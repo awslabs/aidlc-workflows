@@ -72,7 +72,7 @@ const SKILL = join("skills", "aidlc", "SKILL.md");
 // conductor adds why only when what the reviewer returned says it. A fixed
 // "turn budget" reason was wrong whenever something else stopped the review.
 const MISSING_VERDICT_FINDING = "names the review that did not finish";
-const MISSING_VERDICT_REASON = '`--fallback-finding "<why, in one plain sentence>"`';
+const MISSING_VERDICT_REASON = "`--fallback-finding '<why, in one plain sentence>'`";
 
 /** The frontmatter block of an agent .md (throws when unclosed). */
 function frontmatter(body: string, label: string): string {

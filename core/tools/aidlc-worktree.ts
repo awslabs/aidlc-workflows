@@ -13,6 +13,7 @@
 // through matching provenance; new worktrees never use legacy names.
 // Nested checkouts are refused; external linked worktrees remain supported.
 
+import { gitSubmoduleNames } from "./aidlc-git.ts";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -66,14 +67,13 @@ import {
   resolveProjectDir,
   resolveWorkflowSelection,
   serializeSourceListing,
-  sourceChangedOutsideAidlc,
   sourceListingEntriesEqual,
   sourceListingSha256,
   swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
   type WorkflowSelection,
   UNBINDABLE_FINGERPRINT,
-  onlyAidlcFilesChangedSince,
+  mainCheckoutChangeAllowed,
   validateUnitName,
   workspaceSourceFailureSuffix,
   recordedSourceListingUnderCurrentBoundary,
@@ -93,6 +93,9 @@ import {
   asksForHelp,
   printUsageAndExit,
 } from "./aidlc-lib.js";
+import { afterApprovedSkeleton } from "./aidlc-construction-checkpoints.ts";
+import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
+import { swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
@@ -228,28 +231,11 @@ function gitlinkPaths(checkoutDir: string): string[] | null {
   return paths;
 }
 
-function submoduleNames(checkoutDir: string): Map<string, string> {
-  const names = new Map<string, string>();
-  if (!existsSync(join(checkoutDir, ".gitmodules"))) return names;
-  const listed = runGit(
-    ["config", "-f", ".gitmodules", "-z", "--get-regexp", "^submodule\\..*\\.path$"],
-    checkoutDir,
-  );
-  if (!listed.ok) return names;
-  for (const record of listed.stdout.split("\0")) {
-    const newline = record.indexOf("\n");
-    if (newline === -1) continue;
-    const key = record.slice(0, newline);
-    names.set(record.slice(newline + 1), key.slice("submodule.".length, -".path".length));
-  }
-  return names;
-}
-
 function initializeBoltSubmodules(sourceDir: string, worktreeDir: string, prefix = "", depth = 1): string | null {
   if (depth > 16) return `submodules nest more than 16 levels deep under ${prefix || "the worktree"}`;
   const paths = gitlinkPaths(worktreeDir);
   if (paths === null) return `cannot list the submodules of ${prefix || "the worktree"}`;
-  const names = submoduleNames(worktreeDir);
+  const names = gitSubmoduleNames(worktreeDir, GIT_PLATFORM_ARGS);
   for (const path of paths) {
     const source = join(sourceDir, path);
     const name = names.get(path);
@@ -2017,17 +2003,26 @@ function assertAggregateSourceBeforeMerge(
   const current = workspaceSourceState(pd, intent, space);
   // Under relaxed or off the person's own edits to the main checkout during
   // the build are kept: the merge starts from the checkout as it is, and the
-  // change is recorded once so the merge chain stays readable.
-  const keepChange = (recorded: string, changed: string[] | null) => {
+  // change is recorded once so the merge chain stays readable. Under strict so
+  // are the files the person asked to change (swarm allow-change), recorded
+  // with the message they asked in; that step already told them.
+  const keepChange = (recorded: string, changed: string[] | null, asked: string[] | null = null) => {
     const notice = changed && changed.length > 0
-      ? `You changed ${renderChangedPaths(changed)} during the build; kept them and merged unit ${record.unit}.`
+      ? `You changed ${renderChangedPaths(changed)} during the build${asked ? ", as you asked" : ""}; kept them and merged unit ${record.unit}.`
       : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
-    for (const line of recordAcceptedChanges(pd, [{
+    const said = recordAcceptedChanges(pd, [{
       checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
-      recorded, current: current!.fingerprint, notice,
-    }], { intent, space })) process.stderr.write(`note: ${line}\n`);
+      recorded, current: current!.fingerprint, notice, ...(asked ? { messageIds: asked } : {}),
+    }], { intent, space });
+    if (asked === null) for (const line of said) process.stderr.write(`note: ${line}\n`);
     return { state: current!, openingFingerprint: current!.fingerprint };
   };
+  // Under strict, the step for the person's own changes: theirs to keep, with
+  // the message they asked in, or to undo.
+  const personDecides = (changed: string[] | null): string =>
+    changed && changed.length > 0
+      ? mainCheckoutChangeStep(pd, changed, PERSON_DECIDES_CHANGES, "run the merge again")
+      : PERSON_DECIDES_CHANGES;
   const acceptsChanges = current !== null && guardPolicyAcceptsChanges(pd, undefined, { selection: { intent, space } });
   if (current === null) {
     errorWithSlug(
@@ -2055,14 +2050,17 @@ function assertAggregateSourceBeforeMerge(
       );
     }
     if (resuming) return { state: current, openingFingerprint: chain.fingerprint };
-    if (
-      !sameWorkspaceSource(chain.fingerprint, current.fingerprint) &&
-      !onlyAidlcFilesChangedSince(pd, record.stage, chain.listing, current, intent, space)
-    ) {
+    const changed = sameWorkspaceSource(chain.fingerprint, current.fingerprint)
+      ? []
+      : swarmSourceChangedSince(pd, record.stage, chain.listing, current, intent, space);
+    if (changed?.length !== 0) {
       if (acceptsChanges) return keepChange(chain.fingerprint, null);
+      const asked = mainCheckoutChangeAllowed(pd, changed, { intent, space });
+      if (asked !== null) return keepChange(chain.fingerprint, changed, asked);
       errorWithSlug(
         slug,
-        `refusing to merge: the main checkout source changed after the previous reviewed-source merge. ${PERSON_DECIDES_CHANGES}`,
+        "refusing to merge: the main checkout source changed after the previous reviewed-source merge" +
+          `${changed && changed.length > 0 ? ` (${renderChangedPaths(changed)})` : ""}. ${personDecides(changed)}`,
       );
     }
     return {
@@ -2084,21 +2082,33 @@ function assertAggregateSourceBeforeMerge(
     );
   }
   if (resuming) return { state: current, openingFingerprint: opening.fingerprint };
+  // The walking skeleton the person approved at its own checkpoint is where the
+  // swarm starts, never a change of theirs. The link this landing records still
+  // opens at the stage baseline: the chain's first link, as earlier releases
+  // recorded it, though the main checkout already held the skeleton.
   const openingListing = opening.listing === undefined
     ? undefined
-    : recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing);
-  // An AI-DLC update the person took changed only AI-DLC's own files: nobody's source.
+    : recordedSourceListingUnderCurrentBoundary(
+      opening.source === "stage-baseline"
+        ? afterApprovedSkeleton(pd, record.stage, opening.listing, intent, space)
+        : opening.listing,
+      current.listing,
+    );
+  // An AI-DLC update the person took, or a file Git ignores (a dev server's
+  // log), is nobody's source (aidlc-swarm-source.ts).
   const changed = openingListing !== undefined
-    ? sourceChangedOutsideAidlc(pd, openingListing, current.listing)
+    ? swarmSourceChanged(pd, openingListing, current.listing)
     : [];
   if (changed.length > 0) {
     if (acceptsChanges) return keepChange(opening.fingerprint, changed);
+    const asked = mainCheckoutChangeAllowed(pd, changed, { intent, space });
+    if (asked !== null) return keepChange(opening.fingerprint, changed, asked);
     errorWithSlug(
       slug,
       (opening.source === "prior-accepted"
         ? "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate"
         : "refusing to merge: the main checkout source changed since the stage-entry baseline") +
-        ` (${renderChangedPaths(changed)}). ${PERSON_DECIDES_CHANGES}`,
+        ` (${renderChangedPaths(changed)}). ${personDecides(changed)}`,
     );
   }
   // A rejection an earlier release wrote kept no listing: compare fingerprints.
@@ -3596,7 +3606,7 @@ function assertNoForeignBoltDirectory(pd: string, identity: BoltIdentity, select
     if (parsed === null || parsed.slug !== identity.slug || name === identity.name) continue;
     errorWithSlug(
       identity.slug,
-      `no Bolt ${identity.slug} belongs to intent ${relativeRecordDirForSelection(selection)}; this checkout holds ${name} (${parsed.intentId8 === null ? "legacy" : `intent ${parsed.intentId8}`}) at ${join(root, name)} — select that intent to discard it`,
+      `no Bolt ${identity.slug} belongs to intent ${relativeRecordDirForSelection(selection)}; this checkout holds ${name} (${parsed.intentId8 === null ? "legacy" : `intent ${parsed.intentId8}`}) at ${join(root, name)} - select that intent to discard it`,
     );
   }
 }
@@ -3704,7 +3714,7 @@ function handleDiscard(args: string[]): void {
   if (identity.legacy && !dirExists && branchExists && authority.legacyMergeRecorded) {
     errorWithSlug(
       slug,
-      `legacy Bolt ${slug} recorded a merge; finish it with merge --slug ${slug} (cleanup-only) instead of discard — the leftover branch ${branchName} may belong to a later attempt`,
+      `legacy Bolt ${slug} recorded a merge; finish it with merge --slug ${slug} (cleanup-only) instead of discard - the leftover branch ${branchName} may belong to a later attempt`,
     );
   }
   const retained = retainedSourceRefs(repoCwd, identity);

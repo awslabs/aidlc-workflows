@@ -44,9 +44,19 @@ export function unitProgress(
     const units = plannedUnits(recordDir);
     if (units.length === 0) return null;
     const rows: Array<{ at: string; approved: boolean; unit: string }> = [];
-    const auditDir = join(recordDir, "audit");
-    for (const name of readdirSync(auditDir).filter((file) => file.endsWith(".md"))) {
-      for (const entry of readFileSync(join(auditDir, name), "utf-8").split(/\n## /)) {
+    // The tracked shards, and a claimed team Unit's local record (its whole
+    // log; a row in both is counted twice, which changes no Unit's state).
+    const listed = (dir: string) =>
+      readdirSync(dir).filter((file) => file.endsWith(".md")).map((file) => join(dir, file));
+    const localDir = join(recordDir, ".aidlc-engine", "audit");
+    let local: string[] = [];
+    try {
+      local = listed(localDir);
+    } catch {
+      // No claim in this checkout.
+    }
+    for (const shard of [...listed(join(recordDir, "audit")), ...local]) {
+      for (const entry of readFileSync(shard, "utf-8").split(/\n## /)) {
         if (!/^\*\*Checkpoint\*\*: construction-unit$/m.test(entry)) continue;
         const event = /^\*\*Event\*\*:\s*(\S+)/m.exec(entry)?.[1] ?? "";
         if (event !== "GATE_APPROVED" && event !== "GATE_REJECTED") continue;

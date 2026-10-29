@@ -714,6 +714,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(parked()).valid).toBe(true);
   });
 
+  // The claimed checkout's done notice names its Unit; the board notice none.
+  test("notice with or without its Unit -> VALID; a Unit that is not a string -> error", () => {
+    const notice = { kind: "notice", message: 'Unit "alpha" is complete and approved in this checkout.' };
+    expect(errs(notice)).toBe("VALID");
+    expect(errs({ ...notice, unit: "alpha" })).toBe("VALID");
+    expect(errs({ ...notice, unit: 7 })).toContain("notice: unit must be string, got number");
+  });
+
   // ============================================================
   // Positive returns the parsed directive as data (1 assertion)
   // ============================================================

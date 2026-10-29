@@ -1378,7 +1378,7 @@ export function sessionUsageAggregate(
 // Task 6 - Persisted transcript path + runtime ledger producer (usage.ts half)
 // ===========================================================================
 
-// Normalise a session id to a safe filename segment (mirrors aidlc-lib's
+// Normalise a session id to a safe filename segment (mirrors aidlc-record-core's
 // sessionRecordPath sanitisation) so a host-supplied id can't escape the dir.
 function safeSessionSegment(sessionId: string): string {
   return sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");

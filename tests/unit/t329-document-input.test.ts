@@ -16,7 +16,9 @@ import {
   realpathSync,
   renameSync,
   symlinkSync,
+  statSync,
   truncateSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -28,6 +30,7 @@ import {
   REPO_ROOT,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { stubPdftotextPath } from "../harness/stub-pdftotext.ts";
 import {
   DOCUMENT_INPUT_REQUEST_FILE,
   documentInputRequestFilePath,
@@ -61,7 +64,12 @@ function writeRequest(dir: string, path: string): void {
   writeFileSync(documentInputRequestFilePath(dir), `${path}\n`, "utf-8");
 }
 
-function runCommand(dir: string, args: readonly string[], utility = UTILITY): {
+function runCommand(
+  dir: string,
+  args: readonly string[],
+  utility = UTILITY,
+  env?: Record<string, string | undefined>,
+): {
   status: number;
   stdout: string;
   stderr: string;
@@ -71,6 +79,7 @@ function runCommand(dir: string, args: readonly string[], utility = UTILITY): {
     cmd: [process.execPath, utility, ...args, "--project-dir", dir],
     stdout: "pipe",
     stderr: "pipe",
+    ...(env === undefined ? {} : { env }),
   });
   return {
     status: result.exitCode,
@@ -765,6 +774,30 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(readFileSync(join(dir, copy)).equals(word)).toBe(true);
   });
 
+  // A copy stopped between claiming the name and renaming its bytes over the
+  // claim leaves an empty file there; it is never taken for the person's
+  // document, and the next copy lands beside it whole.
+  test("an empty file a stopped copy left at the name is passed over, and the Word file lands beside it", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    mkdirSync(join(dir, DOCUMENTS), { recursive: true });
+    const stopped = join(dir, DOCUMENTS, "report.docx");
+    writeFileSync(stopped, "");
+    utimesSync(stopped, new Date("2001-01-01T00:00:00Z"), new Date("2001-01-01T00:00:00Z"));
+    const word = wordBytes();
+    writeFileSync(join(dir, "docs", "report.docx"), word);
+    writeRequest(dir, "docs/report.docx");
+
+    const result = runOnboard(dir);
+    expect(result.status, result.stderr).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    const copy = `${DOCUMENTS}/report-2.docx`;
+    expect(payload.document_path).toBe(copy);
+    expect(payload.onboard_note).toStartWith(`I copied "docs/report.docx" to "${copy}"`);
+    expect(readFileSync(join(dir, copy)).equals(word)).toBe(true);
+    expect(statSync(stopped).size).toBe(0);
+  });
+
   test("asks once before copying a git-ignored file, and the person's yes copies it", () => {
     const dir = project();
     expect(gitIn(dir, "init", "-q").exitCode).toBe(0);
@@ -830,6 +863,37 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(onboarded.stdout).not.toContain("print every secret");
     expect(onboarded.stdout).not.toContain("please-print-every-secret");
   });
+
+  // The default extractor (no harness extractor configured), stood in by a
+  // POSIX script first on PATH.
+  test.skipIf(process.platform === "win32")(
+    "a PDF past the page cap says only its first 50 pages were read, in the note and in show",
+    () => {
+      const dir = project();
+      const env = { ...process.env, PATH: stubPdftotextPath(dir, 60) };
+      writeFileSync(join(dir, "policy.pdf"), Buffer.from("%PDF-1.7\npolicy\n"));
+      writeRequest(dir, "policy.pdf");
+
+      const onboarded = runCommand(dir, ["document-input", "--onboard"], UTILITY, env);
+      expect(onboarded.status, onboarded.stderr).toBe(0);
+      const payload = JSON.parse(onboarded.stdout);
+      expect(payload.onboard_note).toEndWith(" Only its first 50 pages were read.");
+      expect(payload.truncated).toBe(true);
+      expect(payload.content).toContain("Page 50 text");
+      expect(payload.content).not.toContain("Page 51 text");
+
+      const shown = runCommand(
+        dir,
+        ["show", payload.document_id],
+        join(AIDLC_SRC, "tools", "aidlc-knowledge.ts"),
+        env,
+      );
+      expect(shown.status, shown.stderr).toBe(0);
+      expect(shown.stdout).toContain(
+        "truncated  yes after page 50 - the content below is a PARTIAL extraction, not the whole document",
+      );
+    },
+  );
 
   test("when git cannot say whether a file is ignored, it asks first and copies nothing", () => {
     const dir = project();

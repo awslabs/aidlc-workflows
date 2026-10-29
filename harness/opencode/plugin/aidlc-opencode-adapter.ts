@@ -6,7 +6,10 @@
 // the PLUGIN API (auto-discovered from .opencode/plugin/*.ts, loaded in-process
 // by the opencode runtime). This one plugin maps opencode's hook surface onto
 // the core hook bodies, each run as a bun subprocess fed the ClaudeCodeHookInput
-// JSON shape the core hooks parse (live-verified on opencode 1.17.18):
+// JSON shape the core hooks parse (live-verified on opencode 1.17.18). The
+// default export serves opencode 1 through server() and OpenCode 2 through
+// setup(); the OpenCode 2 section at the end of this file maps V2 moments onto
+// the V1 hooks below:
 //
 //   opencode moment                           -> core hook (Claude event it mirrors)
 //   ----------------------------------------------------------------------------
@@ -54,6 +57,7 @@
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 // emit.ts points this at the projected .aidlc/tools/ copy.
 import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
@@ -544,13 +548,19 @@ function sessionStartHandled(stdout: string): boolean {
   }
 }
 
-export default async ({
+/**
+ * The OpenCode 1 plugin: returns the hook map keyed by V1 hook name. OpenCode 2
+ * does not run it; its `setup` entry (below) feeds V2 events into this same map.
+ * Not exported by name: OpenCode 1 loads every exported function of a plugin
+ * module as a plugin, so the module exports only its default object.
+ */
+async function createV1Adapter({
   client,
   directory,
   aidlcEntrypoints = shippedAidlcEntrypoints,
   aidlcCommand = DEFAULT_AIDLC_COMMAND,
   platform = process.platform,
-}: PluginInput) => {
+}: PluginInput) {
   const runCore = (
     hookFile: string,
     input: Record<string, unknown>,
@@ -772,7 +782,9 @@ export default async ({
     },
 
     "tool.execute.before": async (
-      input: { tool: string; sessionID: string; callID: string },
+      // `agent` is supplied by OpenCode 2, whose tool events name the calling
+      // agent; OpenCode 1 omits it and the chat.message correlation is used.
+      input: { tool: string; sessionID: string; callID: string; agent?: string },
       output: { args: Record<string, unknown> },
     ) => {
       const args = output.args ?? {};
@@ -811,7 +823,7 @@ export default async ({
           }
         }
       }
-      const namedAgent = sessionAgent.get(input.sessionID);
+      const namedAgent = input.agent ?? sessionAgent.get(input.sessionID);
       const delegatedAgent =
         namedAgent?.startsWith("aidlc-") && namedAgent.endsWith("-agent")
           ? namedAgent
@@ -1144,4 +1156,271 @@ export default async ({
       }
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// OpenCode 2 entry point.
+//
+// OpenCode 2 ignores V1 plugin functions: it reads `id` + `setup(ctx)` from the
+// default export and registers hooks on the context's domains. Rather than
+// fork the hook logic, setup() builds the V1 hook map above over a small
+// client shim and forwards each V2 hook or event to the V1 hook it replaces
+// (live-verified on opencode 2.0.24):
+//
+//   V2 moment                                  → V1 hook driven
+//   ------------------------------------------------------------------------
+//   session.hook("prompt")                     → chat.message
+//   tool.hook("execute.before")                → tool.execute.before
+//   tool.hook("execute.after")                 → tool.execute.after
+//   session.hook("compaction")                 → experimental.session.compacting
+//   event session.execution.succeeded          → event session.idle
+//   event session.execution.interrupted        → event session.error (aborted)
+//   event permission.replied                   → event permission.replied
+//   shell.hook("create.before")                → shell.env
+//
+// V2's shell event carries the command's env but no session, so the shell
+// tool's execute.before (which names the session and fires first) records it
+// per command, and create.before consumes it. A command typed in opencode's
+// own terminal has no tool call ahead of it and names no chat, as on V1.
+//
+// V2 renames built-in tools (shell, subagent, patch); toV1Tool maps them back
+// so the hook map keeps one vocabulary. The nudge is sent with
+// session.synthetic, which V2 never routes through the prompt hook, so it can
+// never be recorded as a human turn.
+//
+// Degradations vs the V1 path (documented in docs/guide/harnesses/opencode.md):
+//   - V2 has no todo tool, so aidlc-sync-workflow-state.ts (todowrite) never
+//     runs; workflow state is still advanced by the engine's own commands.
+//   - V2 has no command.execute.before: the person's chat shows the /aidlc
+//     template. The prompt hook gets it expanded, so typedAidlcArguments
+//     reads what they typed back out of it and the turn records that line.
+//   - There is no TUI toast channel; the conductor skill still prints the
+//     engine-error relay message verbatim.
+//   - The shell setting is not exposed, so the bash boundary reads commands
+//     in the platform's default shell dialect.
+// ---------------------------------------------------------------------------
+
+/** A V2 hook callback; each registration narrows `event` to the shape it reads. */
+export type V2HookCallback = (event: never) => Promise<void> | void;
+
+/** The subset of the OpenCode 2 plugin context this adapter uses. */
+export type V2PluginContext = {
+  location: { directory: string };
+  session: {
+    get(input: { sessionID: string }): Promise<{ parentID?: string } | undefined>;
+    synthetic(input: { sessionID: string; text: string }): Promise<unknown>;
+    hook(name: string, callback: V2HookCallback): Promise<unknown>;
+  };
+  tool: {
+    hook(name: string, callback: V2HookCallback): Promise<unknown>;
+  };
+  /** Absent on hosts older than the shell domain; the override is then skipped. */
+  shell?: {
+    hook(name: string, callback: V2HookCallback): Promise<unknown>;
+  };
+  event: {
+    subscribe(options?: { signal?: AbortSignal }): AsyncIterable<{ type: string; data?: Record<string, unknown> }>;
+  };
+};
+
+/** Unit-test seams for the V2 entry point (production passes none). */
+export type V2SetupOptions = Pick<PluginInput, "aidlcEntrypoints" | "aidlcCommand" | "platform">;
+
+const V2_TOOL_NAMES: Record<string, string> = {
+  shell: "bash",
+  subagent: "task",
+  patch: "apply_patch",
+};
+
+function toV1Tool(tool: string): string {
+  return V2_TOOL_NAMES[tool] ?? tool;
+}
+
+/** The text a V2 tool result carries, as V1's string `output`. */
+function v2ToolOutput(result: unknown): string {
+  const r = result as { output?: { output?: unknown }; content?: Array<{ type?: string; text?: string }> };
+  if (typeof r?.output?.output === "string") return r.output.output;
+  return (r?.content ?? [])
+    .filter((c) => c.type === "text" && typeof c.text === "string")
+    .map((c) => c.text)
+    .join("\n");
+}
+
+type V1Hooks = Awaited<ReturnType<typeof createV1Adapter>>;
+
+// What the person typed after /aidlc, read back from the expanded template
+// OpenCode 2 hands the prompt hook: the installed command file's text before
+// $ARGUMENTS, then their words, then the skill text its shell line prints. Null
+// for any other prompt, or when the command file cannot be read.
+function typedAidlcArguments(text: string, directory: string): string | null {
+  let file: string;
+  try {
+    file = readFileSync(join(directory, ".opencode", "command", "aidlc.md"), "utf-8").replace(/\r\n/g, "\n");
+  } catch {
+    return null;
+  }
+  const frontmatterEnd = file.startsWith("---\n") ? file.indexOf("\n---\n", 4) : -1;
+  const body = frontmatterEnd < 0 ? file : file.slice(frontmatterEnd + "\n---\n".length);
+  const at = body.indexOf("$ARGUMENTS");
+  const prompt = text.replace(/\r\n/g, "\n");
+  if (at <= 0 || !prompt.startsWith(body.slice(0, at))) return null;
+  const rest = prompt.slice(at);
+  const skill = rest.indexOf("\n\n---\nname: aidlc\n");
+  const end = skill >= 0 ? skill : rest.indexOf("\n\n");
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+/**
+ * Wire the V1 hook map onto an OpenCode 2 context. Returns the cleanup that
+ * stops the event subscription. Reached through the default export's setup().
+ */
+async function setupV2(
+  ctx: V2PluginContext,
+  options: V2SetupOptions = {},
+): Promise<() => void> {
+  // Parents learned from session.created, so a child is known even before a
+  // session lookup answers.
+  const parents = new Map<string, string | null>();
+  const client: PluginInput["client"] = {
+    session: {
+      get: async ({ path }) => {
+        const known = parents.get(path.id);
+        if (known !== undefined) return { data: known ? { parentID: known } : {} };
+        const info = await ctx.session.get({ sessionID: path.id });
+        if (!info) return {};
+        return { data: info.parentID ? { parentID: info.parentID } : {} };
+      },
+      prompt: async ({ path, body }) => {
+        const text = body.parts.map((p) => p.text).join("\n");
+        return ctx.session.synthetic({ sessionID: path.id, text });
+      },
+    },
+  };
+  // Sessions of shell tool calls waiting for their shell, oldest first per command.
+  const pendingShells = new Map<string, Array<{ callID: string; sessionID: string }>>();
+  const takePendingShell = (command: string): string | undefined => {
+    const queue = pendingShells.get(command);
+    const entry = queue?.shift();
+    if (queue && queue.length === 0) pendingShells.delete(command);
+    return entry?.sessionID;
+  };
+  const dropPendingShell = (command: string, callID: string): void => {
+    const queue = pendingShells.get(command);
+    const at = queue?.findIndex((e) => e.callID === callID) ?? -1;
+    if (queue && at >= 0) queue.splice(at, 1);
+    if (queue && queue.length === 0) pendingShells.delete(command);
+  };
+  const hooks: V1Hooks = await createV1Adapter({
+    client,
+    directory: ctx.location.directory,
+    ...options,
+  });
+
+  await ctx.session.hook("prompt", async (event: {
+    sessionID: string;
+    prompt: { text?: string };
+  }) => {
+    const text = event.prompt?.text ?? "";
+    const parts: ChatPart[] = [{ type: "text", text }];
+    const args = typedAidlcArguments(text, ctx.location.directory);
+    if (args !== null) {
+      await hooks["command.execute.before"]({ command: "aidlc", sessionID: event.sessionID, arguments: args }, { parts });
+    }
+    await hooks["chat.message"]({ sessionID: event.sessionID }, { parts });
+  });
+
+  await ctx.tool.hook("execute.before", async (event: {
+    tool: string;
+    sessionID: string;
+    id: string;
+    agent?: string;
+    input: Record<string, unknown>;
+  }) => {
+    const output = { args: event.input ?? {} };
+    await hooks["tool.execute.before"](
+      { tool: toV1Tool(event.tool), sessionID: event.sessionID, callID: event.id, agent: event.agent },
+      output,
+    );
+    if (output.args !== event.input) event.input = output.args;
+    const command = output.args?.command;
+    if (event.tool === "shell" && typeof command === "string") {
+      const queue = pendingShells.get(command) ?? [];
+      queue.push({ callID: event.id, sessionID: event.sessionID });
+      pendingShells.set(command, queue);
+    }
+  });
+
+  await ctx.tool.hook("execute.after", async (event: {
+    tool: string;
+    sessionID: string;
+    id: string;
+    input: Record<string, unknown>;
+    status: "completed" | "error";
+    result?: unknown;
+  }) => {
+    const tool = toV1Tool(event.tool);
+    // A shell call that never reached a shell must not name the next one.
+    if (event.tool === "shell" && typeof event.input?.command === "string") {
+      dropPendingShell(event.input.command, event.id);
+    }
+    // A failed write changed nothing to audit; a failed subagent still ended.
+    if (event.status !== "completed" && tool !== "task") return;
+    await hooks["tool.execute.after"](
+      { tool, sessionID: event.sessionID, callID: event.id, args: event.input ?? {} },
+      { output: v2ToolOutput(event.result) },
+    );
+  });
+
+  await ctx.shell?.hook("create.before", async (event: {
+    command: string;
+    cwd: string;
+    env: Record<string, string>;
+  }) => {
+    const sessionID = takePendingShell(event.command);
+    if (!sessionID || !event.env) return;
+    await hooks["shell.env"]({ cwd: event.cwd, sessionID }, { env: event.env });
+  });
+
+  await ctx.session.hook("compaction", async (event: { sessionID: string }) => {
+    await hooks["experimental.session.compacting"]({ sessionID: event.sessionID });
+  });
+
+  const controller = new AbortController();
+  void (async () => {
+    try {
+      for await (const ev of ctx.event.subscribe({ signal: controller.signal })) {
+        const data = ev.data ?? {};
+        const sessionID = typeof data.sessionID === "string" ? data.sessionID : "";
+        if (!sessionID) continue;
+        if (ev.type === "session.created") {
+          parents.set(sessionID, typeof data.parentID === "string" ? data.parentID : null);
+        } else if (ev.type === "session.execution.succeeded") {
+          await hooks.event({ event: { type: "session.idle", properties: { sessionID } } });
+        } else if (ev.type === "session.execution.interrupted") {
+          await hooks.event({
+            event: { type: "session.error", properties: { sessionID, error: { name: "MessageAbortedError" } } },
+          });
+        } else if (ev.type === "permission.replied") {
+          await hooks.event({ event: { type: "permission.replied", properties: { sessionID, reply: data.reply } } });
+        }
+      }
+    } catch {
+      /* the stream ends when the plugin unloads */
+    }
+  })();
+  return () => controller.abort();
+}
+
+// One default export serves both hosts: OpenCode 1 (1.18.29+) calls server(),
+// OpenCode 2 calls setup(). OpenCode 1.18 also calls setup() with a partial
+// context that has no tool or session domain; setup() returns early there so
+// the V1 hooks never run twice.
+export default {
+  id: "aidlc",
+  // `options` is a unit-test seam; OpenCode passes only the context.
+  async setup(ctx: V2PluginContext, options?: V2SetupOptions): Promise<(() => void) | undefined> {
+    if (typeof ctx?.tool?.hook !== "function" || typeof ctx?.session?.hook !== "function") return undefined;
+    return setupV2(ctx, options);
+  },
+  server: createV1Adapter,
 };

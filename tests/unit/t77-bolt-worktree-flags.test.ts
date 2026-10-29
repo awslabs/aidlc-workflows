@@ -38,7 +38,7 @@
 //                    discarded:false on stdout.
 //   failJson       - prints {ok:false,slug,stage,reason,detail} JSON and
 //                       process.exit(1). The five-field halt-and-ask envelope.
-//   aidlc-lib.ts worktreePath(pd, id8, slug) locates the intent-scoped Bolt.
+//   aidlc-record-core.ts worktreePath(pd, id8, slug) locates the intent-scoped Bolt.
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,

@@ -42,6 +42,13 @@ const CLAUDE_LIB = join(CLAUDE_TOOLS, "aidlc-lib.ts");
 const LIB_SIBLINGS = [
   "aidlc-lib.ts",
   "aidlc-settings.ts",
+  "aidlc-markdown.ts",
+  "aidlc-locks.ts",
+  "aidlc-review-records.ts",
+  "aidlc-record-core.ts",
+  "aidlc-learned-date.ts",
+  "aidlc-unit-landing.ts",
+  "aidlc-kiro-chat-record.ts",
   "aidlc-install-paths.ts",
   "aidlc-distribution.ts",
   "aidlc-channel.ts",

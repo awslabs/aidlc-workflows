@@ -85,6 +85,7 @@ import {
   printUsageAndExit,
   resolveInvokingSessionId,
 } from "./aidlc-lib.js";
+import { chatTookStepHere } from "./aidlc-record-core.ts";
 import { aidlcDispatcherInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
@@ -1067,7 +1068,7 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
   const forked = forkedState(pd, slug, intent, space);
   if (!forked) {
     error(
-      `No per-Bolt forked state file for slug "${slug}" — was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
+      `No per-Bolt forked state file for slug "${slug}" - was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
     );
   }
   const content = readFileSync(forked.statePath, "utf-8");
@@ -1106,10 +1107,11 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
 //                                  --reason <enum> --defaults <text>
 //
 // Wires the three MERGE_DISPATCH_* events by emitting via `emitAudit` per
-// event variant. The conductor's Unit merge-back (per
-// stage-protocol-construction.md) brackets each aidlc-pipeline-deploy-agent
-// dispatch: pre-call INVOKED, post-call RETURNED on successful parse,
-// FALLBACK on timeout/malformed-YAML.
+// event variant. The conductor brackets each aidlc-pipeline-deploy-agent
+// merge-strategy dispatch: pre-call INVOKED, post-call RETURNED on successful
+// parse, FALLBACK on timeout/malformed-YAML. A pinned Unit's merge gate reads
+// none of them: its strategy and target are the pin's (aidlc-unit.ts
+// pinnedMergeGate).
 //
 // Emit-only contract: no state mutation, no spawn. Pure audit emission so
 // doctor can reconcile orphan INVOKED rows (slug + timestamp window).
@@ -1418,6 +1420,8 @@ async function handleCheckpoint(args: string[]): Promise<void> {
     error(`checkpoint --kind must be ${CHECKPOINT_KINDS.join(" or ")}`);
   }
   const pd = resolveProjectDir(projectDir);
+  // A checkpoint decision is the chat's step on the work; its status is a read.
+  if ((flags.action ?? "status") !== "status") chatTookStepHere(pd);
   let result: ReturnType<typeof resolveConstructionCheckpoint>;
   switch (flags.action ?? "status") {
     case "status":

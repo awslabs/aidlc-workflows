@@ -313,7 +313,7 @@ describe("t-plan-question-waits-for-the-person", () => {
     const create = /intent create (.*?)`/.exec(String(go.message))?.[1];
     expect(create, String(go.message).slice(0, 300)).toBeDefined();
     const made = spawnSync(process.execPath, [
-      join(TOOLS, "aidlc.ts"), "engine", "intent", "create", ...create!.replace('"<2-3 word kebab essence>"', "first-fix").split(" "),
+      join(TOOLS, "aidlc.ts"), "engine", "intent", "create", ...create!.replace("'<2-3 word kebab essence>'", "first-fix").split(" "),
     ], { cwd: proj, env: chatEnv(proj, SESSION), encoding: "utf-8" });
     expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
     const parked = spawnSync(process.execPath, [join(TOOLS, "aidlc-orchestrate.ts"), "park", "--project-dir", proj], {

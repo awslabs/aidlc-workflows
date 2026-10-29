@@ -23,8 +23,9 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -254,5 +255,92 @@ describe("the document a person names is added, wherever it is in their project"
     expect(result.status, result.out).not.toBe(0);
     expect(result.out).toContain("over the 33554432-byte per-document cap; nothing was copied");
     expect(existsSync(join(proj, DOCUMENTS, "huge.md"))).toBe(false);
+  });
+});
+
+// A copy puts its bytes at the name in two steps: an exclusive create of the
+// empty name, then a rename of the whole bytes over it. Whatever another copy
+// left at the name, the person's bytes land whole and the line names where.
+describe("a copy beside another copy of the same name", () => {
+  const LONG_AGO = new Date("2001-01-01T00:00:00Z");
+  const sizes = (proj: string) =>
+    Object.fromEntries(readdirSync(join(proj, DOCUMENTS)).map((name) => [name, statSync(join(proj, DOCUMENTS, name)).size]));
+
+  test("an empty file a stopped copy left is not taken for the person's document, and the copy lands beside it", () => {
+    const proj = project();
+    mkdirSync(join(proj, DOCUMENTS), { recursive: true });
+    writeFileSync(join(proj, DOCUMENTS, "notes.md"), "");
+    utimesSync(join(proj, DOCUMENTS, "notes.md"), LONG_AGO, LONG_AGO);
+    writeFileSync(join(proj, "notes.md"), "# Notes\n\nThe person's words.\n", "utf-8");
+    const result = onboard(proj, ["notes.md"]);
+    expect(result.status, result.out).toBe(0);
+    const copy = `${DOCUMENTS.replaceAll("\\", "/")}/notes-2.md`;
+    expect(readFileSync(join(proj, copy), "utf-8")).toBe("# Notes\n\nThe person's words.\n");
+    expect(String(result.json.onboard_note)).toContain(`Copied notes.md into AI-DLC's documents as ${copy} and added it.`);
+    expect(indexedPaths(result.json)).toEqual([`${SOURCE}/notes-2.md`]);
+    expect(sizes(proj)).toEqual({ "notes.md": 0, "notes-2.md": 29 });
+  });
+
+  // Run in a child so the fs wrapper never reaches this runner's modules.
+  function copyInChild(proj: string, name: string, source: string, before: string): { status: number; out: string } {
+    const result = spawnSync(BUN, ["--eval", `
+      import { mock } from "bun:test";
+      import { join } from "node:path";
+      const fs = { ...await import("node:fs") };
+      const target = join(fs.realpathSync(${JSON.stringify(join(proj, DOCUMENTS))}), ${JSON.stringify(name)});
+      let claimed = false;
+      mock.module("node:fs", () => ({
+        ...fs,
+        openSync(path, flags, ...rest) {
+          // Another copy takes the name the moment this one claims it.
+          if (String(path) === target && flags === "wx" && !claimed) {
+            claimed = true;
+            ${before}
+          }
+          return fs.openSync(path, flags, ...rest);
+        },
+      }));
+      const kb = await import(${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc-knowledge.ts")).href)});
+      const util = await import(${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc-utility.ts")).href)});
+      const copied = util.copyNamedDocumentIntoKnowledge(${JSON.stringify(proj)}, kb, ${JSON.stringify(SPACE)}, ${JSON.stringify(join(proj, source))});
+      process.stdout.write(JSON.stringify({ claimed, target: copied.target }));
+    `], { cwd: proj, env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj }, encoding: "utf-8" });
+    return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  test("a different document taking the name at the moment of the claim sends this copy beside it, both whole", () => {
+    const proj = project();
+    mkdirSync(join(proj, DOCUMENTS), { recursive: true });
+    writeFileSync(join(proj, "notes.md"), "# Mine\n", "utf-8");
+    const result = copyInChild(proj, "notes.md", "notes.md", `fs.writeFileSync(target, "# Theirs\\n");`);
+    expect(result.status, result.out).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({ claimed: true });
+    expect(readFileSync(join(proj, DOCUMENTS, "notes.md"), "utf-8")).toBe("# Theirs\n");
+    expect(readFileSync(join(proj, DOCUMENTS, "notes-2.md"), "utf-8")).toBe("# Mine\n");
+    expect(Object.keys(sizes(proj)).sort()).toEqual(["notes-2.md", "notes.md"]);
+  });
+
+  test("another copy's claim that fills with the same bytes within the second is that copy, not a second one", () => {
+    const proj = project();
+    mkdirSync(join(proj, DOCUMENTS), { recursive: true });
+    writeFileSync(join(proj, "notes.md"), "# Notes\n", "utf-8");
+    const target = join(proj, DOCUMENTS, "notes.md");
+    // The other copy's claim, made a moment ago and filled a moment later by
+    // its rename, as a copy running beside this one does.
+    writeFileSync(target, "");
+    const filler = Bun.spawn([BUN, "--eval", `
+      const fs = await import("node:fs");
+      await Bun.sleep(200);
+      fs.writeFileSync(${JSON.stringify(`${target}.other`)}, "# Notes\\n");
+      fs.renameSync(${JSON.stringify(`${target}.other`)}, ${JSON.stringify(target)});
+    `], { stdout: "ignore", stderr: "ignore" });
+    try {
+      const result = copyInChild(proj, "notes.md", "notes.md", "");
+      expect(result.status, result.out).toBe(0);
+      expect(JSON.parse(result.out).target).toEndWith("notes.md");
+    } finally {
+      filler.kill();
+    }
+    expect(sizes(proj)).toEqual({ "notes.md": 8 });
   });
 });

@@ -121,7 +121,7 @@ Security](19-supply-chain-security.md).
 
 ## Markdown structure
 
-Use `markdownBlocks` in `core/tools/aidlc-lib.ts` for block visibility,
+Use `markdownBlocks` in `core/tools/aidlc-markdown.ts` for block visibility,
 containers, link reference definitions, and claim splitting. It is backed by
 the built-in `Bun.markdown` renderer; its `visibleMarkdownLines` projection
 preserves consumer-specific visibility options. Do not add a Markdown
@@ -258,7 +258,7 @@ The intent-configuration handlers share a single mutation path:
 | `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `collaborators`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
 | `aidlc engine config list [--json]` | `config-list` | Read all thirteen settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
-| `aidlc engine scope change --scope <name> [--key value ...] [--message <id>]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
+| `aidlc engine scope change --scope <name> [--key value ...] [--message <id>] [--skip <slug,...>]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current; on finished work `--skip` takes off the plan the stages the switch would reopen it at |
 
 `config-change` accepts only the twelve setting flags plus `--message` (and the
 `--person-words` forms from before it, which prove nothing), `--intent`, `--space`,
@@ -400,7 +400,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix aidlc doctor` should report the env var as valid.
 
-6. **Check the plan's hints read well** (if `keywords` populated) - the engine no longer matches them; the agent reads them in the plan proposal step (`next "<a request your plan is for>" --project-dir /tmp/scope-smoke` prints every plan with its hints). Make sure the line for yours says what the plan is for in plain words.
+6. **Check the plan's hints read well** (if `keywords` populated) - the engine no longer matches them; the agent reads them in the plan proposal step (`next '<a request your plan is for>' --project-dir /tmp/scope-smoke` prints every plan with its hints). Make sure the line for yours says what the plan is for in plain words.
 
 7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 aidlc engine graph resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 

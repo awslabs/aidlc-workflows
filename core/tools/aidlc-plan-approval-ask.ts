@@ -18,7 +18,7 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -30,7 +30,6 @@ import {
   changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
-  docsRoot,
   errorMessage,
   fenceSwitchSentence,
   getField,
@@ -51,10 +50,10 @@ import {
   readPlanApprovalRuntimeRecord,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
-  recordFileTargetOrThrow,
   rejectionAtRunFloor,
   rejectionIsFreshAttempt,
   removePlanApprovalRuntimeRecord,
+  runStateContent,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
@@ -84,6 +83,7 @@ import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import {
   approvalFingerprint,
   approvedPlanChangeLine,
+  attemptRejectionClosed,
   codeGenerationBuildsWithoutSource,
   clearPlanApprovalOverrideOffered,
   codeGenerationExecutionAllowed,
@@ -93,17 +93,30 @@ import {
   evaluateCodeGenerationApproval,
   keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
+  planAsSentBack,
   readTestingContract,
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  codeGenerationFinishedUnderPlanContract,
   stepNextCommand,
   testingContractDefectMessage,
   usableTestingContract,
+  type CodeGenerationApprovalUse,
   type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
-import { readMessage } from "./aidlc-message-store.ts";
+import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
+import {
+  askedQuestionFields,
+  newQuestionId,
+  openSlotQuestionId,
+  QUESTION_TEXT_FIELD,
+  questionShows,
+  questionTextSha,
+  recordedQuestion,
+  shownAgainFields,
+} from "./aidlc-questions.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
@@ -193,6 +206,8 @@ export interface PlanApprovalAskRecord {
   /** A grouped change request that named no Unit, waiting for "which one". */
   pendingChange?: string;
   results?: PlanApprovalAskResult[];
+  /** The question's id on the record (QUESTION_ASKED, aidlc-questions.ts); a record reopened for a fresh look keeps none. */
+  questionId?: string;
 }
 
 function askPath(projectDir: string, intentId: string): string {
@@ -363,6 +378,48 @@ function pendingBuiltPlanReviews(projectDir: string, intentId: string): PendingP
     pending.push({ unit, targetId: value.targetId, ...(value.feedback ? { feedback: value.feedback } : {}) });
   }
   return pending;
+}
+
+/**
+ * Whether the person asked to see this target's plan again ("Review the
+ * plan"), for its current plan or the next one; false when the target cannot be
+ * named.
+ */
+export function codeGenerationPlanReviewRequested(
+  projectDir: string,
+  unit: string | null,
+  intentId: string = intentIdFor(projectDir),
+): boolean {
+  let targetId: string;
+  try {
+    targetId = codeGenerationTargetId({ unit });
+  } catch {
+    return false;
+  }
+  return planApprovalReviewRequested(projectDir, targetId, intentId) ||
+    planApprovalReviewRequested(projectDir, nextPlanReviewId(intentId), intentId);
+}
+
+/**
+ * A target whose plan stands only as its finished build reads it (a practice
+ * kept after its review, codeGenerationFinishedUnderPlanContract): "finishes"
+ * when its next step is the finish, "plan-review" while the person asked to see
+ * the plan again, which the plan question answers first. Null for any other
+ * target, or when it cannot be told. `next`, the write guard's refusal and the
+ * completion hold all read it, so they say the same.
+ */
+export function codeGenerationFinishedBuild(projectDir: string, unit: string | null): "finishes" | "plan-review" | null {
+  try {
+    if (!codeGenerationFinishedUnderPlanContract(projectDir, unit)) return null;
+    return codeGenerationPlanReviewRequested(projectDir, unit) ? "plan-review" : "finishes";
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the target's next step is the finish of its build (codeGenerationFinishedBuild). */
+export function codeGenerationBuildFinishes(projectDir: string, unit: string | null): boolean {
+  return codeGenerationFinishedBuild(projectDir, unit) === "finishes";
 }
 
 export function planApprovalReviewRequested(projectDir: string, targetId: string, intentId: string): boolean {
@@ -563,8 +620,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
 // A word in a plan that names a file or folder: it has a "/" or a file
 // extension, and no scheme, flag or variable.
 const PLAN_PATH_WORD_RE = /^[A-Za-z0-9_.@~][A-Za-z0-9_.@~/+-]*$/;
-// What ends a word in a plan.
-const PLAN_WORD_BREAK = /[\s`'"()<>[\]{},;|*]/;
+// What ends a word in a plan (the system-install hold reads a plan's words the same way).
+export const PLAN_WORD_BREAK = /[\s`'"()<>[\]{},;|*]/;
 
 /**
  * The files and folders the waiting plans name, project-relative with "/":
@@ -798,19 +855,18 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
 }
 
 /**
- * Called when a step that has the agent write a plan is published: the record
- * folder of each plan it writes is made first, so the plan is one plain file
- * write with no folder to make. The Copilot CLI's file tool makes no folders,
- * and while the plan waits the plan-approval guard refuses a shell command it
- * cannot read as a record write (a folder in a variable, python, `cmd /c
- * mkdir`). Never through a link.
+ * The record folder of each plan a step that has the agent write a plan names
+ * (stage-level, a Unit's, each Unit of a parallel batch), which
+ * prepareRecordFolders makes when the step is published: while the plan waits
+ * the plan-approval guard refuses a shell command it cannot read as a record
+ * write (a folder in a variable, python, `cmd /c mkdir`).
  */
-export function preparePlanRecordFolders(projectDir: string, directive: Directive): void {
-  if (!isPlanApprovalBeat(directive) || directive.plan_approval === undefined) return;
+export function planRecordFolders(projectDir: string, directive: Directive): string[] {
+  if (!isPlanApprovalBeat(directive) || directive.plan_approval === undefined) return [];
   const units = directive.kind === "run-stage"
     ? directive.plan_approval.status === "approved" ? [] : [directive.unit ?? null]
     : (directive.plan_approval.units ?? []).map((target) => target.unit);
-  const record = docsRoot(projectDir);
+  const folders: string[] = [];
   for (const unit of units) {
     // A name that is no Unit (the `{unit-name}` placeholder among them) gets no folder.
     try {
@@ -818,18 +874,19 @@ export function preparePlanRecordFolders(projectDir: string, directive: Directiv
     } catch {
       continue;
     }
-    const folder = relative(record, codeGenerationRecordDir(projectDir, unit));
-    mkdirSync(recordFileTargetOrThrow(record, folder), { recursive: true });
-    recordFileTargetOrThrow(record, folder);
+    folders.push(codeGenerationRecordDir(projectDir, unit));
   }
+  return folders;
 }
 
 /**
  * A rejected gate (the Code Generation completion gate, a Unit checkpoint, or a
  * swarm batch checkpoint) starts a new attempt, so the approval before it no
- * longer counts. While the plan is still exactly the one approved before, the
- * person's rejection is the change to make: the plan is revised first, and the
- * engine asks about the revised plan, never about the one they just sent back.
+ * longer counts. While the plan is still exactly the one the rejected build
+ * started on (the one approved before, or the revision a lowered fence built for
+ * their previous change request), the person's rejection is the change to make:
+ * the plan is revised first, and the engine asks about the revised plan, never
+ * about the one they just sent back.
  *
  * A stage jump or a Redo (`rejectionIsFreshAttempt`) keeps the plan available
  * for approval as it stands. Its reopen notice is not a change request, and an
@@ -854,20 +911,18 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
   }
   const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(runFloor);
   if (floor === null) return null;
-  const rejection = rejectionAtRunFloor(
-    readAuditShardEvents(projectDir), STAGE, unit ?? undefined, runFloor,
-  );
+  const rows = readAuditShardEvents(projectDir);
+  const rejection = rejectionAtRunFloor(rows, STAGE, unit ?? undefined, runFloor);
   if (rejection !== undefined && rejectionIsFreshAttempt(rejection.block)) return null;
+  const closed = rejection ? attemptRejectionClosed(projectDir, rows, rejection, unit) : null;
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
   const read = readTestingContract(plan);
   if ("defect" in read) return null;
-  // The fingerprint binds the attempt too, so compare the files as they are
-  // against each earlier approval at that approval's own attempt.
-  const approvedBefore = stalePlanApprovalReceiptsForTarget(projectDir, intentId, targetId, runFloor).some((receipt) => receipt.fingerprint ===
-    approvalFingerprint(plan, instructions, read.contract.contract_sha256, receipt));
-  if (!approvedBefore) return null;
+  const unrevised = stalePlanApprovalReceiptsForTarget(projectDir, intentId, targetId, runFloor).some((receipt) =>
+    planAsSentBack(plan, instructions, read.contract.contract_sha256, receipt, closed ?? receipt.runFloor));
+  if (!unrevised) return null;
   const feedback = rejection
     ? (auditBlockField(rejection.block, "Feedback") ?? auditBlockField(rejection.block, "Reason"))?.trim()
     : undefined;
@@ -897,16 +952,10 @@ function targetState(
   record: PlanApprovalAskRecord | null,
   issued: CodeGenerationIssuance,
   planApprovalOff = false,
+  use: CodeGenerationApprovalUse = "build",
 ): TargetState {
-  const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued);
-  let targetId: string | null = null;
-  try {
-    targetId = codeGenerationTargetId({ unit });
-  } catch {
-    targetId = null;
-  }
-  const reviewRequested = targetId !== null && (planApprovalReviewRequested(projectDir, targetId, intentId) ||
-    planApprovalReviewRequested(projectDir, nextPlanReviewId(intentId), intentId));
+  const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued, use);
+  const reviewRequested = codeGenerationPlanReviewRequested(projectDir, unit, intentId);
   if (!reviewRequested && codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued)) {
     return { unit, kind: "approved" };
   }
@@ -1004,7 +1053,15 @@ function routedPlanApproval(projectDir: string, directive: Directive): Directive
   // The plans asked about are the ones this directive builds, whatever the
   // engine said last (the question, a pause, or a directive a compacted chat
   // must re-read).
-  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff));
+  // A Unit that owes only its completion receipt was built and reviewed: its
+  // plan is read as the completion reads it. A build directive keeps the build
+  // reading the guard and the brief use, so the plan `next` calls approved is
+  // one they admit (a reviewed stage-level build whose contract moved after its
+  // review gets its finish step instead, unless the person asked to see the
+  // plan again: finishedReviewStep, codeGenerationBuildFinishes).
+  const use: CodeGenerationApprovalUse =
+    directive.kind === "run-stage" && directive.unit_record_step !== undefined ? "completion" : "build";
+  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, use));
   if (states.every((state) => state.kind === "approved")) {
     // Under a lowered Guard Policy an approved plan that changed still builds;
     // the person hears what changed and is asked whether to go back to it, or,
@@ -1100,6 +1157,60 @@ function planApprovalAskDirective(
 // --- Publishing the question ---------------------------------------------------
 
 /**
+ * The id the code plan question goes out with. The question is its slot: while
+ * it is unanswered it keeps its id, its plans edited or not (what it shows is
+ * recorded beside it). A record answered, or reopened for a fresh look, asks a
+ * new question; in a clone, which keeps no record of its own, the committed
+ * record's open one is the question.
+ */
+export function planApprovalQuestionId(projectDir: string, _directive: PlanApprovalAskDirective): string | null {
+  try {
+    const existing = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+    if (existing !== null) {
+      return existing.results === undefined && existing.questionId ? existing.questionId : newQuestionId(projectDir);
+    }
+    return openSlotQuestionId(projectDir, { type: PLAN_APPROVAL_ASK_TYPE, stage: STAGE }) ?? newQuestionId(projectDir);
+  } catch {
+    return null;
+  }
+}
+
+// The plan question goes on the record: QUESTION_ASKED the first time its id is
+// handed out, QUESTION_SHOWN in a chat that had not seen it or with its plans
+// changed. Record-only.
+function recordPlanQuestion(
+  projectDir: string,
+  directive: PlanApprovalAskDirective,
+  record: PlanApprovalAskRecord,
+  session: string | null,
+): void {
+  const id = record.questionId;
+  if (!id) return;
+  try {
+    const shows = questionShows(record.targets.map((target) => `${target.unit ?? ""}:${target.fingerprint}`));
+    if (recordedQuestion(projectDir, id) === null) {
+      const units = record.targets.map((target) => target.unit).filter((unit): unit is string => unit !== null);
+      appendAuditEntryUnlocked("QUESTION_ASKED", {
+        ...askedQuestionFields(projectDir, { type: PLAN_APPROVAL_ASK_TYPE, shows, chat: session, id }),
+        Stage: STAGE,
+        ...(units.length === 1 ? { Unit: units[0] } : units.length > 1 ? { Units: units.join(", ") } : {}),
+        "Ask Id": record.askId,
+        Options: JSON.stringify(record.choices),
+        [QUESTION_TEXT_FIELD]: questionTextSha(record.question),
+        ...(directive.plan_approval.targets[0]?.questions_path
+          ? { "Questions File": directive.plan_approval.targets[0].questions_path }
+          : {}),
+      }, projectDir);
+      return;
+    }
+    const shown = shownAgainFields(projectDir, id, session, shows);
+    if (shown !== null) appendAuditEntryUnlocked("QUESTION_SHOWN", { ...shown, "Ask Id": record.askId }, projectDir);
+  } catch {
+    // The question is asked either way; its record is bookkeeping.
+  }
+}
+
+/**
  * Called after the ask marker is published: record the question in the
  * protected store and write each target's questions file. The same unanswered
  * question for the same files keeps its id, so a restart or a new chat shows
@@ -1146,8 +1257,9 @@ export function publishPlanApprovalAsk(
       existing.question === directive.question && existing.targets.length === targets.length &&
       existing.targets.every((target) =>
         targets.some((current) => current.unit === target.unit && current.fingerprint === target.fingerprint));
+    const questionId = (same ? existing?.questionId : undefined) ?? directive.question_id ?? newQuestionId(projectDir);
     const record: PlanApprovalAskRecord = same && existing
-      ? { ...existing, bound: true, ...shownNow(existing, session) }
+      ? { ...existing, bound: true, ...shownNow(existing, session), questionId }
       : {
           version: 1,
           askId: randomBytes(16).toString("hex"),
@@ -1159,8 +1271,10 @@ export function publishPlanApprovalAsk(
           bound: true,
           ...shownNow(null, session),
           ...shownFromNow(projectDir),
+          questionId,
         };
     writePlanApprovalAsk(projectDir, record);
+    recordPlanQuestion(projectDir, directive, record, session ?? null);
     directive.plan_approval.targets.forEach((view, index) => {
       const path = join(projectDir, view.questions_path);
       const content = questionsFileContent(
@@ -1326,12 +1440,8 @@ function currentPlanApprovalAsk(
   projectDir: string,
   answered: "none" | "some" | "all" = "none",
 ): { marker: ActiveDirectiveMarker; record: PlanApprovalAskRecord } | null {
-  let state: string;
-  try {
-    state = readFileSync(stateFilePath(projectDir), "utf-8");
-  } catch {
-    return null;
-  }
+  const state = runStateContent(projectDir);
+  if (state === null) return null;
   const marker = readActiveDirectiveMarker(projectDir, state);
   if (marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== PLAN_APPROVAL_ASK_TYPE) return null;
   const record = readPlanApprovalAsk(projectDir, marker.intent_uuid ?? "bare-space");
@@ -1899,14 +2009,12 @@ interface OpenEngineQuestion {
   askedAt: string;
 }
 
-const LATER_QUESTION_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
-
 // Whether a question was asked after `since`, the second the one in hand was
 // shown: that later question is the open one. A routing answer can only follow
 // its question, so the same second counts for it.
 function askedAfter(projectDir: string, since: string): boolean {
   return readAuditShardEvents(projectDir).some((row) =>
-    LATER_QUESTION_EVENTS.has(row.event) ? row.timestamp > since
+    QUESTION_ASKED_EVENTS.has(row.event) ? row.timestamp > since
       : row.event === "REQUEST_ROUTED" && row.timestamp >= since);
 }
 
@@ -2328,12 +2436,8 @@ function atCompletionGate(projectDir: string, unit: string | null): boolean {
  */
 export function requestPlanApprovalReviewNow(projectDir: string): string | null {
   return withAuditLock(projectDir, () => {
-    let state: string;
-    try {
-      state = readFileSync(stateFilePath(projectDir), "utf-8");
-    } catch {
-      return null;
-    }
+    const state = runStateContent(projectDir);
+    if (state === null) return null;
     const marker = readActiveDirectiveMarker(projectDir, state);
     const current = marker?.version === 2 ? marker : null;
     if ((current?.stage ?? getField(state, "Current Stage")?.trim()) !== STAGE) return null;
@@ -2388,6 +2492,8 @@ export function requestPlanApprovalReviewNow(projectDir: string): string | null 
         ...asked, askId: randomBytes(16).toString("hex"), ...shownFromNow(projectDir), bound: true,
       };
       delete reopened.replies;
+      // A fresh question: the next showing records it under a new id.
+      delete reopened.questionId;
       if (results.length > 0) reopened.results = results; else delete reopened.results;
       writePlanApprovalAsk(projectDir, reopened);
       // The answer on each file's `[Answer]:` line was the engine's own record

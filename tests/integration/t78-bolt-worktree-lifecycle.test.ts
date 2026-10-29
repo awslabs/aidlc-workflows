@@ -36,7 +36,7 @@
 //                          down the worktree via aidlc-worktree discard FIRST
 //                          (so BOLT_FAILED only lands when discard succeeded)
 //   dist/claude/.claude/tools/aidlc-worktree.ts create / discard
-//   dist/claude/.claude/tools/aidlc-lib.ts worktreePath -> intent-scoped Bolt dir.
+//   dist/claude/.claude/tools/aidlc-record-core.ts worktreePath -> intent-scoped Bolt dir.
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
 //   .sh T1  start --worktree exits 0                  -> "L1: start --worktree exits 0"

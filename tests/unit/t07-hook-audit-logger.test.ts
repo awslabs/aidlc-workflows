@@ -362,6 +362,34 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(proj, ".claude", "tools", "aidlc-settings.ts"),
     );
     copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-markdown.ts"),
+      join(proj, ".claude", "tools", "aidlc-markdown.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-locks.ts"),
+      join(proj, ".claude", "tools", "aidlc-locks.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-review-records.ts"),
+      join(proj, ".claude", "tools", "aidlc-review-records.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-record-core.ts"),
+      join(proj, ".claude", "tools", "aidlc-record-core.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-learned-date.ts"),
+      join(proj, ".claude", "tools", "aidlc-learned-date.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-unit-landing.ts"),
+      join(proj, ".claude", "tools", "aidlc-unit-landing.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-kiro-chat-record.ts"),
+      join(proj, ".claude", "tools", "aidlc-kiro-chat-record.ts"),
+    );
+    copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-install-paths.ts"),
       join(proj, ".claude", "tools", "aidlc-install-paths.ts"),
     );

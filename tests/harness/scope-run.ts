@@ -954,7 +954,7 @@ export class AgentStandIn {
       const message = String(d.message ?? "");
       const create = this.named("aidlc\\.ts engine intent create [^`]+", "engine intent create [^`]+").exec(message);
       if (!create) break;
-      const line = create[1].replace(/--label "[^"]*"/, '--label "scope run"');
+      const line = create[1].replace(/--label (?:"[^"]*"|'[^']*')/, '--label "scope run"');
       let res = this.host.bash(line);
       const said = res.stdout + res.stderr;
       // Plan approval off is the person's own call: create refuses the flag and

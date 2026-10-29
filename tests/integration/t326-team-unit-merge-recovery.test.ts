@@ -23,9 +23,10 @@ import {
   clone,
   auditBlock,
   prepareCandidate,
+  pushUnprojectedCandidate,
   completeUnitOnMain,
-  dispatchMerge,
   appendMainHumanTurn,
+  replyAfterPin,
   gateAndLand,
   nextDirective,
   unitProgressRow,
@@ -50,21 +51,8 @@ describe("t326 pinned team Unit merge", () => {
     const betaPin = runMergeTool(UNIT, ["pin", "beta"], fixture.seed);
     expect(alphaPin.status, alphaPin.out).toBe(0);
     expect(betaPin.status, betaPin.out).toBe(0);
-    const alphaPayload = JSON.parse(alphaPin.stdout);
-    const betaPayload = JSON.parse(betaPin.stdout);
-    dispatchMerge(
-      fixture.seed,
-      "alpha",
-      alphaPayload.pinned_oid,
-      alphaPayload.generation,
-    );
-    dispatchMerge(
-      fixture.seed,
-      "beta",
-      betaPayload.pinned_oid,
-      betaPayload.generation,
-    );
-    appendMainHumanTurn(fixture.seed);
+    // One reply after both pins.
+    replyAfterPin(fixture.seed, "beta");
     expect(
       runMergeTool(
         UNIT,
@@ -89,7 +77,6 @@ describe("t326 pinned team Unit merge", () => {
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
     const pinPayload = JSON.parse(pin.stdout);
-    dispatchMerge(seed, "alpha", pinPayload.pinned_oid);
     expect(
       runMergeTool(
         UNIT,
@@ -177,12 +164,6 @@ describe("t326 pinned team Unit merge", () => {
     );
     const successorPin = runMergeTool(UNIT, ["pin", "alpha"], successor.seed);
     expect(successorPin.status, successorPin.out).toBe(0);
-    const successorPayload = JSON.parse(successorPin.stdout);
-    dispatchMerge(
-      successor.seed,
-      "alpha",
-      successorPayload.pinned_oid,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -227,11 +208,6 @@ describe("t326 pinned team Unit merge", () => {
     );
     const finalizedPin = runMergeTool(UNIT, ["pin", "alpha"], finalized.seed);
     expect(finalizedPin.status, finalizedPin.out).toBe(0);
-    dispatchMerge(
-      finalized.seed,
-      "alpha",
-      JSON.parse(finalizedPin.stdout).pinned_oid,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -261,13 +237,6 @@ describe("t326 pinned team Unit merge", () => {
     prepareCandidate(fixture.remote, "alpha", "skip-drift-team");
     const pin = runMergeTool(UNIT, ["pin", "alpha"], fixture.seed);
     expect(pin.status, pin.out).toBe(0);
-    const pinPayload = JSON.parse(pin.stdout);
-    dispatchMerge(
-      fixture.seed,
-      "alpha",
-      pinPayload.pinned_oid,
-      pinPayload.generation,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -350,12 +319,14 @@ describe("t326 pinned team Unit merge", () => {
       claimedCheckout,
       readFileSync(seededStateFile(claimedCheckout), "utf-8"),
     );
+    // The claimed checkout reads another Unit's receipts the way an unscoped
+    // checkout reads them: the skeleton main built is complete here too.
     expect(claimOnlyModel.section).toBe(
       `## Unit Progress
 <!-- Derived, engine-owned projection; routing ignores hand edits. -->
 | unit | owner | functional-design | nfr-requirements | nfr-design | infrastructure-design | code-generation | gate |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| skeleton | - | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| skeleton | - | [x] | [x] | [x] | [x] | [x] | [x] |
 | alpha | claim-only | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | beta | - | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |`,
     );
@@ -461,9 +432,12 @@ describe("t326 pinned team Unit merge", () => {
       readFileSync(seededStateFile(beta), "utf-8"),
     );
     expect(model.mergedUnits.has("beta")).toBe(false);
+    // alpha's UNIT_MERGED on main is visible from beta's claimed clone, so the
+    // table carries the merged column there as it does on main.
+    expect(model.mergedUnits.has("alpha")).toBe(true);
     expect(
       model.section.split("\n").find((line) => line.startsWith("| beta |")),
-    ).toBe("| beta | - | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |");
+    ).toBe("| beta | beta-grid-team | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |");
     expect(nextDirective(beta)).toMatchObject({
       kind: "run-stage",
       stage: "functional-design",
@@ -476,7 +450,6 @@ describe("t326 pinned team Unit merge", () => {
     prepareCandidate(remote, "alpha", "offline-team");
     const offlinePin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(offlinePin.status, offlinePin.out).toBe(0);
-    dispatchMerge(seed, "alpha", JSON.parse(offlinePin.stdout).pinned_oid);
     git(seed, [
       "remote",
       "set-url",
@@ -557,9 +530,9 @@ describe("t326 pinned team Unit merge", () => {
     rmSync(teamShard);
     git(shardCandidate.checkout, ["add", "-A"]);
     git(shardCandidate.checkout, ["commit", "-m", "reuse main audit shard"]);
-    expect(
-      runMergeTool(UNIT, ["publish", "alpha"], shardCandidate.checkout).status,
-    ).toBe(0);
+    // Publish carries main's own shards as main has them, so only a forged
+    // publication puts the changed main shard in front of pin.
+    pushUnprojectedCandidate(shardCandidate.checkout, "alpha");
     const badShard = runMergeTool(UNIT, ["pin", "alpha"], shardFixture.seed);
     expect(badShard.status).not.toBe(0);
     expect(badShard.out).toContain("inherited audit shard");

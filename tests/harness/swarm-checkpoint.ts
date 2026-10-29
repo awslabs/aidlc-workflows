@@ -265,10 +265,10 @@ export function fixture(
 // baseline so the approved plan covers it; null for every other fixture.
 let addSourceBeforeBaseline: ((code: string) => void) | null = null;
 
-export function fixtureWithSource(addSource: (code: string) => void, units = ["alpha"]): string {
+export function fixtureWithSource(addSource: (code: string) => void, units = ["alpha"], policy = "strict"): string {
   addSourceBeforeBaseline = addSource;
   try {
-    return fixture(units);
+    return fixture(units, CHECK, false, null, policy);
   } finally {
     addSourceBeforeBaseline = null;
   }

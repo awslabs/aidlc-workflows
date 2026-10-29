@@ -117,10 +117,14 @@ Invoke-WebRequest `
 Remove-Item -Recurse -Force $download
 ```
 
-Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps a
-stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim, with AI-DLC's own plugin
-catalogue in `%LOCALAPPDATA%\aidlc\plugins\`. After successful verification
-and installation, the installer registers that bin directory in the current
+Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps the
+`aidlc` command in `%LOCALAPPDATA%\aidlc\bin\`: `aidlc.exe`, a copy of the AI-DLC
+binary that starts the active version, and the `aidlc.cmd` shim beside it.
+PowerShell, CMD and Git Bash all run `aidlc.exe` for a bare `aidlc`, which
+hands the active version its arguments as your shell gave them, with no cmd.exe
+in between reading `&`, `^`, `|`, `<`, `>` or `%NAME%` in them. AI-DLC's own
+plugin catalogue is in `%LOCALAPPDATA%\aidlc\plugins\`. After successful
+verification and installation, the installer registers that bin directory in the current
 account's persistent User PATH, preserving existing entries and avoiding
 duplicates on reruns. It also updates the current PowerShell process and
 notifies Windows of the environment change, so programs started afterwards
@@ -153,7 +157,7 @@ To skip **both persistent and current-process PATH changes**, replace
 a direct command to run without PATH registration. For the default location:
 
 ```powershell
-& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config
+& "$env:LOCALAPPDATA\aidlc\bin\aidlc.exe" config
 ```
 
 Use the printed command path if you changed the install location. Rerun the
@@ -175,7 +179,7 @@ Installation asks no harness question. Human and non-interactive runs install
 the same binary plus all harness runtimes.
 
 For temporary or isolated Windows installs, pass `-NoModifyPath` and invoke
-the reported `aidlc.cmd` path directly to keep the temporary bin directory out
+the reported command path directly to keep the temporary bin directory out
 of User PATH and the current process.
 
 PowerShell `-Json` emits one result with `schemaVersion: 1`, `ok`, `code`,
@@ -392,7 +396,7 @@ directory `fsync` is tolerated. These checks detect unavailable operations;
 success cannot certify atomicity or crash durability. A failed probe stops
 setup with storage remediation and nothing written (a probe that cannot be
 removed is named instead); see
-[Config fails with a hard-link error](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+[Config fails with a storage error](15-troubleshooting.md#config-fails-with-a-storage-error).
 
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
@@ -513,11 +517,19 @@ aidlc config models --reviewing-effort xhigh --project --yes
 aidlc config models --agent architect --effort xhigh --model provider/raw-id --project --yes
 aidlc config models --check
 aidlc config models --reset --project --yes
+aidlc config models --keep --yes
 aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal session model
 ```
 
 A change ends with what changed, its undo command and who picks it up (plus
 any setup step still outstanding); `--json` and `--quiet` output are unchanged.
+
+On Claude Code, Codex, opencode and Kiro CLI, while no policy is recorded, setup
+asks about models at each refresh until you answer (on Kiro IDE, Cursor and
+GitHub Copilot it never asks). Keeping the models as they are is an answer too:
+Enter at the models question, `unchanged` at first-run setup, or `--keep`
+records it in `<harness>/tools/data/harness.json` beside the providers answer,
+so setup stops asking; `--reset` clears it.
 
 `--show --json` prints every agent's effective model, effort, and provenance.
 `--check` is the CI inverse and exits non-zero when the recorded policy is not
@@ -1087,7 +1099,10 @@ except that on Kiro CLI a model or effort change applies from your next Kiro CLI
 session, since a running one keeps what it started with;
 a default scope applies to new work only, and a saved model profile changes
 nothing until `--from` loads it. The runtime, providers, and trust answers
-print no workflow line.
+print no workflow line, and neither does a command that records or clears a
+bypass no other settings file records while its variable is set in the
+environment the command runs in, whatever else it changes: open work reads the
+environment of the editor or CLI it runs in, which the command cannot see.
 
 A refresh that brings in release files (a plain `aidlc config`, `--from`,
 `--download`, `config project`, or the update a pinned project needs first)
@@ -1679,7 +1694,10 @@ a valid cached update notice. Interactive human `aidlc doctor`, and
 absent metadata within 750 ms. Other non-TTY, `--json`, and `--quiet` doctor
 runs are cache-only unless `--check-updates` is explicit. A doctor update row
 read from a check older than 24 hours names the version as the latest known
-one and says how long ago it was checked.
+one and says how long ago it was checked. On a machine that has never checked,
+a refresh that fails inside that budget leaves the row passing as not checked
+yet, naming `aidlc update --check`; only an explicit `--check-updates` reports
+the failed check.
 `doctor --check-updates` and `update --check` use a five-minute metadata
 backstop. Preview discovery and metadata downloads share the same deadline;
 looking up the preview release does not restart the timeout.
@@ -1774,7 +1792,11 @@ yes, and the file is kept beside it as `aidlc.bak-<time>`.
 
 `aidlc --help` prints exactly the six public commands. Each public command also
 has side-effect-free command help: `aidlc <command> --help` (or `-h`) for
-`config`, `doctor`, `version`, `update`, `use`, and `uninstall`. Config-level
+`config`, `doctor`, `version`, `update`, `use`, and `uninstall`. Command help
+names every option that command accepts, with a one-line meaning for each,
+grouped so download and mirror options and the options that only shape output
+read separately from the rest; `use` also describes the version it takes. The
+intent is that you can run a command correctly from its help alone. Config-level
 help names all six policy sections; `aidlc config <section> --help` keeps the
 section-specific help. `aidlc help --all` reveals the hidden `engine` and
 `system` namespaces and points to
@@ -1795,32 +1817,36 @@ Abandoned owner-private staging is swept only after lock and ownership checks.
 Unsupported directory `fsync` is tolerated, so a successful command alone
 cannot promise metadata durability after a crash.
 
-Transaction locking prefers hard links and automatically falls back to an
-owner-stamped directory. Both occupy `.aidlc-transaction.lock`, preserving
-exclusion with live legacy file owners. A dedicated owner-stamped gate in the
-local temporary directory serializes transactions and ownership changes.
-This supports only cooperating processes on **one continuously running mount
-on one host**, sharing the same canonical project path, local temporary
-directory (`TMPDIR` on Unix), and PID namespace. It is not distributed locking
-across hosts or independent mounts, even when they access the same bucket.
+Transaction locking uses one owner-stamped directory, `.aidlc-transaction.lock`
+in the project, made with an exclusive create on every storage; it also keeps
+out a live file lock left by an older release. A dedicated owner-stamped gate in
+the local temporary directory serializes transactions and ownership changes
+among commands that share it. Commands with different temporary directories,
+WSL beside Windows on one folder, or two computers on a shared folder are kept
+apart by the project lock itself: a lock stamped by another computer is never
+cleared from this one, and the command names the folder to delete once nothing
+is running there. AI-DLC makes no hard links: a document copy or a generated
+file is put at its name with an exclusive create and a rename, and never
+replaces a file another command put there first. This is not distributed
+locking across independent mounts that do not share one view of the folder,
+even when they access the same bucket.
 
-The first-run probe is an early capability check; directory-lock transactions
-also probe before applying changes. Neither replaces validation or real lock
-acquisition, and passing calls cannot prove atomic rename or crash durability.
+The first-run probe is the capability check, and transactions do not repeat
+it. It does not replace validation or real lock acquisition, and passing calls
+cannot prove atomic rename or crash durability. A transaction whose commit
+rename the storage does not support stops with the same storage line and fix.
 Compatibility depends on the driver and its actual semantics:
 
 | Storage | Compatibility boundary |
 | --- | --- |
 | Local ext4 or XFS, including EC2 EBS volumes | Suitable project storage for the required filesystem operations. |
-| POSIX-like mount without hard links | Config and transactions can run with directory locking if all remaining requirements hold, within the single-mount scope above. |
+| Storage without hard links, such as exFAT, network shares, or WSL `/mnt/c` | Config and transactions run as on local storage when the remaining requirements hold; AI-DLC makes no hard links. |
 | Mountpoint for Amazon S3 | Full workflows remain incompatible: directory rename and general mutable-file updates are unavailable. S3 Express single-file rename does not remove those limits. See [Mountpoint filesystem semantics](https://github.com/awslabs/mountpoint-s3/blob/5e400f788f8cbca028f3314d84ef2df2c7fcf536/doc/SEMANTICS.md). |
 | s3fs-fuse | Rename uses copy then delete and is not atomic. Passing probes does not establish support for general crash-safe AI-DLC transactions. See [s3fs limitations](https://github.com/s3fs-fuse/s3fs-fuse/blob/fc5778fe83b533a9beed9383f3ce99de76207ef9/README.md#L153-L163). |
 
-The fallback removes the transaction lock's hard-link requirement; separate
-operations can still require hard links, including workspace sync when it
-publishes generated files. Upstream semantics and simulated failures are not
-live validation of a particular S3 mount. Use compatible local/EBS project
-storage when a mount cannot meet these requirements; see [filesystem troubleshooting](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+Upstream semantics and simulated failures are not live validation of a
+particular S3 mount. Use compatible local/EBS project storage when a mount
+cannot meet these requirements; see [filesystem troubleshooting](15-troubleshooting.md#config-fails-with-a-storage-error).
 For foreign or incomplete lock owners, follow [Transaction lock ownership](15-troubleshooting.md#transaction-lock-ownership)
 before any manual recovery.
 
@@ -1845,8 +1871,8 @@ again (with `--purge` if the original used it):
   again from the files on disk, so a file edited after confirmation is kept.
 - If removal had begun, the same plan resumes. Files edited since are kept.
 
-The `aidlc` command itself (`aidlc.cmd`, its shim, the active-version pointers,
-and the active `aidlc.exe`) is removed last, after every other file and the
+The `aidlc` command itself (`aidlc.cmd` and `aidlc.exe` in bin, the shim, the
+active-version pointers, and the active `aidlc.exe`) is removed last, after every other file and the
 User PATH entry, so a failed cleanup still leaves a command to retry it. Because
 the PATH entry may already be gone, run that command by its full path, which
 `aidlc doctor` prints (by default

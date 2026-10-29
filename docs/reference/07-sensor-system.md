@@ -322,7 +322,8 @@ latest result on a declared output is a failure (`failedCheckNotices` in
 `aidlc-state.ts`, at most three sentences and a count), so the agent says it to
 the person with the approval question. The change lines stay what changed.
 Then one line, however many, names the checks that could not run (their script
-crashed or did not start), on a declared output or on a file the stage wrote that
+crashed or did not start, or the gate got no verdict from the dispatcher that
+runs it), on a declared output or on a file the stage wrote that
 is still there (a write-fired check such as `type-check`). A check that could
 not run, or a pass recorded with a note (tool unavailable), evaluated nothing and
 does not clear an earlier failure; a Unit's own gate names that Unit's outputs

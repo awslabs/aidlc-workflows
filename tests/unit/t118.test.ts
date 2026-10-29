@@ -403,8 +403,8 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         "persistence",
       );
       expect(r.directive.kind).toBe("print");
-      expect(r.directive.message ?? "").toContain("--scope bugfix -- 'Fix duplicate todo persistence'");
-      expect(r.directive.message ?? "").toContain("'bugfix Fix duplicate todo persistence'");
+      expect(r.directive.message ?? "").toContain('--scope bugfix --request-file aidlc/.aidlc-request-text/line-after-plan.txt` (the task: "Fix duplicate todo persistence")');
+      expect(r.directive.message ?? "").toContain('which keeps every word of theirs ("bugfix Fix duplicate todo persistence")');
       expect(r.directive.kind).not.toBe("ask");
     });
 
@@ -436,7 +436,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       const opening = emitNextNoState("classic car rental website");
       expect(opening.directive.message ?? "").not.toContain("intent create --scope classic");
       expect(opening.directive.kind).toBe("print");
-      expect(opening.directive.message ?? "").toContain("'classic car rental website'");
+      expect(opening.directive.message ?? "").toContain('which keeps every word of theirs ("classic car rental website")');
       const other = emitNextNoState("note: build a classic car site");
       expect(other.directive.message ?? "").not.toContain("intent create --scope classic");
       // A plan's name inside the sentence is their word: the request reaches the

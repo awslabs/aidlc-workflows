@@ -1422,7 +1422,7 @@ function runDetailShape(id: string, stage: string, matches = ""): void {
   expect(existsSync(detail)).toBe(true);
   const body = readFileSync(detail, "utf-8");
   const lines = body.split("\n");
-  expect(lines).toContain(`# ${id} finding — ${stage}`);
+  expect(lines).toContain(`# ${id} finding - ${stage}`);
   expect(lines.some((l) => l.startsWith("**Timestamp**: "))).toBe(true);
   expect(lines.some((l) => /^\*\*Fire id\*\*: [0-9a-f]{8}$/.test(l))).toBe(true);
   expect(lines.some((l) => l.startsWith("**Output path**: "))).toBe(true);

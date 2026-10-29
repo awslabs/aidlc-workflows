@@ -163,6 +163,8 @@ export type ReleaseFixtureOptions = {
   version?: string;
   reportedVersion?: string;
   binary?: "executable" | "bytes";
+  /** A built binary the release carries as its own, in place of the stub. */
+  binaryFrom?: string;
   distributions?: readonly string[];
   target?: string;
   hostileRoot?: string;
@@ -198,7 +200,9 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
 
   const binaryName = `aidlc-${target}${target.startsWith("windows-") ? ".exe" : ""}`;
   const binaryPath = join(options.root, binaryName);
-  if (process.platform === "win32") {
+  if (options.binaryFrom) {
+    copyFileSync(options.binaryFrom, binaryPath);
+  } else if (process.platform === "win32") {
     if (options.binary === "executable") {
       writeWindowsStub(binaryPath, reportedVersion);
     } else {

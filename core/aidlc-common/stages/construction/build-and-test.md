@@ -142,7 +142,7 @@ These are soft guidelines — the LLM can generate additional test types at any 
 Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Overall build status and prerequisites
 - Test type inventory (which test types were generated)
-- Coverage expectations per unit
+- Coverage expectations for the project and each Unit
 - A `## Target Verification Matrix` with one row per target and these columns:
   Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict
 - Each applicable target begins with Actual and Evidence `Pending`, and Verdict
@@ -168,6 +168,34 @@ Attempt to execute the build and test commands documented in the instruction fil
    malformed per-unit file may carry a project-wide command; run that command
    once, never N times. Capture and report stage-level/per-unit pass/fail
    results without double counting.
+   When a coverage floor is set for the whole project (by the Testing
+   Contract, a team rule, or a threshold in the project's coverage
+   configuration for all measured source), run the project's full-suite
+   coverage command once on the assembled project with its own
+   coverage configuration (an identical command already run in this step in
+   the same repository counts), and record its command, exit code and report
+   in `test-results.md`.
+   In a multi-repo intent, run it once in each repository the floor applies
+   to, with that repository's own command and coverage configuration, and
+   name the repository in the row's Evidence. That run, never a unit-scoped
+   one, is the Evidence for a project-wide coverage-floor row in the Target
+   Verification Matrix, and one repository's run is never the Evidence for
+   another repository's floor. A unit-scoped command whose output shows all
+   of its selected tests passed and the threshold of a floor set for the
+   whole project (one that applies to all measured source, even when the
+   runner checks it file by file) as the only cause of its non-zero exit
+   counts as passed, from a new or an already-approved instructions file:
+   record its exit code and this reason in `test-results.md`. That applies
+   only when that exit stopped no later step of the command: when a step after
+   it did not run because of it (one chained, such as `… && <lint>`, one in a
+   script or lifecycle hook the command calls, or a later task or phase of a
+   build tool; tell from the scripts, hooks and task or phase definitions the
+   command runs and from its output), the command is not exempt and its
+   non-zero exit is a failed command.
+   Any other non-zero exit (a failed or errored test, a threshold set for one
+   path or Unit), or output that does not show both, is a failed command. A
+   coverage target set for one Unit needs its own check on that Unit's scope
+   and its own evidence; a passing full-suite run does not make it `Met`.
 3. **Integration tests** (if applicable): Run integration test commands. Capture results.
 4. **Other applicable checks**: Run every applicable command from performance,
    security, contract, E2E, accessibility, and other generated instruction

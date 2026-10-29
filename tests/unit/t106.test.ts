@@ -1,6 +1,6 @@
 // covers: function:stateFilePath, function:auditFilePath
 //
-// t106 — path builders stateFilePath() / auditFilePath() in aidlc-lib.ts.
+// t106: path builders stateFilePath() / auditFilePath() in aidlc-record-core.ts.
 // Mechanism: none (in-process calls, zero LLM, zero tokens).
 // Technique: example-based.
 //

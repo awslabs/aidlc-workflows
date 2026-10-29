@@ -75,6 +75,7 @@ import {
   freshReviewReceipts,
   getField,
   hookStandsOutside,
+  isolatedRunWithoutWork,
   hostEnvelopeTurnText,
   planApprovalChallengeRelativePath,
   COMMAND_TURN_REPLY,
@@ -112,6 +113,8 @@ import {
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
+import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
+import { boxQuestionId, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/aidlc-questions.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, type NewMessage, saveMessage } from "../tools/aidlc-message-store.ts";
 
@@ -772,11 +775,35 @@ try {
       return null;
     }
   };
+  // The agent learns the id of the message it can name with --message, never
+  // its words: a reply typed or given in a question box, or a check the person
+  // asks in chat to change with nothing waiting on them (without the id, every
+  // such request met the setter's refusal first, and a setting asked in a box
+  // answer was recorded on the message typed before it). On the work, every
+  // such message gets it; outside the work or before any exists, only a reply
+  // to this chat's plan question for new work, so a setting asked beside the
+  // plan pick is recorded as theirs and no other prompt in a project with no
+  // AI-DLC work open carries the line. Once a turn. The setter's proof of the
+  // message still decides.
+  let idSaid = false;
+  const sayMessageId = (messageId: string | null, notAReply: boolean, onTheWork: boolean): void => {
+    if (idSaid || !(promptSubmitted || pickerQuestion !== undefined) || !messageId || notAReply || contextMayReachPerson) {
+      return;
+    }
+    try {
+      if (!onTheWork && (!sessionId || openPlanQuestion(projectDir, sessionId) === null)) return;
+    } catch {
+      return;
+    }
+    idSaid = true;
+    notes.push(`This message of the person's is on record as ${messageId}: a decision you record from it can ` +
+      `name it with --message ${messageId}.`);
+  };
   if (outside) {
     // A turn the host made (its notice or brief) is nobody's words here either:
     // kept, it would read as the person's prompt where their message is the
     // proof before any work exists (intent creation).
-    if (turnOrigin.kind !== "host") keepMessage();
+    if (turnOrigin.kind !== "host") sayMessageId(keepMessage(), typedParse?.command === true, false);
     sayIfKeyShaped();
     return 0;
   }
@@ -800,13 +827,17 @@ try {
   // where doctor and `next` look then, so a tool that runs no hooks is known
   // from the person's first message, before any work.
   recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
+  // The rows below go in the work's record, or with no work in the space's own
+  // while a stage run on its own is open there (its start is there).
+  const inRecord = existsSync(stateFilePath(projectDir)) ||
+    (workflow.selection !== null && isolatedRunWithoutWork(projectDir, workflow.selection));
   // A turn the host made (its notice or brief, not the person's words): none of
   // the person's authority rides on it. No turn, no kept words, no reply, no
   // switch, no conversational marker. The record keeps that it happened and why,
   // with no text, so a turn that stopped counting is visible there.
   if (turnOrigin.kind === "host") {
     const host = turnOrigin;
-    if (existsSync(stateFilePath(projectDir))) {
+    if (inRecord) {
       try {
         writeProjectHookStatusFile(projectDir, hooksHealthDir(projectDir), "record-human-turn.last", isoTimestamp());
       } catch {
@@ -831,8 +862,8 @@ try {
   // it as the engine's own parser read it; nothing is applied here.
   const messageId = keepMessage();
   sayIfKeyShaped();
-  if (existsSync(stateFilePath(projectDir))) {
-    // Inside a workflow it lands in the record, before the mint branch and
+  if (inRecord) {
+    // With a record it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,
     // or a turn with no pending question) is never mistaken for one that never
     // ran. Best-effort: a heartbeat failure never blocks the person's turn.
@@ -895,6 +926,10 @@ try {
             ...(openQuestion !== null ? { [OPEN_QUESTION_FIELD]: openQuestion } : {}),
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
             ...(messageId ? { "Message Id": messageId } : {}),
+            // The questions open where they replied, and what the stage's
+            // questions file said then (aidlc-questions.ts): facts of this
+            // moment, read from one small file. Nothing decides on them here.
+            ...turnQuestionFields(projectDir, sessionId),
           }, projectDir);
           // Keep what the person typed in this chat (recordGateWords in
           // aidlc-lib.ts). A command to AIDLC instructs the framework; the one
@@ -940,9 +975,13 @@ try {
             for (const { question, reply } of pickerReplies(input).entries) {
               if (reply === null) continue; // a question left blank carried no pick
               const options = offered.get(question);
+              // The question it answered, by its id, when the box asked one
+              // open here in the question's own words.
+              const id = boxQuestionId(projectDir, sessionId, question);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
                 Question: question,
+                ...(id !== null ? { [QUESTION_ID_FIELD]: id } : {}),
                 Reply: reply,
                 ...(options !== undefined ? { Options: JSON.stringify(options) } : {}),
               }, projectDir);
@@ -952,16 +991,7 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
-      // On the work, the agent learns the id of the message it can name with
-      // --message, never its words: a reply typed or given in a question box,
-      // or a check the person asks in chat to change with nothing waiting on
-      // them (without the id, every such request met the setter's refusal
-      // first, and a setting asked in a box answer was recorded on the message
-      // typed before it). The setter's proof of the message still decides.
-      if ((promptSubmitted || pickerQuestion !== undefined) && messageId && !notAReply && !contextMayReachPerson) {
-        notes.push(`This message of the person's is on record as ${messageId}: a decision you record from it can ` +
-          `name it with --message ${messageId}.`);
-      }
+      sayMessageId(messageId, notAReply, true);
       try {
         // The engine's guard-recovery ask keeps that the person replied; a
         // pick in a question box that offered its remedies is the host's own
@@ -986,6 +1016,8 @@ try {
       forThePerson.push(() => carryPendingPersonLines(projectDir, session));
     }
   }
+  // Before any work exists: the reply to this chat's plan question.
+  sayMessageId(messageId, typedParse?.command === true, false);
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.
 }

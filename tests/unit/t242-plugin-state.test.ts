@@ -778,6 +778,62 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a sync that meets another AI-DLC command's lock waits for it, then syncs", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    // A live holder: this process, under 2.11.2's file lock.
+    const lock = join(project, ".aidlc-transaction.lock");
+    writeFileSync(lock, `${JSON.stringify({ pid: process.pid, staging: ".aidlc-txn-held" })}\n`);
+    const letGo = setTimeout(() => rmSync(lock, { force: true }), 300);
+    try {
+      const result = await syncPlugins(project, [], ".claude");
+      expect(result.synced).toEqual(["test-pro"]);
+      expect(result.operations).toBeGreaterThan(0);
+    } finally {
+      clearTimeout(letGo);
+    }
+    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+      expect.objectContaining({ key: "test-pro", state: "current" }),
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A lock another computer left is refused with the folder to delete; a
+  // plugin select or sync says that step too, not only the refusal.
+  test("a plugin select and sync that meet another computer's lock name the folder to delete", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const lock = join(project, ".aidlc-transaction.lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({
+      schemaVersion: 1, pid: process.pid, host: "another-host", machine: "another-machine",
+      token: "another-token", staging: ".aidlc-txn-another",
+    }));
+    const step = `delete the folder ${lock} first`;
+    // A JSON line's text as the person reads it (Windows paths are escaped in it).
+    const said = (r: { stdout: string; stderr: string }) => `${r.stdout}${r.stderr}`.split("\n").map((line) => {
+      try {
+        const parsed = JSON.parse(line) as { error?: unknown; message?: unknown };
+        return String(parsed.error ?? parsed.message ?? line);
+      } catch {
+        return line;
+      }
+    }).join("\n");
+    const selected = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
+      cwd: project,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(selected.status).not.toBe(0);
+    expect(said(selected)).toContain(step);
+    const synced = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-plugin.ts"), "sync", "--project-dir", project], {
+      cwd: project,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(synced.status).not.toBe(0);
+    expect(said(synced)).toContain(step);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("public JSON and doctor expose the shared exact comparator state", () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);

@@ -1,6 +1,6 @@
 // covers: function:setCheckbox
 //
-// t108 — setCheckbox() in aidlc-lib.ts.
+// t108: setCheckbox() in aidlc-record-core.ts.
 // Mechanism: none (pure string transform, zero I/O, zero LLM, zero tokens).
 // Technique: metamorphic — the no-clobber-neighbours invariant.
 //

@@ -21,7 +21,6 @@
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
-  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -30,7 +29,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -40,6 +38,7 @@ import { jsoncSettingValue } from "./aidlc-distribution.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
   discoverSiblingRepos,
+  installWithoutReplacing,
   resolveProjectDir,
   withAuditLock,
 } from "./aidlc-lib.ts";
@@ -909,7 +908,16 @@ export function renameRetryingOnWindows(from: string, to: string): void {
 }
 
 function move(from: string, to: string, moves: Move[]): void {
-  renameRetryingOnWindows(from, to);
+  try {
+    renameRetryingOnWindows(from, to);
+  } catch (err) {
+    // A folder another sync put there meanwhile is kept (ENOTEMPTY, or EPERM
+    // or EEXIST on Windows), and this sync rolls back.
+    if (pathEntryExists(to)) {
+      throw new SyncFailure(`${basename(to)} appeared while sync was staging; no changes were applied`);
+    }
+    throw err;
+  }
   moves.push({ from, to });
 }
 
@@ -936,24 +944,13 @@ function rollbackMoves(moves: Move[]): string[] {
 }
 
 function installStagedFile(from: string, to: string, moves: Move[]): void {
-  let linked = false;
   try {
-    // link() is an atomic no-replace install on the same filesystem. Unlike
-    // rename(), it fails with EEXIST if a concurrent writer recreated `to`.
-    linkSync(from, to);
-    linked = true;
-    unlinkSync(from);
-    moves.push({ from, to });
+    installWithoutReplacing(from, to);
   } catch (err) {
-    if (linked) {
-      try {
-        unlinkSync(to);
-      } catch {
-        // The transaction error below retains every source/backup it can.
-      }
-    }
-    throw err;
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    throw new SyncFailure(`${to} changed while workspace-sync was staging; no generated files were replaced`);
   }
+  moves.push({ from, to });
 }
 
 // git's own reason, without its "Cloning into <staging folder>" progress line.
@@ -1320,7 +1317,7 @@ export function installWorkspaceRepo(
       throw new SyncFailure(`${staged.repo.name} appeared while it was being cloned; nothing was changed`);
     }
     if (text === null) {
-      renameRetryingOnWindows(join(staged.transactionDir, "clones", staged.repo.name), target);
+      move(join(staged.transactionDir, "clones", staged.repo.name), target, []);
       return;
     }
     const parsed = parseWorkspaceManifest(text);

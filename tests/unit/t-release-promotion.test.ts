@@ -394,7 +394,7 @@ describe("the stable page", () => {
   });
 
   test("the copy-channel line names the Bun floor the product enforces", () => {
-    const floor = /requires Bun\.markdown \(Bun ([0-9.]+) or newer\)/.exec(readFileSync(join(REPO_ROOT, "core/tools/aidlc-lib.ts"), "utf8"))?.[1];
+    const floor = /requires Bun\.markdown \(Bun ([0-9.]+) or newer\)/.exec(readFileSync(join(REPO_ROOT, "core/tools/aidlc-markdown.ts"), "utf8"))?.[1];
     expect(floor).toBeDefined();
     expect(promotionNotes(shipped)).toContain(`This installation path requires **Bun ${floor} or newer**`);
     expect(readFileSync(join(REPO_ROOT, "docs/guide/18-install-and-lifecycle.md"), "utf8")).toMatch(/^## Copy Channel$/m);

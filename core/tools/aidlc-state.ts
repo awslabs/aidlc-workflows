@@ -30,6 +30,7 @@ import {
   approvalDispositionField,
   rejectedFindingDispositionField,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
+  teamUnitGateStages,
 } from "./aidlc-review-brief.ts";
 import {
   activeIntent,
@@ -87,7 +88,6 @@ import {
   countCheckboxes,
   currentSwarmSourceMergeChain,
   currentSwarmAttemptObligations,
-  effectiveUnitGateRhythm,
   emitError,
   type EmitErrorMessage,
   errorMessage,
@@ -216,7 +216,7 @@ import {
   sourceClaimCovers,
   readUnitSourceManifest,
   aidlcOwnedSourceKey,
-  onlyAidlcFilesChangedSince,
+  mainCheckoutChangeAllowed,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
   resolveProjectDir,
@@ -283,11 +283,15 @@ import {
   attemptEventDefinitelyBefore,
   resolveAuditProjectPath,
   swarmWorkerWorktreeMeta,
+  UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
+import { chatTookStepHere } from "./aidlc-record-core.ts";
 import {
-  personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
+  mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
+import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
+import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -299,8 +303,20 @@ import {
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
 import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import {
+  askedQuestionFields,
+  commandChat,
+  latestAskedQuestion,
+  QUESTION_ID_FIELD,
+  questionShows,
+  shownAgainFields,
+} from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
-import { approvedOverUnfinishedReview, approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
+import {
+  approvedOverUnfinishedReview,
+  approvedUnitChanges,
+  unfinishedReviewsNotice,
+} from "./aidlc-construction-checkpoints.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -1022,6 +1038,8 @@ export function main(argv: string[]): void {
         `aidlc-state.ts ${subcommand}`,
       );
     }
+    // A Construction setting the chat changes is its step on the work.
+    if (subcommand?.startsWith("set-construction-")) chatTookStepHere(resolveProjectDir(projectDir));
     switch (subcommand) {
       case "get":
         handleGet(args.slice(1));
@@ -2007,7 +2025,9 @@ function handleRefreshUnitProgress(
         "Refusing Unit Progress refresh: payload does not match authoritative DAG/artifact/receipt/gate evidence.",
       );
     }
-    const section = foldUnit
+    // A fold keeps the other Units' rows as main has them. A main that never
+    // walked Construction has no table to keep: it gets the whole section.
+    const section = foldUnit && unitProgressSectionRange(content)
       ? foldUnitProgressSection(
         currentUnitProgressSection(content),
         authoritative.section,
@@ -2798,7 +2818,7 @@ function handleUnit(args: string[]): void {
       throw new UnitWaveRouteRefusalError(
         `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
           "(the orchestration engine currently routes it as a batch). " +
-          "A wave has no single active unit — every entry settles through " +
+          "A wave has no single active unit - every entry settles through " +
           `\`aidlc-state.ts unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
           `\`${action}\` would append a serial receipt and ` +
           "drop the deterministic batch path for every remaining unit of the stage. " +
@@ -2940,15 +2960,14 @@ function handleUnit(args: string[]): void {
       }
     }
 
-    // A Unit's Code Generation completes only once the plan it builds from lets
-    // it build (approved, or plan approval off); the plan's question is
+    // A Unit's Code Generation completes only once its plan no longer holds it
+    // (codeGenerationCompletionPlanWaits says when); the plan's question is
     // `next`'s. The remedy the person picked at the recovery question is theirs.
-    if (
-      action === "complete" && slug === "code-generation" &&
+    const planWaits = action === "complete" && slug === "code-generation" &&
       !guardRecoveryAnswerAdmits(readActiveDirectiveMarker(pd, content), ["engine", "state", "unit", ...args], pd) &&
-      codeGenerationCompletionPlanWaits(pd, content, [unit])
-    ) {
-      error(`Refusing to complete unit "${unit}" for "${slug}": ${codeGenerationPlanWaitsStep()}`);
+      codeGenerationCompletionPlanWaits(pd, content, [unit]);
+    if (planWaits) {
+      error(`Refusing to complete unit "${unit}" for "${slug}": ${codeGenerationPlanWaitsStep(undefined, planWaits === "plan-review")}`);
     }
 
     // UNIT_COMPLETED is receipt-plus-evidence: the receipt commits only when
@@ -3583,6 +3602,32 @@ function currentAttemptSwarmUnits(
   return [...obligations.units];
 }
 
+// The walking skeleton is built on the main checkout and approved at its own
+// checkpoint before the swarm starts, and the swarm leaves it out of its
+// batches, as it does a Unit the person skipped: no Bolt merge ever lands it,
+// so its approval is its authority and it owes no merge. A Unit a current
+// swarm batch started or converged still owes one, approved or not. Unreadable
+// evidence exempts nothing.
+function unitsOwingNoSwarmMerge(pd: string, slug: string): Set<string> {
+  try {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, undefined, undefined, unreadable);
+    const floor = latestMainWorkflowStageRunFloorForProject(pd, slug, false, undefined, rows);
+    if (unreadable.length > 0 || floor.startsWith("AMBIGUOUS:")) return new Set();
+    const built = new Set<string>();
+    for (const row of rows) {
+      if (auditBlockField(row.block, "Stage") !== slug || auditBlockField(row.block, "Run floor") !== floor) continue;
+      const names = row.event === "SWARM_STARTED" ? auditBlockField(row.block, "Unit names")
+        : row.event === "SWARM_UNIT_CONVERGED" ? auditBlockField(row.block, "Unit name")
+        : null;
+      for (const unit of (names ?? "").split(",")) if (unit.trim()) built.add(unit.trim());
+    }
+    return new Set([...approvedConstructionUnits(pd, readStateFile(pd))].filter((unit) => !built.has(unit)));
+  } catch {
+    return new Set();
+  }
+}
+
 function verifySettledSwarmSourceBinding(
   pd: string,
   stage: { slug: string; workspace_requires?: boolean },
@@ -3600,6 +3645,9 @@ function verifySettledSwarmSourceBinding(
       `${reviewerPreconditionPrefix(stage.slug, action)}: its settled swarm Unit obligations cannot be resolved for the current attempt.`,
     );
   }
+  const exempt = unitsOwingNoSwarmMerge(pd, stage.slug);
+  const owed = units.filter((unit) => !exempt.has(unit));
+  if (owed.length === 0) return;
   const chain = currentSwarmSourceMergeChain(pd, stage.slug);
   if (chain.state === "none") {
     error(
@@ -3611,17 +3659,20 @@ function verifySettledSwarmSourceBinding(
       `Refusing to complete "${stage.slug}": its post-merge main-checkout source binding chain is invalid (${chain.reason}). Re-run the affected source merge or restart the Bolt attempt.`,
     );
   }
-  const missing = units.filter((unit) => !chain.units.has(unit));
+  const missing = owed.filter((unit) => !chain.units.has(unit));
   if (missing.length > 0) {
     error(
       `Refusing to complete "${stage.slug}": ${missing.length} converged unit(s) have no current-attempt post-merge source binding (${missing.join(", ")}). Merge every reviewed source commit before approval.`,
     );
   }
   const current = workspaceSourceState(pd);
-  // An AI-DLC update the person took after the last merge changed only
-  // AI-DLC's own files: nobody's source moved.
-  const moved = current !== null && !sameWorkspaceSource(chain.fingerprint, current.fingerprint) &&
-    !onlyAidlcFilesChangedSince(pd, stage.slug, chain.listing, current);
+  // An AI-DLC update the person took after the last merge, or a file Git
+  // ignores written since (a dev server's log), is nobody's source
+  // (aidlc-swarm-source.ts).
+  const changed = current === null || sameWorkspaceSource(chain.fingerprint, current.fingerprint)
+    ? []
+    : swarmSourceChangedSince(pd, stage.slug, chain.listing, current);
+  const moved = changed?.length !== 0;
   if (moved && current !== null && guardPolicyAcceptsChanges(pd)) {
     // Kept under relaxed or off: edits made after the last merge stay, once recorded.
     if (changeControlPreflight) return;
@@ -3633,9 +3684,26 @@ function verifySettledSwarmSourceBinding(
     if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
     return;
   }
+  // Under strict, files the person asked to change (swarm allow-change) stay
+  // too, recorded with the message they asked in; that step already told them.
+  const asked = mainCheckoutChangeAllowed(pd, changed);
+  if (moved && current !== null && asked !== null) {
+    if (changeControlPreflight) return;
+    recordAcceptedChanges(pd, [{
+      checkpoint: "swarm-batch", stage: stage.slug, unit: null, changed,
+      recorded: chain.fingerprint, current: current.fingerprint,
+      notice: "Files in the main checkout changed after the last unit was merged, as you asked. Kept them.",
+      messageIds: asked,
+    }]);
+    return;
+  }
   if (current === null || moved) {
+    const undo = "Revert the unreviewed edit or restart and re-review the affected Bolt.";
     error(
-      `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
+      `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge ` +
+        (changed && changed.length > 0
+          ? `(${renderChangedPaths(changed)}). ${mainCheckoutChangeStep(pd, changed, undo, "run the same command again")}`
+          : `(source-fingerprint mismatch). ${undo}`),
     );
   }
 }
@@ -3921,10 +3989,6 @@ function gateSensorDispatchTimeoutMs(): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function diagnosticSnippet(value: string | null | undefined): string {
-  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
-}
-
 function gateSensorMatchesOutput(
   sensor: NonNullable<
     NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
@@ -4068,6 +4132,7 @@ function fireGateSensors(
         });
         continue;
       }
+      const fireId = generateFireId();
       const args = [
         "fire",
         sensor.id,
@@ -4075,12 +4140,15 @@ function fireGateSensors(
         stage.slug,
         "--output-path",
         outputPath,
+        "--fire-id",
+        fireId,
         ...(choice?.unit ? ["--unit", choice.unit] : []),
         ...(fire.pathSet ? ["--paths-stdin", "json"] : []),
       ];
       const command = executable
         ? [executable, "engine", "sensor", ...args]
         : [process.execPath, sensorTool, ...args];
+      const startedAt = Date.now();
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,
         encoding: "utf-8",
@@ -4092,8 +4160,26 @@ function fireGateSensors(
         },
         ...(fire.pathSet ? { input: JSON.stringify(fire.covered) } : {}),
       });
+      // A fire that gave no verdict is recorded whatever the check's severity,
+      // so the gate says it could not run; a blocking one still refuses below.
+      const outcome = unfinishedFire(result, parseSensorFireVerdict(result.stdout ?? ""));
+      if (outcome.unfinished !== null) {
+        try {
+          recordUnfinishedFire(pd, {
+            fireId,
+            sensorId: sensor.id,
+            stageSlug: stage.slug,
+            unit: choice?.unit ?? null,
+            outputPath,
+            durationMs: Date.now() - startedAt,
+            note: outcome.unfinished.note,
+          });
+        } catch (error) {
+          recordHookDrop(pd, "gate-sensors", `sensor ${sensor.id} at ${stage.slug} (Fire id ${fireId}) ${outcome.unfinished.reason}; its could-not-run row was not written: ${errorMessage(error)}`);
+        }
+      }
       if (sensor.default_severity !== "blocking") {
-        const verdict = parseSensorFireVerdict(result.stdout ?? "");
+        const { verdict } = outcome;
         if (verdict?.result === "failed" && verdict.detail_path !== null) failedFires.push(verdict.fire_id);
         continue;
       }
@@ -4107,42 +4193,16 @@ function fireGateSensors(
         });
         continue;
       }
-      if (result.error) {
-        const code = (result.error as NodeJS.ErrnoException).code ?? "unknown";
+      if (outcome.unfinished !== null) {
         issues.push({
           sensorId: sensor.id,
           outputPath,
           detailPath: null,
-          reason:
-            code === "ETIMEDOUT"
-              ? "dispatcher timeout"
-              : `dispatcher spawn failed (${code})`,
+          reason: outcome.unfinished.reason,
         });
         continue;
       }
-      if (result.status !== 0) {
-        const stderr = diagnosticSnippet(result.stderr);
-        issues.push({
-          sensorId: sensor.id,
-          outputPath,
-          detailPath: null,
-          reason:
-            result.status === null
-              ? `dispatcher terminated by ${result.signal ?? "unknown signal"}`
-              : `dispatcher exited ${result.status}${stderr ? `: ${stderr}` : ""}`,
-        });
-        continue;
-      }
-      const verdict = parseSensorFireVerdict(result.stdout ?? "");
-      if (verdict === null) {
-        issues.push({
-          sensorId: sensor.id,
-          outputPath,
-          detailPath: null,
-          reason: "dispatcher returned no valid verdict",
-        });
-        continue;
-      }
+      const { verdict } = outcome;
       let verdictOutputPath: string | null = null;
       try {
         verdictOutputPath = realpathSync(
@@ -5152,10 +5212,15 @@ function refuseStateGuard(
 
 // The person's own approval, carried through the admission chain. It goes over
 // a review the agent asked for that has no verdict yet, or one whose verdict is
-// the NOT-READY fallback no reviewer gave; the chain sets overUnfinishedReview
-// when it did, so the approval is recorded that way.
+// the NOT-READY fallback no reviewer gave; the chain adds each such stage to
+// unfinishedReviews, once, so the approval is recorded that way and its one
+// line names them.
 export interface PersonApproval {
-  overUnfinishedReview: boolean;
+  unfinishedReviews: string[];
+}
+
+function approvesOverUnfinishedReview(personCall: PersonApproval, slug: string): void {
+  if (!personCall.unfinishedReviews.includes(slug)) personCall.unfinishedReviews.push(slug);
 }
 
 // A review request with no verdict yet that the person may approve over,
@@ -5165,6 +5230,7 @@ function approvableUnfinishedReview(
   pd: string,
   content: string,
   receipts: ReturnType<typeof freshReviewReceipts>,
+  slug: string,
   personCall: PersonApproval | undefined,
   unit?: string,
 ): boolean {
@@ -5179,7 +5245,7 @@ function approvableUnfinishedReview(
   ) {
     return false;
   }
-  personCall.overUnfinishedReview = true;
+  approvesOverUnfinishedReview(personCall, slug);
   return true;
 }
 
@@ -5188,6 +5254,7 @@ function approvableUnfinishedReview(
 // did not finish.
 function noteVerdictNotFinished(
   receipts: ReturnType<typeof freshReviewReceipts>,
+  slug: string,
   personCall: PersonApproval | undefined,
   unit?: string,
 ): void {
@@ -5195,13 +5262,8 @@ function noteVerdictNotFinished(
   const scopes = unit === undefined ? [...(receipts.unfinishedVerdicts ?? [])] : [unit];
   if (scopes.some((scope) => receipts.unfinishedVerdicts?.has(scope) === true &&
     (scope === "" ? receipts.stageVerdict !== null : receipts.unitVerdicts.has(scope)))) {
-    personCall.overUnfinishedReview = true;
+    approvesOverUnfinishedReview(personCall, slug);
   }
-}
-
-// The one line the person hears when their approval went over that review.
-function unfinishedReviewNotice(stage: { name: string }, unit?: string): string {
-  return `Approved. The ${stage.name} review${unit ? ` for ${unit}` : ""} did not finish.`;
 }
 
 function verifyReviewerPrecondition(
@@ -5308,10 +5370,10 @@ function verifyReviewerPrecondition(
   // The person's own approval goes over a recovery review that never finished,
   // as over any other unfinished review, unless their team locks it.
   const heldRecoveryUnits = pendingRecoveryUnits.filter(
-    (unit) => !approvableUnfinishedReview(pd, content, receipts, personCall, unit),
+    (unit) => !approvableUnfinishedReview(pd, content, receipts, stage.slug, personCall, unit),
   );
   const stageRecoveryHeld = recoveryReviewOwed(pd, content, receipts.stagePending) &&
-    !approvableUnfinishedReview(pd, content, receipts, personCall);
+    !approvableUnfinishedReview(pd, content, receipts, stage.slug, personCall);
   if (stageRecoveryHeld || heldRecoveryUnits.length > 0) {
     const scope =
       heldRecoveryUnits.length > 0
@@ -5442,7 +5504,7 @@ function verifyReviewerPrecondition(
   const staleRecovery = staleUnit === undefined ? receipts.stagePending : receipts.unitPending.get(staleUnit);
   if (
     staleSource &&
-    !(staleRecovery?.recovery === true && approvableUnfinishedReview(pd, content, receipts, personCall, staleUnit))
+    !(staleRecovery?.recovery === true && approvableUnfinishedReview(pd, content, receipts, stage.slug, personCall, staleUnit))
   ) {
     // On a stage built Unit by Unit, a change no Unit's manifest claims is
     // named first: its way on (the Unit that made it lists the path and is
@@ -5485,13 +5547,13 @@ function verifyReviewerPrecondition(
   // modern global binding was still compared above, preserving crash recovery.
   if (!requireReceiptExistence) return;
 
-  noteVerdictNotFinished(receipts, personCall);
+  noteVerdictNotFinished(receipts, stage.slug, personCall);
   const sawStageReview = receipts.stageVerdict !== null;
   const reviewedUnits = new Set(receipts.unitVerdicts.keys());
 
   if (!perUnit) {
     if (!sawStageReview) {
-      if (approvableUnfinishedReview(pd, content, receipts, personCall)) return;
+      if (approvableUnfinishedReview(pd, content, receipts, stage.slug, personCall)) return;
       if (receipts.stageStale) {
         staleReviewPreconditionError(
           pd,
@@ -5520,7 +5582,7 @@ function verifyReviewerPrecondition(
   const noDagObserved = resolution.state === "none";
   if (noDagObserved) {
     if (receipts.mergedBoltUnits.size === 0) {
-      if (!sawStageReview && !approvableUnfinishedReview(pd, content, receipts, personCall)) {
+      if (!sawStageReview && !approvableUnfinishedReview(pd, content, receipts, stage.slug, personCall)) {
         reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
       }
       return;
@@ -5528,7 +5590,7 @@ function verifyReviewerPrecondition(
     if (sawStageReview) return;
     reviewUnits = [...receipts.mergedBoltUnits].sort();
   } else if (resolution.units.length === 0) {
-    if (!sawStageReview && !approvableUnfinishedReview(pd, content, receipts, personCall)) {
+    if (!sawStageReview && !approvableUnfinishedReview(pd, content, receipts, stage.slug, personCall)) {
       reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
     }
     return;
@@ -5554,7 +5616,7 @@ function verifyReviewerPrecondition(
   // A Unit the person approved at its checkpoint as it was, over this
   // stage's review that did not finish, owes no verdict here either.
   const missing = reviewUnits.filter(
-    (u) => !reviewedUnits.has(u) && !approvableUnfinishedReview(pd, content, receipts, personCall, u) &&
+    (u) => !reviewedUnits.has(u) && !approvableUnfinishedReview(pd, content, receipts, stage.slug, personCall, u) &&
       !approvedOverUnfinishedReview(pd, content, stage.slug, u),
   );
   if (missing.length > 0) {
@@ -6088,7 +6150,7 @@ function handleAdvance(
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to advance — fix the state file first.`
+      `State file has no Scope field. Refusing to advance - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -6335,7 +6397,7 @@ function handleFinalize(args: string[]): void {
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to finalize — fix the state file first.`
+      `State file has no Scope field. Refusing to finalize - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -6471,7 +6533,7 @@ function handleCompleteWorkflow(
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to complete workflow — fix the state file first.`
+      `State file has no Scope field. Refusing to complete workflow - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -6607,21 +6669,10 @@ function teamGateContext(
   if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
     error(`Unit "${unit}" is not in the authoritative unit DAG.`);
   }
-  const rhythm = effectiveUnitGateRhythm(pd, content);
-  if (rhythm === "per-stage") {
-    return { unit, scope: "per-stage", stages: [stage] };
+  const { scope, stages } = teamUnitGateStages(pd, content, stage);
+  if (scope === "per-stage") {
+    return { unit, scope, stages };
   }
-  const workflowScope = getField(content, "Scope") ?? "";
-  const stages = unitMajorConstructionStageSlugs(
-    workflowScope,
-    content,
-    true,
-  )
-    .map((slug) => findStageBySlug(slug))
-    .filter(
-      (entry): entry is NonNullable<ReturnType<typeof findStageBySlug>> =>
-        !!entry,
-    );
   const final = stages[stages.length - 1];
   if (!final || final.slug !== stage.slug) {
     error(
@@ -6669,9 +6720,9 @@ function verifyReviewerPreconditionForUnit(
   // The same governed checkpoint as the stage-level verifier, for one Unit.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   observeChangeControl(pd, content, receipts);
-  noteVerdictNotFinished(receipts, personCall, unit);
+  noteVerdictNotFinished(receipts, stage.slug, personCall, unit);
   if (action === "present-approval-gate") sayEditedReview(pd, content, stage, unit);
-  if (!receipts.unitVerdicts.has(unit) && !approvableUnfinishedReview(pd, content, receipts, personCall, unit)) {
+  if (!receipts.unitVerdicts.has(unit) && !approvableUnfinishedReview(pd, content, receipts, stage.slug, personCall, unit)) {
     const message =
       `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +
       `REVIEW_COMPLETED receipt from ${stage.reviewer} is recorded for this unit.`;
@@ -6919,7 +6970,7 @@ export function guardPreflight(
       action: options.action,
       ...(options.unit !== undefined ? { unit: options.unit } : {}),
       ...(options.entrypoint ? { entrypoint: options.entrypoint } : {}),
-      ...(options.personApproves ? { personCall: { overUnfinishedReview: false } } : {}),
+      ...(options.personApproves ? { personCall: { unfinishedReviews: [] } } : {}),
     });
     return { executable: true };
   } catch (error) {
@@ -6976,7 +7027,33 @@ function gateAskFields(
     fields["Open Decisions"] = "0";
   }
   if (stage.workspace_requires) Object.assign(fields, sourceWorkFields());
+  // The gate's own question record (aidlc-questions.ts): what it shows is the
+  // brief rendered for it and the documents it is about.
+  let outputs: string | null = null;
+  try {
+    outputs = reviewArtifactFingerprint(pd, stage, unit, { stateContent: content });
+  } catch {
+    outputs = null;
+  }
+  Object.assign(fields, askedQuestionFields(pd, {
+    type: "gate",
+    shows: questionShows([fields["Brief Digest"], outputs ?? "none"]),
+  }));
   return fields;
+}
+
+// The gate already open, shown again: its question's id for the step, and a
+// QUESTION_SHOWN row when this chat had not seen it. Record-only.
+function openGateQuestionId(pd: string, slug: string, unit: string | null): string | null {
+  try {
+    const open = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage: slug, unit });
+    if (open === null) return null;
+    const shown = shownAgainFields(pd, open.id, commandChat(pd));
+    if (shown !== null) emitAudit(pd, "QUESTION_SHOWN", shown);
+    return open.id;
+  } catch {
+    return null;
+  }
 }
 
 // Where the review-brief CLI keeps the renderings it printed for this gate.
@@ -7431,7 +7508,7 @@ function handleGateStart(args: string[]): void {
     (preflightTeamGate !== null || !isAutonomousConstructionGate(preflightContent, preflightStage, pd)) &&
     (humanPresenceGuardDisabled() || humanRepliedSinceGate(pd));
   const personCall = (): PersonApproval | undefined =>
-    personApproves ? { overUnfinishedReview: false } : undefined;
+    personApproves ? { unfinishedReviews: [] } : undefined;
   admitStageAction(pd, preflightContent, preflightStage, {
     action: "present-approval-gate",
     ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
@@ -7482,6 +7559,7 @@ function handleGateStart(args: string[]): void {
       );
     }
     if (status === "awaiting-approval") {
+      const questionId = openGateQuestionId(pd, slug, teamGate.unit);
       console.log(
         JSON.stringify({
           slug,
@@ -7490,19 +7568,21 @@ function handleGateStart(args: string[]): void {
           new_state: "awaiting-approval",
           already_awaiting_approval: true,
           revalidated: true,
+          ...(questionId !== null ? { question_id: questionId } : {}),
         }),
       );
       return;
     }
     const timestamp = isoTimestamp();
     content = setField(content, "Last Updated", timestamp);
+    const asked: Record<string, string> = {
+      ...teamGateFields(stage, teamGate),
+      ...(artifacts ? { Artifacts: artifacts } : {}),
+      ...(recovered ? { Recovered: "true" } : {}),
+      ...gateAskFields(pd, stage, content, teamGate.unit, []),
+    };
     try {
-      emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
-        ...teamGateFields(stage, teamGate),
-        ...(artifacts ? { Artifacts: artifacts } : {}),
-        ...(recovered ? { Recovered: "true" } : {}),
-        ...gateAskFields(pd, stage, content, teamGate.unit, []),
-      });
+      emitAudit(pd, "STAGE_AWAITING_APPROVAL", asked);
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
@@ -7513,6 +7593,7 @@ function handleGateStart(args: string[]): void {
       gate_scope: teamGate.scope,
       new_state: "awaiting-approval",
       timestamp,
+      question_id: asked[QUESTION_ID_FIELD],
     }));
     return;
   }
@@ -7521,6 +7602,7 @@ function handleGateStart(args: string[]): void {
   admitStageAction(pd, content, stage, { action: "present-approval-gate", personCall: personCall() });
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
   if (alreadyAwaiting) {
+    let questionId: string | null = null;
     if (
       gateSensorEvaluation.issues.length > 0 &&
       overrideBlockingSensors
@@ -7537,9 +7619,12 @@ function handleGateStart(args: string[]): void {
           true,
         );
         emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
+        questionId = fields[QUESTION_ID_FIELD];
       } catch (e) {
         error(`Audit emission failed: ${errorMessage(e)}`);
       }
+    } else {
+      questionId = openGateQuestionId(pd, slug, null);
     }
     console.log(
       JSON.stringify({
@@ -7547,6 +7632,7 @@ function handleGateStart(args: string[]): void {
         new_state: "awaiting-approval",
         already_awaiting_approval: true,
         revalidated: true,
+        ...(questionId !== null ? { question_id: questionId } : {}),
       }),
     );
     return;
@@ -7557,6 +7643,7 @@ function handleGateStart(args: string[]): void {
   const timestamp = isoTimestamp();
   content = setField(content, "Last Updated", timestamp);
 
+  let questionId: string | undefined;
   try {
     const fields: Record<string, string> = {
       Stage: slug,
@@ -7571,6 +7658,7 @@ function handleGateStart(args: string[]): void {
       overrideBlockingSensors,
     );
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
+    questionId = fields[QUESTION_ID_FIELD];
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
@@ -7581,6 +7669,7 @@ function handleGateStart(args: string[]): void {
     new_state: "awaiting-approval",
     timestamp,
     ...(together.length > 0 ? { approves_together: together } : {}),
+    ...(questionId !== undefined ? { question_id: questionId } : {}),
   }));
   });
 }
@@ -7793,7 +7882,7 @@ function handleApprove(args: string[]): void {
       action: "complete",
       entrypoint: "approve",
       unit: preflightTeamGate.unit,
-      personCall: { overUnfinishedReview: false },
+      personCall: { unfinishedReviews: [] },
     });
   } else {
     verifyStageArtifacts(
@@ -7855,7 +7944,7 @@ function handleApprove(args: string[]): void {
 
   if (teamGate) {
     // A team Unit gate is always the person's to approve (checked above and below).
-    const teamPersonCall: PersonApproval = { overUnfinishedReview: false };
+    const teamPersonCall: PersonApproval = { unfinishedReviews: [] };
     admitStageAction(pd, content, stage, {
       action: "complete",
       entrypoint: "approve",
@@ -7906,7 +7995,7 @@ function handleApprove(args: string[]): void {
                 reviewFindingDispositions,
             }
           : {}),
-        ...(teamPersonCall.overUnfinishedReview ? { Review: "not finished" } : {}),
+        ...(teamPersonCall.unfinishedReviews.length > 0 ? { Review: "not finished" } : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -7919,8 +8008,8 @@ function handleApprove(args: string[]): void {
       gate_scope: teamGate.scope,
       approved: true,
       timestamp,
-      ...(teamPersonCall.overUnfinishedReview
-        ? { change_notices: [unfinishedReviewNotice(stage, teamGate.unit)] }
+      ...(teamPersonCall.unfinishedReviews.length > 0
+        ? { change_notices: [unfinishedReviewsNotice(teamPersonCall.unfinishedReviews, teamGate.unit)] }
         : {}),
     }));
     return;
@@ -8031,7 +8120,7 @@ function handleApprove(args: string[]): void {
   // The person's own approval goes over a review that never finished.
   const personCall: PersonApproval | undefined = autonomousDecision
     ? undefined
-    : { overUnfinishedReview: false };
+    : { unfinishedReviews: [] };
   admitStageAction(pd, content, stage, {
     action: "complete",
     entrypoint: "approve",
@@ -8051,7 +8140,7 @@ function handleApprove(args: string[]): void {
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`,
+      `State file has no Scope field. Refusing to advance after approve - fix the state file first.`,
     );
   }
   if (!validScopes().has(scope)) {
@@ -8091,7 +8180,7 @@ function handleApprove(args: string[]): void {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
     }
-    if (personCall?.overUnfinishedReview) gateFields.Review = "not finished";
+    if ((personCall?.unfinishedReviews.length ?? 0) > 0) gateFields.Review = "not finished";
     Object.assign(gateFields, briefDigestField(pd, stage, undefined), decisionsAcceptedOpenField(pd, slug, undefined));
     if (stage.workspace_requires) Object.assign(gateFields, sourceWorkFields());
     emitAudit(pd, "GATE_APPROVED", gateFields);
@@ -8108,8 +8197,8 @@ function handleApprove(args: string[]): void {
 
   writeStateFile(pd, content);
   sayChangedBeforeCodeGeneration(pd, slug);
-  if (personCall?.overUnfinishedReview) {
-    console.log(JSON.stringify({ change_notices: [unfinishedReviewNotice(stage)] }));
+  if (personCall !== undefined && personCall.unfinishedReviews.length > 0) {
+    console.log(JSON.stringify({ change_notices: [unfinishedReviewsNotice(personCall.unfinishedReviews)] }));
   }
 
   // No explicit consume step (ledger-event design): the GATE_APPROVED
@@ -8671,7 +8760,8 @@ function handleRevise(args: string[]): void {
 // every other Unit still does. Only when no Unit owes the stage any more (each
 // is skipped or kind-vacuous) does the stage itself become [S]: a later block
 // stage is marked in place with one conditional STAGE_SKIPPED, and the Current
-// Stage takes the routed path above.
+// Stage takes the routed path above. A team-owned Unit's skip writes only its
+// receipt, which travels with the Unit's published work.
 function handleSkip(args: string[]): void {
   if (args.length < 1) {
     error("Usage: aidlc-state.ts skip <slug> [--reason <text>] [--route | --unit <name>]");
@@ -8709,16 +8799,16 @@ function handleSkip(args: string[]): void {
     if (!approvedBehind) validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
     const perUnitConstruction = (s: { phase: string; for_each?: string } | undefined) =>
       s?.phase === "construction" && s.for_each === "unit-of-work";
+    const teamOwned = isTeamUnitOwnership(content);
     if (
       getField(content, "Construction Iteration")?.trim() !== "unit-major" ||
-      isTeamUnitOwnership(content) ||
       !perUnitConstruction(stage) ||
       !perUnitConstruction(graph[currentIndex]) ||
       (!approvedBehind && currentIndex > graph.findIndex((s) => s.slug === slug))
     ) {
       error(
         `Cannot skip "${slug}" for unit "${unit}": a one-unit skip needs Construction Iteration: ` +
-          `unit-major with solo units, and a per-unit Construction stage at or after Current Stage "${currentStage}", ` +
+          `unit-major, and a per-unit Construction stage at or after Current Stage "${currentStage}", ` +
           "or one approved before it.",
       );
     }
@@ -8735,10 +8825,9 @@ function handleSkip(args: string[]): void {
     if (!owes(unit)) {
       error(`Cannot skip "${slug}" for unit "${unit}": that unit owes nothing for this stage.`);
     }
-    // Floored per Unit wherever its other lifecycle rows are (solo unit-major
-    // too); team-owned Units keep their own rule.
-    const checkpoints = getField(content, "Construction Checkpoints") === "enabled" ||
-      (!isTeamUnitOwnership(content) && getField(content, "Construction Iteration")?.trim() === "unit-major");
+    // Floored per Unit wherever its other lifecycle rows are, as the Unit's
+    // UNIT_STARTED and UNIT_COMPLETED rows are.
+    const checkpoints = unitScopedLifecycleFloors(content);
     try {
       emitAudit(pd, "UNIT_SKIPPED", {
         Stage: slug,
@@ -8760,6 +8849,12 @@ function handleSkip(args: string[]): void {
     // A Unit's step the person asked to skip spends what they typed for it:
     // their words were the skip. The agent's own skip leaves them kept.
     if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+    // A team's Unit is skipped for itself only: the stage's own checkbox is
+    // derived from every team's Units, so it is never marked or routed here.
+    if (teamOwned) {
+      console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped" }));
+      return;
+    }
     if (approvedBehind) {
       console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped", stage_state: "completed" }));
       return;
@@ -9566,7 +9661,9 @@ function handleReuseArtifact(args: string[]): void {
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
   const repoFlag = getFlagValue(rest, "--repo");
-  const unitFlag = getFlagValue(rest, "--unit");
+  // The engine's own {unit-name}, as an isolated step leaves it, names no Unit.
+  const unitGiven = getFlagValue(rest, "--unit");
+  const unitFlag = unitGiven === UNIT_NAME_PLACEHOLDER ? undefined : unitGiven;
   const singleRun = rest.includes("--single");
   if (unitFlag !== undefined && unitFlag !== null && !UNIT_NAME_REGEX.test(unitFlag)) error(`Invalid Unit name: ${unitFlag}`);
   if (!decision) error("Missing --decision <keep|modify|redo>");

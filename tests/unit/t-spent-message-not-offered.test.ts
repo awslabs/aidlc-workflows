@@ -8,10 +8,11 @@
 // not offered: a live Copilot run took their "Approve" for Requirements
 // Analysis from that offer and turned plan approval off, set by them, with the
 // plan question unanswered. A message that already gave an approval is offered
-// for no setting at all (t-setting-spent-message), so "approve, and turn plan
-// approval off" runs the setting first, before the plan question, where the
-// message is still offered; so is a reply sent since the question was shown, or
-// a message no decision has followed. The refusal, its next step and the plan
+// for a setting only while that approval's reply is in hand
+// (t-setting-rides-approval; later, for none, t-setting-spent-message), so
+// "approve, and turn plan approval off" is offered before the plan question,
+// the setting run first or after the approval; so is a reply sent since the
+// question was shown, or a message no decision has followed. The refusal, its next step and the plan
 // question are as they were; the tool reads no words.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -292,15 +293,17 @@ describe("before the plan question, the message an approval is given in is offer
     expect(auditBlockField(lastCeremonySet(proj), "Person Reply")).toBe("approve the plan, and turn plan approval off from here");
   });
 
-  test("the approval recorded first: no refusal names their message for the setting any more", () => {
+  // The approval's own reply is still in hand (t-setting-rides-approval).
+  test("the approval recorded first: the refusal names their message, and the setting on it is theirs", () => {
     const proj = bugfixAtRequirements();
     const both = said(proj, "approve, and turn plan approval off");
     tick();
     approveRequirements(proj);
     const refused = planApprovalOff(proj);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).not.toContain(both);
-    expect(planApprovalOff(proj, both).rc).not.toBe(0);
-    expect(stateField(proj, "Plan Approval")).not.toBe("off (set by you)");
+    expect(refused.out).toContain(`If their message ${both} (sent `);
+    const off = planApprovalOff(proj, both);
+    expect(off.rc, off.out).toBe(0);
+    expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
   });
 });

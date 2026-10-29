@@ -109,6 +109,8 @@ import { memoryDirFor } from "./aidlc-graph.ts";
 import {
   activeIntent,
   appendUnderHeading,
+  CHANGE_CONTROL_HEADING,
+  GUARD_POLICY_HEADING,
   LEARNINGS_SELECTIONS_DIR,
   normalizeDriveLetter,
   agentFileText,
@@ -142,12 +144,15 @@ import {
   constructionCheckpointsApply,
   approvesTogetherStages,
   spacesRoot,
+  structuredField,
   validSpaceFlag,
   withAuditLock,
   writeFileAtomic,
   harnessDir,
 } from "./aidlc-lib.ts";
 import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
+import { LEARNED_DATE_SOURCE, learnedDate } from "./aidlc-learned-date.ts";
+import { TESTING_HEADING } from "./aidlc-testing-posture.ts";
 import { SLUG_RE } from "./aidlc-stage-schema.ts";
 
 // --- Exit-code convention (plan §2) ---
@@ -402,7 +407,7 @@ function resolveMemoryPath(
   if (!stage) {
     fail(
       `stage "${slug}" is not in the stage graph and runtime-graph.json records no ` +
-        `memory_path for it — cannot resolve the stage diary`,
+        `memory_path for it - cannot resolve the stage diary`,
       1
     );
   }
@@ -801,6 +806,16 @@ function priorLegacyAuditRow(auditContent: string, slug: string, candidateId: st
 // heading, so the tool creates the heading first when needed).
 const DEFAULT_PRACTICE_HEADING = "## Corrections";
 
+// The `Field: value` lines the engine reads as settings, by section: Testing
+// Posture's Methodology and Ordering, and Guard Policy's Mode under its current
+// or retired heading. A learning written as one of those fields there keeps its
+// date out of the value.
+const SETTING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
+  [TESTING_HEADING, ["Methodology", "Ordering"]],
+  [GUARD_POLICY_HEADING, ["Mode"]],
+  [CHANGE_CONTROL_HEADING, ["Mode"]],
+]);
+
 // Header template for the method file's FIRST creation. The relocated
 // org/team/project.md always ship with all eight practice headings, so this
 // only fires for a fresh/fixture workspace that ships no method file yet —
@@ -870,10 +885,10 @@ function legacyMarkerCandidateIdScoped(intentSlug: string, slug: string, candida
 // content hash), so a DIFFERENT learning that happens to land on the same
 // positional candidate_id post-upgrade would otherwise be silently dropped
 // as a false "retry" of the original. Matches the exact line shape persist
-// itself writes: `- <text> (learned <date>) <marker>`.
+// wrote with those markers: `- <text> (learned <date>) <marker>`.
 function legacyLineMatchesText(content: string, marker: string, text: string): boolean {
   const re = new RegExp(
-    `^- ${escapeRegex(text)} \\(learned \\d{4}-\\d{2}-\\d{2}\\) ${escapeRegex(marker)}\\s*$`,
+    `^- ${escapeRegex(text)} ${LEARNED_DATE_SOURCE} ${escapeRegex(marker)}\\s*$`,
     "m"
   );
   return re.test(content);
@@ -1047,7 +1062,8 @@ function handlePersist(args: string[], projectDir: string): void {
         // routed heading first when the method file doesn't carry it.
         if (!hasLine) {
           content = ensureHeading(content, heading);
-          const line = `- ${sel.text} (learned ${today}) ${marker}\n`;
+          const fieldLine = (SETTING_FIELDS.get(heading) ?? []).some((field) => structuredField(sel.text, field) !== null);
+          const line = `- ${sel.text} ${learnedDate(today, fieldLine)} ${marker}\n`;
           content = appendUnderHeading(content, heading, line);
           fileContent.set(path, content);
         }
@@ -1325,7 +1341,7 @@ function stripProjectDir(args: string[]): { projectDirArg: string | undefined; r
 function printHelp(): void {
   process.stdout.write(
     [
-      "aidlc-learnings.ts — §13 learning-gate tool (tool-as-actor).",
+      "aidlc-learnings.ts - §13 learning-gate tool (tool-as-actor).",
       "",
       "Subcommands:",
       "  surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]",
