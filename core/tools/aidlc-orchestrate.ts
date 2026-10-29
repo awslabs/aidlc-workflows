@@ -19794,7 +19794,9 @@ function emitTypedResumeChoice(
     }
     // Back to a Unit's step, the person may want it run again or a change made
     // to it: the agent reads which, and `--change` keeps their words as the change.
-    const change = units !== "" && isPerUnit(node)
+    // A checkout that claimed a Unit reopens that Unit with no Unit named.
+    const claimed = isTeamUnitOwnership(stateContent) && readApplicableTeamUnitScopeStamp(pd, stateContent) !== null;
+    const change = (units !== "" || claimed) && isPerUnit(node)
       ? ` If what they asked for is a change to that stage's work, run \`next --stage ${node.slug}${units} --change\` ` +
         "instead, so the reopen keeps their words as the change."
       : "";

@@ -323,14 +323,20 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
     test(`${label}: a change they ask for in words to an approved stage is recorded in their words`, () => {
       const { checkout } = claimedPastFunctionalDesign(shape);
       const words = "I want to change Functional Design: names are trimmed.";
+      // The next step's question is on screen when they say it, as in the live run.
+      expect(run(LOG, ["decision", "--stage", "nfr-requirements", "--decision", "A choice", "--unit", "alpha"], checkout).status).toBe(0);
       says(checkout, words);
       const turn = readAuditShardEvents(checkout).filter((event) => event.event === "HUMAN_TURN").at(-1);
       const id = /\*\*Message Id\*\*: (\S+)/.exec(turn?.block ?? "")?.[1];
       expect(id, turn?.block).toBeDefined();
+      expect(turn?.block).toContain("**Open Questions**");
       // The agent reads their words as a change: the jump print names the form for one.
       const jump = run(ORCH, ["report", "--result", "resumed", "--choice", "jump", "--target", FD, "--unit", "alpha"], checkout);
       expect(jump.status, jump.out).toBe(0);
       expect((JSON.parse(jump.stdout) as Directive).message).toContain(`\`next --stage ${FD} --unit alpha --change\``);
+      // With no Unit named, the claimed Unit is the one the change is for.
+      const unnamed = run(ORCH, ["report", "--result", "resumed", "--choice", "jump", "--target", FD], checkout);
+      expect((JSON.parse(unnamed.stdout) as Directive).message, unnamed.out).toContain(`\`next --stage ${FD} --change\``);
       const printed = next(checkout, ["--stage", FD, "--unit", "alpha", "--change"]);
       expect(printed.kind, JSON.stringify(printed)).toBe("print");
       const command = /reopen --target \S+ --stages \S+ --units alpha --scope feature --via change/.exec(printed.message ?? "")?.[0];
