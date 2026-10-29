@@ -506,6 +506,7 @@ function scratchProject(): string {
     "aidlc-markdown.ts",
     "aidlc-locks.ts",
     "aidlc-review-records.ts",
+    "aidlc-record-core.ts",
     "aidlc-learned-date.ts",
     "aidlc-unit-landing.ts",
     "aidlc-kiro-chat-record.ts",

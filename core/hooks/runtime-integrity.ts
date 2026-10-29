@@ -31,7 +31,7 @@ const RUNTIME_RECORD_PATH = /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval|
 const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-engine[\\/]+gate-words)(?=[\\/'"`\s]|$)/i;
 // The audit trail: per-intent shards under `aidlc/spaces/<space>/intents/<record>/audit/`
 // and the bare space shard directory `aidlc/spaces/<space>/intents/audit/` (see
-// auditFilePath in aidlc-lib.ts). Worktree mirrors repeat the same relative layout
+// auditFilePath in aidlc-record-core.ts). Worktree mirrors repeat the same relative layout
 // under the worktree root. Every row is appended by an owning tool or hook through
 // appendAuditBlockAtPath; a direct write from the model's tools would let prose forge
 // or damage evidence, so it is refused regardless of fences. The match is anchored on

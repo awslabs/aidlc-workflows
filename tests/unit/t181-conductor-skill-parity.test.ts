@@ -1741,6 +1741,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "core/aidlc-common/stages/inception/requirements-analysis.md",
       "core/hooks/aidlc-review-freeze.ts",
       "core/tools/aidlc-lib.ts",
+      "core/tools/aidlc-record-core.ts",
       "docs/reference/17-skill-system.md",
       "docs/reference/04-stage-protocol.md",
     ];

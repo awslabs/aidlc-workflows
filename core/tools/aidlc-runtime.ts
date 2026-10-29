@@ -443,7 +443,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const allBoltFailedEvents = findAllEvents(audit, "BOLT_FAILED");
 
   // Helper: read a field's value from an audit row block. Mirrors
-  // getField's discipline in aidlc-lib.ts (single-line match,
+  // getField's discipline in aidlc-record-core.ts (single-line match,
   // [ \t]* not \s*) without the dynamic-regexp pattern — callers pass
   // hard-coded field names but the helper is line-scanned to keep ReDoS
   // surface zero. Block format: lines of `**FieldName**: value`.

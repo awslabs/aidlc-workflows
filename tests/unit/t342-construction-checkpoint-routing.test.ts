@@ -1309,6 +1309,7 @@ describe("t342 Construction checkpoint routing", () => {
       "docs/guide/facilitator-guide.md",
       "docs/guide/07-interaction-modes.md",
       "core/tools/aidlc-lib.ts",
+      "core/tools/aidlc-record-core.ts",
     ];
     const stale = [
       "--checkpoint construction-policy",

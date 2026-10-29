@@ -168,7 +168,7 @@ Running with neither anchor is a legitimate third shape: `resolve` is then a rep
 | Resolver + anchor CLI | `tools/aidlc-attest.ts` (dispatcher route: `aidlc attest …`) |
 | Record backings (`RecordView`) | `tools/aidlc-attest.ts` — `treeRecordView` (batched `ls-tree` + `cat-file`, the default) / `worktreeRecordView` (fallback and `anchor`) |
 | Opt-in session anchoring | `hooks/aidlc-session-start.ts` (bounded best-effort reconcile sweep, `AIDLC_SESSION_ANCHOR=1`; off by default) |
-| Evidence write/parse/exclusion library | `aidlc-lib.ts` — `writeUnitSourceSnapshot`, `reviewedSourceEvidenceRelPath`, `reviewedSourceEvidencePath`, `parseUnitSourceListing`, `serializeSourceListing`, `parseAuditShardEvents`, `normalizeManifestSourcePath`, `sourcePathIsExcluded`, `gitCommitSourceListing` |
+| Evidence write/parse/exclusion library | `aidlc-lib.ts`: `writeUnitSourceSnapshot`, `reviewedSourceEvidenceRelPath`, `reviewedSourceEvidencePath`, `parseUnitSourceListing`, `serializeSourceListing`, `normalizeManifestSourcePath`, `sourcePathIsExcluded`, `gitCommitSourceListing`; `parseAuditShardEvents` in `aidlc-record-core.ts` |
 | Swarm evidence transport | `aidlc-swarm.ts` — `captureReviewedRecordSnapshot` (hash-checks the worktree's manifest + evidence) / `mergeReviewedRecordSnapshot` (transactional write into the main record) |
 | Event registration | `aidlc-audit.ts` (`SOURCE_COMMITTED` in `VALID_EVENT_TYPES` + `CLI_PROTECTED_EVENT_TYPES`), registry in `knowledge/aidlc-shared/audit-format.md` |
 | Tests | `tests/unit/t311-committed-reviewed-source-evidence.test.ts` (evidence grammar, dual-write, exclusion), `tests/unit/t312-attest-resolve-anchor.test.ts` (resolve flows, determinism, trust ladder, indeterminate, anchor, the opt-in session sweep) |

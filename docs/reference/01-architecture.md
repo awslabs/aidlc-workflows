@@ -1021,7 +1021,7 @@ when it was minted), so a clone keeps one shard when the machine's name changes
 or the folder is copied to another machine. Shard files that start with the same
 first row are copies of one file (a sync tool's conflict copy, a hand copy);
 readers read the rows they share once (`copiedAuditBlocks` in
-`core/tools/aidlc-lib.ts`).
+`core/tools/aidlc-record-core.ts`).
 
 ## Key Design Decisions
 

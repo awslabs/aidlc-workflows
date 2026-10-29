@@ -104,7 +104,7 @@ export const LANDED: Record<string, () => boolean> = {
   WO5: () => !coreTool("aidlc-lib.ts").includes("CONTINUATION_PHRASES"),
   WO6: () => !coreTool("aidlc-orchestrate.ts").includes("This looks like"),
   pending: () => false,
-  "chat-identity": () => coreTool("aidlc-lib.ts").includes("rejoinedByThisMachine"),
+  "chat-identity": () => coreTool("aidlc-record-core.ts").includes("rejoinedByThisMachine"),
 };
 const landed = new Map<string, boolean>();
 /** The change an item still waits for, or null when its EXPECTED holds on this source. */
