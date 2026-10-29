@@ -47,7 +47,6 @@ import {
   rootDestinationRefusal,
   rootUninstallRefusal,
   validatePublicLifecycleArgs,
-  windowsPosixShim,
 } from "../../core/tools/aidlc-lifecycle.ts";
 import {
   channelPath,
@@ -724,7 +723,7 @@ describe("t244 machine configuration and update discovery", () => {
       const state = await doctorUpdateState({
         "release-base-url": server.baseUrl,
       }, true);
-      expect(state.state).toBe("unavailable");
+      expect(state.state).toBe("absent");
       expect(scheduledTimeouts).toHaveLength(1);
     } finally {
       timer.mockRestore();
@@ -3004,8 +3003,8 @@ describe("t244 Windows and completion release surfaces", () => {
         rmSync(lock);
 
         // A release from before the Git Bash launcher, updating this machine,
-        // wrote none; the first command of this one writes it with the helper,
-        // so hooks run through Git Bash find a bare `aidlc`.
+        // wrote none; the first command of this one writes aidlc.exe in bin
+        // with the helper, so hooks run through Git Bash find a bare `aidlc`.
         const gitBashLauncher = join(dirname(commandPath()), "aidlc");
         rmSync(gitBashLauncher, { force: true });
         const replaced = launch("version");
@@ -3013,7 +3012,8 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(replaced.stdout).toBe(versionLine);
         expect(replaced.stderr).toBe("");
         expect(readFileSync(helperPath, "utf-8")).toBe(current);
-        expect(readFileSync(gitBashLauncher, "utf-8")).toBe(windowsPosixShim());
+        expect(existsSync(join(dirname(commandPath()), "aidlc.exe"))).toBe(true);
+        expect(existsSync(gitBashLauncher)).toBe(false);
         expect(existsSync(lock)).toBe(false);
         expect(launcherRows()).toEqual([]);
 

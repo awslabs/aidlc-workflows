@@ -16,7 +16,9 @@ import {
   realpathSync,
   renameSync,
   symlinkSync,
+  statSync,
   truncateSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -772,6 +774,30 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(readFileSync(join(dir, copy)).equals(word)).toBe(true);
   });
 
+  // A copy stopped between claiming the name and renaming its bytes over the
+  // claim leaves an empty file there; it is never taken for the person's
+  // document, and the next copy lands beside it whole.
+  test("an empty file a stopped copy left at the name is passed over, and the Word file lands beside it", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    mkdirSync(join(dir, DOCUMENTS), { recursive: true });
+    const stopped = join(dir, DOCUMENTS, "report.docx");
+    writeFileSync(stopped, "");
+    utimesSync(stopped, new Date("2001-01-01T00:00:00Z"), new Date("2001-01-01T00:00:00Z"));
+    const word = wordBytes();
+    writeFileSync(join(dir, "docs", "report.docx"), word);
+    writeRequest(dir, "docs/report.docx");
+
+    const result = runOnboard(dir);
+    expect(result.status, result.stderr).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    const copy = `${DOCUMENTS}/report-2.docx`;
+    expect(payload.document_path).toBe(copy);
+    expect(payload.onboard_note).toStartWith(`I copied "docs/report.docx" to "${copy}"`);
+    expect(readFileSync(join(dir, copy)).equals(word)).toBe(true);
+    expect(statSync(stopped).size).toBe(0);
+  });
+
   test("asks once before copying a git-ignored file, and the person's yes copies it", () => {
     const dir = project();
     expect(gitIn(dir, "init", "-q").exitCode).toBe(0);
@@ -864,7 +890,7 @@ describe("t329 project-description and document-input boundaries", () => {
       );
       expect(shown.status, shown.stderr).toBe(0);
       expect(shown.stdout).toContain(
-        "truncated  yes after page 50 — the content below is a PARTIAL extraction, not the whole document",
+        "truncated  yes after page 50 - the content below is a PARTIAL extraction, not the whole document",
       );
     },
   );

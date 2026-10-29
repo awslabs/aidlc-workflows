@@ -208,7 +208,7 @@ function printedCommand(message: string, p = proj): string {
   const command = message.match(/Run `([^`]+)`/)?.[1];
   expect(command, message).toBeDefined();
   const approved = listMessages(p).findLast((entry) => personsWordsText(entry.text) === APPROVAL);
-  return command!.replace('"<2-3 word kebab essence>"', "pending-work")
+  return command!.replace("'<2-3 word kebab essence>'", "pending-work")
     .replace(` --message '${MESSAGE_SLOT}'`, approved === undefined ? "" : ` --message ${approved.id}`);
 }
 
@@ -1091,8 +1091,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       test("its options render from the same labels the reply is read against", () => {
         seedTwoIntentsNoCursor();
         const ask = routingAsk();
-        expect(numberedLine(ask, 1)).toBe("1. **Part of existing work** \u2014 Select one of the above and continue it");
-        expect(numberedLine(ask, 3)).toBe("3. **Reshape existing work** \u2014 Select one of the above, then reshape its remaining plan");
+        expect(numberedLine(ask, 1)).toBe("1. **Part of existing work** - Select one of the above and continue it");
+        expect(numberedLine(ask, 3)).toBe("3. **Reshape existing work** - Select one of the above, then reshape its remaining plan");
       });
 
       for (const text of ["2", "Separate new piece of work", "<line 2>"]) {

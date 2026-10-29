@@ -3804,14 +3804,25 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(JSON.parse(rejected.stdout).message, rejected.out).toStartWith(`Recorded rejected for unit "${unit}"`);
   }
 
+  // A rebuilt Unit's gate is revising until the revision's report puts it to
+  // the person again; `next` names that report, then shows the gate.
+  function reopenedGate(p: string, unit: string) {
+    const step = next(p);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).toContain(`report --stage code-generation --unit ${unit} --result revised`);
+    const revised = tool(p, "orchestrate", ["report", "--stage", "code-generation", "--unit", unit, "--result", "revised"]);
+    expect(revised.status, revised.out).toBe(0);
+    return next(p);
+  }
+
   test("strict, team: a team Unit sent back twice at its gate, the code changing, gets each redo reviewed", () => {
     const p = teamUnits();
     buildReviewed(p, "alpha", alphaAt(p, 1));
     for (const round of [1, 2]) {
       teamSendBack(p, "alpha", `Return a clear error for an empty name (round ${round})`);
       buildReviewed(p, "alpha", alphaAt(p, round + 1));
+      expect(reopenedGate(p, "alpha")).toMatchObject({ stage: "code-generation", unit: "alpha", gate: true });
     }
-    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "alpha", gate: true });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("strict, team: a team Unit changed again after its re-check, with no new attempt, still waits", () => {
@@ -3862,7 +3873,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(buildReviewed(p, "alpha", alphaAt(p, 2)).request?.recovery).toBe("stale-receipt");
       alphaAt(p, 3)();
       carriesOn(tool(p, "log", codeReview("alpha", 2)));
-      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha", gate: true });
+      expect(reopenedGate(p, "alpha")).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha", gate: true });
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test(`${policy}: on a Unit's first build, a second change and the agent's own review carry on to the Unit's completion`, () => {

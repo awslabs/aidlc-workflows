@@ -6,11 +6,13 @@
 //   fire <id> --stage <slug>      — invoke a sensor against a stage output;
 //        --output-path <path>       emits SENSOR_FIRED then a paired terminal
 //        [--unit <name>]            row (PASSED | FAILED | COULD_NOT_RUN |
-//                                   BUDGET_OVERRIDE); the Unit, when named, is
-//                                   on every row.
+//        [--fire-id <8 hex>]        BUDGET_OVERRIDE); the Unit, when named, is
+//                                   on every row; --fire-id, which the gate
+//                                   passes, names the rows' Fire id.
 //
 // The dispatcher is a thin routing surface (Q4/Q5 of the locked plan):
-//   1. Validate inputs + resolve graph + generate Fire id (no audit lock held).
+//   1. Validate inputs + resolve graph + take the --fire-id given or generate
+//      one (no audit lock held).
 //   2. Acquire lock → emit SENSOR_FIRED → release.
 //   3. Spawn the per-sensor script (no lock held; long-running is fine).
 //   4. Decide outcome via the truth table below (no lock held).
@@ -41,7 +43,6 @@
 // always emit a paired terminal row.
 
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -100,6 +101,14 @@ import {
 	resolveHarnessPath,
 	sensorFireUsage,
 } from "./aidlc-runtime-paths.ts";
+import {
+	comparisonKey,
+	FIRE_ID,
+	fireRowFields,
+	generateFireId,
+	normalizePathForComparison,
+	relativizePath,
+} from "./aidlc-sensor-record.ts";
 import { parseSensorManifest, type SensorManifest } from "./aidlc-sensor-schema.ts";
 import {
 	DEFAULT_SUBPROCESS_TIMEOUT_MS,
@@ -396,12 +405,6 @@ const BUNDLED_SENSOR_IDS = new Set([
 	"upstream-coverage",
 ]);
 
-// --- Fire id ---
-
-function generateFireId(): string {
-	return randomBytes(4).toString("hex");
-}
-
 // --- Subcommand: list ---
 
 function handleList(): void {
@@ -615,7 +618,13 @@ function handleFire(args: string[]): void {
 	const pathSet = flags["paths-stdin"] === undefined ? null : readPathSet(id, flags["paths-stdin"], outputPath, matches);
 
 	// --- 1e. Generate Fire id (8 hex chars) ---
-	const fireId = generateFireId();
+	// The gate names its own (`--fire-id`), so it can account for this fire
+	// when it gets no verdict back (recordUnfinishedFire).
+	const givenFireId = flags["fire-id"];
+	if (givenFireId !== undefined && !FIRE_ID.test(givenFireId)) {
+		dispatchError(`fire --fire-id expects 8 hex characters, got "${givenFireId}"`);
+	}
+	const fireId = givenFireId ?? generateFireId();
 
 	// Resolve the project dir once — used by the consume filter in step 2 and
 	// the detail-file path in step 3.
@@ -737,13 +746,7 @@ function handleFire(args: string[]): void {
 	withSensorAuditLock(projectDir, ctx, "fired", () => {
 		appendAuditEntryUnlocked(
 			"SENSOR_FIRED",
-			{
-				"Fire id": fireId,
-				"Sensor ID": id,
-				"Stage slug": stageSlug,
-				...(unit ? { Unit: unit } : {}),
-				"Output path": relativizePath(outputPath, projectDir),
-			},
+			fireRowFields(fireId, id, stageSlug, unit, outputPath, projectDir),
 			projectDir,
 		);
 	});
@@ -1099,7 +1102,7 @@ function buildDetailBody(args: {
 	const { sensorId, stageSlug, outputPath, fireId, timestamp, sensorJson } =
 		args;
 	const lines: string[] = [];
-	lines.push(`# ${sensorId} finding — ${stageSlug}`);
+	lines.push(`# ${sensorId} finding - ${stageSlug}`);
 	lines.push("");
 	lines.push(`**Timestamp**: ${timestamp}`);
 	lines.push(`**Fire id**: ${fireId}`);
@@ -1117,42 +1120,13 @@ function buildDetailBody(args: {
 
 // --- Terminal-row emit ---
 
-// Slim absolute paths into project-relative form for audit emission.
-// audit.md must be machine-portable across worktrees; the PostToolUse
-// hook hands us absolute paths from Claude tool calls, so without this
-// helper every row would carry $HOME prefixes. Paths that don't live
-// under projectDir are emitted verbatim (e.g., system-wide fixtures) —
-// slimming is opportunistic, not enforced.
-function relativizePath(absPath: string, projectDir: string): string {
-	const normalizedPath = normalizePathForComparison(absPath);
-	const normalizedProject = trimTrailingSlashes(
-		normalizePathForComparison(projectDir),
-	);
-	const comparePath = comparisonKey(normalizedPath);
-	const compareProject = comparisonKey(normalizedProject);
-	if (comparePath === compareProject) {
-		return ".";
-	}
-	if (comparePath.startsWith(`${compareProject}/`)) {
-		return normalizedPath.slice(normalizedProject.length + 1);
-	}
-	return normalizedPath;
-}
-
 function emitTerminal(
 	ctx: FireContext,
 	outcome: FireOutcome,
 	projectDir: string,
 ): void {
 	const { sensor, stageSlug, unit, outputPath, fireId, detailPath } = ctx;
-	const id = sensor.id;
-	const baseFields: Record<string, string> = {
-		"Fire id": fireId,
-		"Sensor ID": id,
-		"Stage slug": stageSlug,
-		...(unit ? { Unit: unit } : {}),
-		"Output path": relativizePath(outputPath, projectDir),
-	};
+	const baseFields = fireRowFields(fireId, sensor.id, stageSlug, unit, outputPath, projectDir);
 
 	if (outcome.kind === "passed") {
 		const fields: Record<string, string> = {
@@ -1256,18 +1230,6 @@ function matchesGlob(pattern: string, path: string): boolean {
 	return variants.some((v) => globToRegex(v).test(normalizedPath));
 }
 
-function normalizePathForComparison(path: string): string {
-	return path.replace(/\\/g, "/");
-}
-
-function trimTrailingSlashes(path: string): string {
-	return path.replace(/\/+$/, "");
-}
-
-function comparisonKey(path: string): string {
-	return /^[A-Za-z]:\//.test(path) ? path.toLowerCase() : path;
-}
-
 function globToRegex(glob: string): RegExp {
 	// Translate **, *, and literal segments. Sufficient for the manifest patterns shipped today.
 	let re = "";
@@ -1305,7 +1267,8 @@ function sensorUsage(subcommand: string | undefined): string {
 		fire: [
 			sensorFireUsage(),
 			"  Fires a sensor against a stage output; emits SENSOR_FIRED and its paired result row.",
-			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows)",
+			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows),",
+			"  --fire-id <8 hex> (the fire's Fire id; the gate names its own)",
 		],
 	};
 	if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");

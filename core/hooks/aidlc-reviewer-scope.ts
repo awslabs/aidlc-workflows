@@ -72,6 +72,7 @@ import {
   recordGuardBlockedRow,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { scopeStampLanded } from "../tools/aidlc-unit-landing.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 
 const HOOK_NAME = "reviewer-scope";
@@ -958,6 +959,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
     stateContent = readStateFile(projectDir);
     if (isTeamUnitOwnership(stateContent)) {
       unitScope = readUnitScopeStamp(projectDir);
+      if (unitScope && scopeStampLanded(projectDir, stateContent, unitScope)) unitScope = null;
     }
   } catch {
     // No active team workflow means no claimed-checkout write bound.

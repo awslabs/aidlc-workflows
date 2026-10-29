@@ -1407,7 +1407,7 @@ const handleSummary: SubcommandHandler = (rest, projectDir) => {
   const summary = summarize(projectDir);
   if (!summary) {
     process.stderr.write(
-      "aidlc-runtime summary: no runtime-graph.json found — run a workflow first\n"
+      "aidlc-runtime summary: no runtime-graph.json found - run a workflow first\n"
     );
     process.exit(1);
   }

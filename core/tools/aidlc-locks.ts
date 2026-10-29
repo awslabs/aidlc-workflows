@@ -1775,6 +1775,23 @@ export function writeBufferAtomic(path: string, data: Buffer | Uint8Array): void
   }
 }
 
+// Puts a fully written file at a name only if nothing is there, from any temp
+// folder or computer. link() did this in one step and exFAT has none: the
+// exclusive create is the no-replace step every measured storage has, and the
+// rename over that empty claim brings the whole bytes. A name taken meanwhile
+// throws EEXIST, as link() did. A writer outside AI-DLC that replaces the claim
+// in the moment before the rename is replaced in turn (git's window for its
+// own config).
+export function installWithoutReplacing(from: string, to: string): void {
+  closeSync(openSync(to, "wx"));
+  try {
+    replaceAtomically(from, to);
+  } catch (error) {
+    try { if (lstatSync(to).size === 0) unlinkSync(to); } catch { /* claim already gone */ }
+    throw error;
+  }
+}
+
 // ensureDirSync / renameIntoPlace / removeTreeSync — the three raw
 // mkdir/rename/rm primitives, re-exported so a caller that has NO reason to
 // import node:fs's mutating names directly still can. This module already
@@ -1989,7 +2006,7 @@ export function readRegularFileNoFollowOrThrow(
                 : "not a regular file";
       throw new Error(
         `${what} is not a regular file (${kind}): ${path}. ` +
-          `Only regular files are read — a FIFO, socket, or device file can block ` +
+          `Only regular files are read - a FIFO, socket, or device file can block ` +
           `forever or never reach EOF, so it is refused before any read.`,
       );
     }
@@ -2002,8 +2019,8 @@ export function readRegularFileNoFollowOrThrow(
       throw new Error(
         `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
           `A hardlink can alias content from elsewhere on the filesystem into this ` +
-          `directory. Replace it with an independent copy — ` +
-          `cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`,
+          `directory. Replace it with an independent copy - ` +
+          `cp <file> <file>.copy && mv <file>.copy <file> - and re-run.`,
       );
     }
     if (maxBytes !== undefined && st.size > maxBytes) {

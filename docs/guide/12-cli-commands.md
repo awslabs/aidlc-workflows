@@ -30,7 +30,7 @@ diagnostic and lifecycle routes.
 | `/aidlc [description]` | Start a new workflow; the agent proposes a plan from your description (or offers to compose one when none fits) |
 | `/aidlc compose "<task>"` | Force the adaptive composer: propose a tailored EXECUTE/SKIP plan for the task |
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
-| `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom plan even when a stock scope matches |
+| `/aidlc --new-scope '<task>'` | Force the composer to synthesize a custom plan even when a stock scope matches |
 | `/aidlc` | Resume the open workflow; with no work yet, the agent asks what you want to build |
 | `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
@@ -80,6 +80,7 @@ diagnostic and lifecycle routes.
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
 | `/aidlc plugin validate [path]` | Validate an authored plugin (`--with <base-root>` checks a base plugin's agents; `--json` for structured findings) |
 | `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
+| `aidlc plugin test [path] --install <project-root>` | From a terminal: test that an authored plugin composes into a copy of a project, which is never changed (`--harness <name>`, `--with <base-root>`, `--json`) |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
@@ -361,7 +362,7 @@ is handed to the agent whole, to act on for the intent just selected.
 
 ### `/aidlc intent archive <name>` — Retire an intent you will not finish
 
-`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight or
+`/aidlc intent archive <name> [--reason '<text>']` moves an in-flight or
 completed intent to the `archived` status. Nothing is deleted: the record dir, its
 artifacts, and its audit shards stay exactly where they are, and the archive
 itself is recorded in that intent's audit trail as `WORKFLOW_ARCHIVED` (with
@@ -658,7 +659,10 @@ git switch claim/<intent-id8>/user-profile-api
 Adoption verifies the checked-out claim OID and payload against the live ref,
 including space, intent UUID, Unit, generation, nonce, and bound audit shard,
 before writing the checkout-local scope stamp. Subsequent audit writes retain
-the claim's existing shard, and `publish` continues the same attempt.
+the claim's existing shard, and `publish` continues the same attempt. The
+shard comes back whole from the owner's published commit, including the rows
+`publish` keeps out of the claim (the questions the person already answered),
+so the work resumes without asking them again.
 
 ### `/aidlc --release <unit>` and `/aidlc unit release <unit>` — Release a claim
 
@@ -699,6 +703,9 @@ mirror, and audit shard:
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref
 to a candidate commit that preserves both claim and implementation history.
+AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` (written when a
+session starts in a fresh clone) does not count, here or at landing; it stays
+uncommitted, and any other change still stops both.
 
 ### `/aidlc unit pin <unit>` — Pin candidate evidence
 
@@ -728,13 +735,13 @@ merge gate.
   --user-input "Approve pinned candidate"
 ```
 
-Accepted decisions are `approve` and `reject`. The command requires a fresh
-`MERGE_DISPATCH_INVOKED` plus terminal dispatch result after the pin and a typed
-human turn. Every dispatch row must carry the pin output through
-`--pinned-oid <oid> --attempt-generation <n> --pin-id <uuid>`. Pinned Unit transactions require
-merge strategy so the reviewed OID remains a direct parent. A moved ref,
-changed generation, or HOLD-MERGE marker requires an explicit re-pin before
-approval.
+Accepted decisions are `approve` and `reject`. The command records the
+person's answer when a typed human turn follows the pin (pin's output names this
+command for each answer). A pinned Unit lands with a regular merge into the
+integration branch pin fetched, so the reviewed OID remains a direct parent. A
+moved ref, changed generation, or HOLD-MERGE marker requires an explicit re-pin
+before approval. On approve, its output names the land command (`land`), which
+the agent runs in the same turn.
 
 ### `/aidlc unit land <unit>` — Land the pinned transaction
 
@@ -745,7 +752,7 @@ approval.
 Landing first fetches the current integration branch and revalidates the
 approved evidence against the live Unit DAG, Unit kinds, and active per-Unit
 stage columns. Contract drift refuses before Git mutation and requires rebase,
-republish, re-pin, a new dispatch bracket, and a new merge gate. It then merges
+republish, re-pin, and a new merge gate. It then merges
 pinned content while retaining main-owned engine metadata, folds the Unit row,
 and finalizes the transported audit receipts. For crash recovery, run the
 idempotent steps separately:
@@ -1751,6 +1758,10 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
+Where a switch's variable is set to anything but `1` (the editor or CLI the
+check runs in), the switch you record does not turn its check off there; when it
+is set where you run `config flags --bypass`, the command says so for each check
+but sensors, learnings and usage tracking, instead of saying the check is off.
 Recording or clearing a switch changes only that settings file (and AI-DLC's
 gitignored note of how it was set,
 `aidlc/.aidlc-sessions/recorded-switches.json`) and refreshes no harness files,
@@ -2128,9 +2139,14 @@ parent application source so the selected base can reproduce it. This includes
 approved inline skeleton source before switching to a parallel batch. Files Git
 ignores and does not track, such as a `.env` or a log, are not part of it unless
 you registered them as source in `.aidlc-source-paths.json`: they stay where they
-are, and a Unit's worktree, like any Git checkout, does not have them. The rule
-applies to legacy autonomy and new checkpoint workflows alike; an autonomy grant
-never authorizes an automatic commit.
+are, and a Unit's worktree, like any Git checkout, does not have them. Nor is what
+such an ignored link leads to, and a submodule's files are read by the
+submodule's own ignore rules. A change to one of those files (a test run's log
+written after you approved the plans, a dev server's log during the build) never
+asks for the plans' approval again, and the landings and the stage's completion
+do not count it as a change to the main checkout. The rule applies to legacy
+autonomy and new checkpoint workflows alike; an autonomy grant never authorizes
+an automatic commit.
 
 ```bash
 aidlc engine swarm prepare --batch <N> --units "<exact emitted Units>"
@@ -2143,6 +2159,17 @@ only with explicit authorization, then retry with current approval evidence.
 If the application source or plan changed, re-present any required Plan Approval.
 The requirement concerns application source, not a blanket commit of unrelated
 framework records or other files.
+
+The same preflight names nested repositories whose source files would become
+empty folders in a Unit worktree because their gitlinks have no `.gitmodules`
+entry in the commit the Unit actually starts from. Register them as Git submodules
+and choose a starting commit with those entries, or build that Unit serially. This
+refusal creates no child worktrees and makes no parent commit. Registered
+submodules are copied from the main checkout without network access; gitlinks
+outside the selected source boundary do not block preparation. If the selected
+base needs the approved parent source, preparation starts at that parent commit
+and checks its registrations. Recovery after an explicit discard instead checks
+the recorded Approval Source Commit, even if the parent has since changed.
 
 ### Construction verification command — record human authorization
 
@@ -2320,7 +2347,7 @@ aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skelet
 
 When the person, as they decide, asks for a review finding to be fixed or
 rejects one, add `--fix-finding "<review-artifact>#R-NN"` to approve, or
-`--reject-finding "<review-artifact>#R-NN=<their reason>"` to reject
+`--reject-finding '<review-artifact>#R-NN=<their reason>'` to reject
 (`--reopen-finding` for one the reviewer marked fixed that they say is not),
 once per finding, as at a stage's gate.
 
@@ -3008,6 +3035,15 @@ directory. Build also defaults its plugin root to the current directory; pass
 Validation of a plugin built on a base takes `--with <base-root>`, your own
 checkout of that base, so a stage led by the base's agent is checked instead of
 reported as not checked.
+
+From a terminal, `aidlc plugin test [path] --install <project-root>` (on the
+copy channel `bun .claude/tools/aidlc.ts plugin test ...`) runs the shipped
+compose test. It composes the plugin in `[path]`, the current directory by
+default, into a disposable copy of the project `--install` names, and exits
+`1` on a compose drop, a graph failure or a second compose that changes files;
+the project itself is never changed. Pass `--harness <name>` when that project
+has more than one harness, `--with <base-root>` for a plugin built on a base,
+and `--json` for one result object.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

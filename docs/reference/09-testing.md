@@ -618,18 +618,18 @@ are excluded. JSON retains the full physical grid, including blank cells and
 width-zero continuation cells for wide characters.
 
 The existing `start`, `send`, plain `capture`, `startup`, and `wait` commands
-retain their calling conventions. `send --keys "<text>" --literal` sends
+retain their calling conventions. `send --keys '<text>' --literal` sends
 literal text; without `--literal`, named keys are interpreted and arbitrary
 text such as `1`/`2` remains literal. Enter is appended unless `--no-enter` is
 set. `wait --stable-ms N` retains its screen-stability condition, and
-`startup --ready-pattern "<regex>"` retains its startup navigation behavior.
+`startup --ready-pattern '<regex>'` retains its startup navigation behavior.
 
 The Bun backend supports these capture and input commands:
 
 | Command | Behavior |
 |---------|----------|
 | `resize --session <name> --width N --height N` | Resizes both the PTY and emulator: columns 2–500, rows 1–200, at most 40,000 cells. |
-| `paste --session <name> --text "<text>"` | Pastes text with **no implicit Enter**. Uses bracketed-paste markers only when the application has enabled that mode. CRLF and lone LF become CR; existing lone CR is retained. |
+| `paste --session <name> --text '<text>'` | Pastes text with **no implicit Enter**. Uses bracketed-paste markers only when the application has enabled that mode. CRLF and lone LF become CR; existing lone CR is retained. |
 | `capture --session <name> --physical` | Returns plain text with physical visible rows; preserves the default logical capture API. |
 | `capture --session <name> --json` | Returns a coherent `TuiSnapshot` with full cell data. |
 | `capture --session <name> --ansi` | Returns the current viewport with cell colors and styles as ANSI sequences. |
@@ -2093,7 +2093,11 @@ Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
 follow the model Kiro CLI uses (about 33 each on `claude-opus-5.5` with Kiro
 CLI 2.32.0). It prints one line per tree, for example
 `Kiro CLI 2.32.0 (kiro-ide) release journey on <commit>: PASS (5.1 min of
-turns, 33.23 credits, 3 permission prompts)`, and both lines are recorded,
+turns, 33.23 credits, 3 permission prompts)`; `<commit>` reads
+`<commit> plus uncommitted changes` when the checkout had changes not in that
+commit (the run packages the checkout as it is), and `<commit> (git status
+failed)` when git could not say; run it from a clean checkout of the source
+commit. Both lines are recorded,
 including the full source SHA, in the selected preview's GitHub release notes
 before promotion. Existing results for that source are reused;
 the promotion workflow does not rerun the journey on its new metadata commit.

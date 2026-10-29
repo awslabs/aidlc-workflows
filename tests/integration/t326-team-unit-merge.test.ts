@@ -25,7 +25,6 @@ import {
   makeSeed,
   clone,
   prepareCandidate,
-  dispatchMerge,
   approveMerge,
   gateAndLand,
   nextDirective,
@@ -56,12 +55,6 @@ describe("t326 pinned team Unit merge", () => {
     );
     const alphaEvents = readAllAuditShards(seed).match(/\*\*Event\*\*: UNIT_MERGED/g) ?? [];
     expect(alphaEvents).toHaveLength(1);
-    expect(readAllAuditShards(seed)).toContain(
-      "**Event**: MERGE_DISPATCH_INVOKED",
-    );
-    expect(readAllAuditShards(seed)).toContain(
-      "**Event**: MERGE_DISPATCH_RETURNED",
-    );
     git(seed, ["push", "origin", "main"]);
 
     const status = runMergeTool(UNIT, ["status"], seed);
@@ -187,13 +180,6 @@ describe("t326 pinned team Unit merge", () => {
     expect(movedGate.out).toContain("run aidlc-unit pin alpha again");
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status, repin.out).toBe(0);
-    const repinPayload = JSON.parse(repin.stdout);
-    dispatchMerge(
-      seed,
-      "alpha",
-      repinPayload.pinned_oid,
-      repinPayload.generation,
-    );
     expect(
       runMergeTool(
         UNIT,

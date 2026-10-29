@@ -50,6 +50,7 @@ import {
   setField,
   setGuardPolicyLine,
 } from "../../core/tools/aidlc-lib.ts";
+import { failedCheckNotices } from "../../core/tools/aidlc-state.ts";
 import { LOG, env, exec, next, reviewedStage, say } from "../harness/aidlc-input-corpus.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -58,6 +59,8 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const SENSOR_DISPATCHER = join(AIDLC_SRC, "tools", "aidlc-sensor.ts");
+const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const projects: string[] = [];
 const externalPaths: string[] = [];
 
@@ -359,17 +362,41 @@ function setAutonomous(fixture: Fixture): void {
   );
 }
 
+// A compiled dispatcher that gives the gate no verdict. `rows-then-garbage`
+// runs the real dispatcher (its rows are written) and prints no verdict;
+// `fired-then-exit` writes the fire's SENSOR_FIRED row under the gate's Fire id
+// and dies before its result row.
 function dispatcherStub(
   fixture: Fixture,
-  mode: "exit-2" | "malformed" | "timeout",
+  mode: "exit-2" | "malformed" | "timeout" | "rows-then-garbage" | "fired-then-exit",
 ): string {
   const path = join(fixture.project, `.dispatcher-${mode}.ts`);
+  const flag = (name: string) => `process.argv[process.argv.indexOf("--${name}") + 1]`;
   const body =
     mode === "exit-2"
       ? '#!/usr/bin/env bun\nprocess.stderr.write("dispatcher exploded\\n");\nprocess.exit(2);\n'
       : mode === "malformed"
         ? '#!/usr/bin/env bun\nprocess.stdout.write("not-json\\n");\n'
-        : '#!/usr/bin/env bun\nawait Bun.sleep(1000);\n';
+        : mode === "timeout"
+          ? '#!/usr/bin/env bun\nawait Bun.sleep(1000);\n'
+          : mode === "rows-then-garbage"
+            ? [
+              "#!/usr/bin/env bun",
+              "const env = { ...process.env };",
+              "delete env.AIDLC_COMPILED_EXECUTABLE;",
+              `Bun.spawnSync([process.execPath, ${JSON.stringify(SENSOR_DISPATCHER)}, ...process.argv.slice(4)], { env });`,
+              'process.stdout.write("not-json\\n");',
+              "",
+            ].join("\n")
+            : [
+              "#!/usr/bin/env bun",
+              'import { relative } from "node:path";',
+              `import { appendAuditEntry } from ${JSON.stringify(AUDIT_TOOL)};`,
+              "const pd = process.env.AIDLC_PROJECT_DIR;",
+              `appendAuditEntry("SENSOR_FIRED", { "Fire id": ${flag("fire-id")}, "Sensor ID": process.argv[5], "Stage slug": ${flag("stage")}, "Output path": relative(pd, ${flag("output-path")}).split("\\\\").join("/") }, pd);`,
+              "process.exit(3);",
+              "",
+            ].join("\n");
   writeFileSync(path, body, "utf-8");
   chmodSync(path, 0o755);
   return path;
@@ -711,7 +738,74 @@ describe("t311 gate-bound sensor enforcement", () => {
       expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
         "- [-] probe",
       );
+      expect(eventCount(audit(fixture.project), "SENSOR_COULD_NOT_RUN")).toBe(2);
     }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A fire whose dispatcher gives the gate no verdict checked nothing the gate
+  // can show. An advisory check stops nothing, but the fire is recorded as could
+  // not run, paired by its Fire id, with its cause and not the dispatcher's
+  // words, and the gate says so once, as it does for a script that crashed.
+  // The stub dispatchers run through their shebang, which native Windows cannot
+  // do (every stub would fail to start there); a missing script runs everywhere.
+  test("an advisory check whose dispatcher gives no verdict is recorded as could not run and said at the gate", () => {
+    const stage = (JSON.parse(readFileSync(setupFixture("advisory").graph, "utf-8")) as Parameters<typeof failedCheckNotices>[1][])[0];
+    const notes = { "exit-2": "exit-2", malformed: "bad-output", timeout: "timeout", "missing-script": "exit-1" } as const;
+    const modes = process.platform === "win32" ? ["missing-script"] as const : ["exit-2", "malformed", "timeout", "missing-script"] as const;
+    for (const mode of modes) {
+      const fixture = setupFixture("advisory");
+      if (mode === "missing-script") unlinkSync(join(fixture.scripts, "aidlc-sensor-gate-probe.ts"));
+      const result = gate(fixture, [], mode === "missing-script" ? {} : {
+        AIDLC_COMPILED_EXECUTABLE: dispatcherStub(fixture, mode),
+        AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS: mode === "timeout" ? "100" : String(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const trail = audit(fixture.project);
+      expect(result.status, `${mode}: ${result.out}`).toBe(0);
+      expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain("- [?] probe");
+      expect(eventCount(trail, "SENSOR_FIRED"), `${mode}: ${trail}`).toBe(2);
+      expect(eventCount(trail, "SENSOR_COULD_NOT_RUN"), mode).toBe(2);
+      expect(eventCount(trail, "SENSOR_PASSED")).toBe(0);
+      expect(eventCount(trail, "SENSOR_FAILED")).toBe(0);
+      expect(trail.match(/\*\*Note\*\*: .*/g), mode).toEqual([`**Note**: dispatch-error: ${notes[mode]}`, `**Note**: dispatch-error: ${notes[mode]}`]);
+      const rows = readAuditShardEvents(fixture.project);
+      const fired = rows.filter((row) => row.event === "SENSOR_FIRED").map((row) => row.block.match(/\*\*Fire id\*\*: (\S+)/)?.[1]);
+      const closed = rows.filter((row) => row.event === "SENSOR_COULD_NOT_RUN").map((row) => row.block.match(/\*\*Fire id\*\*: (\S+)/)?.[1]);
+      expect(closed.sort()).toEqual(fired.sort());
+      expect(trail.match(/gate-probe@[^;\n]*=could-not-run/g) ?? [], mode).toHaveLength(2);
+      expect(failedCheckNotices(fixture.project, stage)).toEqual(["The gate-probe check could not run on one.md and 1 other file."]);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The gate accounts for the fire it started, by the Fire id it handed the
+  // dispatcher: rows the fire already wrote are kept, and a SENSOR_FIRED left
+  // without a result is closed rather than doubled. The stubs run through their
+  // shebang, which native Windows cannot do.
+  test.skipIf(process.platform === "win32")("a fire with no verdict keeps the rows it wrote and closes the one it left open", () => {
+    const written = setupFixture("advisory");
+    expect(gate(written, [], { AIDLC_COMPILED_EXECUTABLE: dispatcherStub(written, "rows-then-garbage") }).status).toBe(0);
+    const writtenTrail = audit(written.project);
+    expect(eventCount(writtenTrail, "SENSOR_FIRED"), writtenTrail).toBe(2);
+    expect(eventCount(writtenTrail, "SENSOR_FAILED")).toBe(2);
+    expect(eventCount(writtenTrail, "SENSOR_COULD_NOT_RUN")).toBe(0);
+
+    // Through a symlinked project folder the record spells those rows'
+    // outputs as `<project-dir>/...`; they are still this fire's.
+    const linked = setupFixture("advisory");
+    const link = `${linked.project}-link`;
+    symlinkSync(linked.project, link, "dir");
+    externalPaths.push(link);
+    expect(gate({ ...linked, project: link }, [], { AIDLC_COMPILED_EXECUTABLE: dispatcherStub(linked, "rows-then-garbage") }).status).toBe(0);
+    const linkedTrail = audit(linked.project);
+    expect(eventCount(linkedTrail, "SENSOR_FIRED"), linkedTrail).toBe(2);
+    expect(eventCount(linkedTrail, "SENSOR_FAILED")).toBe(2);
+    expect(eventCount(linkedTrail, "SENSOR_COULD_NOT_RUN")).toBe(0);
+
+    const open = setupFixture("advisory");
+    expect(gate(open, [], { AIDLC_COMPILED_EXECUTABLE: dispatcherStub(open, "fired-then-exit") }).status).toBe(0);
+    const openTrail = audit(open.project);
+    expect(eventCount(openTrail, "SENSOR_FIRED"), openTrail).toBe(2);
+    expect(eventCount(openTrail, "SENSOR_COULD_NOT_RUN")).toBe(2);
+    expect(openTrail).toContain("**Note**: dispatch-error: exit-3");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A check whose script crashed checked nothing: it is recorded as could not

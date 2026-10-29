@@ -1571,6 +1571,8 @@ describe("t161 active-directive owner lock and doctor findings", () => {
       const doctorArgs = [
         join(fixture.projectDir, ".claude", "tools", "aidlc-utility.ts"),
         "doctor",
+        // A lock doctor cleared is a passing row, listed only in the full report.
+        "--verbose",
         "--project-dir",
         fixture.projectDir,
       ];
@@ -1660,17 +1662,20 @@ describe("t161 active-directive owner lock and doctor findings", () => {
         });
         expect(seconds, diagnostic).toBeLessThan(30);
         expect(`${doctor.stdout}${doctor.stderr}`, diagnostic).not.toContain("Failed to acquire audit lock");
-        const labels = (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>)
-          .map((check) => check.label);
+        const checks = JSON.parse(doctor.stdout).data.checks as Array<{ label: string; pass: boolean }>;
+        const labels = checks.map((check) => check.label);
         const audit = readdirSync(join(fixture.recordDir, "audit"))
           .map((shard) => readFileSync(join(fixture.recordDir, "audit", shard), "utf-8"))
           .join("\n");
         if (kind === "empty") {
           expect(labels, diagnostic).toContain('Leaked audit lock on bucket "__workspace__" (unstamped) - cleared');
+          // Doctor fixed it, so the check passes: no failed row, no step left to take.
+          expect(checks.find((check) => check.label.endsWith("(unstamped) - cleared"))?.pass, diagnostic).toBe(true);
           expect(existsSync(lockDir)).toBe(false);
           expect(audit).toContain("**Event**: HEALTH_CHECKED");
         } else {
           expect(labels, diagnostic).toContain('Leaked audit lock on bucket "__workspace__" (unreadable-owner) - not cleared');
+          expect(checks.find((check) => check.label.endsWith("(unreadable-owner) - not cleared"))?.pass, diagnostic).toBe(false);
           expect(existsSync(join(lockDir, "owner.json"))).toBe(true);
           expect(audit).not.toContain("**Event**: HEALTH_CHECKED");
         }

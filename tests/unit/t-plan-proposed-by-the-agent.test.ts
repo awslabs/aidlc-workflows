@@ -901,7 +901,7 @@ describe("t-plan-proposed-by-the-agent: a stage change typed with the plan rides
   /** The `intent create` a creation print names, run as the agent runs it, its label filled. */
   const runCreation = (tools: string, created: Directive): string => {
     const args = /intent create ([^`]+)`/.exec(String(created.message))![1]
-      .replace('"<2-3 word kebab essence>"', "logout-bug").split(" ");
+      .replace("'<2-3 word kebab essence>'", "logout-bug").split(" ");
     const made = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", ...args, "--project-dir", proj], {
       cwd: proj,
       encoding: "utf-8",

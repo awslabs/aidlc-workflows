@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -15,11 +16,22 @@ import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { scopeStampLanded, unitRowMerged } from "./aidlc-unit-landing.ts";
+import {
+  managedBlockMarkers,
+  markedPart,
+  mergeBlock,
+  mergeJsonEntries,
+  onlyMarkedPartChanged,
+  rootIntegrationTarget,
+} from "./aidlc-distribution.ts";
+import { aidlcRootParts } from "./aidlc-includes.ts";
 import {
   activeIntentUuid,
   activeSpace,
   artifactFilename,
   auditBlockField,
+  auditShardBlocks,
   auditShardName,
   type AuditShardEvent,
   type CachedUnitClaim,
@@ -84,7 +96,12 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
-import { aidlcEngineCommand, isCompiledExecutable } from "./aidlc-runtime-paths.ts";
+import {
+  aidlcEngineCommand,
+  aidlcInvocation,
+  isCompiledExecutable,
+  quoteCommandArgument,
+} from "./aidlc-runtime-paths.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -96,18 +113,39 @@ interface GitResult {
   code: number;
 }
 
-function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
+interface GitBytesResult {
+  ok: boolean;
+  stdout: Buffer;
+  stderr: string;
+  code: number;
+}
+
+// Bun's spawnSync stops a pipe read at 1 MiB and hands back what it had, and a
+// Unit's audit shard outgrows that in one long attempt, so the cap is lifted
+// the way the other git readers lift it. A run that could not start, was killed
+// or overflowed is a failed run, whatever its exit status.
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
-    encoding: "utf-8",
     env: { ...process.env, ...env },
+    maxBuffer: 512 * 1024 * 1024,
   });
+  const failure = result.error
+    ? `${result.error.message}\n`
+    : result.signal
+      ? `git stopped by ${result.signal}\n`
+      : "";
   return {
-    ok: result.status === 0,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    ok: result.status === 0 && !result.error && !result.signal,
+    stdout: result.stdout ?? Buffer.alloc(0),
+    stderr: failure + (result.stderr?.toString("utf-8") ?? ""),
     code: result.status ?? 1,
   };
+}
+
+function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
+  const result = gitBytes(projectDir, args, env);
+  return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
 function localGit(
@@ -444,6 +482,40 @@ function currentClaim(
 const NO_GIT_IDENTITY =
   /identity unknown|Please tell me who you are|auto-detect email|no (?:email|name) was given/i;
 
+// Builds a tree equal to `baseTreeOid` but with `path` replaced (or added) by
+// `content`, via a scratch index so the real worktree/index is untouched.
+function writeTreeWithBlob(
+  projectDir: string,
+  baseTreeOid: string,
+  path: string,
+  content: string,
+): string {
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-tree-"));
+  const index = join(scratch, "index");
+  try {
+    const env = { GIT_INDEX_FILE: index };
+    const read = git(projectDir, ["read-tree", baseTreeOid], env);
+    if (!read.ok) fail(`git read-tree failed: ${read.stderr.trim()}`);
+    const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: projectDir,
+      encoding: "utf-8",
+      input: content,
+    });
+    if (blob.status !== 0) fail(`git hash-object failed: ${(blob.stderr ?? "").trim()}`);
+    const update = git(
+      projectDir,
+      ["update-index", "--add", "--cacheinfo", `100644,${(blob.stdout ?? "").trim()},${path}`],
+      env,
+    );
+    if (!update.ok) fail(`git update-index failed: ${update.stderr.trim()}`);
+    const tree = git(projectDir, ["write-tree"], env);
+    if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
+    return tree.stdout.trim();
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 function createClaimCommit(
   projectDir: string,
   parentOid: string,
@@ -451,58 +523,41 @@ function createClaimCommit(
   sourceTreeOid?: string,
   additionalParentOid?: string,
 ): string {
-  const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-claim-"));
-  const index = join(scratch, "index");
-  try {
-    // The claim is the person's own commit: their git name, email and signing
-    // settings apply as they do to any commit they make, so a remote that
-    // matches the committer to the pusher accepts it, and the claim history
-    // shows who claimed.
-    const env = { GIT_INDEX_FILE: index };
-    const read = git(projectDir, ["read-tree", sourceTreeOid ?? parentOid], env);
-    if (!read.ok) fail(`git read-tree failed: ${read.stderr.trim()}`);
-    const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], {
-      cwd: projectDir,
-      encoding: "utf-8",
-      input: `${JSON.stringify(payload, null, 2)}\n`,
-    });
-    if (blob.status !== 0) fail(`git hash-object failed: ${(blob.stderr ?? "").trim()}`);
-    const update = git(
-      projectDir,
-      ["update-index", "--add", "--cacheinfo", `100644,${(blob.stdout ?? "").trim()},${CLAIM_FILE}`],
-      env,
-    );
-    if (!update.ok) fail(`git update-index failed: ${update.stderr.trim()}`);
-    const tree = git(projectDir, ["write-tree"], env);
-    if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
-    // commit-tree does not read commit.gpgsign on its own; porcelain commits do.
-    const signed =
-      git(projectDir, ["config", "--type=bool", "commit.gpgsign"]).stdout.trim() === "true";
-    const commitArgs = [
-      "commit-tree",
-      tree.stdout.trim(),
-      "-p",
-      parentOid,
-      ...(additionalParentOid ? ["-p", additionalParentOid] : []),
-      ...(signed ? ["-S"] : []),
-      "-m",
-      `aidlc unit ${payload.status}: ${payload.unit} generation ${payload.generation}`,
-    ];
-    const commit = git(projectDir, commitArgs, env);
-    if (!commit.ok) {
-      if (NO_GIT_IDENTITY.test(commit.stderr)) {
-        fail(
-          "Git has no name and email for your commits yet. Set them with " +
-            'git config --global user.name "Your Name" and git config --global user.email "you@example.com", ' +
-            "then run the command again.",
-        );
-      }
-      fail(`git commit-tree failed: ${commit.stderr.trim()}`);
+  // The claim is the person's own commit: their git name, email and signing
+  // settings apply as they do to any commit they make, so a remote that
+  // matches the committer to the pusher accepts it, and the claim history
+  // shows who claimed.
+  const tree = writeTreeWithBlob(
+    projectDir,
+    sourceTreeOid ?? parentOid,
+    CLAIM_FILE,
+    `${JSON.stringify(payload, null, 2)}\n`,
+  );
+  // commit-tree does not read commit.gpgsign on its own; porcelain commits do.
+  const signed =
+    git(projectDir, ["config", "--type=bool", "commit.gpgsign"]).stdout.trim() === "true";
+  const commitArgs = [
+    "commit-tree",
+    tree,
+    "-p",
+    parentOid,
+    ...(additionalParentOid ? ["-p", additionalParentOid] : []),
+    ...(signed ? ["-S"] : []),
+    "-m",
+    `aidlc unit ${payload.status}: ${payload.unit} generation ${payload.generation}`,
+  ];
+  const commit = git(projectDir, commitArgs);
+  if (!commit.ok) {
+    if (NO_GIT_IDENTITY.test(commit.stderr)) {
+      fail(
+        "Git has no name and email for your commits yet. Set them with " +
+          'git config --global user.name "Your Name" and git config --global user.email "you@example.com", ' +
+          "then run the command again.",
+      );
     }
-    return commit.stdout.trim();
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    fail(`git commit-tree failed: ${commit.stderr.trim()}`);
   }
+  return commit.stdout.trim();
 }
 
 // What the remote said when it refused a push: its own `remote:` lines, then
@@ -609,7 +664,7 @@ function completedUnits(state: string): Set<string> {
     );
     if (
       workCells.every((cell) => cell === "[x]") &&
-      (mergedIndex < 0 || cells[mergedIndex] === "[x]")
+      (mergedIndex < 0 || unitRowMerged(state, cells[0]))
     ) {
       done.add(cells[0]);
     }
@@ -940,16 +995,27 @@ function gitPathExistsAt(
   return git(projectDir, ["cat-file", "-e", `${oid}:${path}`]).ok;
 }
 
-function gitTextAt(
+export function gitTextAt(
   projectDir: string,
   oid: string,
   path: string,
 ): string {
-  // This is an object, never a worktree path. Without the separator Git also
-  // stats the composite oid:path, which can exceed Windows' path limit.
-  const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
-  if (!shown.ok) fail(`Pinned candidate is missing ${path}.`);
-  return shown.stdout;
+  // `cat-file` takes oid:path as an object name only, never a worktree path,
+  // so Git does not stat it (which could exceed Windows' path limit). The
+  // blob's recorded size is checked against the bytes read: a short read
+  // never stands in for the file.
+  const object = `${oid}:${path}`;
+  const size = git(projectDir, ["cat-file", "-s", object]);
+  if (!size.ok) fail(`Pinned candidate is missing ${path}.`);
+  const expected = Number(size.stdout.trim());
+  const shown = gitBytes(projectDir, ["cat-file", "blob", object]);
+  if (!shown.ok || shown.stdout.length !== expected) {
+    fail(
+      `Could not read all of ${path} from the pinned candidate: ` +
+        `${shown.stdout.length} of ${expected} bytes${shown.ok ? "" : ` (${shown.stderr.trim()})`}.`,
+    );
+  }
+  return shown.stdout.toString("utf-8");
 }
 
 type CandidateAuditEvent = AuditShardEvent;
@@ -960,9 +1026,7 @@ function candidateAuditEvents(
   shards: string[],
 ): CandidateAuditEvent[] {
   const events = shards.flatMap((path, shardIndex) =>
-    gitTextAt(projectDir, oid, path)
-      .replace(/\r\n/g, "\n")
-      .split(/\n---\n/)
+    auditShardBlocks(gitTextAt(projectDir, oid, path))
       .filter((block) => block.trim().length > 0)
       .map((block, pos): CandidateAuditEvent | null => {
         const event = auditBlockField(block, "Event");
@@ -1258,6 +1322,158 @@ function transportedAuditViolation(
   return `${event.event} is not in the transported Unit evidence allowlist`;
 }
 
+// Mirrors appendAuditBlockAtPath's on-disk shape: a one-line preamble (only
+// ever written once, fused with the first block since no `\n---\n` separates
+// them), then every block as `\n---\n`-joined `renderAuditBlock` output.
+const AUDIT_SHARD_HEADER = "# AI-DLC Audit Log\n";
+
+// A claimed checkout's own shard carries far more than the Unit's attempt
+// receipts, because appendAuditEntry has no notion of a claimed checkout:
+// session lifecycle, a typed prompt, an answered question box, sensors,
+// subagent tracking, doctor and guard refusals all land in the SAME shard.
+// Publish ships exactly the evidence pin accepts, so a real session's shard
+// publishes clean.
+//
+// transportedAuditViolation is the ONE owner of what transports: this projects
+// the shard onto that same predicate rather than restating it as a second
+// list, so no event type can be ordinary in a session yet fatal at pin (of 118
+// valid event types only a handful are transportable, and a list here would
+// silently block every type absent from both). Parsed exactly as
+// candidateAuditEvents parses it - CRLF normalised, blank blocks skipped - so
+// publish and pin can never disagree about a block.
+//
+// PROVISIONAL. This compensates at publish for a conflation at write time, and
+// for an authority model that is not expressed: a transported shard's rows are
+// refused by type because nothing records whose shard a row came from. When
+// authority is scoped by provenance, pin can select its evidence instead of
+// refusing a whole file, and this projection should be DELETED rather than
+// kept alongside it.
+//
+// Returns null when nothing is dropped, so an untouched shard keeps its own
+// bytes (a CRLF candidate is not rewritten to LF for no reason).
+function transportableAuditShardText(
+  content: string,
+  unit: string,
+  generation: number,
+): { text: string; withheld: number } | null {
+  // auditShardBlocks is the grammar the candidate walk splits with, so these
+  // are the same blocks, with the same bytes, in the same order pin reads.
+  const blocks = auditShardBlocks(content);
+  const keep = blocks.map((block, pos) => {
+    // The candidate walk drops both before it evaluates anything, so neither
+    // is ever a violation; the trailing blank block carries the last separator.
+    if (block.trim().length === 0) return true;
+    const event = auditBlockField(block, "Event");
+    if (!event) return true;
+    return transportedAuditViolation(
+      {
+        event,
+        block,
+        timestamp: auditBlockField(block, "Timestamp") ?? "",
+        shard: "",
+        shardIndex: 0,
+        pos,
+      },
+      unit,
+      generation,
+    ) === null;
+  });
+  const withheld = keep.filter((kept) => !kept).length;
+  if (withheld === 0) return null;
+  const kept = blocks.filter((_, pos) => keep[pos]).join("\n---\n");
+  // The shard's one-line header is written once, with no separator after it,
+  // so it rides inside the first block rather than standing on its own. It
+  // survives that block being withheld: each rendered block opens with its
+  // own newline, so prepending the header reproduces the on-disk shape.
+  const headerWithheld = blocks.length > 0 && !keep[0] &&
+    blocks[0].startsWith(AUDIT_SHARD_HEADER);
+  return {
+    text: headerWithheld ? AUDIT_SHARD_HEADER + kept : kept,
+    withheld,
+  };
+}
+
+// Projects the claim-bound audit shard inside `treeOid` onto the transportable
+// evidence, returning a tree equal to `treeOid` except for that one blob. The
+// clone's own history and working copy keep the whole shard; only the tree
+// about to be published is projected.
+function transportableCandidateTree(
+  projectDir: string,
+  treeOid: string,
+  recordPrefix: string,
+  auditShard: string,
+  unit: string,
+  generation: number,
+): { tree: string; withheld: number } {
+  const shardPath = `${recordPrefix}/audit/${auditShard}`;
+  if (!gitPathExistsAt(projectDir, treeOid, shardPath)) {
+    return { tree: treeOid, withheld: 0 };
+  }
+  const content = gitTextAt(projectDir, treeOid, shardPath);
+  const projected = transportableAuditShardText(content, unit, generation);
+  if (!projected) return { tree: treeOid, withheld: 0 };
+  return {
+    tree: writeTreeWithBlob(projectDir, treeOid, shardPath, projected.text),
+    withheld: projected.withheld,
+  };
+}
+
+// Every audit shard but the claim's own, as `baseOid` has it: pin refuses any
+// change to another shard (candidateBoundary). A checkout whose own shard was
+// on main before the claim still recorded its pre-claim rows there, and
+// `git add -A` commits them. Those rows stay in the clone's history and
+// working copy, as the projected ones do.
+function auditShardsAsBase(
+  projectDir: string,
+  treeOid: string,
+  baseOid: string,
+  recordPrefix: string,
+  auditShard: string,
+): { tree: string; withheld: number } {
+  const auditRoot = `${recordPrefix}/audit`;
+  const paths = gitOutput(
+    projectDir,
+    ["diff", "--no-renames", "--name-only", baseOid, treeOid, "--", auditRoot],
+    "Cannot compare candidate audit shards",
+  )
+    .split(/\r?\n/)
+    .filter((path) => path && path !== `${auditRoot}/${auditShard}`);
+  if (paths.length === 0) return { tree: treeOid, withheld: 0 };
+  const rows = (oid: string, path: string) =>
+    gitPathExistsAt(projectDir, oid, path)
+      ? auditShardBlocks(gitTextAt(projectDir, oid, path))
+        .filter((block) => auditBlockField(block, "Event")).length
+      : 0;
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-tree-"));
+  try {
+    const env = { GIT_INDEX_FILE: join(scratch, "index") };
+    const read = git(projectDir, ["read-tree", treeOid], env);
+    if (!read.ok) fail(`git read-tree failed: ${read.stderr.trim()}`);
+    let withheld = 0;
+    for (const path of paths) {
+      withheld += Math.max(0, rows(treeOid, path) - rows(baseOid, path));
+      const [mode, , oid] = gitOutput(
+        projectDir,
+        ["ls-tree", baseOid, "--", path],
+        "Cannot read the base audit shard",
+      ).split(/\s+/);
+      const update = git(
+        projectDir,
+        oid
+          ? ["update-index", "--cacheinfo", `${mode},${oid},${path}`]
+          : ["update-index", "--force-remove", "--", path],
+        env,
+      );
+      if (!update.ok) fail(`git update-index failed: ${update.stderr.trim()}`);
+    }
+    const tree = git(projectDir, ["write-tree"], env);
+    if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
+    return { tree: tree.stdout.trim(), withheld };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 function candidateBoundary(
   projectDir: string,
   baseOid: string,
@@ -1483,7 +1699,16 @@ function candidateEvidence(
     TRANSPORTED_DATA_EVENTS.has(event.event)
   );
   const events = authorityRows;
+  // A stage whose documents all belong to other kinds of Unit applies to this
+  // one no more than it does to the walk: it settles with no directive, so it
+  // earns no receipt, review or gate.
+  const notApplicable = new Set(stages.filter((slug) => {
+    const stage = graph.find((entry) => entry.slug === slug);
+    return (stage?.produces ?? []).length > 0 &&
+      filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
+  }));
   const stagesCompleted = stages.filter((stage) =>
+    notApplicable.has(stage) ||
     unitLifecycleSnapshot(
       projectDir,
       stage,
@@ -1505,7 +1730,7 @@ function candidateEvidence(
   const gatesExpected =
     claim.payload.gate_rhythm === "unit-end"
       ? [stages[stages.length - 1]]
-      : stages;
+      : stages.filter((stage) => !notApplicable.has(stage));
   const gatesApproved = gatesExpected.filter((stage) =>
     unitGateStatus(
       projectDir,
@@ -1519,6 +1744,7 @@ function candidateEvidence(
   const reviewersReady: string[] = [];
   const artifactPaths: string[] = [];
   for (const stageSlug of stages) {
+    if (notApplicable.has(stageSlug)) continue;
     const stage = graph.find((entry) => entry.slug === stageSlug);
     if (!stage) fail(`Pinned candidate references unknown stage "${stageSlug}".`);
     const names = filterProducesByKind(
@@ -1671,12 +1897,11 @@ function publishUnit(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const stamp = requireLiveClaimForTeamUnit(pd, unit);
   if (!stamp) fail("Unit publication requires a scoped team checkout.");
-  const dirty = gitOutput(
-    pd,
-    ["status", "--porcelain", "--untracked-files=no"],
-    "Cannot inspect candidate worktree",
-  );
-  if (dirty) fail("Unit publication requires a clean tracked worktree; commit the candidate first.");
+  const changed = worktreeChanges(pd, "no", "Cannot inspect candidate worktree");
+  const own = aidlcOwnRootParts(pd, changed);
+  if (changed.some((path) => !own.has(path))) {
+    fail("Unit publication requires a clean tracked worktree; commit the candidate first.");
+  }
   const remote = repositoryRemote(pd);
   const current = currentClaim(pd, remote, stamp.claim_ref);
   if (
@@ -1687,11 +1912,22 @@ function publishUnit(args: string[], projectDir?: string): void {
     fail(`Unit "${unit}" claim is stale or released; publication refused.`);
   }
   const headOid = gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve candidate HEAD");
-  const headTree = gitOutput(
+  const rawHeadTree = gitOutput(
     pd,
     ["rev-parse", "HEAD^{tree}"],
     "Cannot resolve candidate tree",
   );
+  const recordPrefix = relativeRecordDir(pd);
+  if (!recordPrefix) fail("Cannot resolve the active intent record for publication.");
+  // The shard the claim bound at claim time, which is the one pin inspects
+  // (candidateEvidence fails without it). Reading it from the claim rather
+  // than resolving a name here keeps one owner for the shard's identity.
+  const auditShard = current.payload.audit_shard;
+  if (!auditShard || !/^[A-Za-z0-9._-]+\.md$/.test(auditShard)) {
+    fail(
+      `Unit "${unit}" claim has no bound audit shard; release and re-claim it before publishing again.`,
+    );
+  }
   const integration = fetchIntegration(pd);
   const integrationIsAncestor = localGit(
     pd,
@@ -1703,6 +1939,23 @@ function publishUnit(args: string[], projectDir?: string): void {
   const publicationIntegrationRef = integrationIsAncestor
     ? integration.ref
     : current.payload.integration_ref;
+  const projected = transportableCandidateTree(
+    pd,
+    rawHeadTree,
+    recordPrefix,
+    auditShard,
+    unit,
+    current.generation,
+  );
+  const asBase = auditShardsAsBase(
+    pd,
+    projected.tree,
+    publicationBaseOid,
+    recordPrefix,
+    auditShard,
+  );
+  const headTree = asBase.tree;
+  const withheld = projected.withheld + asBase.withheld;
   if (
     current.payload.candidate_tree_oid === headTree &&
     current.payload.candidate_head_oid === headOid &&
@@ -1717,6 +1970,7 @@ function publishUnit(args: string[], projectDir?: string): void {
       unit,
       candidate_oid: current.oid,
       generation: current.generation,
+      local_rows_withheld: withheld,
     }));
     return;
   }
@@ -1755,6 +2009,9 @@ function publishUnit(args: string[], projectDir?: string): void {
     candidate_oid: published.oid,
     candidate_head_oid: headOid,
     generation: published.generation,
+    // Said rather than done quietly: the candidate carries the Unit's evidence,
+    // and this many of the clone's own local rows stayed behind.
+    local_rows_withheld: withheld,
   }));
 }
 
@@ -1836,7 +2093,7 @@ function currentPinnedClaim(
       fail(
         `Unit "${transaction.unit}" was released after its merge commit landed. ` +
           `Inspect the landed commit, then recover explicitly with aidlc unit land ${transaction.unit} ` +
-          '--accept-released-attempt --user-input "<human acknowledgment>".',
+          "--accept-released-attempt --user-input '<human acknowledgment>'.",
       );
     }
     return {
@@ -1905,75 +2162,70 @@ function assertTransactionIdentity(
   }
 }
 
-function requireMergeDispatchDecision(
-  projectDir: string,
+// A pinned Unit lands with a regular merge, so the reviewed pinned OID stays a
+// direct parent, into the integration branch pin fetched (fetchIntegration,
+// which reads the team's Way of Working). Neither is a lookup's or the
+// person's to choose: the team's own default (squash) holds for every other
+// merge. Pin prints these terms with the gate's question; the gate records them.
+function pinnedMergeGate(
   transaction: UnitMergeTransaction,
 ): { strategy: "merge"; target: string } {
+  return { strategy: "merge", target: transaction.integration_branch };
+}
+
+// The merge gate as pin hands it to the agent: one question for the person,
+// asked in the pin's own turn, and the command that records each answer.
+function pinMergeGateStep(transaction: UnitMergeTransaction): Record<string, string> {
+  const terms = pinnedMergeGate(transaction);
+  const record = (decision: "approve" | "reject") =>
+    `${aidlcInvocation()} unit gate ${quoteCommandArgument(transaction.unit)} --decision ${decision} --user-input '<their answer>'`;
+  return {
+    strategy: terms.strategy,
+    target_branch: terms.target,
+    ask:
+      `Ask the person now, as one question, whether to merge Unit "${transaction.unit}" into ${terms.target}` +
+      " (Approve or Reject), with the pinned commit and the files outside the Unit's folder above, then end your" +
+      " turn. Record their reply with the command for their choice.",
+    approve: record("approve"),
+    reject: record("reject"),
+  };
+}
+
+// After the person's Approve, the land is the next step, as their Approve is
+// the go to merge: the gate hands it out so the same turn lands it.
+function approvedLandStep(transaction: UnitMergeTransaction): Record<string, string> {
+  return {
+    command: `${aidlcInvocation()} unit land ${quoteCommandArgument(transaction.unit)} --target ${quoteCommandArgument(pinnedMergeGate(transaction).target)}`,
+    step: "Run it now, in this turn, and tell the person in plain words what it reports.",
+  };
+}
+
+// The person's reply to the gate the pin showed: a typed turn in main's own
+// shard stamped after the pin, so the turn that ran the pin is not it, and
+// after the last gate decision, which spent the turns before it.
+function requireReplyAfterPin(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+): void {
+  if (humanPresenceGuardDisabled()) return;
   const all = mainAuthorityAuditRows(projectDir);
-  if (!transaction.pin_id) {
-    fail(`Unit "${transaction.unit}" merge transaction has no pin identity; pin it again.`);
-  }
-  const relevant = all.filter(
+  const previousGateIndex = all.findLastIndex(
     (row) =>
-      (
-        row.event === "MERGE_DISPATCH_INVOKED" ||
-        row.event === "MERGE_DISPATCH_RETURNED" ||
-        row.event === "MERGE_DISPATCH_FALLBACK"
-      ) &&
-      auditBlockField(row.block, "Bolt slug") === transaction.unit &&
-      auditBlockField(row.block, "Pinned OID") === transaction.pinned_oid &&
-      auditBlockField(row.block, "Attempt Generation") ===
-        String(transaction.generation) &&
-      auditBlockField(row.block, "Pin Transaction") === transaction.pin_id,
+      (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
+      auditBlockField(row.block, "Stage") !== null,
   );
-  const invokedIndex = relevant.findLastIndex(
-    (row) => row.event === "MERGE_DISPATCH_INVOKED",
-  );
-  if (invokedIndex < 0) {
-    fail(`Unit "${transaction.unit}" merge gate requires MERGE_DISPATCH_INVOKED after pinning.`);
-  }
-  const terminal = relevant
-    .slice(invokedIndex + 1)
-    .findLast(
-      (row) =>
-        row.event === "MERGE_DISPATCH_RETURNED" ||
-        row.event === "MERGE_DISPATCH_FALLBACK",
-    );
-  if (!terminal) {
-    fail(`Unit "${transaction.unit}" merge dispatch has no terminal result.`);
-  }
-  if (!humanPresenceGuardDisabled()) {
-    const terminalIndex = all.indexOf(terminal);
-    const previousGate = [...all]
-      .reverse()
-      .find(
+  if (
+    !all
+      .slice(previousGateIndex + 1)
+      .some(
         (row) =>
-          (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
-          auditBlockField(row.block, "Stage") !== null,
-      );
-    const previousGateIndex = previousGate ? all.indexOf(previousGate) : -1;
-    const humanFloor = Math.max(terminalIndex, previousGateIndex);
-    if (
-      terminalIndex < 0 ||
-      !all.slice(humanFloor + 1).some((row) => row.event === "HUMAN_TURN")
-    ) {
-      fail(
-        `Unit "${transaction.unit}" merge gate requires a typed human turn after merge dispatch.`,
-      );
-    }
-  }
-  if (terminal.event === "MERGE_DISPATCH_FALLBACK") {
-    return { strategy: "merge", target: transaction.integration_branch };
-  }
-  const strategy = auditBlockField(terminal.block, "Strategy");
-  const target = auditBlockField(terminal.block, "Target branch");
-  if (strategy !== "merge") {
+          row.event === "HUMAN_TURN" && row.timestamp > transaction.pinned_at,
+      )
+  ) {
     fail(
-      `Unit "${transaction.unit}" pinned transaction requires merge strategy; dispatch returned "${strategy ?? "missing"}".`,
+      `Unit "${transaction.unit}" merge gate requires a typed human turn after the pin.`,
     );
   }
-  if (!target) fail(`Unit "${transaction.unit}" merge dispatch omitted its target branch.`);
-  return { strategy: "merge", target };
 }
 
 function mergeGateRecord(
@@ -2016,6 +2268,10 @@ function pinUnit(args: string[], projectDir?: string): void {
   if (!isTeamUnitOwnership(state)) fail("Unit pinning requires Unit Ownership: team.");
   const identity = activeIdentity(pd);
   const inFlight = readUnitMergeTransaction(pd, unit);
+  const integration = fetchIntegration(pd);
+  const ref = claimRef(identity.intentId8, unit);
+  const claim = currentClaim(pd, integration.remote, ref);
+  let superseded: UnitMergeTransaction | null = null;
   if (
     inFlight &&
     inFlight.space === identity.space &&
@@ -2024,13 +2280,13 @@ function pinUnit(args: string[], projectDir?: string): void {
       inFlight.status,
     )
   ) {
-    fail(
-      `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
-    );
+    if (!approvalOutlivedByRepublish(pd, inFlight, claim)) {
+      fail(
+        `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
+      );
+    }
+    superseded = inFlight;
   }
-  const integration = fetchIntegration(pd);
-  const ref = claimRef(identity.intentId8, unit);
-  const claim = currentClaim(pd, integration.remote, ref);
   if (
     claim?.status !== "claimed" ||
     claim.payload.intent_uuid !== identity.intentUuid ||
@@ -2078,8 +2334,39 @@ function pinUnit(args: string[], projectDir?: string): void {
     generation: claim.generation,
     evidence,
     gate_required: true,
-    merge_dispatch_required: true,
+    merge_gate: pinMergeGateStep(transaction),
+    ...(superseded
+      ? { superseded: { pinned_oid: superseded.pinned_oid, status: superseded.status } }
+      : {}),
   }));
+}
+
+// An approved merge that git never landed, whose Unit was republished since
+// (a refused landing, then a reopened stage): the approval was for a candidate
+// the claim no longer holds, and gate and land both send the person back to
+// pin. Pin replaces it. The approval stays bound to its own Pinned OID and
+// Attempt Generation, so it never counts for the new candidate.
+function approvalOutlivedByRepublish(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+  claim: UnitClaimView | null,
+): boolean {
+  if (
+    transaction.status !== "approved" ||
+    transaction.git_commit_oid ||
+    transaction.checkpoint_commit_oid ||
+    claim?.status !== "claimed" ||
+    claim.payload.intent_uuid !== transaction.intent_uuid ||
+    (
+      claim.oid === transaction.pinned_oid &&
+      claim.generation === transaction.generation &&
+      claim.nonce === transaction.nonce
+    )
+  ) {
+    return false;
+  }
+  if (git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) return false;
+  return firstParentMergeOf(projectDir, transaction) === null;
 }
 
 function gateUnitMerge(args: string[], projectDir?: string): void {
@@ -2136,10 +2423,12 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       unit,
       decision,
       pinned_oid: transaction.pinned_oid,
+      ...(decision === "approve" ? { land: approvedLandStep(transaction) } : {}),
     }));
     return;
   }
-  const dispatch = requireMergeDispatchDecision(pd, transaction);
+  requireReplyAfterPin(pd, transaction);
+  const terms = pinnedMergeGate(transaction);
   appendAuditEntry(
     decision === "approve" ? "GATE_APPROVED" : "GATE_REJECTED",
     {
@@ -2148,8 +2437,8 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       "Pinned OID": transaction.pinned_oid,
       "Attempt Generation": String(transaction.generation),
       "Gate Scope": "unit-merge",
-      Strategy: dispatch.strategy,
-      "Target branch": dispatch.target,
+      Strategy: terms.strategy,
+      "Target branch": terms.target,
       "Outside the unit record tree":
         transaction.evidence.outside_unit_record_paths.join(", ") || "none",
       ...(decision === "approve"
@@ -2163,8 +2452,8 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     status: decision === "approve" ? "approved" : "rejected",
     decision,
     user_input: userInput,
-    target_branch: dispatch.target,
-    strategy: dispatch.strategy,
+    target_branch: terms.target,
+    strategy: terms.strategy,
   });
   console.log(JSON.stringify({
     gated: true,
@@ -2176,6 +2465,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       transaction.evidence.outside_unit_record_paths,
     outside_unit_record_tree_note:
       "These paths are outside the unit's record tree and require human overlap judgment.",
+    ...(decision === "approve" ? { land: approvedLandStep(transaction) } : {}),
   }));
 }
 
@@ -2205,6 +2495,138 @@ function isEngineMergeMetadata(
   ]).has(path);
 }
 
+// The paths `git status` lists as changed: tracked changes, and with
+// `untracked: "all"` every untracked file Git does not ignore.
+function worktreeChanges(projectDir: string, untracked: "no" | "all", label: string): string[] {
+  const status = git(projectDir, ["status", "--porcelain=v1", "-z", `--untracked-files=${untracked}`]);
+  if (!status.ok) fail(`${label}: ${status.stderr.trim() || `exit ${status.code}`}`);
+  const paths: string[] = [];
+  const records = status.stdout.split("\u0000");
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record.length < 4) continue;
+    const code = record.slice(0, 2);
+    paths.push(record.slice(3));
+    if (/[RC]/.test(code) && records[i + 1]) {
+      paths.push(records[++i]);
+    }
+  }
+  return paths;
+}
+
+// What AI-DLC's own write in a shared root file is: its marked part (.gitignore,
+// AGENTS.md) or its entries in a JSON file (opencode.json), as aidlcRootParts
+// reads them from what the project's harnesses ship.
+type OwnRootPart = { marker: string } | { entries: string };
+
+// The changed paths that hold only AI-DLC's own write, which the session-start
+// hook adds in a checkout config never ran in and a release brings up to date:
+// in a shared root file, its marked part as a release shipped it with the
+// person's part around it as HEAD holds it, or its entries merged onto HEAD's
+// copy exactly as the hook merges them (no copy when HEAD has none). A change
+// of the person's in that file, inside the part too (the hook and config then
+// leave the part as theirs), a file they staged, or a part that does not read,
+// leaves it theirs.
+function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<string, OwnRootPart> {
+  const own = new Map<string, OwnRootPart>();
+  if (paths.length === 0) return own;
+  const { blocks, entries } = aidlcRootParts(projectDir);
+  const entriesAt = new Map([...entries].map(([key, part]) => [rootIntegrationTarget(projectDir, key), part.text]));
+  for (const path of paths) {
+    const block = blocks.get(path);
+    const shippedEntries = entriesAt.get(path);
+    if (!block && shippedEntries === undefined) continue;
+    if (!git(projectDir, ["diff", "--cached", "--quiet", "--", path]).ok) continue;
+    let text: string;
+    try {
+      if (!lstatSync(join(projectDir, path)).isFile()) continue;
+      text = readFileSync(join(projectDir, path), "utf-8");
+    } catch {
+      continue;
+    }
+    const committed = gitPathExistsAt(projectDir, "HEAD", path) ? gitTextAt(projectDir, "HEAD", path) : "";
+    if (
+      block && onlyMarkedPartChanged(path, text, committed, block.marker) &&
+      mergeBlock(path, text, block.shipped, block.marker, block.legacy).currentBlockShipped
+    ) {
+      own.set(path, { marker: block.marker });
+    } else if (shippedEntries !== undefined) {
+      // Git's copy holds the line endings the repository stores, the file the
+      // checkout's own (core.autocrlf on Windows), so they are left aside.
+      const lf = (value: string) => value.replace(/\r\n/g, "\n");
+      const merged = mergeJsonEntries(committed, shippedEntries, { kind: "none" });
+      if (!("conflict" in merged) && lf(merged.text) === lf(text)) own.set(path, { entries: shippedEntries });
+    }
+  }
+  return own;
+}
+
+interface YieldedRootPart {
+  path: string;
+  part: OwnRootPart;
+  bytes: Buffer;
+}
+
+// Git refuses to merge over a local change to a file the merge writes, the
+// same bytes included. So before the merge, AI-DLC's own write in a shared
+// root file the candidate also changes is set aside: the file goes back to
+// HEAD's copy (or, AI-DLC's whole, away), and its bytes are kept in `yielded`
+// first, so a stop part way still gives each one back. They are kept in memory
+// only: a landing killed between the merge and its commit leaves the merge's
+// copy, and the next session start writes AI-DLC's part again.
+function yieldOwnRootParts(projectDir: string, candidatePaths: readonly string[], yielded: YieldedRootPart[]): void {
+  const touched = worktreeChanges(projectDir, "all", "Cannot inspect main worktree")
+    .filter((path) => candidatePaths.includes(path));
+  for (const [path, part] of aidlcOwnRootParts(projectDir, touched)) {
+    yielded.push({ path, part, bytes: readFileSync(join(projectDir, path)) });
+    if (gitPathExistsAt(projectDir, "HEAD", path)) {
+      const restored = git(projectDir, ["checkout", "HEAD", "--", path]);
+      if (!restored.ok) fail(`Failed to restore ${path} before the Unit merge: ${restored.stderr.trim()}.`);
+    } else {
+      git(projectDir, ["rm", "-f", "--cached", "--ignore-unmatch", "--", path]);
+      unlinkSync(join(projectDir, path));
+    }
+  }
+}
+
+// After the merge, what was set aside goes back onto the merged file, still
+// uncommitted: AI-DLC's marked part as the landing checkout had it, or its
+// entries merged as the hook merges them, around the person's part as the
+// merge made it. When the landing stopped and rolled back, each file gets its
+// bytes back as they were.
+function returnOwnRootParts(projectDir: string, yielded: readonly YieldedRootPart[], landed: boolean): void {
+  for (const { path, part, bytes } of yielded) {
+    const file = join(projectDir, path);
+    if (!landed) {
+      writeFileSync(file, bytes);
+      continue;
+    }
+    let merged: string;
+    try {
+      merged = readFileSync(file, "utf-8");
+    } catch {
+      continue;
+    }
+    let next: string | undefined;
+    if ("entries" in part) {
+      const withEntries = mergeJsonEntries(merged, part.entries, { kind: "none" });
+      next = "conflict" in withEntries ? undefined : withEntries.text;
+    } else {
+      const kept = markedPart(path, bytes.toString("utf-8"), part.marker)?.block;
+      const now = markedPart(path, merged, part.marker);
+      if (!kept || now === null) continue;
+      if (now.block === null) {
+        const { begin, end } = managedBlockMarkers(path, part.marker);
+        next = mergeBlock(path, merged, kept.slice(begin.length, kept.length - end.length), part.marker).value;
+      } else {
+        const at = merged.indexOf(now.block);
+        next = `${merged.slice(0, at)}${kept}${merged.slice(at + now.block.length)}`;
+      }
+    }
+    if (next !== undefined && next !== merged) writeFileSync(file, next);
+  }
+}
+
 function conflictFiles(projectDir: string): string[] {
   const listed = git(projectDir, ["diff", "--name-only", "--diff-filter=U"]);
   return listed.ok
@@ -2221,32 +2643,15 @@ function checkpointMainMetadata(
     ["rev-parse", "HEAD"],
     "Cannot resolve metadata checkpoint parent",
   );
-  const statusResult = git(
-    projectDir,
-    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-  );
-  if (!statusResult.ok) {
-    fail(
-      `Cannot inspect main worktree: ${statusResult.stderr.trim() || `exit ${statusResult.code}`}`,
-    );
-  }
-  const status = statusResult.stdout;
-  if (!status) return { parentOid };
+  const changed = worktreeChanges(projectDir, "all", "Cannot inspect main worktree");
+  if (changed.length === 0) return { parentOid };
   const recordPrefix = relativeRecordDir(projectDir);
   if (!recordPrefix) {
     fail("Cannot resolve active intent metadata for Unit landing.");
   }
-  const paths: string[] = [];
-  const records = status.split("\u0000");
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i];
-    if (record.length < 4) continue;
-    const code = record.slice(0, 2);
-    paths.push(record.slice(3));
-    if (/[RC]/.test(code) && records[i + 1]) {
-      paths.push(records[++i]);
-    }
-  }
+  // AI-DLC's own part of a shared root file stays as it is, uncommitted.
+  const own = aidlcOwnRootParts(projectDir, changed);
+  const paths = changed.filter((path) => !own.has(path));
   const unsafe = paths.filter(
     (path) =>
       !isEngineMergeMetadata(projectDir, path, recordPrefix) &&
@@ -2257,6 +2662,7 @@ function checkpointMainMetadata(
       `Unit landing requires a clean source worktree; commit or stash: ${unsafe.join(", ")}.`,
     );
   }
+  if (paths.length === 0) return { parentOid };
   const added = git(projectDir, ["add", "-A", "--", ...paths]);
   if (!added.ok) {
     fail(
@@ -2521,11 +2927,12 @@ function validateLandedMerge(
   }
 }
 
-function recoveredMergeCommit(
+// The merge commit of the pinned candidate on HEAD's first-parent line since
+// pin, or null when there is none. Undefined when the history cannot be read.
+function firstParentMergeOf(
   projectDir: string,
   transaction: UnitMergeTransaction,
-  target: string,
-): string | null {
+): string | null | undefined {
   const history = git(
     projectDir,
     [
@@ -2535,15 +2942,24 @@ function recoveredMergeCommit(
       `${transaction.main_before_oid}..HEAD`,
     ],
   );
-  if (!history.ok) return null;
+  if (!history.ok) return undefined;
   for (const line of history.stdout.split(/\r?\n/).filter(Boolean)) {
     const [commitOid, parentText = ""] = line.split("\u0000");
     const parents = parentText.split(/\s+/).filter(Boolean);
-    if (parents[1] !== transaction.pinned_oid) continue;
-    validateLandedMerge(projectDir, transaction, commitOid, target);
-    return commitOid;
+    if (parents[1] === transaction.pinned_oid) return commitOid;
   }
   return null;
+}
+
+function recoveredMergeCommit(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+  target: string,
+): string | null {
+  const commitOid = firstParentMergeOf(projectDir, transaction);
+  if (!commitOid) return null;
+  validateLandedMerge(projectDir, transaction, commitOid, target);
+  return commitOid;
 }
 
 function metadataCheckpointAtHead(
@@ -2707,100 +3123,108 @@ function landGit(
     fail("Another git merge is already in progress.");
   }
   const changed = candidateChangedPaths(projectDir, transaction);
-  const merged = existingMergeHead.ok
-    ? { ok: true, stdout: "", stderr: "", code: 0 }
-    : git(
-      projectDir,
-      ["merge", "--no-commit", "--no-ff", transaction.pinned_oid],
-    );
-  restoreMainMetadata(projectDir, changed);
-  const conflicts = conflictFiles(projectDir).filter(
-    (path) => !isEngineMergeMetadata(projectDir, path),
-  );
-  if (conflicts.length > 0) {
-    git(projectDir, ["merge", "--abort"]);
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, {
-      ...working,
-      conflict_files: conflicts,
-    });
-    fail(`Unit "${transaction.unit}" source conflicts: ${conflicts.join(", ")}.`);
-  }
-  if (!merged.ok && !git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) {
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, working);
-    fail(`Pinned git merge failed: ${merged.stderr.trim() || merged.stdout.trim()}.`);
-  }
-  const pendingTree = gitOutput(
-    projectDir,
-    ["write-tree"],
-    "Cannot materialize pending Unit merge tree",
-  );
-  const mainParent = gitOutput(
-    projectDir,
-    ["rev-parse", "HEAD"],
-    "Cannot resolve pending Unit merge parent",
-  );
-  const inspection = inspectLandedTree(
-    projectDir,
-    working,
-    pendingTree,
-    mainParent,
-  );
-  if (inspection.violations.length > 0) {
-    git(projectDir, ["merge", "--abort"]);
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, {
-      ...working,
-      conflict_files: inspection.violations,
-    });
-    throw new CandidateExactPolicyError(
-      `Unit "${transaction.unit}" candidate-exact merge policy refused auto-merged paths: ` +
-        `${inspection.violations.join(", ")}. Rebase onto the current target and republish.`,
-      { ...inspection, phase: "pending-index" },
-    );
-  }
-  const committed = git(projectDir, [
-    "commit",
-    "--no-edit",
-    "-m",
-    `Merge Unit ${transaction.unit} @ ${transaction.pinned_oid.slice(0, 12)}`,
-  ]);
-  if (!committed.ok) {
-    git(projectDir, ["merge", "--abort"]);
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, working);
-    fail(`Pinned git merge commit failed: ${committed.stderr.trim() || committed.stdout.trim() || `exit ${committed.code}`}.`);
-  }
-  const commitOid = gitOutput(
-    projectDir,
-    ["rev-parse", "HEAD"],
-    "Cannot resolve landed merge commit",
-  );
+  const yielded: YieldedRootPart[] = [];
+  let landed = false;
   try {
-    validateLandedMerge(projectDir, working, commitOid, target);
-  } catch (error) {
-    if (error instanceof CandidateExactPolicyError) {
-      error.details.passed_pending_tree_oid = pendingTree;
+    if (!existingMergeHead.ok) yieldOwnRootParts(projectDir, changed, yielded);
+    const merged = existingMergeHead.ok
+      ? { ok: true, stdout: "", stderr: "", code: 0 }
+      : git(
+        projectDir,
+        ["merge", "--no-commit", "--no-ff", transaction.pinned_oid],
+      );
+    restoreMainMetadata(projectDir, changed);
+    const conflicts = conflictFiles(projectDir).filter(
+      (path) => !isEngineMergeMetadata(projectDir, path),
+    );
+    if (conflicts.length > 0) {
+      git(projectDir, ["merge", "--abort"]);
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, {
+        ...working,
+        conflict_files: conflicts,
+      });
+      fail(`Unit "${transaction.unit}" source conflicts: ${conflicts.join(", ")}.`);
     }
-    const reset = git(projectDir, ["reset", "--hard", mainParent]);
-    if (!reset.ok) {
-      fail(
-        `Unit merge validation failed and rollback also failed: ${errorMessage(error)}; ${reset.stderr.trim()}.`,
+    if (!merged.ok && !git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) {
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, working);
+      fail(`Pinned git merge failed: ${merged.stderr.trim() || merged.stdout.trim()}.`);
+    }
+    const pendingTree = gitOutput(
+      projectDir,
+      ["write-tree"],
+      "Cannot materialize pending Unit merge tree",
+    );
+    const mainParent = gitOutput(
+      projectDir,
+      ["rev-parse", "HEAD"],
+      "Cannot resolve pending Unit merge parent",
+    );
+    const inspection = inspectLandedTree(
+      projectDir,
+      working,
+      pendingTree,
+      mainParent,
+    );
+    if (inspection.violations.length > 0) {
+      git(projectDir, ["merge", "--abort"]);
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, {
+        ...working,
+        conflict_files: inspection.violations,
+      });
+      throw new CandidateExactPolicyError(
+        `Unit "${transaction.unit}" candidate-exact merge policy refused auto-merged paths: ` +
+          `${inspection.violations.join(", ")}. Rebase onto the current target and republish.`,
+        { ...inspection, phase: "pending-index" },
       );
     }
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, working);
-    throw error;
+    const committed = git(projectDir, [
+      "commit",
+      "--no-edit",
+      "-m",
+      `Merge Unit ${transaction.unit} @ ${transaction.pinned_oid.slice(0, 12)}`,
+    ]);
+    if (!committed.ok) {
+      git(projectDir, ["merge", "--abort"]);
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, working);
+      fail(`Pinned git merge commit failed: ${committed.stderr.trim() || committed.stdout.trim() || `exit ${committed.code}`}.`);
+    }
+    const commitOid = gitOutput(
+      projectDir,
+      ["rev-parse", "HEAD"],
+      "Cannot resolve landed merge commit",
+    );
+    try {
+      validateLandedMerge(projectDir, working, commitOid, target);
+    } catch (error) {
+      if (error instanceof CandidateExactPolicyError) {
+        error.details.passed_pending_tree_oid = pendingTree;
+      }
+      const reset = git(projectDir, ["reset", "--hard", mainParent]);
+      if (!reset.ok) {
+        fail(
+          `Unit merge validation failed and rollback also failed: ${errorMessage(error)}; ${reset.stderr.trim()}.`,
+        );
+      }
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, working);
+      throw error;
+    }
+    landed = true;
+    return {
+      ...working,
+      status: "git-landed",
+      target_branch: target,
+      strategy: "merge",
+      git_commit_oid: commitOid,
+      conflict_files: undefined,
+    };
+  } finally {
+    returnOwnRootParts(projectDir, yielded, landed);
   }
-  return {
-    ...working,
-    status: "git-landed",
-    target_branch: target,
-    strategy: "merge",
-    git_commit_oid: commitOid,
-    conflict_files: undefined,
-  };
 }
 
 function runStateFold(
@@ -3268,7 +3692,7 @@ function adoptUnit(args: string[], projectDir?: string): void {
     fail(`Unit adoption requires checked-out branch "${ref}", found "${branch}".`);
   }
   const existing = readUnitScopeStamp(pd);
-  if (existing && existing.unit !== unit) {
+  if (existing && existing.unit !== unit && !scopeStampLanded(pd, state, existing)) {
     fail(`This checkout is already scoped to Unit "${existing.unit}".`);
   }
   const claim = currentClaim(pd, repositoryRemote(pd), ref);
@@ -3313,6 +3737,23 @@ function adoptUnit(args: string[], projectDir?: string): void {
     gate_rhythm: claim.payload.gate_rhythm,
     audit_shard: claim.payload.audit_shard,
   };
+  // Publish ships the claim shard projected onto what pin accepts; the owner's
+  // own commit, the claim commit's second parent, keeps every row. The working
+  // copy takes the owner's shard, so the person's answers stay answered here,
+  // unless this checkout has already written to it.
+  const ownerHead = claim.payload.candidate_head_oid;
+  const recordPrefix = relativeRecordDir(pd);
+  if (ownerHead && recordPrefix) {
+    const shardPath = `${recordPrefix}/audit/${claim.payload.audit_shard}`;
+    const blobAt = (oid: string) => git(pd, ["rev-parse", `${oid}:${shardPath}`]).stdout;
+    if (
+      blobAt(ownerHead) !== blobAt("HEAD") &&
+      git(pd, ["diff", "--quiet", "HEAD", "--", shardPath]).ok
+    ) {
+      const owners = git(pd, ["show", `${ownerHead}:${shardPath}`, "--"]);
+      if (owners.ok) writeFileSync(join(pd, shardPath), owners.stdout);
+    }
+  }
   finalizeClaimCheckout(pd, stamp, claim);
   console.log(JSON.stringify({ adopted: true, ...stamp }));
 }
@@ -3336,7 +3777,9 @@ function claimUnit(args: string[], projectDir?: string): void {
   const identity = activeIdentity(pd);
   validateClaimRefUnit(identity.intentId8, unit);
   const existingStamp = readUnitScopeStamp(pd);
-  if (existingStamp) {
+  if (existingStamp && scopeStampLanded(pd, state, existingStamp)) {
+    clearUnitScopeStamp(pd);
+  } else if (existingStamp) {
     if (existingStamp.unit !== unit) {
       fail(`This checkout is already scoped to Unit "${existingStamp.unit}".`);
     }
@@ -3385,7 +3828,16 @@ function claimUnit(args: string[], projectDir?: string): void {
       : (current?.generation ?? 0) + 1;
   const nonce = randomUUID();
   const owner = claimOwnerLabel(pd, flags.team);
-  const auditShard = auditShardName(pd);
+  // Pin takes exactly one newly added team shard (candidateBoundary). A
+  // checkout whose own shard main already has (the lead's own checkout, or a
+  // copy of it) keeps the claim's evidence in a shard of the claim's own: the
+  // clone shard's shape, its token from the nonce.
+  const ownShard = auditShardName(pd);
+  const recordPrefix = relativeRecordDir(pd);
+  const auditShard = recordPrefix &&
+      gitPathExistsAt(pd, integration.oid, `${recordPrefix}/audit/${ownShard}`)
+    ? ownShard.replace(/-[a-z0-9]+\.md$/, `-${nonce.replaceAll("-", "").slice(0, 12)}.md`)
+    : ownShard;
   const rhythm =
     flags.rhythm === "unit-end" || flags.rhythm === "per-stage"
       ? flags.rhythm

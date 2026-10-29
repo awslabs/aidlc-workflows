@@ -96,7 +96,6 @@ import {
   auditFilePath,
   beforeDelimiter,
   type ClaudeCodeHookInput,
-  codeGenerationIsTheStep,
   composerProposalPath,
   docsRoot,
   ENGINE_TEXT_DIRS,
@@ -176,6 +175,7 @@ import {
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   codeGenerationRulesArrivingReason,
+  codeGenerationStepOnRecord,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
   parkedWhereItStands,
@@ -669,11 +669,25 @@ export function mutationBlockReason(
   opaqueShell = false,
   detail: string | null = null,
   planApprovalOff = false,
+  finished = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
     ? "run mutation-capable shell commands"
     : "modify workspace paths";
+  // A build reviewed under its plan, whose contract moved after the review, and
+  // whose plan the person has not asked to see again (codeGenerationBuildFinishes):
+  // the moved contract is for the next plan, so no approval is promised. A
+  // developer handoff refused for such a build keeps the ordinary refusal, which
+  // names `next` too.
+  if (finished) {
+    return (
+      `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
+      "the Testing Contract changed after that review, which applies from the next plan. Writes inside the " +
+      `selected code-generation record directory remain available. Run ${nextOnItsOwn()}: it says what this ` +
+      "build does next."
+    );
+  }
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
@@ -1011,6 +1025,18 @@ function isOutsideProject(projectDir: string, target: string): boolean {
     }
     const real = join(expandedRealPath(cursor), ...suffix);
     return !isWithinDir(real, projectLexical) && !isWithinDir(real, projectReal);
+  } catch {
+    return false;
+  }
+}
+
+// Whether the target's build is finished and `next` hands over its finish
+// (codeGenerationBuildFinishes), loaded only for a write already refused. False
+// when that module cannot be read, which keeps the ordinary refusal.
+function buildFinishes(projectDir: string, unit: string | null): boolean {
+  try {
+    const ask = require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts");
+    return ask.codeGenerationBuildFinishes(projectDir, unit);
   } catch {
     return false;
   }
@@ -2434,6 +2460,7 @@ async function evaluate(
     unit: string | null;
     opaqueShell: boolean;
     detail: string | null;
+    finished: boolean;
   } | null = null;
   const refusalFields = (): { tool: string; target: string; unit?: string } => {
     const unit = blockedMutation?.unit ?? (verdict.mentioned[0] === `stage:${GUARDED_STAGE}`
@@ -2582,7 +2609,7 @@ async function evaluate(
     // The step on record is the engine's to read too: where it is Code
     // Generation, `next --stage` leaves a jump to the `jump execute` judged here.
     const codeGenerationRelevant =
-      codeGenerationIsTheStep(directiveStage, durableStage) ||
+      codeGenerationStepOnRecord(projectDir, state, activeDirective) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
@@ -2839,6 +2866,7 @@ async function evaluate(
           unit: null,
           opaqueShell: mutation.targets.length === 0,
           detail: null,
+          finished: false,
         };
       } else if (activeDirective.kind !== "run-stage" && setAside === null) {
         authorityFailure =
@@ -2886,6 +2914,7 @@ async function evaluate(
             unit,
             opaqueShell: outsideRecord === undefined,
             detail: receiptDetail([evidence], verdict.mentioned),
+            finished: !approval.ok && buildFinishes(projectDir, unit),
           };
         }
       }
@@ -2924,6 +2953,7 @@ async function evaluate(
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,
           planApprovalOff,
+          blockedMutation.finished,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)

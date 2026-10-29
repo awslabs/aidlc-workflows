@@ -872,7 +872,8 @@ const opencode: Shape = {
 // The shipped plugin with its own defaults: the shipped entrypoint list and the
 // installed `bun .aidlc/tools/aidlc.ts engine` of the project.
 async function opencodeCall(proj: string, session: string, tool: string, args: Record<string, unknown>): Promise<Verdict> {
-  const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
+  const { default: adapterPlugin } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
+  const createAdapter = adapterPlugin.server;
   const client = {
     session: {
       get: async () => ({ data: {} }),

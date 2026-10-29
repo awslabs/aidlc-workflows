@@ -74,14 +74,14 @@ describe("t-lines-said-before-they-reply: the lines the person must hear ride ch
     const first = nextIn(proj);
     expect(first.kind).toBe("run-stage");
     const said = notices(first);
-    expect(said.join(" ")).toStartWith("Setting up a poc workflow for this");
+    expect(said.join(" ")).toStartWith("Setting up the poc workflow for this");
     expect(said.join(" ")).toContain(NO_CODE);
     expect(String(first.change_notices_note)).toContain(WHEN);
     // The stage's own line stays the step's narration, and nothing is carried twice.
-    expect(String(first.narration ?? "")).not.toContain("Setting up a poc workflow");
+    expect(String(first.narration ?? "")).not.toContain("Setting up the poc workflow");
     expect(String(first.narration ?? "")).not.toContain("no code yet");
     // Said once: the same step asked for again does not carry it.
-    expect(notices(nextIn(proj)).join(" ")).not.toContain("Setting up a poc workflow");
+    expect(notices(nextIn(proj)).join(" ")).not.toContain("Setting up the poc workflow");
   });
 
   test("picking the work back up: where it picks up rides change_notices, the stage's own line stays narration", () => {

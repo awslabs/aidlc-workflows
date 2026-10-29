@@ -26,6 +26,7 @@ import {
   releaseAuditLock,
 } from "../tools/aidlc-lib.ts";
 import { readMessage, standingPersonTurn } from "../tools/aidlc-message-store.ts";
+import { askedQuestionFields, questionShows } from "../tools/aidlc-questions.ts";
 import {
   approvalFingerprint,
   codeGenerationRecordDir,
@@ -191,6 +192,29 @@ function recordAllowed(
   }
 }
 
+// The go-ahead the agent now asks for is a question to the person, on the
+// record with its id (aidlc-questions.ts) beside the hold's row; their
+// go-ahead's row closes it. Record-only: a lost row holds nothing.
+function recordInstallQuestion(
+  projectDir: string,
+  hook: string,
+  command: string,
+  fields: Record<string, string>,
+  session: string | null,
+): void {
+  if (!acquireAuditLock(projectDir, 5, 50)) return;
+  try {
+    appendAuditEntryUnlocked("QUESTION_ASKED", {
+      ...askedQuestionFields(projectDir, { type: "system-install", shows: questionShows([command]), chat: session }),
+      ...fields,
+    }, projectDir);
+  } catch (error) {
+    recordHookDrop(projectDir, hook, `QUESTION_ASKED row not recorded: ${errorMessage(error)}`);
+  } finally {
+    releaseAuditLock(projectDir);
+  }
+}
+
 /**
  * The refusal for a shell line that installs a system package nobody asked
  * for, or null when it runs: it installs none, the person's turn stands (the
@@ -213,7 +237,7 @@ export function unaskedSystemInstall(
   }
   const plans = approvedPlanWords(projectDir);
   if (installs.every((install) => namedByOnePlan(plans, install))) return null;
-  recordGuardBlockedRow(projectDir, {
+  const held = recordGuardBlockedRow(projectDir, {
     eventType: "SYSTEM_INSTALL_BLOCKED",
     hook: context.hook,
     reason: "system-install",
@@ -222,6 +246,7 @@ export function unaskedSystemInstall(
     session: context.session,
     stage: context.stage,
   });
+  if (held) recordInstallQuestion(projectDir, context.hook, command, fields, context.session);
   return `AI-DLC stopped this command: \`${shown}\` installs a system package on this machine, outside the project, ` +
     "and no plan the person approved names it. Tell the person the command and what it is for. It runs once the " +
     "person says so, or they can run it themselves.";

@@ -6,7 +6,6 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
-  linkSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -77,6 +76,7 @@ import {
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
+import { main as pluginTestMain } from "./aidlc-plugin-test.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   ARCHIVED_FROM_FIELD,
@@ -508,6 +508,7 @@ import {
   PERSON_ASKED_SKIP_REASON,
   personsWordsText,
   declaredProjectType,
+  installWithoutReplacing,
 } from "./aidlc-lib.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -538,8 +539,8 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
-import { resolveHookPath } from "./aidlc.ts";
-import { executePlan } from "./aidlc-transaction.ts";
+import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
+import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcInvocation,
@@ -851,7 +852,7 @@ Utilities:
   unit status       Show claimable, claimed, and dependency-blocked Units
   compose "<task>"  Suggest a plan tailored to this task (mid-workflow: adjust the steps not yet run)
   compose --report <path>  Build a plan from a scan report (sort findings into a fix-and-ship run)
-  --new-scope "<task>"  Build a custom plan even when a ready-made one matches
+  --new-scope '<task>'  Build a custom plan even when a ready-made one matches
   intent list       List intents in the active space (read-only; --json for structured output; --all includes archived)
   intent switch <name>  Switch the active intent (bare intent <name> still works)
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
@@ -1503,7 +1504,7 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       }
     } catch (err) {
       resetSelectionSensitiveCaches();
-      die(`select-plugins failed: ${errorMessage(err)}`);
+      die(`select-plugins failed: ${withTransactionFix(err, errorMessage(err))}`);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
@@ -1614,6 +1615,44 @@ function handlePluginBuild(
   pluginAuthorCommandCode(pluginBuildMain(args));
 }
 
+function handlePluginTest(
+  positional: string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+): void {
+  const { usage, options } = pluginTestCommand();
+  // Help wherever it is asked, as the standalone tool reads it.
+  if (flags.help !== undefined || positional.slice(1).includes("-h")) {
+    process.stdout.write(renderPluginTestHelp());
+    return;
+  }
+  const takesValue = new Map(
+    options.map((option) => [option.flag.slice(2), option.metavar !== undefined]),
+  );
+  const paths = positional.slice(1);
+  let reason: string | null = null;
+  for (const [name, value] of Object.entries(flags)) {
+    const valued = takesValue.get(name);
+    if (valued === undefined) reason ??= `unknown option "--${name}"`;
+    else if (valued && missingValueFlags.has(name)) reason ??= `--${name} requires a value`;
+    // The shared parser hands a bare option the word after it; that word is
+    // the plugin's folder.
+    else if (!valued && value !== "true") paths.push(value);
+  }
+  if (paths.length > 1) reason ??= `unexpected positional argument "${paths[1]}"`;
+  if (reason !== null) {
+    process.stderr.write(`Usage: ${usage}\n${reason}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  const args = [paths[0] ?? process.cwd()];
+  if (flags.install !== undefined) args.push("--install", flags.install);
+  if (flags.harness !== undefined) args.push("--harness", flags.harness);
+  if (flags.with !== undefined) args.push("--with", flags.with);
+  if (flags.json !== undefined) args.push("--json");
+  pluginAuthorCommandCode(pluginTestMain(args, `Usage: ${usage}`));
+}
+
 // The sync doctor names for these plugins: where the host lists its plugins,
 // the chat command or the engine's with the root set; elsewhere one command
 // per plugin, with its folder.
@@ -1706,7 +1745,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
         }
         await mod.compose();
       } catch (error) {
-        die(`plugin-sync failed for ${item.root}: ${errorMessage(error)}`);
+        die(`plugin-sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
       } finally {
         for (const key of envKeys) {
           const value = previous[key];
@@ -4561,7 +4600,7 @@ export async function collectDoctorReport(
         label:
           hooksDisabledBy === null
             ? "Hooks enabled (resolved disableAllHooks is not true)"
-            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
+            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} - AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
         fix:
           hooksDisabledBy === null
             ? undefined
@@ -5627,13 +5666,12 @@ export async function collectDoctorReport(
           : leak.kind === "coordination-gate" ? "lock coordination gate"
           : "legacy active-directive transaction";
         const outcome = leak.cleared ? "cleared" : "not cleared";
-        const manual = !leak.cleared;
-        results.push({
+        const label = `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) - ${outcome}`;
+        // A lock doctor cleared is fixed: its row passes and says so.
+        results.push(leak.cleared ? { pass: true, label } : {
           pass: false,
-          label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) - ${outcome}`,
-          fix: manual
-            ? `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`
-            : `the stale lock was cleared automatically; re-run your ${entrySkillInvocation()} command`,
+          label,
+          fix: `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`,
         });
       }
     }
@@ -6154,7 +6192,7 @@ export async function collectDoctorReport(
           `${cleanupOrphans.length} cleanup-orphan${cleanupOrphans.length === 1 ? "" : "s"} (merge/discard landed, dir persists): ${cleanupOrphans.join(", ")}`,
         );
       }
-      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift — ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
+      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift - ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
       fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
@@ -6221,7 +6259,7 @@ export async function collectDoctorReport(
       } else {
         results.push({
           pass: false,
-          label: `Stale branches: ${stale.length} drift — ${stale.join(", ")}`,
+          label: `Stale branches: ${stale.length} drift - ${stale.join(", ")}`,
           fix: "Inspect unrecognised names and unknown intent ownership. Recognised branches have no worktree directory and no owning WORKTREE_MERGED/_DISCARDED audit row. Delete via 'git branch -D <full-bolt-name>' only if abandoned.",
         });
       }
@@ -6289,7 +6327,7 @@ export async function collectDoctorReport(
     } else {
       results.push({
         pass: false,
-        label: `Orphan state files: ${orphan.length} drift — ${orphan.join(", ")}`,
+        label: `Orphan state files: ${orphan.length} drift - ${orphan.join(", ")}`,
         fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
       });
     }
@@ -7824,11 +7862,10 @@ function phasesWithExecuteStages(plan: Record<string, "EXECUTE" | "SKIP">): Set<
 //
 // Scope-excluded phases get NO folder: an empty `operation/` in a bugfix record
 // reads as work that was planned and skipped, when that phase was never in the
-// plan. Nothing depends on the folder pre-existing: a stage artifact is written
-// by the agent, which makes its folder first where its file tool does not (the
-// Copilot CLI's; Code Generation's plan folder `next` makes itself,
-// preparePlanRecordFolders), and every deterministic reader of a phase dir
-// guards on existence. This only ever creates: an older record that already
+// plan. Nothing depends on the folder pre-existing: `next` makes each stage's
+// folder when it hands out the step that writes there (prepareRecordFolders in
+// aidlc-orchestrate.ts), and every deterministic reader of a phase dir guards
+// on existence. This only ever creates: an older record that already
 // carries all five keeps them.
 function ensureWorkspaceDirs(
   projectDir: string,
@@ -7993,7 +8030,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         `intent. Start work via \`${entrySkillInvocation()} "<what to build>"\` (the engine names ` +
         "the create move for you); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
-        "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
+        "ideally `--arguments '<description>' --label '<2-3 word essence>'`).",
     );
   }
 
@@ -8679,7 +8716,7 @@ function handleIntentCreateStateBuild(
   for (const stage of graph) {
     const action = planStages[stage.slug] || "SKIP";
     if (action === "EXECUTE") {
-      executeStages.push(stage.number);
+      executeStages.push(`${stage.number} (${stage.slug})`);
     } else {
       skipStages.push(`${stage.number} (${stage.slug})`);
     }
@@ -8692,7 +8729,7 @@ function handleIntentCreateStateBuild(
       adjustedMapping["reverse-engineering"] = "SKIP";
       const reStage = graph.find((s) => s.slug === "reverse-engineering");
       if (reStage) {
-        const idx = executeStages.indexOf(reStage.number);
+        const idx = executeStages.indexOf(`${reStage.number} (${reStage.slug})`);
         if (idx >= 0) executeStages.splice(idx, 1);
         skipStages.push(`${reStage.number} ${GREENFIELD_RE_SKIP_LABEL}`);
       }
@@ -10783,8 +10820,13 @@ function documentInputNoTextReason(shown: { state: string }): string {
 // and any other moves the copy to <stem>-2<ext>, -3, and so on. Leading dots
 // are dropped and the names the knowledge walk skips are passed over, so a
 // later sync still sees the copy. The bytes land in a dot-named staging file
-// first and are published with link(), which never replaces a name.
+// first and are published with installWithoutReplacing, which never replaces a
+// name, whichever temp folder or computer the other copy runs from.
 const DOCUMENT_INPUT_COPY_NAME_LIMIT = 100;
+// ponytail: a 0-byte file made this second may be another copy's claim that
+// fills a moment later; a claim that takes over a second to fill leaves a -2
+// copy with the same bytes.
+const DOCUMENT_INPUT_CLAIM_SETTLE_MS = 1_000;
 
 function copyIntoDocuments(
   kb: typeof import("./aidlc-knowledge.ts"),
@@ -10802,7 +10844,15 @@ function copyIntoDocuments(
     const target = join(documentsReal, candidate);
     // A file already at this name with the same bytes is this copy already.
     const holdsSameBytes = (): boolean => {
-      const existing = lstatSync(target, { throwIfNoEntry: false });
+      let existing = lstatSync(target, { throwIfNoEntry: false });
+      for (
+        const deadline = Date.now() + DOCUMENT_INPUT_CLAIM_SETTLE_MS;
+        existing?.isFile() && existing.size === 0 && bytes.length > 0 &&
+        Date.now() - existing.mtimeMs < DOCUMENT_INPUT_CLAIM_SETTLE_MS && Date.now() < deadline;
+      ) {
+        Bun.sleepSync(5);
+        existing = lstatSync(target, { throwIfNoEntry: false });
+      }
       if (existing === undefined || !existing.isFile() || existing.size !== bytes.length) return false;
       try {
         return kb.sha256Hex(kb.readDocumentBytes(target, candidate, undefined, bytes.length)) === digest;
@@ -10817,7 +10867,7 @@ function copyIntoDocuments(
     const staged = join(documentsReal, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
     try {
       writeFileSync(staged, bytes, { flag: "wx" });
-      linkSync(staged, target);
+      installWithoutReplacing(staged, target);
       return { target, created: true };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -12097,9 +12147,13 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // refused, naming the setter that lets it through. Keep this guard ahead
     // of the same-scope path, including no-ops.
     if (isAutonomousMode(contentBefore) && !personAsked()) {
+      // No request on record can be a person who is there; only an
+      // unattended run has nobody here.
+      const why = process.env.AIDLC_UNATTENDED === "1"
+        ? "with nobody here to approve the new plan" : "without a request from the person for this change on record";
       die(
         "Cannot change scope while Construction runs unattended (Construction Autonomy Mode is " +
-          "autonomous) with nobody here to approve the new plan. Run " +
+          `autonomous) ${why}. Run ` +
           `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
           "approval at each Bolt), then change scope.",
       );
@@ -12189,7 +12243,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       for (const stage of graph) {
         const action = adjustedMapping[stage.slug] || "SKIP";
         if (action === "EXECUTE") {
-          executeStages.push(stage.number);
+          executeStages.push(`${stage.number} (${stage.slug})`);
         } else {
           let reason = stage.slug;
           if (stage.slug === "reverse-engineering" && projectType.toLowerCase() === "greenfield" &&
@@ -12474,7 +12528,7 @@ function rebuildEffectivePlanFields(
     }
   }
   for (const s of graph) {
-    if (eff(s.slug) === "EXECUTE") executeStages.push(s.number);
+    if (eff(s.slug) === "EXECUTE") executeStages.push(`${s.number} (${s.slug})`);
     else if (!preservedSlugs.has(s.slug)) skipStages.push(skipLabel(s));
   }
   let next = setField(content, "Stages to Execute", executeStages.join(", "));
@@ -12656,9 +12710,11 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // conductor that drifts into "improving the plan") is refused, naming the
     // setter that lets it through.
     if (isAutonomousMode(content) && !personAskedSinceGate(projectDir, { intent: flags.intent, space: flags.space })) {
+      const why = process.env.AIDLC_UNATTENDED === "1"
+        ? "with nobody here to approve it" : "without a request from the person for this change on record";
       die(
         "Cannot change the plan while Construction runs unattended (Construction Autonomy Mode is " +
-          "autonomous) with nobody here to approve it. Run " +
+          `autonomous) ${why}. Run ` +
           `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
           "approval at each Bolt), then recompose.",
       );
@@ -12704,11 +12760,16 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       die(`Cannot recompose "${slug}": ${why}`);
     const typed = (args: string): string => `\`${entrySkillInvocation()} ${args}\``;
     const runAlone = (slug: string): string => `To run it on its own, type ${typed(`--stage ${slug} --single`)}.`;
-    const movePast = (slug: string): string => {
+    // A started stage (in progress, being revised, or at its own question) is
+    // skipped where it stands by the person's own skip, which `next` carries
+    // out (planChangeDirective); on the last stage that is the way on.
+    const movePast = (slug: string, started: boolean): string => {
       const next = nextInScopeStage(slug, scope, content);
       return next
         ? `To move past it, jump to the next stage with ${typed(`--stage ${next.slug}`)}.`
-        : "It is the last stage on the plan.";
+        : started
+          ? `It is the last stage on the plan; to skip it where it stands, type ${typed(`--skip ${slug}`)}.`
+          : "It is the last stage on the plan.";
     };
 
     for (const slug of [...skipList, ...addList]) {
@@ -12728,7 +12789,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
           ? `It is already done; to run it again, jump back to it with ${typed(`--stage ${slug}`)}.`
           : state === "skipped"
             ? (skipping ? "It is already skipped." : runAlone(slug))
-            : (skipping ? movePast(slug) : runAlone(slug));
+            : (skipping ? movePast(slug, true) : runAlone(slug));
         reject(slug, `${frozen} ${instead}`);
       }
       const idx = graph.findIndex((s) => s.slug === slug);
@@ -12750,7 +12811,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       if (!owedRe && !passedOver && currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
         if (putBack) reject(slug, `${frozen} ${runAlone(slug)}`);
         const instead = idx === currentIdx
-          ? (skipping ? movePast(slug) : runAlone(slug))
+          ? (skipping ? movePast(slug, false) : runAlone(slug))
           : (skipping ? "The workflow does not go back to it, so there is nothing to skip." : runAlone(slug));
         reject(slug, `it is ${idx === currentIdx ? "the current stage" : `behind the current stage ("${currentSlug}")`}, and a plan change only reaches stages ahead. ${instead}`);
       }
@@ -13698,7 +13759,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
-        '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
+        "[--arguments '<description>' | --request <id>] [--label '<short label>'] " +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] " +
         "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] [--project-type <greenfield|brownfield>] " +
@@ -13844,6 +13905,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "plugin-build":
       handlePluginBuild(positional, flags, missingValueFlags);
+      break;
+    case "plugin-test":
+      handlePluginTest(positional, flags, missingValueFlags);
       break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is

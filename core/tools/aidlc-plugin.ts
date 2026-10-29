@@ -47,6 +47,8 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import {
   executePlan,
+  TransactionBusyError,
+  withTransactionFix,
   transactionState,
   writeOperation,
   type TransactionOperation,
@@ -2189,7 +2191,7 @@ function heldLine(
       : problem.kind === "range"
         ? [
           `needs ${needs(problem.base)}, and ${problem.base.name} ${problem.version} is ${problem.where}`,
-          `Install a ${problem.base.name} version in that range, or a version of ${key} made for ${problem.base.name} ${problem.version}.`,
+          `Install a version of ${problem.base.name} in that range, or a version of ${key} made for ${problem.base.name} ${problem.version}.`,
         ]
         : problem.kind === "include"
         ? [
@@ -2547,8 +2549,7 @@ async function syncPluginsLocked(
     } catch (error) {
       if (
         lockRetry < 3 &&
-        error instanceof Error &&
-        error.message.includes("another AI-DLC mutation holds")
+        error instanceof TransactionBusyError
       ) {
         const lockPath = join(projectDir, ".aidlc-transaction.lock");
         for (
@@ -2653,7 +2654,7 @@ export async function main(argv: string[]): Promise<void> {
     }
     throw new Error("usage: aidlc engine plugin <list|sync [--prune-missing]>");
   } catch (error) {
-    const message = errorMessage(error);
+    const message = withTransactionFix(error, errorMessage(error));
     const code = error instanceof PluginUsageError ? 2 : 1;
     if (flags.json === "true") process.stdout.write(jsonEnvelope(code, message, null));
     else process.stderr.write(`aidlc engine plugin: ${message}\n`);

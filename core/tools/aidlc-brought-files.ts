@@ -17,7 +17,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { holdsRecordedWrite, managedBlockMarkers } from "./aidlc-distribution.ts";
+import { holdsRecordedWrite, markedPart, onlyMarkedPartChanged } from "./aidlc-distribution.ts";
 import { isReadOnlyEngineProbe, readRegularFileNoFollowOrThrow } from "./aidlc-locks.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
@@ -169,22 +169,6 @@ function installRecord(projectDir: string): InstallRecord {
   return record;
 }
 
-// A shared file's marked part and the person's part around it, line endings
-// and the blank lines beside the markers aside; `block` is null for a file
-// with no marked part, and the whole is null when its markers are broken.
-function markedPart(path: string, text: string, marker: string): { block: string | null; person: string } | null {
-  const { begin, end } = managedBlockMarkers(path, marker);
-  const begins = text.split(begin).length - 1;
-  const ends = text.split(end).length - 1;
-  const plain = (part: string): string => part.replace(/\r\n/g, "\n").trim();
-  if (begins === 0 && ends === 0) return { block: null, person: plain(text) };
-  const at = text.indexOf(begin);
-  const to = text.indexOf(end);
-  if (begins !== 1 || ends !== 1 || to < at) return null;
-  const person = [plain(text.slice(0, at)), plain(text.slice(to + end.length))].filter(Boolean).join("\n");
-  return { block: text.slice(at, to + end.length), person };
-}
-
 // The file's bytes now, or null when it cannot be read.
 function bytesNow(projectDir: string, path: string): Buffer | null {
   try {
@@ -214,7 +198,7 @@ function writtenByInstall(projectDir: string, record: InstallRecord, file: Broug
     const now = markedPart(file.path, text, marker);
     if (now?.block == null || !holdsRecordedWrite(now.block, hash)) continue;
     const copy = committedCopy(projectDir, file);
-    if (copy !== null && markedPart(file.path, copy.blob.toString("utf-8"), marker)?.person === now.person) return true;
+    if (copy !== null && onlyMarkedPartChanged(file.path, text, copy.blob.toString("utf-8"), marker)) return true;
   }
   return false;
 }

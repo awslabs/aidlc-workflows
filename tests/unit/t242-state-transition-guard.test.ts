@@ -2611,10 +2611,10 @@ describe("t242 state-transition ownership guard", () => {
       readFileSync(join(STAGES_ROOT, phase, `${slug}.md`), "utf-8");
 
     expect(stage("inception", "reverse-engineering")).toContain(
-      '{{INVOKE}} engine orchestrate report --stage reverse-engineering --result skipped --reason "<reason>"',
+      "{{INVOKE}} engine orchestrate report --stage reverse-engineering --result skipped --reason '<reason>'",
     );
     expect(stage("inception", "user-stories")).toContain(
-      '{{INVOKE}} engine orchestrate report --stage user-stories --result skipped --reason "<reason>"',
+      "{{INVOKE}} engine orchestrate report --stage user-stories --result skipped --reason '<reason>'",
     );
     expect(stage("inception", "requirements-analysis")).toContain(
       "{{INVOKE}} engine orchestrate next --add user-stories",

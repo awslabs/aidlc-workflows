@@ -688,6 +688,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "plugin test maps to plugin-test",
+      routerArgs: ["plugin", "test", "--help"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["plugin-test", "--help"],
+      fixture: true,
+    },
+    {
       name: "update maps to its machine lifecycle delegate",
       routerArgs: ["update"],
       tool: "aidlc-lifecycle.ts",
@@ -3203,6 +3210,22 @@ describe("t230 dispatcher help and errors", () => {
         ).toBeGreaterThan(0);
       }
     }
+  });
+
+  // The verb's usage form is its one list of options: help prints a row for
+  // each, with what it does, and the handler takes exactly these (t327).
+  test("plugin test help has one row per option its usage form names, each with a meaning", () => {
+    const route = ROUTES.find((candidate) => candidate.id === "plugin-author") as Route;
+    const help = viaDispatcher(["plugin", "test", "--help"], REPO_ROOT);
+    expect(help.exitCode, help.stderr.toString()).toBe(0);
+    const rows = help.stdout.toString().split("\n").filter((line) => /^ {2}--/.test(line));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.map((line) => line.trim().split(/\s{2,}/)[0]).sort()).toEqual(
+      routeOptions(route, "test").map((option) =>
+        option.metavar ? `${option.flag} <${option.metavar}>` : option.flag
+      ).sort(),
+    );
+    for (const row of rows) expect(row.trim().split(/\s{2,}/)[1]?.length ?? 0, row).toBeGreaterThan(0);
   });
 
   test("command help names every flag either public parser accepts", () => {

@@ -13,7 +13,13 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
+import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
+import {
+  askedQuestionFields,
+  QUESTION_ID_FIELD,
+  questionEntryDigests,
+  questionShows,
+} from "./aidlc-questions.ts";
 import {
   chatsSince,
   latestMessage,
@@ -304,6 +310,8 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
   recordPlanApprovalLegacyRecoveryAnswer,
+  REVIEW_TESTING_CONTRACT_FIELD,
+  reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
@@ -333,7 +341,7 @@ function unitManifestRefusal(
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
-      `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason "<why this work changes it>"`)}\` and say the line it prints once, ` +
+      `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason '<why this work changes it>'`)}\` and say the line it prints once, ` +
       "then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
   }
   return `unit "${unit}" has no valid source manifest at ${manifestPath} (${manifest.reason}). ${rewrite}`;
@@ -579,6 +587,7 @@ const LOG_INTERACTION_OPTIONS = [
 ];
 const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS,
+  "--option",
   "--decision",
   "--decision-file",
   "--rationale",
@@ -832,8 +841,13 @@ function handlePlanApprovalBatch(
   try {
     withAuditLock(pd, () => {
       if (action === "decision") {
+        let questionId = "";
         const challenge = recordPlanApprovalBatchChallenge(pd, flags["batch-file"], session, (batch) => {
           withdrawProtectedQuestions(pd, session);
+          const asked = askedQuestionFields(pd, {
+            type: "plan-approval", shows: questionShows([batch.bindingSha256]), chat: session,
+          });
+          questionId = asked[QUESTION_ID_FIELD];
           emitAudit(pd, "DECISION_RECORDED", {
             Stage: flags.stage,
             Checkpoint: PLAN_APPROVAL_CHECKPOINT,
@@ -844,12 +858,14 @@ function handlePlanApprovalBatch(
             Units: batch.members.map((member) => member.unit).join(", "),
             "Batch Binding SHA-256": batch.bindingSha256,
             "Batch Members": JSON.stringify(batch.members),
+            ...asked,
           });
         });
         console.log(JSON.stringify({
           emitted: "DECISION_RECORDED",
           checkpoint: "plan-approval",
           stage: flags.stage,
+          ...(questionId ? { question_id: questionId } : {}),
           batch: challenge.batch,
           options: challenge.options,
           challengeId: challenge.challengeId,
@@ -1108,8 +1124,21 @@ function keptMessageRefusal(pd: string): string | null {
     `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
+// A question's choices given one --option each, so a choice may hold a comma
+// with no separator on the command line for a shell to read: they join any
+// --options list in the grammar optionsList reads.
+function withEachOption(args: string[], flags: Record<string, string>): void {
+  const each: string[] = [];
+  for (let i = 0; i < args.length - 1; i++) if (args[i] === "--option") each.push(args[++i]);
+  delete flags.option;
+  if (each.length === 0) return;
+  const choices = [...(flags.options === undefined ? [] : optionsList(flags.options)), ...each];
+  flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+}
+
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
+  withEachOption(args, flags);
   if (!flags.stage) error("Missing --stage <slug>");
   // A question holding the person's words arrives in a file the agent wrote, as
   // an answer's text does, so no shell reads it on the way.
@@ -1258,6 +1287,13 @@ function handleDecision(args: string[]): void {
     fields["Message Id"] = proof.message.id;
   }
 
+  // The question this row asks, on the record (aidlc-questions.ts).
+  Object.assign(fields, askedQuestionFields(pd, {
+    type: flags.checkpoint ?? fields[QUESTION_KIND_FIELD] ?? "stage-question",
+    shows: decisionShows(pd, flags, fields),
+    ...(fields.Session ? { chat: fields.Session } : {}),
+  }));
+
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
@@ -1310,6 +1346,7 @@ function handleDecision(args: string[]): void {
     JSON.stringify({
       emitted: "DECISION_RECORDED",
       stage: flags.stage,
+      question_id: fields[QUESTION_ID_FIELD],
       ...(challenge !== null
         ? {
             challengeId: challenge.challengeId,
@@ -1329,6 +1366,25 @@ function handleDecision(args: string[]): void {
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
     })
   );
+}
+
+// What a logged question shows the person (aidlc-questions.ts): the command or
+// setting a checkpoint asks about, the plan's fingerprint, the summary's own
+// entry in its questions file with its answer blanked, else the question and
+// its choices as logged.
+function decisionShows(pd: string, flags: Record<string, string>, fields: Record<string, string>): string {
+  if (fields["Command SHA-256"]) return questionShows([fields["Command SHA-256"]]);
+  if (flags.checkpoint === "construction-policy") return questionShows([fields.Field, fields.Value]);
+  if (fields["Approval Fingerprint"]) return questionShows([fields["Approval Fingerprint"]]);
+  if (flags.checkpoint === "summary-confirmation" && fields["Questions File"]) {
+    try {
+      const entries = questionEntryDigests(readFileSync(join(pd, fields["Questions File"]), "utf-8"));
+      return questionShows([entries[SUMMARY_CONFIRMATION_CHECKPOINT] ?? "none"]);
+    } catch {
+      return questionShows(["none"]);
+    }
+  }
+  return questionShows([flags.decision, flags.options]);
 }
 
 // --- Subcommand: answers ---
@@ -2573,17 +2629,23 @@ function handleAnswer(args: string[]): void {
       // the next confirmation took it as its Person Reply.
       const asksWhat = !positive && summaryFeedback === null;
       let whatAsked = false;
+      let whatQuestionId: string | null = null;
       if (asksWhat) {
         rowEndsTurn = true;
         try {
+          const asked = askedQuestionFields(pd, {
+            type: "stage-question", shows: questionShows([SUMMARY_CHANGES_QUESTION, undefined]),
+          });
           emitAudit(pd, "DECISION_RECORDED", {
             Stage: flags.stage,
             Decision: SUMMARY_CHANGES_QUESTION,
             ...(fields.Unit !== undefined ? { Unit: fields.Unit } : {}),
             ...(fields["Attempt Generation"] !== undefined ? { "Attempt Generation": fields["Attempt Generation"] } : {}),
             ...(workflow !== undefined ? { Workflow: workflow } : {}),
+            ...asked,
           });
           whatAsked = true;
+          whatQuestionId = asked[QUESTION_ID_FIELD];
         } catch {
           // The change request is on record; the question is asked all the same.
         }
@@ -2601,6 +2663,7 @@ function handleAnswer(args: string[]): void {
           choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
+          ...(whatQuestionId !== null ? { question_id: whatQuestionId } : {}),
           ...(asksWhat
             ? {
               agent_note: `Ask the free-text question "${SUMMARY_CHANGES_QUESTION}" and end the turn; ` +
@@ -4551,8 +4614,10 @@ function handleReview(args: string[]): void {
     const swarmUnit = flags.stage === "code-generation" && flags.unit ? swarmWorkerWorktreeMeta(pd) : null;
     // On Kiro (kiro-ide), while the reviewer read-scope check holds, this
     // review's reviewer is dispatched as a copy that carries its read scope; a
-    // replaced request's copy goes with it.
+    // replaced request's copy goes with it, and so does the copy of any review
+    // that is over without its verdict.
     if (replaces !== null) removeReviewCopy(pd, replaces);
+    sweepReviewCopies(pd, { intent, space });
     const copy = requestId === null ? null : prepareReviewCopy(pd, {
       requestId,
       reviewer: flags.reviewer,
@@ -5208,6 +5273,19 @@ function handleReview(args: string[]): void {
       }
       fields["Review Record"] = slot.recordRelative;
       fields["Review Record Digest"] = reviewRecordDigest(serialized);
+      // The build this verdict covers was finished under the Testing Contract
+      // in force now; the completion reads it to tell a practice kept at the
+      // gate from a contract that moved while the build ran. A swarm worker's
+      // checkout (swarmWorkerWorktreeMeta) resolves its own memory while its
+      // approval may read the parent's, so its verdict records none and its
+      // completion is held for a moved contract, as with no contract on record.
+      // A delegated approval also never reads the field
+      // (codeGenerationApprovalArtifacts), which covers a worker checkout whose
+      // meta does not validate. A person's own Unit worktree records it.
+      const reviewedContract = flags.stage === "code-generation" && swarmWorkerWorktreeMeta(pd) === null
+        ? reviewedTestingContract(pd)
+        : null;
+      if (reviewedContract !== null) fields[REVIEW_TESTING_CONTRACT_FIELD] = reviewedContract;
       recordPath = slot.recordRelative;
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
       // The draft was the reviewer's input; the record now holds it. The
@@ -5269,8 +5347,12 @@ function handleReview(args: string[]): void {
   // the reviewer-scope hook reads it. Remove that one too, when it is this
   // review's own record; another Unit's review keeps its window.
   removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
-  // The verdict closes the request, so its reviewer copy (Kiro) goes too.
+  // The verdict closes the request, so its reviewer copy (Kiro) goes too, with
+  // the copy of any review that is over without its verdict.
+  // removeReviewCopy deletes by the request's name whatever the layout reads
+  // now; the sweep reads the ledger.
   removeReviewCopy(pd, fields["Request Id"]);
+  sweepReviewCopies(pd, { intent, space });
 
   const agentNote = recorded.context === undefined
     ? null
@@ -5300,12 +5382,12 @@ function logUsage(subcommand: string | undefined): string {
     decision: [
       `${invoke("decision")} --stage <slug> --decision '<the question>' --options '<choice>,<choice>'`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
-      "  When a choice holds a comma, start the list with | and separate the choices with it: \"|<choice>|<choice>\".",
+      "  When a choice holds a comma, pass each choice as its own --option '<choice>' in place of --options.",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],
     answer: [
-      `${invoke("answer")} --stage <slug> --details "<the person's exact choice>"`,
+      `${invoke("answer")} --stage <slug> --details '<their exact choice>'`,
       "  Records the person's answer. Required: --stage, and --details, --details-file or --request-file.",
       `  --checkpoint: ${ANSWER_CHECKPOINTS.join(", ")}. Use the one its question was recorded with.`,
       `  Options: ${flags(ANSWER_OPTIONS)}`,

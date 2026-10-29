@@ -246,7 +246,7 @@ that reply and never counts in the chat, so the count holds across a park.
 With `accept_as_is: "offered"`, the gate adds a third option:
 
 ```
-{ label: "Accept as-is", description: "Archive current version and move on" }
+{ label: "Accept as-is", description: "Approve it as it is and move on" }
 ```
 
 The question text changes to include the cycle count, `[N]` from
@@ -653,7 +653,7 @@ task status in the sidebar, and the tool-stamped audit trail.
 not. Report gate and terminal outcomes through `aidlc-orchestrate.ts`.
 
 **`[S]` behavior:**
-- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump; under unit-major iteration a skip names the walk's `directive.stage` and `--unit <directive.unit>`, covers that unit only, and `[S]` follows once no unit owes the stage
+- Set by `report --stage <current> --result skipped --reason '<reason>'`, scope composition, or Stage/Phase Jump; under unit-major iteration a skip names the walk's `directive.stage` and `--unit <directive.unit>`, covers that unit only, and `[S]` follows once no unit owes the stage
 - Excluded from statusline progress counts (not counted in total or done)
 - Preserved while the engine routes onward; never paired with `STAGE_COMPLETED`
 - On resume, treated as completed for task tracking (task created and immediately marked completed)
@@ -710,8 +710,8 @@ boundary, and reads stay open by any means.
   `aidlc engine log link`. Lifecycle and configuration commands record their
   own events; artifact and session hooks record the activity they observe.
 - Free-form notes with no owning event (errors worked around, recoveries,
-  mid-workflow change requests): `aidlc engine audit append-raw "<heading>"
-  "<body>"` with the heading `Error: <brief>`, `Recovery: <brief>`, or
+  mid-workflow change requests): `aidlc engine audit append-raw '<heading>'
+  '<body>'` with the heading `Error: <brief>`, `Recovery: <brief>`, or
   `Change Request: <brief>` and the details as `**Field**: value` lines in the
   body. The tool stamps the timestamp and refuses a body naming a taxonomy
   event.
@@ -938,7 +938,7 @@ If user inputs from different stages contradict:
 2. Do NOT resolve by choosing one interpretation
 3. Ask which takes priority
 4. Update overridden artifact
-5. Record the resolution with `aidlc engine audit append-raw "Recovery: <brief>" "<body>"`
+5. Record the resolution with `aidlc engine audit append-raw 'Recovery: <brief>' '<body>'`
 
 ### Severity Levels
 
@@ -974,7 +974,7 @@ Affect prior stages:
 ### Scope Changes
 
 New requirements or scope-level modifications:
-1. Record the request with `aidlc engine audit append-raw "Change Request: <brief>" "<body>"`
+1. Record the request with `aidlc engine audit append-raw 'Change Request: <brief>' '<body>'`
 2. Return to Requirements Analysis (2.3) or Delivery Planning (2.9)
 3. Re-plan from that point
 4. If change affects stage selection (e.g., `poc` -> `feature`), use the
@@ -1167,7 +1167,7 @@ investigation before marking complete.
 1. **Retry once** with reduced context (summarize inception, current unit only)
 2. If retry fails, offer user: "Run inline" (execute in orchestrator) or
    "Skip and revisit" (mark incomplete, continue)
-3. Record the failure with `aidlc engine audit append-raw "Error: <brief>" "<body>"`
+3. Record the failure with `aidlc engine audit append-raw 'Error: <brief>' '<body>'`
 
 ---
 

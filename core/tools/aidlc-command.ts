@@ -178,6 +178,48 @@ export function nextFlagTakesFollowing(flag: string, following: string | undefin
   return following !== undefined && !following.startsWith("-") && !NEXT_VALUELESS_FLAGS.has(flag);
 }
 
+/**
+ * The `unit` noun's verbs, each with whether it takes the Unit's name, as the
+ * Unit tool runs them (aidlc-unit.ts main). The dispatcher's `unit` route and
+ * the `next` line both read this list.
+ */
+export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
+  ["adopt", true],
+  ["claim", true],
+  ["gate", true],
+  ["land", true],
+  ["merge-status", true],
+  ["participate", false],
+  ["pin", true],
+  ["publish", true],
+  ["release", true],
+  ["status", false],
+]);
+
+/**
+ * The Unit tool's argv when a `next` line is the person's Unit command, else
+ * null. It is one by its shape alone: `unit`, one of UNIT_VERBS, and at most
+ * the one Unit name that verb takes, as the Unit tool itself reads the rest
+ * (`parse`: aidlc-lib.ts parseArgs, which aidlc-unit.ts uses). A word more,
+ * the words behind the `--` mark included, is the person's, so the whole line
+ * stays theirs (`unit tests for the parser`, `unit pin alpha -- why first`).
+ * Kiro IDE's PowerShell hands the whole line over as one argument, which
+ * `split` (aidlc-lib.ts splitKiroCommandArgs) reads as a shell would, quotes
+ * included. readNextLine is the one caller and hands both readers in, since
+ * this module does not load aidlc-lib.ts.
+ */
+export function unitCommandArgv(
+  args: readonly string[],
+  split: (line: string) => string[],
+  parse: (args: string[]) => { positional: string[] },
+): string[] | null {
+  const tokens = args.length === 1 ? split(args[0]) : [...args];
+  if (tokens[0] !== "unit") return null;
+  const takesName = UNIT_VERBS.get(tokens[1] ?? "");
+  if (takesName === undefined) return null;
+  return parse(tokens.slice(2)).positional.length <= (takesName ? 1 : 0) ? tokens.slice(1) : null;
+}
+
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
 // The dispatcher's global flags: `aidlc` drops them wherever they appear
 // before `--`, then routes what remains.

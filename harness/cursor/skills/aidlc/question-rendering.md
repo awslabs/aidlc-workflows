@@ -65,11 +65,11 @@ options:
 becomes:
 
 ```
-**Approval** — [Stage Name] complete. How would you like to proceed?
+**Approval** - [Stage Name] complete. How would you like to proceed?
 
-1. **Approve** — Continue to [next stage]
-2. **Request Changes** — Provide revision feedback
-3. **Other** — describe what you want instead
+1. **Approve** - Continue to [next stage]
+2. **Request Changes** - Provide revision feedback
+3. **Other** - describe what you want instead
 
 Reply with a number (or just tell me).
 ```
@@ -90,11 +90,11 @@ confirm:
 ```
 - <each answer, as a summary bullet>
 
-**Confirm** — Does this all look correct before I generate the artifact?
+**Confirm** - Does this all look correct before I generate the artifact?
 
-1. **Looks correct** — Generate the artifact from these answers
-2. **Request changes** — Revise one or more answers before generation
-3. **Other** — describe what you want instead
+1. **Looks correct** - Generate the artifact from these answers
+2. **Request changes** - Revise one or more answers before generation
+3. **Other** - describe what you want instead
 
 Reply with a number (or just tell me).
 ```

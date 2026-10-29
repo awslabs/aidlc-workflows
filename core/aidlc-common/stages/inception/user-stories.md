@@ -73,7 +73,7 @@ Create `<record>/inception/user-stories/user-stories-assessment.md` documenting 
 - If skipping: what alternative coverage exists (e.g., requirements alone are sufficient)
 
 If skipping, run
-`{{INVOKE}} engine orchestrate report --stage user-stories --result skipped --reason "<reason>"`.
+`{{INVOKE}} engine orchestrate report --stage user-stories --result skipped --reason '<reason>'`.
 The engine records the skip and advances to the next in-scope stage.
 
 ### Step 3: Load Prior Context

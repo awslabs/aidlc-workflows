@@ -605,7 +605,7 @@ function reconcilePriorSession(): void {
         // exists). Emit SESSION_ENDED through the byte-shared core hook with
         // inferred provenance; the back-dating is carried in the reason.
         const reason =
-          `inferred — Codex has no SessionEnd event (D-4); reconciled at next ` +
+          `inferred - Codex has no SessionEnd event (D-4); reconciled at next ` +
           `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
         runCore(
           "aidlc-session-end.ts",

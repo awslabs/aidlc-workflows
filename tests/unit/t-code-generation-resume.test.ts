@@ -263,6 +263,24 @@ function dispatch(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
+/** A file write in the build: the guard runs before it, as before every change the build makes. */
+function guardWrite(proj: string, file: string): void {
+  const result = spawnSync(BUN, [GUARD], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: SESSION,
+      cwd: proj,
+      tool_name: "Write",
+      tool_input: { file_path: file, content: "export const part = 3;\n" },
+    }),
+    env: env(proj),
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+}
+
 /** Plan, approve, and reach the build: returns the first run's directive and brief. */
 function approvedBuild(proj: string, unit: string | null = UNIT): { build: Emitted; first: string } {
   writePlan(proj, unit);
@@ -588,6 +606,35 @@ describe("a fresh start for the steps", () => {
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
     freshRunThenResume(proj);
+  });
+
+  test("Request Changes under a lowered fence: its build clears the old ticks once", () => {
+    const proj = project("relaxed");
+    interrupted(proj, 1, 2, 3, 4);
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "log every part",
+    }, proj);
+    expect(next(proj).plan_approval?.status).toBe("revise");
+    // The revision adds a step; the approval their change request closed carries into this attempt.
+    writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8")
+      .replace("- [ ] Step 9:", "- [ ] Step 10: log every part\n- [ ] Step 9:"), "utf-8");
+    const build = next(proj) as Emitted & { change_notices?: string[] };
+    expect(build.kind).toBe("run-stage");
+    expect(build.plan_approval?.status).toBe("approved");
+    // The change the person asked for is not offered back to them to undo.
+    expect((build.change_notices ?? []).some((line) => line.startsWith("Your approved plan changed"))).toBe(false);
+    // The first start in this attempt clears the previous build's ticks.
+    dispatch(proj, brief(proj));
+    expect(readFileSync(planPath(proj), "utf-8")).not.toContain("- [x]");
+    // The build ticks as it goes. Every later change it makes starts generation
+    // again through the guard, and those ticks stay.
+    tick(proj, UNIT, 1, 2);
+    dispatch(proj, brief(proj));
+    guardWrite(proj, join(proj, "src", "part3.ts"));
+    const after = readFileSync(planPath(proj), "utf-8");
+    expect(after).toContain("- [x] Step 1:");
+    expect(after).toContain("- [x] Step 2:");
+    expect(after).toContain("- [ ] Step 10: log every part\n");
   });
 
   test("a plan edited after approval: the build continues on the edited plan, steps fresh", () => {

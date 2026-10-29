@@ -507,6 +507,7 @@ function scratchProject(): string {
     "aidlc-locks.ts",
     "aidlc-review-records.ts",
     "aidlc-learned-date.ts",
+    "aidlc-unit-landing.ts",
     "aidlc-kiro-chat-record.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
@@ -522,6 +523,8 @@ function scratchProject(): string {
     // decides the refusal's last clause); the setting resolver and what it imports.
     "aidlc-guard-switch.ts",
     "aidlc-question-store.ts",
+    // The question record the hook stamps turns from, and the tools write.
+    "aidlc-questions.ts",
     // What the agent writes before a plan is picked, kept whatever the hook decides.
     "aidlc-before-pick.ts",
     "aidlc-recorded-switches.ts",
@@ -540,6 +543,9 @@ function scratchProject(): string {
     // The checkpoint question names the person's files a build changed.
     "aidlc-brought-files.ts",
     "aidlc-testing-posture.ts",
+    // aidlc-testing-posture.ts reads the side-by-side build's source rule here.
+    "aidlc-swarm-source.ts",
+    "aidlc-git.ts",
     // The config sections the hook sorts while a plan waits, and what that imports.
     "aidlc-command.ts",
     "aidlc-color.ts",

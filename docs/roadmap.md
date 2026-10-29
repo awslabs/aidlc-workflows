@@ -206,8 +206,8 @@ but do not yet have committed release versions.
   CREATE, VALIDATE, BUILD, and TEST authoring tiers ship as
   the standalone `aidlc-plugin-create.ts`, `aidlc-plugin-validate.ts`,
   `aidlc-plugin-build.ts`, and `aidlc-plugin-test.ts` tools. The top-level
-  `plugin validate` and `plugin build` routes also ship. Top-level
-  `plugin create` and `plugin test` routes remain proposed in
+  `plugin validate`, `plugin build` and `plugin test` routes also ship. A
+  top-level `plugin create` route remains proposed in
   [#723](https://github.com/awslabs/aidlc-workflows/issues/723).
   Registered marketplaces, remote search, verified install/update, catalog
   emission and graduation tombstones are under implementation in

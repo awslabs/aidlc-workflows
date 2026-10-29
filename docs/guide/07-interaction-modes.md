@@ -239,7 +239,7 @@ flowchart TD
 
 If you have requested changes 3 or more times on the same stage, a third option appears:
 
-After three rounds of **Request Changes** on the same stage, the question says which revision cycle it is and adds a third option, **Accept as-is** (described as "Archive current version and move on").
+After three rounds of **Request Changes** on the same stage, the question says which revision cycle it is and adds a third option, **Accept as-is** (described as "Approve it as it is and move on").
 
 **Accept as-is** approves the stage with its documents as they are and advances the workflow. This prevents infinite revision loops when perfect is the enemy of good.
 

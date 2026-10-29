@@ -278,15 +278,12 @@ SLO compliance review, cost optimization analysis, infrastructure drift detectio
 | feedback-loop.md                      | Operational insights, improvement proposals, inputs to next Ideation cycle |
 | feedback-optimization-questions.md    | Clarifying questions with answers                          |
 
-### Approval Gate -- Three-Option (Unique)
+### Approval Gate
 
-Stage 4.7 has a **unique three-option approval gate**:
+Strictly 2-option:
 
 1. **Approve** -- Workflow complete. The full AI-DLC lifecycle is finished.
 2. **Request Changes** -- Provide revision feedback.
-3. **Start New Ideation Cycle** -- Feed the feedback-loop.md insights back into a new Stage 1.1.
-
-This reflects the cyclical nature of the AI-DLC lifecycle.
 
 ---
 

@@ -2,10 +2,11 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
+import { scopeStampLanded } from "./aidlc-unit-landing.ts";
 import { KIRO_SESSION_DIR_RE, kiroChatRecordPaths } from "./aidlc-kiro-chat-record.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -32,7 +33,7 @@ import {
   repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
-import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing } from "./aidlc-command.ts";
+import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -210,6 +211,7 @@ export {
   fileIdentity,
   type FileIdentity,
   holdsAuditLock,
+  installWithoutReplacing,
   intentsDir,
   isPidAlive,
   isPlainObject,
@@ -682,7 +684,7 @@ function readShippedHarnessData(): ShippedHarnessData {
         if (typeof argv === "string") {
           throw new Error(
             `${p}: harness.json field "documentExtractors" entry "${mime}" argv must be an ARRAY ` +
-              `of strings, not a shell string — it is spawned without a shell, so a string ` +
+              `of strings, not a shell string - it is spawned without a shell, so a string ` +
               `cannot be split safely.`,
           );
         }
@@ -2279,9 +2281,17 @@ export const KIRO_CLI_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
 // the turn a subagent's hand-back (or another session's message) starts, its
 // `<agent-message>` block alone. 2.1.310 writes a turn's transcript row only
 // after this hook returns, so for these the block is all there is to read.
+// The Claude desktop app (2.1.31x, captured live): another session's message
+// reaches the hook as its `<cross-session-message>` element alone, while the
+// transcript row frames that element in a sentence before and a note after, so
+// `claudeTranscriptOrigin` never finds the row by the prompt's text.
 export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
   { name: "claude task notification", pattern: /^<task-notification>\r?\n[\s\S]*\r?\n<\/task-notification>$/ },
   { name: "claude agent message", pattern: /^<agent-message from="[^"\r\n]*">\r?\n[\s\S]*\r?\n<\/agent-message>$/ },
+  {
+    name: "claude session message",
+    pattern: /^<cross-session-message(?: [^\r\n]*)?>\r?\n[\s\S]*\r?\n<\/cross-session-message>$/,
+  },
 ];
 
 // The whole prompt is one of the host's fixed sentences. Null otherwise.
@@ -4606,21 +4616,9 @@ function sourceKeysChangedOutsideAidlc(
 }
 
 // The paths outside AI-DLC's own files that moved since a kept listing (a
-// landing's or a review's `Source Listing`). Null when no listing was kept or
-// it does not read back exactly: the caller then compares fingerprints.
-export function sourceChangedOutsideAidlcSince(
-  projectDir: string,
-  stageSlug: string,
-  listing: string | undefined,
-  current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
-): string[] | null {
-  const keys = sourceKeysChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space);
-  return keys === null ? null : renderSourcePathKeys(keys);
-}
-
-// The same, as `<repo>\0<path>` keys, for a line that names each path's repo.
+// review's `Source Listing`), as `<repo>\0<path>` keys. Null when no listing
+// was kept or it does not read back exactly: the caller then compares
+// fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
   stageSlug: string,
@@ -4651,19 +4649,6 @@ export function recordedSourceListingForCompare(
   );
   for (const key of excluded) before.delete(key);
   return before;
-}
-
-// Whether the main checkout moved from a kept listing only in AI-DLC's own
-// files. False when no listing was kept or it does not read back exactly.
-export function onlyAidlcFilesChangedSince(
-  projectDir: string,
-  stageSlug: string,
-  listing: string | undefined,
-  current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
-): boolean {
-  return sourceChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space)?.length === 0;
 }
 
 function generatedRunnerSkill(skillDir: string): boolean {
@@ -4880,7 +4865,7 @@ export function resolveUniqueIntentDir(intentsRoot: string, base: string): strin
   }
   throw new Error(
     `Could not find a free intent record dir for "${base}" after ${MAX_DIR_COLLISIONS} attempts in ${intentsRoot}. ` +
-      `This many same-day intents with the same label indicates a bug or a runaway caller — pass a distinct --label.`,
+      `This many same-day intents with the same label indicates a bug or a runaway caller - pass a distinct --label.`,
   );
 }
 
@@ -5417,26 +5402,16 @@ export function workflowDisplayName(space: string, intent: { dirName?: unknown; 
 
 // Materialize the active-space cursor without overwriting a concurrent explicit
 // switch. A clone does not carry this gitignored file, so SessionStart and any
-// active-intent write recreate the resolved pointer on first use. Publish a
-// fully-written staged file with link(), whose no-replace install is atomic: if
-// a space switch wins the race, its value stays untouched.
+// active-intent write recreate the resolved pointer on first use. The exclusive
+// create never replaces a cursor a space switch already wrote.
 export function ensureActiveSpaceCursor(projectDir: string): void {
   const space = activeSpace(projectDir);
   const root = workspaceRoot(projectDir);
-  const cursor = join(root, ACTIVE_SPACE_POINTER);
-  const staged = join(root, `.aidlc-active-space-${process.pid}-${randomUUID()}.tmp`);
   try {
     mkdirSync(root, { recursive: true });
-    writeFileSync(staged, `${space}\n`, { encoding: "utf-8", flag: "wx" });
-    linkSync(staged, cursor);
+    writeFileSync(join(root, ACTIVE_SPACE_POINTER), `${space}\n`, { encoding: "utf-8", flag: "wx" });
   } catch {
     /* existing cursor won, or per-user state is unwritable */
-  } finally {
-    try {
-      unlinkSync(staged);
-    } catch {
-      /* staging file was never created or is already gone */
-    }
   }
 }
 
@@ -5501,7 +5476,10 @@ export function clearActiveIntentCursor(
 export function setActiveSpaceCursor(projectDir: string, name: string): void {
   try {
     mkdirSync(workspaceRoot(projectDir), { recursive: true });
-    writeFileSync(join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER), `${name}\n`, "utf-8");
+    // Renamed into place, never written in place: a first cursor's exclusive
+    // create (ensureActiveSpaceCursor) that lands at the same moment cannot
+    // tear it or write over it.
+    writeFileAtomic(join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER), `${name}\n`);
   } catch {
     /* per-user cursor; best-effort */
   }
@@ -5707,11 +5685,21 @@ export interface PlanApprovalRuntimeReceipt
   /** Plan approval was off, so the engine built this plan without asking; `source` says what turned it off. */
   skipped?: { source: string };
   /**
-   * The fingerprint of the plan and instructions the build started on, kept
-   * only when that is not the approved content: a lowered fence built a plan
-   * edited after its approval. An interrupted build picks up only on it.
+   * The fingerprint of the plan and instructions the last build under this
+   * approval started on, at the attempt it started in, kept only when that is
+   * not the approved content: a lowered fence built a plan edited after its
+   * approval, or revised for the person's change request. An interrupted build
+   * in the approval's own attempt picks up only on it, and their next change
+   * request is judged against it.
    */
   startedFingerprint?: string;
+  /**
+   * The attempt (its run floor) this approval was carried into and built in:
+   * the person's change request closed the attempt it was given in, and the
+   * first build start in the next attempt records it, so that attempt clears
+   * the old ticks once.
+   */
+  carriedInto?: string;
 }
 
 export interface PlanApprovalWorktreeDelegation {
@@ -14562,6 +14550,12 @@ function summaryBoundarySpelling(line: string): boolean {
 }
 
 export function summaryConfirmationContentHash(content: string): string {
+  // The one shape a later round of questions takes in a file whose summary was
+  // already confirmed (a revision, or a reopened step): the refusals name it, so
+  // a round is never written as a section of its own or a second summary.
+  const laterRound =
+    ' A later round of questions (a revision, or a reopened step) goes in "## Q<n>" sections after the summary, numbered on from the last question; ' +
+    `then rewrite the bullets of the one "${SUMMARY_CONFIRMATION_CHECKPOINT}" section to cover every answer, blank its "[Answer]:" line, and confirm it again.`;
   const normalized = content.replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
 	const blocks = markdownBlocks(normalized);
@@ -14595,7 +14589,8 @@ export function summaryConfirmationContentHash(content: string): string {
     if (title === SUMMARY_CONFIRMATION_CHECKPOINT && atxH2) {
       if (sawSummary) {
         throw new Error(
-          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}"`,
+          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}".` +
+            laterRound,
         );
       }
       sawSummary = true;
@@ -14655,7 +14650,7 @@ export function summaryConfirmationContentHash(content: string): string {
           : `H${heading.level}`;
       throw new Error(
         `unsupported ${headingKind} heading "${title}" ` +
-          boundary,
+          boundary + "." + laterRound,
       );
     }
   }
@@ -15606,7 +15601,7 @@ export function isSummaryConfirmationChoice(text: string | undefined): boolean {
 /** A decision whose offered options are the summary's two choices. */
 /**
  * The choices a question's Options field (or the `--options` it was logged
- * with) lists, in order and trimmed. A list that starts with `|` separates
+ * with, its `--option` choices joined in) lists, in order and trimmed. A list that starts with `|` separates
  * its choices with `|`, so a choice may hold a comma ("|Refuse it, with a
  * message|Save it as Untitled"); any other list is split on commas, as every
  * list was written before, and a `|` inside it is part of its choice ("Use
@@ -16791,7 +16786,10 @@ function readAuditShardTexts(
 }
 
 // The block sequence every shard parser walks; positions index into it.
-function auditShardBlocks(content: string): string[] {
+// Exported so a reader outside this file (the Unit candidate walk and the
+// publish-side projection in aidlc-unit.ts) splits a shard the same way rather
+// than carrying its own copy of the grammar.
+export function auditShardBlocks(content: string): string[] {
   return content.replace(/\r\n/g, "\n").split(/\n---\n/);
 }
 
@@ -17583,6 +17581,10 @@ export interface FreshReviewReceipts {
    *  records that no reviewer had finished (reviewCompletionWithoutReviewer).
    *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
   noReviewerVerdicts?: Set<string>;
+  /** The audit block of each scope's fresh terminal receipt ("" for the stage,
+   *  else the Unit), for a field another owner wrote on it. Read only beside
+   *  stageVerdict / unitVerdicts. */
+  verdictBlocks?: Map<string, string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -21723,6 +21725,7 @@ export function freshReviewReceipts(
     editedVerdicts: new Set(),
     dictatedVerdicts: new Set(),
     noReviewerVerdicts: new Set(),
+    verdictBlocks: new Map(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -21834,6 +21837,7 @@ export function freshReviewReceipts(
   const editedVerdicts = new Set<string>();
   const dictatedVerdicts = new Set<string>();
   const noReviewerVerdicts = new Set<string>();
+  const verdictBlocks = new Map<string, string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -22278,6 +22282,7 @@ export function freshReviewReceipts(
     else dictatedVerdicts.delete(unit ?? "");
     if (reviewCompletionWithoutReviewer(e.block)) noReviewerVerdicts.add(unit ?? "");
     else noReviewerVerdicts.delete(unit ?? "");
+    verdictBlocks.set(unit ?? "", e.block);
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -22775,6 +22780,7 @@ export function freshReviewReceipts(
     editedVerdicts,
     dictatedVerdicts,
     noReviewerVerdicts,
+    verdictBlocks,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [
@@ -32083,6 +32089,7 @@ function applicableTeamUnitScopeStamp(
   ) {
     return null;
   }
+  if (scopeStampLanded(projectDir, state, stamp)) return null;
   return stamp;
 }
 
@@ -32115,7 +32122,11 @@ export function worktreeClaimBoundaryMatches(
   return main;
 }
 
-function cachedClaimFanoutActive(projectDir: string): boolean {
+// The one check that team Unit fan-out is active: a claim of the active intent
+// still says `claimed`, a landed Unit's included (land never releases it). The
+// guard below and `next` in an unscoped team checkout (aidlc-orchestrate.ts,
+// routeNext) both read it, so `next` never hands out Unit work the guard refuses.
+export function cachedClaimFanoutActive(projectDir: string): boolean {
   const cache = readUnitClaimRegistryCache(projectDir);
   const space = activeSpace(projectDir);
   const intentUuid = activeIntentUuid(projectDir, space);
@@ -32180,7 +32191,8 @@ export function validateLiveUnitScope(
   if (!stamp) {
     if (cachedClaimFanoutActive(pd)) {
       throw new Error(
-        "Team Unit fan-out is active in an unscoped checkout; claim a Unit before lifecycle or report work.",
+        "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is " +
+          `claimed with \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,
       );
     }
     return null;
@@ -32361,7 +32373,23 @@ export function eventMatchesClaimAttempt(
       : eventGeneration === String(generation);
   }
   const eventUnit = auditBlockField(block, "Unit");
-  if (unit !== undefined && unit !== stamp.unit) return false;
+  // Another Unit's receipt, read in a scoped checkout: it is not this claim's
+  // attempt, so it is read as an unscoped checkout reads it. A scoped
+  // checkout that refused it would show every other Unit as unfinished.
+  const other = unit !== undefined && unit !== stamp.unit
+    ? unit
+    : unit === undefined && eventUnit !== null && eventUnit !== stamp.unit
+    ? eventUnit
+    : null;
+  if (other !== null) {
+    const eventGeneration = auditBlockField(block, "Attempt Generation");
+    if (eventGeneration === null) return true;
+    const generation =
+      readClaimGenerations(projectDir)[claimGenerationKey(projectDir, other)];
+    return generation === undefined
+      ? true
+      : eventGeneration === String(generation);
+  }
   if (eventUnit !== null && eventUnit !== stamp.unit) return false;
   return (
     auditBlockField(block, "Attempt Generation") === String(stamp.generation)
@@ -32909,7 +32937,7 @@ export function validateBoltSlug(slug: string): string | null {
     return `Bolt slug "${slug.slice(0, 32)}..." is ${slug.length} chars; max is ${BOLT_SLUG_MAX_LENGTH}`;
   }
   if (!BOLT_SLUG_REGEX.test(slug)) {
-    return `Invalid Bolt slug "${slug}" — must match ${BOLT_SLUG_REGEX} (lowercase letter, then lowercase letters/digits/hyphens)`;
+    return `Invalid Bolt slug "${slug}" - must match ${BOLT_SLUG_REGEX} (lowercase letter, then lowercase letters/digits/hyphens)`;
   }
   return null;
 }
@@ -33603,7 +33631,7 @@ export function setFieldStrict(content: string, field: string, value: string): s
   );
   if (!regex.test(content)) {
     throw new Error(
-      `Field not found in state file: "${field}". Cannot update — refusing to silently no-op.`
+      `Field not found in state file: "${field}". Cannot update - refusing to silently no-op.`
     );
   }
   return content.replace(regex, `$1 ${value}`);
@@ -37007,7 +37035,7 @@ export function gateStagesFromBlock(block: string): string[] {
   return stage ? [stage] : [];
 }
 
-function gateEventMatchesUnit(
+export function gateEventMatchesUnit(
   block: string,
   slug: string,
   unit: string | undefined,
@@ -38074,30 +38102,6 @@ export function currentSwarmSourceMergeChain(
   return priorFingerprint === null
     ? { state: "none" }
     : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
-}
-
-// Whether the main checkout moved, since the build's last verified source (the
-// last landing's listing, else the stage's opening listing), only in AI-DLC's
-// own files: the comparison a landing makes. False when no listing reads back
-// or the evidence cannot be read; the caller then keeps its fingerprint compare.
-export function onlyAidlcFilesChangedInSwarmStage(
-  projectDir: string,
-  slug: string,
-  current: WorkspaceSourceState,
-): boolean {
-  try {
-    const chain = currentSwarmSourceMergeChain(projectDir, slug);
-    if (chain.state === "ready") return onlyAidlcFilesChangedSince(projectDir, slug, chain.listing, current);
-    if (chain.state !== "none") return false;
-    const opening = currentSwarmSourceOpeningFingerprint(projectDir, slug);
-    return opening.state === "ready" && opening.listing !== undefined && sourceChangedOutsideAidlc(
-      projectDir,
-      recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing),
-      current.listing,
-    ).length === 0;
-  } catch {
-    return false;
-  }
 }
 
 // --- A change the person asked for in the main checkout ----------------------
@@ -40241,7 +40245,7 @@ function objectListField(
     if (line === "" || /^[ \t]+$/.test(line)) continue;
     if (/^[ \t]+-[ \t]/.test(line)) {
       throw new Error(
-        `Blank line not allowed inside ${key}[] block — list items must be consecutive`
+        `Blank line not allowed inside ${key}[] block - list items must be consecutive`
       );
     }
     break;
@@ -41961,7 +41965,8 @@ export function nextTokenKind(token: string, following: string | undefined): "fl
  * over as one quoted argument.
  */
 export type NextLineReading =
-  | { kind: "exact" }
+  // `unit`: the Unit tool's argv, when the line is the person's Unit command (unitCommandArgv).
+  | { kind: "exact"; unit?: string[] }
   | { kind: "words" }
   | { kind: "untaken-flag"; token: string; value?: string }
   | { kind: "value"; flag: string; value: string; valid: readonly string[] }
@@ -42104,6 +42109,8 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (knowledge.kind !== "not-knowledge") {
     return knowledge.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
   }
+  const unit = unitCommandArgv(args, splitKiroCommandArgs, parseArgs);
+  if (unit !== null) return { kind: "exact", unit };
   const workspace = parseWorkspaceCommand(head);
   if (workspace.kind !== "not-workspace") {
     const theirs = workspace.kind === "switch" && !workspace.explicit && workspace.words !== undefined;

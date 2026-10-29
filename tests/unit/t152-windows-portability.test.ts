@@ -80,9 +80,10 @@ describe("t152 Windows portability guard", () => {
   test("Windows path separators are normalized at harness and sensor boundaries", () => {
     const sensor = read("dist/claude/.claude/tools/aidlc-sensor.ts");
     expect(sensor).toContain("normalizePathForComparison(path)");
-    expect(sensor).toContain('path.replace(/\\\\/g, "/")');
-    expect(sensor).toContain("comparisonKey(normalizedPath)");
     expect(sensor).toContain("globToRegex(v).test(normalizedPath)");
+    const sensorRecord = read("dist/claude/.claude/tools/aidlc-sensor-record.ts");
+    expect(sensorRecord).toContain('path.replace(/\\\\/g, "/")');
+    expect(sensorRecord).toContain("comparisonKey(normalizedPath)");
 
     const fixtures = read("tests/harness/fixtures.ts");
     expect(fixtures).toContain('new Set(["EBUSY", "ENOTEMPTY", "EPERM"])');

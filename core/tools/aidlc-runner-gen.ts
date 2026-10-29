@@ -161,7 +161,7 @@ user-invocable: true
 ${nativeRunnerFrontmatter()}\
 ---
 
-# AI-DLC Stage Runner — ${node.slug}
+# AI-DLC Stage Runner - ${node.slug}
 
 ${bodyLead}
 \`/aidlc --stage ${node.slug} --single\`; the same stage is always reachable via
@@ -206,7 +206,7 @@ that flag without this skill.
    \`\`\`
 
    This records a STAGE_STARTED / STAGE_COMPLETED pair under a synthetic workflow
-   id and stops. It NEVER writes the main workflow's \`Current Stage\` — a
+   id and stops. It NEVER writes the main workflow's \`Current Stage\` - a
    single-stage run is isolated by design (the tool refuses to advance the main
    workflow).
 `;
@@ -231,7 +231,7 @@ export function renderInitRunner(): string {
 name: ${INIT_RUNNER_DIR}
 generated-by: aidlc-runner-gen
 description: >
-  Start an AI-DLC workflow — run the whole Initialization phase (mint the
+  Start an AI-DLC workflow - run the whole Initialization phase (mint the
   intent, detect the workspace, build state) in one step, without typing a
   stage. The engine normally auto-creates the first intent; this is opt-in
   packaging over that move. Pass \`--scope <name>\` to seed the initial scope. A freeform description without a scope first gets the same plan offer as \`${entrySkill}\`, then continues as \`${entrySkill}\` does.
@@ -245,7 +245,7 @@ ${nativeRunnerFrontmatter()}\
 Start a fresh AI-DLC workflow. The workspace shell ships in \`dist/\` (no setup
 command), and the engine auto-creates the first intent when you describe what to
 build - this skill is opt-in packaging over that creation move. Initialization is a
-PHASE, not a single stage — it mints the intent, detects the workspace
+PHASE, not a single stage - it mints the intent, detects the workspace
 (greenfield/brownfield), and builds \`aidlc-state.md\` together, in one
 deterministic call. There is no per-init-stage runner because an init stage has
 no standalone meaning.
@@ -258,7 +258,7 @@ no standalone meaning.
 
 2. **The user named a scope** with \`--scope <name>\`: create the intent (run
    the initialization phase). Forward the recognized flags as-is, and pass any
-   freeform description text via \`--arguments "<text>"\` (\`intent-create\` reads
+   freeform description text via \`--arguments '<text>'\` (\`intent-create\` reads
    the description from the \`--arguments\` flag, NOT a positional: forwarding
    it bare would silently drop it). ALSO derive a short **\`--label\`**: a 2-3
    word kebab-case essence of what's being built (\`"I would like to build a
@@ -267,7 +267,7 @@ no standalone meaning.
    the full \`--arguments\` text is preserved separately in the audit + state:
 
    \`\`\`bash
-   ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
+   ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments '<description>' --label '<2-3 word essence>'
    \`\`\`
 
    Print the tool's output and stop. This does not advance a stage; run
@@ -646,7 +646,7 @@ export function renderRunner(scope: string, description: string): string {
 name: ${dir}
 generated-by: aidlc-runner-gen
 description: >
-  Run the AI-DLC workflow with the ${scope} scope baked in — no scope
+  Run the AI-DLC workflow with the ${scope} scope baked in - no scope
   detection. ${desc} Packaging over \`${entrySkill} --scope ${scope}\`, which works
   without this skill.
 argument-hint: "[description | --status | --stage <slug|#> | --phase <name|#>]"
@@ -654,7 +654,7 @@ user-invocable: true
 ${nativeRunnerFrontmatter()}\
 ---
 
-# AI-DLC — ${scope} scope
+# AI-DLC - ${scope} scope
 
 Drive the AI-DLC engine with the **${scope}** scope fixed. This is the same
 deterministic forwarding loop the \`${entrySkill}\` orchestrator runs, with \`--scope
@@ -705,7 +705,7 @@ ahead of that run-stage. Adopt it for the whole run.
    Legacy Plan Approval recovery keeps its explicit bare-\`next\` choice.
    Never use \`report\` as a fallback for an engine ask answer; a selected guard
    remedy may still explicitly name a stage report.
-3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` only after acting on a stage directive. A redo, jump, or start-fresh request on re-entry is the sole non-stage report round-trip and uses \`report --result resumed --choice <redo|jump|fresh>\`.
+3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input '<text>']\` only after acting on a stage directive. A redo, jump, or start-fresh request on re-entry is the sole non-stage report round-trip and uses \`report --result resumed --choice <redo|jump|fresh>\`.
 4. Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs
    bare \`${aidlcToolInvocation("orchestrate")} next\`, with no \`--scope\` and no
    \`$ARGUMENTS\` (repeating them would redo a jump or a setting the person
@@ -753,11 +753,11 @@ preserving any \`--request\` id rather than rebuilding the request.
   new-work text:
 
   \`\`\`bash
-  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> "<the new-work description>"
+  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> '<the new-work description>'
   \`\`\`
 
   The engine returns a \`print\` directive naming the \`intent-create\` command
-  (with the \`--label "<2-3 word kebab essence>"\` placeholder). Act on it exactly
+  (with the \`--label '<2-3 word kebab essence>'\` placeholder). Act on it exactly
   as the loop's \`print\` handling describes: create the intent, then re-run
   \`next\` and carry on into the new work's first stage in this chat. Say the
   narration's line about starting it in a clean chat once: it is an option for
@@ -836,7 +836,7 @@ function handleScopes(rest: string[]): void {
       );
       process.exit(1);
     }
-    console.log(`OK — ${batch.length} scope-runner(s) in sync: ${batch.join(", ")}`);
+    console.log(`OK - ${batch.length} scope-runner(s) in sync: ${batch.join(", ")}`);
     return;
   }
 

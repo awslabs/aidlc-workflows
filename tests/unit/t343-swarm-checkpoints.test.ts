@@ -481,6 +481,21 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(auditBlockField(row.block, autonomous ? "Autonomous" : "User Input")).toBe(autonomous ? "true" : "Approve");
   });
 
+  // The batch's question is on the record with its own id (the question
+  // record): its row carries it, and so does what the ask prints.
+  test("the batch's question has its id on its row and in what the ask prints", () => {
+    const pd = fixture();
+    converge(pd);
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    const row = readAuditShardEvents(pd).filter((event) => event.event === "DECISION_RECORDED" &&
+      auditBlockField(event.block, "Checkpoint") === "Swarm Batch Approval").at(-1)!;
+    expect(auditBlockField(row.block, "Question Id")).toMatch(/^[0-9a-f]{8}$/);
+    expect(auditBlockField(row.block, "Question Type")).toBe("swarm-batch");
+    expect(auditBlockField(row.block, "Question Chat")).toBe("t343-checkpoint");
+    expect(JSON.parse(asked.stdout.trim().split(/\r?\n/).at(-1)!).question_id).toBe(auditBlockField(row.block, "Question Id"));
+  });
+
   // The person names a finding as they decide the batch, and the conductor
   // passes it to the command it runs: a fix asked for is no decision, so the
   // next review re-checks the finding.
