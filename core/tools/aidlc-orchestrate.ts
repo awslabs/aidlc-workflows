@@ -7657,10 +7657,13 @@ export function prepareRecordFolders(projectDir: string, directive: Directive): 
     }
   }
   const folders = new Set(planRecordFolders(projectDir, directive));
-  let codekb: string | null = null;
+  // A code knowledge base folder is made from the space's own folder, which
+  // holds the `codekb/` parent an older record may not have yet.
+  let codekb: { space: string; root: string } | null = null;
   if (named.length > 0) {
     const ctx = codekbCtxFor(projectDir);
-    codekb = dirname(codekbDir(projectDir, ctx.codekbRepo, ctx.space));
+    const root = dirname(codekbDir(projectDir, ctx.codekbRepo, ctx.space));
+    codekb = { space: dirname(root), root };
     for (const path of named) {
       const each = path.includes(REPO_PLACEHOLDER)
         ? ctx.repos.map((repo) => path.replaceAll(REPO_PLACEHOLDER, repo))
@@ -7687,7 +7690,7 @@ export function prepareRecordFolders(projectDir: string, directive: Directive): 
   const record = docsRoot(projectDir);
   for (const folder of folders) {
     if (inside(record, folder)) make(record, folder);
-    else if (codekb !== null && inside(codekb, folder)) make(codekb, folder);
+    else if (codekb !== null && inside(codekb.root, folder)) make(codekb.space, folder);
   }
   if (failed !== null) throw failed;
 }
