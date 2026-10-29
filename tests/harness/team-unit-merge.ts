@@ -919,6 +919,16 @@ export function appendMainHumanTurn(projectDir: string): void {
   );
 }
 
+/** The person's reply to the merge gate the pin showed: a main-shard human
+ *  turn stamped after the pin (both are second-precision), so it is the turn
+ *  the gate counts and the turn that ran the pin is not. */
+export function replyAfterPin(projectDir: string, unit: string): void {
+  const pinnedAt = readUnitMergeTransaction(projectDir, unit)?.pinned_at;
+  expect(pinnedAt).toBeTruthy();
+  while (new Date().toISOString().replace(/\.\d{3}Z$/, "Z") <= pinnedAt!) Bun.sleepSync(50);
+  appendMainHumanTurn(projectDir);
+}
+
 export function approveMerge(
   main: string,
   unit: string,
