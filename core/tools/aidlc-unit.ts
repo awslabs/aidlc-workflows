@@ -15,6 +15,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { scopeStampLanded, unitRowMerged } from "./aidlc-unit-landing.ts";
 import {
   activeIntentUuid,
   activeSpace,
@@ -71,8 +72,6 @@ import {
   unitMajorConstructionStageSlugs,
   unitParticipantPath,
   unitReleasePendingPath,
-  unitRowMerged,
-  scopeStampLanded,
   validateUnitName,
   withAuditLock,
   writeUnitClaimRegistryCache,

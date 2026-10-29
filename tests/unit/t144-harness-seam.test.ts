@@ -46,6 +46,7 @@ const LIB_SIBLINGS = [
   "aidlc-locks.ts",
   "aidlc-review-records.ts",
   "aidlc-learned-date.ts",
+  "aidlc-unit-landing.ts",
   "aidlc-kiro-chat-record.ts",
   "aidlc-install-paths.ts",
   "aidlc-distribution.ts",

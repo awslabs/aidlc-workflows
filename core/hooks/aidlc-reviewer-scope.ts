@@ -67,12 +67,12 @@ import {
   resolveProjectDirFromHook,
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
-  scopeStampLanded,
   toPosix,
   writeGuardStoodAside,
   recordGuardBlockedRow,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { scopeStampLanded } from "../tools/aidlc-unit-landing.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 
 const HOOK_NAME = "reviewer-scope";
