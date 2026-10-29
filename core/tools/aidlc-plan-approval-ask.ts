@@ -608,8 +608,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
 // A word in a plan that names a file or folder: it has a "/" or a file
 // extension, and no scheme, flag or variable.
 const PLAN_PATH_WORD_RE = /^[A-Za-z0-9_.@~][A-Za-z0-9_.@~/+-]*$/;
-// What ends a word in a plan.
-const PLAN_WORD_BREAK = /[\s`'"()<>[\]{},;|*]/;
+// What ends a word in a plan (the system-install hold reads a plan's words the same way).
+export const PLAN_WORD_BREAK = /[\s`'"()<>[\]{},;|*]/;
 
 /**
  * The files and folders the waiting plans name, project-relative with "/":

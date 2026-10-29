@@ -469,7 +469,7 @@ describe("t194 recompose - rejections", () => {
     writeFileSync(sp, terminal, "utf-8");
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("not Running");
+    expect(r.out).toContain("this work is finished, so nothing on its plan is left to skip");
     expect(readState(proj)).toBe(terminal);
   });
 

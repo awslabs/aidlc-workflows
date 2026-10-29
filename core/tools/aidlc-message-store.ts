@@ -651,6 +651,7 @@ const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
   STAGE_RULES_BLOCKED: true,
   REVIEW_FREEZE_BLOCKED: true,
   REVIEWER_SCOPE_BLOCKED: true,
+  SYSTEM_INSTALL_BLOCKED: true,
 };
 
 // Whether the agent is still carrying out the reply that gave the latest

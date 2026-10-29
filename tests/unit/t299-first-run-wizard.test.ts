@@ -11,14 +11,17 @@ import {
   closeSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -86,6 +89,54 @@ function treeSnapshot(root: string): Record<string, string> {
   };
   visit(root, "");
   return snapshot;
+}
+
+// Every entry below root as lstat sees it: a link by its target, never
+// followed, so a link the person keeps reads as theirs before and after.
+function linkTree(root: string): Record<string, string> {
+  const entries: Record<string, string> = {};
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory).sort()) {
+      const path = join(directory, entry);
+      const rel = prefix ? `${prefix}/${entry}` : entry;
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        entries[rel] = `link:${readlinkSync(path)}`;
+      } else if (stat.isDirectory()) {
+        entries[`${rel}/`] = "";
+        visit(path, rel);
+      } else {
+        entries[rel] = readFileSync(path).toString("base64");
+      }
+    }
+  };
+  visit(root, "");
+  return entries;
+}
+
+// A folder link: a junction on Windows, where it needs no privilege.
+function folderLink(target: string, path: string): void {
+  symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+}
+
+// A checkout of the person's own where Claude Code keeps its worktrees, with
+// the links a worktree of a repo with a tracked AGENTS.md -> CLAUDE.md, or of
+// one with node_modules, holds. `clone` gives it a .git folder of its own
+// instead of a worktree's .git file.
+function claudeWorktree(project: string, name: string, clone = false): string {
+  const tree = join(project, ".claude", "worktrees", name);
+  mkdirSync(join(tree, "docs"), { recursive: true });
+  if (clone) {
+    mkdirSync(join(tree, ".git"));
+    writeFileSync(join(tree, ".git", "HEAD"), "ref: refs/heads/main\n");
+  } else {
+    writeFileSync(join(tree, ".git"), `gitdir: ${join(project, ".git", "worktrees", name)}\n`);
+  }
+  writeFileSync(join(tree, "CLAUDE.md"), "# Project notes\n");
+  writeFileSync(join(tree, "docs", "guide.md"), "guide\n");
+  if (process.platform !== "win32") symlinkSync("CLAUDE.md", join(tree, "AGENTS.md"));
+  folderLink(join(tree, "docs"), join(tree, "shared"));
+  return tree;
 }
 
 function detection(
@@ -2310,6 +2361,115 @@ describe("t299 first-run setup wizard", () => {
     expect(recovery).toBeDefined();
     expect(existsSync(recovery as string)).toBe(true);
     temporary.push(recovery as string);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // #3212: the rollback snapshot took .claude whole and refused the first link
+  // in a Claude Code worktree under it, so setup stopped after the menu.
+  // The menu's recommended preset is a record-only config step, which read the
+  // project's own copy and refused the worktree's link as well.
+  test("setup beside Claude Code worktrees that hold links completes and leaves them as they were", () => {
+    const trees: string[] = [];
+    let before: Record<string, string>[] = [];
+    let inodes: number[] = [];
+    const result = runWizard("\n", {
+      prepare: (project) => {
+        trees.push(claudeWorktree(project, "example"), claudeWorktree(project, "clone", true));
+        // A clone the release writes into stays AI-DLC's to read.
+        mkdirSync(join(project, ".claude", "skills", ".git"), { recursive: true });
+        writeFileSync(join(project, ".claude", "skills", ".git", "HEAD"), "ref: refs/heads/main\n");
+        before = trees.map(linkTree);
+        inodes = trees.map((tree) => lstatSync(tree).ino);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Writing project files ... done");
+    expect(result.stdout).toContain("Recording model preset ... done");
+    expect(result.stdout).not.toContain("is a link");
+    const manifestPath = join(result.project, ".claude", "tools", "data", "aidlc-manifest.json");
+    const recorded = (): string[] =>
+      Object.keys(JSON.parse(readFileSync(manifestPath, "utf-8")).files).sort();
+    const setUp = recorded();
+    expect(setUp.filter((rel) => rel.startsWith(".claude/worktrees/"))).toEqual([]);
+    expect(setUp).toContain(".claude/skills/aidlc/SKILL.md");
+
+    // A later model change reads the same copy.
+    const later = runCli(result, INIT, [
+      "config", "models", "--project", "--preset", "thorough", "--yes", "--json",
+    ]);
+    expect(later.status, later.stdout + later.stderr).toBe(0);
+    expect(recorded()).toEqual(setUp);
+    expect(existsSync(join(result.project, ".claude", "skills", "aidlc", "SKILL.md"))).toBe(true);
+    expect(trees.map(linkTree)).toEqual(before);
+    // A junction's lstat inode is not stable on Windows.
+    if (process.platform !== "win32") {
+      expect(trees.map((tree) => lstatSync(tree).ino)).toEqual(inodes);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("late first-run failure beside a worktree restores what setup changed and leaves the worktree as it was", () => {
+    let tree = "";
+    let before: Record<string, string> = {};
+    let inode = 0;
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        tree = claudeWorktree(project, "example");
+        const harness = join(project, ".claude");
+        mkdirSync(join(harness, "user"), { recursive: true });
+        writeFileSync(join(harness, "user", "keep.txt"), "keep\n");
+        writeFileSync(join(harness, "settings.local.json"), "{\"env\":{\"MINE\":\"1\"}}\n");
+        // Setup merges its entries into this one.
+        writeFileSync(join(harness, "settings.json"), "{\"permissions\":{\"allow\":[\"Bash(ls)\"]}}\n");
+        before = linkTree(harness);
+        inode = lstatSync(tree).ino;
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain(
+      "  Setup stopped: injected first-run failure after child 3.\n  No setup changes were kept.",
+    );
+    expect(linkTree(join(result.project, ".claude"))).toEqual(before);
+    if (process.platform !== "win32") expect(lstatSync(tree).ino).toBe(inode);
+    expect(existsSync(join(result.project, "aidlc"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a link the person keeps in .claude stays as it is through a late first-run failure", () => {
+    const outside = temp("aidlc-t299-linked-");
+    writeFileSync(join(outside, "notes.md"), "shared\n");
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        mkdirSync(join(project, ".claude"));
+        folderLink(outside, join(project, ".claude", "shared"));
+        before = linkTree(join(project, ".claude"));
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(linkTree(join(result.project, ".claude"))).toEqual(before);
+    expect(linkTree(outside)).toEqual({ "notes.md": Buffer.from("shared\n").toString("base64") });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A clone at a path the release writes into is setup's to restore, even
+  // beside a worktree the snapshot goes around.
+  test("late first-run failure restores a clone the release writes into", () => {
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        claudeWorktree(project, "example");
+        const skills = join(project, ".claude", "skills");
+        mkdirSync(join(skills, ".git"), { recursive: true });
+        writeFileSync(join(skills, ".git", "HEAD"), "ref: refs/heads/main\n");
+        mkdirSync(join(skills, "my-skill"));
+        writeFileSync(join(skills, "my-skill", "SKILL.md"), "# mine\n");
+        before = linkTree(skills);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(linkTree(join(result.project, ".claude", "skills"))).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Bun's global prompt() returns null for an empty line, which the wizard read

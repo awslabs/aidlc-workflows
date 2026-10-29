@@ -65,7 +65,7 @@ describe("log", () => {
     expect(decision).toContain("the learnings one included, takes none");
     expect(decision).not.toContain("guard-recovery");
     const answer = run(p, "aidlc-log.ts", ["answer", "--help"]).stdout;
-    expect(answer).toContain("Required: --stage, and --details or --details-file.");
+    expect(answer).toContain("Required: --stage, and --details, --details-file or --request-file.");
     expect(answer).toContain("guard-recovery");
     expect(answer).toContain("--details-file");
   });

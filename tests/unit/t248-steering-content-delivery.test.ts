@@ -1311,6 +1311,59 @@ describe("t248 deterministic steering delivery", () => {
     }
   });
 
+  // About 1 receipt in 64 starts with `-`, and an agent marks such a word with
+  // `--` (#3206, #2780). The key is chosen so part 1's receipt is one of them.
+  test("a receipt behind `--` continues to the next part, and so does one that starts with `-`", () => {
+    const proj = statefulProject();
+    inflateOrg(proj);
+    const first = invoke(proj, "next", []).directive;
+    expect(first.kind).toBe("load-steering");
+    const payload = readMarker(statefulMarkerPath(proj)).steering_payload;
+    let key = Buffer.alloc(32);
+    for (let seed = 0; !receiptFor(payload, key).startsWith("-"); seed++) {
+      key = createHash("sha256").update(`t248-dash-receipt-${seed}`).digest();
+    }
+    // Off part 1 first: a marker still on part 1 is handed back as it was
+    // issued, under the key it was minted with.
+    expect(invoke(proj, "continue", [first.receipt ?? ""]).directive.part).toBe(2);
+    writeFileSync(join(seededRecordDir(proj), ".aidlc-engine", "steering-token-key"), `${key.toString("base64url")}\n`, {
+      mode: 0o600,
+    });
+    const dashReceipt = receiptFor(payload, key);
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env.AIDLC_PROJECT_DIR;
+    const run = (argv: string[]): WireDirective => {
+      const res = spawnSync(BUN, argv, {
+        cwd: proj,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env,
+      });
+      expect(res.status, res.stderr).toBe(0);
+      return JSON.parse((res.stdout ?? "").trim()) as WireDirective;
+    };
+    const orchestrate = join(proj, ".claude", "tools", "aidlc-orchestrate.ts");
+    const spellings: [string, string[]][] = [
+      ["engine, -- ahead of the receipt", [orchestrate, "--project-dir", proj, "continue", "--", dashReceipt]],
+      ["dispatcher, -- ahead of the receipt", [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "orchestrate", "continue", "--", dashReceipt]],
+      ["engine, the receipt alone", [orchestrate, "--project-dir", proj, "continue", dashReceipt]],
+    ];
+    for (const [spelling, argv] of spellings) {
+      const issued = run([orchestrate, "--project-dir", proj, "next"]);
+      expect(issued.part, spelling).toBe(1);
+      expect(issued.receipt, spelling).toBe(dashReceipt);
+      const answer = run(argv);
+      expect(answer.kind, spelling).toBe("load-steering");
+      expect(answer.part, spelling).toBe(2);
+    }
+
+    // A receipt that matches nothing still restarts at part 1, `--` or not.
+    run([orchestrate, "--project-dir", proj, "next"]);
+    const wrong = run([orchestrate, "--project-dir", proj, "continue", "--", flipLastChar(dashReceipt)]);
+    expect(wrong.part).toBe(1);
+    expect(wrong.receipt).toBe(dashReceipt);
+  });
+
   test("a consumed receipt restarts delivery at part 1, and after run-stage every repeat ask gets the rules again", () => {
     const proj = statefulProject();
     inflateOrg(proj);

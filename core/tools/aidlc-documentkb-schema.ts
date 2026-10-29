@@ -77,6 +77,8 @@ export interface ExtractionRecord {
   extractor?: ExtractorIdentity;
   chars?: number;
   truncated?: boolean;
+  // Present only when the PDF page cap ended the text: the pages kept.
+  pages_kept?: number;
   reason?: string;
   detectedType?: string;
   // The sha256 this derivative was produced FROM. Compared against the row's
@@ -418,6 +420,15 @@ function validateExtraction(raw: unknown, where: string, errors: string[]): void
     errors.push(
       `${where}.extraction.truncated must be a boolean when state is "${state}" — ` +
         `a reader cannot tell a complete extraction from a capped one without it`,
+    );
+  }
+  if (
+    raw.pages_kept !== undefined &&
+    (typeof raw.pages_kept !== "number" || !Number.isInteger(raw.pages_kept) || raw.pages_kept < 1 ||
+      raw.truncated !== true)
+  ) {
+    errors.push(
+      `${where}.extraction.pages_kept must be a positive integer, and only on a truncated extraction`,
     );
   }
   if (req.reason && typeof raw.reason !== "string") {
