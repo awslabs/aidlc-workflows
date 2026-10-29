@@ -111,13 +111,14 @@ reading the engine's `main()` uses and hooks such as the Copilot claim and the
 Stop hook share. **Exact**: every token read under the grammar, with any free
 words marked as theirs (the `--` delimiter, or a plan named with a colon); it
 acts as it always has. A Unit command is exact by its shape (`unitCommandArgv`,
-`aidlc-command.ts`): `unit`, one of the Unit verbs, and before the first `--`
-option at most the one Unit name that verb takes (`unit pin alpha`, `unit land
-alpha --step git`, or the same line as one argument, as Kiro IDE hands it over);
-`next` names that command for the agent to run, and no seam runs it off-band.
-Any other line that opens with `unit` (`unit tests for the parser`, `unit`
-alone, `unit help`, a misspelt verb) is their words, with no refusal naming the
-verbs as the `plugin` and `knowledge` nouns give. **Words**: nothing on the line was read, so it is a
+`aidlc-command.ts`): `unit`, one of the Unit verbs, and at most the one Unit
+name that verb takes, as the Unit tool reads the rest (`unit pin alpha`, `unit
+land alpha --step git`, or the same line as one argument, quotes included, as
+Kiro IDE hands it over); `next` names that command for the agent to run, and no
+seam runs it off-band. Any other line that opens with `unit` (`unit tests for
+the parser`, `unit pin alpha -- why first`, `unit` alone, `unit help`, a
+misspelt verb) is their words, with no refusal naming the verbs as the `plugin`
+and `knowledge` nouns give. **Words**: nothing on the line was read, so it is a
 request. **A reading step** otherwise: the `print` above, with no `narration`,
 naming each reading as a command to run, and nothing created, switched, jumped,
 dropped or refused before the agent has read it. Four lines reach it besides an

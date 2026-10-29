@@ -4,14 +4,15 @@
 // `/aidlc unit pin alpha` and the other `unit` verbs are the person's own Unit commands
 // (docs/guide/12-cli-commands.md), so `next` names that command for the agent to run, on every harness, instead of
 // reading the line as words for new work (#3287: the new-work routing question "You said: unit pin alpha. What should
-// I do?"). The line is told apart by its structure only: `unit`, one of the Unit verbs, and before the first option at
-// most the one Unit name that verb takes. Any other line that starts with "unit" stays the person's words. Every seam
+// I do?"). The line is told apart by its structure only: `unit`, one of the Unit verbs, and at most the one Unit name
+// that verb takes, as the Unit tool reads the line. Any other line that starts with "unit" stays the person's words,
+// the words behind the `--` mark included. Every seam
 // that reads the line before the agent agrees, and none runs a Unit command off-band: they change git and reach the
 // remote, so they stay behind the host's own Allow prompt.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { UNIT_VERBS, unitCommandArgv } from "../../dist/claude/.claude/tools/aidlc-command.ts";
+import { UNIT_VERBS } from "../../dist/claude/.claude/tools/aidlc-command.ts";
 import { classifyTerminalCommand, isReadOnlyNextArgv, readNextLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { nextArgsAreOnlyWords, parseNextFlags } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
@@ -95,11 +96,16 @@ describe("a Unit command typed after /aidlc reaches that command", () => {
     }
   });
 
-  test("Kiro IDE's one argument holding the whole line is the same command", () => {
+  test("Kiro IDE's one argument holding the whole line is the same command, quotes read as typed", () => {
     const kiroIde = TREES.find((tree) => tree.harness === "kiro-ide")!;
     expectUnitCommandStep(nextFrom(kiroIde, ["unit pin alpha"]), `${kiroIde.invoke} unit pin alpha`);
     expect(parseNextFlags(["unit land alpha --step git"]).unitCommand).toEqual(["land", "alpha", "--step", "git"]);
-    expect(readNextLine(["unit status"])).toEqual({ kind: "exact" });
+    expect(readNextLine(["unit status"])).toEqual({ kind: "exact", unit: ["status"] });
+    expect(parseNextFlags(['unit claim alpha --team "Team A"']).unitCommand).toEqual(["claim", "alpha", "--team", "Team A"]);
+    expectUnitCommandStep(
+      nextFrom(kiroIde, ['unit gate alpha --decision approve --user-input "ship it"']),
+      `${kiroIde.invoke} unit gate alpha --decision approve --user-input ${quoteCommandArgument("ship it")}`,
+    );
   });
 
   test("the entry word handed on as an argument is how they reached AI-DLC, not part of the command", () => {
@@ -131,18 +137,23 @@ describe("a line that only starts with the word unit stays the person's words", 
     ["unit", "pinn", "alpha"],
     // A single-dash token is a bare word to the Unit tool, so here it is a second name.
     ["unit", "pin", "alpha", "-x"],
-    // One argument that opens with the entry word, or holds a quote, is their sentence whole.
+    // Words behind the `--` mark are theirs, never the command's.
+    ["unit", "pin", "alpha", "--", "explain", "this", "first"],
+    // An option's value is one word; the next word is theirs, so the reason is never cut short.
+    ["unit", "gate", "alpha", "--decision", "approve", "--user-input", "ship", "it"],
+    // One argument that opens with the entry word is their sentence whole.
     ["/aidlc unit pin alpha"],
-    ['unit claim alpha --team "Team A"'],
   ];
   test("not the verb form: no Unit command, the words kept whole", () => {
     for (const line of words) {
-      expect(unitCommandArgv(line), line.join(" ")).toBeNull();
       const parsed = parseNextFlags(line);
       expect(parsed.unitCommand, line.join(" ")).toBeUndefined();
-      // The entry word is how they reached AI-DLC, so the work is never named after it.
-      expect(parsed.intent, line.join(" ")).toBe(line.join(" ").replace(/^\/aidlc\s+/, ""));
-      expect(readNextLine(line).kind, line.join(" ")).not.toBe("exact");
+      // The entry word is how they reached AI-DLC, and the mark is not a word: every word of theirs is kept, an
+      // option `next` does not take among them, exactly as before.
+      for (const word of line.join(" ").replace(/^\/aidlc\s+/, "").split(" ").filter((token) => token !== "--")) {
+        expect(parsed.personWords ?? parsed.intent ?? "", line.join(" ")).toContain(word);
+      }
+      expect(readNextLine(line), line.join(" ")).not.toHaveProperty("unit");
     }
   });
 
@@ -156,7 +167,7 @@ describe("every reader of the line agrees, and none runs a Unit command off-band
   test("the verb form reads exact, is not a terminal utility and not a read-only line, and is not a reply", () => {
     for (const verb of UNIT_VERBS.keys()) {
       for (const line of [verbLine(verb), [...verbLine(verb), "--project-type", "x"]]) {
-        expect(readNextLine(line), line.join(" ")).toEqual({ kind: "exact" });
+        expect(readNextLine(line), line.join(" ")).toEqual({ kind: "exact", unit: line.slice(1) });
         expect(classifyTerminalCommand(line), line.join(" ")).toBeNull();
         expect(isReadOnlyNextArgv(line), line.join(" ")).toBe(false);
         expect(nextArgsAreOnlyWords(line), line.join(" ")).toBe(false);

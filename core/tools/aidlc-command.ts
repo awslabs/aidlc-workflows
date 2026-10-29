@@ -198,23 +198,26 @@ export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
 
 /**
  * The Unit tool's argv when a `next` line is the person's Unit command, else
- * null. It is one by its shape alone: `unit`, one of UNIT_VERBS, and before
- * the first option at most the one Unit name that verb takes; from the first
- * option on the Unit tool reads the rest as its own. An option starts with
- * `--`, the `--` mark included, as the Unit tool's parseArgs reads it. Any
- * other line that opens with "unit" (`unit tests for the parser`) is the
- * person's words. Kiro IDE's PowerShell hands the whole line over as one
- * argument, which is read the same way unless it holds a quote, whose reading
- * is a shell's.
+ * null. It is one by its shape alone: `unit`, one of UNIT_VERBS, and at most
+ * the one Unit name that verb takes, as the Unit tool itself reads the rest
+ * (`parse`: aidlc-lib.ts parseArgs, which aidlc-unit.ts uses). A word more,
+ * the words behind the `--` mark included, is the person's, so the whole line
+ * stays theirs (`unit tests for the parser`, `unit pin alpha -- why first`).
+ * Kiro IDE's PowerShell hands the whole line over as one argument, which
+ * `split` (aidlc-lib.ts splitKiroCommandArgs) reads as a shell would, quotes
+ * included. readNextLine is the one caller and hands both readers in, since
+ * this module does not load aidlc-lib.ts.
  */
-export function unitCommandArgv(args: readonly string[]): string[] | null {
-  const tokens = args.length === 1 && !/["'`]/.test(args[0]) ? args[0].trim().split(/\s+/) : args;
+export function unitCommandArgv(
+  args: readonly string[],
+  split: (line: string) => string[],
+  parse: (args: string[]) => { positional: string[] },
+): string[] | null {
+  const tokens = args.length === 1 ? split(args[0]) : [...args];
   if (tokens[0] !== "unit") return null;
   const takesName = UNIT_VERBS.get(tokens[1] ?? "");
   if (takesName === undefined) return null;
-  const option = tokens.findIndex((token, at) => at > 1 && token.startsWith("--"));
-  const names = (option < 0 ? tokens.length : option) - 2;
-  return names <= (takesName ? 1 : 0) ? tokens.slice(1) : null;
+  return parse(tokens.slice(2)).positional.length <= (takesName ? 1 : 0) ? tokens.slice(1) : null;
 }
 
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);

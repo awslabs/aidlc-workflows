@@ -41979,7 +41979,8 @@ export function nextTokenKind(token: string, following: string | undefined): "fl
  * over as one quoted argument.
  */
 export type NextLineReading =
-  | { kind: "exact" }
+  // `unit`: the Unit tool's argv, when the line is the person's Unit command (unitCommandArgv).
+  | { kind: "exact"; unit?: string[] }
   | { kind: "words" }
   | { kind: "untaken-flag"; token: string; value?: string }
   | { kind: "value"; flag: string; value: string; valid: readonly string[] }
@@ -42122,7 +42123,8 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (knowledge.kind !== "not-knowledge") {
     return knowledge.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
   }
-  if (unitCommandArgv(args) !== null) return { kind: "exact" };
+  const unit = unitCommandArgv(args, splitKiroCommandArgs, parseArgs);
+  if (unit !== null) return { kind: "exact", unit };
   const workspace = parseWorkspaceCommand(head);
   if (workspace.kind !== "not-workspace") {
     const theirs = workspace.kind === "switch" && !workspace.explicit && workspace.words !== undefined;

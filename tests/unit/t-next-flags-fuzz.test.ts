@@ -43,7 +43,6 @@ import {
   validScopes,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { nextArgsAreOnlyWords, parseNextFlags, typedSettingModifiers } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
-import { unitCommandArgv } from "../../dist/claude/.claude/tools/aidlc-command.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
@@ -497,7 +496,7 @@ describe("the flag parser over a seeded sweep of lines", () => {
       if (testCase.argv.length > 1 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) {
         const line = testCase.argv.join(" ");
         const quoted = readNextLine([line]);
-        if (argumentIsFlagShaped(line) || reading.kind === "plan-word" || unitCommandArgv(testCase.argv) !== null) {
+        if (argumentIsFlagShaped(line) || reading.kind === "plan-word" || (reading.kind === "exact" && reading.unit !== undefined)) {
           // A sentence opening with a plan's name is the same reading step
           // either way, because it is the same line.
           expect(quoted, `quoted ${note}`).toEqual(reading);

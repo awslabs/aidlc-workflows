@@ -100,7 +100,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { CONFIG_SECTIONS, unitCommandArgv } from "./aidlc-command.ts";
+import { CONFIG_SECTIONS } from "./aidlc-command.ts";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -406,7 +406,6 @@ import {
   readNextLine,
   readNextTokens,
   readOrchestratorLauncherOptions,
-  splitFlagShapedArguments,
   REQUEST_TEXT_DIR,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -5993,8 +5992,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   if (knowledgeCommand.kind !== "not-knowledge") return { knowledgeCommand };
   // A Unit command owns its whole argv, options included (`unit land alpha
   // --step git`), so nothing on it is read as one of next's own flags.
-  const unitCommand = unitCommandArgv(splitFlagShapedArguments(args));
-  if (unitCommand !== null) return { unitCommand };
+  if (reading.kind === "exact" && reading.unit !== undefined) return { unitCommand: reading.unit };
   // The pick question's answer, `next --pick <record>`: select that record and
   // carry on in the same turn, so picking work up takes one step. Words the
   // agent adds after the name, or the `--request <id>` of the step that kept
