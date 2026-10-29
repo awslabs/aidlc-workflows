@@ -2279,9 +2279,17 @@ export const KIRO_CLI_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
 // the turn a subagent's hand-back (or another session's message) starts, its
 // `<agent-message>` block alone. 2.1.310 writes a turn's transcript row only
 // after this hook returns, so for these the block is all there is to read.
+// The Claude desktop app (2.1.31x, captured live): another session's message
+// reaches the hook as its `<cross-session-message>` element alone, while the
+// transcript row frames that element in a sentence before and a note after, so
+// `claudeTranscriptOrigin` never finds the row by the prompt's text.
 export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
   { name: "claude task notification", pattern: /^<task-notification>\r?\n[\s\S]*\r?\n<\/task-notification>$/ },
   { name: "claude agent message", pattern: /^<agent-message from="[^"\r\n]*">\r?\n[\s\S]*\r?\n<\/agent-message>$/ },
+  {
+    name: "claude session message",
+    pattern: /^<cross-session-message(?: [^\r\n]*)?>\r?\n[\s\S]*\r?\n<\/cross-session-message>$/,
+  },
 ];
 
 // The whole prompt is one of the host's fixed sentences. Null otherwise.
