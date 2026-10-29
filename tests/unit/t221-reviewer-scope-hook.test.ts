@@ -976,6 +976,19 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(runHook(proj, write).code).toBe(0);
   });
 
+  test("a merged cell alone, without the landing in the checkout's history, keeps a claimed checkout held", () => {
+    const proj = scratchProject();
+    seedUnitScope(
+      proj,
+      "U03-scoring",
+      "\n## Unit Progress\n| unit | owner | code-generation | merged |\n| --- | --- | --- | --- |\n" +
+        "| U03-scoring | t221 | [x] | [x] |\n",
+    );
+    const r = runHook(proj, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "touch Construction/u05-API/result.md" } });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('scoped to Unit "U03-scoring"');
+  });
+
   test.each([
     ["relaxed policy", "- **Guard Policy**: relaxed (set by you)\n", {}],
     ["off policy", "- **Guard Policy**: off (set by you)\n", {}],

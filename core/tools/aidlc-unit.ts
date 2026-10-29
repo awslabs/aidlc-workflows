@@ -71,6 +71,8 @@ import {
   unitMajorConstructionStageSlugs,
   unitParticipantPath,
   unitReleasePendingPath,
+  unitRowMerged,
+  scopeStampLanded,
   validateUnitName,
   withAuditLock,
   writeUnitClaimRegistryCache,
@@ -627,7 +629,7 @@ function completedUnits(state: string): Set<string> {
     );
     if (
       workCells.every((cell) => cell === "[x]") &&
-      (mergedIndex < 0 || cells[mergedIndex] === "[x]")
+      (mergedIndex < 0 || unitRowMerged(state, cells[0]))
     ) {
       done.add(cells[0]);
     }
@@ -3581,7 +3583,9 @@ function claimUnit(args: string[], projectDir?: string): void {
   const identity = activeIdentity(pd);
   validateClaimRefUnit(identity.intentId8, unit);
   const existingStamp = readUnitScopeStamp(pd);
-  if (existingStamp) {
+  if (existingStamp && scopeStampLanded(pd, state, existingStamp)) {
+    clearUnitScopeStamp(pd);
+  } else if (existingStamp) {
     if (existingStamp.unit !== unit) {
       fail(`This checkout is already scoped to Unit "${existingStamp.unit}".`);
     }

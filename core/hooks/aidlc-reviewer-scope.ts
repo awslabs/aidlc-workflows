@@ -67,6 +67,7 @@ import {
   resolveProjectDirFromHook,
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
+  scopeStampLanded,
   toPosix,
   writeGuardStoodAside,
   recordGuardBlockedRow,
@@ -958,6 +959,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
     stateContent = readStateFile(projectDir);
     if (isTeamUnitOwnership(stateContent)) {
       unitScope = readUnitScopeStamp(projectDir);
+      if (unitScope && scopeStampLanded(projectDir, stateContent, unitScope)) unitScope = null;
     }
   } catch {
     // No active team workflow means no claimed-checkout write bound.

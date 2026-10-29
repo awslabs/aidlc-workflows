@@ -2,10 +2,16 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { copyFileSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { auditShardHost, auditShardName, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { seededAuditDir } from "../harness/fixtures.ts";
+import {
+  auditShardHost,
+  auditShardName,
+  readApplicableTeamUnitScopeStamp,
+  readUnitScopeStamp,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { AIDLC_SRC, seededAuditDir, seededRecordDir } from "../harness/fixtures.ts";
 import {
   UNIT,
   appendMainHumanTurn,
@@ -14,6 +20,7 @@ import {
   gateAndLand,
   git,
   makeSeed,
+  nextDirective,
   prepareCandidate,
   runMergeTool,
 } from "../harness/team-unit-merge.ts";
@@ -22,7 +29,8 @@ import {
 // lead's own checkout, where Inception ran, or a copy of that folder carrying
 // its clone id. Pin accepts exactly one newly added team shard, so the claim
 // keeps the Unit's evidence in a shard of its own, and the lead's shard, rows
-// written before the claim included, is published as main has it.
+// written before the claim included, is published as main has it. Once the
+// Unit lands and the lead pulls main, the checkout is no longer held to it.
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -35,6 +43,22 @@ function leadShardOnMain(lead: string): string {
   git(lead, ["commit", "-m", "lead inception audit"]);
   git(lead, ["push", "origin", "main"]);
   return auditShardName(lead);
+}
+
+// A write into another Unit's record, as the claimed-checkout bound reads it.
+function otherUnitWrite(checkout: string): ReturnType<typeof spawnSync> {
+  const record = relative(checkout, seededRecordDir(checkout)).replaceAll("\\", "/");
+  return spawnSync(process.execPath, [join(AIDLC_SRC, "hooks", "aidlc-reviewer-scope.ts")], {
+    cwd: checkout,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: `touch ${record}/construction/beta/notes.md` },
+      cwd: checkout,
+    }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: checkout },
+    encoding: "utf-8",
+  });
 }
 
 function cloneShard(checkout: string): string {
@@ -54,6 +78,10 @@ describe("t326 pinned team Unit merge: a claim in a checkout whose shard main ha
     const leadShardBeforeClaim = readFileSync(leadShardPath, "utf-8");
 
     const candidate = prepareCandidate(remote, "alpha", "lead", { checkout: lead });
+    // Until the landing reaches it, the checkout stays held to the Unit.
+    expect(runMergeTool(UNIT, ["pin", "alpha"], lead).out)
+      .toContain("Unit pinning must run from an unscoped main checkout.");
+    expect(otherUnitWrite(lead).status).toBe(2);
     const pinner = clone(remote, "pinner");
     gateAndLand(pinner, "alpha");
 
@@ -64,6 +92,19 @@ describe("t326 pinned team Unit merge: a claim in a checkout whose shard main ha
     expect(git(pinner, ["show", `HEAD:${record}/${leadShard}`])).toBe(leadShardOnMainText.trim());
     expect(git(pinner, ["show", `HEAD:${record}/${candidate.auditShard}`]))
       .toContain("**Event**: UNIT_COMPLETED");
+
+    // The landed Unit's claim is over once the lead pulls main: the checkout is
+    // theirs again, writing their own shard, and the next Unit claims there.
+    git(pinner, ["push", "origin", "main"]);
+    git(lead, ["pull", "--ff-only", "origin", "main"]);
+    expect(readApplicableTeamUnitScopeStamp(lead)).toBeNull();
+    expect(auditShardName(lead)).toBe(leadShard);
+    expect(otherUnitWrite(lead).status).toBe(0);
+    expect(runMergeTool(UNIT, ["pin", "beta"], lead).out).not.toContain("unscoped main checkout");
+    expect(nextDirective(lead)).not.toMatchObject({ unit: "alpha" });
+    const beta = runMergeTool(UNIT, ["claim", "beta", "--team", "lead"], lead);
+    expect(beta.status, beta.out).toBe(0);
+    expect(JSON.parse(beta.stdout)).toMatchObject({ claimed: true, unit: "beta" });
   });
 
   test("a second claim and a second publish in that checkout start nothing new", () => {
