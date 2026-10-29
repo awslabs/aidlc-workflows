@@ -1483,7 +1483,16 @@ function candidateEvidence(
     TRANSPORTED_DATA_EVENTS.has(event.event)
   );
   const events = authorityRows;
+  // A stage whose documents all belong to other kinds of Unit applies to this
+  // one no more than it does to the walk: it settles with no directive, so it
+  // earns no receipt, review or gate.
+  const notApplicable = new Set(stages.filter((slug) => {
+    const stage = graph.find((entry) => entry.slug === slug);
+    return (stage?.produces ?? []).length > 0 &&
+      filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
+  }));
   const stagesCompleted = stages.filter((stage) =>
+    notApplicable.has(stage) ||
     unitLifecycleSnapshot(
       projectDir,
       stage,
@@ -1505,7 +1514,7 @@ function candidateEvidence(
   const gatesExpected =
     claim.payload.gate_rhythm === "unit-end"
       ? [stages[stages.length - 1]]
-      : stages;
+      : stages.filter((stage) => !notApplicable.has(stage));
   const gatesApproved = gatesExpected.filter((stage) =>
     unitGateStatus(
       projectDir,
@@ -1519,6 +1528,7 @@ function candidateEvidence(
   const reviewersReady: string[] = [];
   const artifactPaths: string[] = [];
   for (const stageSlug of stages) {
+    if (notApplicable.has(stageSlug)) continue;
     const stage = graph.find((entry) => entry.slug === stageSlug);
     if (!stage) fail(`Pinned candidate references unknown stage "${stageSlug}".`);
     const names = filterProducesByKind(
