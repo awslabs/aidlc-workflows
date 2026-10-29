@@ -8,6 +8,8 @@
 // approval records dispositions for exactly the findings the brief showed: the
 // person is never recorded accepting a finding the gate did not show. A gate
 // with no open findings reads as before, and a per-stage team gate is unchanged.
+// An earlier stage whose review did not finish (its reviewer stopped twice) is
+// named in the brief, and the line after Approve names that stage.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -259,12 +261,30 @@ function logReview(proj: string, stage: string, reviewer: string, findings: Find
   return relative(proj, stageDir(proj, stage)).replaceAll("\\", "/");
 }
 
+// A review whose reviewer stopped twice with nothing written, on each of the
+// stage's two passes: the request, its one retry, then the logger's own
+// NOT-READY fallback, which records a review that did not finish.
+function logStoppedReview(proj: string, stage: string, reviewer: string): void {
+  for (const iteration of [1, 2]) {
+    const base = ["review", "--stage", stage, "--reviewer", reviewer, "--unit", "alpha", "--iteration", String(iteration)];
+    for (const extra of [[], ["--retry-pending"], ["--verdict", "NOT-READY"]]) {
+      const logged = run(LOG, proj, [...base, ...extra]);
+      expect(logged.rc, logged.out).toBe(0);
+    }
+  }
+  const completed = readAuditShardEvents(proj).filter((row) =>
+    row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Stage") === stage
+  );
+  expect(auditBlockField(completed.at(-1)!.block, "Review Finished")).toBe("no");
+}
+
 // Walks alpha's stages to its gate, each reviewed with the findings given for
-// it, and returns the gate's directive. A NOT-READY review is reviewed again
-// and stays NOT-READY: the review's last pass, whose concerns go to the gate.
+// it ("stopped": its reviewer stopped twice), and returns the gate's
+// directive. A NOT-READY review is reviewed again and stays NOT-READY: the
+// review's last pass, whose concerns go to the gate.
 function walkToGate(
   proj: string,
-  reviews: Record<string, Finding[]>,
+  reviews: Record<string, Finding[] | "stopped">,
   stages = BLOCK,
   beforeGate?: () => void,
 ): Directive {
@@ -278,8 +298,11 @@ function walkToGate(
     }
     const completed = run(STATE, proj, ["unit", "complete", "--stage", stage, "--unit", "alpha"]);
     expect(completed.rc, completed.out).toBe(0);
-    if (directive.reviewer) {
-      const findings = reviews[stage] ?? [];
+    const said = reviews[stage];
+    if (directive.reviewer && said === "stopped") {
+      logStoppedReview(proj, stage, directive.reviewer);
+    } else if (directive.reviewer) {
+      const findings = said ?? [];
       logReview(proj, stage, directive.reviewer, findings);
       if (findings.some((finding) => finding.severity !== "Minor")) logReview(proj, stage, directive.reviewer, findings, 2);
     }
@@ -290,8 +313,8 @@ function walkToGate(
   return gate;
 }
 
-function brief(proj: string, stage: string): string {
-  const printed = run(BRIEF, proj, ["review", "--stage", stage, "--unit", "alpha", "--why", "first"]);
+function brief(proj: string, stage: string, extra: string[] = []): string {
+  const printed = run(BRIEF, proj, ["review", "--stage", stage, "--unit", "alpha", "--why", "first", ...extra]);
   expect(printed.rc, printed.out).toBe(0);
   return printed.stdout;
 }
@@ -470,6 +493,73 @@ describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its App
     );
     expect(gateReport(proj, "approved", ["--user-input", "Approve"]).kind).toBe("done");
     expect(recorded(proj)).toEqual([]);
+  });
+
+  test("an earlier stage whose review did not finish is named at the gate and in the line after Approve", () => {
+    const proj = seedProject("unit-end");
+    walkToGate(proj, { "nfr-design": "stopped" });
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    const shown = brief(proj, "code-generation");
+    expect(shown).toContain("**Stages:** NFR Design, Code Generation");
+    expect(shown).toContain("**Review outcome:** Concerns remain for your decision.");
+    expect(shown).toMatch(/construction\/alpha\/nfr-design\/[^`]+`\n\n\| ID \| Severity \| Where \| Status \|\n\|---\|---\|---\|---\|\n\| R-01 \| Major \|/);
+    expect(shown).toContain("> R-01 Finding: The review did not finish, so there is no review result to rely on.");
+    expect(shown).toContain("- **Approve** - continue with the open findings accepted.");
+    expect(shown).not.toContain("No blocking concerns were found.");
+    expect(shown).not.toContain("Approve accepts the open review finding");
+    const approved = gateReport(proj, "approved", ["--user-input", "Approve"]);
+    expect(approved.kind).toBe("done");
+    expect(JSON.stringify(approved)).toContain("Approved. The NFR Design review for alpha did not finish.");
+    expect(recorded(proj)).toEqual([]);
+    const row = readAuditShardEvents(proj).find((event) => event.event === "GATE_APPROVED")!;
+    expect(auditBlockField(row.block, "Review")).toBe("not finished");
+  });
+
+  test("beside an unfinished review the accepts line names its stage and Approve records only the real finding", () => {
+    const proj = seedProject("unit-end");
+    walkToGate(proj, {
+      "nfr-requirements": [{ id: "R-01", severity: "Minor", finding: "Name the latency budget's owner", action: "Add an owner" }],
+      "nfr-design": "stopped",
+    });
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    const shown = brief(proj, "code-generation");
+    expect(shown).toContain("**Stages:** NFR Requirements, NFR Design, Code Generation");
+    expect(shown).toContain(
+      "Approve accepts the open review finding NFR Requirements R-01 (Name the latency budget's owner) as risk; you " +
+        "can also approve and ask for it to be fixed, or reject it as not applying, saying why.",
+    );
+    expect(gateReport(proj, "approved", ["--user-input", "Approve"]).kind).toBe("done");
+    expect(recorded(proj)).toEqual([expect.stringMatching(/\/nfr-requirements\/[^#]+#R-01 Accepted risk$/)]);
+  });
+
+  test("two reviews that did not finish are both named, and the reviewer's reason stays with its own stage", () => {
+    const proj = seedProject("unit-end");
+    walkToGate(proj, { "nfr-design": "stopped", "code-generation": "stopped" });
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    const reason = "The reviewer said it had no tool to write its review.";
+    const shown = brief(proj, "code-generation", ["--fallback-finding", reason]);
+    expect(shown).toContain("**Stages:** NFR Design, Code Generation");
+    expect(shown.split("> R-01 Finding: The review did not finish").length - 1).toBe(2);
+    expect(shown.split(reason).length - 1).toBe(1);
+    expect(shown.indexOf(reason)).toBeGreaterThan(shown.indexOf("construction/alpha/code-generation/"));
+    const approved = gateReport(proj, "approved", ["--user-input", "Approve"]);
+    expect(JSON.stringify(approved)).toContain(
+      "Approved. The NFR Design and Code Generation reviews for alpha did not finish.",
+    );
+  });
+
+  test("a per-stage team gate over a review that did not finish reads and says as before", () => {
+    const proj = seedProject("per-stage");
+    walkToGate(proj, { "functional-design": "stopped" }, ["functional-design"]);
+    expect(runReport(proj, ["--stage", "functional-design", "--unit", "alpha", "--result", "awaiting-approval"]).kind)
+      .toBe("print");
+    const shown = brief(proj, "functional-design");
+    expect(shown).toStartWith("**Stage:** Functional Design\n**Review outcome:** Concerns remain for your decision.\n");
+    expect(shown).toContain("> R-01 Finding: The review did not finish, so there is no review result to rely on.");
+    const approved = runReport(proj, [
+      "--stage", "functional-design", "--unit", "alpha", "--result", "approved", "--user-input", "Approve",
+    ]);
+    expect(JSON.stringify(approved)).toContain("Approved. The Functional Design review for alpha did not finish.");
   });
 
   test("a per-stage team gate shows its own review as before", () => {
