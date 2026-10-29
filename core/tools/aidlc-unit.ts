@@ -3556,7 +3556,7 @@ function adoptUnit(args: string[], projectDir?: string): void {
     fail(`Unit adoption requires checked-out branch "${ref}", found "${branch}".`);
   }
   const existing = readUnitScopeStamp(pd);
-  if (existing && existing.unit !== unit) {
+  if (existing && existing.unit !== unit && !scopeStampLanded(pd, state, existing)) {
     fail(`This checkout is already scoped to Unit "${existing.unit}".`);
   }
   const claim = currentClaim(pd, repositoryRemote(pd), ref);

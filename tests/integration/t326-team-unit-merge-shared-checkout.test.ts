@@ -107,6 +107,26 @@ describe("t326 pinned team Unit merge: a claim in a checkout whose shard main ha
     expect(JSON.parse(beta.stdout)).toMatchObject({ claimed: true, unit: "beta" });
   });
 
+  test("after the landing, the claimant checkout takes over a teammate's claim of the next Unit", () => {
+    const { seed: lead, remote } = makeSeed();
+    leadShardOnMain(lead);
+    prepareCandidate(remote, "alpha", "lead", { checkout: lead });
+    const pinner = clone(remote, "pinner");
+    gateAndLand(pinner, "alpha");
+    git(pinner, ["push", "origin", "main"]);
+    git(lead, ["pull", "--ff-only", "origin", "main"]);
+
+    const mate = clone(remote, "mate");
+    const claimed = runMergeTool(UNIT, ["claim", "beta", "--team", "mate"], mate);
+    expect(claimed.status, claimed.out).toBe(0);
+    const ref = JSON.parse(claimed.stdout).claim_ref as string;
+    git(lead, ["fetch", "origin", `${ref}:${ref}`]);
+    git(lead, ["switch", ref.replace(/^refs\/heads\//, "")]);
+    const adopted = runMergeTool(UNIT, ["adopt", "beta"], lead);
+    expect(adopted.status, adopted.out).toBe(0);
+    expect(readApplicableTeamUnitScopeStamp(lead)?.unit).toBe("beta");
+  });
+
   test("a second claim and a second publish in that checkout start nothing new", () => {
     const { seed: lead, remote } = makeSeed();
     leadShardOnMain(lead);
