@@ -7,10 +7,12 @@
 //        --output-path <path>       emits SENSOR_FIRED then a paired terminal
 //        [--unit <name>]            row (PASSED | FAILED | COULD_NOT_RUN |
 //        [--fire-id <8 hex>]        BUDGET_OVERRIDE); the Unit, when named, is
-//                                   on every row. The gate names the Fire id.
+//                                   on every row; --fire-id, which the gate
+//                                   passes, names the rows' Fire id.
 //
 // The dispatcher is a thin routing surface (Q4/Q5 of the locked plan):
-//   1. Validate inputs + resolve graph + generate Fire id (no audit lock held).
+//   1. Validate inputs + resolve graph + take the --fire-id given or generate
+//      one (no audit lock held).
 //   2. Acquire lock → emit SENSOR_FIRED → release.
 //   3. Spawn the per-sensor script (no lock held; long-running is fine).
 //   4. Decide outcome via the truth table below (no lock held).
