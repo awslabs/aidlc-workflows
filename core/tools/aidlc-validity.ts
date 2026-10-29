@@ -12,7 +12,7 @@ import {
   rememberRawFingerprint,
   staleStageLine,
 } from "./aidlc-lib.js";
-import { loadGraph } from "./aidlc-graph.ts";
+import { loadGraph, type RecheckIf } from "./aidlc-graph.ts";
 import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
@@ -48,6 +48,11 @@ export interface ArtifactBasis {
   presentCount: number;
   structureHash: string;
   contentHash: string;
+  /** Only set on INPUT basis rows and only when the consuming stage
+   *  declared a `recheck_if` value on its `consumes` entry. Absence means
+   *  the pessimistic default (`changed`), preserving pre-RFC behavior.
+   *  See docs/rfcs/typed-dependency-edges.md. */
+  recheck_if?: RecheckIf;
 }
 
 export interface StageValidationBasis {
@@ -112,6 +117,9 @@ export interface StageValidityNode {
     artifact: string;
     required?: boolean;
     conditional_on?: string;
+    /** Mirrors Consume.recheck_if in aidlc-graph.ts. Optional; absent =
+     *  `changed` (pessimistic, the pre-RFC default). */
+    recheck_if?: RecheckIf;
   }>;
   requires_stage?: readonly string[];
 }
@@ -141,7 +149,26 @@ interface CompletionReceipts {
 interface ObservedDependency {
   to: string;
   artifact: string;
+  /** Consumer's declared recheck_if value on this edge. Absent = `changed`
+   *  (pessimistic, the pre-RFC default). */
+  recheck_if?: RecheckIf;
 }
+
+/**
+ * Per-artifact change classification for a producer's outputs, computed by
+ * comparing the receipt basis with the currently-recomputed basis. Consumed
+ * by propagateStageInvalidation to filter edges whose declared recheck_if
+ * does not intersect the actual change class.
+ *
+ * `filesAddedOrRemoved` mirrors `structureHash` movement; `edited` mirrors
+ * `contentHash` movement. A byte-identical re-execution moves neither, so
+ * consumers of a re-run producer are never flagged by change class alone.
+ */
+export interface ProducerOutputChange {
+  filesAddedOrRemoved: boolean;
+  edited: boolean;
+}
+export type ProducerOutputChanges = Map<string, Map<string, ProducerOutputChange>>;
 
 export interface CaptureStageValidationOptions {
   resolution?: ArtifactResolutionOptions;
@@ -394,7 +421,14 @@ function captureInputBasis(
       required,
       instances,
     );
-    if (basis) inputs.push(basis);
+    if (basis) {
+      // Carry declared recheck_if through the receipt so downstream
+      // propagation can filter by it. Undeclared = `changed` (pessimistic,
+      // pre-RFC default). The explicit "changed" value is preserved too:
+      // it lets advisories name the effective policy honestly.
+      if (consume.recheck_if !== undefined) basis.recheck_if = consume.recheck_if;
+      inputs.push(basis);
+    }
   }
   return sortedArtifactBases(inputs);
 }
@@ -763,6 +797,9 @@ function observedDependencyEdges(
       outgoing.push({
         to: consumer,
         artifact: input.artifact,
+        // Carry consumer recheck_if through the edge. Absent = `changed`
+        // (pessimistic; any producer change flows through).
+        recheck_if: input.recheck_if,
       });
       edges.set(input.producer, outgoing);
     }
@@ -778,16 +815,81 @@ function observedDependencyEdges(
 }
 
 /**
+ * Compute per-artifact change classification for each producer stage.
+ * Compares the receipt's OUTPUT basis with the currently-recomputed OUTPUT
+ * basis. Only outputs are considered — inputs feed the producer's OWN
+ * direct staleness, not what its consumers should filter on.
+ *
+ * `filesAddedOrRemoved` reports a structureHash movement (the file set /
+ * paths / kinds changed); `edited` reports a contentHash movement (any
+ * observed instance's bytes changed, appeared, or disappeared). A byte-
+ * identical re-execution moves neither, so consumers of a re-run producer
+ * are never flagged by change class alone — the trigger is a changed
+ * result, not a re-run.
+ */
+export function computeProducerOutputChanges(
+  before: ReadonlyMap<string, StageValidationBasis>,
+  after: ReadonlyMap<string, StageValidationBasis>,
+): ProducerOutputChanges {
+  const result: ProducerOutputChanges = new Map();
+  for (const [slug, previous] of before) {
+    const current = after.get(slug);
+    if (!current) continue;
+    const perArtifact = new Map<string, ProducerOutputChange>();
+    const prevByArtifact = new Map(
+      previous.outputs.map((item) => [item.artifact, item]),
+    );
+    const currByArtifact = new Map(
+      current.outputs.map((item) => [item.artifact, item]),
+    );
+    const keys = new Set([
+      ...prevByArtifact.keys(),
+      ...currByArtifact.keys(),
+    ]);
+    for (const key of keys) {
+      const p = prevByArtifact.get(key);
+      const c = currByArtifact.get(key);
+      perArtifact.set(key, {
+        filesAddedOrRemoved: p?.structureHash !== c?.structureHash,
+        edited: p?.contentHash !== c?.contentHash,
+      });
+    }
+    result.set(slug, perArtifact);
+  }
+  return result;
+}
+
+/**
  * Propagate stale roots through dependencies actually observed in schema-3
  * completion receipts. A declared-but-missing optional consume is not an edge.
  * requires_stage is not used because v2 does not yet distinguish semantic and
  * ordering-only requires edges.
+ *
+ * When producerOutputChanges is supplied AND an edge carries a `recheck_if`
+ * declaration, the edge only fires when the producer's actual change class
+ * matches the declared trigger:
+ *
+ *   - `edited`                → fire iff contentHash moved
+ *   - `files-added-or-removed`→ fire iff structureHash moved
+ *   - `changed` (explicit)    → fire on any change (top of lattice)
+ *   - omitted (undefined)     → fire on any change (== `changed`, pre-RFC default)
+ *
+ * Producer re-execution with byte-identical outputs moves neither hash and
+ * therefore never flags a consumer. The trigger is a changed result, not a
+ * re-run.
+ *
+ * Always-recheck classes are handled OUTSIDE this filter: own-output
+ * mutation, graph-contract change, and project-type change all mark the
+ * producing stage directly stale via diffStageValidationBasis; the filter
+ * only narrows how that stale flag propagates onward through observed
+ * consumer edges.
  */
 export function propagateStageInvalidation(
   stages: readonly StageValidityNode[],
   completedSlugs: ReadonlySet<string>,
   directReasons: ReadonlyMap<string, readonly string[]>,
   completionBases: ReadonlyMap<string, StageValidationBasis>,
+  producerOutputChanges?: ProducerOutputChanges,
 ): StageValidityIssue[] {
   const known = new Set(stages.map((stage) => stage.slug));
   const edges = observedDependencyEdges(completionBases);
@@ -825,6 +927,20 @@ export function propagateStageInvalidation(
 
     for (const edge of edges.get(current.slug) ?? []) {
       if (!known.has(edge.to)) continue;
+      // Typed-edge filter: only applies at DIRECT producer edges where we
+      // have concrete before/after output change info. Transitive hops
+      // (where current.slug is not itself in producerOutputChanges) remain
+      // pessimistic — a false-negative there is impossible because the
+      // producer at hop N is already marked stale by hop N-1's propagation.
+      if (edge.recheck_if && edge.recheck_if !== "changed" && producerOutputChanges) {
+        const changes = producerOutputChanges.get(current.slug)?.get(edge.artifact);
+        if (changes) {
+          const passes = edge.recheck_if === "edited"
+            ? changes.edited
+            : changes.filesAddedOrRemoved;
+          if (!passes) continue;
+        }
+      }
       const reason =
         `depends on stale stage "${current.slug}" via ` +
         `artifact:${edge.artifact}`;
@@ -974,6 +1090,9 @@ export function inspectStageValidity(
   const amended = new Map<string, { basis: StageValidationBasis; message: string }>();
   const warnings: string[] = [];
   const unavailable = new Set<string>();
+  // Collect current bases so we can classify per-artifact producer output
+  // changes for the typed-edge filter in propagateStageInvalidation.
+  const currentBases = new Map<string, StageValidationBasis>();
 
   for (const [slug, previous] of receipts.latestKnown) {
     const stage = stageBySlug.get(slug);
@@ -991,6 +1110,10 @@ export function inspectStageValidity(
       );
       continue;
     }
+    // POC (feat/typed-dependency-edges): record every recomputed basis,
+    // including stages the upstream content/definition gate below explains
+    // away, so computeProducerOutputChanges still has data for them.
+    currentBases.set(slug, current);
     // Content recorded over raw line endings reads as the same content now.
     const recorded = basisInCurrentForm(previous);
     const edited = changesExplainedBy(recorded, current, contentOnly);
@@ -1025,11 +1148,17 @@ export function inspectStageValidity(
     if (changes.length > 0) directReasons.set(slug, changes);
   }
 
+  const producerOutputChanges = computeProducerOutputChanges(
+    receipts.latestKnown,
+    currentBases,
+  );
+
   const issues = propagateStageInvalidation(
     stages,
     completedSlugs,
     directReasons,
     receipts.latestKnown,
+    producerOutputChanges,
   ).map((issue) => issue.direct && issue.reasons.every((reason) =>
     reason.startsWith("output:") && edits.get(issue.stage)?.has(reason))
     ? { ...issue, edited: true as const } : issue);

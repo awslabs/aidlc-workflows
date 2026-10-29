@@ -70,6 +70,10 @@ export interface StageFrontmatter {
     // because 2.8.0 to 2.11.0, which refresh a project with their own
     // validator, pass one there and refuse a new top-level key.
     cited?: boolean;
+    /** Past-tense fact about the input artifact that triggers recheck.
+     *  Omitted = `changed` (the pre-RFC pessimistic default).
+     *  See docs/rfcs/typed-dependency-edges.md. */
+    recheck_if?: "edited" | "files-added-or-removed" | "changed";
   }>;
   requires_stage: string[];
   sensors?: string[];
@@ -148,6 +152,10 @@ export const VALID_MODES = ["inline", "subagent", "pipeline", "mob", "agent-team
 export const ENSEMBLE_MODES = ["pipeline", "mob"] as const;
 
 export const VALID_CONDITIONAL_ON = ["brownfield", "greenfield"] as const;
+/** Values accepted by `consumes[].recheck_if`. Omission = `changed` (the
+ *  pre-RFC pessimistic default). Unknown values fail loudly at graph
+ *  compile — never fall back to the default. */
+export const VALID_RECHECK_IF = ["edited", "files-added-or-removed", "changed"] as const;
 
 // The conductor itself, named as a lead_agent on the bootstrap initialization
 // stages. It is a reserved pseudo-agent with no .claude/agents/*.md file by
@@ -686,6 +694,21 @@ export function validateStageFrontmatter(
 
         if ("cited" in e && e.cited !== undefined && typeof e.cited !== "boolean") {
           errors.push(`consumes[${i}].cited must be boolean, got ${describe(e.cited)}`);
+        }
+
+        // Unknown recheck_if values fail loudly per the typed-dependency-edges
+        // RFC: absence has a defined default (`changed`), invalid presence is
+        // never silently coerced.
+        if ("recheck_if" in e && e.recheck_if !== undefined) {
+          if (typeof e.recheck_if !== "string") {
+            errors.push(
+              `consumes[${i}].recheck_if must be string, got ${describe(e.recheck_if)}`
+            );
+          } else if (!(VALID_RECHECK_IF as readonly string[]).includes(e.recheck_if)) {
+            errors.push(
+              `consumes[${i}].recheck_if must be one of ${VALID_RECHECK_IF.join(" | ")}, got "${e.recheck_if}"`
+            );
+          }
         }
       });
     }
