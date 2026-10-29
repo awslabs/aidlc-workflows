@@ -745,7 +745,10 @@ the agent runs in the same turn.
 
 The gate's audit row keeps what the person said after the pin and the message it
 came in (`Person Reply`, `Message Id`) beside the agent's account, as a stage
-gate's row does.
+gate's row does. When a line of their own words typed in that chat before the
+pin has not been used by a decision, the row names the message after the pin and
+leaves the words in its record; with the human-presence guard off it keeps
+neither.
 
 ### `/aidlc unit land <unit>` — Land the pinned transaction
 
