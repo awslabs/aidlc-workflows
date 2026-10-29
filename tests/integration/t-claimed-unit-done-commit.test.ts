@@ -105,19 +105,23 @@ function runAdapter(dir: string, target: string, payload: unknown) {
   return spawn(dir, [process.execPath, join(dir, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), target], JSON.stringify(payload), {});
 }
 
+const SHELL = process.platform === "win32"
+  ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
+  : "/bin/bash";
+
 function runShell(dir: string, command: string) {
-  const shell = process.platform === "win32"
-    ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
-    : "/bin/bash";
-  return spawn(dir, [shell, "-c", command], undefined, {});
+  return spawn(dir, [SHELL, "-c", command], undefined, {});
 }
 
 function hookCall(dir: string, toolName: string, toolInput: Record<string, unknown>): Record<string, unknown> {
   return { hook_event_name: "PreToolUse", session_id: SESSION, cwd: dir, tool_name: toolName, tool_input: toolInput };
 }
 
+// The commands run in bash, so on Windows the call names that shell, as a
+// call made in Git Bash does (the Copilot adapter reads it as PowerShell
+// otherwise).
 function bashCall(dir: string, command: string): Record<string, unknown> {
-  return hookCall(dir, "Bash", { command });
+  return hookCall(dir, "Bash", { command, ...(process.platform === "win32" ? { shell: SHELL } : {}) });
 }
 
 // The guard's answer to one tool call: its refusal, or null when it passes.
