@@ -13518,17 +13518,25 @@ function approvalOverReview(
 // when no such request does: per Unit with a Unit DAG the Unit routes own the
 // review (team ownership without a DAG is an error the route states, which a
 // review step must not hide), and a class that resolves to none has no review.
+// With `finishedBuild`, a stage-level Code Generation build whose plan stands as
+// its finished build reads it (codeGenerationBuildFinishes) is read with the
+// class its review on record ran under, as its completion reads it, whatever
+// the review setting says now, so `next` hands over its finish.
 function stageLevelReviewClass(
   projectDir: string,
   node: GraphStage,
   scope: string,
   stateContent: string,
+  finishedBuild = false,
 ): ReviewClass | null {
   if (!node.reviewer) return null;
   if (
     isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent) &&
     (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent))
   ) return null;
+  if (finishedBuild && node.slug === "code-generation" && codeGenerationBuildFinishes(projectDir, null)) {
+    return reviewClassOnRecord(projectDir, stateContent, node, null);
+  }
   const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
   return reviewClass === "none" ? null : reviewClass;
 }
@@ -13547,7 +13555,7 @@ function stageReviewStep(
   stateContent: string | null,
 ): { text: string; endsTurn: boolean; finished: boolean } | null {
   if (stateContent === null || !node.reviewer || isReadOnlyEngineProbe()) return null;
-  const reviewClass = stageLevelReviewClass(projectDir, node, scope, stateContent);
+  const reviewClass = stageLevelReviewClass(projectDir, node, scope, stateContent, true);
   if (reviewClass === null) return null;
   const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
   const pending = review.stagePending;

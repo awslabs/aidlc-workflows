@@ -467,6 +467,9 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(state).not.toContain("**Review Override**");
     writeFileSync(stateFile, state.replace(/^(- \*\*Scope\*\*: .*)$/m, "$1\n- **Review Override**: none"), "utf-8");
     keepTestingPractice(proj);
+    const step = lastStep(runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate next").stdout);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message, JSON.stringify(step)).toContain("report --stage code-generation --result awaiting-approval");
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
