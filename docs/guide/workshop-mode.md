@@ -185,7 +185,10 @@ aidlc unit claim payments --team "Payments team"
 ```
 
 Exactly one concurrent claimant wins. The command stamps the checkout with
-space, intent, Unit, generation, nonce, and gate rhythm.
+space, intent, Unit, generation, nonce, and gate rhythm. A checkout whose own
+audit shard is already on main (the lead's own checkout, or a copy of it) keeps
+the Unit's evidence in a new shard of the claim's own, so it publishes and pins
+like a fresh clone.
 
 To hand the same attempt to a teammate on another machine, push the claim ref.
 The teammate fetches and checks out the exact local `claim/<intent-id8>/<unit>`
@@ -228,7 +231,10 @@ aidlc unit publish payments
 
 `publish` creates a candidate commit whose tree is the team's committed work and
 whose parents bind both the claim history and the implementation history. It
-CAS-updates the claim ref. Publication is not integration.
+CAS-updates the claim ref. Publication is not integration. The candidate carries
+the claim's audit shard with the rows pin accepts and every other audit shard as
+main has it; the rows left out stay in the checkout's own history, and publish
+says how many.
 
 ---
 
