@@ -1,4 +1,5 @@
-// covers: subcommand:aidlc-orchestrate:next, function:approvedComposerPlan, function:composedPlanChangeStep
+// covers: subcommand:aidlc-orchestrate:next, function:approvedComposerPlan, function:composedPlanChangeStep,
+// function:keptComposerPlans, function:unseenComposedPlanStep
 //
 // t-composed-plan-change-kept - a stage change typed with the creation of a
 // tailored plan, where the composer kept a different plan for that request,
@@ -10,6 +11,13 @@
 // both ways on, the composer for a change and the plan's own approval command
 // for an Approve, so an Approve retyped by hand still creates the plan
 // approved (#2923) and a change asked for reaches the composer.
+//
+// The plan the gate showed is the one the composer kept before the person's
+// reply. On Codex CLI the composer that offered a plan was gone by the Approve
+// turn, the agent ran a new one, and its different plan was created as the one
+// approved. A plan composed after the reply now creates nothing: `next` names
+// the plan the person saw and its approval, or, with none on record, has the
+// agent show the new plan once, and the person's next reply creates it.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -17,6 +25,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { scopeSettingsOf } from "../../core/tools/aidlc-graph.ts";
 import { loadScopeMapping, scopeGuardPolicyDefault } from "../../core/tools/aidlc-lib.ts";
+import { saveMessage } from "../../core/tools/aidlc-message-store.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -289,3 +298,186 @@ describe("a stage change typed at a composed plan's gate is never dropped unsaid
     expect(readdirSync(engineDir(proj))).toContain("composer-scores.json");
   });
 });
+
+// The person's own chat: the reply-since rule on (the fixture profile switches
+// it off), the hooks beating as they do on every message.
+function asPerson(proj: string): Record<string, string | undefined> {
+  const health = join(engineDir(proj), "hooks-health");
+  mkdirSync(health, { recursive: true });
+  writeFileSync(join(health, "record-human-turn.last"), `${wholeSeconds(new Date())}\n`);
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  delete env.AIDLC_UNATTENDED;
+  return env;
+}
+
+const wholeSeconds = (at: Date): string => at.toISOString().replace(/\.\d{3}Z$/, "Z");
+
+function nextAsPerson(proj: string, args: string[]): Printed {
+  const res = runOrchestrateNext(ORCH, proj, args, { cwd: proj, env: asPerson(proj) });
+  const raw = JSON.parse(res.out.split("\n").find((entry) => entry.trim().startsWith("{")) ?? "{}") as Record<string, unknown>;
+  return {
+    kind: String(raw.kind),
+    message: String(raw.message ?? raw.reason ?? ""),
+    ...(typeof raw.narration === "string" ? { narration: raw.narration } : {}),
+    raw,
+  };
+}
+
+/** The person's message, kept as the prompt hook keeps it (whole seconds). */
+function personSays(proj: string, words: string, at = new Date()): void {
+  saveMessage(proj, {
+    session: null, at: wholeSeconds(at), source: "prompt", text: words, picker: null, words, settings: [],
+    route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+}
+
+/** Moves the request's question, and the plan kept so far if any, a minute back,
+ *  and returns a time between them and now for the person's reply. */
+function before(proj: string, request: string): Date {
+  const earlier = new Date(Date.now() - 60_000).toISOString();
+  const question = join(proj, "aidlc", ".aidlc-sessions", "questions", `${request}.json`);
+  writeFileSync(question, JSON.stringify({ ...JSON.parse(readFileSync(question, "utf-8")), createdAt: earlier }));
+  keptAt(proj, earlier);
+  return new Date(Date.now() - 30_000);
+}
+
+/** Moves the plan kept last, if any, to `at`. */
+function keptAt(proj: string, at: string): void {
+  const recordPath = join(engineDir(proj), "composer-scores.json");
+  const record = JSON.parse(readFileSync(recordPath, "utf-8"));
+  if (record.plan) writeFileSync(recordPath, JSON.stringify({ ...record, plan: { ...record.plan, at } }));
+}
+
+/** A custom plan on bugfix's grid with `flips`, validated as the composer does. */
+function customPlan(proj: string, flips: Record<string, "EXECUTE" | "SKIP">): { base: string; changes: { skip: string[]; add: string[] } } {
+  const grid = { ...stockGrid("bugfix"), ...flips };
+  const echoed = validate(proj, { stages: grid, scopeSettings: bugfix().settings, guardPolicy: "off", depth: "minimal" }, ["--custom"]);
+  return { base: echoed.base_scope as string, changes: echoed.plan_changes as { skip: string[]; add: string[] } };
+}
+
+const SHOWN = { "deployment-pipeline": "SKIP", "deployment-execution": "SKIP" } as const;
+const RECOMPOSED = { [SKIPPED]: "SKIP", "deployment-execution": "SKIP" } as const;
+
+describe("Approve creates the plan the gate showed, even when the plan is composed again after the reply", () => {
+  test("the live shape: a composer run again after Approve keeps a different plan; creating it names the plan shown, whose approval creates it", () => {
+    const proj = installedProject();
+    const request = tailor(proj);
+    const shown = customPlan(proj, SHOWN);
+    personSays(proj, "Approve", before(proj, request));
+    const again = customPlan(proj, RECOMPOSED);
+    expect(again.base).toBe(shown.base);
+    expect(again.changes).not.toEqual(shown.changes);
+
+    const step = nextAsPerson(proj, ["--scope", again.base, ...lists(again.changes), "--plan-name", "cent-fix", "--request", request]);
+    expect(step.kind, step.message).toBe("print");
+    expect(step.message).not.toContain("intent create");
+    expect(step.message).toContain("worked out after the person's last message on record");
+    nothingCreated(proj);
+    const approval = commandIn(step, ` next --scope ${shown.base}`);
+    expect(approval).toContain(`${lists(shown.changes).join(" ")} --plan-name cent-fix --request ${request}`);
+
+    const created = nextAsPerson(proj, runNamedArgs(approval));
+    expect(commandIn(created, "intent create")).toContain(lists(shown.changes).join(" "));
+    create(proj, created);
+    const state = stateOf(proj);
+    expect(suffixOf(state, "deployment-pipeline")).toBe("SKIP");
+    expect(suffixOf(state, SKIPPED)).toBe("EXECUTE");
+  });
+
+  test("a plan composed again on another scope names the plan shown on its own scope", () => {
+    const proj = installedProject();
+    const request = tailor(proj);
+    const shown = customPlan(proj, SHOWN);
+    personSays(proj, "Approve", before(proj, request));
+    const feature = withEnvAndFreshCaches(POLICY_ENV, () => ({ settings: scopeSettingsOf("feature")!, policy: scopeGuardPolicyDefault("feature") }));
+    validate(proj, { stages: stockGrid("feature"), scopeSettings: feature.settings, guardPolicy: feature.policy }, ["--matched", "feature"]);
+
+    const step = nextAsPerson(proj, ["--scope", "feature", "--request", request]);
+    expect(step.message).not.toContain("intent create");
+    expect(step.message).toContain("worked out after the person's last message on record");
+    nothingCreated(proj);
+    const approval = commandIn(step, ` next --scope ${shown.base}`);
+    expect(commandIn(nextAsPerson(proj, runNamedArgs(approval)), "intent create")).toContain(lists(shown.changes).join(" "));
+  });
+
+  test("with no plan kept before the reply, the plan composed after it is shown once, and the next reply creates it", () => {
+    const proj = installedProject();
+    const request = tailor(proj);
+    personSays(proj, "Approve", before(proj, request));
+    const again = customPlan(proj, RECOMPOSED);
+    const command = ["--scope", again.base, ...lists(again.changes), "--request", request];
+
+    const step = nextAsPerson(proj, command);
+    expect(step.kind, step.message).toBe("print");
+    expect(step.message).not.toContain("intent create");
+    expect(step.message).toContain("If you worked it out again after their reply, first say: \"I no longer had the plan I showed you, so I worked it out again. Here it is; nothing is set up until you approve it.\"");
+    expect(step.message).toContain("end your turn: their next reply creates it");
+    nothingCreated(proj);
+
+    // Shown once: the person's next reply makes it the plan shown, and the same command creates it.
+    keptAt(proj, new Date(Date.now() - 20_000).toISOString());
+    personSays(proj, "Approve", new Date(Date.now() - 10_000));
+    const created = nextAsPerson(proj, command);
+    expect(commandIn(created, "intent create")).toContain(lists(again.changes).join(" "));
+
+    // A third plan worked out after that reply never loops back here: the step names the plan now shown.
+    const third = customPlan(proj, { [SKIPPED]: "SKIP" });
+    expect(third.changes).not.toEqual(again.changes);
+    const named = nextAsPerson(proj, ["--scope", third.base, ...lists(third.changes), "--request", request]);
+    expect(named.message).not.toContain("intent create");
+    const approval = commandIn(named, ` next --scope ${again.base}`);
+    expect(commandIn(nextAsPerson(proj, runNamedArgs(approval)), "intent create")).toContain(lists(again.changes).join(" "));
+  });
+
+  test("the same plan validated again, an edit shown again, and a run with no messages on record create at once", () => {
+    // The composer validates the shown plan again after the reply: it is still the plan shown.
+    const same = installedProject();
+    const sameRequest = tailor(same);
+    const shown = customPlan(same, SHOWN);
+    personSays(same, "Approve", before(same, sameRequest));
+    customPlan(same, SHOWN);
+    expect(commandIn(nextAsPerson(same, ["--scope", shown.base, ...lists(shown.changes), "--request", sameRequest]), "intent create"))
+      .toContain(lists(shown.changes).join(" "));
+
+    // An edit: the revised plan is shown, and the reply after it approves it.
+    const edited = installedProject();
+    const editRequest = tailor(edited);
+    customPlan(edited, SHOWN);
+    personSays(edited, "Edit the plan: skip the requirements step", before(edited, editRequest));
+    const revised = customPlan(edited, RECOMPOSED);
+    personSays(edited, "Approve");
+    expect(commandIn(nextAsPerson(edited, ["--scope", revised.base, ...lists(revised.changes), "--request", editRequest]), "intent create"))
+      .toContain(lists(revised.changes).join(" "));
+
+    // No message on record (a host whose prompt hook keeps none): the plan kept last, as before.
+    const unrecorded = installedProject();
+    const unrecordedRequest = tailor(unrecorded);
+    customPlan(unrecorded, SHOWN);
+    before(unrecorded, unrecordedRequest);
+    const last = customPlan(unrecorded, RECOMPOSED);
+    expect(commandIn(nextAsPerson(unrecorded, ["--scope", last.base, ...lists(last.changes), "--request", unrecordedRequest]), "intent create"))
+      .toContain(lists(last.changes).join(" "));
+  });
+
+  test("a report-only composition gets the step before its entry is spent", () => {
+    const proj = installedProject();
+    const dispatch = next(proj, ["compose", "--report", "scan.json"]);
+    const entry = /--request ([0-9a-f]{8})/.exec(dispatch.message)?.[1] as string;
+    const shown = customPlan(proj, SHOWN);
+    personSays(proj, "Approve", before(proj, entry));
+    const again = customPlan(proj, RECOMPOSED);
+    const step = nextAsPerson(proj, ["--scope", again.base, ...lists(again.changes), "--request", entry, "--", "fix the split rounding"]);
+    expect(step.message).not.toContain("intent create");
+    expect(step.message).toContain("worked out after the person's last message on record");
+    const approval = commandIn(step, ` next --scope ${shown.base}`);
+    expect(approval).toEndWith(`--request ${entry} -- <creationDescription>`);
+    const created = nextAsPerson(proj, [...runNamedArgs(approval.replace(" -- <creationDescription>", "")), "--", "fix the split rounding"]);
+    expect(commandIn(created, "intent create")).toContain(lists(shown.changes).join(" "));
+  });
+});
+
+/** The arguments of a `next` command a step named, as the agent would run them. */
+function runNamedArgs(command: string): string[] {
+  return command.split(" next ")[1].split(" ").filter(Boolean);
+}

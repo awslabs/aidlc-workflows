@@ -580,6 +580,8 @@ import {
   approvedComposerPlan,
   type Consume,
   type GraphStage,
+  keptComposerPlans,
+  type KeptComposerPlan,
   loadGraph,
   memoryDirFor,
   openComposerScores,
@@ -6696,26 +6698,99 @@ function composedPlanChangeStep(
 ): PrintDirective | null {
   const typed = flags.planChanges;
   if (!typed || flags.storedPlanChanges || !flags.request) return null;
-  const same = (a: readonly string[], b: readonly string[]): boolean =>
-    new Set(a).size === new Set(b).size && a.every((slug) => b.includes(slug));
-  if (same(typed.skip, kept.skip) && same(typed.add, kept.add)) return null;
-  const listed = (changes: PlanChanges): string =>
-    [
-      ...(changes.skip.length > 0 ? [`skip ${changes.skip.join(", ")}`] : []),
-      ...(changes.add.length > 0 ? [`add ${changes.add.join(", ")}`] : []),
-    ].join("; ") || "no stage changes";
-  const carried = carriedRoutingFlags({ ...flags, planChanges: kept });
-  const approval = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(scope)}` +
-    `${flags.newIntent ? " --new-intent" : ""}${carried.newWork}${carried.planChanges} --request ${flags.request}` +
-    (described ? " -- <creationDescription>" : "");
+  if (sameStageChanges(typed, kept)) return null;
+  const approval = composedApprovalCommand(flags, scope, kept, described);
   return printDirective(
-    `Nothing is created yet: the stage changes typed here (${listed(typed)}) are not those of the plan the composer ` +
-      `proposed for this request, which its gate showed (${scope} with ${listed(kept)}). Read the person's reply at the ` +
-      "gate. If they asked for these changes, they edited the plan: dispatch the composer again to apply them, as " +
-      "composer.md says for an edit, and show them the revised plan; its approval creates it. If they approved the plan " +
+    `Nothing is created yet: the stage changes typed here (${stageChangesListed(typed)}) are not those of the plan ` +
+      `the composer proposed for this request, which its gate showed (${scope} with ${stageChangesListed(kept)}). ` +
+      "Read the person's reply at the gate. If they asked for these changes, they edited the plan: dispatch the " +
+      "composer again to apply them, as composer.md says for an edit, and show them the revised plan; its approval " +
+      "creates it. If they approved the plan " +
       `as shown, run \`${approval}\`${described ? ", with the same creationDescription as one shell-safe argument," : ""} ` +
       "and follow what it returns: it creates that plan.",
   );
+}
+
+// A plan kept after the person's last message on record, typed into its
+// creation: a composer run again on the Approve turn (the one that offered the
+// plan is gone between `codex exec` turns) or in a new chat. Nothing is created
+// from it, as nothing says they saw it. The step names the approval of the
+// plan kept before that message, for the agent that showed that plan and read
+// an approval; otherwise the agent shows this plan with its gate, and the next
+// reply makes it the plan shown, so the same creation runs. Null when the plan
+// typed is the one shown, is not the one kept after the message, or the record
+// is other work's (keptComposerPlans).
+function unseenComposedPlanStep(
+  flags: ParsedFlags,
+  scope: string,
+  projectDir: string,
+  requests: readonly string[],
+  described = false,
+): PrintDirective | null {
+  if (!flags.request) return null;
+  const kept = keptComposerPlans(projectDir, requests, composerPlanSeen(projectDir));
+  const typed = flags.planChanges ?? { skip: [], add: [] };
+  const isTyped = (plan: KeptComposerPlan): boolean => plan.scope === scope && sameStageChanges(typed, plan.changes);
+  if (!kept?.unseen || !isTyped(kept.unseen) || (kept.shown !== null && isTyped(kept.shown))) return null;
+  const typedPlan = `${scope} with ${stageChangesListed(typed)}`;
+  if (kept.shown === null) {
+    return printDirective(
+      `Nothing is created yet: this plan (${typedPlan}) was worked out after the person's last message on record, and ` +
+        "no plan kept before that message is on record. If you worked it out again after their reply, first say: " +
+        `"${PLAN_WORKED_OUT_AGAIN}" Then show this plan as composer.md shows an offer, with its gate as numbered ` +
+        "prose, and end your turn: their next reply creates it.",
+    );
+  }
+  const approval = composedApprovalCommand(flags, kept.shown.scope, kept.shown.changes, described);
+  return printDirective(
+    `Nothing is created yet: the plan typed here (${typedPlan}) was worked out after the person's last message on ` +
+      `record, and the plan kept before that message is ${kept.shown.scope} with ${stageChangesListed(kept.shown.changes)}. ` +
+      "If that is the plan you showed them and their reply approved it, run " +
+      `\`${approval}\`${described ? ", with the same creationDescription as one shell-safe argument," : ""} and follow ` +
+      "what it returns: it creates the plan they approved. Otherwise (they asked for a change, or you showed them this " +
+      "plan), show them this plan as composer.md shows an offer, with its gate as numbered prose, and end your turn: " +
+      "their next reply creates it.",
+  );
+}
+
+const PLAN_WORKED_OUT_AGAIN =
+  "I no longer had the plan I showed you, so I worked it out again. Here it is; nothing is set up until you approve it.";
+
+const sameStageChanges = (a: PlanChanges, b: PlanChanges): boolean => {
+  const same = (x: readonly string[], y: readonly string[]): boolean =>
+    new Set(x).size === new Set(y).size && x.every((slug) => y.includes(slug));
+  return same(a.skip, b.skip) && same(a.add, b.add);
+};
+
+const stageChangesListed = (changes: PlanChanges): string =>
+  [
+    ...(changes.skip.length > 0 ? [`skip ${changes.skip.join(", ")}`] : []),
+    ...(changes.add.length > 0 ? [`add ${changes.add.join(", ")}`] : []),
+  ].join("; ") || "no stage changes";
+
+// The command that creates a composed plan as its gate showed it: its scope and
+// lists, the flags typed with this creation, the same request.
+function composedApprovalCommand(flags: ParsedFlags, scope: string, changes: PlanChanges, described: boolean): string {
+  const carried = carriedRoutingFlags({ ...flags, planChanges: changes });
+  return `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(scope)}` +
+    `${flags.newIntent ? " --new-intent" : ""}${carried.newWork}${carried.planChanges} --request ${flags.request}` +
+    (described ? " -- <creationDescription>" : "");
+}
+
+// Whether the person has said something since `since`: the reply-since-shown
+// rule (noReplySince), which a person at their own terminal and a switched-off
+// presence check pass.
+function personRepliedSince(projectDir: string, since: string): boolean {
+  return humanPresenceGuardDisabled() || commandAtPersonsTerminal() || !noReplySince(projectDir, engineSessionId ?? null, since);
+}
+
+// Whether the person replied after a composed plan was kept at `at`. With no
+// reply of theirs on record at all (a host whose prompt hook keeps none, a
+// prompt it skipped) nothing places a plan before or after one, so every plan
+// counts as seen and the plan kept last stands, as before plans had times.
+function composerPlanSeen(projectDir: string): (at: string) => boolean {
+  if (!personRepliedSince(projectDir, new Date(0).toISOString())) return () => true;
+  return (at) => personRepliedSince(projectDir, at);
 }
 
 function createPrintDirective(
@@ -6754,8 +6829,11 @@ function createPrintDirective(
   // folder otherwise, so creation counts and runs the stages the gate showed.
   const asked = flags.request ? readQuestion(projectDir, flags.request) : null;
   const composedFrom = asked?.composedFrom;
+  const requests = flags.request ? [flags.request, ...(composedFrom ? [composedFrom] : [])] : [];
+  const unseen = unseenComposedPlanStep(flags, scope, projectDir, requests);
+  if (unseen) return unseen;
   const approved = flags.request
-    ? approvedComposerPlan(projectDir, [flags.request, ...(composedFrom ? [composedFrom] : [])], scope)
+    ? approvedComposerPlan(projectDir, requests, scope, composerPlanSeen(projectDir))
     : null;
   if (approved) {
     const step = composedPlanChangeStep(flags, scope, approved.changes);
@@ -10441,8 +10519,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // A list that is not the plan kept for this entry gets its step while the
     // entry is still there for the approval it names.
     const composedScope = flags.scope ?? flags.positionalScope;
-    const kept = composedScope ? approvedComposerPlan(questionDir, [composition.id], composedScope) : null;
-    const step = kept && composedScope ? composedPlanChangeStep(flags, composedScope, kept.changes, true) : null;
+    const kept = composedScope
+      ? approvedComposerPlan(questionDir, [composition.id], composedScope, composerPlanSeen(questionDir))
+      : null;
+    const step = composedScope
+      ? unseenComposedPlanStep(flags, composedScope, questionDir, [composition.id], true) ??
+        (kept ? composedPlanChangeStep(flags, composedScope, kept.changes, true) : null)
+      : null;
     if (step) {
       emit(step);
       return;
@@ -10497,8 +10580,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // their reply after it was shown.
     if (
       found.origin === "front" && (flags.scope || flags.positionalScope || flags.compose) &&
-      !humanPresenceGuardDisabled() && !commandAtPersonsTerminal() &&
-      noReplySince(questionDir, engineSessionId ?? null, found.createdAt)
+      !personRepliedSince(questionDir, found.createdAt)
     ) {
       emit(printDirective(
         "Nothing was started: the person has not answered the plan question yet, and the plan is theirs to pick. " +
