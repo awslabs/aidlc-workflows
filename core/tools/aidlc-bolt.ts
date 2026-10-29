@@ -1106,10 +1106,11 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
 //                                  --reason <enum> --defaults <text>
 //
 // Wires the three MERGE_DISPATCH_* events by emitting via `emitAudit` per
-// event variant. The conductor's Unit merge-back (per
-// stage-protocol-construction.md) brackets each aidlc-pipeline-deploy-agent
-// dispatch: pre-call INVOKED, post-call RETURNED on successful parse,
-// FALLBACK on timeout/malformed-YAML.
+// event variant. The conductor brackets each aidlc-pipeline-deploy-agent
+// merge-strategy dispatch: pre-call INVOKED, post-call RETURNED on successful
+// parse, FALLBACK on timeout/malformed-YAML. A pinned Unit's merge gate reads
+// none of them: its strategy and target are the pin's (aidlc-unit.ts
+// pinnedMergeGate).
 //
 // Emit-only contract: no state mutation, no spawn. Pure audit emission so
 // doctor can reconcile orphan INVOKED rows (slug + timestamp window).

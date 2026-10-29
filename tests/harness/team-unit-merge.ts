@@ -842,69 +842,13 @@ export function completeUnitOnMain(projectDir: string, unit: string): void {
   );
 }
 
-export function dispatchMerge(
-  main: string,
-  unit: string,
-  pinnedOid: string,
-  generation = 1,
-): void {
-  const pinId = readUnitMergeTransaction(main, unit)?.pin_id;
-  expect(pinId).toBeTruthy();
-  const invoked = runMergeTool(
-    BOLT,
-    [
-      "dispatch-event",
-      "--event",
-      "MERGE_DISPATCH_INVOKED",
-      "--slug",
-      unit,
-      "--pinned-oid",
-      pinnedOid,
-      "--attempt-generation",
-      String(generation),
-      "--pin-id",
-      pinId!,
-      "--practices-excerpt",
-      "trunk-based integration on main",
-    ],
-    main,
-  );
-  expect(invoked.status, invoked.out).toBe(0);
-  const returned = runMergeTool(
-    BOLT,
-    [
-      "dispatch-event",
-      "--event",
-      "MERGE_DISPATCH_RETURNED",
-      "--slug",
-      unit,
-      "--pinned-oid",
-      pinnedOid,
-      "--attempt-generation",
-      String(generation),
-      "--pin-id",
-      pinId!,
-      "--strategy",
-      "merge",
-      "--target",
-      "main",
-      "--confidence",
-      "1",
-      "--notes",
-      `merge pinned candidate ${pinnedOid}`,
-    ],
-    main,
-  );
-  expect(returned.status, returned.out).toBe(0);
-}
-
 export function appendMainHumanTurn(projectDir: string): void {
   const shard = join(seededAuditDir(projectDir), auditShardName(projectDir));
   let existing = "";
   try {
     existing = readFileSync(shard, "utf-8");
   } catch {
-    // The dispatch bracket normally creates the main shard first.
+    // A main that has recorded nothing yet has no shard.
   }
   writeFileSync(
     shard,
@@ -935,9 +879,7 @@ export function approveMerge(
 ): { pinnedOid: string; stateBeforeGit: string } {
   const pin = runMergeTool(UNIT, ["pin", unit], main);
   expect(pin.status, pin.out).toBe(0);
-  const pinPayload = JSON.parse(pin.stdout);
-  const pinnedOid = pinPayload.pinned_oid as string;
-  dispatchMerge(main, unit, pinnedOid, pinPayload.generation);
+  const pinnedOid = JSON.parse(pin.stdout).pinned_oid as string;
   const gate = runMergeTool(
     UNIT,
     [

@@ -23,8 +23,7 @@ import {
   parallelDependencyBody,
   makeSeed,
   prepareCandidate,
-  dispatchMerge,
-  appendMainHumanTurn,
+  replyAfterPin,
   pushUnprojectedCandidate,
 } from "../harness/team-unit-merge.ts";
 
@@ -301,13 +300,6 @@ describe("t326 pinned team Unit merge", () => {
     );
     const initialPin = runMergeTool(UNIT, ["pin", "alpha"], landFixture.seed);
     expect(initialPin.status, initialPin.out).toBe(0);
-    const initial = JSON.parse(initialPin.stdout);
-    dispatchMerge(
-      landFixture.seed,
-      "alpha",
-      initial.pinned_oid,
-      initial.generation,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -400,12 +392,6 @@ describe("t326 pinned team Unit merge", () => {
     const pin = runMergeTool(UNIT, ["pin", "alpha"], fixture.seed);
     expect(pin.status, pin.out).toBe(0);
     const pinPayload = JSON.parse(pin.stdout);
-    dispatchMerge(
-      fixture.seed,
-      "alpha",
-      pinPayload.pinned_oid,
-      pinPayload.generation,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -455,13 +441,6 @@ describe("t326 pinned team Unit merge", () => {
     prepareCandidate(fixture.remote, "alpha", "dirty-metadata-team");
     const pin = runMergeTool(UNIT, ["pin", "alpha"], fixture.seed);
     expect(pin.status, pin.out).toBe(0);
-    const payload = JSON.parse(pin.stdout);
-    dispatchMerge(
-      fixture.seed,
-      "alpha",
-      payload.pinned_oid,
-      payload.generation,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -508,11 +487,6 @@ describe("t326 pinned team Unit merge", () => {
     );
     const conflictPin = runMergeTool(UNIT, ["pin", "alpha"], conflict.seed);
     expect(conflictPin.status, conflictPin.out).toBe(0);
-    dispatchMerge(
-      conflict.seed,
-      "alpha",
-      JSON.parse(conflictPin.stdout).pinned_oid,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -562,13 +536,6 @@ describe("t326 pinned team Unit merge", () => {
     prepareCandidate(heldAtLand.remote, "alpha", "late-held-team");
     const latePin = runMergeTool(UNIT, ["pin", "alpha"], heldAtLand.seed);
     expect(latePin.status, latePin.out).toBe(0);
-    const latePayload = JSON.parse(latePin.stdout);
-    dispatchMerge(
-      heldAtLand.seed,
-      "alpha",
-      latePayload.pinned_oid,
-      latePayload.generation,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -590,7 +557,6 @@ describe("t326 pinned team Unit merge", () => {
     prepareCandidate(remote, "alpha", "journal-team");
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
-    const pinnedOid = JSON.parse(pin.stdout).pinned_oid;
     const journalPath = unitMergeTransactionPath(seed, "alpha");
     const forged = JSON.parse(readFileSync(journalPath, "utf-8"));
     const ownerForged = {
@@ -621,7 +587,6 @@ describe("t326 pinned team Unit merge", () => {
     expect(bypass.status).not.toBe(0);
     expect(bypass.out).toContain("approved merge-gate receipt");
 
-    dispatchMerge(seed, "alpha", pinnedOid);
     expect(
       runMergeTool(
         UNIT,
@@ -654,7 +619,6 @@ describe("t326 pinned team Unit merge", () => {
     prepareCandidate(remote, "alpha", "human-team");
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
-    dispatchMerge(seed, "alpha", JSON.parse(pin.stdout).pinned_oid);
     const cancelled = runMergeTool(
       UNIT,
       ["gate", "alpha", "--decision", "approve", "--user-input", "Cancelled"],
@@ -673,7 +637,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(noHuman.status).not.toBe(0);
     expect(noHuman.out).toContain("typed human turn");
-    appendMainHumanTurn(seed);
+    replyAfterPin(seed, "alpha");
     const approved = runMergeTool(
       UNIT,
       [

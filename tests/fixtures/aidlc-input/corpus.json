@@ -16016,7 +16016,7 @@
     "state": "work-open",
     "meaning": "the person means: decide the pinned merge of the Unit u1-login (the documented unit command)",
     "source": "docs/guide/12-cli-commands.md:625",
-    "documented": "Section heading \"Decide the pinned merge\": \"Accepted decisions are `approve` and `reject`\"; needs \"a fresh `MERGE_DISPATCH_INVOKED` plus terminal dispatch result after the pin and a typed human turn\"",
+    "documented": "Section heading \"Decide the pinned merge\": \"Accepted decisions are `approve` and `reject`\"; records \"the person's answer when a typed human turn follows the pin\"",
     "expected": {
       "engine": {
         "kinds": [

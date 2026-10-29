@@ -319,12 +319,11 @@ online stale attempt, and warn once plus proceed from the stamp when offline.
 
 **Pinned Unit merge-back.** When the scoped Unit is complete, commit its tracked
 work and run `aidlc unit publish <unit>`; publication CAS-updates the claim ref
-but does not integrate it. On unscoped main, run `aidlc unit pin <unit>` and
-bracket the existing pipeline-deploy strategy lookup with
-`MERGE_DISPATCH_INVOKED` / `MERGE_DISPATCH_RETURNED` (or `_FALLBACK`), then
-present the returned pinned OID + evidence summary as one merge gate. Record the
-exact human answer with `aidlc unit gate <unit> --decision <approve|reject>
---user-input '<text>'`. On approval, `aidlc unit land <unit> --target <branch>`
+but does not integrate it. On unscoped main, run `aidlc unit pin <unit>`, then
+in the same turn present the returned pinned OID + evidence summary as one merge
+gate, as its `merge_gate` says. Record the human answer with the command it
+names for their choice (`aidlc unit gate <unit> --decision <approve|reject>
+--user-input '<text>'`). On approval, `aidlc unit land <unit> --target <branch>`
 owns the transaction: pinned git content first with main-owned metadata retained,
 then one Unit-row fold under the intent lock, then audit/finalization. A moved
 claim ref requires re-pin, and an unavailable registry makes gate/land fail
@@ -334,23 +333,20 @@ the merge and continue explicitly with `aidlc unit land <unit>
 claim is never accepted. Source conflicts abort before state folding. For
 crash recovery the same command accepts `--step git|state|audit`; each step is
 idempotent and `aidlc unit merge-status <unit>` reports the local journal.
-The dispatch bracket must be newer than the pin and followed by a typed human
-turn. This transaction deliberately requires strategy `merge` so the reviewed
-pinned OID remains a direct parent; a returned squash/rebase decision is refused.
+The answer counts when a typed human turn follows the pin. The transaction
+lands with strategy `merge` into the pin's integration branch, so the reviewed
+pinned OID remains a direct parent; that is not a choice for the person, and the
+team's merge default holds for every other merge.
 The candidate may transport one claim-bound new audit shard containing that
 team's own attempt-keyed lifecycle, team-gate, and reviewer receipts. These are
 team assertions rechecked against artifacts/fingerprints and judged at the main
 merge gate. `HUMAN_TURN`, `MERGE_DISPATCH_*`, `UNIT_MERGED`, unit-merge gates,
 foreign Unit receipts, sibling Unit record paths, and additional shards are
 never transportable.
-Pass `--pinned-oid <pin output OID> --attempt-generation <pin output generation>
---pin-id <pin output pin_id>` to every `aidlc bolt dispatch-event` call in this
-bracket; the gate ignores unbound or older dispatch rows, including a bracket
-from an earlier pin of the same candidate. Dispatch and merge-gate rows are
-accepted only from the unscoped main checkout's audit shard and must match that
-exact OID, generation, and pin transaction; the subsequent main-shard
-`HUMAN_TURN` is the chronological human-presence proof and intentionally carries
-no transaction fields.
+Merge-gate rows are accepted only from the unscoped main checkout's audit shard
+and must match that exact OID and generation; the main-shard `HUMAN_TURN` after
+the pin is the chronological human-presence proof and intentionally carries no
+transaction fields.
 
 Each construction stage file (3.1–3.4) documents its execution modes (QUESTION-ONLY, ARTIFACT-ONLY, Full) and the step split points. See the individual stage files for details.
 

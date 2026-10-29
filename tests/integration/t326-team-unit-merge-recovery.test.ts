@@ -24,8 +24,8 @@ import {
   auditBlock,
   prepareCandidate,
   completeUnitOnMain,
-  dispatchMerge,
   appendMainHumanTurn,
+  replyAfterPin,
   gateAndLand,
   nextDirective,
   unitProgressRow,
@@ -50,21 +50,8 @@ describe("t326 pinned team Unit merge", () => {
     const betaPin = runMergeTool(UNIT, ["pin", "beta"], fixture.seed);
     expect(alphaPin.status, alphaPin.out).toBe(0);
     expect(betaPin.status, betaPin.out).toBe(0);
-    const alphaPayload = JSON.parse(alphaPin.stdout);
-    const betaPayload = JSON.parse(betaPin.stdout);
-    dispatchMerge(
-      fixture.seed,
-      "alpha",
-      alphaPayload.pinned_oid,
-      alphaPayload.generation,
-    );
-    dispatchMerge(
-      fixture.seed,
-      "beta",
-      betaPayload.pinned_oid,
-      betaPayload.generation,
-    );
-    appendMainHumanTurn(fixture.seed);
+    // One reply after both pins.
+    replyAfterPin(fixture.seed, "beta");
     expect(
       runMergeTool(
         UNIT,
@@ -89,7 +76,6 @@ describe("t326 pinned team Unit merge", () => {
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
     const pinPayload = JSON.parse(pin.stdout);
-    dispatchMerge(seed, "alpha", pinPayload.pinned_oid);
     expect(
       runMergeTool(
         UNIT,
@@ -177,12 +163,6 @@ describe("t326 pinned team Unit merge", () => {
     );
     const successorPin = runMergeTool(UNIT, ["pin", "alpha"], successor.seed);
     expect(successorPin.status, successorPin.out).toBe(0);
-    const successorPayload = JSON.parse(successorPin.stdout);
-    dispatchMerge(
-      successor.seed,
-      "alpha",
-      successorPayload.pinned_oid,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -227,11 +207,6 @@ describe("t326 pinned team Unit merge", () => {
     );
     const finalizedPin = runMergeTool(UNIT, ["pin", "alpha"], finalized.seed);
     expect(finalizedPin.status, finalizedPin.out).toBe(0);
-    dispatchMerge(
-      finalized.seed,
-      "alpha",
-      JSON.parse(finalizedPin.stdout).pinned_oid,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -261,13 +236,6 @@ describe("t326 pinned team Unit merge", () => {
     prepareCandidate(fixture.remote, "alpha", "skip-drift-team");
     const pin = runMergeTool(UNIT, ["pin", "alpha"], fixture.seed);
     expect(pin.status, pin.out).toBe(0);
-    const pinPayload = JSON.parse(pin.stdout);
-    dispatchMerge(
-      fixture.seed,
-      "alpha",
-      pinPayload.pinned_oid,
-      pinPayload.generation,
-    );
     expect(
       runMergeTool(
         UNIT,
@@ -476,7 +444,6 @@ describe("t326 pinned team Unit merge", () => {
     prepareCandidate(remote, "alpha", "offline-team");
     const offlinePin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(offlinePin.status, offlinePin.out).toBe(0);
-    dispatchMerge(seed, "alpha", JSON.parse(offlinePin.stdout).pinned_oid);
     git(seed, [
       "remote",
       "set-url",

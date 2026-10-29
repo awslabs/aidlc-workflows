@@ -271,19 +271,16 @@ cannot prove the pin was not tombstoned.
 
 ### 2. Present the merge gate
 
-Before the gate, the harness follows the existing merge-dispatch seam: it emits
-`MERGE_DISPATCH_INVOKED`, asks the pipeline-deploy agent to resolve the affirmed
-target/strategy from the active practices, then emits
-`MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK`. The pinned OID and Unit
-attempt generation and pin transaction ID are passed to every dispatch-event
-call through `--pinned-oid`, `--attempt-generation`, and `--pin-id`; the gate
-ignores unbound or older rows, including a bracket from an earlier pin of the
-same candidate. The gate is not presented until that bracket is complete. Pinned Unit
-landing requires strategy `merge` so the reviewed OID is a direct parent; a
-squash/rebase result is refused and must be reconciled before the gate.
+Pin's output carries the merge gate (`merge_gate`): the question, its strategy
+and target, and the command that records each answer. The agent asks it in the
+pin's own turn, once. A pinned Unit lands with a regular merge (strategy
+`merge`) into the integration branch pin fetched, so the reviewed OID is a
+direct parent; that is not put to the person as a choice, and the team's merge
+default (squash in the shipped `org.md`) holds for every other merge. The
+person's reply after the pin is the answer the gate records.
 
 The integration lead presents the evidence summary and pinned OID to the human,
-then records the exact answer:
+then records their answer:
 
 ```bash
 aidlc unit gate payments \

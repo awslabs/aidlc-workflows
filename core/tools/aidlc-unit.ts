@@ -85,7 +85,12 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
-import { aidlcEngineCommand, isCompiledExecutable } from "./aidlc-runtime-paths.ts";
+import {
+  aidlcEngineCommand,
+  aidlcInvocation,
+  isCompiledExecutable,
+  quoteCommandArgument,
+} from "./aidlc-runtime-paths.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -2083,75 +2088,61 @@ function assertTransactionIdentity(
   }
 }
 
-function requireMergeDispatchDecision(
-  projectDir: string,
+// A pinned Unit lands with a regular merge, so the reviewed pinned OID stays a
+// direct parent, into the integration branch pin fetched (fetchIntegration,
+// which reads the team's Way of Working). Neither is a lookup's or the
+// person's to choose: the team's own default (squash) holds for every other
+// merge. Pin prints these terms with the gate's question; the gate records them.
+function pinnedMergeGate(
   transaction: UnitMergeTransaction,
 ): { strategy: "merge"; target: string } {
+  return { strategy: "merge", target: transaction.integration_branch };
+}
+
+// The merge gate as pin hands it to the agent: one question for the person,
+// asked in the pin's own turn, and the command that records each answer.
+function pinMergeGateStep(transaction: UnitMergeTransaction): Record<string, string> {
+  const terms = pinnedMergeGate(transaction);
+  const record = (decision: "approve" | "reject") =>
+    `${aidlcInvocation()} unit gate ${quoteCommandArgument(transaction.unit)} --decision ${decision} --user-input '<their reply>'`;
+  return {
+    strategy: terms.strategy,
+    target_branch: terms.target,
+    ask:
+      `Ask the person now, as one question, whether to merge Unit "${transaction.unit}" into ${terms.target}` +
+      " (Approve or Reject), with the pinned commit and the files outside the Unit's folder above, then end your" +
+      " turn. Record their reply with the command for their choice.",
+    approve: record("approve"),
+    reject: record("reject"),
+  };
+}
+
+// The person's reply to the gate the pin showed: a typed turn in main's own
+// shard stamped after the pin, so the turn that ran the pin is not it, and
+// after the last gate decision, which spent the turns before it.
+function requireReplyAfterPin(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+): void {
+  if (humanPresenceGuardDisabled()) return;
   const all = mainAuthorityAuditRows(projectDir);
-  if (!transaction.pin_id) {
-    fail(`Unit "${transaction.unit}" merge transaction has no pin identity; pin it again.`);
-  }
-  const relevant = all.filter(
+  const previousGateIndex = all.findLastIndex(
     (row) =>
-      (
-        row.event === "MERGE_DISPATCH_INVOKED" ||
-        row.event === "MERGE_DISPATCH_RETURNED" ||
-        row.event === "MERGE_DISPATCH_FALLBACK"
-      ) &&
-      auditBlockField(row.block, "Bolt slug") === transaction.unit &&
-      auditBlockField(row.block, "Pinned OID") === transaction.pinned_oid &&
-      auditBlockField(row.block, "Attempt Generation") ===
-        String(transaction.generation) &&
-      auditBlockField(row.block, "Pin Transaction") === transaction.pin_id,
+      (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
+      auditBlockField(row.block, "Stage") !== null,
   );
-  const invokedIndex = relevant.findLastIndex(
-    (row) => row.event === "MERGE_DISPATCH_INVOKED",
-  );
-  if (invokedIndex < 0) {
-    fail(`Unit "${transaction.unit}" merge gate requires MERGE_DISPATCH_INVOKED after pinning.`);
-  }
-  const terminal = relevant
-    .slice(invokedIndex + 1)
-    .findLast(
-      (row) =>
-        row.event === "MERGE_DISPATCH_RETURNED" ||
-        row.event === "MERGE_DISPATCH_FALLBACK",
-    );
-  if (!terminal) {
-    fail(`Unit "${transaction.unit}" merge dispatch has no terminal result.`);
-  }
-  if (!humanPresenceGuardDisabled()) {
-    const terminalIndex = all.indexOf(terminal);
-    const previousGate = [...all]
-      .reverse()
-      .find(
+  if (
+    !all
+      .slice(previousGateIndex + 1)
+      .some(
         (row) =>
-          (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
-          auditBlockField(row.block, "Stage") !== null,
-      );
-    const previousGateIndex = previousGate ? all.indexOf(previousGate) : -1;
-    const humanFloor = Math.max(terminalIndex, previousGateIndex);
-    if (
-      terminalIndex < 0 ||
-      !all.slice(humanFloor + 1).some((row) => row.event === "HUMAN_TURN")
-    ) {
-      fail(
-        `Unit "${transaction.unit}" merge gate requires a typed human turn after merge dispatch.`,
-      );
-    }
-  }
-  if (terminal.event === "MERGE_DISPATCH_FALLBACK") {
-    return { strategy: "merge", target: transaction.integration_branch };
-  }
-  const strategy = auditBlockField(terminal.block, "Strategy");
-  const target = auditBlockField(terminal.block, "Target branch");
-  if (strategy !== "merge") {
+          row.event === "HUMAN_TURN" && row.timestamp > transaction.pinned_at,
+      )
+  ) {
     fail(
-      `Unit "${transaction.unit}" pinned transaction requires merge strategy; dispatch returned "${strategy ?? "missing"}".`,
+      `Unit "${transaction.unit}" merge gate requires a typed human turn after the pin.`,
     );
   }
-  if (!target) fail(`Unit "${transaction.unit}" merge dispatch omitted its target branch.`);
-  return { strategy: "merge", target };
 }
 
 function mergeGateRecord(
@@ -2260,7 +2251,7 @@ function pinUnit(args: string[], projectDir?: string): void {
     generation: claim.generation,
     evidence,
     gate_required: true,
-    merge_dispatch_required: true,
+    merge_gate: pinMergeGateStep(transaction),
     ...(superseded
       ? { superseded: { pinned_oid: superseded.pinned_oid, status: superseded.status } }
       : {}),
@@ -2352,7 +2343,8 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     }));
     return;
   }
-  const dispatch = requireMergeDispatchDecision(pd, transaction);
+  requireReplyAfterPin(pd, transaction);
+  const terms = pinnedMergeGate(transaction);
   appendAuditEntry(
     decision === "approve" ? "GATE_APPROVED" : "GATE_REJECTED",
     {
@@ -2361,8 +2353,8 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       "Pinned OID": transaction.pinned_oid,
       "Attempt Generation": String(transaction.generation),
       "Gate Scope": "unit-merge",
-      Strategy: dispatch.strategy,
-      "Target branch": dispatch.target,
+      Strategy: terms.strategy,
+      "Target branch": terms.target,
       "Outside the unit record tree":
         transaction.evidence.outside_unit_record_paths.join(", ") || "none",
       ...(decision === "approve"
@@ -2376,8 +2368,8 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     status: decision === "approve" ? "approved" : "rejected",
     decision,
     user_input: userInput,
-    target_branch: dispatch.target,
-    strategy: dispatch.strategy,
+    target_branch: terms.target,
+    strategy: terms.strategy,
   });
   console.log(JSON.stringify({
     gated: true,
