@@ -29569,6 +29569,8 @@ export interface UnitClaimRegistryCache {
 export interface UnitMergeEvidence {
   stages_expected: string[];
   stages_completed: string[];
+  /** The stages the Unit skipped in its attempt, each with its recorded reason. */
+  stages_skipped?: Array<{ stage: string; reason: string }>;
   gates_expected: string[];
   gates_approved: string[];
   reviewers_expected: string[];

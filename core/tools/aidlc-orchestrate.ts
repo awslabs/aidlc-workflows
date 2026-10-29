@@ -15046,7 +15046,8 @@ function teamUnitProgressModel(
     for (const unit of mainOwnedUnits) {
       const unitKind = kinds?.get(unit) ?? null;
       const applicableStages = block.filter((stage) =>
-        teamUnitStageApplies(stage, unitKind)
+        teamUnitStageApplies(stage, unitKind) &&
+        !(ledgers.get(stage.slug)?.skipped.has(unit) ?? false)
       );
       const settled = applicableStages.every((stage) =>
         unitSettled(
@@ -15102,8 +15103,9 @@ function teamUnitProgressModel(
     let allStageGatesApproved = true;
 
     for (const stage of block) {
-      const applies = teamUnitStageApplies(stage, unitKind);
       const ledger = ledgers.get(stage.slug) ?? unitLedgerFor(projectDir, stage.slug);
+      // A step the Unit skipped owes nothing, as one its kind writes nothing for.
+      const applies = teamUnitStageApplies(stage, unitKind) && !ledger.skipped.has(unit);
       const settled = !applies ||
         unitSettled(
           projectDir,
@@ -15444,163 +15446,80 @@ function emitTeamUnitMajorRunStage(
     refreshedState = readStateFile(projectDir);
     return true;
   };
-  for (const stage of block) {
-    const checkpoint = ledgers.get(stage.slug)?.checkpoint;
-    if (checkpoint?.state === "paused") {
-      emit(unitPausedAskDirective(
-        pausedUnitQuestion(checkpoint.unit, stage.slug, checkpoint.reason, checkpoint.nextAction),
-        stage.slug,
-        checkpoint.unit,
-      ));
-      return;
-    }
-  }
-
   const finalStage = block[block.length - 1];
-  for (const unit of units) {
-    if (model?.mergedUnits.has(unit)) continue;
+  const step = teamUnitMajorWalkStep(
+    projectDir, refreshedState, block, units, kinds, ledgers, model?.mergedUnits ?? new Set<string>(),
+    rhythm, auditRows, recordPrefix, codekbCtx,
+  );
+  if (step.kind === "paused") {
+    const checkpoint = step.checkpoint;
+    emit(unitPausedAskDirective(
+      pausedUnitQuestion(checkpoint.unit, step.stage, checkpoint.reason, checkpoint.nextAction),
+      step.stage,
+      checkpoint.unit,
+    ));
+    return;
+  }
+  if (step.kind === "summary") {
+    const refusal = summaryRefusalForRouting(
+      projectDir,
+      refreshedState,
+      step.stage,
+      step.unit,
+      step.confirmation,
+    );
+    emit(
+      refusal === undefined
+        ? errorDirective(step.confirmation.message)
+        : routedRefusalDirective(projectDir, refusal),
+    );
+    return;
+  }
+  if (step.kind === "work" || step.kind === "gate") {
+    const { stage, unit } = step;
     const unitKind = kinds?.get(unit) ?? null;
-    for (const stage of block) {
-      if (!teamUnitStageApplies(stage, unitKind)) continue;
-      const ledger = ledgers.get(stage.slug) ?? unitLedgerFor(projectDir, stage.slug);
-      if (
-        !unitSettled(
-          projectDir,
-          stage,
-          unit,
-          recordPrefix,
-          codekbCtx,
-          unitKind,
-          ledger,
-        )
-      ) {
-        if (!syncScopedStage(stage.slug, unit)) return;
-        const directive = buildRunStageDirective(
-          stage,
-          projectType,
-          unit,
-          scope,
-          refreshedState,
-          recordPrefix,
-          codekbCtx,
-          unitKind,
-        );
-        directive.gate = false;
-        directive.unit = unit;
-        // A Unit whose work is done is named the step it still owes, as on the
-        // solo routes, never its stage body again.
-        emitUnitStepOrStage(
-          unitReceiptOnlyStep(projectDir, stage, unit, recordPrefix, codekbCtx, unitKind, ledger, refreshedState, scope),
-          directive,
-        );
-        return;
-      }
-      const confirmation = checkSummaryConfirmationEvidence(projectDir, stage, {
-        stateContent: refreshedState,
-        unit,
-      });
-      if (!confirmation.ok) {
-        const refusal = summaryRefusalForRouting(
-          projectDir,
-          refreshedState,
-          stage,
-          unit,
-          confirmation,
-        );
-        emit(
-          refusal === undefined
-            ? errorDirective(confirmation.message)
-            : routedRefusalDirective(projectDir, refusal),
-        );
-        return;
-      }
-      if (
-        rhythm === "per-stage" &&
-        unitGateStatus(
-          projectDir,
-          stage.slug,
-          unit,
-          "per-stage",
-          auditRows,
-        ) !== "approved"
-      ) {
-        if (!syncScopedStage(stage.slug, unit)) return;
-        const directive = buildRunStageDirective(
-          stage,
-          projectType,
-          unit,
-          scope,
-          refreshedState,
-          recordPrefix,
-          codekbCtx,
-          unitKind,
-        );
-        directive.gate = true;
-        directive.unit = unit;
-        directive.unit_gate = "per-stage";
-        const preflight = preflightDirective(
-          projectDir,
-          refreshedState,
-          stage,
-          { action: "present-approval-gate", unit },
-        );
-        if (preflight !== null) {
-          emit(preflight);
-          return;
-        }
-        // A gate the person's Request Changes or a reopen left revising is not
-        // open: the revision's report puts it to them again, as a solo stage's
-        // does, and only then does their answer record.
-        if (unitGateStatus(projectDir, stage.slug, unit, "per-stage", auditRows) === "revising") {
-          emit(revisedUnitGateStep(stage, unit));
-          return;
-        }
-        emit(applyGateOnlyShape(directive, projectDir, refreshedState));
-        return;
-      }
-    }
-    if (
-      rhythm === "unit-end" &&
-      finalStage &&
-      unitGateStatus(
-        projectDir,
-        finalStage.slug,
-        unit,
-        "unit-end",
-        auditRows,
-      ) !== "approved"
-    ) {
-      if (!syncScopedStage(finalStage.slug, unit)) return;
-      const directive = buildRunStageDirective(
-        finalStage,
-        projectType,
-        unit,
-        scope,
-        refreshedState,
-        recordPrefix,
-        codekbCtx,
-        unitKind,
+    if (!syncScopedStage(stage.slug, unit)) return;
+    const directive = buildRunStageDirective(
+      stage,
+      projectType,
+      unit,
+      scope,
+      refreshedState,
+      recordPrefix,
+      codekbCtx,
+      unitKind,
+    );
+    directive.gate = step.kind === "gate";
+    directive.unit = unit;
+    if (step.kind === "work") {
+      // A Unit whose work is done is named the step it still owes, as on the
+      // solo routes, never its stage body again.
+      emitUnitStepOrStage(
+        unitReceiptOnlyStep(projectDir, stage, unit, recordPrefix, codekbCtx, unitKind, step.ledger, refreshedState, scope),
+        directive,
       );
-      directive.gate = true;
-      directive.unit = unit;
-      directive.unit_gate = "unit-end";
-      const preflight = preflightDirective(
-        projectDir,
-        refreshedState,
-        finalStage,
-        { action: "present-approval-gate", unit },
-      );
-      if (preflight !== null) {
-        emit(preflight);
-        return;
-      }
-      if (unitGateStatus(projectDir, finalStage.slug, unit, "unit-end", auditRows) === "revising") {
-        emit(revisedUnitGateStep(finalStage, unit));
-        return;
-      }
-      emit(applyGateOnlyShape(directive, projectDir, refreshedState));
       return;
     }
+    directive.unit_gate = step.gate;
+    const preflight = preflightDirective(
+      projectDir,
+      refreshedState,
+      stage,
+      { action: "present-approval-gate", unit },
+    );
+    if (preflight !== null) {
+      emit(preflight);
+      return;
+    }
+    // A gate the person's Request Changes or a reopen left revising is not
+    // open: the revision's report puts it to them again, as a solo stage's
+    // does, and only then does their answer record.
+    if (unitGateStatus(projectDir, stage.slug, unit, step.gate, auditRows) === "revising") {
+      emit(revisedUnitGateStep(stage, unit));
+      return;
+    }
+    emit(applyGateOnlyShape(directive, projectDir, refreshedState));
+    return;
   }
 
   if (!finalStage) {
@@ -15637,6 +15556,114 @@ function emitTeamUnitMajorRunStage(
     codekbCtx,
     projectDir,
   );
+}
+
+// The team walk's first stop, without emitting it: a paused Unit, the first
+// (stage, Unit) work a Unit has not settled, its summary confirmation, or its
+// gate (each block stage under per-stage, the last one under unit-end), or
+// nothing left. Units walk outer, block stages inner, as the solo walk does. A
+// stage the Unit's kind owes nothing, or one the Unit skipped in this attempt,
+// is passed over: no work, summary or gate is asked for it. Read-only, so
+// routing (emitTeamUnitMajorRunStage) and the skip report
+// (teamUnitMajorWorkBeat) share one walk and cannot disagree about the step.
+type TeamUnitWalkStep =
+  | { kind: "paused"; stage: string; checkpoint: NonNullable<UnitLedger["checkpoint"]> }
+  | { kind: "work"; stage: GraphStage; unit: string; ledger: UnitLedger }
+  | {
+      kind: "summary";
+      stage: GraphStage;
+      unit: string;
+      confirmation: Extract<SummaryConfirmationEvidence, { ok: false }>;
+    }
+  | { kind: "gate"; stage: GraphStage; unit: string; gate: UnitGateRhythm }
+  | { kind: "covered" };
+
+function teamUnitMajorWalkStep(
+  projectDir: string,
+  stateContent: string,
+  block: GraphStage[],
+  units: string[],
+  kinds: Map<string, string> | null | undefined,
+  ledgers: Map<string, UnitLedger>,
+  mergedUnits: ReadonlySet<string>,
+  rhythm: UnitGateRhythm,
+  auditRows: readonly AuditShardEvent[],
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+): TeamUnitWalkStep {
+  for (const stage of block) {
+    const checkpoint = ledgers.get(stage.slug)?.checkpoint;
+    if (checkpoint?.state === "paused") return { kind: "paused", stage: stage.slug, checkpoint };
+  }
+  const finalStage = block[block.length - 1];
+  for (const unit of units) {
+    if (mergedUnits.has(unit)) continue;
+    const unitKind = kinds?.get(unit) ?? null;
+    for (const stage of block) {
+      if (!teamUnitStageApplies(stage, unitKind)) continue;
+      const ledger = ledgers.get(stage.slug) ?? unitLedgerFor(projectDir, stage.slug);
+      if (ledger.skipped.has(unit)) continue;
+      if (!unitSettled(projectDir, stage, unit, recordPrefix, codekbCtx, unitKind, ledger)) {
+        return { kind: "work", stage, unit, ledger };
+      }
+      const confirmation = checkSummaryConfirmationEvidence(projectDir, stage, { stateContent, unit });
+      if (!confirmation.ok) return { kind: "summary", stage, unit, confirmation };
+      if (
+        rhythm === "per-stage" &&
+        unitGateStatus(projectDir, stage.slug, unit, "per-stage", auditRows) !== "approved"
+      ) {
+        return { kind: "gate", stage, unit, gate: "per-stage" };
+      }
+    }
+    if (
+      rhythm === "unit-end" &&
+      finalStage &&
+      unitGateStatus(projectDir, finalStage.slug, unit, "unit-end", auditRows) !== "approved"
+    ) {
+      return { kind: "gate", stage: finalStage, unit, gate: "unit-end" };
+    }
+  }
+  return { kind: "covered" };
+}
+
+// The (stage, Unit) work the team walk hands out right now for the Current
+// Stage, or null when the work is not team-owned Units on the per-unit block or
+// the walk stops at a pause, a summary, a gate, or nothing left. The skip report
+// reads it beside unitMajorWorkBeat, so a skip of the step `next` handed out
+// (started or not) is the walk's own beat.
+function teamUnitMajorWorkBeat(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): { stage: GraphStage; unit: string; context: UnitWorkContext } | null {
+  if (readConstructionIteration(stateContent) !== "unit-major" || !isTeamUnitOwnership(stateContent)) return null;
+  const resolution = resolveBoltBatches(projectDir);
+  if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
+  const block = constructionUnitMajorBlock(scope, stateContent, true);
+  if (!block.some((stage) => stage.slug === currentSlug)) return null;
+  const scopeStamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
+  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat();
+  const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+  let model: TeamUnitProgressModel;
+  try {
+    model = deriveTeamUnitProgressModel(projectDir, stateContent, auditRows, undefined, { readOnly: true });
+  } catch {
+    return null;
+  }
+  const recordPrefix = engineRelativeRecordDir(projectDir);
+  const codekbCtx = codekbCtxFor(projectDir);
+  const step = teamUnitMajorWalkStep(
+    projectDir, stateContent, block, units, resolution.unitKinds, model.ledgers, model.mergedUnits,
+    effectiveUnitGateRhythm(projectDir, stateContent), auditRows, recordPrefix, codekbCtx,
+  );
+  return step.kind === "work"
+    ? { stage: step.stage, unit: step.unit, context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx } }
+    : null;
 }
 
 // The first stop of the solo unit-major walk, without emitting it. Units walk
@@ -19955,8 +19982,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // while Current Stage stays on the first block stage, and a stage's
     // condition is judged for that unit. So the skip names the live beat's
     // stage AND unit and covers that unit only; every other unit still owes
-    // the stage, and the stage itself is skipped only once none does.
-    const beat = unitMajorWorkBeat(pd, scope, stateContent, currentSlug);
+    // the stage, and the stage itself is skipped only once none does. Team-owned
+    // Units walk their own way, and the beat is the step that walk handed out.
+    const beat = unitMajorWorkBeat(pd, scope, stateContent, currentSlug) ??
+      teamUnitMajorWorkBeat(pd, scope, stateContent, currentSlug);
     const unit = flags.unit?.trim();
     // The person's own skip of the walk's first stage naming no unit is for
     // every unit from here: the beat's unit and each unit that still owes the

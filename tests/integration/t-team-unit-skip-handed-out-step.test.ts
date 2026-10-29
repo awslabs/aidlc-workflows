@@ -17,7 +17,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ORCH,
@@ -192,23 +192,34 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
 
   test("publish carries the skip, pin takes the stage as owing nothing, and the Unit lands with its row done", () => {
     const { seed, remote } = teamSeed();
+    // The skip is reported without a `next` first: the beat is the team walk's
+    // either way, and the fixture's claimed row keeps the owner it was given.
     const { auditShard } = prepareCandidate(remote, "alpha", "alpha-team", {
       stages: WORKED,
       beforeCommit: (checkout) => {
-        handedOut(checkout);
         const skipped = skipReport(checkout, ["--unit", "alpha"]);
         expect(JSON.parse(skipped.stdout).kind, skipped.out).toBe("done");
+        // The engine's turn marker, which a real install's .gitignore keeps out
+        // with the rest of the record's engine folder.
+        appendFileSync(join(checkout, ".git", "info", "exclude"), "**/.aidlc-engine/engine-touch\n");
       },
     });
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
-    const evidence = JSON.parse(pin.stdout).evidence as {
+    const pinned = JSON.parse(pin.stdout) as { evidence: {
       stages_completed: string[];
+      stages_skipped?: Array<{ stage: string; reason: string }>;
       reviewers_expected: string[];
       gates_expected: string[];
       artifact_paths: string[];
-    };
-    expect(evidence.stages_completed).toContain(STAGE);
+    }; merge_gate: Record<string, string> };
+    const evidence = pinned.evidence;
+    // Not counted as done: the merge question says it was skipped, and why.
+    expect(evidence.stages_completed).not.toContain(STAGE);
+    expect(evidence.stages_skipped).toEqual([{ stage: STAGE, reason: AGENT_REASON }]);
+    expect(pinned.merge_gate.skipped_steps).toBe(
+      `Unit "alpha" skipped Infrastructure Design (${AGENT_REASON}). Say so in the question, in one line.`,
+    );
     expect(evidence.reviewers_expected).not.toContain(STAGE);
     expect(evidence.gates_expected).not.toContain(STAGE);
     expect(evidence.artifact_paths.some((path) => path.includes(`/${STAGE}/`))).toBe(false);

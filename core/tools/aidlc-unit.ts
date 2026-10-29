@@ -1237,6 +1237,7 @@ const TRANSPORTED_ATTEMPT_EVENTS = new Set([
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   "STAGE_AWAITING_APPROVAL",
   "STAGE_REVISING",
   "GATE_APPROVED",
@@ -1752,8 +1753,8 @@ function candidateEvidence(
     return (stage?.produces ?? []).length > 0 &&
       filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
   }));
-  const stagesCompleted = stages.filter((stage) =>
-    notApplicable.has(stage) ||
+  const snapshots = new Map(stages.map((stage) => [
+    stage,
     unitLifecycleSnapshot(
       projectDir,
       stage,
@@ -1770,12 +1771,24 @@ function candidateEvidence(
             unitKind,
           ),
       },
-    ).receipts.has(claim.unit)
+    ),
+  ]));
+  // A stage the Unit skipped in this attempt owes, like one its kind writes
+  // nothing for, no documents, review, receipt or per-stage gate; the merge
+  // question says it was skipped, with the reason recorded.
+  const skipped = new Map<string, string>();
+  for (const stage of stages) {
+    const reason = snapshots.get(stage)?.skipped.get(claim.unit);
+    if (!notApplicable.has(stage) && reason !== undefined) skipped.set(stage, reason);
+  }
+  const owesNothing = (stage: string): boolean => notApplicable.has(stage) || skipped.has(stage);
+  const stagesCompleted = stages.filter((stage) =>
+    notApplicable.has(stage) || snapshots.get(stage)?.receipts.has(claim.unit) === true
   );
   const gatesExpected =
     claim.payload.gate_rhythm === "unit-end"
       ? [stages[stages.length - 1]]
-      : stages.filter((stage) => !notApplicable.has(stage));
+      : stages.filter((stage) => !owesNothing(stage));
   const gatesApproved = gatesExpected.filter((stage) =>
     unitGateStatus(
       projectDir,
@@ -1789,7 +1802,7 @@ function candidateEvidence(
   const reviewersReady: string[] = [];
   const artifactPaths: string[] = [];
   for (const stageSlug of stages) {
-    if (notApplicable.has(stageSlug)) continue;
+    if (owesNothing(stageSlug)) continue;
     const stage = graph.find((entry) => entry.slug === stageSlug);
     if (!stage) fail(`Pinned candidate references unknown stage "${stageSlug}".`);
     const names = filterProducesByKind(
@@ -1904,6 +1917,10 @@ function candidateEvidence(
   const evidence: UnitMergeEvidence = {
     stages_expected: stages,
     stages_completed: stagesCompleted,
+    // Only when there is one, so a Unit pinned before this field compares the same.
+    ...(skipped.size > 0
+      ? { stages_skipped: [...skipped].map(([stage, reason]) => ({ stage, reason })) }
+      : {}),
     gates_expected: gatesExpected,
     gates_approved: gatesApproved,
     reviewers_expected: reviewersExpected,
@@ -1915,7 +1932,7 @@ function candidateEvidence(
     merge_held: mergeHeld,
   };
   const incomplete: string[] = [];
-  if (stagesCompleted.length !== stages.length) incomplete.push("UNIT_COMPLETED receipts");
+  if (stagesCompleted.length + skipped.size !== stages.length) incomplete.push("UNIT_COMPLETED receipts");
   if (gatesApproved.length !== gatesExpected.length) incomplete.push("team gate approvals");
   if (reviewersReady.length !== reviewersExpected.length) {
     const missingReviewStages = reviewersExpected.filter((stage) => !reviewersReady.includes(stage));
@@ -2252,6 +2269,20 @@ function pinMergeGateStep(pd: string, transaction: UnitMergeTransaction): Record
       " with the command for their choice.",
     approve: record("approve"),
     reject: record("reject"),
+    ...skippedStepsLine(transaction),
+  };
+}
+
+// A step the Unit skipped is said once in the merge question, with its reason.
+function skippedStepsLine(transaction: UnitMergeTransaction): Record<string, string> {
+  const skipped = transaction.evidence.stages_skipped ?? [];
+  if (skipped.length === 0) return {};
+  const graph = loadStageGraphAll();
+  const steps = skipped.map(({ stage, reason }) =>
+    `${graph.find((entry) => entry.slug === stage)?.name || stage} (${reason})`
+  );
+  return {
+    skipped_steps: `Unit "${transaction.unit}" skipped ${steps.join(" and ")}. Say so in the question, in one line.`,
   };
 }
 

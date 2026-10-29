@@ -8762,7 +8762,8 @@ function handleRevise(args: string[]): void {
 // every other Unit still does. Only when no Unit owes the stage any more (each
 // is skipped or kind-vacuous) does the stage itself become [S]: a later block
 // stage is marked in place with one conditional STAGE_SKIPPED, and the Current
-// Stage takes the routed path above.
+// Stage takes the routed path above. A team-owned Unit's skip writes only its
+// receipt, which travels with the Unit's published work.
 function handleSkip(args: string[]): void {
   if (args.length < 1) {
     error("Usage: aidlc-state.ts skip <slug> [--reason <text>] [--route | --unit <name>]");
@@ -8800,16 +8801,16 @@ function handleSkip(args: string[]): void {
     if (!approvedBehind) validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
     const perUnitConstruction = (s: { phase: string; for_each?: string } | undefined) =>
       s?.phase === "construction" && s.for_each === "unit-of-work";
+    const teamOwned = isTeamUnitOwnership(content);
     if (
       getField(content, "Construction Iteration")?.trim() !== "unit-major" ||
-      isTeamUnitOwnership(content) ||
       !perUnitConstruction(stage) ||
       !perUnitConstruction(graph[currentIndex]) ||
       (!approvedBehind && currentIndex > graph.findIndex((s) => s.slug === slug))
     ) {
       error(
         `Cannot skip "${slug}" for unit "${unit}": a one-unit skip needs Construction Iteration: ` +
-          `unit-major with solo units, and a per-unit Construction stage at or after Current Stage "${currentStage}", ` +
+          `unit-major, and a per-unit Construction stage at or after Current Stage "${currentStage}", ` +
           "or one approved before it.",
       );
     }
@@ -8826,10 +8827,9 @@ function handleSkip(args: string[]): void {
     if (!owes(unit)) {
       error(`Cannot skip "${slug}" for unit "${unit}": that unit owes nothing for this stage.`);
     }
-    // Floored per Unit wherever its other lifecycle rows are (solo unit-major
-    // too); team-owned Units keep their own rule.
-    const checkpoints = getField(content, "Construction Checkpoints") === "enabled" ||
-      (!isTeamUnitOwnership(content) && getField(content, "Construction Iteration")?.trim() === "unit-major");
+    // Floored per Unit wherever its other lifecycle rows are, as the Unit's
+    // UNIT_STARTED and UNIT_COMPLETED rows are.
+    const checkpoints = unitScopedLifecycleFloors(content);
     try {
       emitAudit(pd, "UNIT_SKIPPED", {
         Stage: slug,
@@ -8851,6 +8851,12 @@ function handleSkip(args: string[]): void {
     // A Unit's step the person asked to skip spends what they typed for it:
     // their words were the skip. The agent's own skip leaves them kept.
     if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+    // A team's Unit is skipped for itself only: the stage's own checkbox is
+    // derived from every team's Units, so it is never marked or routed here.
+    if (teamOwned) {
+      console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped" }));
+      return;
+    }
     if (approvedBehind) {
       console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped", stage_state: "completed" }));
       return;
