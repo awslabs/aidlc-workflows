@@ -6022,7 +6022,7 @@ export interface ParsedFlags {
   phase?: string;
   jumpUnit?: string; // --unit <name> with --stage: reopen that per-unit stage for this Unit (unit-major)
   everyUnit?: boolean; // --every-unit with --stage: reopen that per-unit stage for every Unit (unit-major)
-  change?: boolean; // --change with --stage and --unit or --every-unit: the reopen is the person's change at the open gate
+  change?: boolean; // --change with --stage and --unit or --every-unit: the reopen is the person's change
   depth?: string;
   testStrategy?: string;
   projectType?: "greenfield" | "brownfield"; // --project-type: the person's word on new project vs existing code
@@ -19794,10 +19794,14 @@ function emitTypedResumeChoice(
     }
     // Back to a Unit's step, the person may want it run again or a change made
     // to it: the agent reads which, and `--change` keeps their words as the change.
-    // A checkout that claimed a Unit reopens that Unit with no Unit named.
-    const claimed = isTeamUnitOwnership(stateContent) && readApplicableTeamUnitScopeStamp(pd, stateContent) !== null;
-    const change = (units !== "" || claimed) && isPerUnit(node)
-      ? ` If what they asked for is a change to that stage's work, run \`next --stage ${node.slug}${units} --change\` ` +
+    // A checkout that claimed a Unit names that Unit when they named none: the
+    // form the plan-approval guard admits for the reopen it prints.
+    const claim = units === "" && isTeamUnitOwnership(stateContent)
+      ? readApplicableTeamUnitScopeStamp(pd, stateContent)
+      : null;
+    const changeUnits = claim !== null ? ` --unit ${claim.unit}` : units;
+    const change = changeUnits !== "" && isPerUnit(node)
+      ? ` If what they asked for is a change to that stage's work, run \`next --stage ${node.slug}${changeUnits} --change\` ` +
         "instead, so the reopen keeps their words as the change."
       : "";
     emit(move(printDirective(

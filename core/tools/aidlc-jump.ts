@@ -246,8 +246,9 @@ function parseFlags(
 // through it again. Every other Unit keeps its finished, approved work. Inside
 // the walk nothing else changes: no checkbox, no Current Stage, no files. Once
 // the walk has moved on to a later stage, the work moves back to the target.
-// `--via change` is the person's change at the open late question: the rows
-// keep their words as the change.
+// `--via change` is a change the person asked for (at the open late question,
+// a recovery question's Request Changes, or a jump back the agent read as one):
+// the rows keep their words as the change, with the messages they came in.
 // The active Unit's lifecycle mirror is dropped; the next `unit start` writes
 // it again.
 
@@ -262,8 +263,7 @@ function handleReopen(args: string[]): void {
   }
   // `--via redo`: a redo of the step on re-entry, not a jump (the person's
   // Redo, or the redo the engine hands the agent for a Unit's step).
-  // `--via change`: the person asked for a change at the open gate, and it
-  // belongs to these Units' step.
+  // `--via change`: the person asked for a change to these Units' step.
   if (flags.via !== undefined && flags.via !== "redo" && flags.via !== "change") {
     error(`Unknown --via: ${flags.via} (only "redo" or "change")`);
   }

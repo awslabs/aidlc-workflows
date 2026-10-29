@@ -336,7 +336,7 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect((JSON.parse(jump.stdout) as Directive).message).toContain(`\`next --stage ${FD} --unit alpha --change\``);
       // With no Unit named, the claimed Unit is the one the change is for.
       const unnamed = run(ORCH, ["report", "--result", "resumed", "--choice", "jump", "--target", FD], checkout);
-      expect((JSON.parse(unnamed.stdout) as Directive).message, unnamed.out).toContain(`\`next --stage ${FD} --change\``);
+      expect((JSON.parse(unnamed.stdout) as Directive).message, unnamed.out).toContain(`\`next --stage ${FD} --unit alpha --change\``);
       const printed = next(checkout, ["--stage", FD, "--unit", "alpha", "--change"]);
       expect(printed.kind, JSON.stringify(printed)).toBe("print");
       const command = /reopen --target \S+ --stages \S+ --units alpha --scope feature --via change/.exec(printed.message ?? "")?.[0];
@@ -434,6 +434,40 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
     const reopened = run(JUMP, printedReopen(printed.message).split(" "), checkout);
     expect(reopened.status, reopened.out).toBe(0);
     expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha", gate: false });
+  });
+
+  test("at Code Generation the guards let the change the jump print offers through", () => {
+    const { checkout } = claimedPastFunctionalDesign("shared");
+    for (const slug of ["nfr-requirements", "nfr-design", "infrastructure-design"]) {
+      expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: slug, unit: "alpha" });
+      workStage(checkout, "alpha", slug, 1);
+      approveStage(checkout, "alpha", slug, "awaiting-approval");
+    }
+    expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+    says(checkout, "I want to change Functional Design: names are trimmed.");
+    // The person names no Unit; the agent reads a change and runs the form the print offers.
+    const jump = run(ORCH, ["report", "--result", "resumed", "--choice", "jump", "--target", FD], checkout);
+    const offered = /`next (--stage \S+(?: --unit \S+)? --change)`/.exec((JSON.parse(jump.stdout) as Directive).message ?? "")?.[1];
+    expect(offered, jump.out).toBeDefined();
+    const printed = next(checkout, offered!.split(" "));
+    expect(printed.kind, JSON.stringify(printed)).toBe("print");
+    const reopen = /reopen --target \S+ --stages \S+ --units alpha --scope feature --via change/.exec(printed.message ?? "")?.[0];
+    expect(reopen, printed.message).toBeDefined();
+    for (const hook of [PLAN_GUARD, TRANSITION_GUARD]) {
+      const judged = spawnSync(process.execPath, [hook], {
+        cwd: checkout,
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          session_id: SESSION,
+          tool_name: "Bash",
+          tool_input: { command: `aidlc engine jump ${reopen}` },
+          cwd: checkout,
+        }),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: checkout },
+        encoding: "utf-8",
+      });
+      expect(judged.status, `${hook}: ${judged.stderr}`).toBe(0);
+    }
   });
 
   test("the question offers no reopen a claimed checkout cannot take, and main still offers it", () => {
