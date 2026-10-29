@@ -528,6 +528,10 @@ export function prepareCandidate(
     /** Runs after the Unit's commit, right before publish: what a session
      *  writes into the checkout between the two. */
     beforePublish?: (checkout: string) => void;
+    /** Runs once the stage documents and receipts are written, before the
+     *  Unit's work is committed and published: a case drives the engine on
+     *  the worked checkout there (a skip of the step it hands out, say). */
+    beforeCommit?: (checkout: string) => void;
   } = {},
 ): {
   checkout: string;
@@ -756,6 +760,7 @@ export function prepareCandidate(
   // real event ahead of these hand-written receipts.
   const priorShard = existsSync(shardPath) ? readFileSync(shardPath, "utf-8") : "";
   writeFileSync(shardPath, priorShard + audit);
+  options.beforeCommit?.(checkout);
   git(checkout, ["add", "-A"]);
   git(checkout, ["commit", "-m", `complete ${unit}`]);
   options.beforePublish?.(checkout);
