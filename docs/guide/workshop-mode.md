@@ -324,6 +324,10 @@ Landing is ordered and resumable:
 3. **Audit/finalize.** Commit the main state and merge lifecycle rows, then mark
    the local transaction complete.
 
+Once the checkout that claimed the Unit pulls the landed main, it is no longer
+held to that Unit: its record shows the Unit merged and its history holds the
+merged claim, so `/aidlc`, pin and a next claim work there as on main.
+
 The steps can be driven separately for recovery:
 
 ```bash
