@@ -178,6 +178,45 @@ export function nextFlagTakesFollowing(flag: string, following: string | undefin
   return following !== undefined && !following.startsWith("-") && !NEXT_VALUELESS_FLAGS.has(flag);
 }
 
+/**
+ * The `unit` noun's verbs, each with whether it takes the Unit's name, as the
+ * Unit tool runs them (aidlc-unit.ts main). The dispatcher's `unit` route and
+ * the `next` line both read this list.
+ */
+export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
+  ["adopt", true],
+  ["claim", true],
+  ["gate", true],
+  ["land", true],
+  ["merge-status", true],
+  ["participate", false],
+  ["pin", true],
+  ["publish", true],
+  ["release", true],
+  ["status", false],
+]);
+
+/**
+ * The Unit tool's argv when a `next` line is the person's Unit command, else
+ * null. It is one by its shape alone: `unit`, one of UNIT_VERBS, and before
+ * the first option at most the one Unit name that verb takes; from the first
+ * option on the Unit tool reads the rest as its own. An option starts with
+ * `--`, the `--` mark included, as the Unit tool's parseArgs reads it. Any
+ * other line that opens with "unit" (`unit tests for the parser`) is the
+ * person's words. Kiro IDE's PowerShell hands the whole line over as one
+ * argument, which is read the same way unless it holds a quote, whose reading
+ * is a shell's.
+ */
+export function unitCommandArgv(args: readonly string[]): string[] | null {
+  const tokens = args.length === 1 && !/["'`]/.test(args[0]) ? args[0].trim().split(/\s+/) : args;
+  if (tokens[0] !== "unit") return null;
+  const takesName = UNIT_VERBS.get(tokens[1] ?? "");
+  if (takesName === undefined) return null;
+  const option = tokens.findIndex((token, at) => at > 1 && token.startsWith("--"));
+  const names = (option < 0 ? tokens.length : option) - 2;
+  return names <= (takesName ? 1 : 0) ? tokens.slice(1) : null;
+}
+
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
 // The dispatcher's global flags: `aidlc` drops them wherever they appear
 // before `--`, then routes what remains.

@@ -32,7 +32,7 @@ import {
   repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
-import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing } from "./aidlc-command.ts";
+import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -42122,6 +42122,7 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (knowledge.kind !== "not-knowledge") {
     return knowledge.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
   }
+  if (unitCommandArgv(args) !== null) return { kind: "exact" };
   const workspace = parseWorkspaceCommand(head);
   if (workspace.kind !== "not-workspace") {
     const theirs = workspace.kind === "switch" && !workspace.explicit && workspace.words !== undefined;

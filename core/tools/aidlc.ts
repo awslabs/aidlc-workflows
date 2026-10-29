@@ -15,6 +15,7 @@ import {
   parseDispatcherWorkspaceCommand,
   type RouteNamespaceName,
   TRUSTED_ROUTE_NAMESPACE,
+  UNIT_VERBS,
 } from "./aidlc-command.ts";
 import {
   cmd,
@@ -248,18 +249,7 @@ export const ROUTES: readonly Route[] = [
     group: "unit",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: [
-      "adopt",
-      "claim",
-      "gate",
-      "land",
-      "merge-status",
-      "participate",
-      "pin",
-      "publish",
-      "release",
-      "status",
-    ],
+    verbs: [...UNIT_VERBS.keys()],
     tool: TOOLS.unit,
     ...PUBLIC_ENGINE,
     namespace: "public",

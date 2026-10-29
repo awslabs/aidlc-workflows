@@ -7177,9 +7177,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit status",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit status"
+        ]
       },
       "end": {
         "asks": 0,
@@ -7200,9 +7203,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit adopt user-profile-api",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit adopt user-profile-api"
+        ]
       },
       "end": {
         "asks": 0,
@@ -7224,7 +7230,8 @@
           "print"
         ],
         "names": [
-          "user-api"
+          "user-api",
+          "aidlc.ts unit claim user-api"
         ],
         "never": [
           "require --claim"
@@ -7236,8 +7243,7 @@
       }
     },
     "source": "docs/guide/12-cli-commands.md:527",
-    "documented": "/aidlc unit claim <unit> --team <label>",
-    "after": "pending"
+    "documented": "/aidlc unit claim <unit> --team <label>"
   },
   {
     "id": "X5a-w",
@@ -15568,9 +15574,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit adopt u1-login",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit adopt u1-login"
+        ]
       },
       "end": {
         "asks": 0,
@@ -15591,9 +15600,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit participate",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit participate"
+        ]
       },
       "end": {
         "asks": 0,
@@ -15614,9 +15626,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit publish u1-login",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit publish u1-login"
+        ]
       },
       "end": {
         "asks": 0,
@@ -15628,6 +15643,11 @@
     "id": "doc-103-w",
     "category": "doc-example",
     "input": "unit pin u1-login",
+    "argv": {
+      "kiro-ide-pwsh": [
+        "unit pin u1-login"
+      ]
+    },
     "state": "work-open",
     "meaning": "the person means: pin the completed candidate of the Unit u1-login for merging (the documented unit command)",
     "source": "docs/guide/12-cli-commands.md:50 (+1 more)",
@@ -15637,9 +15657,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit pin u1-login",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit pin u1-login"
+        ]
       },
       "end": {
         "asks": 0,
@@ -15683,9 +15706,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit claim u1-login",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit claim u1-login"
+        ]
       },
       "end": {
         "asks": 0,
@@ -15706,9 +15732,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit merge-status u1-login",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit merge-status u1-login"
+        ]
       },
       "end": {
         "asks": 0,
@@ -15729,9 +15758,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit status",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit status"
+        ]
       },
       "end": {
         "asks": 0,
@@ -15804,9 +15836,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit release u1-login",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit release u1-login"
+        ]
       },
       "end": {
         "asks": 0,
@@ -16022,9 +16057,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit gate u1-login",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit gate u1-login"
+        ]
       },
       "end": {
         "asks": 0,
@@ -16100,9 +16138,12 @@
         "kinds": [
           "print"
         ],
-        "words": "unit land u1-login",
+        "words": null,
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "aidlc.ts unit land u1-login"
+        ]
       },
       "end": {
         "asks": 0,

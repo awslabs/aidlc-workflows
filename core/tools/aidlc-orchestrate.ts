@@ -100,7 +100,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { CONFIG_SECTIONS } from "./aidlc-command.ts";
+import { CONFIG_SECTIONS, unitCommandArgv } from "./aidlc-command.ts";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -406,6 +406,7 @@ import {
   readNextLine,
   readNextTokens,
   readOrchestratorLauncherOptions,
+  splitFlagShapedArguments,
   REQUEST_TEXT_DIR,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -1049,7 +1050,7 @@ function hooksOffStop(
   const flags = parseNextFlags(nextArgs);
   if (
     flags.parseError || !nextEngagesWorkflow(nextArgs, flags) || flags.orchestratorVerb !== undefined ||
-    flags.pluginCommand !== undefined || flags.knowledgeCommand !== undefined ||
+    flags.pluginCommand !== undefined || flags.knowledgeCommand !== undefined || flags.unitCommand !== undefined ||
     flags.claim !== undefined || flags.release !== undefined
   ) return null;
   if (!hookActivation()?.agentStep) return null;
@@ -5830,6 +5831,7 @@ export interface ParsedFlags {
   pickedUp?: string; // --resume picking up the only work here: the person's one line for it
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
   knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
+  unitCommand?: string[]; // leading `unit <verb>` (unitCommandArgv): the person's Unit command, for the agent to run
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
   orchestratorVerb?: "park" | "team-board"; // leading orchestrator verb: terminal print naming that command
   orchestratorVerbArgs?: string[]; // allowlisted trailing args for team-board (--space <s>, --intent <i>, --snapshot)
@@ -5914,6 +5916,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     const said = args.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
     return { readingStep: reading, ...(said.length > 0 ? { intent: said } : {}) };
   }
+  // A Unit command owns its whole argv, options included (`unit land alpha
+  // --step git`), so nothing on it is read as one of next's own flags.
+  const unitCommand = unitCommandArgv(splitFlagShapedArguments(args));
+  if (unitCommand !== null) return { unitCommand };
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently
@@ -10595,7 +10601,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.config && !flags.configCommand && !flags.workspaceCommand && !flags.orchestratorVerb && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.config && !flags.configCommand && !flags.workspaceCommand && !flags.orchestratorVerb && !flags.pluginCommand && !flags.knowledgeCommand && !flags.unitCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
       !flags.depth && !flags.testStrategy && !flags.projectType && !flags.review &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report &&
@@ -10911,6 +10917,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(turnEndingPrint(
       `Run \`${aidlcToolInvocation("knowledge")} ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+    ));
+    return;
+  }
+
+  // Branch 1f - the person's own Unit command (`unit pin alpha`), never words
+  // for new work. The agent runs it, behind the host's own prompt: it changes
+  // git and reaches the shared remote, so no seam runs it off-band.
+  if (flags.unitCommand) {
+    const command = `${aidlcInvocation()} unit ${flags.unitCommand.map((arg) => quoteCommandArgument(arg)).join(" ")}`;
+    emit(turnEndingPrint(
+      `Run \`${command}\`, tell the person in plain words what it reports, then stop. This is the person's own Unit command, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }

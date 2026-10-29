@@ -43,6 +43,7 @@ import {
   validScopes,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { nextArgsAreOnlyWords, parseNextFlags, typedSettingModifiers } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
+import { unitCommandArgv } from "../../dist/claude/.claude/tools/aidlc-command.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
@@ -490,12 +491,13 @@ describe("the flag parser over a seeded sweep of lines", () => {
       // The same line as one quoted argument, as a harness that quotes the
       // whole turn hands it over. Nothing but flags and their values reads as
       // those tokens; a sentence opening with a plan's name is the same reading
-      // step either way, because it is the same line; any other sentence is
+      // step either way, because it is the same line; so is a Unit command
+      // (Kiro IDE hands it over as one argument); any other sentence is
       // theirs whole.
       if (testCase.argv.length > 1 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) {
         const line = testCase.argv.join(" ");
         const quoted = readNextLine([line]);
-        if (argumentIsFlagShaped(line) || reading.kind === "plan-word") {
+        if (argumentIsFlagShaped(line) || reading.kind === "plan-word" || unitCommandArgv(testCase.argv) !== null) {
           // A sentence opening with a plan's name is the same reading step
           // either way, because it is the same line.
           expect(quoted, `quoted ${note}`).toEqual(reading);
