@@ -1130,7 +1130,7 @@ export function buildPlanProfile(
     );
   } else if (methodology === "atdd") {
     steps.push(
-      "Acceptance Red - write executable acceptance tests for the complete feature before implementation.",
+      "Acceptance Red - write executable acceptance tests for the complete feature before implementation, run them, and record the failing command output.",
       "Feature implementation - implement the required layers against the acceptance contract.",
       "Acceptance Green - run the acceptance tests until they pass.",
       "Feature Refactor - improve the cross-layer implementation while acceptance stays green.",

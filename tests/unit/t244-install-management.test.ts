@@ -724,7 +724,7 @@ describe("t244 machine configuration and update discovery", () => {
       const state = await doctorUpdateState({
         "release-base-url": server.baseUrl,
       }, true);
-      expect(state.state).toBe("unavailable");
+      expect(state.state).toBe("absent");
       expect(scheduledTimeouts).toHaveLength(1);
     } finally {
       timer.mockRestore();

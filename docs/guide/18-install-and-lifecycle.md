@@ -1679,7 +1679,10 @@ a valid cached update notice. Interactive human `aidlc doctor`, and
 absent metadata within 750 ms. Other non-TTY, `--json`, and `--quiet` doctor
 runs are cache-only unless `--check-updates` is explicit. A doctor update row
 read from a check older than 24 hours names the version as the latest known
-one and says how long ago it was checked.
+one and says how long ago it was checked. On a machine that has never checked,
+a refresh that fails inside that budget leaves the row passing as not checked
+yet, naming `aidlc update --check`; only an explicit `--check-updates` reports
+the failed check.
 `doctor --check-updates` and `update --check` use a five-minute metadata
 backstop. Preview discovery and metadata downloads share the same deadline;
 looking up the preview release does not restart the timeout.

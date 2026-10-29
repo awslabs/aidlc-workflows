@@ -179,11 +179,13 @@ export async function doctorUpdateState(
   ) {
     // An automatic refresh is opportunistic UI work. Its short fallback keeps
     // doctor responsive; a requested --check-updates is required network work.
-    update = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
+    const refreshed = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
       offline: flags.offline === "true" ? true : undefined,
       baseUrl: flags["release-base-url"],
       caBundle: flags["ca-bundle"],
     });
+    const keepNeverChecked = !explicit && update.state === "absent" && refreshed.state === "unavailable";
+    if (!keepNeverChecked) update = refreshed;
   }
   return update;
 }

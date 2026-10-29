@@ -455,8 +455,10 @@ Include in the delegation prompt:
 - The instruction that the current Testing Contract in the tool-produced brief is
   authoritative for Part 2. The subagent must not independently re-resolve or
   reinterpret memory. TDD records each Red command's failing output before
-  Green; BDD and ATDD follow their scenario/acceptance-first cross-layer
-  profiles; custom/mixed follows the exact ordering in that contract.
+  Green; BDD follows its scenario-first cross-layer profile; ATDD follows its
+  acceptance-first cross-layer profile and records the Acceptance Red run's
+  failing output before the feature implementation; custom/mixed follows the
+  exact ordering in that contract.
 - The instruction that measurable quality targets from NFR Requirements, NFR
   Design, and the Testing Contract coverage floor are inputs, not suggestions.
   The subagent must NEVER relax, lower, or disable a defined target, including
