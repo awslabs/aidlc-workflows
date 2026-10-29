@@ -2407,9 +2407,6 @@ async function evaluate(
     typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
   const guardedDispatch =
     DISPATCH_TOOLS.has(toolName) && subagentType === GUARDED_AGENT;
-  // On the work with no AI-DLC step there yet: the hook ran in a chat on the
-  // work (its heartbeat is above), and only the developer dispatch meets the fence.
-  if (standAside && !guardedDispatch) return 0;
   if (SAFE_READ_TOOLS.has(toolName)) return 0;
   const mutationCapable =
     toolName === "Bash" ||
@@ -2474,6 +2471,10 @@ async function evaluate(
       recordHookDrop(projectDir, HOOK_NAME, `system install check skipped: ${errorMessage(error)}`);
     }
   }
+  // On the work with no AI-DLC step there yet: the hook ran in a chat on the
+  // work (its heartbeat is above) and the install check, which is no fence,
+  // held it; of the fence only the developer dispatch meets it.
+  if (standAside && !guardedDispatch) return 0;
   let blockedMutation: {
     target: string;
     unit: string | null;

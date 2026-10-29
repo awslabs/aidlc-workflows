@@ -195,6 +195,15 @@ describe("a second chat on the work the cursor names", () => {
     for (const verdict of await reads(proj, host)) expect(verdict.code, verdict.command).toBe(2);
   });
 
+  test("before that step, a system package install nobody asked for still waits for the person", async () => {
+    const host = shape("claude");
+    const proj = workAtCodeGeneration(host, "off");
+    opensSecondChat(proj, host);
+    const install = await host.call(proj, SECOND, { tool: "Bash", command: "sudo apt-get install -y python3-pytest" });
+    expect(install.code).toBe(2);
+    expect(install.said).toContain("installs a system package on this machine");
+  });
+
   test("its developer dispatch before that step meets the plan, as any chat on the work does", async () => {
     const host = shape("claude");
     const proj = workAtCodeGeneration(host, "off");
