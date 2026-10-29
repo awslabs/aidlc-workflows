@@ -2456,10 +2456,12 @@ type OwnRootPart = { marker: string } | { entries: string };
 
 // The changed paths that hold only AI-DLC's own write, which the session-start
 // hook adds in a checkout config never ran in and a release brings up to date:
-// in a shared root file, its marked part with the person's part around it as
-// HEAD holds it, or its entries merged onto HEAD's copy exactly as the hook
-// merges them (no copy when HEAD has none). A change of the person's in that
-// file, or a part that does not read, leaves it theirs.
+// in a shared root file, its marked part as a release shipped it with the
+// person's part around it as HEAD holds it, or its entries merged onto HEAD's
+// copy exactly as the hook merges them (no copy when HEAD has none). A change
+// of the person's in that file, inside the part too (the hook and config then
+// leave the part as theirs), a file they staged, or a part that does not read,
+// leaves it theirs.
 function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<string, OwnRootPart> {
   const own = new Map<string, OwnRootPart>();
   if (paths.length === 0) return own;
@@ -2469,6 +2471,7 @@ function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<st
     const block = blocks.get(path);
     const shippedEntries = entriesAt.get(path);
     if (!block && shippedEntries === undefined) continue;
+    if (!git(projectDir, ["diff", "--cached", "--quiet", "--", path]).ok) continue;
     let text: string;
     try {
       if (!lstatSync(join(projectDir, path)).isFile()) continue;
@@ -2477,7 +2480,10 @@ function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<st
       continue;
     }
     const committed = gitPathExistsAt(projectDir, "HEAD", path) ? gitTextAt(projectDir, "HEAD", path) : "";
-    if (block && onlyMarkedPartChanged(path, text, committed, block.marker)) {
+    if (
+      block && onlyMarkedPartChanged(path, text, committed, block.marker) &&
+      mergeBlock(path, text, block.shipped, block.marker, block.legacy).currentBlockShipped
+    ) {
       own.set(path, { marker: block.marker });
     } else if (shippedEntries !== undefined) {
       // Git's copy holds the line endings the repository stores, the file the

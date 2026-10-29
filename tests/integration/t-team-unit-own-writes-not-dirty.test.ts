@@ -137,6 +137,13 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
       const agents = readFileSync(join(checkout, "AGENTS.md"), "utf-8");
       writeFileSync(join(checkout, "AGENTS.md"), agents.replace("every push", "every commit"));
     }],
+    ["the person's own words inside AI-DLC's part of AGENTS.md", "copilot", (checkout: string) => {
+      const agents = readFileSync(join(checkout, "AGENTS.md"), "utf-8");
+      writeFileSync(join(checkout, "AGENTS.md"), agents.replace("<!-- END AI-DLC:agents -->", "Our own rule.\n<!-- END AI-DLC:agents -->"));
+    }],
+    ["AI-DLC's part staged with git add", "copilot", (checkout: string) => {
+      git(checkout, ["add", "--", "AGENTS.md"]);
+    }],
     ["a second begin marker in AGENTS.md", "copilot", (checkout: string) => {
       appendLine(checkout, "AGENTS.md", "<!-- BEGIN AI-DLC:agents -->");
     }],
@@ -255,6 +262,22 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
     rmSync(hook);
     const landed = runMergeTool(UNIT, ["land", "alpha"], seed);
     expect(landed.status, landed.out).toBe(0);
+  });
+
+  test("AI-DLC's part the person staged with git add still stops landing with the same line, and stays staged", () => {
+    const { seed, remote } = seedWithRuntime();
+    prepareCandidate(remote, "alpha", "team-a");
+    sessionStarts(seed);
+    git(seed, ["add", "--", "AGENTS.md"]);
+    approveMerge(seed, "alpha");
+    const head = git(seed, ["rev-parse", "HEAD"]);
+    const staged = git(seed, ["diff", "--cached", "--name-only"]);
+    const landed = runMergeTool(UNIT, ["land", "alpha"], seed);
+    expect(landed.status).not.toBe(0);
+    expect(landed.out).toContain("Unit landing requires a clean source worktree; commit or stash: AGENTS.md.");
+    expect(git(seed, ["rev-parse", "HEAD"])).toBe(head);
+    expect(git(seed, ["diff", "--cached", "--name-only"])).toBe(staged);
+    expect(stashes(seed)).toBe("");
   });
 
   test("beside AI-DLC's part, a line of the person's own in .gitignore still stops landing with the same line", () => {

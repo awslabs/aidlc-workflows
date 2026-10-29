@@ -220,7 +220,7 @@ Gate rhythm controls the team review points:
 Commit the completed artifacts, source, state mirror, and audit shard. Publication
 requires a clean tracked checkout; AI-DLC's own part of `.gitignore`, `AGENTS.md`
 and `opencode.json`, which it writes when a session starts in a fresh clone, does
-not count and stays uncommitted:
+not count:
 
 ```bash
 git add -A
