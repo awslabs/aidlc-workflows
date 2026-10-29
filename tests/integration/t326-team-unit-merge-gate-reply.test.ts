@@ -143,6 +143,26 @@ describe("t326 a pinned Unit's merge gate row keeps what the person said", () =>
     expect(auditBlockField(row, "Person Reply")).toBeNull();
   });
 
+  test("after a reject and a re-pin, the approval keeps only the reply to the new pin", () => {
+    const { seed, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "alpha-team");
+    pinAlpha(seed);
+    afterPin(seed);
+    says(seed, "not yet, the tests are not in CI");
+    expect(gate(seed, "reject", "Reject").status).toBe(0);
+    pinAlpha(seed);
+    afterPin(seed);
+    const message = says(seed, "1");
+    const approved = gate(seed, "approve", "Approve");
+    expect(approved.status, approved.out).toBe(0);
+    const row = readAuditShardEvents(seed).find((entry) =>
+      entry.event === "GATE_APPROVED" && auditBlockField(entry.block, "Gate Scope") === "unit-merge");
+    expect(row).toBeDefined();
+    expect(auditBlockField(row!.block, "Person Reply")).toBe("1");
+    expect(auditBlockField(row!.block, "Message Id")).toBe(message);
+    expect(auditBlockField(row!.block, "Message Ids")).toBeNull();
+  });
+
   test("with the human-presence guard off, the row is as it was", () => {
     const { seed, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "alpha-team");
