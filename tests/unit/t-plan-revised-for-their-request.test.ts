@@ -333,6 +333,29 @@ describe("a plan revised only for the person's own change request", () => {
     });
   }
 
+  // A revision that lands back on the plan they first approved is still a
+  // revision: it builds, and their words are not handed over again.
+  test("Guard Policy off: a second change that restores the approved plan builds, with no third revise", () => {
+    const proj = project("off");
+    approved(proj);
+    expect(posture(proj, "begin").status).toBe(0);
+    reply(proj, "rename the test file to price.spec.js please");
+    rejectedAtGate(proj, "rename the test file to price.spec.js please");
+    expect(next(proj).plan_approval?.status).toBe("revise");
+    writePlan(proj, "- [ ] Step 2: rename the test file to price.spec.js\n");
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    expect(posture(proj, "begin").status).toBe(0);
+    reply(proj, "actually keep the old test file name");
+    rejectedAtGate(proj, "actually keep the old test file name");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "actually keep the old test file name" });
+    writePlan(proj);
+    const build = next(proj);
+    expect(build.plan_approval?.status, JSON.stringify(build)).toBe("approved");
+    const handed = guardAdmitsBuild(proj);
+    expect(handed.code, handed.stderr).toBe(0);
+    expect(posture(proj, "begin").status, posture(proj, "verify").out).toBe(0);
+  });
+
   test("strict: the plan question comes back for the revised plan", () => {
     const proj = project("strict");
     approved(proj);

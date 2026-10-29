@@ -5719,7 +5719,8 @@ export interface PlanApprovalRuntimeReceipt
    * approval started on, at the attempt it started in, kept only when that is
    * not the approved content: a lowered fence built a plan edited after its
    * approval, or revised for the person's change request. An interrupted build
-   * picks up only on it, and their next change request is judged against it.
+   * in the approval's own attempt picks up only on it, and their next change
+   * request is judged against it.
    */
   startedFingerprint?: string;
   /**

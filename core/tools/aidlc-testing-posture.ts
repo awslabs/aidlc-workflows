@@ -1581,11 +1581,13 @@ export function approvalFingerprint(
 }
 
 // Whether the plan and instructions are still what the person sent back with a
-// change request: the approved content, or the content a lowered fence built
-// under this approval (an edit, or the revision for their previous change
-// request) in the approval's own attempt or in `closed`, the run floor of the
-// attempt their rejection closed. While it holds, the change they asked for
-// has not been carried out yet.
+// change request: the content the build in `closed` (the run floor of the
+// attempt their rejection closed) started on. In a later attempt than the
+// approval's, that is the revision a lowered fence built there for their
+// previous change request; in the approval's own attempt, the content it
+// started on there, or the approved content. Only that one: a revision that
+// lands back on the plan they first approved is a revision. While it holds,
+// the change they asked for has not been carried out yet.
 export function planAsSentBack(
   plan: string,
   instructions: string,
@@ -1594,9 +1596,9 @@ export function planAsSentBack(
   closed: string,
 ): boolean {
   const at = (runFloor: string): string => approvalFingerprint(plan, instructions, contractHash, { ...receipt, runFloor });
-  const approved = at(receipt.runFloor);
-  return approved === receipt.fingerprint || approved === receipt.startedFingerprint ||
-    at(closed) === receipt.startedFingerprint;
+  return closed !== receipt.runFloor && receipt.startedFingerprint !== undefined
+    ? at(closed) === receipt.startedFingerprint
+    : at(receipt.runFloor) === (receipt.startedFingerprint ?? receipt.fingerprint);
 }
 
 // The attempt the person's rejection closed: the stage's run floor as it stood
@@ -5623,18 +5625,20 @@ function publishCodeGenerationStart(
     ? recordCodeGenerationContinuation(projectDir, continuation, "begin") : [];
   // A lowered fence building a plan edited after its approval, or revised for
   // the person's change request: the receipt keeps the content the build
-  // started on, at the attempt it started in, so an interrupted build of it
-  // picks up (see "Picking up an interrupted build") and their next change
-  // request is judged against it (planAsSentBack). A swarm, a worktree
-  // delegation and a batch keep their own continuation rule.
+  // started on, at the attempt it started in, so an interrupted build in the
+  // approval's own attempt picks up (see "Picking up an interrupted build"),
+  // and their next change request is judged against it (planAsSentBack). A
+  // swarm, a worktree delegation and a batch keep their own continuation rule.
   const started = pickUp && continuation && !receipt.batch
     ? buildContentFingerprint(continuation.artifacts.plan, continuation.artifacts.instructions, authority) : null;
   const startedOn = started !== null && started !== receipt.fingerprint ? { startedFingerprint: started } : {};
   if (receipt.status === "generation") {
     // An approval their change request carried was spent by the build their
-    // rejection closed; this build starts on the revision.
+    // rejection closed; this build starts on the revision. Not in `originals`:
+    // a start that fails leaves nothing to undo (only a later attempt reads the
+    // value, and the retry writes it again), and their sweep is for receipts
+    // of this attempt, not of the one the approval was given in.
     if (continuation?.carried && started !== null && started !== receipt.startedFingerprint) {
-      originals.push(receipt);
       writePlanApprovalReceipt(projectDir, { ...receipt, startedFingerprint: started });
     }
     return changeNotices;
