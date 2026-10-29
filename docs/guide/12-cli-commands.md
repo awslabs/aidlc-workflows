@@ -748,7 +748,7 @@ before approval.
 Landing first fetches the current integration branch and revalidates the
 approved evidence against the live Unit DAG, Unit kinds, and active per-Unit
 stage columns. Contract drift refuses before Git mutation and requires rebase,
-republish, re-pin, a new dispatch bracket, and a new merge gate. It then merges
+republish, re-pin, and a new merge gate. It then merges
 pinned content while retaining main-owned engine metadata, folds the Unit row,
 and finalizes the transported audit receipts. For crash recovery, run the
 idempotent steps separately:

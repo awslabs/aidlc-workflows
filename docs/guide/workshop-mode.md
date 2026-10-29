@@ -446,8 +446,8 @@ registry.
 3. The facilitator repeats pin/gate/land for Bob's pinned candidate.
 4. When the final row is merged, `/aidlc` on main routes Build and Test, then
    CI Pipeline.
-5. The group reviews `UNIT_MERGED`, gate, reviewer, and merge-dispatch rows in
-   the combined audit shards.
+5. The group reviews `UNIT_MERGED`, gate, and reviewer rows in the combined
+   audit shards.
 
 The teams never race to push main. Candidate refs can move only through
 claim-bound CAS publication; main serializes the reviewed pinned OIDs.
