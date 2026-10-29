@@ -17,7 +17,9 @@
 > later, use the Kiro harness (`--harness kiro`), listed as Kiro: it runs in
 > Kiro CLI (started with `kiro-cli --v3`) as well as Kiro IDE. In an existing
 > Kiro CLI (V2) project, `aidlc config --harness kiro` switches `.kiro/` to it
-> in place and keeps `aidlc/`; a plain `aidlc config` refresh, or
+> in place and keeps `aidlc/` (at a terminal it asks first; with `--yes` it
+> switches; without a terminal, or under `--quiet` or `--json`, it changes
+> nothing and prints the command with `--yes`); a plain `aidlc config` refresh, or
 > `--harness kiro-v2`, keeps Kiro CLI (V2).
 
 One of the framework's harnesses: the Kiro runtime runs the same AI-DLC
@@ -300,7 +302,8 @@ instead (an ACP client starts `kiro-cli acp --agent-engine v2`). To run Kiro
 CLI on its v3 engine, use the
 [Kiro IDE](kiro-ide.md) distribution instead; in an existing project,
 `aidlc config --harness kiro` switches `.kiro/` to it in place and keeps
-`aidlc/`; then start `kiro-cli --v3` (when it asks to trust the folder and you know
+`aidlc/` (at a terminal it asks first; with `--yes` it switches; without a terminal, or under
+`--quiet` or `--json`, it changes nothing and prints the command with `--yes`); then start `kiro-cli --v3` (when it asks to trust the folder and you know
 what is in it, choose **Trust, continue**). See
 [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
 

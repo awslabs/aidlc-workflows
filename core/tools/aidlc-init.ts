@@ -13179,14 +13179,17 @@ export async function main(
     // `--harness kiro` named Kiro CLI (V2) before it named Kiro, so on a Kiro
     // CLI (V2) project it may be an older script's refresh. At a terminal the
     // person is asked first, unless a --plan-token already carries their
-    // approval of this switch's plan. Otherwise the note says what the name
-    // means and how to stay, before any check can refuse the run, in words
-    // true whatever happens next; under --json in the result (its notes on
-    // success, emitResult on any refusal).
+    // approval of this switch's plan. With no question to ask (no terminal,
+    // or --quiet or --json), the switch needs --yes (or a dry run's token);
+    // otherwise it stops, saying what the name means and both commands. With
+    // --yes or on a dry run, the note says what
+    // the name means and how to stay, before any check can refuse the run, in
+    // words true whatever happens next; under --json in the result (its notes
+    // on success, emitResult on any refusal).
     if (switchOccupant?.distribution === "kiro" && !section && typedHarnesses.includes(typedHarnessName("kiro-ide"))) {
       const stay = configCommand(`--harness ${typedHarnessName("kiro")}${projectTarget(projectDir)}`);
-      const asking = configInputIsTty() && options.mode === "human" && !options.yes &&
-        !dryRun && !argv.includes("--plan-token");
+      const unapproved = !options.yes && !dryRun && !argv.includes("--plan-token");
+      const asking = configInputIsTty() && options.mode === "human" && unapproved;
       if (asking) {
         const answer = configPrompt(
           `This project is set up for Kiro CLI (V2). \`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3). ` +
@@ -13202,6 +13205,20 @@ export async function main(
         if (options.mode === "json") {
           refusalNote = note;
           sourceNotes.push(note);
+        }
+        // With no one at a terminal to answer, the run may be an agent
+        // following a line an older Kiro CLI (V2) tree printed, so the switch
+        // waits for --yes (a dry run and a --plan-token go on).
+        if (unapproved) {
+          const again = configRerunWith(input, projectDir, ["--yes"]);
+          const stopped = `nothing changed; ${switchOccupant.harnessDir} stays on Kiro CLI (V2). ` +
+            `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3); ` +
+            `to switch ${switchOccupant.harnessDir} to Kiro in place, run ${again ? `\`${again}\`` : "it again with --yes"}. ` +
+            "To keep Kiro CLI (V2):";
+          // --quiet prints only a refusal's command, so the rest comes first.
+          if (options.mode === "quiet") writeSwitchNote(stopped, options);
+          emitResult(usage(stopped, stay), options);
+          return;
         }
         writeSwitchNote(note, options);
       }

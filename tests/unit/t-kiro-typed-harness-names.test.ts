@@ -5,8 +5,9 @@
 // CLI (V2) (the `kiro` tree). Installed projects keep the ids they record, so
 // a refresh keeps whichever tree a project has; `--harness kiro` on a Kiro CLI
 // (V2) project is the in-place switch to Kiro, asked first at a terminal
-// (unless a dry run's --plan-token already approves its plan) and said once
-// otherwise, in --quiet and in the --json result too. A copied tool's hand-off carries ids, read as ids by
+// (unless a dry run's --plan-token already approves its plan), refused with
+// no terminal and no --yes, and said once with --yes, in --quiet and in the
+// --json result too. A copied tool's hand-off carries ids, read as ids by
 // every release.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -109,6 +110,47 @@ describe("Kiro harness names a person types", () => {
     expect(switched.out.split(note).length - 1).toBe(1);
     expect(switched.out).toMatch(/to keep Kiro CLI \(V2\), run `[^`]* config --harness kiro-v2[^`]*` instead\./);
     expect(stamp(dir)).toBe("kiro-ide");
+  });
+
+  // An agent in chat has no terminal: following a line an older Kiro CLI (V2)
+  // tree printed, it hears both ways on, and nothing is switched without --yes.
+  test("with no terminal and no --yes, --harness kiro on a Kiro CLI (V2) project changes nothing and names both ways", () => {
+    const dir = project();
+    expect(config(dir, ["--harness", "kiro-v2", "--yes"]).status).toBe(0);
+    const plain = config(dir, ["--harness", "kiro"]);
+    expect(plain.status, plain.out).toBe(2);
+    expect(plain.out).toContain("nothing changed; .kiro stays on Kiro CLI (V2). `--harness kiro` now means Kiro (Kiro IDE and Kiro CLI v3); " +
+      "to switch .kiro to Kiro in place, run `");
+    expect(plain.out).toMatch(/to switch \.kiro to Kiro in place, run `[^`]* config [^`]*--harness kiro [^`]*--yes`\. To keep Kiro CLI \(V2\):/);
+    expect(plain.out).toMatch(/usage: [^\n]* config --harness kiro-v2/);
+    // --quiet prints a refusal's command alone, so the stop and the --yes command come first.
+    const quiet = config(dir, ["--harness", "kiro", "--quiet"]);
+    expect(quiet.status, quiet.out).toBe(2);
+    expect(quiet.out).toMatch(/^Warning: nothing changed; \.kiro stays on Kiro CLI \(V2\)\.[^\n]*--harness kiro [^`\n]*--yes`/);
+    expect(quiet.out).toMatch(/\n[^\n]* config --harness kiro-v2[^\n]*\n$/);
+    const json = config(dir, ["--harness", "kiro", "--json"]);
+    expect(json.status, json.out).toBe(2);
+    const result = JSON.parse(json.stdout) as { message?: string; data?: { notes?: string[] } };
+    expect(result.message).toMatch(/run `[^`]* config [^`]*--harness kiro [^`]*--yes`/);
+    expect(result.data?.notes?.join("\n")).toContain("to keep Kiro CLI (V2), run `");
+    expect(stamp(dir)).toBe("kiro");
+  });
+
+  test("the stop comes before any check of the switch can refuse it, and a terminal run under --quiet stops too", () => {
+    const dir = project();
+    expect(config(dir, ["--harness", "kiro-v2", "--yes"]).status).toBe(0);
+    rmSync(join(dir, ".kiro", "hooks"), { recursive: true, force: true });
+    writeFileSync(join(dir, ".kiro", "hooks"), "not a folder\n");
+    const stopped = config(dir, ["--harness", "kiro"]);
+    expect(stopped.status, stopped.out).toBe(2);
+    expect(stopped.out).toContain("nothing changed; .kiro stays on Kiro CLI (V2)");
+    expect(stopped.out).not.toContain("cannot switch");
+    // --quiet asks nothing, at a terminal too.
+    const quiet = config(dir, ["--harness", "kiro", "--quiet"], { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "y\n" });
+    expect(quiet.status, quiet.out).toBe(2);
+    expect(quiet.out).not.toContain("[y/N]");
+    expect(quiet.out).toContain("Warning: nothing changed; .kiro stays on Kiro CLI (V2)");
+    expect(stamp(dir)).toBe("kiro");
   });
 
   test("with --quiet the switch still says once what it does", () => {

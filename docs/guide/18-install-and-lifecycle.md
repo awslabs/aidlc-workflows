@@ -1278,7 +1278,10 @@ instead: in a project that has one of them, `aidlc config --harness kiro`
 (or `--harness kiro-v2`) switches `.kiro/` to the other in place. A plain
 `aidlc config` refresh keeps whichever Kiro harness the project has; on a Kiro
 CLI (V2) project, `--harness kiro` switches it to Kiro (at a terminal it asks
-first; with `--yes` it says so once and switches), so a script that refreshes
+first; with `--yes` it says so once and switches; without a terminal, or
+under `--quiet` or `--json`, it changes nothing and prints both commands, the
+switch with `--yes` and the refresh with `--harness kiro-v2`; a dry run's
+`--plan-token` applies the switch as planned), so a script that refreshes
 a Kiro CLI (V2) project passes `--harness kiro-v2`. The switch is a
 refresh planned from the installed row's ownership baseline: it removes the files
 only that row shipped, keeps `aidlc/`, reports a locally modified file it would
