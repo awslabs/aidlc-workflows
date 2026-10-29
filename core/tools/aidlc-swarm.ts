@@ -3221,7 +3221,7 @@ function handleCheck(rest: string[]): void {
 
   const verdict = verdictFor(unit, projectDir, identity, check.command, flags["test-file"], showOutput);
   if (!verdict.exists) {
-    fail(`no worktree for unit "${unit}" — run \`prepare\` first`);
+    fail(`no worktree for unit "${unit}" - run \`prepare\` first`);
   }
   if (verdict.confineError) {
     console.log(

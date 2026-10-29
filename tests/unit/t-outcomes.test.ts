@@ -7,9 +7,9 @@
 // state text stand in for a live run, so no model is needed.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { AIDLC_SRC, cleanupTestProject, createTestProject, seededAuditShard, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, cleanupTestProject, createTestProject, FIXTURES_DIR, seededAuditShard, seededStateFile } from "../harness/fixtures.ts";
 import { markersChanged, newlySkipped, stageEvents } from "../harness/outcomes.ts";
 import { PersonTurnLedger } from "../harness/person-turns.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -155,6 +155,19 @@ describe("t-outcomes", () => {
     test("a stage ahead of the cursor started shows", () => {
       const after = progress({ "state-init": "x", "intent-capture": " ", "market-research": "-" });
       expect(markersChanged(before, after, "intent-capture")).toEqual(["market-research"]);
+    });
+
+    // Run 40779000516 on Windows: before the gate, the agent's own plan step
+    // started the current stage, and the hook marked it in progress.
+    test("the current stage started before the gate is no plan change; a stage skipped is", () => {
+      const seed = readFileSync(join(FIXTURES_DIR, "state-initialization-done.md"), "utf-8");
+      const started = seed.replace("- [ ] intent-capture", "- [-] intent-capture")
+        .replace("- **Last Updated**: 2025-07-01T09:30:00Z", "- **Last Updated**: 2026-10-28T22:30:58Z");
+      expect(started).not.toBe(seed);
+      expect(newlySkipped(seed, started)).toEqual([]);
+      expect(markersChanged(seed, started, "intent-capture")).toEqual([]);
+      const skipped = started.replace("- [ ] market-research \u2014 EXECUTE", "- [ ] market-research \u2014 SKIP");
+      expect(newlySkipped(seed, skipped)).toEqual(["market-research"]);
     });
   });
 });

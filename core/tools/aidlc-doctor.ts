@@ -134,7 +134,8 @@ async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
 }
 
 // Git Bash, where Claude Code runs its hooks on Windows, finds a bare `aidlc`
-// only through the extensionless launcher beside aidlc.cmd. Without it every
+// through aidlc.exe in bin or the extensionless launcher beside aidlc.cmd,
+// never aidlc.cmd itself. Without either every
 // hook that calls `aidlc` fails there, while PowerShell and CMD still find the
 // command, so the rest of doctor would read healthy.
 function windowsGitBashLauncherCheck(): DoctorCheck | null {
@@ -179,11 +180,13 @@ export async function doctorUpdateState(
   ) {
     // An automatic refresh is opportunistic UI work. Its short fallback keeps
     // doctor responsive; a requested --check-updates is required network work.
-    update = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
+    const refreshed = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
       offline: flags.offline === "true" ? true : undefined,
       baseUrl: flags["release-base-url"],
       caBundle: flags["ca-bundle"],
     });
+    const keepNeverChecked = !explicit && update.state === "absent" && refreshed.state === "unavailable";
+    if (!keepNeverChecked) update = refreshed;
   }
   return update;
 }

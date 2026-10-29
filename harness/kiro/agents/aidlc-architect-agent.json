@@ -1,6 +1,6 @@
 {
   "name": "aidlc-architect-agent",
-  "description": "AI-DLC Architect Agent — delegation target for the reverse-engineering (2.1) synthesis step. Use for delegated architecture-analysis tasks.",
+  "description": "AI-DLC Architect Agent - delegation target for the reverse-engineering (2.1) synthesis step. Use for delegated architecture-analysis tasks.",
   "prompt": "file://aidlc-architect-agent.md",
   "includeMcpJson": true,
   "tools": [

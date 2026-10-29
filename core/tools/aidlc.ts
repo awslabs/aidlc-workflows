@@ -416,7 +416,7 @@ export const ROUTES: readonly Route[] = [
     human: [{ command: "config [args]", summary: "configure, pin, or refresh this project" }],
     all: [
       "config [--harness <name>] [--from <path>|--download [--release-base-url <url>] [--ca-bundle <path>]] [--mcp <defaults|none>] [--pin <version>|--unpin] [--dry-run] [--yes] [--json] [--quiet] [--force] [--plan-token <token>] [--project-dir <path>]",
-      "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
+      "config models [--show [--json]|--check|--keep|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
@@ -995,17 +995,19 @@ export const ROUTES: readonly Route[] = [
   },
   {
     // The plugin AUTHORING surface (v2): `aidlc plugin validate` / `aidlc plugin
-    // build` run against a plugin checkout, which is usually NOT an installed
-    // project, so this route is public, unpinned, and carries no project
-    // requirement. The installed-plugin lifecycle (select/sync/list) stays on
-    // the engine `plugin` noun above.
+    // build` / `aidlc plugin test` run against a plugin checkout, which is
+    // usually NOT an installed project, so this route is public, unpinned, and
+    // carries no project requirement. The installed-plugin lifecycle
+    // (select/sync/list) stays on the engine `plugin` noun above. The `test`
+    // usage form is that verb's one list of options: its help and the flags
+    // its handler accepts are both read from it.
     id: "plugin-author",
     group: "plugin",
     kind: "noun-map",
     classification: "translation",
-    verbs: ["validate", "build"],
+    verbs: ["validate", "build", "test"],
     tool: TOOLS.utility,
-    targets: { validate: "plugin-validate", build: "plugin-build" },
+    targets: { validate: "plugin-validate", build: "plugin-build", test: "plugin-test" },
     namespace: "public",
     visibility: "hidden",
     projectRequirement: "none",
@@ -1013,7 +1015,11 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human", "json"],
-    all: ["validate [path] [--with <base-root>]", "build <harness> [outDir] [--plugin-root <path>]"],
+    all: [
+      "validate [path] [--with <base-root>]",
+      "build <harness> [outDir] [--plugin-root <path>]",
+      "test [path] --install <project-root> [--harness <name>] [--with <base-root>] [--json]",
+    ],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
@@ -1593,7 +1599,7 @@ function optionForm(option: RouteOption): string {
 // Every group is rendered from one column width so the summaries line up
 // across headings, and a group with no options is left out entirely.
 function renderOptionGroups(
-  command: PublicCommand,
+  summary: (flag: string) => string,
   options: readonly RouteOption[],
   out: typeof process.stdout,
 ): string[] {
@@ -1620,7 +1626,7 @@ function renderOptionGroups(
     lines.push("", heading(group.label, out));
     for (const option of group.members) {
       const form = optionForm(option);
-      lines.push(`  ${form}${" ".repeat(Math.max(2, width - form.length))}${flagSummary(command, option.flag)}`);
+      lines.push(`  ${form}${" ".repeat(Math.max(2, width - form.length))}${summary(option.flag)}`);
     }
   }
   return lines;
@@ -1743,7 +1749,7 @@ export function renderCommandHelp(command: PublicCommand): string {
           ),
         ]
       : []),
-    ...renderOptionGroups(command, options, out),
+    ...renderOptionGroups((flag) => flagSummary(command, flag), options, out),
     ...(examples[command]?.length
       ? [
           "",
@@ -1755,6 +1761,42 @@ export function renderCommandHelp(command: PublicCommand): string {
       : []),
     "",
     dim(`Run '${invoke} --help' for the public command list.`, out),
+    "",
+  ].join("\n");
+}
+
+// `aidlc plugin test`: the route's usage form for the verb is its one list of
+// options. Its help renders from that form here, and its handler in
+// aidlc-utility.ts takes exactly the options routeOptions reads from it.
+const PLUGIN_TEST_FLAG_SUMMARIES: Readonly<Record<string, string>> = {
+  "--harness": "The harness to test, when the project has more than one",
+  "--install": "A project set up with AI-DLC; the test composes into a copy of it and never changes it",
+  "--with": "Your checkout of the base plugin this one builds on, composed into the copy first",
+};
+
+export function pluginTestCommand(): { usage: string; options: RouteOption[] } {
+  const route = ROUTES.find((candidate) => candidate.id === "plugin-author");
+  const form = route ? usageFormsFor(route, "test")[0] : undefined;
+  if (!route || !form) throw new Error("dispatcher route registry is missing plugin test");
+  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, "test") };
+}
+
+export function renderPluginTestHelp(): string {
+  const { usage, options } = pluginTestCommand();
+  const out = process.stdout;
+  return [
+    "Check that a plugin composes cleanly into a copy of a project, which is never changed",
+    "",
+    heading("USAGE", out),
+    `  ${cmd(usage, out)}`,
+    "",
+    heading("ARGUMENTS", out),
+    "  [path]  The plugin's folder, the one holding .aidlc-plugin/plugin.json; the current folder when left out",
+    ...renderOptionGroups(
+      (flag) => PLUGIN_TEST_FLAG_SUMMARIES[flag] ?? FLAG_SUMMARIES[flag] ?? "",
+      options,
+      out,
+    ),
     "",
   ].join("\n");
 }
@@ -2264,7 +2306,7 @@ function resolveSystem(argv: string[]): Action {
 }
 
 // Public noun routes (the v2 team/authoring surface): `aidlc unit <verb>` and
-// `aidlc plugin <validate|build>` resolve at the top level without the engine
+// `aidlc plugin <validate|build|test>` resolve at the top level without the engine
 // prefix. A head token whose verb does not match falls through to the public
 // unknown-command error rather than a noun error, so `aidlc plugin list`
 // remains "unknown command 'plugin'" (that engine surface is `aidlc engine
@@ -4117,6 +4159,13 @@ export async function main(rawArgv: string[]): Promise<void> {
         const { replacePreviousWindowsShimHelper } = await import("./aidlc-lifecycle.ts");
         replacePreviousWindowsShimHelper();
       }
+      // An activation run by a release from before bin\aidlc.exe left none, or
+      // left the Git Bash launcher beside it; this release catches up once.
+      const { binRoot } = await import("./aidlc-install-paths.ts");
+      if (!existsSync(join(binRoot(), "aidlc.exe")) || existsSync(join(binRoot(), "aidlc"))) {
+        const { catchUpWindowsExeCommand } = await import("./aidlc-lifecycle.ts");
+        catchUpWindowsExeCommand();
+      }
     } catch {
       // A binary run from outside an install has no helper to replace.
     }
@@ -4169,6 +4218,21 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
+  // The bin copy on Windows, the one binary with aidlc.cmd beside it, hands the
+  // command to the active release instead of running it. Loaded only there, so
+  // the dispatcher's front gate and the lean projections keep their import graph.
+  if (process.platform === "win32" && existsSync(join(dirname(process.execPath), "aidlc.cmd"))) {
+    import("./aidlc-native-launcher.ts")
+      .then((m) => m.startNativeLauncher(), () => false)
+      .then((launched) => {
+        if (!launched) startDispatcher();
+      });
+  } else {
+    startDispatcher();
+  }
+}
+
+function startDispatcher(): void {
   // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
   // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
   // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only

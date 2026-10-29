@@ -2710,7 +2710,7 @@ describe("t243 project initialization", () => {
     expect(addCodex.status).toBe(4);
     expect(addCodex.stdout).toContain("predates shared onboarding");
     expect(addCodex.stdout).toContain(
-      "run aidlc config --harness kiro first — if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
+      "run aidlc config --harness kiro first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
     );
     expect(existsSync(join(project, ".codex"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
@@ -3032,7 +3032,7 @@ describe("t243 project initialization", () => {
     for (const [version, message] of [
       [
         `${AIDLC_VERSION}-preview.20260101.1`,
-        "predates shared onboarding; run aidlc config --harness copilot first — if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
+        "predates shared onboarding; run aidlc config --harness copilot first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
       ],
       ["99.0.0-preview.20260101.1", "cannot coexist"],
     ]) {

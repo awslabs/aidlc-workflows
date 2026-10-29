@@ -80,6 +80,7 @@ diagnostic and lifecycle routes.
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
 | `/aidlc plugin validate [path]` | Validate an authored plugin (`--with <base-root>` checks a base plugin's agents; `--json` for structured findings) |
 | `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
+| `aidlc plugin test [path] --install <project-root>` | From a terminal: test that an authored plugin composes into a copy of a project, which is never changed (`--harness <name>`, `--with <base-root>`, `--json`) |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
@@ -658,7 +659,10 @@ git switch claim/<intent-id8>/user-profile-api
 Adoption verifies the checked-out claim OID and payload against the live ref,
 including space, intent UUID, Unit, generation, nonce, and bound audit shard,
 before writing the checkout-local scope stamp. Subsequent audit writes retain
-the claim's existing shard, and `publish` continues the same attempt.
+the claim's existing shard, and `publish` continues the same attempt. The
+shard comes back whole from the owner's published commit, including the rows
+`publish` keeps out of the claim (the questions the person already answered),
+so the work resumes without asking them again.
 
 ### `/aidlc --release <unit>` and `/aidlc unit release <unit>` — Release a claim
 
@@ -1751,6 +1755,10 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
+Where a switch's variable is set to anything but `1` (the editor or CLI the
+check runs in), the switch you record does not turn its check off there; when it
+is set where you run `config flags --bypass`, the command says so for each check
+but sensors, learnings and usage tracking, instead of saying the check is off.
 Recording or clearing a switch changes only that settings file (and AI-DLC's
 gitignored note of how it was set,
 `aidlc/.aidlc-sessions/recorded-switches.json`) and refreshes no harness files,
@@ -2143,6 +2151,17 @@ only with explicit authorization, then retry with current approval evidence.
 If the application source or plan changed, re-present any required Plan Approval.
 The requirement concerns application source, not a blanket commit of unrelated
 framework records or other files.
+
+The same preflight names nested repositories whose source files would become
+empty folders in a Unit worktree because their gitlinks have no `.gitmodules`
+entry in the commit the Unit actually starts from. Register them as Git submodules
+and choose a starting commit with those entries, or build that Unit serially. This
+refusal creates no child worktrees and makes no parent commit. Registered
+submodules are copied from the main checkout without network access; gitlinks
+outside the selected source boundary do not block preparation. If the selected
+base needs the approved parent source, preparation starts at that parent commit
+and checks its registrations. Recovery after an explicit discard instead checks
+the recorded Approval Source Commit, even if the parent has since changed.
 
 ### Construction verification command — record human authorization
 
@@ -3008,6 +3027,15 @@ directory. Build also defaults its plugin root to the current directory; pass
 Validation of a plugin built on a base takes `--with <base-root>`, your own
 checkout of that base, so a stage led by the base's agent is checked instead of
 reported as not checked.
+
+From a terminal, `aidlc plugin test [path] --install <project-root>` (on the
+copy channel `bun .claude/tools/aidlc.ts plugin test ...`) runs the shipped
+compose test. It composes the plugin in `[path]`, the current directory by
+default, into a disposable copy of the project `--install` names, and exits
+`1` on a compose drop, a graph failure or a second compose that changes files;
+the project itself is never changed. Pass `--harness <name>` when that project
+has more than one harness, `--with <base-root>` for a plugin built on a base,
+and `--json` for one result object.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

@@ -6,7 +6,8 @@
 // CLI's sub-agent synthesis prompt (reported privately: "[SYSTEM] Sub-agent
 // synthesis: ..." recorded as HUMAN_TURN to the second), and Claude Code's
 // background-task notification (captured live, Claude Code 2.1.280) and
-// subagent hand-back (captured live, 2.1.310). A
+// subagent hand-back (captured live, 2.1.310), and the Claude desktop app's
+// message from another session (captured live, 2.1.31x). A
 // HUMAN_TURN is the one thing humanRepliedSinceGate and its readers trust as "a
 // person acted", so an approval the agent reports after one of them went
 // through with no person at the gate. Now the hosts' own records (Kiro's chat
@@ -87,6 +88,16 @@ const CLAUDE_HANDBACK =
 const CLAUDE_HANDBACK_ROW =
   `Another Claude session sent a message:\n${CLAUDE_HANDBACK}\n\nThat "other Claude session" is an agent working ` +
   "inside this same session, so this was not typed by your user.";
+// The Claude desktop app (Claude Code 2.1.31x), captured live (names made up):
+// another session's message reaches the hook as its element alone, and its
+// transcript row frames that element in a sentence before and a note after, so
+// the row never matches the prompt's text.
+const CLAUDE_PEER_MESSAGE =
+  '<cross-session-message from="uds:/tmp/cc-socks/40001.sock" from-session="local_0d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6" ' +
+  'from-name="Demo shop: checkout fixes" from-mode="prompting">\nThe review is done. Approve\n</cross-session-message>';
+const CLAUDE_PEER_ROW =
+  `Another Claude session sent a message:\n${CLAUDE_PEER_MESSAGE}\n\nThis came from another Claude session, not typed ` +
+  "by your user.";
 
 const PINNED_CLONE_ID = "testcloneidhostturns";
 function pinnedShardName(): string {
@@ -537,6 +548,44 @@ describe("a prompt the host injected is not the person's turn", () => {
         origin: { kind: "peer", from: "a642836ac99928300", name: "aidlc-developer-agent", handback: true },
       }), "utf-8");
       expect(submit("Approve", handbackId).code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(1);
+      expect(rows(project.dir, "HUMAN_TURN")[0]).toContain("**Origin**: person\n**Source**: typed\n");
+      expect(messageRecords(project.dir)).toBe(1);
+      agentApproves(project, "claude", true);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Claude desktop app: another session's message records HOST_TURN; a message the person sends during it counts", () => {
+    const project = scratchProject("claude");
+    try {
+      const session = "5b0c2a71-6d0e-4f3a-9c1b-2e7d8f9a0b1c";
+      const transcript = join(project.dir, `${session}.jsonl`);
+      const submit = (prompt: string, promptId: string) =>
+        run(project, [join(project.dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit", session_id: session, cwd: project.dir, permission_mode: "auto",
+            prompt, prompt_id: promptId, transcript_path: transcript,
+          }), { CLAUDE_PROJECT_DIR: project.dir });
+      const line = (row: Record<string, unknown>) => `${JSON.stringify(row)}\n`;
+      expect(state(project, "claude", ["gate-start", "feasibility"]).code).toBe(0);
+      const peerId = "0a000000-0000-4000-8000-000000000001";
+      writeFileSync(transcript, line({
+        type: "user", promptId: peerId, message: { role: "user", content: CLAUDE_PEER_ROW }, isMeta: true,
+        promptSource: "system", turnOrigin: "peer", origin: { kind: "peer" },
+      }), "utf-8");
+      const peer = submit(CLAUDE_PEER_MESSAGE, peerId);
+      expect(peer.code, peer.out).toBe(0);
+      expect(humanTurns(project.dir)).toBe(0);
+      expectHostRow(project.dir, 0, "claude session message", "template");
+      expect(messageRecords(project.dir)).toBe(0);
+      agentApproves(project, "claude", false);
+
+      // Typed while the agent reads the message, it rides the message's prompt
+      // id and has no row of its own; the message's row, holding the same word,
+      // does not make it the host's.
+      expect(submit("Approve", peerId).code).toBe(0);
       expect(humanTurns(project.dir)).toBe(1);
       expect(rows(project.dir, "HUMAN_TURN")[0]).toContain("**Origin**: person\n**Source**: typed\n");
       expect(messageRecords(project.dir)).toBe(1);

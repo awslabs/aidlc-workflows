@@ -77,6 +77,7 @@ import {
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
+import { main as pluginTestMain } from "./aidlc-plugin-test.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   ARCHIVED_FROM_FIELD,
@@ -538,7 +539,7 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
-import { resolveHookPath } from "./aidlc.ts";
+import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
@@ -1612,6 +1613,44 @@ function handlePluginBuild(
   ];
   if (flags.json === "true") args.push("--json");
   pluginAuthorCommandCode(pluginBuildMain(args));
+}
+
+function handlePluginTest(
+  positional: string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+): void {
+  const { usage, options } = pluginTestCommand();
+  // Help wherever it is asked, as the standalone tool reads it.
+  if (flags.help !== undefined || positional.slice(1).includes("-h")) {
+    process.stdout.write(renderPluginTestHelp());
+    return;
+  }
+  const takesValue = new Map(
+    options.map((option) => [option.flag.slice(2), option.metavar !== undefined]),
+  );
+  const paths = positional.slice(1);
+  let reason: string | null = null;
+  for (const [name, value] of Object.entries(flags)) {
+    const valued = takesValue.get(name);
+    if (valued === undefined) reason ??= `unknown option "--${name}"`;
+    else if (valued && missingValueFlags.has(name)) reason ??= `--${name} requires a value`;
+    // The shared parser hands a bare option the word after it; that word is
+    // the plugin's folder.
+    else if (!valued && value !== "true") paths.push(value);
+  }
+  if (paths.length > 1) reason ??= `unexpected positional argument "${paths[1]}"`;
+  if (reason !== null) {
+    process.stderr.write(`Usage: ${usage}\n${reason}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  const args = [paths[0] ?? process.cwd()];
+  if (flags.install !== undefined) args.push("--install", flags.install);
+  if (flags.harness !== undefined) args.push("--harness", flags.harness);
+  if (flags.with !== undefined) args.push("--with", flags.with);
+  if (flags.json !== undefined) args.push("--json");
+  pluginAuthorCommandCode(pluginTestMain(args, `Usage: ${usage}`));
 }
 
 // The sync doctor names for these plugins: where the host lists its plugins,
@@ -4561,7 +4600,7 @@ export async function collectDoctorReport(
         label:
           hooksDisabledBy === null
             ? "Hooks enabled (resolved disableAllHooks is not true)"
-            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
+            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} - AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
         fix:
           hooksDisabledBy === null
             ? undefined
@@ -6154,7 +6193,7 @@ export async function collectDoctorReport(
           `${cleanupOrphans.length} cleanup-orphan${cleanupOrphans.length === 1 ? "" : "s"} (merge/discard landed, dir persists): ${cleanupOrphans.join(", ")}`,
         );
       }
-      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift — ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
+      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift - ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
       fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
@@ -6221,7 +6260,7 @@ export async function collectDoctorReport(
       } else {
         results.push({
           pass: false,
-          label: `Stale branches: ${stale.length} drift — ${stale.join(", ")}`,
+          label: `Stale branches: ${stale.length} drift - ${stale.join(", ")}`,
           fix: "Inspect unrecognised names and unknown intent ownership. Recognised branches have no worktree directory and no owning WORKTREE_MERGED/_DISCARDED audit row. Delete via 'git branch -D <full-bolt-name>' only if abandoned.",
         });
       }
@@ -6289,7 +6328,7 @@ export async function collectDoctorReport(
     } else {
       results.push({
         pass: false,
-        label: `Orphan state files: ${orphan.length} drift — ${orphan.join(", ")}`,
+        label: `Orphan state files: ${orphan.length} drift - ${orphan.join(", ")}`,
         fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
       });
     }
@@ -8679,7 +8718,7 @@ function handleIntentCreateStateBuild(
   for (const stage of graph) {
     const action = planStages[stage.slug] || "SKIP";
     if (action === "EXECUTE") {
-      executeStages.push(stage.number);
+      executeStages.push(`${stage.number} (${stage.slug})`);
     } else {
       skipStages.push(`${stage.number} (${stage.slug})`);
     }
@@ -8692,7 +8731,7 @@ function handleIntentCreateStateBuild(
       adjustedMapping["reverse-engineering"] = "SKIP";
       const reStage = graph.find((s) => s.slug === "reverse-engineering");
       if (reStage) {
-        const idx = executeStages.indexOf(reStage.number);
+        const idx = executeStages.indexOf(`${reStage.number} (${reStage.slug})`);
         if (idx >= 0) executeStages.splice(idx, 1);
         skipStages.push(`${reStage.number} ${GREENFIELD_RE_SKIP_LABEL}`);
       }
@@ -12189,7 +12228,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       for (const stage of graph) {
         const action = adjustedMapping[stage.slug] || "SKIP";
         if (action === "EXECUTE") {
-          executeStages.push(stage.number);
+          executeStages.push(`${stage.number} (${stage.slug})`);
         } else {
           let reason = stage.slug;
           if (stage.slug === "reverse-engineering" && projectType.toLowerCase() === "greenfield" &&
@@ -12474,7 +12513,7 @@ function rebuildEffectivePlanFields(
     }
   }
   for (const s of graph) {
-    if (eff(s.slug) === "EXECUTE") executeStages.push(s.number);
+    if (eff(s.slug) === "EXECUTE") executeStages.push(`${s.number} (${s.slug})`);
     else if (!preservedSlugs.has(s.slug)) skipStages.push(skipLabel(s));
   }
   let next = setField(content, "Stages to Execute", executeStages.join(", "));
@@ -13844,6 +13883,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "plugin-build":
       handlePluginBuild(positional, flags, missingValueFlags);
+      break;
+    case "plugin-test":
+      handlePluginTest(positional, flags, missingValueFlags);
       break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is

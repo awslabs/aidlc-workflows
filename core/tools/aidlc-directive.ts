@@ -1641,7 +1641,7 @@ export interface AskChoice {
   /** The command that answers the question when this choice is picked; absent when the pick needs one more answer. */
   command?: string;
 }
-const DASH = "\u2014";
+const DASH = "-";
 export const OTHER_OPTION_LINE = `**Other** ${DASH} describe what you want instead`;
 export const NUMBERED_REPLY_HINT = "Reply with a number (or just tell me).";
 export function numberedOptionLine(index: number, label: string, detail?: string): string {
@@ -3805,7 +3805,7 @@ if (import.meta.main) {
     },
     { kind: "print", message: "AIDLC framework version 0.0.0" },
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
-    { kind: "done", reason: "Workflow complete — all in-scope stages approved." },
+    { kind: "done", reason: "Workflow complete - all in-scope stages approved." },
     { kind: "parked", reason: 'Workflow parked at "feasibility". Resume with /aidlc --resume.', stage: "feasibility" },
     { kind: "notice", message: "Team Unit fan-out is active." },
     // The classify-round-trip skeleton case: gate is the unresolved sentinel,
@@ -3840,7 +3840,7 @@ if (import.meta.main) {
       console.log(`${ex.kind}: VALID`);
     } else {
       allValid = false;
-      console.log(`${ex.kind}: INVALID — ${r.errors.join("; ")}`);
+      console.log(`${ex.kind}: INVALID - ${r.errors.join("; ")}`);
     }
   }
   process.exit(allValid ? 0 : 1);
