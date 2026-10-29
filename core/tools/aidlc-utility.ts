@@ -5666,13 +5666,12 @@ export async function collectDoctorReport(
           : leak.kind === "coordination-gate" ? "lock coordination gate"
           : "legacy active-directive transaction";
         const outcome = leak.cleared ? "cleared" : "not cleared";
-        const manual = !leak.cleared;
-        results.push({
+        const label = `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) - ${outcome}`;
+        // A lock doctor cleared is fixed: its row passes and says so.
+        results.push(leak.cleared ? { pass: true, label } : {
           pass: false,
-          label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) - ${outcome}`,
-          fix: manual
-            ? `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`
-            : `the stale lock was cleared automatically; re-run your ${entrySkillInvocation()} command`,
+          label,
+          fix: `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`,
         });
       }
     }
@@ -12136,9 +12135,13 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // refused, naming the setter that lets it through. Keep this guard ahead
     // of the same-scope path, including no-ops.
     if (isAutonomousMode(contentBefore) && !personAsked()) {
+      // No request on record can be a person who is there; only an
+      // unattended run has nobody here.
+      const why = process.env.AIDLC_UNATTENDED === "1"
+        ? "with nobody here to approve the new plan" : "without a request from the person for this change on record";
       die(
         "Cannot change scope while Construction runs unattended (Construction Autonomy Mode is " +
-          "autonomous) with nobody here to approve the new plan. Run " +
+          `autonomous) ${why}. Run ` +
           `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
           "approval at each Bolt), then change scope.",
       );
@@ -12695,9 +12698,11 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // conductor that drifts into "improving the plan") is refused, naming the
     // setter that lets it through.
     if (isAutonomousMode(content) && !personAskedSinceGate(projectDir, { intent: flags.intent, space: flags.space })) {
+      const why = process.env.AIDLC_UNATTENDED === "1"
+        ? "with nobody here to approve it" : "without a request from the person for this change on record";
       die(
         "Cannot change the plan while Construction runs unattended (Construction Autonomy Mode is " +
-          "autonomous) with nobody here to approve it. Run " +
+          `autonomous) ${why}. Run ` +
           `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
           "approval at each Bolt), then recompose.",
       );
@@ -12743,11 +12748,16 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       die(`Cannot recompose "${slug}": ${why}`);
     const typed = (args: string): string => `\`${entrySkillInvocation()} ${args}\``;
     const runAlone = (slug: string): string => `To run it on its own, type ${typed(`--stage ${slug} --single`)}.`;
-    const movePast = (slug: string): string => {
+    // A started stage (in progress, being revised, or at its own question) is
+    // skipped where it stands by the person's own skip, which `next` carries
+    // out (planChangeDirective); on the last stage that is the way on.
+    const movePast = (slug: string, started: boolean): string => {
       const next = nextInScopeStage(slug, scope, content);
       return next
         ? `To move past it, jump to the next stage with ${typed(`--stage ${next.slug}`)}.`
-        : "It is the last stage on the plan.";
+        : started
+          ? `It is the last stage on the plan; to skip it where it stands, type ${typed(`--skip ${slug}`)}.`
+          : "It is the last stage on the plan.";
     };
 
     for (const slug of [...skipList, ...addList]) {
@@ -12767,7 +12777,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
           ? `It is already done; to run it again, jump back to it with ${typed(`--stage ${slug}`)}.`
           : state === "skipped"
             ? (skipping ? "It is already skipped." : runAlone(slug))
-            : (skipping ? movePast(slug) : runAlone(slug));
+            : (skipping ? movePast(slug, true) : runAlone(slug));
         reject(slug, `${frozen} ${instead}`);
       }
       const idx = graph.findIndex((s) => s.slug === slug);
@@ -12789,7 +12799,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       if (!owedRe && !passedOver && currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
         if (putBack) reject(slug, `${frozen} ${runAlone(slug)}`);
         const instead = idx === currentIdx
-          ? (skipping ? movePast(slug) : runAlone(slug))
+          ? (skipping ? movePast(slug, false) : runAlone(slug))
           : (skipping ? "The workflow does not go back to it, so there is nothing to skip." : runAlone(slug));
         reject(slug, `it is ${idx === currentIdx ? "the current stage" : `behind the current stage ("${currentSlug}")`}, and a plan change only reaches stages ahead. ${instead}`);
       }

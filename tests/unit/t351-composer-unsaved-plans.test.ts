@@ -1586,7 +1586,7 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const printed = next(proj, approvalOf(next(proj, ["--scope", "bugfix", "--skip", "deployment-pipeline", "--request", id])));
     expect(printed.kind, printed.message).toBe("print");
     expect(creationOf(printed)).not.toContain("--skip");
-    expect(printed.narration).toContain("Setting up a bugfix workflow for this:");
+    expect(printed.narration).toContain("Setting up the bugfix workflow for this:");
   });
 
   test("a report-only composition's approval creates the plan kept for the entry it was composed from", () => {
@@ -1677,7 +1677,7 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const printed = next(proj, ["--scope", "bugfix", "--request", id]);
     expect(printed.kind, printed.message).toBe("print");
     expect(creationOf(printed)).toContain("--project-type brownfield");
-    expect(printed.narration).toContain(`Setting up a bugfix workflow for this: ${echoed.summary?.shown} stages, `);
+    expect(printed.narration).toContain(`Setting up the bugfix workflow for this: ${echoed.summary?.shown} stages, `);
     expect(printed.narration).not.toContain("The folder has no code yet");
   });
 

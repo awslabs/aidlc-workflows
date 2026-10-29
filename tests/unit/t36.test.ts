@@ -265,6 +265,9 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
     const r = scopeChange(["--scope", "mvp"], p);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Construction Autonomy Mode is autonomous");
+    // What it found is no request on record, which can be a person who is there.
+    expect(r.out).toContain("without a request from the person for this change on record");
+    expect(r.out).not.toContain("nobody here");
     // The step it names is one that runs: the setter's real command, and no
     // wait that never ends (the mode stays autonomous to the end of the run).
     expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);

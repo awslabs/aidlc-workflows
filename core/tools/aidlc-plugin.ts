@@ -2189,7 +2189,7 @@ function heldLine(
       : problem.kind === "range"
         ? [
           `needs ${needs(problem.base)}, and ${problem.base.name} ${problem.version} is ${problem.where}`,
-          `Install a ${problem.base.name} version in that range, or a version of ${key} made for ${problem.base.name} ${problem.version}.`,
+          `Install a version of ${problem.base.name} in that range, or a version of ${key} made for ${problem.base.name} ${problem.version}.`,
         ]
         : problem.kind === "include"
         ? [

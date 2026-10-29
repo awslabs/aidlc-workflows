@@ -5116,6 +5116,20 @@ export function validateCodeGenerationForkApproval(
   return baseMatches ? baseCommit : parentHead;
 }
 
+// The worktree differs from the approved parent source by what it holds itself
+// (edits not committed, or commits the parent's history does not contain), so
+// an approval cannot be handed to it in place. Swarm prepare tells the person
+// which in their words (planNotHandedOver); the message stays the refusal the
+// other callers print.
+export class WorktreeHoldsItsOwnWorkError extends Error {
+  readonly holds: "uncommitted" | "diverged";
+  constructor(message: string, holds: "uncommitted" | "diverged") {
+    super(message);
+    this.name = "WorktreeHoldsItsOwnWorkError";
+    this.holds = holds;
+  }
+}
+
 function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: string, discardedSha256?: string) {
   const provenance = approvalWorktreeProvenance(parentDir, childDir, unit);
   const approved = parentWorktreeApproval(provenance.parent, unit);
@@ -5140,7 +5154,7 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     // The commit holds a link, never what it leads to outside the worktree.
     const live = new Map([...childLive].filter(([key]) => !isLinkTargetListingKey(childSource.listing, key)));
     if (!base || serializeSourceListing(base) !== serializeSourceListing(live)) {
-      throw new Error("Preserved worktree source differs from the approved parent baseline and contains dirty or untracked source. Nothing was changed. Preserve that work, reconcile/review it on the parent, and obtain fresh Plan Approval before retrying.");
+      throw new WorktreeHoldsItsOwnWorkError("Preserved worktree source differs from the approved parent baseline and contains dirty or untracked source. Nothing was changed. Preserve that work, reconcile/review it on the parent, and obtain fresh Plan Approval before retrying.", "uncommitted");
     }
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);
     const committed = gitCommitSourceListing(provenance.repo.cwd, parentHead, provenance.repo.repo === null);
@@ -5150,7 +5164,7 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     try {
       worktreeApprovalGit(provenance.child, ["merge-base", "--is-ancestor", childHead, parentHead]);
     } catch {
-      throw new Error("Preserved worktree history cannot fast-forward to the approved parent source. Reconcile its branch without discarding work, then retry.");
+      throw new WorktreeHoldsItsOwnWorkError("Preserved worktree history cannot fast-forward to the approved parent source. Reconcile its branch without discarding work, then retry.", "diverged");
     }
     syncCommit = parentHead;
   }

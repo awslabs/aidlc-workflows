@@ -478,7 +478,7 @@ completion receipt keep their existing checks. Other stages retain their short
 ### Lines carried to the next spoken step
 
 Some person-facing lines arrive on a step the agent passes through without
-speaking: the `print` that creates the work ("Setting up a poc workflow for
+speaking: the `print` that creates the work ("Setting up the poc workflow for
 this ... The folder has no code yet, so I'm starting this as a new project
 ..."), the `workspace reclassify` reply, and the redo jump that runs Reverse
 Engineering owed behind the cursor. The agent runs those and goes on, then

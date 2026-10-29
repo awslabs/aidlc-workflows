@@ -195,6 +195,7 @@ import {
   readCodeGenerationWorktreeSourceBaseline,
   validateCodeGenerationWorktreeApproval,
   validateCodeGenerationForkApproval,
+  WorktreeHoldsItsOwnWorkError,
 } from "./aidlc-testing-posture.ts";
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -2565,16 +2566,21 @@ function buildHoldsEarlierPlan(projectDir: string, unit: string, worktree: strin
   return !!parentFingerprint && parentFingerprint !== childFingerprint;
 }
 
-// The build's work has moved away from the main code the new approval
-// describes (its worker wrote code, a peer landed first, or main changed), so
-// the new plan cannot be handed to it in place. Nothing is changed; the person
+// The build holds what the new approval does not describe (its worker's edits
+// not committed, or commits the main code's history does not contain), so the
+// new plan cannot be handed to it in place. Nothing is changed; the person
 // chooses between the work it holds and the plan they approved. Keeping it is
 // offered only where its landing runs: work that converged in this attempt
 // lands by the same merge run again, and any other work only through the
 // build's own check, which refuses while the build holds the earlier plan.
+// Any other refusal on the way names its own step.
 function planNotHandedOver(
   projectDir: string, batch: string, unit: string, worktree: string, attempt: SwarmAttemptStamp, error: unknown,
 ): string {
+  const notHanded = `Unit ${unit}: the plan approved again could not be handed to its existing build`;
+  if (!(error instanceof WorktreeHoldsItsOwnWorkError)) {
+    return `${notHanded}. The build and its work are kept. ${error instanceof Error ? error.message : String(error)}`;
+  }
   let landsAsItIs = mergedBackConvergence(projectDir, batch, unit, swarmBoltSlug(unit), attempt) !== null;
   if (!landsAsItIs) {
     try {
@@ -2583,9 +2589,10 @@ function planNotHandedOver(
       // The check's refusal: the landing would stop on it.
     }
   }
-  return `Unit ${unit}: the plan approved again could not be handed to its existing build, ` +
-    `whose work no longer lines up with the main code (${error instanceof Error ? error.message : String(error)}). ` +
-    "The build and its work are kept. To build the new plan, set this Unit's current work aside (abort and discard it) " +
+  const holds = error.holds === "uncommitted"
+    ? "which holds work of its own that is not committed" : "whose commits are not in the main code's history";
+  return `${notHanded}, ${holds}. The build and its work are kept. ` +
+    "To build the new plan, set this Unit's current work aside (abort and discard it) " +
     (landsAsItIs ? "and run prepare again; to keep the current work instead, land it as it is." : "and run prepare again.");
 }
 

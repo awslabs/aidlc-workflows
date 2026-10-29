@@ -6833,7 +6833,7 @@ function createPrintDirective(
   // counts the compiled grid already gave us.
   // A plan composed for this piece of work is the one the person approved; its
   // base scope is not a name they know it by.
-  const plan = flags.planChanges ? "the plan you approved" : `a ${scope} workflow`;
+  const plan = flags.planChanges ? "the plan you approved" : `the ${scope} workflow`;
   directive.narration = clause
     ? `Setting up ${plan} for this: ${clause}.`
     : `Setting up ${plan} for this.`;
