@@ -126,6 +126,31 @@ describe("t326 a pinned Unit's merge gate asks once", () => {
     expect(mergeGate.reject).toContain("unit gate alpha --decision reject --user-input");
   });
 
+  test("after Approve at the merge gate, the next step is the land", () => {
+    const { seed, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "alpha-team");
+    pinAlpha(seed);
+    replyAfterPin(seed, "alpha");
+    const approved = gate(seed, "approve", "Approve");
+    expect(approved.status, approved.out).toBe(0);
+    const land = JSON.parse(approved.stdout).land as Record<string, string>;
+    expect(land.command).toContain("unit land alpha --target main");
+    expect(land.step).toContain("now");
+    const landed = runMergeTool(UNIT, ["land", "alpha", "--target", "main"], seed);
+    expect(landed.status, landed.out).toBe(0);
+    expect(JSON.parse(landed.stdout)).toMatchObject({ landed: true, status: "complete" });
+  });
+
+  test("after Reject at the merge gate, nothing lands", () => {
+    const { seed, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "alpha-team");
+    pinAlpha(seed);
+    replyAfterPin(seed, "alpha");
+    const rejected = gate(seed, "reject", "Reject");
+    expect(rejected.status, rejected.out).toBe(0);
+    expect(JSON.parse(rejected.stdout)).not.toHaveProperty("land");
+  });
+
   test("the turn that ran the pin is not the answer; the reply after it is", () => {
     const { seed, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "alpha-team");
