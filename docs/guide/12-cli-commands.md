@@ -659,7 +659,10 @@ git switch claim/<intent-id8>/user-profile-api
 Adoption verifies the checked-out claim OID and payload against the live ref,
 including space, intent UUID, Unit, generation, nonce, and bound audit shard,
 before writing the checkout-local scope stamp. Subsequent audit writes retain
-the claim's existing shard, and `publish` continues the same attempt.
+the claim's existing shard, and `publish` continues the same attempt. The
+shard comes back whole from the owner's published commit, including the rows
+`publish` keeps out of the claim (the questions the person already answered),
+so the work resumes without asking them again.
 
 ### `/aidlc --release <unit>` and `/aidlc unit release <unit>` — Release a claim
 

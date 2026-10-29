@@ -3494,6 +3494,23 @@ function adoptUnit(args: string[], projectDir?: string): void {
     gate_rhythm: claim.payload.gate_rhythm,
     audit_shard: claim.payload.audit_shard,
   };
+  // Publish ships the claim shard projected onto what pin accepts; the owner's
+  // own commit, the claim commit's second parent, keeps every row. The working
+  // copy takes the owner's shard, so the person's answers stay answered here,
+  // unless this checkout has already written to it.
+  const ownerHead = claim.payload.candidate_head_oid;
+  const recordPrefix = relativeRecordDir(pd);
+  if (ownerHead && recordPrefix) {
+    const shardPath = `${recordPrefix}/audit/${claim.payload.audit_shard}`;
+    const blobAt = (oid: string) => git(pd, ["rev-parse", `${oid}:${shardPath}`]).stdout;
+    if (
+      blobAt(ownerHead) !== blobAt("HEAD") &&
+      git(pd, ["diff", "--quiet", "HEAD", "--", shardPath]).ok
+    ) {
+      const owners = git(pd, ["show", `${ownerHead}:${shardPath}`, "--"]);
+      if (owners.ok) writeFileSync(join(pd, shardPath), owners.stdout);
+    }
+  }
   finalizeClaimCheckout(pd, stamp, claim);
   console.log(JSON.stringify({ adopted: true, ...stamp }));
 }
