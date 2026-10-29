@@ -286,12 +286,14 @@ default (squash in the shipped `org.md`) holds for every other merge. The
 person's reply after the pin is the answer the gate records.
 
 The integration lead presents the evidence summary and pinned OID to the human,
-then records their answer:
+then records their answer: their reply goes in the file pin's gate commands name,
+written with the agent's file tool so no shell reads it, and the gate reads it
+from there:
 
 ```bash
 aidlc unit gate payments \
   --decision approve \
-  --user-input "Approve pinned candidate"
+  --request-file aidlc/.aidlc-request-text/gate-payments.txt
 ```
 
 An approval's output names the land command, run in the same turn with no

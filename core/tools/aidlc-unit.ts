@@ -48,6 +48,8 @@ import {
   readUnitClaimRegistryCache,
   readApplicableTeamUnitScopeStamp,
   readUnitMergeTransaction,
+  recordFileTargetOrThrow,
+  REQUEST_TEXT_DIR,
   readStateFile,
   readUnitGateRhythm,
   readUnitScopeStamp,
@@ -2166,18 +2168,29 @@ function pinnedMergeGate(
 }
 
 // The merge gate as pin hands it to the agent: one question for the person,
-// asked in the pin's own turn, and the command that records each answer.
-function pinMergeGateStep(transaction: UnitMergeTransaction): Record<string, string> {
+// asked in the pin's own turn, and the command that records each answer. Their
+// reply goes in a request file the agent writes with its file tool and the
+// gate reads (readRequestFile), so no shell reads it on the way: PowerShell and
+// Git Bash quote an apostrophe differently. Pin makes the file's folder, since
+// some hosts' file tools make none.
+function pinMergeGateStep(pd: string, transaction: UnitMergeTransaction): Record<string, string> {
   const terms = pinnedMergeGate(transaction);
+  const file = `${REQUEST_TEXT_DIR}/gate-${transaction.unit.replace(/[^A-Za-z0-9._-]+/g, "-")}.txt`;
+  try {
+    mkdirSync(dirname(recordFileTargetOrThrow(pd, file)), { recursive: true });
+  } catch {
+    // A file tool that makes folders still writes it; the command is the same.
+  }
   const record = (decision: "approve" | "reject") =>
-    `${aidlcInvocation()} unit gate ${quoteCommandArgument(transaction.unit)} --decision ${decision} --user-input '<their answer>'`;
+    `${aidlcInvocation()} unit gate ${quoteCommandArgument(transaction.unit)} --decision ${decision} --request-file ${file}`;
   return {
     strategy: terms.strategy,
     target_branch: terms.target,
     ask:
       `Ask the person now, as one question, whether to merge Unit "${transaction.unit}" into ${terms.target}` +
       " (Approve or Reject), with the pinned commit and the files outside the Unit's folder above, then end your" +
-      " turn. Record their reply with the command for their choice.",
+      ` turn. Write their reply, as they typed it, to \`${file}\` with your file tool, not a shell, and record it` +
+      " with the command for their choice.",
     approve: record("approve"),
     reject: record("reject"),
   };
@@ -2326,7 +2339,7 @@ function pinUnit(args: string[], projectDir?: string): void {
     generation: claim.generation,
     evidence,
     gate_required: true,
-    merge_gate: pinMergeGateStep(transaction),
+    merge_gate: pinMergeGateStep(pd, transaction),
     ...(superseded
       ? { superseded: { pinned_oid: superseded.pinned_oid, status: superseded.status } }
       : {}),

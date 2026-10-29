@@ -321,9 +321,11 @@ online stale attempt, and warn once plus proceed from the stamp when offline.
 work and run `aidlc unit publish <unit>`; publication CAS-updates the claim ref
 but does not integrate it. On unscoped main, run `aidlc unit pin <unit>`, then
 in the same turn present the returned pinned OID + evidence summary as one merge
-gate, as its `merge_gate` says. Record the human answer with the command it
-names for their choice (`aidlc unit gate <unit> --decision <approve|reject>
---user-input '<text>'`). On approval, the gate's `land` names `aidlc unit land
+gate, as its `merge_gate` says. Write the person's reply, as they typed it, to
+`aidlc/.aidlc-request-text/gate-<unit>.txt` with your file tool, not a shell, and
+record it with the command it names for their choice (`aidlc unit gate <unit>
+--decision <approve|reject> --request-file aidlc/.aidlc-request-text/gate-<unit>.txt`).
+On approval, the gate's `land` names `aidlc unit land
 <unit> --target <branch>`, run in the same turn with no further question; it
 owns the transaction: pinned git content first with main-owned metadata retained,
 then one Unit-row fold under the intent lock, then audit/finalization. A moved
