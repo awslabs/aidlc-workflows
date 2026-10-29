@@ -18,7 +18,7 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -30,7 +30,6 @@ import {
   changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
-  docsRoot,
   errorMessage,
   fenceSwitchSentence,
   getField,
@@ -51,7 +50,6 @@ import {
   readPlanApprovalRuntimeRecord,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
-  recordFileTargetOrThrow,
   rejectionAtRunFloor,
   rejectionIsFreshAttempt,
   removePlanApprovalRuntimeRecord,
@@ -799,19 +797,18 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
 }
 
 /**
- * Called when a step that has the agent write a plan is published: the record
- * folder of each plan it writes is made first, so the plan is one plain file
- * write with no folder to make. The Copilot CLI's file tool makes no folders,
- * and while the plan waits the plan-approval guard refuses a shell command it
- * cannot read as a record write (a folder in a variable, python, `cmd /c
- * mkdir`). Never through a link.
+ * The record folder of each plan a step that has the agent write a plan names
+ * (stage-level, a Unit's, each Unit of a parallel batch), which
+ * prepareRecordFolders makes when the step is published: while the plan waits
+ * the plan-approval guard refuses a shell command it cannot read as a record
+ * write (a folder in a variable, python, `cmd /c mkdir`).
  */
-export function preparePlanRecordFolders(projectDir: string, directive: Directive): void {
-  if (!isPlanApprovalBeat(directive) || directive.plan_approval === undefined) return;
+export function planRecordFolders(projectDir: string, directive: Directive): string[] {
+  if (!isPlanApprovalBeat(directive) || directive.plan_approval === undefined) return [];
   const units = directive.kind === "run-stage"
     ? directive.plan_approval.status === "approved" ? [] : [directive.unit ?? null]
     : (directive.plan_approval.units ?? []).map((target) => target.unit);
-  const record = docsRoot(projectDir);
+  const folders: string[] = [];
   for (const unit of units) {
     // A name that is no Unit (the `{unit-name}` placeholder among them) gets no folder.
     try {
@@ -819,10 +816,9 @@ export function preparePlanRecordFolders(projectDir: string, directive: Directiv
     } catch {
       continue;
     }
-    const folder = relative(record, codeGenerationRecordDir(projectDir, unit));
-    mkdirSync(recordFileTargetOrThrow(record, folder), { recursive: true });
-    recordFileTargetOrThrow(record, folder);
+    folders.push(codeGenerationRecordDir(projectDir, unit));
   }
+  return folders;
 }
 
 /**

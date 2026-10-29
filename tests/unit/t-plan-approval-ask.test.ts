@@ -1,7 +1,7 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
 // function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply, function:runStateContent,
-// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders, function:parkedWhereItStands
+// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:planRecordFolders, function:parkedWhereItStands
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -4185,7 +4185,7 @@ describe("the plan's record folder is there before the plan is written", () => {
     mkdirSync(dirname(stageDir(blocked)), { recursive: true });
     writeFileSync(stageDir(blocked), "", "utf-8");
     expect(next(blocked).plan_approval).toEqual({ status: "plan" });
-    expect(readFileSync(join(hooksHealthDir(blocked), "plan-approval-ask.drops"), "utf-8")).toContain("EEXIST");
+    expect(readFileSync(join(hooksHealthDir(blocked), "record-folders.drops"), "utf-8")).toContain("EEXIST");
     if (process.platform === "win32") return; // A link needs a privilege Windows does not give by default.
     const linked = project();
     const outside = mkdtempSync(join(tmpdir(), "t-plan-folder-outside-"));
