@@ -364,7 +364,7 @@ describe("t330 (1) the Plan Approval content projection", () => {
     "| --- | --- | --- |",
     `| 4 | [${box}] | Wire the hook |`,
     "",
-    "Check with `echo [x] done`, keep items[x] as written, see [x](notes.md), and write \\[x] literally.",
+    "Check with `echo [x] done`, keep items[x] as written, mark [x]`flag` as is, see [x](notes.md), and write \\[x] literally.",
     "",
   ].join("\n");
   const boxedBaseline = fingerprintOf(boxed(" "));
@@ -383,6 +383,7 @@ describe("t330 (1) the Plan Approval content projection", () => {
     ["a reworded step beside its ticked box", boxed("x").replace("Create the manifest", "Generate the manifest")],
     ["a box inside a code span", boxed(" ").replace("`echo [x] done`", "`echo [ ] done`")],
     ["a box glued to a word", boxed(" ").replace("items[x]", "items[-]")],
+    ["a box glued to a code span", boxed(" ").replace("[x]`flag`", "[ ]`flag`")],
     ["a link's text", boxed(" ").replace("[x](notes.md)", "[X](notes.md)")],
     ["an escaped box", boxed(" ").replace("\\[x]", "\\[ ]")],
   ];

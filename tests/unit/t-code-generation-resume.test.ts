@@ -887,6 +887,15 @@ describe("clearing a plan's ticks", () => {
     expect(projectPlanApprovalContent(reset)).toBe(projectPlanApprovalContent(plan));
     expect(resetPlanTaskMarkers(reset)).toBe(reset);
   });
+
+  // The projection keeps a multi-line comment's closing line as it is, box and
+  // all, so a box after the closer is left; the other ticks are still cleared.
+  test("a box after a multi-line comment's closer is left, and every other tick is cleared", () => {
+    const plan = "# Plan\n\n- [x] Step 1: keep `src/a.ts`\n<!--\nnote\n--> - [x] Step 2: after the comment\n";
+    const reset = resetPlanTaskMarkers(plan);
+    expect(reset).toBe("# Plan\n\n- [ ] Step 1: keep `src/a.ts`\n<!--\nnote\n--> - [x] Step 2: after the comment\n");
+    expect(projectPlanApprovalContent(reset)).toBe(projectPlanApprovalContent(plan));
+  });
 });
 
 describe("the plan's steps", () => {

@@ -1527,10 +1527,7 @@ const PLAN_TASK_BOX_RE = /(?<![\w\]])\[[xX-]\](?=[ \t]|$)/g;
 
 /** The line with every task box outside its inline code spans set back to `[ ]`. */
 function resetTaskBoxes(line: string): string {
-  const reset = (text: string) =>
-    text.replace(PLAN_TASK_BOX_RE, (box, at: number) => (isEscaped(text, at) ? box : "[ ]"));
-  let out = "";
-  let start = 0;
+  const spans: Array<[number, number]> = [];
   for (let cursor = 0; cursor < line.length; cursor++) {
     if (line[cursor] !== "`" || isEscaped(line, cursor)) continue;
     let end = cursor + 1;
@@ -1540,11 +1537,11 @@ function resetTaskBoxes(line: string): string {
       cursor = end - 1;
       continue;
     }
-    out += reset(line.slice(start, cursor)) + line.slice(cursor, close);
-    start = close;
+    spans.push([cursor, close]);
     cursor = close - 1;
   }
-  return out + reset(line.slice(start));
+  return line.replace(PLAN_TASK_BOX_RE, (box, at: number) =>
+    isEscaped(line, at) || spans.some(([from, to]) => at >= from && at < to) ? box : "[ ]");
 }
 
 export function projectPlanApprovalContent(text: string): string {
@@ -2285,24 +2282,32 @@ function stepsWithWrittenFiles(
 
 /**
  * The plan with every task box the approval projection resets (`[x]`, `[X]`,
- * `[-]` wherever a line puts them, outside fences, comments and code spans,
- * before a terminal review appendix) set back to `[ ]`, and every other byte as
- * it was. Returns the plan unchanged unless its approval projection is provably
- * the same afterwards, so clearing ticks can never change what was approved.
+ * `[-]` wherever a line puts them, outside fences, multi-line comments and the
+ * line's own code spans, as the projection reads them, before a terminal review
+ * appendix) set back to `[ ]`, and every other byte as it was. Only a reset that
+ * leaves the approval projection provably the same is kept, so clearing ticks
+ * can never change what was approved: when resetting every visible box would
+ * not (a box after a multi-line comment's closer, which the projection keeps as
+ * it is), only the lines shown whole are reset, and failing that the plan is
+ * returned unchanged.
  */
 export function resetPlanTaskMarkers(plan: string): string {
   const bom = plan.startsWith("\uFEFF") ? "\uFEFF" : "";
   const text = plan.slice(bom.length);
   const body = contentBeforeTerminalReviewAppendix(text);
   const visible = visibleMarkdownLines(body, { preserveIndentedCode: true });
-  // Lines at even indices, their own line endings between them.
-  const parts = body.split(/(\r\n|\r|\n)/);
-  visible.forEach((line, index) => {
-    const raw = parts[index * 2];
-    if (raw !== undefined && resetTaskBoxes(line) !== line) parts[index * 2] = resetTaskBoxes(raw);
-  });
-  const reset = `${bom}${parts.join("")}${text.slice(body.length)}`;
-  return projectPlanApprovalContent(reset) === projectPlanApprovalContent(plan) ? reset : plan;
+  const cleared = (whole: boolean): string | null => {
+    // Lines at even indices, their own line endings between them.
+    const parts = body.split(/(\r\n|\r|\n)/);
+    visible.forEach((line, index) => {
+      const raw = parts[index * 2];
+      if (raw === undefined || (whole && raw !== line) || resetTaskBoxes(line) === line) return;
+      parts[index * 2] = resetTaskBoxes(raw);
+    });
+    const reset = `${bom}${parts.join("")}${text.slice(body.length)}`;
+    return projectPlanApprovalContent(reset) === projectPlanApprovalContent(plan) ? reset : null;
+  };
+  return cleared(false) ?? cleared(true) ?? plan;
 }
 
 function underSwarmDirective(projectDir: string): boolean {
