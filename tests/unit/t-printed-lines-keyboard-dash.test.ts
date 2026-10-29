@@ -83,7 +83,7 @@ describe("t-printed-lines-keyboard-dash", () => {
   });
 
   test("the check reads literals, never comments or regexes", () => {
-    const text = "// a \u2014 comment\nconst a = /x\u2014y/;\nconst b = \"one \u2014 two\";\nconst c = `t ${a} \u2013 u`;\n";
+    const text = "// a \u2014 comment\nconst a = /x\u2014y/;\nconst b = \"one \u2014 two\";\nconst c = `t $" + "{a} \u2013 u`;\n";
     expect(longDashLiterals("x.ts", text).map((literal) => literal.line)).toEqual([3, 4]);
   });
 });
