@@ -298,13 +298,12 @@ function walkToGate(
     }
     const completed = run(STATE, proj, ["unit", "complete", "--stage", stage, "--unit", "alpha"]);
     expect(completed.rc, completed.out).toBe(0);
-    const said = reviews[stage];
+    const said = reviews[stage] ?? [];
     if (directive.reviewer && said === "stopped") {
       logStoppedReview(proj, stage, directive.reviewer);
-    } else if (directive.reviewer) {
-      const findings = said ?? [];
-      logReview(proj, stage, directive.reviewer, findings);
-      if (findings.some((finding) => finding.severity !== "Minor")) logReview(proj, stage, directive.reviewer, findings, 2);
+    } else if (directive.reviewer && said !== "stopped") {
+      logReview(proj, stage, directive.reviewer, said);
+      if (said.some((finding) => finding.severity !== "Minor")) logReview(proj, stage, directive.reviewer, said, 2);
     }
   }
   beforeGate?.();
