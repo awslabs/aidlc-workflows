@@ -1,13 +1,14 @@
 // covers: harness-instrument:printed-lines-keyboard-dash
 //
 // A line AI-DLC prints uses " - ", never a long dash (U+2013 or U+2014) a
-// person cannot type (Arden's pick for P2944). This lint reads every string
-// and template literal in the TypeScript under core/ and harness/ with the
-// TypeScript parser, so a comment or a regex is never taken for a printed
-// line, and fails on a long dash. Left out: the shipped onboarding prose and
-// Codex's config-file comments, which are documents, and the literals in
-// READ_FORMATS, which a tool writes into a record or reads back from one, so
-// an existing record must still parse.
+// person cannot type (the maintainer's pick for P2944). This lint reads every
+// string and template literal in the TypeScript under core/ and harness/ with
+// the TypeScript parser, so a comment or a regex is never taken for a printed
+// line, and every string value in their JSON (the Claude Code welcome card, the
+// Kiro agents' descriptions), and fails on a long dash. Left out: the shipped
+// onboarding prose and Codex's config-file comments, which are documents, and
+// the literals in READ_FORMATS, which a tool writes into a record or reads
+// back from one, so an existing record must still parse.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -44,7 +45,7 @@ const READ_FORMATS = new Set<string>([
 function sourceFiles(): string[] {
   const listed = runTestSourceGit(REPO_ROOT, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "core", "harness"]);
   return [...new Set(listed.split("\0"))].filter(
-    (path) => /\.ts$/.test(path) && !DOCUMENTS.test(path) && existsSync(join(REPO_ROOT, path)),
+    (path) => /\.(?:ts|json)$/.test(path) && !DOCUMENTS.test(path) && existsSync(join(REPO_ROOT, path)),
   );
 }
 
@@ -65,11 +66,21 @@ export function longDashLiterals(file: string, text: string): Array<{ line: numb
   return found;
 }
 
+/** The string values anywhere in a parsed JSON file that carry a long dash. */
+function longDashJsonStrings(value: unknown): string[] {
+  if (typeof value === "string") return LONG_DASH.test(value) ? [value] : [];
+  return value !== null && typeof value === "object" ? Object.values(value).flatMap(longDashJsonStrings) : [];
+}
+
 describe("t-printed-lines-keyboard-dash", () => {
   test("no string AI-DLC prints from core/ or harness/ carries a long dash", () => {
     const findings: string[] = [];
     for (const path of sourceFiles()) {
-      for (const literal of longDashLiterals(path, readFileSync(join(REPO_ROOT, path), "utf8"))) {
+      const text = readFileSync(join(REPO_ROOT, path), "utf8");
+      const literals = path.endsWith(".json")
+        ? longDashJsonStrings(JSON.parse(text)).map((value) => ({ line: 1, text: value }))
+        : longDashLiterals(path, text);
+      for (const literal of literals) {
         if (READ_FORMATS.has(`${path} ${literal.text}`)) continue;
         findings.push(`${path}:${literal.line}: ${JSON.stringify(literal.text.slice(0, 80))}`);
       }

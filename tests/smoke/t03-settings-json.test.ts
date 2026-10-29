@@ -468,7 +468,7 @@ describe("companyAnnouncements — the Scopes table says what each plan runs", (
         const slugs = stagesOf(ph).map((stage) => stage.slug);
         const run = slugs.filter((slug) => grid[scope]?.stages[slug] === "EXECUTE");
         if (run.length === slugs.length) return "all";
-        if (run.length === 0) return "—";
+        if (run.length === 0) return "-";
         return run.map((slug) => codeOf.get(slug)).join(", ");
       });
     const rows = scopeRows.slice(2).map(cells);
