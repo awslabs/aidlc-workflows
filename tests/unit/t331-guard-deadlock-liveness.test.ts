@@ -2241,10 +2241,19 @@ describe("AttemptView projections and refusal streaks", () => {
     const decided = (status: Status, other?: Status) =>
       candidateReviewCoverageProjection([...review("NOT-READY", 1, 0), approval(2, {
         [REVIEW_FINDING_DISPOSITIONS_FIELD]: serializeReviewFindingDispositions([
-          { artifact: "nfr-design", id: "R-01", fingerprint: `sha256:${"b".repeat(64)}`, status },
+          // The engine names each reviewed document by its path in the project.
+          {
+            artifact: "aidlc/construction/alpha/nfr-design/security-design.md",
+            id: "R-01", fingerprint: `sha256:${"b".repeat(64)}`, status,
+          },
           // One unit-end approval records every stage's findings; another
           // stage's are not this stage's.
-          ...(other ? [{ artifact: "logical-components", id: "R-01", fingerprint: `sha256:${"c".repeat(64)}`, status: other }] : []),
+          ...(other
+            ? [{
+              artifact: "aidlc/construction/alpha/nfr-requirements/nfr-requirements.md",
+              id: "R-01", fingerprint: `sha256:${"c".repeat(64)}`, status: other,
+            }]
+            : []),
         ])!,
       })], {
         unit: "alpha",
@@ -2253,7 +2262,7 @@ describe("AttemptView projections and refusal streaks", () => {
         reviewer: "reviewer",
         artifactPrefix: "construction/alpha/nfr-design/",
         expectedFingerprint: fingerprint,
-        approvalAccepts: (block) => approvalDecidesOpenFindings(block, "nfr-design"),
+        approvalAccepts: (block) => approvalDecidesOpenFindings(block, "construction/alpha/nfr-design/"),
       });
     expect(decided("Accepted risk")).toBe("approved");
     expect(decided("Fix requested")).toBe(null);

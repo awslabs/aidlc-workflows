@@ -19758,7 +19758,8 @@ function candidateAttemptEventMatches(
 // What a reviewed stage's review comes to for pin: "ready" when its last
 // verified review is READY on the candidate's documents, "approved" when it is
 // NOT-READY on them and the person's approval of the stage (the GATE_APPROVED
-// the stage gate writes) comes after it, null otherwise. A change to the
+// the stage gate writes) comes after it and decided its open findings, null
+// otherwise. A change to the
 // documents, a rejection or a revision after either undoes it.
 export function candidateReviewCoverageProjection(
   rows: ReadonlyArray<AuditShardEvent>,

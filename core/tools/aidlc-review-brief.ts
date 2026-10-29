@@ -1223,13 +1223,16 @@ function parseDispositionField(
   });
 }
 
-// Whether an approval decided every open finding it recorded on one review
-// artifact. A finding the person asked to have fixed, or whose work changed
-// after its review, is still open; an approval that records none stands for
-// its own decision.
-export function approvalDecidesOpenFindings(block: string, artifact: string | undefined): boolean {
+// Whether an approval decided every open finding it recorded on the documents
+// under one folder (`construction/<unit>/<stage>/`); a disposition names its
+// document by its path in the project. A finding the person asked to have
+// fixed, or whose work changed after its review, is still open; an approval
+// that records none stands for its own decision.
+export function approvalDecidesOpenFindings(block: string, documents: string): boolean {
   return parseDispositionField(auditBlockField(block, REVIEW_FINDING_DISPOSITIONS_FIELD))
-    .filter((disposition) => disposition.artifact === artifact)
+    .filter((disposition) =>
+      disposition.artifact.startsWith(documents) || disposition.artifact.includes(`/${documents}`)
+    )
     .every((disposition) => dispositionIsDecision(disposition.status));
 }
 

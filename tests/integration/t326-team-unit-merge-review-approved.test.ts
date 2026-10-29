@@ -10,7 +10,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   artifactFilename,
   loadStageGraphAll,
@@ -129,9 +129,13 @@ describe("t326 pin and a stage approved over an open review concern", () => {
     const candidate = prepareCandidate(fixture.remote, "alpha", "fix-team");
     reviewLeftNotReady(candidate, "fix-team");
     // "Approve, but fix R-01": the approval records the fix the person asked
-    // for, and the finding stays open for the next review.
+    // for, and the finding stays open for the next review. The engine names
+    // the reviewed document by its path in the project.
+    const reviewed = join(
+      seededRecordDir(candidate.checkout), "construction", "alpha", STAGE, artifactFilename(nfrDesign.review_artifact!),
+    );
     const dispositions = serializeReviewFindingDispositions([{
-      artifact: nfrDesign.review_artifact!,
+      artifact: relative(candidate.checkout, reviewed).replaceAll("\\", "/"),
       id: "R-01",
       fingerprint: `sha256:${"b".repeat(64)}`,
       status: "Fix requested",
