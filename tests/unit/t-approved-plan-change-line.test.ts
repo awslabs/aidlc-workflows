@@ -18,6 +18,9 @@
 //     decision runs it: the agent going back on its own is refused;
 //   - ticking a step is not a change, an added step is named as added, and
 //     once the build has started the line says so and offers the rebuild;
+//   - a tick is not a change wherever the step's line puts its box (after a
+//     label, after bold, in a heading, in a table cell), and a step's words
+//     changed beside such a box still ask again;
 //   - the plan-approval guard lets restore through while the plan waits;
 //   - under relaxed, the line beside each build step on the edited plan says
 //     plan re-approval is off, never plan approval, which stays on; a plan
@@ -172,9 +175,9 @@ function say(proj: string, prompt: string, session = SESSION): void {
 }
 
 /** Plan, then the person approves in their own words and the agent records that choice. */
-function approvedPlan(proj: string, unit: string | null = UNIT): void {
+function approvedPlan(proj: string, unit: string | null = UNIT, plan = planText(proj)): void {
   mkdirSync(recordDir(proj, unit), { recursive: true });
-  writeFileSync(planPath(proj, unit), planText(proj), "utf-8");
+  writeFileSync(planPath(proj, unit), plan, "utf-8");
   writeFileSync(instructionsPath(proj, unit), INSTRUCTIONS, "utf-8");
   expect(next(proj).ask_type).toBe("plan-approval");
   say(proj, "approve");
@@ -365,6 +368,40 @@ describe("an approved plan that changed before the build is named, and can be un
     startBuild(proj);
     rewrite(proj);
     expect(next(proj).change_notices).toContain(changed(REBUILD_ASK, "after the build started"));
+  });
+
+  // The stage asks for a box on each step and names no line shape, so a plan's
+  // boxes can sit anywhere on its step lines. A person once met the plan
+  // question again after the developer ticked `Step N. [ ]` boxes.
+  function boxedPlanText(proj: string, box: string, totals = "add the totals in `src/totals.ts`"): string {
+    return "# Code Generation Plan\n\n## Summary\n\n- Builds: a cart\n- Touches: src/\n- Tests: 3 unit tests\n\n" +
+      `## Steps\n\nStep 1. [${box}] add the cart model in \`src/cart.ts\`\n\n**Step 2.** [${box}] ${totals}\n\n` +
+      `### Step 3. [${box}] add the checkout in \`src/checkout.ts\`\n\n` +
+      `| Step | Done | What |\n| --- | --- | --- |\n| 4 | [${box}] | Update the brief doc comment |\n\n` +
+      renderTestingContract(resolveTestingPosture(proj));
+  }
+
+  for (const policy of ["strict", "off"] as const) {
+    test(`${policy}: ticking boxes that are not list items is not a change either`, () => {
+      const proj = project(policy);
+      approvedPlan(proj, UNIT, boxedPlanText(proj, " "));
+      startBuild(proj);
+      writeFileSync(planPath(proj), boxedPlanText(proj, "x"), "utf-8");
+      const build = next(proj);
+      expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+      expect(build.plan_approval).toEqual({ status: "approved" });
+      expect(build.change_notices ?? []).toEqual([]);
+    });
+  }
+
+  test("strict: a step's words changed beside such a box still ask again", () => {
+    const proj = project("strict");
+    approvedPlan(proj, UNIT, boxedPlanText(proj, " "));
+    startBuild(proj);
+    writeFileSync(planPath(proj), boxedPlanText(proj, "x", "add the taxes in `src/totals.ts`"), "utf-8");
+    const ask = next(proj);
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("plan-approval");
   });
 
   // Their yes is answered by the restore and the build that follows it. A
