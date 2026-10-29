@@ -226,7 +226,6 @@ import {
   checkSummaryConfirmationEvidence,
   clearEarlierAttemptSummaryAnswer,
   clearActiveDirectiveMarker,
-  codeGenerationIsTheStep,
   codekbRepoName,
   discoverSiblingRepos,
   repoNameProblem,
@@ -659,6 +658,7 @@ import {
   codeGenerationResume,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
+  codeGenerationStepOnRecord,
   notePlanApprovalOverrideOffered,
   parkedWhereItStands,
   promotableTestingPosture,
@@ -15132,11 +15132,16 @@ function emitTeamUnitMajorRunStage(
     return;
   }
   if (scopeStamp) {
-    emit(noticeDirective(
-      `Unit "${scopeStamp.unit}" is complete and approved in this checkout. ` +
-        `Commit the completed candidate and run \`aidlc unit publish ${scopeStamp.unit}\`; ` +
-        "unscoped main will pin, gate, and land it.",
-    ));
+    // Named, so the step on record says which Unit is done here: on Copilot
+    // the notice is that step, and the plan-approval guard reads it.
+    emit({
+      ...noticeDirective(
+        `Unit "${scopeStamp.unit}" is complete and approved in this checkout. ` +
+          `Commit the completed candidate and run \`aidlc unit publish ${scopeStamp.unit}\`; ` +
+          "unscoped main will pin, gate, and land it.",
+      ),
+      unit: scopeStamp.unit,
+    });
     return;
   }
   const next = nextInScopeStage(finalStage.slug, scope, refreshedState);
@@ -17060,9 +17065,10 @@ function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
 // once per command, and not where Code Generation is the step on record, where
 // the plan-approval guard judges the `jump execute` the print names.
 function jumpRunsInNext(projectDir: string, stateContent: string): boolean {
-  return !isReadOnlyEngineProbe() && jumpsMade === 0 && !codeGenerationIsTheStep(
-    readActiveDirectiveMarker(projectDir, stateContent)?.stage ?? "",
-    getField(stateContent, "Current Stage") ?? "",
+  return !isReadOnlyEngineProbe() && jumpsMade === 0 && !codeGenerationStepOnRecord(
+    projectDir,
+    stateContent,
+    readActiveDirectiveMarker(projectDir, stateContent),
   );
 }
 

@@ -96,7 +96,6 @@ import {
   auditFilePath,
   beforeDelimiter,
   type ClaudeCodeHookInput,
-  codeGenerationIsTheStep,
   composerProposalPath,
   docsRoot,
   ENGINE_TEXT_DIRS,
@@ -176,6 +175,7 @@ import {
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   codeGenerationRulesArrivingReason,
+  codeGenerationStepOnRecord,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
   parkedWhereItStands,
@@ -2582,7 +2582,7 @@ async function evaluate(
     // The step on record is the engine's to read too: where it is Code
     // Generation, `next --stage` leaves a jump to the `jump execute` judged here.
     const codeGenerationRelevant =
-      codeGenerationIsTheStep(directiveStage, durableStage) ||
+      codeGenerationStepOnRecord(projectDir, state, activeDirective) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =

@@ -933,6 +933,8 @@ export interface NoticeDirective {
   kind: "notice";
   narration?: NarrationField;
   message: string;
+  /** The claimed Unit the notice says is complete and approved in this checkout. */
+  unit?: string;
 }
 
 // The Directive union — the engine emits exactly one of these per `next`.
@@ -1164,7 +1166,7 @@ const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note", "revisio
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
-const NOTICE_FIELDS = ["kind", "message"] as const;
+const NOTICE_FIELDS = ["kind", "message", "unit"] as const;
 
 // `narration` is legal on EVERY kind, so it is folded into each allowed-key set
 // centrally rather than repeated in eleven literals. A presentation field carries no
@@ -2298,6 +2300,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "notice":
       checkString(o, "message", kind, errors);
+      checkOptionalString(o, "unit", kind, errors);
       break;
     // No default: the union is exhaustive — every member of DirectiveKind has a
     // case above. TS flags a missing case at compile time if a kind is added.

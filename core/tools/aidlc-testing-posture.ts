@@ -56,7 +56,9 @@ import {
   clearEngineAskMark,
   clearPlanApprovalReceipt,
   isolatedCodeGenerationTestStrategy,
+  codeGenerationIsTheStep,
   readActiveDirectiveMarker,
+  readApplicableTeamUnitScopeStamp,
   singleStageAttemptIsOpen,
   singleStageAttemptScope,
   authorizedVerificationCommand,
@@ -2628,6 +2630,31 @@ export function codeGenerationIssuance(
     if (!setAside || marker.stage !== CODE_GENERATION_STAGE) return null;
     if (marker.unit !== undefined) return { kind: "run-stage", unit: marker.unit };
     return marker.units?.length ? { kind: "invoke-swarm", units: marker.units } : { kind: "run-stage" };
+  }
+}
+
+/**
+ * Whether Code Generation is the step on record (codeGenerationIsTheStep: the
+ * step the engine issued, current for this state, or Current Stage), as the
+ * plan-approval guard and `next --stage` both read it. Not once that step is
+ * the engine's notice that the Unit this checkout claims is complete and
+ * approved here: the Unit's stages are the checkout's whole walk, so Code
+ * Generation is over there, as it is once a workflow's walk moves past it,
+ * though Current Stage stays on it. Only Copilot keeps a notice as the step on
+ * record (its Stop hook ends the turn on it); elsewhere the Unit's approved
+ * build stays on record. A stamp that cannot be read leaves the step as it was.
+ */
+export function codeGenerationStepOnRecord(
+  projectDir: string,
+  stateContent: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  if (!codeGenerationIsTheStep(marker?.stage ?? "", getField(stateContent, "Current Stage") ?? "")) return false;
+  if (marker?.version !== 2 || marker.kind !== "notice" || !marker.unit) return true;
+  try {
+    return readApplicableTeamUnitScopeStamp(projectDir, stateContent)?.unit !== marker.unit;
+  } catch {
+    return true;
   }
 }
 
