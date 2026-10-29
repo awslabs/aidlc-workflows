@@ -2304,7 +2304,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
-  test("27l: a person's words in quotes may hold parentheses, semicolons, spaced pipes or arrows, and a single-quoted price without an Allow click", () => {
+  test("27l: a person's words in quotes may hold parentheses, semicolons, and spaced pipes or arrows without an Allow click", () => {
     // The agent records answers and decisions in the person's words, which
     // often hold "(closed range)", "Skip it; nothing else", or "A|B" options.
     // Inside quotes those are plain text in every shell VS Code may run, and
@@ -2327,11 +2327,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           // as a later run recorded them, with / and + in the words
           'bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision "Q1,Q2,Q3,Q4" --options "Q1: Inclusive end / exclusive+day-after / inclusive-for-total-only / parameterized / Other; Q2: date-only / may-carry-time / mixed-normalize / Other; Q3: filter.ts only / review-others / broader-rework / Other; Q4: regression-test / test+manual / no-new-test / Other"',
           'bun .aidlc/tools/aidlc.ts engine log answer --stage requirements-analysis --details "Q1: A (inclusive end); Q2: A (date-only, plain inclusive comparison); Q3: A (filter.ts only, AssetApi untouched); Q4: A (add targeted regression test, keep existing tests green)"',
-          // a question whose choice holds a comma and a price, one --option a
-          // choice, as the protocol shows it: no | for cmd to read, and no
-          // shell expands a $ in single quotes
-          "bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision 'Q3: how should formatPrice(0) read?' --option 'Show $0.00, with tax' --option 'A: hide it' --option 'Other'",
-          "aidlc engine log answer --stage requirements-analysis --details 'Q3: Show $0.00, with tax'",
+          // a question whose choice holds a comma, one --option a choice, as the
+          // protocol shows it: no | for cmd to read, and `A:` is text, not a drive
+          "bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision 'Q3: how should formatPrice(0) read?' --option 'Show zero, with tax' --option 'A: hide it' --option 'Other'",
         ]) expect(decision(command, shell), `${shell}: ${command}`).toBe("allow");
         // Lettered options, which Windows would read as a path on drive A:.
         expect(decision('aidlc engine log decision --stage requirements-analysis --decision "Q3?" --options "A: yes only fix the end,B: also change start,Other"', shell), String(shell)).toBe("allow");
@@ -2353,8 +2351,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           "aidlc engine log answer --stage requirements-analysis --details (calc)",
           "aidlc engine log answer --stage requirements-analysis --details a;calc",
           'aidlc engine log answer --stage requirements-analysis --details "a $(calc) b"',
-          // a $ in double quotes, and a backtick in single ones, still keep the prompt
-          'aidlc engine log answer --stage requirements-analysis --details "Show $0.00, with tax"',
+          // a $ in either quotes (test 30), and a backtick, still keep the prompt
+          "bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision 'Q3?' --option 'Show $0.00, with tax' --option 'Hide it'",
           "aidlc engine log answer --stage requirements-analysis --details 'a `calc` b'",
           'aidlc engine log answer --stage requirements-analysis --details "100% (of it)"',
           'aidlc engine log answer --stage requirements-analysis --details "a ^& b"',
