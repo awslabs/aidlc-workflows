@@ -515,6 +515,8 @@ export function prepareCandidate(
     answerLine?: string;
     /** Claim with the unit-end rhythm: one approval on the last stage, none per stage. */
     unitEnd?: boolean;
+    /** Claim with the per-stage rhythm by name, as on a main whose own rhythm is unit-end. */
+    perStage?: boolean;
     /** Runs right after claim, before any stage work or audit receipt is
      *  written - lets a case mint a real event (e.g. a session-start hook)
      *  into the fresh checkout's shard before anything else exists there. */
@@ -530,7 +532,10 @@ export function prepareCandidate(
   if (options.crlf) git(checkout, ["config", "core.autocrlf", "false"]);
   const claim = runMergeTool(
     UNIT,
-    ["claim", unit, "--team", label, ...(options.unitEnd ? ["--rhythm", "unit-end"] : [])],
+    [
+      "claim", unit, "--team", label,
+      ...(options.unitEnd ? ["--rhythm", "unit-end"] : options.perStage ? ["--rhythm", "per-stage"] : []),
+    ],
     checkout,
   );
   expect(claim.status, claim.out).toBe(0);

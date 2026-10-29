@@ -14890,14 +14890,16 @@ export function deriveTeamUnitProgressModel(
 }
 
 // The rhythm a team Unit was claimed with, as its gate rows record it: a Unit
-// claimed with unit-end approves once, on a row scoped unit-end. A Unit with
-// no such row walks this checkout's own rhythm.
+// claimed with unit-end approves once, on a row scoped unit-end, and one
+// claimed per-stage on rows scoped per-stage. A Unit with no such row walks
+// this checkout's own rhythm.
 function unitGateRhythmsFromAudit(rows: readonly AuditShardEvent[]): Map<string, UnitGateRhythm> {
   const rhythms = new Map<string, UnitGateRhythm>();
   for (const row of rows) {
     if (row.event !== "GATE_APPROVED" && row.event !== "STAGE_AWAITING_APPROVAL") continue;
     const unit = auditBlockField(row.block, "Unit");
-    if (unit && auditBlockField(row.block, "Gate Scope") === "unit-end") rhythms.set(unit, "unit-end");
+    const scope = auditBlockField(row.block, "Gate Scope");
+    if (unit && (scope === "unit-end" || scope === "per-stage")) rhythms.set(unit, scope);
   }
   return rhythms;
 }
