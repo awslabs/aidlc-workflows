@@ -825,7 +825,7 @@ interface PreparedEmission {
   // The agent stops after this step (see writePrepared).
   endsTurn?: true;
   marker?: {
-    kind: "ask" | "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
+    kind: "ask" | "load-steering" | "run-stage" | "invoke-swarm" | "notice"; stage: string; unit?: string;
     units?: string[];
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
     rules_bundle?: string; directive_sha256?: string;
@@ -1948,6 +1948,21 @@ function prepareEmission(directive: Directive): PreparedEmission {
       openQuestionMarkers.add(marker);
     }
   }
+  // The engine's word that the Unit this checkout claims is complete and
+  // approved here (the one notice that names a Unit) is the step on record on
+  // every harness, at the stage of the step it follows, so the plan-approval
+  // guard and `next --stage` read Code Generation as over there
+  // (codeGenerationStepOnRecord). Copilot keeps it as it keeps every result.
+  const doneState = transported.kind === "notice" && transported.unit !== undefined && engineProjectDir
+    ? loadStateFileIfPresent(engineProjectDir)
+    : null;
+  if (transported.kind === "notice" && transported.unit !== undefined && doneState !== null && engineProjectDir) {
+    const beneath = readActiveDirectiveMarker(engineProjectDir, doneState);
+    const stage = beneath?.version === 2 ? beneath.stage : getField(doneState, "Current Stage")?.trim() ?? "";
+    if (/^[a-z][a-z0-9-]*$/.test(stage)) {
+      marker = { kind: "notice", stage, unit: transported.unit, state_sha256: stateDigest(doneState) };
+    }
+  }
   if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
     const markerStateHash =
       route.stateHash ??
@@ -2023,7 +2038,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ? { projectDir: route.codekbCtx.projectDir }
       : publication
         ? { projectDir: publication.projectDir }
-        : marker?.kind === "ask" && engineProjectDir
+        : (marker?.kind === "ask" || marker?.kind === "notice") && engineProjectDir
           ? { projectDir: engineProjectDir }
         : {}),
     ...(marker ? { marker } : {}),
@@ -2732,6 +2747,14 @@ function emit(requested: Directive): void {
           writePrepared(prepared);
           return;
         }
+        // The done notice is said as before whatever came of its record.
+        if (
+          prepared.marker.kind === "notice" &&
+          publication !== "copilot-committed" && publication !== "generic-committed"
+        ) {
+          writePrepared(prepared);
+          return;
+        }
         if (publication === "legacy-plan-approval-owned") {
           writePrepared(prepareEmission(errorDirective(
             "Legacy Kiro Plan Approval is owned by another active IDE window. Continue the pending approval there; this call did not receive or rotate its protected choices.",
@@ -2859,6 +2882,10 @@ function emit(requested: Directive): void {
       if (e instanceof EngineModeViolationError) throw e;
       if (projectDir) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
+      }
+      if (prepared.marker?.kind === "notice") {
+        writePrepared(prepared);
+        return;
       }
       // A program holding the lock folder is not freed by a retry or by doctor:
       // the step is to stop it (lockFolderHeldStep). That comes before showing

@@ -1746,6 +1746,19 @@ lands beside that start, and the approved plan builds. The hook itself passes
 every call while there is no workflow state, as before; the run's
 `report --single` still waits for the approved plan.
 
+**A claimed Unit that is done.** In a checkout claimed for a team Unit, once
+every stage of the Unit is settled and approved, `next` answers the `notice`
+that the Unit is complete and approved there (commit it and run
+`aidlc unit publish <unit>`), with the Unit in its `unit` field. That notice is
+the step on record on every harness, at the stage of the step it follows, so
+Code Generation is not the step in that checkout any more, though Current Stage
+stays on it (`codeGenerationStepOnRecord`, which `next --stage` reads too): the
+Unit's own commit, in any spelling, and every file change pass this hook as
+they do once a workflow's walk is past Code Generation. A developer handoff that names a
+plan is still judged, and a system package install nobody asked for still waits
+for the person, as at every stage. When the notice goes out of date (a
+compaction), the refusal names `next`, which records it again.
+
 **What the plan never governs.** At any point of Code Generation, under every
 Guard Policy and whatever the current step (the plan being written, the engine's
 plan question open, the rules still arriving, a swarm batch, a step gone out of
