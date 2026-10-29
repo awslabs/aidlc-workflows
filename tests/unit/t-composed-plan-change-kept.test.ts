@@ -53,7 +53,12 @@ afterEach(() => {
 });
 
 type Printed = { kind: string; message: string; narration?: string; raw: Record<string, unknown> };
-type Validated = { base_scope?: string; plan_changes?: { skip: string[]; add: string[] } };
+type Validated = {
+  base_scope?: string;
+  plan_changes?: { skip: string[]; add: string[] };
+  creation_depth?: string;
+  creation_settings?: Record<string, string>;
+};
 
 function installedProject(): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
@@ -153,8 +158,9 @@ function stateOf(proj: string): string {
 
 const suffixOf = (state: string, slug: string) => new RegExp(`^- \\[.\\] ${slug} \u2014 (EXECUTE|SKIP)`, "m").exec(state)?.[1];
 
-function create(proj: string, printed: Printed): void {
-  const args = commandIn(printed, "intent create").split(" intent create ")[1].replace(/--label "[^"]*"/, "--label split-evenly");
+function create(proj: string, printed: Printed, message?: string): void {
+  const args = commandIn(printed, "intent create").split(" intent create ")[1].replace(/--label "[^"]*"/, "--label split-evenly")
+    .replace("'<id>'", message ?? "'<id>'");
   const run = runTool(proj, "aidlc-utility.ts", ["intent-create", ...args.split(/\s+/).filter(Boolean)]);
   expect(run.status, run.out).toBe(0);
 }
@@ -324,12 +330,12 @@ function nextAsPerson(proj: string, args: string[]): Printed {
   };
 }
 
-/** The person's message, kept as the prompt hook keeps it (whole seconds). */
-function personSays(proj: string, words: string, at = new Date()): void {
-  saveMessage(proj, {
+/** The person's message, kept as the prompt hook keeps it (whole seconds). Returns its id. */
+function personSays(proj: string, words: string, at = new Date()): string {
+  return saveMessage(proj, {
     session: null, at: wholeSeconds(at), source: "prompt", text: words, picker: null, words, settings: [],
     route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
-  });
+  }).id;
 }
 
 /** Moves the request's question, and the plan kept so far if any, a minute back,
@@ -349,12 +355,31 @@ function keptAt(proj: string, at: string): void {
   if (record.plan) writeFileSync(recordPath, JSON.stringify({ ...record, plan: { ...record.plan, at } }));
 }
 
+type Custom = { base: string; changes: { skip: string[]; add: string[] }; depth?: string; settings: Record<string, string> };
+
 /** A custom plan on bugfix's grid with `flips`, validated as the composer does. */
-function customPlan(proj: string, flips: Record<string, "EXECUTE" | "SKIP">): { base: string; changes: { skip: string[]; add: string[] } } {
+function customPlan(
+  proj: string,
+  flips: Record<string, "EXECUTE" | "SKIP">,
+  shape: { depth?: string; flip?: "sensors" | "learnings" } = {},
+): Custom {
   const grid = { ...stockGrid("bugfix"), ...flips };
-  const echoed = validate(proj, { stages: grid, scopeSettings: bugfix().settings, guardPolicy: "off", depth: "minimal" }, ["--custom"]);
-  return { base: echoed.base_scope as string, changes: echoed.plan_changes as { skip: string[]; add: string[] } };
+  const settings: Record<string, string> = { ...bugfix().settings };
+  if (shape.flip) settings[shape.flip] = settings[shape.flip] === "on" ? "off" : "on";
+  const echoed = validate(proj, { stages: grid, scopeSettings: settings, guardPolicy: "off", depth: shape.depth ?? "minimal" }, ["--custom"]);
+  return {
+    base: echoed.base_scope as string,
+    changes: echoed.plan_changes as { skip: string[]; add: string[] },
+    ...(echoed.creation_depth ? { depth: echoed.creation_depth } : {}),
+    settings: echoed.creation_settings ?? {},
+  };
 }
+
+/** The creation flags a plan's own approval types for its depth and settings. */
+const shapeFlags = (plan: Custom): string[] => [
+  ...(plan.depth ? ["--depth", plan.depth] : []),
+  ...Object.entries(plan.settings).flatMap(([key, value]) => [`--${key.replace(/_/g, "-")}`, value]),
+];
 
 const SHOWN = { "deployment-pipeline": "SKIP", "deployment-execution": "SKIP" } as const;
 const RECOMPOSED = { [SKIPPED]: "SKIP", "deployment-execution": "SKIP" } as const;
@@ -363,23 +388,31 @@ describe("Approve creates the plan the gate showed, even when the plan is compos
   test("the live shape: a composer run again after Approve keeps a different plan; creating it names the plan shown, whose approval creates it", () => {
     const proj = installedProject();
     const request = tailor(proj);
-    const shown = customPlan(proj, SHOWN);
-    personSays(proj, "Approve", before(proj, request));
-    const again = customPlan(proj, RECOMPOSED);
+    const shown = customPlan(proj, SHOWN, { depth: "standard", flip: "sensors" });
+    const approve = personSays(proj, "Approve", before(proj, request));
+    const again = customPlan(proj, RECOMPOSED, { depth: "comprehensive", flip: "learnings" });
     expect(again.base).toBe(shown.base);
     expect(again.changes).not.toEqual(shown.changes);
+    expect(shapeFlags(again)).not.toEqual(shapeFlags(shown));
 
-    const step = nextAsPerson(proj, ["--scope", again.base, ...lists(again.changes), "--plan-name", "cent-fix", "--request", request]);
+    // The agent types the later plan as composer.md says: its lists, depth, settings and name.
+    const typed = ["--scope", again.base, ...lists(again.changes), ...shapeFlags(again), "--plan-name", "cent-fix", "--request", request];
+    const step = nextAsPerson(proj, typed);
     expect(step.kind, step.message).toBe("print");
     expect(step.message).not.toContain("intent create");
     expect(step.message).toContain("worked out after the person's last message on record");
     nothingCreated(proj);
+    // The plan shown is named with its own depth and settings, never the later plan's.
     const approval = commandIn(step, ` next --scope ${shown.base}`);
     expect(approval).toContain(`${lists(shown.changes).join(" ")} --plan-name cent-fix --request ${request}`);
+    for (const [flag, value] of pairs(shapeFlags(shown))) expect(approval).toContain(`${flag} ${value}`);
+    for (const [flag, value] of pairs(shapeFlags(again))) expect(approval).not.toContain(`${flag} ${value}`);
 
     const created = nextAsPerson(proj, runNamedArgs(approval));
-    expect(commandIn(created, "intent create")).toContain(lists(shown.changes).join(" "));
-    create(proj, created);
+    const creation = commandIn(created, "intent create");
+    expect(creation).toContain(lists(shown.changes).join(" "));
+    for (const [flag, value] of pairs(shapeFlags(shown))) expect(creation).toContain(`${flag} ${value}`);
+    create(proj, created, approve);
     const state = stateOf(proj);
     expect(suffixOf(state, "deployment-pipeline")).toBe("SKIP");
     expect(suffixOf(state, SKIPPED)).toBe("EXECUTE");
@@ -476,6 +509,9 @@ describe("Approve creates the plan the gate showed, even when the plan is compos
     expect(commandIn(created, "intent create")).toContain(lists(shown.changes).join(" "));
   });
 });
+
+const pairs = (flat: string[]): Array<[string, string]> =>
+  flat.flatMap((token, i) => (i % 2 === 0 ? [[token, flat[i + 1]] as [string, string]] : []));
 
 /** The arguments of a `next` command a step named, as the agent would run them. */
 function runNamedArgs(command: string): string[] {

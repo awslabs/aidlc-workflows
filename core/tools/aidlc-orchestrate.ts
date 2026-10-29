@@ -6741,7 +6741,23 @@ function unseenComposedPlanStep(
         "prose, and end your turn: their next reply creates it.",
     );
   }
-  const approval = composedApprovalCommand(flags, kept.shown.scope, kept.shown.changes, described);
+  // A depth, setting or Guard Policy typed here that is the later plan's own
+  // came with that plan, not from the person: it is left off, and the shown
+  // plan's are typed in its place, as its own approval types them.
+  const unseenSettings = kept.unseen.settings ?? {};
+  const asShown: ParsedFlags = {
+    ...flags,
+    ...(flags.depth !== undefined && flags.depth === kept.unseen.depth ? { depth: undefined } : {}),
+    ...(flags.review !== undefined && flags.review === unseenSettings.review ? { review: undefined } : {}),
+    ...(flags.changeControl !== undefined && flags.changeControl === kept.unseen.guardPolicy ? { changeControl: undefined } : {}),
+    ceremony: undefined,
+  };
+  for (const key of CEREMONY_KEYS) {
+    const value = flags.ceremony?.[key];
+    if (value !== undefined && value !== unseenSettings[key]) asShown.ceremony = { ...asShown.ceremony, [key]: value };
+  }
+  fillApprovedPlanSettings(asShown, kept.shown, projectDir);
+  const approval = composedApprovalCommand(asShown, kept.shown.scope, kept.shown.changes, described);
   return printDirective(
     `Nothing is created yet: the plan typed here (${typedPlan}) was worked out after the person's last message on ` +
       `record, and the plan kept before that message is ${kept.shown.scope} with ${stageChangesListed(kept.shown.changes)}. ` +
