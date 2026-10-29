@@ -20048,7 +20048,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const wholeStage = /"new_state":"skipped"/.test(res.stdout);
       emit({
         kind: "done",
-        reason: wholeStage
+        // A team's other Units are worked in their own checkouts, so the line
+        // says nothing of them.
+        reason: isTeamUnitOwnership(stateContent)
+          ? `Skipped "${slug}" for unit "${beat.unit}". Run next to continue.`
+          : wholeStage
           ? `Skipped "${slug}" for unit "${beat.unit}". No unit needs this step now, so the ` +
             "whole step is marked skipped. Run next to continue."
           : `Skipped "${slug}" for unit "${beat.unit}" only; the other units still do this ` +
