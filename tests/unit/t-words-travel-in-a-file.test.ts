@@ -52,4 +52,21 @@ describe("the person's words in a printed next step travel in a file", () => {
     // `next` read the file and took its words, so the file is spent.
     expect(existsSync(file)).toBe(false);
   });
+
+  test("a Unit gate typed after /aidlc: the step's gate command names a file holding their reason, not the words", () => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    const reason = WORDS.join(" ");
+    for (const typed of [
+      ["unit", "gate", "alpha", "--decision", "reject", "--user-input", reason],
+      ["unit", "gate", "alpha", "--decision", "reject", `--user-input=${reason}`],
+    ]) {
+      const d = next(proj, typed);
+      expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+      const step = /`[^`]* unit gate alpha --decision reject --request-file (aidlc\/\.aidlc-request-text\/[^ `]+)`/.exec(String(d.message));
+      expect(step, String(d.message)).not.toBeNull();
+      for (const word of WORDS) expect(String(d.message)).not.toContain(word);
+      expect(readFileSync(join(proj, ...step![1].split("/")), "utf-8")).toBe(reason);
+    }
+  });
 });

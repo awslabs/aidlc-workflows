@@ -4562,15 +4562,37 @@ function unselectedWordsReplyDirective(
 // never reads these words, and per command where a step names several, since
 // running one spends its file.
 function wordsForNextStep(pd: string, name: string, text: string): string {
+  const file = requestFileFor(pd, name, text);
+  return file === null ? ` -- ${quoteCommandArgument(text)}` : ` --request-file ${file}`;
+}
+
+// The request file a printed command names for the person's words, or null
+// when it cannot be written.
+function requestFileFor(pd: string, name: string, text: string): string | null {
   const word = (part: string) => part.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
   const chat = word(engineSessionId ?? "");
   const file = `${REQUEST_TEXT_DIR}/${[name, chat].filter(Boolean).map(word).join("-")}.txt`;
   try {
     if (!isReadOnlyEngineProbe()) writeRecordFileNoFollow(pd, file, text);
-    return ` --request-file ${file}`;
+    return file;
   } catch {
-    return ` -- ${quoteCommandArgument(text)}`;
+    return null;
   }
+}
+
+// The person's Unit command for the agent to run. A gate's decision in their
+// words (`--user-input`) goes to a request file the gate reads, as a next
+// step's words do (wordsForNextStep); on the line only when the file cannot be
+// written.
+function unitCommandLine(pd: string, argv: readonly string[]): string {
+  const at = argv[0] === "gate" ? argv.findIndex((arg) => arg === "--user-input" || arg.startsWith("--user-input=")) : -1;
+  const inline = at >= 0 && argv[at] !== "--user-input";
+  const text = at < 0 ? undefined : inline ? argv[at].slice("--user-input=".length) : argv[at + 1];
+  const file = text === undefined || text.trim() === "" || (!inline && text.startsWith("--"))
+    ? null
+    : requestFileFor(pd, `gate-${argv[1] ?? ""}`, text);
+  const words = file === null ? argv : [...argv.slice(0, at), "--request-file", file, ...argv.slice(at + (inline ? 1 : 2))];
+  return words.map((arg) => quoteCommandArgument(arg)).join(" ");
 }
 
 // The step after the switch for the words the reading step above kept from
@@ -11251,7 +11273,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // for new work. The agent runs it, behind the host's own prompt: it changes
   // git and reaches the shared remote, so no seam runs it off-band.
   if (flags.unitCommand) {
-    const command = `${aidlcInvocation()} unit ${flags.unitCommand.map((arg) => quoteCommandArgument(arg)).join(" ")}`;
+    const command = `${aidlcInvocation()} unit ${unitCommandLine(resolveProjectDir(projectDir), flags.unitCommand)}`;
     emit(turnEndingPrint(
       `Run \`${command}\`, tell the person in plain words what it reports, then stop. This is the person's own Unit command, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
