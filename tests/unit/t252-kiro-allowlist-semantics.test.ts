@@ -502,6 +502,7 @@ const WORKTREE_DOT_FOLDERS = [
   `${WORKTREE}/.kiro/agents/aidlc.json`,
   `${WORKTREE}/.github/workflows/ci.yml`,
   `${WORKTREE}/.husky/pre-commit`,
+  `${WORKTREE}/.aidlc/worktree-meta.json`,
   `${WORKTREE}/aidlc/spaces/../../.kiro/agents/aidlc.json`,
 ];
 
@@ -921,8 +922,9 @@ function v3GlobRegExp(glob: string): RegExp {
   return new RegExp(`^${out}${subtree ? "(?:/.*)?" : ""}$`, "s");
 }
 
-// The Unit checkout probes both engines asked for, and its dot folders, which
-// only Kiro 3.0 asked for (WORKTREE_DOT_FOLDERS).
+// The Unit checkout probes on Kiro CLI 2.35.1: written on both engines, asked
+// on both, and the checkout's dot folders, which only Kiro 3.0 asked for
+// (WORKTREE_DOT_FOLDERS).
 const WORKTREE_PROBES_ASKED_ON_KIRO_2 = [
   `${WORKTREE}/.gitignore`,
   `${WORKTREE}/.git-probe`,
@@ -932,6 +934,16 @@ const WORKTREE_PROBES_ASKED_ON_KIRO_2 = [
   `${WORKTREE}/../../../.github/workflows/dotdot-probe.yml`,
   ".github/workflows/top-probe.yml",
   ".kiro/steering/probe.md",
+];
+const WORKTREE_PROBES_WRITTEN = [
+  `${WORKTREE}/src/wt-probe.js`,
+  `${WORKTREE}/test/wt-probe.test.js`,
+  `${WORKTREE}/README-wt-probe.md`,
+  `${WORKTREE}/web/src/deep/wt-probe.ts`,
+  `${WORKTREE}/src/.env-wt-probe`,
+  `/project/${WORKTREE}/src/abs-wt-probe.js`,
+  `${WORKTREE}/aidlc/spaces/../../src/dotdot-wt-probe.js`,
+  `${WORKTREE}/aidlc/spaces/default/intents/i/construction/u1/plan-probe.md`,
 ];
 const WORKTREE_DOT_FOLDER_PROBES = [
   `${WORKTREE}/.kiro/agents/wt-probe.json`,
@@ -957,14 +969,7 @@ const RECORDED_WRITES_ON_KIRO_3: Array<["allow" | "ask", string]> = [
     ".aidlc/worktrees/bolt-1a2b3c4d_u1/aidlc/spaces/default/intents/i/construction/u1/plan.md",
     "/project/README-abs-probe.md",
     "/project/src/abs-probe.js",
-    `${WORKTREE}/src/wt-probe.js`,
-    `${WORKTREE}/test/wt-probe.test.js`,
-    `${WORKTREE}/README-wt-probe.md`,
-    `${WORKTREE}/web/src/deep/wt-probe.ts`,
-    `${WORKTREE}/src/.env-wt-probe`,
-    `/project/${WORKTREE}/src/abs-wt-probe.js`,
-    `${WORKTREE}/aidlc/spaces/../../src/dotdot-wt-probe.js`,
-    `${WORKTREE}/aidlc/spaces/default/intents/i/construction/u1/plan-probe.md`,
+    ...WORKTREE_PROBES_WRITTEN,
   ].map((path): ["allow" | "ask", string] => ["allow", path]),
   ...[
     ".aidlc/worktrees/bolt-1a2b3c4d_u1/.kiro/agents/aidlc.json",
@@ -986,12 +991,12 @@ const RECORDED_WRITES_ON_KIRO_3: Array<["allow" | "ask", string]> = [
   ].map((path): ["allow" | "ask", string] => ["ask", path]),
 ];
 
-// What Kiro CLI 2.35.1 on its default engine did for the Unit checkout probes
+// What Kiro CLI 2.35.1 on its v2 engine did for the Unit checkout probes
 // (headless, the developer's write list): the same on the shipped file and on
 // the file Kiro upgraded for its 3.0 engine, which Kiro CLI 2 also loads.
 const RECORDED_WRITES_ON_KIRO_2: Array<["allow" | "ask", string]> = [
   ...[
-    ...RECORDED_WRITES_ON_KIRO_3.filter(([verdict, path]) => verdict === "allow" && path.includes(WORKTREE)).map(([, path]) => path),
+    ...WORKTREE_PROBES_WRITTEN,
     ...WORKTREE_DOT_FOLDER_PROBES,
     "src/top-probe.js",
   ].map((path): ["allow" | "ask", string] => ["allow", path]),

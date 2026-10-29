@@ -244,7 +244,7 @@ project files without asking: any path inside the project whose top-level name
 does not start with a dot. In a side-by-side build a worker writes in a Unit's
 checkout (`.aidlc/worktrees/<unit>/`) the same way: its code and records
 there go through without asking, and the checkout's own `.git`, `.gitignore`
-and other dot entries ask. On Kiro CLI's default engine the checkout's dot
+and other dot entries ask. On Kiro CLI's v2 engine the checkout's dot
 folders (its `.kiro/`, `.github/`) go through too, and stay in that checkout
 until the Unit lands. Their writes into `.kiro/` (apart from the `aidlc` agent's own
 `.kiro/sensors/` files), `.git/`, or any other
