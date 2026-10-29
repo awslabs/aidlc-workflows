@@ -646,11 +646,13 @@ Validation checks:
   template bundled with the validator. Absence is valid because plugin build
   injects the current template.
 
-The user-facing `aidlc plugin validate` and `aidlc plugin build` verbs delegate
-to these same shipped tools. `aidlc plugin create` and `aidlc plugin test`
-remain deferred to
-[RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723); invoke
-their shipped Bun tools directly.
+The user-facing `aidlc plugin validate`, `aidlc plugin build` and
+`aidlc plugin test` verbs delegate to these same shipped tools, on a native
+install and on the copy channel alike (there the verb is
+`bun <harness-dir>/tools/aidlc.ts plugin ...`). `aidlc plugin create` remains
+deferred to
+[RFC #723 section 2e](https://github.com/awslabs/aidlc-workflows/issues/723);
+invoke its shipped Bun tool directly.
 
 The repository test helper's `validatePluginContent()` delegates these shared
 rules to the same tool and retains checkout-aware fixture integration.
@@ -693,41 +695,62 @@ Answer "does this plugin compose cleanly into my install?" without modifying
 that install:
 
 ```bash
-bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> \
-  --install <project-root> [--harness <name>] [--with <base-root>] [--json]
+aidlc plugin test [path] --install <project-root> [--harness <name>] [--with <base-root>] [--json]
 ```
+
+`[path]` is the plugin root and defaults to the current folder, as for
+`aidlc plugin validate`. The verb runs the shipped `aidlc-plugin-test.ts`,
+which a copied tools folder runs as
+`bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> --install <project-root> ...`.
 
 The tool validates and builds first, copies the selected install surfaces into
 a temporary candidate, runs the real emitted `hooks/compose.ts`, recompiles the
 candidate graph, verifies the plugin stages and scopes are present, and runs
 compose a second time to prove idempotency. Any compose drop, graph failure,
-missing plugin node, or second-pass file change exits `1`. The live install is
-hashed before and after and is never a compose target.
+missing plugin node, or second-pass file change exits `1`; invalid command
+usage exits `2`. The live install is hashed before and after and is never a
+compose target.
 
 Pass `--harness` when the install is ambiguous, including `.kiro` (Kiro CLI vs
 Kiro IDE) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
 `--with <base-root>` composes your checkout of the base into the candidate
-first, as sync composes bases first, so the install does not need the base. `--dist <version>` is reserved
-until RFC #722 milestone 2 defines a released runtime-bundle channel.
+first, as sync composes bases first, so the install does not need the base. The
+standalone tool reserves `--dist <version>` until RFC #722 milestone 2 defines
+a released runtime-bundle channel.
 
-1. **Content validation** is the always-on baseline. Run
-   `aidlc-plugin-validate.ts` against the authored plugin root. It is fast and
-   gives precise authoring findings, but it does not prove that packaging or
-   composition succeeds.
-2. **Compose integration** is the default CI check. Run
-   `aidlc-plugin-test.ts` against a real install. Inside this repository,
-   `composePluginFixture()` delegates the hook subprocess/drop reader to the
-   same shipped implementation while retaining its test-only fixture API.
-   This tier is deterministic and exercises the actual builder and composer,
-   but it does not launch a model-backed harness.
-3. **Live harness e2e** is opt-in compatibility evidence. Call
-   `invokeHarness()` only behind the gate returned by `liveGateFor()`. The live
-   gates are `AIDLC_CLAUDE_SDK_LIVE`, `AIDLC_KIRO_ACP_LIVE`,
-   `AIDLC_CODEX_EXEC_LIVE`, `AIDLC_COPILOT_EXEC_LIVE`,
-   `AIDLC_OPENCODE_RUN_LIVE`, and `AIDLC_CURSOR_RUN_LIVE`. Live runs prove the
-   host can discover and invoke the composed plugin, but they need installed
-   CLIs, credentials, and more time. An unset gate returns a skipped result, so
-   a green test run can mean the live check did not run.
+1. **Content validation** is the always-on baseline: `aidlc plugin validate`
+   against the authored plugin root. It is fast and gives precise authoring
+   findings, but it does not prove that packaging or composition succeeds.
+2. **Compose integration** is the default CI check: `aidlc plugin test`
+   against a real install. This tier is deterministic and exercises the actual
+   builder and composer, but it does not launch a model-backed harness.
+3. **Live harness e2e** is opt-in compatibility evidence: the built plugin
+   installed in the host and run there. Live runs prove the host can discover
+   and invoke the composed plugin, but they need installed CLIs, credentials,
+   and more time.
+
+#### In your plugin's repository
+
+A plugin repository's CI installs aidlc in the job, as for any machine without
+a person at it ([Install and Lifecycle](../guide/18-install-and-lifecycle.md#automation)),
+and runs the three verbs. The install the test composes into is a scratch
+project that `aidlc config` sets up in a temporary folder for the harness you
+publish:
+
+```bash
+install_root="$(mktemp -d)"
+aidlc config --project-dir "$install_root" --harness claude --yes
+aidlc plugin validate
+aidlc plugin test --install "$install_root"
+aidlc plugin build claude
+```
+
+Each command exits non-zero on a finding, so the job stops at the first one.
+For each further harness you publish, set up its scratch install the same way,
+then run `aidlc plugin test --install <that install>` and
+`aidlc plugin build <harness>` for it.
+
+#### Inside this repository
 
 Plugin tests under `plugins/<name>/tests/*.test.ts` are discovered
 automatically and join the integration tier. Run one plugin's tests with:
@@ -736,8 +759,12 @@ automatically and join the integration tier. Run one plugin's tests with:
 bash tests/run-tests.sh --integration --filter "plugin-<name>"
 ```
 
-Inside this repository, this content test is the minimum copyable shape. The
-helper delegates the shared rules to the shipped tool:
+These tests use this repository's own helpers in `tests/harness/plugin-kit.ts`,
+imported by relative path, so they run only here; a plugin in its own
+repository runs the verbs above instead. `validatePluginContent()` delegates
+the shared rules to the shipped validator, and `composePluginFixture()`
+delegates the hook subprocess and drop reader to the shipped compose test while
+keeping its test-only fixture API. The minimum content test is:
 
 ```ts
 import { expect, test } from "bun:test";
@@ -775,6 +802,12 @@ test("plugin composes into a Claude install", () => {
   expect(graph.some((stage) => stage.slug === "your-plugin-stage")).toBe(true);
 });
 ```
+
+For the live tier here, call `invokeHarness()` only behind the gate returned
+by `liveGateFor()`. The live gates are `AIDLC_CLAUDE_SDK_LIVE`,
+`AIDLC_KIRO_ACP_LIVE`, `AIDLC_CODEX_EXEC_LIVE`, `AIDLC_COPILOT_EXEC_LIVE`,
+`AIDLC_OPENCODE_RUN_LIVE`, and `AIDLC_CURSOR_RUN_LIVE`. An unset gate returns a
+skipped result, so a green test run can mean the live check did not run.
 
 ## Rules of the road
 

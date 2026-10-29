@@ -1,15 +1,17 @@
-// covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, function:transportedAuditViolation, function:transportableCandidateTree
+// covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:adopt, function:transportedAuditViolation, function:transportableCandidateTree
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readUnitScopeStamp, writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, seededAuditDir } from "../harness/fixtures.ts";
 import {
   UNIT,
+  appendMainHumanTurn,
   cleanupTempDirs,
+  clone,
   git,
   runMergeTool,
   makeSeed,
@@ -32,6 +34,7 @@ const SESSION_START_HOOK = join(AIDLC_SRC, "hooks", "aidlc-session-start.ts");
 const LOG_SUBAGENT_HOOK = join(AIDLC_SRC, "hooks", "aidlc-log-subagent.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 function fireHook(hookPath: string, checkout: string, stdinJson: unknown): void {
   const result = spawnSync(process.execPath, [hookPath], {
@@ -164,6 +167,104 @@ describe("t326 pinned team Unit merge: organic audit noise", () => {
     const shardBeforePublish = readFileSync(shardPath, "utf-8");
     expect(shardBeforePublish.startsWith("# AI-DLC Audit Log\n\n## Session Start\n"))
       .toBe(true);
+
+    const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
+    expect(pin.status, pin.out).toBe(0);
+  });
+});
+
+// The owner's agent asks a Functional Design question and logs the person's
+// answer, each after a typed turn, as a stage does: four rows publish withholds.
+function answerStorageQuestion(checkout: string): void {
+  // `aidlc log` touches the engine's turn marker, which the shipped .gitignore
+  // ignores and the seed's does not.
+  appendFileSync(join(checkout, ".git", "info", "exclude"), "**/.aidlc-engine/engine-touch\n");
+  appendMainHumanTurn(checkout);
+  const asked = runMergeTool(LOG, [
+    "decision", "--stage", "functional-design", "--unit", "alpha",
+    "--decision", "Which storage should alpha use?", "--options", "A. Postgres,B. DynamoDB",
+  ], checkout);
+  expect(asked.status, asked.out).toBe(0);
+  appendMainHumanTurn(checkout);
+  const answered = runMergeTool(LOG, [
+    "answer", "--stage", "functional-design", "--unit", "alpha", "--details", "B. DynamoDB",
+  ], checkout);
+  expect(answered.status, answered.out).toBe(0);
+}
+
+function storageAnswers(checkout: string): string[] {
+  const listed = runMergeTool(LOG, ["answers", "--stage", "functional-design", "--unit", "alpha"], checkout);
+  expect(listed.status, listed.out).toBe(0);
+  return (JSON.parse(listed.stdout).answered as Array<{ answer: string }>).map((entry) => entry.answer);
+}
+
+// A teammate's fresh clone, on the claim branch as the docs say, adopted.
+function adoptInTeammateClone(remote: string, owner: string): string {
+  const ref = readUnitScopeStamp(owner)!.claim_ref;
+  const mate = clone(remote, "alpha-teammate");
+  git(mate, ["fetch", "origin", `${ref}:${ref}`]);
+  git(mate, ["switch", ref.replace(/^refs\/heads\//, "")]);
+  const adopted = runMergeTool(UNIT, ["adopt", "alpha"], mate);
+  expect(adopted.status, adopted.out).toBe(0);
+  return mate;
+}
+
+describe("t326 team Unit adopt: the rows publish withheld", () => {
+  test("a teammate who adopts a published unfinished Unit keeps the owner's answered question", () => {
+    const { remote } = makeSeed();
+    const owner = clone(remote, "alpha-owner");
+    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--team", "alpha-owner"], owner);
+    expect(claimed.status, claimed.out).toBe(0);
+    const auditShard = JSON.parse(claimed.stdout).audit_shard as string;
+    answerStorageQuestion(owner);
+    expect(storageAnswers(owner)).toEqual(["B. DynamoDB"]);
+    git(owner, ["add", "-A"]);
+    git(owner, ["commit", "-m", "alpha functional design in progress"]);
+    const published = runMergeTool(UNIT, ["publish", "alpha"], owner);
+    expect(published.status, published.out).toBe(0);
+    expect(JSON.parse(published.stdout).local_rows_withheld).toBeGreaterThanOrEqual(4);
+
+    const mate = adoptInTeammateClone(remote, owner);
+    expect(storageAnswers(mate)).toEqual(["B. DynamoDB"]);
+    const mateShardPath = join(seededAuditDir(mate), auditShard);
+    expect(readFileSync(mateShardPath, "utf-8"))
+      .toBe(readFileSync(join(seededAuditDir(owner), auditShard), "utf-8"));
+
+    // A second adopt after the teammate's own work keeps that work.
+    appendMainHumanTurn(mate);
+    const mateShard = readFileSync(mateShardPath, "utf-8");
+    const again = runMergeTool(UNIT, ["adopt", "alpha"], mate);
+    expect(again.status, again.out).toBe(0);
+    expect(readFileSync(mateShardPath, "utf-8")).toBe(mateShard);
+  });
+
+  test("a teammate who adopts and republishes a finished Unit still pins with the shard trimmed", () => {
+    const { seed, remote } = makeSeed();
+    const candidate = prepareCandidate(remote, "alpha", "alpha-owner", {
+      afterClaim: answerStorageQuestion,
+    });
+    const mate = adoptInTeammateClone(remote, candidate.checkout);
+    expect(storageAnswers(mate)).toEqual(["B. DynamoDB"]);
+
+    writeFileSync(join(mate, "src", "alpha.ts"), 'export const alpha = "teammate";\n');
+    git(mate, ["add", "-A"]);
+    git(mate, ["commit", "-m", "alpha finished by the teammate"]);
+    const mateShardPath = join(seededAuditDir(mate), candidate.auditShard);
+    const mateShard = readFileSync(mateShardPath, "utf-8");
+    const republished = runMergeTool(UNIT, ["publish", "alpha"], mate);
+    expect(republished.status, republished.out).toBe(0);
+    expect(JSON.parse(republished.stdout).local_rows_withheld).toBeGreaterThanOrEqual(4);
+    expect(readFileSync(mateShardPath, "utf-8")).toBe(mateShard);
+
+    // Handed back: the owner adopts the teammate's publication.
+    const owner = candidate.checkout;
+    const ref = readUnitScopeStamp(owner)!.claim_ref;
+    git(owner, ["fetch", "origin", `${ref}:${ref}`]);
+    git(owner, ["switch", ref.replace(/^refs\/heads\//, "")]);
+    const handedBack = runMergeTool(UNIT, ["adopt", "alpha"], owner);
+    expect(handedBack.status, handedBack.out).toBe(0);
+    expect(storageAnswers(owner)).toEqual(["B. DynamoDB"]);
+    expect(readFileSync(join(seededAuditDir(owner), candidate.auditShard), "utf-8")).toBe(mateShard);
 
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);

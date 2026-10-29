@@ -273,7 +273,8 @@ function workAsksNothing(stateContent: string): boolean {
 /**
  * What `config flags --bypass` says for a check the person asked to turn off
  * that a settings file already keeps off at that place: that it is, and the
- * one wider-place offer. Empty for anything else (the command's own line).
+ * one wider-place offer, or that the environment outranks the recording
+ * (overriddenRecordingLine). Empty for anything else (the command's own line).
  */
 export function alreadyOffLines(
   projectDir: string,
@@ -291,9 +292,39 @@ export function alreadyOffLines(
       held = false;
     }
     if (!held) return [];
+    const overridden = overriddenRecordingLine(projectDir, name, label, target, env, true);
+    if (overridden !== null) return [overridden];
     const offer = target === "global" ? null : widerPlaceOffer(projectDir, name, "project", env);
     return [`The ${label}${settingPurpose(label)} is already off ${where(target)}.${offer ? ` ${offer}` : ""}`];
   });
+}
+
+/**
+ * The line for a check the person asked to turn off that a settings file now
+ * records off, while a variable of the switch's name set to anything but 1 is
+ * in the environment: it decides over the files, as resolveProjectFlag reads
+ * it, so the recording does not turn the check off. It never says the check is
+ * on, since the open piece of work can still keep it off, and never prints the
+ * variable's value. Like the switch's own line it ends with the way back,
+ * which from a chat is the whole print. `unchanged`: nothing was written, so
+ * no change line names the clear, and at the person's own terminal this line
+ * names it for the file that records it. Null otherwise.
+ */
+function overriddenRecordingLine(
+  projectDir: string,
+  name: string,
+  label: string,
+  target: SettingsTarget,
+  env: NodeJS.ProcessEnv,
+  unchanged: boolean,
+): string | null {
+  if (!Object.hasOwn(env, name) || env[name] === "1") return null;
+  const back = unchanged && commandAtPersonsTerminal(env)
+    ? `To clear the recording: ${clearSwitchCommand(name as RecordableProjectBypass, projectDir, undefined, target)}`
+    : "You can clear the recording any time.";
+  return `The ${label}${settingPurpose(label)} is recorded off ${where(target)}, but ${name} is set to something ` +
+    "other than 1 in the environment this command ran in, and it decides over the settings files, so the recording " +
+    `does not turn the check off. Start the editor or CLI without ${name} for the recording to turn the check off. ${back}`;
 }
 
 /**
@@ -622,9 +653,11 @@ export function markSwitchOffNoticesSaid(projectDir: string, env: NodeJS.Process
 /**
  * Record how `config flags` changed the switches in one settings file, after
  * the write succeeded, and return what the person should read now: a line for
- * each check it turned off, and one for each it turned back on. A caller that
- * already names the other files still recording a cleared switch passes
- * `otherFiles: false`, so the person reads that once. `message` is the id the
+ * each check it turned off, and one for each it turned back on. A check it
+ * recorded off that the environment keeps from turning off gets the line that
+ * says so (overriddenRecordingLine). A caller that already names the other
+ * files still recording a cleared switch passes `otherFiles: false`, so the
+ * person reads that once. `message` is the id the
  * command named with `--message`, the message the person asked in.
  */
 export function recordSwitchChange(
@@ -681,6 +714,11 @@ export function recordSwitchChange(
       const offer = item.target === "global" ? null : widerPlaceOffer(projectDir, item.name, "project", env);
       return offer ? `${line} ${offer}` : line;
     });
+  for (const name of added) {
+    const label = PERSON_CHECK_SWITCH_LABELS[name];
+    const overridden = label === undefined ? null : overriddenRecordingLine(projectDir, name, label, target, env, false);
+    if (overridden !== null) lines.push(overridden);
+  }
   // "On again" only when nothing else still keeps the check off.
   for (const name of removed) {
     const label = PERSON_CHECK_SWITCH_LABELS[name] ?? name;

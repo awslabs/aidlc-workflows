@@ -87,6 +87,21 @@ function workspace(): {
   };
 }
 
+// The person's own shell: both ends a terminal, no chat bound to it, and none of
+// the marks an agent's host puts on the commands it runs (the runner's own
+// environment may carry its host's), as commandAtPersonsTerminal reads it.
+function ownTerminal(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    AIDLC_TEST_CONFIG_TTY: "1",
+    AIDLC_SESSION_OVERRIDE: undefined,
+    TERM_PROGRAM: undefined,
+  };
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) env[key] = undefined;
+  }
+  return env;
+}
+
 const lastLine = (out: string): string => out.split(/\r?\n/).filter((line) => line.trim() !== "").at(-1) ?? "";
 
 describe("t-switch-offers-wider-place: the switch's own line carries the one wider-place question", () => {
@@ -123,6 +138,64 @@ describe("t-switch-offers-wider-place: the switch's own line carries the one wid
     const out = run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes", "--message", m1]);
     expect(out).toContain("already off for this project");
     expect(lastLine(out)).toEndWith(MACHINE_OFFER);
+  });
+
+  // The variable decides over the files, and only 1 turns the check off, so the
+  // recording does nothing where it is set: no line says the check is off. Open
+  // work runs in the editor's or CLI's own environment, which the command cannot
+  // see, so no line says whether it picks the switch up either.
+  // An empty value is not run on Windows, where setting a variable to nothing can
+  // remove it.
+  test.each(process.platform === "win32" ? ["0"] : ["0", ""])("with the environment's %j outranking the file, the recording is said to do nothing, the first time and again", (value) => {
+    const { run, said } = workspace();
+    const env = { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: value };
+    const m1 = said("turn the review freeze check off for this project");
+    const args = ["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes", "--message", m1];
+    const recorded = "is recorded off for this project, but AIDLC_DISABLE_REVIEW_FREEZE_HOOK is set to something other than 1";
+    for (const out of [run(args, env), run(args, env)]) {
+      expect(out).toContain(recorded);
+      // From a chat this line is the whole print, so it carries the way back.
+      expect(out).toContain("Start the editor or CLI without AIDLC_DISABLE_REVIEW_FREEZE_HOOK for the recording to turn the check off. You can clear the recording any time.");
+      expect(out).not.toContain("already off");
+      expect(out).not.toContain("is off for this project since");
+      expect(out).not.toContain("?");
+    }
+    expect(run(args, { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" })).toContain("already off for this project");
+    // At the person's own terminal the change line's undo is the one way back.
+    const { run: typedRun } = workspace();
+    const typedArgs = ["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--yes"];
+    const typed = typedRun(typedArgs, { ...ownTerminal(), ...env });
+    expect(typed).toContain(recorded);
+    expect(typed).toMatch(/Recorded AIDLC_DISABLE_REVIEW_FREEZE_HOOK in .* To undo: .*--clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK/);
+    expect(typed).toEndWith("You can clear the recording any time.");
+    expect(typed).not.toContain("To clear the recording:");
+    expect(typed).not.toContain("open workflow");
+    // Without the variable the same command does name the open work.
+    if (value === "0") {
+      expect(workspace().run(typedArgs, { ...ownTerminal(), AIDLC_DISABLE_REVIEW_FREEZE_HOOK: undefined }))
+        .toContain("1 open workflow");
+    }
+    // Beside another change too, from a chat for the shared file, where the
+    // change lines are shown: the line would otherwise claim the switch with it.
+    const side = workspace();
+    const m2 = side.said("turn the review freeze check off for the whole project, and hook debug on");
+    const mixed = side.run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--hook-debug", "on",
+      "--project", "--yes", "--message", m2], env);
+    expect(mixed).toContain("hook debug: not set -> on");
+    expect(mixed).toContain(recorded);
+    expect(mixed).not.toContain("open workflow");
+    if (value === "0") {
+      const plain = workspace();
+      const m3 = plain.said("turn the review freeze check off for the whole project, and hook debug on");
+      expect(plain.run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--hook-debug", "on",
+        "--project", "--yes", "--message", m3], { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: undefined })).toContain("1 open workflow");
+    }
+    // Again, nothing is written and no change line names the clear: nobody is
+    // there to ask, so this line names the command, for the file it is in.
+    const again = typedRun(typedArgs, { ...ownTerminal(), ...env });
+    expect(again).toContain(recorded);
+    expect(again).toMatch(/To clear the recording: \S.* config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --project --yes/);
+    expect(again).not.toContain("To undo: ");
   });
 
   test("nowhere wider to go: this machine, a check with no project place, and the Guard Policy ask nothing", () => {

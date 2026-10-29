@@ -1288,10 +1288,10 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(directive.question).toContain('(1) a separate new piece of work - start new "bugfix" work for it');
     expect(directive.question).toContain('(2) part of that work - change it to "bugfix"');
     expect(directive.numbered_prose_question).toContain(
-      '1. **Separate new piece of work** — Start new "bugfix" work for it; the current work stays as it is',
+      '1. **Separate new piece of work** - Start new "bugfix" work for it; the current work stays as it is',
     );
     expect(directive.numbered_prose_question).toContain(
-      '2. **Part of the active work** — Change the current workflow to "bugfix" and continue it',
+      '2. **Part of the active work** - Change the current workflow to "bugfix" and continue it',
     );
   });
 

@@ -97,18 +97,39 @@ interface GitResult {
   code: number;
 }
 
-function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
+interface GitBytesResult {
+  ok: boolean;
+  stdout: Buffer;
+  stderr: string;
+  code: number;
+}
+
+// Bun's spawnSync stops a pipe read at 1 MiB and hands back what it had, and a
+// Unit's audit shard outgrows that in one long attempt, so the cap is lifted
+// the way the other git readers lift it. A run that could not start, was killed
+// or overflowed is a failed run, whatever its exit status.
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
-    encoding: "utf-8",
     env: { ...process.env, ...env },
+    maxBuffer: 512 * 1024 * 1024,
   });
+  const failure = result.error
+    ? `${result.error.message}\n`
+    : result.signal
+      ? `git stopped by ${result.signal}\n`
+      : "";
   return {
-    ok: result.status === 0,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    ok: result.status === 0 && !result.error && !result.signal,
+    stdout: result.stdout ?? Buffer.alloc(0),
+    stderr: failure + (result.stderr?.toString("utf-8") ?? ""),
     code: result.status ?? 1,
   };
+}
+
+function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
+  const result = gitBytes(projectDir, args, env);
+  return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
 function localGit(
@@ -958,16 +979,27 @@ function gitPathExistsAt(
   return git(projectDir, ["cat-file", "-e", `${oid}:${path}`]).ok;
 }
 
-function gitTextAt(
+export function gitTextAt(
   projectDir: string,
   oid: string,
   path: string,
 ): string {
-  // This is an object, never a worktree path. Without the separator Git also
-  // stats the composite oid:path, which can exceed Windows' path limit.
-  const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
-  if (!shown.ok) fail(`Pinned candidate is missing ${path}.`);
-  return shown.stdout;
+  // `cat-file` takes oid:path as an object name only, never a worktree path,
+  // so Git does not stat it (which could exceed Windows' path limit). The
+  // blob's recorded size is checked against the bytes read: a short read
+  // never stands in for the file.
+  const object = `${oid}:${path}`;
+  const size = git(projectDir, ["cat-file", "-s", object]);
+  if (!size.ok) fail(`Pinned candidate is missing ${path}.`);
+  const expected = Number(size.stdout.trim());
+  const shown = gitBytes(projectDir, ["cat-file", "blob", object]);
+  if (!shown.ok || shown.stdout.length !== expected) {
+    fail(
+      `Could not read all of ${path} from the pinned candidate: ` +
+        `${shown.stdout.length} of ${expected} bytes${shown.ok ? "" : ` (${shown.stderr.trim()})`}.`,
+    );
+  }
+  return shown.stdout.toString("utf-8");
 }
 
 type CandidateAuditEvent = AuditShardEvent;
@@ -1595,7 +1627,16 @@ function candidateEvidence(
     TRANSPORTED_DATA_EVENTS.has(event.event)
   );
   const events = authorityRows;
+  // A stage whose documents all belong to other kinds of Unit applies to this
+  // one no more than it does to the walk: it settles with no directive, so it
+  // earns no receipt, review or gate.
+  const notApplicable = new Set(stages.filter((slug) => {
+    const stage = graph.find((entry) => entry.slug === slug);
+    return (stage?.produces ?? []).length > 0 &&
+      filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
+  }));
   const stagesCompleted = stages.filter((stage) =>
+    notApplicable.has(stage) ||
     unitLifecycleSnapshot(
       projectDir,
       stage,
@@ -1617,7 +1658,7 @@ function candidateEvidence(
   const gatesExpected =
     claim.payload.gate_rhythm === "unit-end"
       ? [stages[stages.length - 1]]
-      : stages;
+      : stages.filter((stage) => !notApplicable.has(stage));
   const gatesApproved = gatesExpected.filter((stage) =>
     unitGateStatus(
       projectDir,
@@ -1631,6 +1672,7 @@ function candidateEvidence(
   const reviewersReady: string[] = [];
   const artifactPaths: string[] = [];
   for (const stageSlug of stages) {
+    if (notApplicable.has(stageSlug)) continue;
     const stage = graph.find((entry) => entry.slug === stageSlug);
     if (!stage) fail(`Pinned candidate references unknown stage "${stageSlug}".`);
     const names = filterProducesByKind(
@@ -2152,6 +2194,10 @@ function pinUnit(args: string[], projectDir?: string): void {
   if (!isTeamUnitOwnership(state)) fail("Unit pinning requires Unit Ownership: team.");
   const identity = activeIdentity(pd);
   const inFlight = readUnitMergeTransaction(pd, unit);
+  const integration = fetchIntegration(pd);
+  const ref = claimRef(identity.intentId8, unit);
+  const claim = currentClaim(pd, integration.remote, ref);
+  let superseded: UnitMergeTransaction | null = null;
   if (
     inFlight &&
     inFlight.space === identity.space &&
@@ -2160,13 +2206,13 @@ function pinUnit(args: string[], projectDir?: string): void {
       inFlight.status,
     )
   ) {
-    fail(
-      `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
-    );
+    if (!approvalOutlivedByRepublish(pd, inFlight, claim)) {
+      fail(
+        `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
+      );
+    }
+    superseded = inFlight;
   }
-  const integration = fetchIntegration(pd);
-  const ref = claimRef(identity.intentId8, unit);
-  const claim = currentClaim(pd, integration.remote, ref);
   if (
     claim?.status !== "claimed" ||
     claim.payload.intent_uuid !== identity.intentUuid ||
@@ -2215,7 +2261,38 @@ function pinUnit(args: string[], projectDir?: string): void {
     evidence,
     gate_required: true,
     merge_dispatch_required: true,
+    ...(superseded
+      ? { superseded: { pinned_oid: superseded.pinned_oid, status: superseded.status } }
+      : {}),
   }));
+}
+
+// An approved merge that git never landed, whose Unit was republished since
+// (a refused landing, then a reopened stage): the approval was for a candidate
+// the claim no longer holds, and gate and land both send the person back to
+// pin. Pin replaces it. The approval stays bound to its own Pinned OID and
+// Attempt Generation, so it never counts for the new candidate.
+function approvalOutlivedByRepublish(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+  claim: UnitClaimView | null,
+): boolean {
+  if (
+    transaction.status !== "approved" ||
+    transaction.git_commit_oid ||
+    transaction.checkpoint_commit_oid ||
+    claim?.status !== "claimed" ||
+    claim.payload.intent_uuid !== transaction.intent_uuid ||
+    (
+      claim.oid === transaction.pinned_oid &&
+      claim.generation === transaction.generation &&
+      claim.nonce === transaction.nonce
+    )
+  ) {
+    return false;
+  }
+  if (git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) return false;
+  return firstParentMergeOf(projectDir, transaction) === null;
 }
 
 function gateUnitMerge(args: string[], projectDir?: string): void {
@@ -2657,11 +2734,12 @@ function validateLandedMerge(
   }
 }
 
-function recoveredMergeCommit(
+// The merge commit of the pinned candidate on HEAD's first-parent line since
+// pin, or null when there is none. Undefined when the history cannot be read.
+function firstParentMergeOf(
   projectDir: string,
   transaction: UnitMergeTransaction,
-  target: string,
-): string | null {
+): string | null | undefined {
   const history = git(
     projectDir,
     [
@@ -2671,15 +2749,24 @@ function recoveredMergeCommit(
       `${transaction.main_before_oid}..HEAD`,
     ],
   );
-  if (!history.ok) return null;
+  if (!history.ok) return undefined;
   for (const line of history.stdout.split(/\r?\n/).filter(Boolean)) {
     const [commitOid, parentText = ""] = line.split("\u0000");
     const parents = parentText.split(/\s+/).filter(Boolean);
-    if (parents[1] !== transaction.pinned_oid) continue;
-    validateLandedMerge(projectDir, transaction, commitOid, target);
-    return commitOid;
+    if (parents[1] === transaction.pinned_oid) return commitOid;
   }
   return null;
+}
+
+function recoveredMergeCommit(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+  target: string,
+): string | null {
+  const commitOid = firstParentMergeOf(projectDir, transaction);
+  if (!commitOid) return null;
+  validateLandedMerge(projectDir, transaction, commitOid, target);
+  return commitOid;
 }
 
 function metadataCheckpointAtHead(
@@ -3449,6 +3536,23 @@ function adoptUnit(args: string[], projectDir?: string): void {
     gate_rhythm: claim.payload.gate_rhythm,
     audit_shard: claim.payload.audit_shard,
   };
+  // Publish ships the claim shard projected onto what pin accepts; the owner's
+  // own commit, the claim commit's second parent, keeps every row. The working
+  // copy takes the owner's shard, so the person's answers stay answered here,
+  // unless this checkout has already written to it.
+  const ownerHead = claim.payload.candidate_head_oid;
+  const recordPrefix = relativeRecordDir(pd);
+  if (ownerHead && recordPrefix) {
+    const shardPath = `${recordPrefix}/audit/${claim.payload.audit_shard}`;
+    const blobAt = (oid: string) => git(pd, ["rev-parse", `${oid}:${shardPath}`]).stdout;
+    if (
+      blobAt(ownerHead) !== blobAt("HEAD") &&
+      git(pd, ["diff", "--quiet", "HEAD", "--", shardPath]).ok
+    ) {
+      const owners = git(pd, ["show", `${ownerHead}:${shardPath}`, "--"]);
+      if (owners.ok) writeFileSync(join(pd, shardPath), owners.stdout);
+    }
+  }
   finalizeClaimCheckout(pd, stamp, claim);
   console.log(JSON.stringify({ adopted: true, ...stamp }));
 }

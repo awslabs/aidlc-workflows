@@ -1448,7 +1448,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const token of [
         "## Questions AI-DLC asks",
         "Print it as given and END THE TURN",
-        "`**Other** \u2014 describe what you want instead`",
+        "`**Other** - describe what you want instead`",
         "Every such render is invalid",
         "never use `report` for a question's answer",
       ]) {

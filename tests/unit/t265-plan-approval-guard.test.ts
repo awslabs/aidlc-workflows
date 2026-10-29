@@ -540,6 +540,7 @@ function scratchProject(): string {
     // The checkpoint question names the person's files a build changed.
     "aidlc-brought-files.ts",
     "aidlc-testing-posture.ts",
+    "aidlc-git.ts",
     // The config sections the hook sorts while a plan waits, and what that imports.
     "aidlc-command.ts",
     "aidlc-color.ts",

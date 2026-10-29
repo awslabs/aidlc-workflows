@@ -1102,7 +1102,7 @@ function buildDetailBody(args: {
 	const { sensorId, stageSlug, outputPath, fireId, timestamp, sensorJson } =
 		args;
 	const lines: string[] = [];
-	lines.push(`# ${sensorId} finding — ${stageSlug}`);
+	lines.push(`# ${sensorId} finding - ${stageSlug}`);
 	lines.push("");
 	lines.push(`**Timestamp**: ${timestamp}`);
 	lines.push(`**Fire id**: ${fireId}`);

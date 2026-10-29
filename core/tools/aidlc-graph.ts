@@ -1300,7 +1300,7 @@ export function loadSensors(): Map<string, SensorFile> {
     if (typeof manifest.id === "string" && out.has(manifest.id)) {
       const previous = mustGet(out, manifest.id, "sensor-manifest dup");
       throw new Error(
-        `${filePath}: duplicate sensor id "${manifest.id}" — also declared ` +
+        `${filePath}: duplicate sensor id "${manifest.id}" - also declared ` +
           `in ${previous.path}. Rename one of them.`,
       );
     }
@@ -2687,7 +2687,7 @@ export function compileStageGraph(): {
       const previousFile = slugToFile.get(slug);
       if (previousFile) {
         throw new Error(
-          `Duplicate stage slug "${slug}" in ${filePath} — already declared ` +
+          `Duplicate stage slug "${slug}" in ${filePath} - already declared ` +
             `in ${previousFile}. Rename one of them.`
         );
       }
@@ -2755,7 +2755,7 @@ export function compileStageGraph(): {
       .map(({ file, slug }) => `${file} (stage "${slug}")`)
       .join(", ");
     throw new Error(
-      `Duplicate producers for consumed artifact "${artifact}" in ${producerList} — ` +
+      `Duplicate producers for consumed artifact "${artifact}" in ${producerList} - ` +
         `consumed by stage "${consumer.slug}" in ${consumer.file}. ` +
         `Rename one produced artifact or update the consumer.`
     );
@@ -2889,7 +2889,7 @@ export function compileStageGraph(): {
       if (numericStageOrder(depNum, stage.number) >= 0) {
         throw new Error(
           `Compile invariant violated: stage "${stage.slug}" (${stage.number}) ` +
-            `requires "${dep}" (${depNum}) — dependency must be lower-numbered. ` +
+            `requires "${dep}" (${depNum}) - dependency must be lower-numbered. ` +
             `Fix: either renumber in stage-graph.json to match the dependency ` +
             `direction, or remove the offending requires_stage edge.`
         );
@@ -2915,7 +2915,7 @@ export function compileStageGraph(): {
       console.error(
         `[advisory] stage "${stage.slug}" is the per-unit build stage ` +
           `(for_each: unit-of-work + workspace_requires) but mode is ` +
-          `"${stage.mode}", not "subagent" — the autonomous Construction ` +
+          `"${stage.mode}", not "subagent" - the autonomous Construction ` +
           `swarm will NOT fire for it; units build serially.`
       );
     }
