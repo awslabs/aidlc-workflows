@@ -1845,7 +1845,9 @@ function candidateEvidence(
   const questionsPath =
     `${recordPrefix}/construction/${claim.unit}/code-generation/code-generation-questions.md`;
   let planFingerprint: string | null = null;
-  if (stages.includes("code-generation")) {
+  // A Unit that skipped Code Generation wrote no plan, so none is read or owed.
+  const buildsCode = stages.includes("code-generation") && !skipped.has("code-generation");
+  if (buildsCode) {
     const plan = gitTextAt(
       projectDir,
       claim.oid,
@@ -1938,7 +1940,7 @@ function candidateEvidence(
     const missingReviewStages = reviewersExpected.filter((stage) => !reviewersReady.includes(stage));
     incomplete.push(`reviewer READY receipts (${missingReviewStages.join(", ")})`);
   }
-  if (stages.includes("code-generation") && !planFingerprint) {
+  if (buildsCode && !planFingerprint) {
     incomplete.push("Plan Approval fingerprint");
   }
   if (changedAudit.length === 0) {

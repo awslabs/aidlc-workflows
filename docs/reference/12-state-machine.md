@@ -293,7 +293,8 @@ so it is never marked or routed in the claimed checkout. The walk asks no
 summary, review or gate for that step, the Unit's row shows it `[x]` like a
 stage its kind writes nothing for, the receipt travels with the published
 work, and pin takes the stage as one the Unit owes nothing: no documents,
-review, receipt or per-stage gate. Pin's evidence lists it under
+review, receipt or per-stage gate (for Code Generation, no plan or Plan
+Approval either). Pin's evidence lists it under
 `stages_skipped` with its reason (left out of `stages_completed`), and the
 merge gate step's `skipped_steps` line has the agent say it in the merge
 question.

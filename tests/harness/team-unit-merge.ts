@@ -617,6 +617,8 @@ export function prepareCandidate(
     unit,
     "code-generation",
   );
+  // Its folder too when the stages leave Code Generation out (a case that skips it).
+  mkdirSync(codeDir, { recursive: true });
   const contract = resolveTestingPosture(checkout);
   const plan =
     `# Code Generation Plan\n\n${renderTestingContract(contract)}\n` +

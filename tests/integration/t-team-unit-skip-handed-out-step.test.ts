@@ -17,7 +17,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ORCH,
@@ -231,5 +231,32 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
     // The landed shard carries the Unit's skip.
     const landed = readFileSync(join(seededAuditDir(seed), auditShard), "utf-8");
     expect(landed).toContain("Unit Skipped");
+  });
+
+  test("the person's skip of Code Generation, with no plan written, is pinned, gated and landed", () => {
+    const { seed, remote } = teamSeed();
+    prepareCandidate(remote, "alpha", "alpha-team", {
+      stages: ["functional-design", "nfr-requirements", "nfr-design", STAGE],
+      beforeCommit: (checkout) => {
+        // A skipped Code Generation writes no plan, instructions or questions.
+        const codeDir = join(seededRecordDir(checkout), "construction", "alpha", "code-generation");
+        for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-generation-questions.md"]) {
+          rmSync(join(codeDir, name));
+        }
+        appendFileSync(join(checkout, ".git", "info", "exclude"), "**/.aidlc-engine/engine-touch\n");
+        const skipped = runMergeTool(ORCH, [
+          "report", "--stage", "code-generation", "--unit", "alpha", "--result", "skipped", "--reason", PERSON_ASKED_SKIP_REASON,
+        ], checkout);
+        expect(JSON.parse(skipped.stdout).kind, skipped.out).toBe("done");
+      },
+    });
+    const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
+    expect(pin.status, pin.out).toBe(0);
+    const evidence = JSON.parse(pin.stdout).evidence as { stages_skipped?: Array<{ stage: string }>; plan_fingerprint: string | null };
+    expect(evidence.stages_skipped?.map((entry) => entry.stage)).toEqual(["code-generation"]);
+    expect(evidence.plan_fingerprint).toBeNull();
+    gateAndLand(seed, "alpha");
+    const cells = unitProgressRow(seed, "alpha").split("|").slice(1, -1).map((cell) => cell.trim());
+    expect(cells.slice(2)).toEqual(cells.slice(2).map(() => "[x]"));
   });
 });
