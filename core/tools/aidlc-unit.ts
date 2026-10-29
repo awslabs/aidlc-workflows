@@ -193,6 +193,9 @@ export interface UnitClaimView {
   ref: string;
   observedAt?: string;
   movementObserved?: boolean;
+  // Set by the opening rule (buildOverview): the Unit is done, and its claim,
+  // kept after landing, is not one being worked.
+  landed?: boolean;
   payload: UnitClaimPayload;
 }
 
@@ -737,8 +740,11 @@ function buildOverview(
   const claimed: Array<{ unit: string; owner: string; generation: number }> = [];
   const waiting: Array<{ unit: string; blockedBy: string[] }> = [];
   for (const unit of opening.units) {
-    if (opening.completed.has(unit)) continue;
     const claim = claims.get(unit);
+    if (opening.completed.has(unit)) {
+      if (claim?.status === "claimed") claim.landed = true;
+      continue;
+    }
     if (claim?.status === "claimed") {
       claimed.push({ unit, owner: claim.owner, generation: claim.generation });
       continue;

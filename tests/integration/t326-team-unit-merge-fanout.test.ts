@@ -72,6 +72,9 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     expect(probe.status, probe.out).toBe(0);
     expect(JSON.parse(probe.stdout)).toMatchObject({ kind: "notice", message: lead.message });
     expect(checkoutFiles(seed)).toEqual(beforeProbe);
+    const snapshot = runMergeTool(ORCH, ["team-board", "--snapshot"], seed);
+    expect(snapshot.status, snapshot.out).toBe(0);
+    expect(snapshot.stdout).toContain("| alpha | landed | alpha-team | 1 |");
 
     // The guard's refusal names the person's step.
     const unscopedStart = runMergeTool(
