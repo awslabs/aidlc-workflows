@@ -426,6 +426,7 @@ import {
   kiroContextPressure,
   relativeCodekbDir,
   codekbDir,
+  codekbStageRepos,
   recordFileTargetOrThrow,
   intentsRegistryPath,
   MANY_REPOS,
@@ -7642,18 +7643,24 @@ export function bootstrapDirectiveMemory(
 }
 
 // When a step is published, the record folder of each file it names (its
-// documents, a wave Unit's documents and questions file, the code plan) is
-// made first, so each one is a plain file write: the Copilot CLI's file tool
-// makes no folders ("Parent directory does not exist"). Only inside this work's
-// record or the space's code knowledge base, never through a link, never for a
-// path that still holds a placeholder; a `{repo}` path is each repo's. Every
-// folder it can make is made, then the first it could not make is thrown.
+// documents and its own stage folder, which its diary path names, a wave
+// Unit's, the code plan, and Reverse Engineering's staging folder for each
+// repo) is made first, so each one is a plain file write: the Copilot CLI's
+// file tool makes no folders ("Parent directory does not exist"). Only inside
+// this work's record or the space's code knowledge base, never through a link,
+// never for a path that still holds a placeholder; a `{repo}` path is each
+// repo's. Every folder it can make is made, then the first it could not make
+// is thrown.
 export function prepareRecordFolders(projectDir: string, directive: Directive): void {
   const named: string[] = [];
   if (directive.kind === "run-stage") {
-    named.push(...directive.produces);
+    named.push(...directive.produces, directive.memory_path);
     for (const entry of directive.wave?.entries ?? []) {
-      named.push(...entry.produces, ...(entry.questions_file === undefined ? [] : [entry.questions_file]));
+      named.push(
+        ...entry.produces,
+        entry.unit_memory_path,
+        ...(entry.questions_file === undefined ? [] : [entry.questions_file]),
+      );
     }
   }
   const folders = new Set(planRecordFolders(projectDir, directive));
@@ -7670,6 +7677,13 @@ export function prepareRecordFolders(projectDir: string, directive: Directive): 
         : [path];
       for (const file of each) {
         if (!file.includes("{")) folders.add(dirname(join(projectDir, ...file.split("/"))));
+      }
+    }
+    // The architect writes each repo's candidate there, and codekb-publish
+    // swaps it into the store (reverse-engineering.md).
+    if (directive.kind === "run-stage" && directive.stage === "reverse-engineering") {
+      for (const repo of codekbStageRepos(projectDir)) {
+        folders.add(join(engineDir(projectDir), `codekb-stage-${repo}`));
       }
     }
   }

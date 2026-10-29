@@ -9,7 +9,8 @@
 //
 //   - a bugfix stage with the learnings ritual off: its folder is there, empty;
 //   - a per-Unit stage: that Unit's folder only;
-//   - a work that records two repos: each repo's code knowledge base folder;
+//   - Reverse Engineering: its own stage folder for the developer's scan, and
+//     each repo's code knowledge base folder and staging folder;
 //   - a route check makes nothing; a file where the folder goes, or a link out
 //     of the record, leaves the step as it was and makes nothing outside.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -134,7 +135,7 @@ describe("each record folder a step names is there before the agent writes into 
     }
   });
 
-  test("a work recording two repos at Reverse Engineering: each recorded repo's code knowledge base folder", () => {
+  test("a work recording two repos at Reverse Engineering: each recorded repo's code knowledge base and staging folders", () => {
     const proj = createOrchestrationTestProject();
     created.push(proj);
     writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-init-done.md"), "utf-8"), "utf-8");
@@ -149,6 +150,28 @@ describe("each record folder a step names is there before the agent writes into 
     expect(step.produces?.some((file) => file.includes("{repo}"))).toBe(true);
     expect(readdirSync(codekb).filter((name) => !before.includes(name)).sort()).toEqual(["repo-a", "repo-b"]);
     for (const repo of ["repo-a", "repo-b"]) emptyFolder(join(codekb, repo));
+    // The developer's scan handoff and the architect's candidate for each repo.
+    emptyFolder(join(seededRecordDir(proj), "inception", "reverse-engineering"));
+    const engine = join(seededRecordDir(proj), ".aidlc-engine");
+    expect(readdirSync(engine).filter((name) => name.startsWith("codekb-stage-")).sort())
+      .toEqual(["codekb-stage-repo-a", "codekb-stage-repo-b"]);
+    for (const repo of ["repo-a", "repo-b"]) emptyFolder(join(engine, `codekb-stage-${repo}`));
+  });
+
+  // The live run on the Copilot CLI on Windows that found it: every refusal left
+  // was the developer's scan handoff and the architect's nine staged files.
+  test("Reverse Engineering on a project that records no repo: its handoff folder and the project's staging folder", () => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-init-done.md"), "utf-8"), "utf-8");
+    const step = next(proj);
+    expect(step, JSON.stringify(step).slice(0, 300)).toMatchObject({ kind: "run-stage", stage: "reverse-engineering" });
+    emptyFolder(join(seededRecordDir(proj), "inception", "reverse-engineering"));
+    const store = (step.produces ?? [])[0]?.split("/")[4];
+    expect(store).toBeTruthy();
+    const engine = join(seededRecordDir(proj), ".aidlc-engine");
+    expect(readdirSync(engine).filter((name) => name.startsWith("codekb-stage-"))).toEqual([`codekb-stage-${store}`]);
+    emptyFolder(join(engine, `codekb-stage-${store}`));
   });
 
   test("a route check makes nothing", () => {
