@@ -279,7 +279,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    that one human decision covers every Unit and approval records dispositions
    for every Unit's open findings. At a Unit's own approval (its Construction
    checkpoint, or its team Unit gate), add `--unit "<unit>"`: that approval covers
-   only that Unit, and the brief shows only its review. Unit-filtered `context` output remains mandatory for
+   only that Unit, and the brief shows only that Unit's reviews. Unit-filtered `context` output remains mandatory for
    each reviewer dispatch. Select `first` after the initial review, `revision`
    after a requested revision, and `stale` after artifact/source invalidation or
    a backward jump. Print stdout verbatim. It deterministically renders the

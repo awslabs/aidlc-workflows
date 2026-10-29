@@ -1337,12 +1337,15 @@ change. See
    or reject one as not applying, with their reason (`--reject-finding` on a
    Request Changes, whose gate comes back with the review as it stands when
    nothing else changed); the Approve option then does not say it again. The ids come from the builder
-   `GATE_APPROVED` writes through. A Unit's own approval (`--unit`, below), and
-   a gate whose one approval also covers later stages with open findings of
-   their own, show no such line. The final gate of a per-Unit stage renders every Unit
+   `GATE_APPROVED` writes through. A Unit's Construction checkpoint, a
+   per-stage team Unit gate, and a gate whose one approval also covers later
+   stages with open findings of their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
    checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
-   Unit's review; reviewer dispatch context is always Unit-filtered.
+   Unit's review; at a team Unit's end-of-Unit gate that is every gated stage's
+   review with an open finding, ahead of the last stage's own, with the line
+   naming what its one Approve accepts (`teamUnitGateStages` gives both the
+   brief and the approval the same stages). Reviewer dispatch context is always Unit-filtered.
    On `adversarial`: READY → run the learnings ritual only when its module is listed, then proceed to the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
