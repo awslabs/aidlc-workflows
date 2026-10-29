@@ -703,6 +703,9 @@ mirror, and audit shard:
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref
 to a candidate commit that preserves both claim and implementation history.
+AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` (written when a
+session starts in a fresh clone) does not count, here or at landing; it stays
+uncommitted, and any other change still stops both.
 
 ### `/aidlc unit pin <unit>` — Pin candidate evidence
 

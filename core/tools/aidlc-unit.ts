@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -15,6 +16,15 @@ import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import {
+  managedBlockMarkers,
+  markedPart,
+  mergeBlock,
+  mergeJsonEntries,
+  onlyMarkedPartChanged,
+  rootIntegrationTarget,
+} from "./aidlc-distribution.ts";
+import { aidlcRootParts } from "./aidlc-includes.ts";
 import {
   activeIntentUuid,
   activeSpace,
@@ -1830,12 +1840,11 @@ function publishUnit(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const stamp = requireLiveClaimForTeamUnit(pd, unit);
   if (!stamp) fail("Unit publication requires a scoped team checkout.");
-  const dirty = gitOutput(
-    pd,
-    ["status", "--porcelain", "--untracked-files=no"],
-    "Cannot inspect candidate worktree",
-  );
-  if (dirty) fail("Unit publication requires a clean tracked worktree; commit the candidate first.");
+  const changed = worktreeChanges(pd, "no", "Cannot inspect candidate worktree");
+  const own = aidlcOwnRootParts(pd, changed);
+  if (changed.some((path) => !own.has(path))) {
+    fail("Unit publication requires a clean tracked worktree; commit the candidate first.");
+  }
   const remote = repositoryRemote(pd);
   const current = currentClaim(pd, remote, stamp.claim_ref);
   if (
@@ -2421,6 +2430,127 @@ function isEngineMergeMetadata(
   ]).has(path);
 }
 
+// The paths `git status` lists as changed: tracked changes, and with
+// `untracked: "all"` every untracked file Git does not ignore.
+function worktreeChanges(projectDir: string, untracked: "no" | "all", label: string): string[] {
+  const status = git(projectDir, ["status", "--porcelain=v1", "-z", `--untracked-files=${untracked}`]);
+  if (!status.ok) fail(`${label}: ${status.stderr.trim() || `exit ${status.code}`}`);
+  const paths: string[] = [];
+  const records = status.stdout.split("\u0000");
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record.length < 4) continue;
+    const code = record.slice(0, 2);
+    paths.push(record.slice(3));
+    if (/[RC]/.test(code) && records[i + 1]) {
+      paths.push(records[++i]);
+    }
+  }
+  return paths;
+}
+
+// What AI-DLC's own write in a shared root file is: its marked part (.gitignore,
+// AGENTS.md) or its entries in a JSON file (opencode.json), as aidlcRootParts
+// reads them from what the project's harnesses ship.
+type OwnRootPart = { marker: string } | { entries: string };
+
+// The changed paths that hold only AI-DLC's own write, which the session-start
+// hook adds in a checkout config never ran in and a release brings up to date:
+// in a shared root file, its marked part with the person's part around it as
+// HEAD holds it, or its entries merged onto HEAD's copy exactly as the hook
+// merges them (no copy when HEAD has none). A change of the person's in that
+// file, or a part that does not read, leaves it theirs.
+function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<string, OwnRootPart> {
+  const own = new Map<string, OwnRootPart>();
+  if (paths.length === 0) return own;
+  const { blocks, entries } = aidlcRootParts(projectDir);
+  const entriesAt = new Map([...entries].map(([key, part]) => [rootIntegrationTarget(projectDir, key), part.text]));
+  for (const path of paths) {
+    const block = blocks.get(path);
+    const shippedEntries = entriesAt.get(path);
+    if (!block && shippedEntries === undefined) continue;
+    let text: string;
+    try {
+      if (!lstatSync(join(projectDir, path)).isFile()) continue;
+      text = readFileSync(join(projectDir, path), "utf-8");
+    } catch {
+      continue;
+    }
+    const committed = gitPathExistsAt(projectDir, "HEAD", path) ? gitTextAt(projectDir, "HEAD", path) : "";
+    if (block && onlyMarkedPartChanged(path, text, committed, block.marker)) {
+      own.set(path, { marker: block.marker });
+    } else if (shippedEntries !== undefined) {
+      const merged = mergeJsonEntries(committed, shippedEntries, { kind: "none" });
+      if (!("conflict" in merged) && merged.text === text) own.set(path, { entries: shippedEntries });
+    }
+  }
+  return own;
+}
+
+interface YieldedRootPart {
+  path: string;
+  part: OwnRootPart;
+  bytes: Buffer;
+}
+
+// Git refuses to merge over a local change to a file the merge writes, the
+// same bytes included. So before the merge, AI-DLC's own write in a shared
+// root file the candidate also changes is set aside: the file goes back to
+// HEAD's copy (or, AI-DLC's whole, away), and its bytes are kept in `yielded`
+// first, so a stop part way still gives each one back.
+function yieldOwnRootParts(projectDir: string, candidatePaths: readonly string[], yielded: YieldedRootPart[]): void {
+  const touched = worktreeChanges(projectDir, "all", "Cannot inspect main worktree")
+    .filter((path) => candidatePaths.includes(path));
+  for (const [path, part] of aidlcOwnRootParts(projectDir, touched)) {
+    yielded.push({ path, part, bytes: readFileSync(join(projectDir, path)) });
+    if (gitPathExistsAt(projectDir, "HEAD", path)) {
+      const restored = git(projectDir, ["checkout", "HEAD", "--", path]);
+      if (!restored.ok) fail(`Failed to restore ${path} before the Unit merge: ${restored.stderr.trim()}.`);
+    } else {
+      git(projectDir, ["rm", "-f", "--cached", "--ignore-unmatch", "--", path]);
+      unlinkSync(join(projectDir, path));
+    }
+  }
+}
+
+// After the merge, what was set aside goes back onto the merged file, still
+// uncommitted: AI-DLC's marked part as the landing checkout had it, or its
+// entries merged as the hook merges them, around the person's part as the
+// merge made it. When the landing stopped and rolled back, each file gets its
+// bytes back as they were.
+function returnOwnRootParts(projectDir: string, yielded: readonly YieldedRootPart[], landed: boolean): void {
+  for (const { path, part, bytes } of yielded) {
+    const file = join(projectDir, path);
+    if (!landed) {
+      writeFileSync(file, bytes);
+      continue;
+    }
+    let merged: string;
+    try {
+      merged = readFileSync(file, "utf-8");
+    } catch {
+      continue;
+    }
+    let next: string | undefined;
+    if ("entries" in part) {
+      const withEntries = mergeJsonEntries(merged, part.entries, { kind: "none" });
+      next = "conflict" in withEntries ? undefined : withEntries.text;
+    } else {
+      const kept = markedPart(path, bytes.toString("utf-8"), part.marker)?.block;
+      const now = markedPart(path, merged, part.marker);
+      if (!kept || now === null) continue;
+      if (now.block === null) {
+        const { begin, end } = managedBlockMarkers(path, part.marker);
+        next = mergeBlock(path, merged, kept.slice(begin.length, kept.length - end.length), part.marker).value;
+      } else {
+        const at = merged.indexOf(now.block);
+        next = `${merged.slice(0, at)}${kept}${merged.slice(at + now.block.length)}`;
+      }
+    }
+    if (next !== undefined && next !== merged) writeFileSync(file, next);
+  }
+}
+
 function conflictFiles(projectDir: string): string[] {
   const listed = git(projectDir, ["diff", "--name-only", "--diff-filter=U"]);
   return listed.ok
@@ -2437,32 +2567,15 @@ function checkpointMainMetadata(
     ["rev-parse", "HEAD"],
     "Cannot resolve metadata checkpoint parent",
   );
-  const statusResult = git(
-    projectDir,
-    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-  );
-  if (!statusResult.ok) {
-    fail(
-      `Cannot inspect main worktree: ${statusResult.stderr.trim() || `exit ${statusResult.code}`}`,
-    );
-  }
-  const status = statusResult.stdout;
-  if (!status) return { parentOid };
+  const changed = worktreeChanges(projectDir, "all", "Cannot inspect main worktree");
+  if (changed.length === 0) return { parentOid };
   const recordPrefix = relativeRecordDir(projectDir);
   if (!recordPrefix) {
     fail("Cannot resolve active intent metadata for Unit landing.");
   }
-  const paths: string[] = [];
-  const records = status.split("\u0000");
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i];
-    if (record.length < 4) continue;
-    const code = record.slice(0, 2);
-    paths.push(record.slice(3));
-    if (/[RC]/.test(code) && records[i + 1]) {
-      paths.push(records[++i]);
-    }
-  }
+  // AI-DLC's own part of a shared root file stays as it is, uncommitted.
+  const own = aidlcOwnRootParts(projectDir, changed);
+  const paths = changed.filter((path) => !own.has(path));
   const unsafe = paths.filter(
     (path) =>
       !isEngineMergeMetadata(projectDir, path, recordPrefix) &&
@@ -2473,6 +2586,7 @@ function checkpointMainMetadata(
       `Unit landing requires a clean source worktree; commit or stash: ${unsafe.join(", ")}.`,
     );
   }
+  if (paths.length === 0) return { parentOid };
   const added = git(projectDir, ["add", "-A", "--", ...paths]);
   if (!added.ok) {
     fail(
@@ -2933,100 +3047,108 @@ function landGit(
     fail("Another git merge is already in progress.");
   }
   const changed = candidateChangedPaths(projectDir, transaction);
-  const merged = existingMergeHead.ok
-    ? { ok: true, stdout: "", stderr: "", code: 0 }
-    : git(
-      projectDir,
-      ["merge", "--no-commit", "--no-ff", transaction.pinned_oid],
-    );
-  restoreMainMetadata(projectDir, changed);
-  const conflicts = conflictFiles(projectDir).filter(
-    (path) => !isEngineMergeMetadata(projectDir, path),
-  );
-  if (conflicts.length > 0) {
-    git(projectDir, ["merge", "--abort"]);
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, {
-      ...working,
-      conflict_files: conflicts,
-    });
-    fail(`Unit "${transaction.unit}" source conflicts: ${conflicts.join(", ")}.`);
-  }
-  if (!merged.ok && !git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) {
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, working);
-    fail(`Pinned git merge failed: ${merged.stderr.trim() || merged.stdout.trim()}.`);
-  }
-  const pendingTree = gitOutput(
-    projectDir,
-    ["write-tree"],
-    "Cannot materialize pending Unit merge tree",
-  );
-  const mainParent = gitOutput(
-    projectDir,
-    ["rev-parse", "HEAD"],
-    "Cannot resolve pending Unit merge parent",
-  );
-  const inspection = inspectLandedTree(
-    projectDir,
-    working,
-    pendingTree,
-    mainParent,
-  );
-  if (inspection.violations.length > 0) {
-    git(projectDir, ["merge", "--abort"]);
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, {
-      ...working,
-      conflict_files: inspection.violations,
-    });
-    throw new CandidateExactPolicyError(
-      `Unit "${transaction.unit}" candidate-exact merge policy refused auto-merged paths: ` +
-        `${inspection.violations.join(", ")}. Rebase onto the current target and republish.`,
-      { ...inspection, phase: "pending-index" },
-    );
-  }
-  const committed = git(projectDir, [
-    "commit",
-    "--no-edit",
-    "-m",
-    `Merge Unit ${transaction.unit} @ ${transaction.pinned_oid.slice(0, 12)}`,
-  ]);
-  if (!committed.ok) {
-    git(projectDir, ["merge", "--abort"]);
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, working);
-    fail(`Pinned git merge commit failed: ${committed.stderr.trim()}.`);
-  }
-  const commitOid = gitOutput(
-    projectDir,
-    ["rev-parse", "HEAD"],
-    "Cannot resolve landed merge commit",
-  );
+  const yielded: YieldedRootPart[] = [];
+  let landed = false;
   try {
-    validateLandedMerge(projectDir, working, commitOid, target);
-  } catch (error) {
-    if (error instanceof CandidateExactPolicyError) {
-      error.details.passed_pending_tree_oid = pendingTree;
+    if (!existingMergeHead.ok) yieldOwnRootParts(projectDir, changed, yielded);
+    const merged = existingMergeHead.ok
+      ? { ok: true, stdout: "", stderr: "", code: 0 }
+      : git(
+        projectDir,
+        ["merge", "--no-commit", "--no-ff", transaction.pinned_oid],
+      );
+    restoreMainMetadata(projectDir, changed);
+    const conflicts = conflictFiles(projectDir).filter(
+      (path) => !isEngineMergeMetadata(projectDir, path),
+    );
+    if (conflicts.length > 0) {
+      git(projectDir, ["merge", "--abort"]);
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, {
+        ...working,
+        conflict_files: conflicts,
+      });
+      fail(`Unit "${transaction.unit}" source conflicts: ${conflicts.join(", ")}.`);
     }
-    const reset = git(projectDir, ["reset", "--hard", mainParent]);
-    if (!reset.ok) {
-      fail(
-        `Unit merge validation failed and rollback also failed: ${errorMessage(error)}; ${reset.stderr.trim()}.`,
+    if (!merged.ok && !git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) {
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, working);
+      fail(`Pinned git merge failed: ${merged.stderr.trim() || merged.stdout.trim()}.`);
+    }
+    const pendingTree = gitOutput(
+      projectDir,
+      ["write-tree"],
+      "Cannot materialize pending Unit merge tree",
+    );
+    const mainParent = gitOutput(
+      projectDir,
+      ["rev-parse", "HEAD"],
+      "Cannot resolve pending Unit merge parent",
+    );
+    const inspection = inspectLandedTree(
+      projectDir,
+      working,
+      pendingTree,
+      mainParent,
+    );
+    if (inspection.violations.length > 0) {
+      git(projectDir, ["merge", "--abort"]);
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, {
+        ...working,
+        conflict_files: inspection.violations,
+      });
+      throw new CandidateExactPolicyError(
+        `Unit "${transaction.unit}" candidate-exact merge policy refused auto-merged paths: ` +
+          `${inspection.violations.join(", ")}. Rebase onto the current target and republish.`,
+        { ...inspection, phase: "pending-index" },
       );
     }
-    working = rollbackMetadataCheckpoint(projectDir, working);
-    writeUnitMergeTransaction(projectDir, working);
-    throw error;
+    const committed = git(projectDir, [
+      "commit",
+      "--no-edit",
+      "-m",
+      `Merge Unit ${transaction.unit} @ ${transaction.pinned_oid.slice(0, 12)}`,
+    ]);
+    if (!committed.ok) {
+      git(projectDir, ["merge", "--abort"]);
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, working);
+      fail(`Pinned git merge commit failed: ${committed.stderr.trim()}.`);
+    }
+    const commitOid = gitOutput(
+      projectDir,
+      ["rev-parse", "HEAD"],
+      "Cannot resolve landed merge commit",
+    );
+    try {
+      validateLandedMerge(projectDir, working, commitOid, target);
+    } catch (error) {
+      if (error instanceof CandidateExactPolicyError) {
+        error.details.passed_pending_tree_oid = pendingTree;
+      }
+      const reset = git(projectDir, ["reset", "--hard", mainParent]);
+      if (!reset.ok) {
+        fail(
+          `Unit merge validation failed and rollback also failed: ${errorMessage(error)}; ${reset.stderr.trim()}.`,
+        );
+      }
+      working = rollbackMetadataCheckpoint(projectDir, working);
+      writeUnitMergeTransaction(projectDir, working);
+      throw error;
+    }
+    landed = true;
+    return {
+      ...working,
+      status: "git-landed",
+      target_branch: target,
+      strategy: "merge",
+      git_commit_oid: commitOid,
+      conflict_files: undefined,
+    };
+  } finally {
+    returnOwnRootParts(projectDir, yielded, landed);
   }
-  return {
-    ...working,
-    status: "git-landed",
-    target_branch: target,
-    strategy: "merge",
-    git_commit_oid: commitOid,
-    conflict_files: undefined,
-  };
 }
 
 function runStateFold(

@@ -526,6 +526,9 @@ export function prepareCandidate(
      *  written - lets a case mint a real event (e.g. a session-start hook)
      *  into the fresh checkout's shard before anything else exists there. */
     afterClaim?: (checkout: string) => void;
+    /** Runs after the Unit's commit, right before publish: what a session
+     *  writes into the checkout between the two. */
+    beforePublish?: (checkout: string) => void;
   } = {},
 ): {
   checkout: string;
@@ -749,6 +752,7 @@ export function prepareCandidate(
   writeFileSync(shardPath, priorShard + audit);
   git(checkout, ["add", "-A"]);
   git(checkout, ["commit", "-m", `complete ${unit}`]);
+  options.beforePublish?.(checkout);
   const published = runMergeTool(UNIT, ["publish", unit], checkout);
   expect(published.status, published.out).toBe(0);
   return {
