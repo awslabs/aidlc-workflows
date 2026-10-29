@@ -216,8 +216,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   authored JSON carries the command without it.
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
-  and drops `skills/` — see emit). The 3 session skills are core dirs for
-  in-tree harnesses (claude, kiro, kiro-ide); codex emits them instead.
+  and drops `skills/` — see emit). The core skills (the 3 session skills,
+  `aidlc-knowledge` and `aidlc-issue-report`) are core dirs for in-tree
+  harnesses (claude, kiro, kiro-ide, cursor, opencode); codex and copilot emit
+  them instead, each from its own list in `emit.ts`.
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into each channel (supported text formats get token
   substitution).

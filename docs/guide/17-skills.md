@@ -22,6 +22,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
 - **`/aidlc-compose`** - the adaptive composer: it reads your task, proposes the stages that fit it, and after you approve runs it as a plan of its own. Same as `/aidlc compose`; see [The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).
 - **`/aidlc-knowledge`** - the DocumentKB: index the team's own documents (PDFs, Word files, Markdown, plain text) into a per-space catalog agents can cite. Standalone like the session skills, but read-write: it changes the catalog and emits document audit events (never workflow state). Same surface as `/aidlc knowledge <verb>`; see [CLI Commands](12-cli-commands.md) for the verbs.
+- **`/aidlc-issue-report`** - when a run went wrong and you cannot quite say how: it reads what AI-DLC and your AI tool left on this machine (the audit and state, hook health, a `doctor --export` archive, and the tool's own chat log for this project), finds what went wrong and when, and writes one report to send to the AI-DLC team, with your names, your company's and your project's details replaced. It quotes AI-DLC's own messages as they are, asks before putting in any other raw value, checks the report and its facts before handing them over (refusing any line that could still identify a person, a company or a machine, so the agent rewrites it), asks you to read the report once, and never sends anything itself. On Codex, type `$aidlc-issue-report`; elsewhere you can also just ask for an issue report. See [Troubleshooting](15-troubleshooting.md).
 
 Everything a runner does is reachable from `/aidlc` with a flag. The runners are packaging — typing `/aidlc-bugfix` and seeing it in your `/` menu is good ergonomics, nothing more. Delete every runner and the shortcuts go; the capability stays, reachable through `/aidlc` flags.
 
@@ -122,6 +123,7 @@ The three bootstrap **initialization** stages ship no stage-runner - creating ha
 | Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](11-session-management.md) |
 | Composer | `/aidlc-compose` | Propose a plan made for your task, then run it after you approve | `/aidlc compose` |
 | Document knowledge | `/aidlc-knowledge` | Index and read the team's own documents (per-space DocumentKB) | `/aidlc knowledge <verb>` |
+| Issue report | `/aidlc-issue-report` | One redacted report of what went wrong in a run, to send to the AI-DLC team | builds on `/aidlc --doctor --export` |
 
 There's one stage-runner for every runnable stage in the lifecycle. To see the full set, list your skills directory. In a project set up for Claude Code with `aidlc config` (shortened):
 
@@ -141,7 +143,7 @@ aidlc-units-generation
 aidlc-user-stories
 ```
 
-That is 42 entries: `/aidlc`, the 30 stage-runners, the 5 scope-runners, `/aidlc-init`, `/aidlc-compose`, `/aidlc-knowledge` and the 3 session skills.
+That is 43 entries: `/aidlc`, the 30 stage-runners, the 5 scope-runners, `/aidlc-init`, `/aidlc-compose`, `/aidlc-knowledge`, `/aidlc-issue-report` and the 3 session skills.
 
 ---
 
