@@ -6743,13 +6743,15 @@ function unseenComposedPlanStep(
   }
   // A depth, setting or Guard Policy typed here that is the later plan's own
   // came with that plan, not from the person: it is left off, and the shown
-  // plan's are typed in its place, as its own approval types them.
+  // plan's are typed in its place, as its own approval types them. The record
+  // keeps a Guard Policy only above its scope's default, which is typed too.
   const unseenSettings = kept.unseen.settings ?? {};
+  const unseenPolicy = kept.unseen.guardPolicy ?? scopeGuardPolicyDefault(kept.unseen.scope);
   const asShown: ParsedFlags = {
     ...flags,
     ...(flags.depth !== undefined && flags.depth === kept.unseen.depth ? { depth: undefined } : {}),
     ...(flags.review !== undefined && flags.review === unseenSettings.review ? { review: undefined } : {}),
-    ...(flags.changeControl !== undefined && flags.changeControl === kept.unseen.guardPolicy ? { changeControl: undefined } : {}),
+    ...(flags.changeControl !== undefined && flags.changeControl === unseenPolicy ? { changeControl: undefined } : {}),
     ceremony: undefined,
   };
   for (const key of CEREMONY_KEYS) {

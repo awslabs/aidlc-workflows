@@ -418,20 +418,25 @@ describe("Approve creates the plan the gate showed, even when the plan is compos
     expect(suffixOf(state, SKIPPED)).toBe("EXECUTE");
   });
 
-  test("a plan composed again on another scope names the plan shown on its own scope", () => {
+  test("a plan composed again on another scope names the plan shown on its own scope, without the other plan's Guard Policy", () => {
     const proj = installedProject();
     const request = tailor(proj);
     const shown = customPlan(proj, SHOWN);
     personSays(proj, "Approve", before(proj, request));
-    const feature = withEnvAndFreshCaches(POLICY_ENV, () => ({ settings: scopeSettingsOf("feature")!, policy: scopeGuardPolicyDefault("feature") }));
-    validate(proj, { stages: stockGrid("feature"), scopeSettings: feature.settings, guardPolicy: feature.policy }, ["--matched", "feature"]);
+    // The later plan is enterprise as it stands, whose Guard Policy is its default, strict, typed as composer.md says.
+    const enterprise = withEnvAndFreshCaches(POLICY_ENV, () => ({ settings: scopeSettingsOf("enterprise")!, policy: scopeGuardPolicyDefault("enterprise") }));
+    expect(enterprise.policy).toBe("strict");
+    validate(proj, { stages: stockGrid("enterprise"), scopeSettings: enterprise.settings, guardPolicy: enterprise.policy }, ["--matched", "enterprise"]);
 
-    const step = nextAsPerson(proj, ["--scope", "feature", "--request", request]);
+    const step = nextAsPerson(proj, ["--scope", "enterprise", "--guard-policy", "strict", "--request", request]);
     expect(step.message).not.toContain("intent create");
     expect(step.message).toContain("worked out after the person's last message on record");
     nothingCreated(proj);
     const approval = commandIn(step, ` next --scope ${shown.base}`);
-    expect(commandIn(nextAsPerson(proj, runNamedArgs(approval)), "intent create")).toContain(lists(shown.changes).join(" "));
+    expect(approval).not.toContain("--guard-policy strict");
+    const creation = commandIn(nextAsPerson(proj, runNamedArgs(approval)), "intent create");
+    expect(creation).toContain(lists(shown.changes).join(" "));
+    expect(creation).not.toContain("--guard-policy strict");
   });
 
   test("with no plan kept before the reply, the plan composed after it is shown once, and the next reply creates it", () => {
