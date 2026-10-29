@@ -1237,8 +1237,9 @@ export function chatAwaitsFirstStep(projectDir: string, selection: WorkflowSelec
 }
 
 // The chat takes an AI-DLC step on the work it followed the cursor to (`next`,
-// a report, a recorded answer, a setting it changes there): from now on the
-// work's fences hold it. Returns the selection as the step goes on with it.
+// a report, a recorded answer or review, a checkpoint decision, a setting it
+// changes there): from now on the work's fences hold it. Returns the selection
+// as the step goes on with it.
 export function chatTookStep(projectDir: string, selection: WorkflowSelection): WorkflowSelection {
   const binding = selection.binding;
   if (
@@ -1249,6 +1250,16 @@ export function chatTookStep(projectDir: string, selection: WorkflowSelection): 
   }
   writeSessionBinding(projectDir, selection.sessionId, binding.space, binding.intent, "cursor");
   return { ...selection, binding: { ...binding, source: "cursor" } };
+}
+
+// The same for a command that has not resolved its selection yet. A selection
+// that cannot be read leaves the binding as it is: the command says what is wrong.
+export function chatTookStepHere(projectDir: string): void {
+  try {
+    chatTookStep(projectDir, resolveWorkflowSelection(projectDir));
+  } catch {
+    // The fences wait for the chat's next step.
+  }
 }
 
 export function relativeRecordDirForSelection(selection: WorkflowSelection): string | null {

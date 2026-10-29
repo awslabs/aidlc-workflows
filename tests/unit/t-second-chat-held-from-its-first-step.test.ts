@@ -195,6 +195,26 @@ describe("a second chat on the work the cursor names", () => {
     for (const verdict of await reads(proj, host)) expect(verdict.code, verdict.command).toBe(2);
   });
 
+  // The commands the agent runs on the person's word with no `next` before
+  // them: a review they asked for (stage-protocol.md), a Unit checkpoint
+  // decision, a Construction setting. Each is the chat's step on the work.
+  for (const [step, argv] of [
+    ["a review the person asked for", ["aidlc-log.ts", "review", "--stage", "code-generation", "--reviewer",
+      "aidlc-architecture-reviewer-agent", "--iteration", "1", "--person-asked"]],
+    ["a Unit checkpoint decision", ["aidlc-bolt.ts", "checkpoint", "--unit", "u1", "--action", "approve"]],
+    ["a Construction setting", ["aidlc-state.ts", "set-construction-checkpoints", "disabled"]],
+  ] as const) {
+    test(`${step} is its first step: the checks hold it from there`, async () => {
+      const host = shape("claude");
+      const proj = workAtCodeGeneration(host, "off");
+      opensSecondChat(proj, host);
+      const [tool, ...args] = argv;
+      spawnTree(proj, [join(proj, ".claude", "tools", tool), ...args, "--project-dir", proj], undefined, chatVariables("claude"));
+      expect(readSessionBinding(proj, SECOND)).toMatchObject({ intent: DEFAULT_RECORD_DIR, source: "cursor" });
+      expect((await host.call(proj, SECOND, { tool: "Bash", command: READS[0] })).code).toBe(2);
+    });
+  }
+
   test("before that step, a system package install nobody asked for still waits for the person", async () => {
     const host = shape("claude");
     const proj = workAtCodeGeneration(host, "off");

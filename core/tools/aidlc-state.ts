@@ -285,6 +285,7 @@ import {
   swarmWorkerWorktreeMeta,
   UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
+import { chatTookStepHere } from "./aidlc-record-core.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
@@ -1033,6 +1034,8 @@ export function main(argv: string[]): void {
         `aidlc-state.ts ${subcommand}`,
       );
     }
+    // A Construction setting the chat changes is its step on the work.
+    if (subcommand?.startsWith("set-construction-")) chatTookStepHere(resolveProjectDir(projectDir));
     switch (subcommand) {
       case "get":
         handleGet(args.slice(1));

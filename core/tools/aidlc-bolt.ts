@@ -85,6 +85,7 @@ import {
   printUsageAndExit,
   resolveInvokingSessionId,
 } from "./aidlc-lib.js";
+import { chatTookStepHere } from "./aidlc-record-core.ts";
 import { aidlcDispatcherInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
@@ -1419,6 +1420,8 @@ async function handleCheckpoint(args: string[]): Promise<void> {
     error(`checkpoint --kind must be ${CHECKPOINT_KINDS.join(" or ")}`);
   }
   const pd = resolveProjectDir(projectDir);
+  // A checkpoint decision is the chat's step on the work; its status is a read.
+  if ((flags.action ?? "status") !== "status") chatTookStepHere(pd);
   let result: ReturnType<typeof resolveConstructionCheckpoint>;
   switch (flags.action ?? "status") {
     case "status":

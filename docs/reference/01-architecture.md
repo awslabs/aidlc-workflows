@@ -941,8 +941,9 @@ work the cursor named is `cursor-followed` on the hosts whose agent commands nam
 their chat (Claude Code, Codex, Kiro CLI, opencode: `CHAT_NAMING_HOSTS`): it takes
 part in that work as any chat there does, but the gates stand aside for it
 (`hookOutsideGate`, `chatAwaitsFirstStep`) until its first AI-DLC step there
-(`next`, `continue`, `report` or `park` other than a read-only probe, a recorded
-`decision` or `answer`, or a setting it changes), which rewrites the source as
+(`next`, `continue`, `report` or `park` other than a read-only probe, what it
+records through `aidlc-log.ts` other than reading answers, a Unit checkpoint
+decision, or a setting it changes), which rewrites the source as
 `cursor` (`chatTookStep`); a worktree of this checkout or a Unit claimed here holds
 it from the start. Its developer dispatch meets the plan as any chat on the work
 does. On Cursor, Copilot and Kiro IDE (and Kiro CLI v3, which runs that tree) a
