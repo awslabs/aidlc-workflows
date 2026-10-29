@@ -10,9 +10,10 @@
 // passes after finalize (release-merge must not stale its directive marker), and a
 // second finalize reports the merged-back Unit converged instead of looping on
 // "already merged". Nothing is asked twice; a changed plan still asks as today.
-// A plan approved again that cannot reach the kept build always names setting the
-// work aside, and landing the work as it is only where that runs: the same merge
-// again for work that already converged, or work its own check lets go on.
+// A plan approved again that cannot reach a kept build holding work of its own
+// names setting that work aside, and landing it as it is only where that runs:
+// the same merge again for work that already converged, or work its own check
+// lets go on. Any other refusal on the way names its own step.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
