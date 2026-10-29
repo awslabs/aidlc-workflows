@@ -35,7 +35,6 @@ import {
   discoverableRuntimeHarnessDir,
   runtimeHarnessDir,
   hookSessionProjectDir,
-  hostWorktreeProjectDir,
   runtimeProjectDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
@@ -3578,14 +3577,11 @@ function dispatcherProjectDirFrom(
   // reader of the line takes the same slice, so none of them can answer them
   // about an option they did not use.
   const explicit = projectDirFlag(argv.slice(0, limit)).value;
-  const own = explicit || process.env.AIDLC_PROJECT_DIR;
-  if (own) return isAbsolute(own) ? own : resolve(process.cwd(), own);
-  const host = process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
-  if (!host) return process.cwd();
-  const hostDir = isAbsolute(host) ? host : resolve(process.cwd(), host);
-  // A host session in a git worktree of the project may still name the main
-  // checkout; the worktree holding the workspace shell is the project then.
-  return hostWorktreeProjectDir(hostDir) ?? hostDir;
+  const value = explicit || process.env.AIDLC_PROJECT_DIR ||
+    process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
+  return value
+    ? (isAbsolute(value) ? value : resolve(process.cwd(), value))
+    : process.cwd();
 }
 
 // Whether the dispatcher's project directory comes from the host (its
@@ -3628,13 +3624,14 @@ function projectDirFlag(argv: readonly string[]): {
 async function dispatchPinnedVersion(
   argv: string[],
   input: string | null,
+  hookRoute: boolean,
 ): Promise<number | null> {
   if (routePinPolicy(argv) !== "pinned") return null;
   // A host may run a worktree session's hook from the main checkout it names
-  // as the project; the hook then acts on the checkout its payload names, so
-  // that checkout's pin is the one that runs it.
+  // as the project; a native hook then acts on the checkout its payload names
+  // (execute), so that checkout's pin is the one that runs it.
   const hostDir = dispatcherProjectDirFrom(argv);
-  const projectDir = input !== null && dispatcherHostResolved(argv)
+  const projectDir = hookRoute && input !== null && isCompiledExecutable() && dispatcherHostResolved(argv)
     ? hookSessionProjectDir(hostDir, input)
     : hostDir;
   const pinPath = join(projectDir, ".aidlc-version");
@@ -4226,7 +4223,7 @@ export async function main(rawArgv: string[]): Promise<void> {
   ) {
     process.env.AIDLC_TEST_CONFIG_INPUT = await readStdin();
   }
-  const pinnedCode = await dispatchPinnedVersion(argv, bufferedStdin);
+  const pinnedCode = await dispatchPinnedVersion(argv, bufferedStdin, route?.routeOnly === "hook");
   if (pinnedCode !== null) {
     process.exitCode = pinnedCode;
     return;

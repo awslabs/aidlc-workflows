@@ -1,22 +1,30 @@
-// covers: file:tools/aidlc-runtime-paths.ts
+// covers: file:tools/aidlc-runtime-paths.ts, function:swarmWorkerWorktreeMeta
 //
 // A host that opens a session in a git worktree of the project may still name
-// the main checkout as the project (Claude Code's desktop app sets
-// CLAUDE_PROJECT_DIR that way). A hook then runs with the worktree as its
-// working directory: it must act on the worktree, not on the main checkout.
-// AIDLC_PROJECT_DIR, the engine's own variable, still wins.
+// the main checkout as the project and run the session's hooks from it (Claude
+// Code's desktop app sets CLAUDE_PROJECT_DIR that way). The hook payload says
+// where the session works: the first cwd its transcript records, else its own
+// cwd. That checkout is the project when it is another worktree of the same
+// repository holding the AI-DLC workspace, and never when AI-DLC made it (a
+// swarm Unit's worktree, which a conductor's kept `cd` can leave the payload
+// naming). Tools and the copy channel keep the host's directory.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
-  hookSessionDirectories,
+  hookSessionDirectory,
   hookSessionProjectDir,
   hostWorktreeProjectDir,
   runtimeProjectDir,
 } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
+import { swarmWorkerWorktreeMeta } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { cleanupCheckpointFixtures, fixture, prepare, wt } from "../harness/swarm-checkpoint.ts";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 function git(cwd: string, args: string[]): void {
   const result = spawnSync("git", args, { cwd, encoding: "utf-8" });
@@ -36,6 +44,18 @@ function makeProject(root: string): string {
   git(root, ["-c", "user.name=t", "-c", "user.email=t@example.test", "add", "-A"]);
   git(root, ["-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "project"]);
   return realpathSync(root);
+}
+
+// A session transcript whose rows carry the cwd of their time.
+function transcript(path: string, cwds: string[]): string {
+  writeFileSync(
+    path,
+    [
+      JSON.stringify({ type: "bridge-session", sessionId: "s1" }),
+      ...cwds.map((cwd) => JSON.stringify({ type: "user", cwd, sessionId: "s1" })),
+    ].join("\n") + "\n",
+  );
+  return path;
 }
 
 const ENV_KEYS = ["AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "KIRO_PROJECT_DIR"] as const;
@@ -80,86 +100,104 @@ describe("a hook in a host's worktree acts on that worktree", () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  test("the worktree the hook runs in is the project when the host names the main checkout", () => {
-    process.chdir(worktree);
-    expect(realpathSync(hostWorktreeProjectDir(main) as string)).toBe(worktree);
-  });
-
-  test("the main checkout stays the project when the hook runs in it", () => {
-    process.chdir(main);
-    expect(hostWorktreeProjectDir(main)).toBeNull();
+  test("a worktree of the project holding the workspace is the session's project, from any folder inside it", () => {
+    expect(realpathSync(hostWorktreeProjectDir(main, worktree) as string)).toBe(worktree);
+    expect(realpathSync(hostWorktreeProjectDir(main, join(worktree, "aidlc")) as string)).toBe(worktree);
+    expect(hostWorktreeProjectDir(main, main)).toBeNull();
   });
 
   test("a checkout without the AI-DLC workspace, another project, or no checkout at all, does not take over", () => {
-    process.chdir(bare);
-    expect(hostWorktreeProjectDir(main)).toBeNull();
-    process.chdir(elsewhere);
-    expect(hostWorktreeProjectDir(main)).toBeNull();
+    expect(hostWorktreeProjectDir(main, bare)).toBeNull();
+    expect(hostWorktreeProjectDir(main, elsewhere)).toBeNull();
     // A separate clone holding a workspace is its own project, not a worktree
     // of the one the host named.
     const other = makeProject(join(base, "other"));
-    process.chdir(other);
-    expect(hostWorktreeProjectDir(main)).toBeNull();
+    expect(hostWorktreeProjectDir(main, other)).toBeNull();
     expect(hookSessionProjectDir(main, JSON.stringify({ cwd: other }))).toBe(main);
   });
 
-  test("a hook run from the main checkout follows the session's directory named by its payload", () => {
-    process.chdir(main);
-    // The payload's own cwd: the worktree, or a directory inside it.
-    expect(realpathSync(hostWorktreeProjectDir(main, worktree) as string)).toBe(worktree);
-    expect(realpathSync(hookSessionProjectDir(main, JSON.stringify({ cwd: worktree })))).toBe(worktree);
-    expect(realpathSync(hookSessionProjectDir(main, JSON.stringify({ cwd: join(worktree, "aidlc") })))).toBe(worktree);
-    // The transcript's cwd when the payload's cwd is the main checkout itself.
-    const transcript = join(base, "session.jsonl");
-    writeFileSync(
-      transcript,
-      `${JSON.stringify({ type: "bridge-session", sessionId: "s1" })}\n` +
-        `${JSON.stringify({ type: "user", cwd: worktree, sessionId: "s1" })}\n` +
-        `${JSON.stringify({ type: "assistant", cwd: worktree, sessionId: "s1" })}\n`,
-    );
-    expect(hookSessionDirectories(JSON.stringify({ cwd: main, transcript_path: transcript }))).toEqual([main, worktree]);
-    expect(realpathSync(hookSessionProjectDir(main, JSON.stringify({ cwd: main, transcript_path: transcript })))).toBe(worktree);
-    // Nothing usable: the host's directory stands.
-    expect(hookSessionProjectDir(main, JSON.stringify({ cwd: bare }))).toBe(main);
-    expect(hookSessionProjectDir(main, JSON.stringify({ cwd: elsewhere }))).toBe(main);
-    expect(hookSessionProjectDir(main, JSON.stringify({ cwd: main }))).toBe(main);
-    expect(hookSessionProjectDir(main, "not json")).toBe(main);
-    expect(hookSessionProjectDir(main, JSON.stringify({ transcript_path: join(base, "missing.jsonl") }))).toBe(main);
+  test("a worktree AI-DLC made is never the session's own, wherever it is", () => {
+    // Under the project's .aidlc/worktrees/: refused before git runs.
+    git(main, ["worktree", "add", "-q", join(main, ".aidlc", "worktrees", "bolt-x"), "-b", "bolt-x"]);
+    expect(hostWorktreeProjectDir(main, join(main, ".aidlc", "worktrees", "bolt-x"))).toBeNull();
+    // Elsewhere, holding the worktree metadata AI-DLC writes into its own.
+    git(main, ["worktree", "add", "-q", join(base, "made"), "-b", "made"]);
+    mkdirSync(join(base, "made", ".aidlc"));
+    writeFileSync(join(base, "made", ".aidlc", "worktree-meta.json"), "{}\n");
+    expect(hostWorktreeProjectDir(main, join(base, "made"))).toBeNull();
   });
 
-  test("a hook run from the main checkout runs on the pin of the checkout its payload names", () => {
-    // The main checkout declares a release this machine never registered (it
-    // was pulled to a newer shell); the worktree the session works in declares
-    // none. The hook acts on the worktree, so the main checkout's pin must not
-    // stop it.
+  test("the session's directory is the first cwd its transcript records, else the payload's cwd", () => {
+    const started = transcript(join(base, "started.jsonl"), [worktree, main]);
+    expect(hookSessionDirectory(JSON.stringify({ cwd: main, transcript_path: started }))).toBe(worktree);
+    expect(realpathSync(hookSessionProjectDir(main, JSON.stringify({ cwd: main, transcript_path: started }))))
+      .toBe(worktree);
+    // A session that started in the main checkout stays there, whatever its
+    // payload's cwd names now.
+    const stayed = transcript(join(base, "stayed.jsonl"), [main, worktree]);
+    expect(hookSessionProjectDir(main, JSON.stringify({ cwd: worktree, transcript_path: stayed }))).toBe(main);
+    // No transcript yet (the session's first hook): the payload's cwd.
+    const missing = join(base, "missing.jsonl");
+    expect(hookSessionDirectory(JSON.stringify({ cwd: worktree, transcript_path: missing }))).toBe(worktree);
+    expect(realpathSync(hookSessionProjectDir(main, JSON.stringify({ cwd: worktree })))).toBe(worktree);
+    // Nothing usable: the host's directory stands.
+    expect(hookSessionProjectDir(main, JSON.stringify({ cwd: bare }))).toBe(main);
+    expect(hookSessionProjectDir(main, JSON.stringify({ cwd: main }))).toBe(main);
+    expect(hookSessionProjectDir(main, "not json")).toBe(main);
+    expect(hookSessionProjectDir(main, JSON.stringify({ transcript_path: missing }))).toBe(main);
+  });
+
+  test("the copy channel's dispatcher runs a hook on the host's pin", () => {
+    // The source dispatcher runs the host's own hook files, which act on the
+    // host's directory, so the host's pin is the one that runs them.
     writeFileSync(join(main, ".aidlc-version"), "2.11.1-preview.20261013.999\n");
     const machine = join(base, "machine");
     mkdirSync(machine);
     const dispatcher = resolve(import.meta.dir, "../../dist/claude/.claude/tools/aidlc.ts");
-    const hook = (payloadCwd: string) => spawnSync("bun", [dispatcher, "engine", "hook", "fold-usage"], {
+    const hooked = spawnSync("bun", [dispatcher, "engine", "hook", "fold-usage"], {
       cwd: main,
       encoding: "utf-8",
-      input: JSON.stringify({ session_id: "s1", cwd: payloadCwd, hook_event_name: "PreToolUse", tool_name: "Bash" }),
+      input: JSON.stringify({ session_id: "s1", cwd: worktree, hook_event_name: "PreToolUse", tool_name: "Bash" }),
       env: { ...process.env, CLAUDE_PROJECT_DIR: main, AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") },
     });
-    const inWorktree = hook(worktree);
-    expect(inWorktree.stderr).not.toContain("pin is not registered");
-    // The main checkout's own session still answers to the main checkout's pin.
-    const inMain = hook(main);
-    expect(inMain.stderr).toContain("this project's 2.11.1-preview.20261013.999 pin is not registered on this machine");
+    expect(hooked.stderr).toContain("this project's 2.11.1-preview.20261013.999 pin is not registered on this machine");
   });
 
-  test("the runtime project dir follows the worktree for the host's variable and AIDLC_PROJECT_DIR as given", () => {
+  test("a tool keeps the host's directory", () => {
     process.chdir(worktree);
     process.env.CLAUDE_PROJECT_DIR = main;
-    expect(realpathSync(runtimeProjectDir())).toBe(worktree);
-    process.env.AIDLC_PROJECT_DIR = main;
     expect(realpathSync(runtimeProjectDir())).toBe(main);
-    delete process.env.AIDLC_PROJECT_DIR;
     delete process.env.CLAUDE_PROJECT_DIR;
-    process.env.KIRO_PROJECT_DIR = main;
     expect(realpathSync(runtimeProjectDir())).toBe(worktree);
-    delete process.env.KIRO_PROJECT_DIR;
-    expect(realpathSync(runtimeProjectDir())).toBe(worktree);
+  });
+});
+
+describe("a swarm Unit's worktree is never taken for the session's project", () => {
+  afterEach(cleanupCheckpointFixtures, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a conductor's kept cd into a Unit's worktree leaves the hook on the project folder", () => {
+    // The project's harness is committed, as a team's is, so the Unit's
+    // worktree holds it too.
+    const pd = fixture(["alpha"]);
+    mkdirSync(join(pd, ".claude", "tools", "data"), { recursive: true });
+    writeFileSync(join(pd, ".claude", "tools", "data", "harness.json"), JSON.stringify({ harnessDir: ".claude" }));
+    git(pd, ["add", ".claude"]);
+    git(pd, ["-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "harness"]);
+    const prepared = prepare(pd, ["alpha"]);
+    expect(prepared.code, prepared.out + prepared.err).toBe(0);
+    const alpha = wt(pd, "alpha");
+    expect(swarmWorkerWorktreeMeta(alpha)).not.toBeNull();
+    expect(existsSync(join(alpha, ".claude", "tools", "data", "harness.json"))).toBe(true);
+    expect(hostWorktreeProjectDir(pd, alpha)).toBeNull();
+    expect(hostWorktreeProjectDir(pd, join(alpha, "aidlc"))).toBeNull();
+    // The payload's cwd names the Unit's worktree; the transcript says where
+    // the session started.
+    expect(hookSessionProjectDir(pd, JSON.stringify({ cwd: alpha }))).toBe(pd);
+    const kept = transcript(join(pd, "..", `${pd.split(/[\\/]/).pop()}-session.jsonl`), [pd, alpha]);
+    try {
+      expect(hookSessionProjectDir(pd, JSON.stringify({ cwd: alpha, transcript_path: kept }))).toBe(pd);
+    } finally {
+      rmSync(kept, { force: true });
+    }
   });
 });

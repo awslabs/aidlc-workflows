@@ -453,13 +453,16 @@ The compiled engine loads hook modules from the runtime payload beside the
 executable, and that tree is never a project: `engine hook` and sensor script
 routes take the project from `--project-dir`, then `AIDLC_PROJECT_DIR`,
 `CLAUDE_PROJECT_DIR`, or `KIRO_PROJECT_DIR`, then the directory the host
-launched the command in. A host variable or launch directory that names the
-main checkout while the session works in a git worktree of it is corrected to
-the worktree: the worktree the hook runs in, else the directory the hook
-payload's `cwd` or the session transcript's `cwd` names, when that checkout
-holds the AI-DLC workspace shell (Claude Code's desktop app runs a worktree
-session's hooks from the main checkout it names as the project). An adapter
-resolves its project from its host first.
+launched the command in. When that names the main checkout while the session
+works in another git worktree of it, an `engine hook` route of the native
+install acts on that worktree, and runs on its pin: the session's directory is
+the first `cwd` its transcript records, else the payload's `cwd`, and it counts
+when it is a worktree of the same repository holding the AI-DLC workspace shell
+(Claude Code's desktop app runs a worktree session's hooks from the main
+checkout it names as the project). A worktree AI-DLC made, under
+`.aidlc/worktrees/` or holding `.aidlc/worktree-meta.json`, never counts, and
+the copy channel's hooks keep the host's directory. An adapter resolves its
+project from its host first.
 Kiro IDE sets no project variable. Its adapter uses the directory Kiro IDE ran
 the hook in (it does not read the payload's `cwd` field, see
 [kiro-ide-hook-payload.md](kiro-ide-hook-payload.md)) and hands that to the
