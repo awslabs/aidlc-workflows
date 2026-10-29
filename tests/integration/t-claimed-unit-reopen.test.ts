@@ -141,7 +141,7 @@ function clone(remote: string, label: string): string {
   return dir;
 }
 
-function run(tool: string, args: string[], cwd: string) {
+function run(tool: string, args: string[], cwd: string, env: Record<string, string> = {}) {
   const result = spawnSync(process.execPath, [tool, ...args, "--project-dir", cwd], {
     cwd,
     encoding: "utf-8",
@@ -150,6 +150,7 @@ function run(tool: string, args: string[], cwd: string) {
       AIDLC_SKIP_ARTIFACT_GUARD: "1",
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      ...env,
     },
   });
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`, stdout: result.stdout ?? "" };
@@ -319,6 +320,31 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
     });
 
+    test(`${label}: a change they ask for in words to an approved stage is recorded in their words`, () => {
+      const { checkout } = claimedPastFunctionalDesign(shape);
+      const words = "I want to change Functional Design: names are trimmed.";
+      says(checkout, words);
+      const turn = readAuditShardEvents(checkout).filter((event) => event.event === "HUMAN_TURN").at(-1);
+      const id = /\*\*Message Id\*\*: (\S+)/.exec(turn?.block ?? "")?.[1];
+      expect(id, turn?.block).toBeDefined();
+      // The agent reads their words as a change: the jump print names the form for one.
+      const jump = run(ORCH, ["report", "--result", "resumed", "--choice", "jump", "--target", FD, "--unit", "alpha"], checkout);
+      expect(jump.status, jump.out).toBe(0);
+      expect((JSON.parse(jump.stdout) as Directive).message).toContain(`\`next --stage ${FD} --unit alpha --change\``);
+      const printed = next(checkout, ["--stage", FD, "--unit", "alpha", "--change"]);
+      expect(printed.kind, JSON.stringify(printed)).toBe("print");
+      const command = /reopen --target \S+ --stages \S+ --units alpha --scope feature --via change/.exec(printed.message ?? "")?.[0];
+      expect(command, printed.message).toBeDefined();
+      const reopened = run(JUMP, command!.split(" "), checkout, { AIDLC_SESSION_OVERRIDE: SESSION });
+      expect(reopened.status, reopened.out).toBe(0);
+      const row = readAuditShardEvents(checkout).filter((event) => event.event === "GATE_REJECTED").at(-1)?.block ?? "";
+      expect(row).toContain("**Reopen**: change");
+      expect(row).toContain("**User Input**: Request Changes");
+      expect(row).toContain(`**Feedback**: ${words}`);
+      expect(row).toContain(`**Message Id**: ${id}`);
+      expect(row).not.toContain("/aidlc --stage");
+    });
+
     test(`${label}: a move outside the Unit names a place the person can go`, () => {
       const { checkout } = claimedPastFunctionalDesign(shape);
       const before = recordSnapshot(checkout);
@@ -356,6 +382,19 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect(readAuditShardEvents(checkout).some((event) => event.event === "GATE_REJECTED")).toBe(false);
     });
   }
+
+  test("a reopen they ask for as a jump keeps its jump row", () => {
+    const { checkout } = claimedPastFunctionalDesign("clone");
+    says(checkout, "Go back to Functional Design for alpha.");
+    const printed = next(checkout, ["--stage", FD, "--unit", "alpha"]);
+    expect(printed.kind, JSON.stringify(printed)).toBe("print");
+    const reopened = run(JUMP, printedReopen(printed.message).split(" "), checkout, { AIDLC_SESSION_OVERRIDE: SESSION });
+    expect(reopened.status, reopened.out).toBe(0);
+    const row = readAuditShardEvents(checkout).filter((event) => event.event === "GATE_REJECTED").at(-1)?.block ?? "";
+    expect(row).toContain("**Reopen**: jump");
+    expect(row).toContain(`**Feedback**: Reopened Functional Design for unit alpha (/aidlc --stage ${FD}).`);
+    expect(row).not.toContain("Message Id");
+  });
 
   test("at Code Generation the guards let the printed reopen through", () => {
     const { checkout } = claimedPastFunctionalDesign("shared");

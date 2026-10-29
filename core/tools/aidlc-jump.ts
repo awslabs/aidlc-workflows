@@ -48,6 +48,7 @@ import {
   answerModeStageStartedFields,
   personsGateReply,
   resolveInvokingSessionId,
+  windowMessageIds,
   claimAttemptFields,
   effectiveUnitGateRhythm,
   isTeamUnitOwnership,
@@ -279,10 +280,11 @@ function handleReopen(args: string[]): void {
     if (!UNIT_NAME_REGEX.test(unit)) error(`Invalid Unit name: ${unit}`);
   }
   const stageName = targetStage.name ?? targetSlug;
-  // A change is kept in the person's own words, from the gate they answered.
+  // A change is kept in the person's own words, from the gate they answered,
+  // with the messages they came in, as a gate's Request Changes row names them.
   const gateStage = getField(content, "Current Stage")?.trim() ?? targetSlug;
-  const changeWords = flags.via === "change"
-    ? personsGateReply(pd, resolveInvokingSessionId(pd), gateStage).words
+  const change = flags.via === "change"
+    ? personsGateReply(pd, resolveInvokingSessionId(pd), gateStage)
     : null;
   // From a later stage of the same phase (Build and Test, say) the work moves
   // back to the target as a backward jump moves it, but with no STAGE_JUMPED or
@@ -319,8 +321,10 @@ function handleReopen(args: string[]): void {
       Feedback: flags.via === "redo"
         ? `Redid ${stageName} for unit ${unit} (redo on re-entry).`
         : flags.via === "change"
-          ? changeWords ?? `Reopened ${stageName} for unit ${unit} for a change.`
+          ? change?.words ?? `Reopened ${stageName} for unit ${unit} for a change.`
           : `Reopened ${stageName} for unit ${unit} (/aidlc --stage ${targetSlug}).`,
+      ...(change?.messageId ? { "Message Id": change.messageId } : {}),
+      ...(change ? windowMessageIds(change) : {}),
       ...(movedFrom ? { "Moved From": movedFrom } : {}),
     });
     // A redo answers the re-use question for this Unit's step too: recorded

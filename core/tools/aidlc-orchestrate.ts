@@ -19792,8 +19792,14 @@ function emitTypedResumeChoice(
       emit(unknownUnit);
       return;
     }
+    // Back to a Unit's step, the person may want it run again or a change made
+    // to it: the agent reads which, and `--change` keeps their words as the change.
+    const change = units !== "" && isPerUnit(node)
+      ? ` If what they asked for is a change to that stage's work, run \`next --stage ${node.slug}${units} --change\` ` +
+        "instead, so the reopen keeps their words as the change."
+      : "";
     emit(move(printDirective(
-      `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.`,
+      `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.${change}`,
     )));
     return;
   }
