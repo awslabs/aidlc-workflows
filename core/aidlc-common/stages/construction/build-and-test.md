@@ -74,9 +74,10 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 - the approved `mockups.md`, `interaction-spec.md`, `design-system-mapping.md`,
   and `accessibility-checklist.md` under `<record>/inception/refined-mockups/`
   when they exist, to test what they decided where a test fits. Their `UX`
-  decisions and checks are not targets in this inventory: Step 10's coverage
-  lines report each decision built or not built, and Step 12 names any no test
-  exercised, so an untested decision is never a failure here.
+  decisions and accessibility checks are not targets in this inventory: Step
+  10's coverage lines report each decision built or not built, and Step 12
+  names every decision and every measurable accessibility check no test
+  exercised, so neither is silently dropped and neither is a failure here.
 - every current `## Testing Contract` in `code-generation-plan.md`, including
   postapproval edits permitted by Code Generation Step 3's lowered-fence rule;
   do not describe those edits as human-approved.
@@ -336,7 +337,9 @@ checked in Happy DOM, not a real browser." The person decides at the gate with
 that in front of them.
 
 When Refined Mockups ran, say in one line which `UX` decisions no test
-exercised, and in one line which built screens or API responses to compare with
+exercised, in one line which measurable checks of `accessibility-checklist.md`
+(keyboard, contrast, screen reader) no test exercised, and in one line which
+built screens or API responses to compare with
 `<record>/inception/refined-mockups/mockups-preview.html`. Whether the build
 matches the experience they approved, brand and feel included, is the person's
 judgement at this gate; the tests cannot settle it.

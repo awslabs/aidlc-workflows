@@ -243,7 +243,7 @@ describe("t293 the documented workflow, end to end, through the public dispatche
         { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
       expect(human.status, human.stderr).toBe(0);
-      expect(human.stdout).toContain("--- excerpt (part 1 of 3 of the text, 2000 characters each) ---");
+      expect(human.stdout).toContain("--- excerpt (part 1 of 3 of the text, up to 2000 characters each) ---");
       expect(human.stdout).toContain("x".repeat(2000));
       const last = run(p, "show long.md --brief --part 3", ["show", longRow.id, "--brief", "--part", "3"]);
       expect((last.excerpt as string).length, "the last part holds the remainder").toBe(1000);

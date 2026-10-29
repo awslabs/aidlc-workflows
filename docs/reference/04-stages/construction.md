@@ -1341,9 +1341,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
    per-unit test instructions across all units. Build a source-complete
    inventory of every measurable target from NFR Requirements, NFR Design, and
    every current Testing Contract, and read the approved experience to test what
-   it decided where a test fits. Its `UX` decisions are not targets: Step 10
-   reports each built or not built and Step 12 names any no test exercised, so
-   an untested decision is never a failure. For each target, record a stable
+   it decided where a test fits. Its `UX` decisions and accessibility checks
+   are not targets: Step 10 reports each decision built or not built and Step
+   12 names every decision and measurable accessibility check no test
+   exercised, so neither is silently dropped and neither is a failure. For each target, record a stable
    ID, source path/section, expected value, the check that produces its actual
    value, and any later validation stage that owns it. Catalog all required test
    types.
@@ -1545,8 +1546,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
     stage or phase state; the reported gate outcome owns the transition.
 
 12. **Completion** -- Present completion message and approval gate. When
-    Refined Mockups ran, it names the `UX` decisions no test exercised and the
-    built screens or API responses to compare with `mockups-preview.html`;
+    Refined Mockups ran, it names the `UX` decisions and measurable
+    accessibility checks no test exercised and the built screens or API
+    responses to compare with `mockups-preview.html`;
     whether the build matches the approved experience, brand and feel included,
     is the person's judgement at this gate.
 

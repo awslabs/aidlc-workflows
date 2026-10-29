@@ -13,8 +13,8 @@ import {
   recordDir,
   resolveBoltDag,
   resolveProjectDir,
+  markdownBlocks,
   usesStageLevelPerUnitArtifacts,
-  visibleMarkdownLines,
 } from "./aidlc-lib.ts";
 import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
@@ -298,10 +298,22 @@ function decisionsOfStories(specContent: string, stories: Set<string> | null): S
   return decisions;
 }
 
-// Every UX ID visible in interaction-spec.md, as AC IDs are read from
-// stories.md; one in code or a comment is not a decision.
+// Every UX ID a reader of interaction-spec.md sees, as AC IDs are read from
+// stories.md. The shared parser says what renders: code, comments, link
+// reference definitions, and script-like HTML do not; an HTML block's text does.
 function experienceDecisions(specContent: string): Set<string> {
-  return extractIds(visibleMarkdownLines(specContent).join("\n"), [ID_PATTERNS.UX]);
+  const { lines } = markdownBlocks(specContent);
+  const source = specContent.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+  const shown = source.map((raw, index) => {
+    const line = lines[index];
+    if (line.kind === "codeFenced" || line.kind === "codeIndented" || line.kind === "definition") return "";
+    if (line.kind === "htmlFlow" && (line.htmlKind ?? 7) <= 5) return "";
+    let text = raw;
+    const comments = line.invisible.filter((span) => span.kind === "htmlComment").sort((a, b) => b.start - a.start);
+    for (const span of comments) text = text.slice(0, span.start) + text.slice(span.end);
+    return text;
+  });
+  return extractIds(shown.join("\n"), [ID_PATTERNS.UX]);
 }
 
 // Whether Functional Design's produces_kinds gives a Unit of this kind the

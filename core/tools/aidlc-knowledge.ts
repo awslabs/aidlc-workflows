@@ -2583,7 +2583,7 @@ export function renderShow(d: ShownDocument): string {
   }
   if (d.excerpt !== undefined) {
     const extent = d.excerpt_truncated
-      ? `part ${d.excerpt_part} of ${d.excerpt_parts} of the text, ${BRIEF_EXCERPT_CHARS} characters each`
+      ? `part ${d.excerpt_part} of ${d.excerpt_parts} of the text, up to ${BRIEF_EXCERPT_CHARS} characters each`
       : "the whole text";
     out.push("", d.content_notice ?? UNTRUSTED_CONTENT_NOTICE, "", `--- excerpt (${extent}) ---`, d.excerpt);
   }

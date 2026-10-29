@@ -773,7 +773,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1"]);
   });
 
-  test("code-generation owes every visible UX ID, whatever its form, and none in code or a comment", () => {
+  test("code-generation owes every rendered UX ID, whatever its form, and none in code, a comment, or a link definition", () => {
     const proj = project();
     seedExperience(proj);
     write(proj, "inception/refined-mockups/interaction-spec.md", [
@@ -798,11 +798,19 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
       "UX1.1.3 an example in code",
       "```",
       "<!-- UX1.1.4 a draft left in a comment -->",
+      "",
+      "[UX1.1.5]: https://example.com/a-link-reference-definition",
+      "",
+      "<div>",
+      "UX1.1.6 A decision written in an HTML block [Q5]",
+      "</div>",
+      "",
+      "- A list item with <!-- UX1.1.7 an inline comment --> in it",
     ].join("\n"));
     let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
-    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1", "UX1.1.2"]);
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1", "UX1.1.2", "UX1.1.6"]);
 
-    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2"]));
+    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2", "UX1.1.6"]));
     expect(out.result.pass, "an ID mentioned again is the same decision, not a duplicate").toBe(true);
   });
 
