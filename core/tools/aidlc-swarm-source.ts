@@ -83,6 +83,22 @@ function gitIgnoredPaths(checkout: string, paths: readonly string[], depth = 0):
   return ignored;
 }
 
+// The paths among `paths` (relative to `checkout`) that a commit reachable from
+// HEAD touched: a file the person tracked, its deletion since committed, which
+// the index no longer knows. Null when Git cannot answer.
+function trackedInHistory(checkout: string, paths: readonly string[]): Set<string> | null {
+  const touched = new Set<string>();
+  for (let at = 0; at < paths.length; at += 256) {
+    const logged = spawnSync("git", [
+      "-C", checkout, "log", "--no-renames", "--format=", "--name-only", "-z", "HEAD", "--",
+      ...paths.slice(at, at + 256).map((path) => `:(literal)${path}`),
+    ], { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS });
+    if (logged.status !== 0) return null;
+    for (const path of logged.stdout.split("\0")) if (path) touched.add(path.replace(/^\n+/, ""));
+  }
+  return touched;
+}
+
 /**
  * One checkout's live listing without what is not the person's source: the
  * paths Git ignores and does not track there, and what an ignored link leads to
@@ -140,7 +156,15 @@ export function swarmSourceChanged(
   for (const [repo, listing] of byRepo) {
     const checkout = repo === "" ? projectDir : repoDir(projectDir, repo);
     const kept = withoutGitIgnored(checkout, repo === "")(listing);
-    for (const key of listing.keys()) if (!kept.has(key)) dropped.add(`${repo}${key}`);
+    const left = [...listing.keys()].filter((key) => !kept.has(key));
+    // A file gone now is asked of Git's history: one the person tracked stays
+    // their source, its deletion a change.
+    const gone = new Set(left.filter((key) => !after.has(`${repo}${key}`)).map((key) => key.slice(1)));
+    const tracked = gone.size === 0 ? new Set<string>() : trackedInHistory(checkout, [...gone]);
+    for (const key of left) {
+      if (gone.has(key.slice(1)) && (tracked === null || tracked.has(key.slice(1)))) continue;
+      dropped.add(`${repo}${key}`);
+    }
   }
   const theirs = (listing: ReadonlyMap<string, string>) => new Map([...listing].filter(([key]) => !dropped.has(key)));
   return sourceChangedOutsideAidlc(projectDir, theirs(before), theirs(after));

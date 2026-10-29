@@ -166,11 +166,11 @@ test("strict: a dev server's ignored log written in the main checkout during the
   const first = land(pd, "alpha");
   expect(first.code, first.out).toBe(0);
   expect(first.out).not.toContain("dev-server.log");
-  appendFileSync(join(pd, "dev-server.log"), "request served\n");
+  // The dev server restarts and clears its log: a file Git never tracked is gone, not deleted source.
+  rmSync(join(pd, "dev-server.log"));
   const second = land(pd, "beta");
   expect(second.code, second.out).toBe(0);
   expect(second.out).not.toContain("dev-server.log");
-  expect(readFileSync(join(pd, "dev-server.log"), "utf-8")).toBe("listening\nrequest served\n");
 });
 
 test("strict: a file Git does not ignore, written in the main checkout during the build, still stops the landing", () => {
@@ -219,6 +219,33 @@ test("strict: a tracked file an ignore rule matches, or an ignored one registere
   const refused = land(pd, "alpha");
   expect(refused.code).not.toBe(0);
   expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (config/local.json, fixture.log)");
+});
+
+// The index forgets a file once its deletion is committed; Git's history still says it was the person's.
+test("strict: a tracked file an ignore rule matches, its deletion committed after the approval, still asks again", () => {
+  const pd = project("strict", (code) => {
+    writeFileSync(join(code, "fixture.log"), "tracked log\n");
+    git(code, ["add", "-f", "fixture.log"]);
+  });
+  git(pd, ["rm", "-q", "fixture.log"]);
+  git(pd, [...ID, "commit", "-qm", "stop shipping fixture.log"]);
+  const result = prepare(pd, UNITS);
+  expect(result.code).not.toBe(0);
+  expect(`${result.out}\n${result.err}`).toContain(REASKED);
+});
+
+test("strict: that deletion committed during the build still stops the landing, named", () => {
+  const pd = project("strict", (code) => {
+    writeFileSync(join(code, "fixture.log"), "tracked log\n");
+    git(code, ["add", "-f", "fixture.log"]);
+  });
+  prepared(pd);
+  built(pd);
+  git(pd, ["rm", "-q", "fixture.log"]);
+  git(pd, [...ID, "commit", "-qm", "stop shipping fixture.log"]);
+  const refused = land(pd, "alpha");
+  expect(refused.code).not.toBe(0);
+  expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (fixture.log)");
 });
 
 // Git reads the person's rules against their own paths, never against what a tracked link leads to outside the
