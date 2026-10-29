@@ -981,6 +981,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#protectedResponseFields`]: { use: "keeps", why: "the audit writer: a protected question's decision row, the response's words with every message they came in (Message Ids)" },
   [`${LIB}#readProtectedResponse`]: { use: "decides", why: "the protected response's own read: checks its fields' form (the digest's hex)" },
   [`${LIB}#withdrawProtectedReplyWords`]: { use: "decides", why: "drops a kept reply by its message id (the scan reads a reply's id as its words), and keeps the words of the replies that stay" },
+  [`${AUDIT}#handleTurns`]: { use: "keeps", why: "the person's own reader of their turns (`audit turns`): shows each HUMAN_TURN with its message record's words, read-only and never for a delegate" },
   [`${AUDIT}#appendAuditEntry`]: { use: "keeps", why: "the audit writer", from: [`${LOG}#emitAudit`] },
   [`${AUDIT}#appendAuditEntryUnlocked`]: { use: "keeps", why: "the audit writer", from: [`${AUDIT}#appendAuditEntry`, `${LOG}#emitAudit`] },
   [`${AUDIT}#tapAuditMetric`]: { use: "keeps", why: "the audit writer: the row's metric", from: [`${AUDIT}#appendAuditEntryUnlocked`] },

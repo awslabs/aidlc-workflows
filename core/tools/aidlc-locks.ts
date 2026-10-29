@@ -1989,7 +1989,7 @@ export function readRegularFileNoFollowOrThrow(
                 : "not a regular file";
       throw new Error(
         `${what} is not a regular file (${kind}): ${path}. ` +
-          `Only regular files are read — a FIFO, socket, or device file can block ` +
+          `Only regular files are read - a FIFO, socket, or device file can block ` +
           `forever or never reach EOF, so it is refused before any read.`,
       );
     }
@@ -2002,8 +2002,8 @@ export function readRegularFileNoFollowOrThrow(
       throw new Error(
         `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
           `A hardlink can alias content from elsewhere on the filesystem into this ` +
-          `directory. Replace it with an independent copy — ` +
-          `cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`,
+          `directory. Replace it with an independent copy - ` +
+          `cp <file> <file>.copy && mv <file>.copy <file> - and re-run.`,
       );
     }
     if (maxBytes !== undefined && st.size > maxBytes) {

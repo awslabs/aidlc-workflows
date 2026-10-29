@@ -1067,7 +1067,7 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
   const forked = forkedState(pd, slug, intent, space);
   if (!forked) {
     error(
-      `No per-Bolt forked state file for slug "${slug}" — was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
+      `No per-Bolt forked state file for slug "${slug}" - was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
     );
   }
   const content = readFileSync(forked.statePath, "utf-8");

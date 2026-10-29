@@ -502,14 +502,16 @@ $binDir = if ($env:AIDLC_BIN_DIR) {
 } else {
   Join-Path $installRoot 'bin'
 }
+# The install writes aidlc.exe beside aidlc.cmd, which PATHEXT finds first; a
+# release from before it writes only aidlc.cmd. Either is this install's own.
 $command = Join-Path $binDir 'aidlc.cmd'
+$exeCommand = Join-Path $binDir 'aidlc.exe'
+function Test-InstalledCommand($Resolved) {
+  return $Resolved -and @($command, $exeCommand) -contains [IO.Path]::GetFullPath($Resolved.Source)
+}
 $existingAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
   Select-Object -First 1
-if (-not $env:AIDLC_BIN_DIR -and $existingAidlc -and
-  -not [IO.Path]::GetFullPath($existingAidlc.Source).Equals(
-    [IO.Path]::GetFullPath($command),
-    [StringComparison]::OrdinalIgnoreCase
-  )) {
+if (-not $env:AIDLC_BIN_DIR -and $existingAidlc -and -not (Test-InstalledCommand $existingAidlc)) {
   Stop-Install -Code 4 -Status 'failed' `
     -Message "existing aidlc at $($existingAidlc.Source) is outside the native install destination" `
     -Remediation 'use its package manager, or set AIDLC_BIN_DIR to an explicit empty directory'
@@ -698,6 +700,7 @@ try {
       -Message $applyResult.message -Remediation $applyResult.remediation
   }
 
+  if (Test-Path -LiteralPath $exeCommand -PathType Leaf) { $command = $exeCommand }
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $installAccount = $identity.Name
   $accountSid = $identity.User.Value
@@ -730,19 +733,11 @@ try {
     try {
       $resolvedAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
-      if (-not $resolvedAidlc -or
-        -not [IO.Path]::GetFullPath($resolvedAidlc.Source).Equals(
-          [IO.Path]::GetFullPath($command),
-          [StringComparison]::OrdinalIgnoreCase
-        )) {
+      if (-not (Test-InstalledCommand $resolvedAidlc)) {
         $env:Path = "$binDir;$env:Path"
         $resolvedAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
           Select-Object -First 1
-        if (-not $resolvedAidlc -or
-          -not [IO.Path]::GetFullPath($resolvedAidlc.Source).Equals(
-            [IO.Path]::GetFullPath($command),
-            [StringComparison]::OrdinalIgnoreCase
-          )) {
+        if (-not (Test-InstalledCommand $resolvedAidlc)) {
           throw 'installed aidlc is not resolvable after applying the PATH update'
         }
       }

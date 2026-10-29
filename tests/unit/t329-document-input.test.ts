@@ -864,7 +864,7 @@ describe("t329 project-description and document-input boundaries", () => {
       );
       expect(shown.status, shown.stderr).toBe(0);
       expect(shown.stdout).toContain(
-        "truncated  yes after page 50 — the content below is a PARTIAL extraction, not the whole document",
+        "truncated  yes after page 50 - the content below is a PARTIAL extraction, not the whole document",
       );
     },
   );

@@ -178,6 +178,15 @@ export type TrustRecord = {
   reviewed?: boolean;
 };
 
+// The person kept the models as they are (Enter at the models question, or
+// `config models --keep`), so setup stops asking while no policy is recorded.
+// A setup answer like the providers one, never policy: agents read
+// aidlc.settings.json only.
+export type ModelsAnswerRecord = {
+  schemaVersion: 1;
+  kept: true;
+};
+
 export type CompletionShell = "bash" | "zsh" | "fish" | "powershell" | "none";
 
 export type ProjectChoicesRecord = {
@@ -191,6 +200,7 @@ export type ConfigDiagnosticRecords = {
   providers: ProvidersRecord | null;
   trust: TrustRecord | null;
   project: ProjectChoicesRecord | null;
+  modelsAnswer?: ModelsAnswerRecord | null;
 };
 
 export type ConfigDiagnosticOverrides = {
@@ -198,6 +208,7 @@ export type ConfigDiagnosticOverrides = {
   providers?: ProvidersRecord | null;
   trust?: TrustRecord | null;
   project?: ProjectChoicesRecord | null;
+  modelsAnswer?: ModelsAnswerRecord | null;
   plugins?: string[] | null;
 };
 
@@ -508,6 +519,15 @@ export function normalizeTrustRecord(value: unknown): TrustRecord | null {
   };
 }
 
+// harness.json refuses a `models` key as a legacy policy, hence the name.
+export function normalizeModelsAnswerRecord(value: unknown): ModelsAnswerRecord | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || value.schemaVersion !== 1 || value.kept !== true || Object.keys(value).length !== 2) {
+    throw new Error("modelsAnswer record must be {\"schemaVersion\": 1, \"kept\": true}");
+  }
+  return { schemaVersion: 1, kept: true };
+}
+
 export function normalizeProjectChoicesRecord(
   value: unknown,
 ): ProjectChoicesRecord | null {
@@ -573,6 +593,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
       : null,
     trust: normalizeTrustRecord(value.trust),
     project: normalizeProjectChoicesRecord(value.project),
+    modelsAnswer: normalizeModelsAnswerRecord(value.modelsAnswer),
   };
 }
 

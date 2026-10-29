@@ -19,7 +19,8 @@
 //           writes the pending marker `aidlc/.aidlc-compose-pending`, and ends
 //           the turn AT the approve/edit/reject gate (numbered prose:
 //           request_user_input returns {} in exec mode). NOTHING is applied:
-//           the state file is byte-unchanged, no RECOMPOSED. JOURNEY TOLERANCE:
+//           no stage newly skipped, no marker changed but the current stage
+//           starting, no RECOMPOSED. JOURNEY TOLERANCE:
 //           the live codex conductor sometimes drops the leading verb when
 //           forwarding, landing on the engine's cold-start compose OFFER
 //           ("reply with compose...") instead; when that happens the journey
@@ -289,9 +290,12 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
           expect(/approve/i.test(gateOut), gateDiagnostic).toBe(true);
           expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
           // Marker written, nothing applied: a change before Approve on this
-          // route is AI-DLC acting for the person.
+          // route is AI-DLC acting for the person. The current stage may
+          // start, as after Approve.
           expect(existsSync(markerPath(proj))).toBe(true);
-          expectPersonFirst(readState(proj) === before && !auditText(proj).includes("**Event**: RECOMPOSED"),
+          const atGate = readState(proj);
+          expectPersonFirst(newlySkipped(before, atGate).length === 0 && markersChanged(before, atGate, cursorBefore).length === 0 &&
+            !auditText(proj).includes("**Event**: RECOMPOSED"),
             "the plan change was applied before the person approved it");
 
           // Beat 2: answer the gate in the SAME session.

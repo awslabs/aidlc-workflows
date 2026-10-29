@@ -16,6 +16,7 @@ import {
   commandPath,
   installRoot,
   machineTransactionRoot,
+  WINDOWS_EXE_COMMAND_ASIDE,
   windowsUninstallFencePath,
 } from "./aidlc-install-paths.ts";
 import {
@@ -266,9 +267,14 @@ function assertDeletionPlan(
   ) throw new Error("Windows uninstall requires an explicit file plan");
   const rootKey = planPathKey(root);
   // A bin directory may sit outside the root; the only files there are
-  // aidlc.cmd and the Git Bash launcher beside it.
-  const commandKeys = [planPathKey(command), planPathKey(join(dirname(command), "aidlc"))];
-  const besideCommand = (path: string): boolean => commandKeys.includes(planPathKey(path));
+  // aidlc.cmd, the Git Bash launcher and aidlc.exe beside it, and the replaced
+  // aidlc.exe copies renamed aside.
+  const commandKeys = ["aidlc", "aidlc.exe"].map((name) => planPathKey(join(dirname(command), name)));
+  commandKeys.push(planPathKey(command));
+  const besideCommand = (path: string): boolean =>
+    commandKeys.includes(planPathKey(path)) ||
+    (planPathKey(dirname(path)) === planPathKey(dirname(command)) &&
+      WINDOWS_EXE_COMMAND_ASIDE.test(basename(path)));
   const withinRoot = (path: string): boolean =>
     planPathKey(path).startsWith(`${rootKey}${sep}`);
   const absolutePath = (path: unknown): path is string =>
@@ -396,13 +402,18 @@ function Test-UninstallPreserved([string]$Path) {
   }
   return $false
 }
+function Test-UninstallBesideCommand([string]$Path) {
+  if ($Path -eq $diskCommand -or $Path -eq $diskGitBashLauncher -or $Path -eq $diskExeLauncher) { return $true }
+  return [IO.Path]::GetDirectoryName($Path) -eq [IO.Path]::GetDirectoryName($diskCommand) -and
+    [IO.Path]::GetFileName($Path) -match '${WINDOWS_EXE_COMMAND_ASIDE.source}'
+}
 function Assert-UninstallTargetBoundary([string]$Path, [bool]$Directory) {
   if ($Path -eq (Convert-UninstallPath ([IO.Path]::GetPathRoot($Path))) -or
       $Path -eq (Convert-UninstallPath ([Environment]::GetFolderPath('UserProfile'))) -or
       $Path -match '(?:^|[\\/])\.git(?:[\\/]|$)' -or
       ($Path -eq $diskRoot -and -not $Directory) -or
       ($Path -ne $diskRoot -and -not (Test-UninstallWithin $Path $diskRoot) -and
-        ($Directory -or ($Path -ne $diskCommand -and $Path -ne $diskGitBashLauncher)))) {
+        ($Directory -or -not (Test-UninstallBesideCommand $Path)))) {
     throw "outside Windows uninstall target boundary: $Path"
   }
 }
@@ -739,6 +750,7 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     // The Git Bash launcher beside aidlc.cmd: the one other file a bin
     // directory outside the root holds.
     "$diskGitBashLauncher = Convert-UninstallPath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($command), 'aidlc'))",
+    "$diskExeLauncher = Convert-UninstallPath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($command), 'aidlc.exe'))",
     "$diskFence = Convert-UninstallPath $fence",
     "$diskJournal = Convert-UninstallPath $JournalPath",
     "$diskCleanup = Convert-UninstallPath $cleanup",
@@ -763,7 +775,7 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
   $resuming = [string]$journal.progress -in @('removing', 'finalizing')
   $keep = @($deletionScope.preserved | ForEach-Object { Convert-UninstallPath ([string]$_) })
   foreach ($path in $keep) {
-    if ($path -ne $diskCommand -and $path -ne $diskGitBashLauncher -and -not (Test-UninstallWithin $path $diskRoot)) {
+    if (-not (Test-UninstallBesideCommand $path) -and -not (Test-UninstallWithin $path $diskRoot)) {
       throw 'invalid Windows uninstall preserved path'
     }
   }
@@ -788,10 +800,11 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     }
     $null = Assert-UninstallKind $path $false
   }
-  # aidlc.cmd runs aidlc-shim.ps1, which reads active-version and
-  # active-executable to start the active version's aidlc.exe. That chain is removed
-  # last, so every earlier failure leaves a command that can retry cleanup.
-  $entrypoint = @($diskCommand, (Convert-UninstallPath ([IO.Path]::Combine($root, 'aidlc-shim.ps1'))),
+  # aidlc.cmd runs aidlc-shim.ps1, and aidlc.exe in bin runs itself, each reading
+  # active-version and active-executable to start the active version's aidlc.exe.
+  # That chain is removed last, so every earlier failure leaves a command that can
+  # retry cleanup.
+  $entrypoint = @($diskCommand, $diskExeLauncher, (Convert-UninstallPath ([IO.Path]::Combine($root, 'aidlc-shim.ps1'))),
     (Convert-UninstallPath ([IO.Path]::Combine($root, 'active-version'))), (Convert-UninstallPath $pointer))
   $activeVersionFile = Convert-UninstallPath ([IO.Path]::Combine($root, 'active-version'))
   if ($null -ne (Assert-UninstallKind $activeVersionFile $false)) {

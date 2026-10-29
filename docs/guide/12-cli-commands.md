@@ -80,6 +80,7 @@ diagnostic and lifecycle routes.
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
 | `/aidlc plugin validate [path]` | Validate an authored plugin (`--with <base-root>` checks a base plugin's agents; `--json` for structured findings) |
 | `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
+| `aidlc plugin test [path] --install <project-root>` | From a terminal: test that an authored plugin composes into a copy of a project, which is never changed (`--harness <name>`, `--with <base-root>`, `--json`) |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
@@ -658,7 +659,10 @@ git switch claim/<intent-id8>/user-profile-api
 Adoption verifies the checked-out claim OID and payload against the live ref,
 including space, intent UUID, Unit, generation, nonce, and bound audit shard,
 before writing the checkout-local scope stamp. Subsequent audit writes retain
-the claim's existing shard, and `publish` continues the same attempt.
+the claim's existing shard, and `publish` continues the same attempt. The
+shard comes back whole from the owner's published commit, including the rows
+`publish` keeps out of the claim (the questions the person already answered),
+so the work resumes without asking them again.
 
 ### `/aidlc --release <unit>` and `/aidlc unit release <unit>` — Release a claim
 
@@ -1071,7 +1075,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. When the agent adds a setting you asked for in your own words, it adds `--message <id>` too, naming the message you asked in, and the setting reads `set by you` as it does for `config set`. Scope-sourced Guard Policy follows a stricter new default automatically. A lower default follows when the agent names the message you asked for the scope change in (`--message <id>`); otherwise the running workflow keeps its policy and the output says so in one line. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update. Stage checkboxes carry over unchanged, including an open approval (`[?]`) and a revision (`[R]`), except where the new scope skips a stage that is waiting for approval, or skips the current stage before it has started: those stages are skipped with the change (`[S]`, one `STAGE_SKIPPED` row and one output line each, naming `/aidlc --stage <slug> --single` to run one on its own). On running work, when nothing waits on you (the stage was simply running), the agent carries on in the same turn, into the next stage the new scope runs when it no longer runs that one. When an approval, a question or a Unit's checkpoint or summary waits on you, the turn ends, and the agent says where the work picks up when that stage stays on the new plan and the work is not going Unit by Unit. When the same message also answered an approval that waits for you on a stage the new plan still runs, with the work neither paused nor going Unit by Unit ("approve, and switch back to the poc plan"), the agent records that answer right after the switch, so the work goes on from the new plan; at Practices Discovery's gate a change request is recorded the same way, while an approval, which waits for the practices you approved to be saved, waits for your next message. On finished work (`Status: Completed`), a new scope that runs a stage after the last one reopens the work at that stage in the same write (`Status: Running`, the stage `[-]`, one `STAGE_STARTED` row, the `intents.json` row back to `in-flight`), and the agent carries on into it in the same turn, saying the switch line and any setting the new scope changed with the stage's first line; what you approved before stays approved, and `doctor` reads the reopened run as a run, not as drift from the earlier completion. A new scope that adds nothing after the last stage leaves the work finished. A change never refuses for Unit work in flight, with solo or team Unit Ownership: Units that Units Generation already made carry on per Unit when the new scope skips Units Generation, and a Unit approval or Unit work at a stage the new scope drops is named in one line (for example, "The beta Unit's NFR Requirements approval is no longer part of the plan."). The other way round, a new scope that runs Units Generation, chosen after the work passed it without running it, makes no Units: its Construction stages run once for the whole work, an open gate stays open with its work, and going back to Units Generation (`/aidlc --stage units-generation`) splits the work into Units.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. When the agent adds a setting you asked for in your own words, it adds `--message <id>` too, naming the message you asked in, and the setting reads `set by you` as it does for `config set`. Scope-sourced Guard Policy follows a stricter new default automatically. A lower default follows when the agent names the message you asked for the scope change in (`--message <id>`); otherwise the running workflow keeps its policy and the output says so in one line. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update. Stage checkboxes carry over unchanged, including an open approval (`[?]`) and a revision (`[R]`), except where the new scope skips a stage that is waiting for approval, or skips the current stage before it has started: those stages are skipped with the change (`[S]`, one `STAGE_SKIPPED` row and one output line each, naming `/aidlc --stage <slug> --single` to run one on its own). On running work, when nothing waits on you (the stage was simply running), the agent carries on in the same turn, into the next stage the new scope runs when it no longer runs that one. When an approval, a question or a Unit's checkpoint or summary waits on you, the turn ends, and the agent says where the work picks up when that stage stays on the new plan and the work is not going Unit by Unit. When the same message also answered an approval that waits for you on a stage the new plan still runs, with the work neither paused nor going Unit by Unit ("approve, and switch back to the poc plan"), the agent records that answer right after the switch, so the work goes on from the new plan; at Practices Discovery's gate a change request is recorded the same way, while an approval, which waits for the practices you approved to be saved, waits for your next message. On finished work (`Status: Completed`), a new scope that runs a stage after the last one reopens the work at that stage in the same write (`Status: Running`, the stage `[-]`, one `STAGE_STARTED` row, the `intents.json` row back to `in-flight`), and the agent carries on into it in the same turn, saying the switch line and any setting the new scope changed with the stage's first line; what you approved before stays approved, and `doctor` reads the reopened run as a run, not as drift from the earlier completion. A new scope that adds nothing after the last stage leaves the work finished. A stage you skip with the switch (`/aidlc --scope feature --skip ci-pipeline` on finished poc work) is taken off the plan before the reopen picks its stage, so the work reopens at the first stage after it that you did not skip, and the agent says what was skipped and how to run it on its own (`/aidlc --stage <slug> --single`); with every stage the switch adds skipped, the work stays finished with those skips on its plan. A change never refuses for Unit work in flight, with solo or team Unit Ownership: Units that Units Generation already made carry on per Unit when the new scope skips Units Generation, and a Unit approval or Unit work at a stage the new scope drops is named in one line (for example, "The beta Unit's NFR Requirements approval is no longer part of the plan."). The other way round, a new scope that runs Units Generation, chosen after the work passed it without running it, makes no Units: its Construction stages run once for the whole work, an open gate stays open with its work, and going back to Units Generation (`/aidlc --stage units-generation`) splits the work into Units.
 
 The reply's first line gives the stages the work runs on the new plan (those done, and those from the current stage on; a stage the new plan adds behind the current stage runs only if you go back to it), how many are done, and its approval gates, and says how to go back (`/aidlc --scope <old scope>`) when switching back gives back the same stages still to run: after a plan tailored to the work, it does not. Then comes one line per stage the change skipped, one naming the Unit work it dropped, and one per setting whose value changed; a default the new scope leaves as it was is not listed, while a setting you typed with the scope is always reported, changed or not.
 
@@ -1751,6 +1755,10 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
+Where a switch's variable is set to anything but `1` (the editor or CLI the
+check runs in), the switch you record does not turn its check off there; when it
+is set where you run `config flags --bypass`, the command says so for each check
+but sensors, learnings and usage tracking, instead of saying the check is off.
 Recording or clearing a switch changes only that settings file (and AI-DLC's
 gitignored note of how it was set,
 `aidlc/.aidlc-sessions/recorded-switches.json`) and refreshes no harness files,
@@ -1977,6 +1985,10 @@ aidlc engine audit history
 
 `log answers` returns JSON with paired answers, open questions, and the rare ambiguous answer (one with no question before it, or two writers tied at one second). One reply closes every question logged for the menu it answered.
 `audit history` returns a JSON timeline of events and free-form notes.
+`aidlc engine audit turns` is for you: it lists each of your turns with what
+you sent, read from this machine's message record, since the committed audit
+keeps no words. Records stay on the machine that wrote them for a day, so an
+older turn, or one from another clone, says its words are not here.
 
 An answer whose text holds a character a shell acts on (`$`, a backtick, a quote,
 `%`, `&`, `|`, `<`, `>`, `^`, `!`, or a line break) reaches `log answer` through
@@ -2139,6 +2151,17 @@ only with explicit authorization, then retry with current approval evidence.
 If the application source or plan changed, re-present any required Plan Approval.
 The requirement concerns application source, not a blanket commit of unrelated
 framework records or other files.
+
+The same preflight names nested repositories whose source files would become
+empty folders in a Unit worktree because their gitlinks have no `.gitmodules`
+entry in the commit the Unit actually starts from. Register them as Git submodules
+and choose a starting commit with those entries, or build that Unit serially. This
+refusal creates no child worktrees and makes no parent commit. Registered
+submodules are copied from the main checkout without network access; gitlinks
+outside the selected source boundary do not block preparation. If the selected
+base needs the approved parent source, preparation starts at that parent commit
+and checks its registrations. Recovery after an explicit discard instead checks
+the recorded Approval Source Commit, even if the parent has since changed.
 
 ### Construction verification command — record human authorization
 
@@ -3004,6 +3027,15 @@ directory. Build also defaults its plugin root to the current directory; pass
 Validation of a plugin built on a base takes `--with <base-root>`, your own
 checkout of that base, so a stage led by the base's agent is checked instead of
 reported as not checked.
+
+From a terminal, `aidlc plugin test [path] --install <project-root>` (on the
+copy channel `bun .claude/tools/aidlc.ts plugin test ...`) runs the shipped
+compose test. It composes the plugin in `[path]`, the current directory by
+default, into a disposable copy of the project `--install` names, and exits
+`1` on a compose drop, a graph failure or a second compose that changes files;
+the project itself is never changed. Pass `--harness <name>` when that project
+has more than one harness, `--with <base-root>` for a plugin built on a base,
+and `--json` for one result object.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

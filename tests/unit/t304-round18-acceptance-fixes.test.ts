@@ -1655,6 +1655,21 @@ describe("t304 first-run prompt and detection safety", () => {
     expect(toClaude.stdout).toContain("3. Preset       balanced");
     expect(recordedModels(toClaude.project)?.preset).toBe("balanced");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // "unchanged" is the person's models answer: it records no preset, and the
+  // next refresh does not ask about models again.
+  test("unchanged at the preset step records the models answer and no preset", () => {
+    // Claude Code (1), customize (2), keep steps 1 and 2, unchanged (4) at step
+    // 3, keep steps 4 and 5 (step 6 asks nothing), apply, then the status line.
+    const wizard = runWizard("1\n2\n\n\n4\n\n\n\n\n");
+    expect(wizard.status, wizard.stdout + wizard.stderr).toBe(0);
+    expect(wizard.stdout).toContain("3. Preset       none (unchanged)");
+    expect(existsSync(join(wizard.project, "aidlc.settings.json"))).toBe(false);
+    const harness = JSON.parse(
+      readFileSync(join(wizard.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(harness.modelsAnswer).toEqual({ schemaVersion: 1, kept: true });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t304 diagnostics and release truthfulness", () => {

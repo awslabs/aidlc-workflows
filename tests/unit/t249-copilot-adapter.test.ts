@@ -43,7 +43,7 @@
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 // (Same idiom as codex's t149.)
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -236,6 +236,11 @@ function overlayAuthoredCopilotSources(dir: string): void {
 }
 
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
+// The receipt construction: the first 8 base64url characters of
+// HMAC-SHA256(key, JSON(payload)).
+function receiptFor(payload: unknown, key: Buffer): string {
+  return createHmac("sha256", key).update(JSON.stringify(payload), "utf-8").digest("base64url").slice(0, 8);
+}
 // The refusal a superseded tracked `continue` prints, in the person's terms.
 const SUPERSEDED_CONTINUE = "This `continue` was overtaken before it could answer.";
 
@@ -1282,6 +1287,49 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(audit).toContain("added.ts");
   });
 
+  // The Copilot runtime's apply_patch is a freeform tool: its input is the
+  // patch text itself, not an object (the GitHub Copilot app on Windows).
+  test("17b: apply_patch given the patch as plain text is audited", () => {
+    const dir = scratchProject(true);
+    const added = join(seededRecordDir(dir), "inception", "plain.md");
+    mkdirSync(dirname(added), { recursive: true });
+    writeFileSync(added, "# Plain\n", "utf-8");
+
+    const result = runAdapter(dir, "post-tool", {
+      hook_event_name: "PostToolUse",
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: `*** Begin Patch\n*** Add File: ${relative(dir, added)}\n+# Plain\n*** End Patch\n`,
+    });
+
+    expect(result.code).toBe(0);
+    const audit = readAudit(dir);
+    expect(audit).toContain("ARTIFACT_CREATED");
+    expect(audit).toContain("plain.md");
+  });
+
+  // The CLI's own hook payload carries the arguments as toolArgs, a JSON string.
+  test("17c: an apply_patch whose arguments come as toolArgs is audited", () => {
+    const dir = scratchProject(true);
+    const files = ["as-text.md", "as-json.md"].map((name) => join(seededRecordDir(dir), "inception", name));
+    mkdirSync(dirname(files[0]), { recursive: true });
+    for (const file of files) writeFileSync(file, "# Doc\n", "utf-8");
+    const patch = (file: string) => `*** Begin Patch\n*** Add File: ${relative(dir, file)}\n+# Doc\n*** End Patch\n`;
+
+    for (const toolArgs of [patch(files[0]), JSON.stringify({ input: patch(files[1]) })]) {
+      const result = runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse",
+        cwd: dir,
+        toolName: "apply_patch",
+        toolArgs,
+      });
+      expect(result.code).toBe(0);
+    }
+    const audit = readAudit(dir);
+    expect(audit).toContain("as-text.md");
+    expect(audit).toContain("as-json.md");
+  });
+
   test("18: VS Code agent_type/agent_id populate and clear reviewer identity", () => {
     const dir = scratchProject(true);
     const hostSessionId = "11111111-2222-4333-8444-555555555555";
@@ -1379,6 +1427,20 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         hookSpecificOutput?: { permissionDecision?: string };
       }).hookSpecificOutput?.permissionDecision,
     ).toBe("deny");
+
+    // The same patch as plain text gets the same guard.
+    const plain = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: hostSessionId,
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: `*** Begin Patch\n*** Update File: ${sibling}\n@@\n*** End Patch\n`,
+    });
+    expect(
+      (JSON.parse(plain.stdout || "{}") as {
+        hookSpecificOutput?: { permissionDecision?: string };
+      }).hookSpecificOutput?.permissionDecision,
+    ).toBe("deny");
   });
 
   test("18b: file_search query maps to scoped Glob.pattern enforcement", () => {
@@ -1427,6 +1489,53 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
           hookSpecificOutput?: { permissionDecision?: string };
         }).hookSpecificOutput?.permissionDecision,
         query,
+      ).toBe("deny");
+    }
+  });
+
+  // The Copilot runtime's own grep tool takes `paths`, one folder or several.
+  test("18c: the grep tool's paths are each held to the reviewer's unit", () => {
+    const dir = scratchProject(true);
+    const hostSessionId = "11111111-2222-4333-8444-555555555558";
+    const record = seededRecordDir(dir);
+    mkdirSync(record, { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "U01",
+        exempt: [],
+      }),
+      "utf-8",
+    );
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      cwd: dir,
+      session_id: hostSessionId,
+      agent_type: "aidlc-architecture-reviewer-agent",
+      agent_id: "vscode-agent-grep",
+    });
+
+    const grep = (paths: string | string[]) =>
+      runAdapter(dir, "guard-tool-call", {
+        hook_event_name: "PreToolUse",
+        session_id: hostSessionId,
+        cwd: dir,
+        tool_name: "grep",
+        tool_input: { pattern: "TODO", paths },
+      });
+    const own = join(record, "construction", "U01");
+    const sibling = join(record, "construction", "U02");
+    expect(grep(own).stdout.trim()).toBe("");
+    expect(grep([own]).stdout.trim()).toBe("");
+    for (const paths of [sibling, [sibling], [own, sibling]]) {
+      expect(
+        (JSON.parse(grep(paths).stdout || "{}") as {
+          hookSpecificOutput?: { permissionDecision?: string };
+        }).hookSpecificOutput?.permissionDecision,
+        JSON.stringify(paths),
       ).toBe("deny");
     }
   });
@@ -1949,6 +2058,29 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(repeated).owner_epoch).toBe(sameEpoch);
     expect(runAdapter(repeated, "continue-workflow", { ...FIXTURES.stop, cwd: repeated, session_id: "same-owner", stop_hook_active: true }).stdout).toBe("");
     expect(marker(repeated).stop_count).toBe(2);
+  });
+
+  // The CLI hands its shell tool to these hooks as Bash; a host that names it
+  // powershell or pwsh (the GitHub Copilot app on Windows) gets the same path:
+  // the command is claimed, runs, and settles.
+  test("21b: a shell call named powershell or pwsh is claimed and settled as Bash", () => {
+    for (const tool of ["powershell", "pwsh"]) {
+      const dir = orchestrationProject();
+      const session = `shell-${tool}`;
+      const attempt = `${session}-next`;
+      const spec = commandSpec(dir, "direct", ["next"]);
+      const pre = runAdapter(dir, "guard-tool-call", { ...commandPayload(dir, session, spec.text, attempt), tool_name: tool });
+      const rewritten = rewrittenCommand(pre);
+      expect(rewritten, tool).toContain(`--aidlc-attempt-id ${attempt}`);
+      const executed = runShell(dir, rewritten);
+      expect(executed.status, executed.stderr).toBe(0);
+      const post = runAdapter(dir, "post-tool", {
+        ...commandPayload(dir, session, rewritten, attempt, true, executed.stdout),
+        tool_name: tool,
+      });
+      expect(post.code).toBe(0);
+      expect(marker(dir).active_attempt, tool).toMatchObject({ id: attempt, status: "settled" });
+    }
   });
 
   test("21a: terminal notice output is captured, retained, and allows Copilot Stop", () => {
@@ -2629,6 +2761,55 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       dir, session, commandSpec(dir, "direct", ["continue", token1, token1]).text, "doubled-continue",
     ));
     expect(doubled.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  // About 1 receipt in 64 starts with `-`, and an agent marks such a word with
+  // `--` (#3206). The key is chosen so part 1's receipt is one of them.
+  test("21j2: a receipt behind `--` continues to the next part, as one that starts with `-` does alone", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const session = "dash-receipt-owner";
+    const first = runLifecycle(dir, session, "direct", ["next"], "dash-next");
+    expect(first.directive).toMatchObject({ kind: "load-steering", part: 1 });
+    const payload = marker(dir).steering_payload;
+    let key = Buffer.alloc(32);
+    for (let seed = 0; !receiptFor(payload, key).startsWith("-"); seed++) {
+      key = createHash("sha256").update(`t249-dash-receipt-${seed}`).digest();
+    }
+    // Off part 1 first: a marker still on part 1 is handed back as it was
+    // issued, under the key it was minted with.
+    const off = runLifecycle(dir, session, "direct", ["continue", String(first.directive.receipt)], "dash-off-part-1");
+    expect(off.directive).toMatchObject({ kind: "load-steering", part: 2 });
+    writeFileSync(join(seededRecordDir(dir), ".aidlc-engine", "steering-token-key"), `${key.toString("base64url")}\n`, {
+      mode: 0o600,
+    });
+    const dashReceipt = receiptFor(payload, key);
+    for (const [form, args] of [
+      ["direct", ["continue", "--", dashReceipt]],
+      ["source", ["continue", "--", dashReceipt]],
+      ["direct", ["continue", dashReceipt]],
+    ] as const) {
+      const spelling = `${form} ${args.join(" ")}`;
+      const issued = runLifecycle(dir, session, "direct", ["next"], `dash-issue-${form}-${args.length}`);
+      expect(issued.directive, spelling).toMatchObject({ kind: "load-steering", part: 1, receipt: dashReceipt });
+      const attempt = `dash-continue-${form}-${args.length}`;
+      const answer = runLifecycle(dir, session, form, [...args], attempt);
+      expect(answer.directive, spelling).toMatchObject({ kind: "load-steering", part: 2 });
+      expect(marker(dir), spelling).toMatchObject({
+        kind: "load-steering",
+        part: 2,
+        delivery: "delivered",
+        active_attempt: { id: attempt, command_kind: "continue", status: "settled" },
+      });
+    }
+    // Two words behind the mark, or an option behind it, are still not a
+    // continuation the adapter claims.
+    for (const args of [["continue", "--", dashReceipt, dashReceipt], ["continue", "--", dashReceipt, "--project-dir", dir]]) {
+      const refused = runAdapter(dir, "guard-tool-call", commandPayload(
+        dir, session, commandSpec(dir, "direct", args).text, `dash-refused-${args.length}`,
+      ));
+      expect(refused.stdout, args.join(" ")).toContain("`continue` takes only the receipt");
+    }
   });
 
   test("21k: a continue superseded by a newer command, another chat, or a compaction is refused and changes nothing", () => {
