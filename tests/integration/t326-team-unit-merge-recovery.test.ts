@@ -23,6 +23,7 @@ import {
   clone,
   auditBlock,
   prepareCandidate,
+  pushUnprojectedCandidate,
   completeUnitOnMain,
   dispatchMerge,
   appendMainHumanTurn,
@@ -557,9 +558,9 @@ describe("t326 pinned team Unit merge", () => {
     rmSync(teamShard);
     git(shardCandidate.checkout, ["add", "-A"]);
     git(shardCandidate.checkout, ["commit", "-m", "reuse main audit shard"]);
-    expect(
-      runMergeTool(UNIT, ["publish", "alpha"], shardCandidate.checkout).status,
-    ).toBe(0);
+    // Publish carries main's own shards as main has them, so only a forged
+    // publication puts the changed main shard in front of pin.
+    pushUnprojectedCandidate(shardCandidate.checkout, "alpha");
     const badShard = runMergeTool(UNIT, ["pin", "alpha"], shardFixture.seed);
     expect(badShard.status).not.toBe(0);
     expect(badShard.out).toContain("inherited audit shard");
