@@ -30,6 +30,7 @@ import {
   approvalDispositionField,
   rejectedFindingDispositionField,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
+  teamUnitGateStages,
 } from "./aidlc-review-brief.ts";
 import {
   activeIntent,
@@ -87,7 +88,6 @@ import {
   countCheckboxes,
   currentSwarmSourceMergeChain,
   currentSwarmAttemptObligations,
-  effectiveUnitGateRhythm,
   emitError,
   type EmitErrorMessage,
   errorMessage,
@@ -6660,21 +6660,10 @@ function teamGateContext(
   if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
     error(`Unit "${unit}" is not in the authoritative unit DAG.`);
   }
-  const rhythm = effectiveUnitGateRhythm(pd, content);
-  if (rhythm === "per-stage") {
-    return { unit, scope: "per-stage", stages: [stage] };
+  const { scope, stages } = teamUnitGateStages(pd, content, stage);
+  if (scope === "per-stage") {
+    return { unit, scope, stages };
   }
-  const workflowScope = getField(content, "Scope") ?? "";
-  const stages = unitMajorConstructionStageSlugs(
-    workflowScope,
-    content,
-    true,
-  )
-    .map((slug) => findStageBySlug(slug))
-    .filter(
-      (entry): entry is NonNullable<ReturnType<typeof findStageBySlug>> =>
-        !!entry,
-    );
   const final = stages[stages.length - 1];
   if (!final || final.slug !== stage.slug) {
     error(

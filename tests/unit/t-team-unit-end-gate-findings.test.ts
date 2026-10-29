@@ -18,7 +18,12 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { artifactFilename, findStageBySlug } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  auditBlockField,
+  findStageBySlug,
+  readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -30,7 +35,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { readReviewFindingDispositions } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+import { REVIEW_FINDING_DISPOSITIONS_FIELD } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 // The stage's checks run before its review and at its gate; this file's
@@ -300,10 +305,46 @@ const NFR_DESIGN_FINDINGS: Finding[] = [
   },
 ];
 
-function dispositions(proj: string, stage: string): Array<{ id: string; status: string; artifact: string }> {
-  return [...readReviewFindingDispositions(proj, stage, "alpha").values()]
-    .map(({ id, status, artifact }) => ({ id, status, artifact }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+// What the Unit's one GATE_APPROVED row records, as "<artifact>#<id> <status>".
+function recorded(proj: string): string[] {
+  const rows = readAuditShardEvents(proj).filter((row) =>
+    row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === "alpha"
+  );
+  expect(rows).toHaveLength(1);
+  const field = auditBlockField(rows[0].block, REVIEW_FINDING_DISPOSITIONS_FIELD);
+  if (field === null) return [];
+  const { dispositions } = JSON.parse(field) as { dispositions: Array<{ artifact: string; id: string; status: string }> };
+  return dispositions.map(({ artifact, id, status }) => `${artifact}#${id} ${status}`).sort();
+}
+
+// The open findings the brief shows, as "<review folder>#<id>": each review
+// artifact line, then the rows of its table that are still open.
+function shownOpen(text: string): string[] {
+  const shown: string[] = [];
+  let folder = "";
+  for (const line of text.split("\n")) {
+    const artifact = /^\*\*Review artifact:\*\* `(.+)\/[^/]+`$/.exec(line);
+    if (artifact) folder = artifact[1];
+    const row = /^\| (R-\d+) \| [^|]+ \| [^|]+ \| (New|Unresolved) \|$/.exec(line);
+    if (row) shown.push(`${folder}#${row[1]}`);
+  }
+  return shown.sort();
+}
+
+function folderOf(entry: string): string {
+  const [path, rest] = entry.split("#");
+  return `${path.slice(0, path.lastIndexOf("/"))}#${rest.split(" ")[0]}`;
+}
+
+// The review artifact a stage's findings are recorded against, as a fix or a
+// rejection names it.
+function recordedArtifact(proj: string, stage: string): string {
+  const dir = relative(proj, stageDir(proj, stage)).replaceAll("\\", "/");
+  return `${dir}/${artifactFilename(findStageBySlug(stage)!.review_artifact!)}`;
+}
+
+function gateReport(proj: string, result: string, extra: string[] = []): Directive {
+  return runReport(proj, ["--stage", "code-generation", "--unit", "alpha", "--result", result, ...extra]);
 }
 
 describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its Approve decides", () => {
@@ -311,8 +352,7 @@ describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its App
     const proj = seedProject("unit-end");
     const gate = walkToGate(proj, { "nfr-design": NFR_DESIGN_FINDINGS });
     expect(gate).toMatchObject({ stage: "code-generation", unit_gate: "unit-end" });
-    expect(runReport(proj, ["--stage", "code-generation", "--unit", "alpha", "--result", "awaiting-approval"]).kind)
-      .toBe("print");
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
     const shown = brief(proj, "code-generation");
     expect(shown).toContain("**Stages:** NFR Design, Code Generation");
     expect(shown).toContain("**Review outcome:** Concerns remain for your decision.");
@@ -328,14 +368,78 @@ describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its App
     expect(shown).not.toContain("No blocking concerns were found.");
     expect(shown).not.toContain("no findings are open");
 
-    expect(runReport(proj, [
-      "--stage", "code-generation", "--unit", "alpha", "--result", "approved", "--user-input", "Approve",
-    ]).kind).toBe("done");
+    expect(gateReport(proj, "approved", ["--user-input", "Approve"]).kind).toBe("done");
     // Exactly the findings the brief showed, each accepted as risk.
-    expect(dispositions(proj, "nfr-design")).toEqual([
-      expect.objectContaining({ id: "R-01", status: "Accepted risk" }),
-      expect.objectContaining({ id: "R-02", status: "Accepted risk" }),
+    const record = recorded(proj);
+    expect(record.map(folderOf)).toEqual(shownOpen(shown));
+    expect(record).toHaveLength(2);
+    for (const entry of record) {
+      expect(entry).toContain("/construction/alpha/nfr-design/");
+      expect(entry).toEndWith(" Accepted risk");
+    }
+  });
+
+  test("findings open on two stages are named with their stage, and a fix asked for one leaves the other accepted", () => {
+    const proj = seedProject("unit-end");
+    walkToGate(proj, {
+      "nfr-requirements": [{ id: "R-01", severity: "Minor", finding: "Name the latency budget's owner", action: "Add an owner" }],
+      "nfr-design": [NFR_DESIGN_FINDINGS[0]],
+    });
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    const shown = brief(proj, "code-generation");
+    expect(shown).toContain("**Stages:** NFR Requirements, NFR Design, Code Generation");
+    expect(shown).toContain(
+      "Approve accepts the open review findings NFR Requirements R-01 (Name the latency budget's owner) and " +
+        "NFR Design R-01 (operability-design.md and testability-design.md do not exist) as risk; you can also " +
+        "approve and ask for one to be fixed, or reject one as not applying, saying why.",
+    );
+    expect(shownOpen(shown)).toHaveLength(2);
+    const nfrDesign = recordedArtifact(proj, "nfr-design");
+    expect(gateReport(proj, "approved", ["--user-input", "Approve", "--fix-finding", `${nfrDesign}#R-01`]).kind)
+      .toBe("done");
+    const record = recorded(proj);
+    expect(record.map(folderOf)).toEqual(shownOpen(shown));
+    expect(record).toEqual([
+      expect.stringMatching(/\/nfr-design\/[^#]+#R-01 Fix requested$/),
+      expect.stringMatching(/\/nfr-requirements\/[^#]+#R-01 Accepted risk$/),
     ]);
-    for (const stage of BLOCK.filter((slug) => slug !== "nfr-design")) expect(dispositions(proj, stage)).toEqual([]);
+  });
+
+  test("with no open findings the end-of-Unit gate reads as before and records none", () => {
+    const proj = seedProject("unit-end");
+    walkToGate(proj, {});
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    const plan = `${relative(proj, stageDir(proj, "code-generation")).replaceAll("\\", "/")}/code-generation-plan.md`;
+    expect(brief(proj, "code-generation")).toBe(
+      [
+        "**Stage:** Code Generation",
+        "**Review outcome:** No blocking concerns were found.",
+        "",
+        `**Review artifact:** \`${plan}\``,
+        "",
+        "| ID | Severity | Where | Status |",
+        "|---|---|---|---|",
+        "| - | - | - | No findings |",
+        "",
+        "**Decision options:**",
+        "- **Approve** - continue; no findings are open.",
+        "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
+        "",
+      ].join("\n"),
+    );
+    expect(gateReport(proj, "approved", ["--user-input", "Approve"]).kind).toBe("done");
+    expect(recorded(proj)).toEqual([]);
+  });
+
+  test("a per-stage team gate shows its own review as before", () => {
+    const proj = seedProject("per-stage");
+    const gate = walkToGate(proj, { "functional-design": [NFR_DESIGN_FINDINGS[1]] }, ["functional-design"]);
+    expect(gate).toMatchObject({ stage: "functional-design", unit_gate: "per-stage" });
+    expect(runReport(proj, ["--stage", "functional-design", "--unit", "alpha", "--result", "awaiting-approval"]).kind)
+      .toBe("print");
+    const shown = brief(proj, "functional-design");
+    expect(shown).toStartWith("**Stage:** Functional Design\n**Review outcome:** Concerns remain for your decision.\n");
+    expect(shown).toContain("- **Approve** - continue with the open findings accepted.");
+    expect(shown).not.toContain("Approve accepts the open review finding");
   });
 });
