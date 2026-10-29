@@ -2117,6 +2117,15 @@ function pinMergeGateStep(transaction: UnitMergeTransaction): Record<string, str
   };
 }
 
+// After the person's Approve, the land is the next step, as their Approve is
+// the go to merge: the gate hands it out so the same turn lands it.
+function approvedLandStep(transaction: UnitMergeTransaction): Record<string, string> {
+  return {
+    command: `${aidlcInvocation()} unit land ${quoteCommandArgument(transaction.unit)} --target ${quoteCommandArgument(pinnedMergeGate(transaction).target)}`,
+    step: "Run it now, in this turn, and tell the person in plain words what it reports.",
+  };
+}
+
 // The person's reply to the gate the pin showed: a typed turn in main's own
 // shard stamped after the pin, so the turn that ran the pin is not it, and
 // after the last gate decision, which spent the turns before it.
@@ -2340,6 +2349,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       unit,
       decision,
       pinned_oid: transaction.pinned_oid,
+      ...(decision === "approve" ? { land: approvedLandStep(transaction) } : {}),
     }));
     return;
   }
@@ -2381,6 +2391,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       transaction.evidence.outside_unit_record_paths,
     outside_unit_record_tree_note:
       "These paths are outside the unit's record tree and require human overlap judgment.",
+    ...(decision === "approve" ? { land: approvedLandStep(transaction) } : {}),
   }));
 }
 

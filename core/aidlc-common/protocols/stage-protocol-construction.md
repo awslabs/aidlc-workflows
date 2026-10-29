@@ -323,7 +323,8 @@ but does not integrate it. On unscoped main, run `aidlc unit pin <unit>`, then
 in the same turn present the returned pinned OID + evidence summary as one merge
 gate, as its `merge_gate` says. Record the human answer with the command it
 names for their choice (`aidlc unit gate <unit> --decision <approve|reject>
---user-input '<text>'`). On approval, `aidlc unit land <unit> --target <branch>`
+--user-input '<text>'`). On approval, the gate's `land` names `aidlc unit land
+<unit> --target <branch>`, run in the same turn with no further question; it
 owns the transaction: pinned git content first with main-owned metadata retained,
 then one Unit-row fold under the intent lock, then audit/finalization. A moved
 claim ref requires re-pin, and an unavailable registry makes gate/land fail

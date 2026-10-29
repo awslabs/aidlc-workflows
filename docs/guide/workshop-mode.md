@@ -288,7 +288,8 @@ aidlc unit gate payments \
   --user-input "Approve pinned candidate"
 ```
 
-A rejection keeps the candidate unmerged. A candidate carrying
+An approval's output names the land command, run in the same turn with no
+further question. A rejection keeps the candidate unmerged. A candidate carrying
 `Merge-Held: true` is refused until the team resolves the HOLD-MERGE sequence,
 publishes again, and main re-pins.
 
