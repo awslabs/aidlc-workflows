@@ -6,7 +6,6 @@ import {
   filterProducesByKind,
   getField,
   loadStageGraph,
-  markdownBlocks,
   parseCheckboxes,
   parseStateStageSuffixes,
   printUsageAndExit,
@@ -293,45 +292,16 @@ function criteriaOfStories(storiesContent: string, stories: Set<string>): Set<st
 // way an acceptance criterion does; `null` stories means the run owes them all.
 function decisionsOfStories(specContent: string, stories: Set<string> | null): Set<string> {
   const decisions = new Set<string>();
-  for (const ux of experienceDefinitions(specContent).keys()) {
+  for (const ux of experienceDecisions(specContent)) {
     if (stories === null || stories.has(storyOfDecision(ux))) decisions.add(ux);
   }
   return decisions;
 }
 
-// A decision is defined where its ID opens a visible list item, a table row's
-// first cell, or a heading, after markup only; a mention elsewhere, or in code
-// or a comment, is not one. Inline HTML is dropped where the shared parser
-// places it, and an item whose first line holds only markup opens on the next.
-// Returns how many times each ID is defined.
-function experienceDefinitions(specContent: string): Map<string, number> {
-  const { lines } = markdownBlocks(specContent);
-  const source = specContent.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
-  const text = (index: number): string => {
-    let line = source[index] ?? "";
-    const spans = lines[index].invisible.filter((span) => span.kind !== "codeText").sort((a, b) => b.start - a.start);
-    for (const span of spans) line = line.slice(0, span.start) + line.slice(span.end);
-    return line;
-  };
-  const opened = new Set<number>();
-  let pending: number | null = null;
-  const defined = new Map<string, number>();
-  lines.forEach((line, index) => {
-    if (line.kind === "codeFenced" || line.kind === "codeIndented" || line.kind === "htmlFlow") return;
-    const item = line.containers.at(-1);
-    let head: string | null = null;
-    if (line.kind === "table") head = text(index).replace(/^[\s>]*\|/, "").split("|")[0];
-    else if (line.kind === "heading") head = text(index).slice(line.contentStart).replace(/^\s*#+/, "");
-    else if (item?.kind === "listItem" && (!opened.has(item.id) || pending === item.id)) {
-      opened.add(item.id);
-      head = text(index).slice(line.contentStart);
-      pending = /[\p{L}\p{N}]/u.test(head) ? null : item.id;
-    }
-    // Only markup may precede the ID: emphasis, code, or a link's bracket.
-    const id = head === null ? undefined : /^[^\p{L}\p{N}]*(UX\d+\.\d+\.\d+)\b/u.exec(head)?.[1];
-    if (id) defined.set(id, (defined.get(id) ?? 0) + 1);
-  });
-  return defined;
+// Every UX ID visible in interaction-spec.md, as AC IDs are read from
+// stories.md; one in code or a comment is not a decision.
+function experienceDecisions(specContent: string): Set<string> {
+  return extractIds(visibleMarkdownLines(specContent).join("\n"), [ID_PATTERNS.UX]);
 }
 
 // Whether Functional Design's produces_kinds gives a Unit of this kind the
@@ -356,28 +326,14 @@ function storyOfDecision(ux: string): string {
   return `US${group}.${story}`;
 }
 
-// Two decisions under one ID would be traced as one, a visible ID nothing
-// defines would be traced as none, and a decision whose story stories.md lacks
-// belongs to no Unit: each is fixed at Refined Mockups, so every table that
-// reads the spec reports them.
+// A decision whose story stories.md lacks belongs to no Unit; it is fixed at
+// Refined Mockups, so every table that reads the spec reports it.
 function experienceProblems(specContent: string, storiesContent: string | null): string[] {
-  const defined = experienceDefinitions(specContent);
-  const stories = storiesContent === null ? null : extractIds(storiesContent, [ID_PATTERNS.US]);
-  const problems: string[] = [];
-  for (const id of extractIds(visibleMarkdownLines(specContent).join("\n"), [ID_PATTERNS.UX])) {
-    if (!defined.has(id)) {
-      problems.push(`interaction-spec.md mentions ${id}, but no list item, table row, or heading opens with it; define each experience decision on its own row at Refined Mockups`);
-    }
-  }
-  for (const [id, count] of defined) {
-    if (count > 1) {
-      problems.push(`interaction-spec.md defines ${id} more than once; give each experience decision its own ID at Refined Mockups`);
-    }
-    if (stories && !stories.has(storyOfDecision(id))) {
-      problems.push(`interaction-spec.md's ${id} names story ${storyOfDecision(id)}, which stories.md does not have`);
-    }
-  }
-  return problems;
+  if (storiesContent === null) return [];
+  const stories = extractIds(storiesContent, [ID_PATTERNS.US]);
+  return [...experienceDecisions(specContent)]
+    .filter((id) => !stories.has(storyOfDecision(id)))
+    .map((id) => `interaction-spec.md's ${id} names story ${storyOfDecision(id)}, which stories.md does not have`);
 }
 
 function addExperienceDecisions(result: UpstreamResolution, docsDir: string, stories: Set<string> | null): void {
@@ -1069,7 +1025,7 @@ function finalCoverage(projectDir: string): FinalCoverage {
     const read = readText(interactionSpec);
     if (read.reason) reasons.push(read.reason);
     if (read.content !== null) {
-      experience.push(...experienceDefinitions(read.content).keys());
+      experience.push(...experienceDecisions(read.content));
       reasons.push(...experienceProblems(read.content, storyContent));
     }
   }

@@ -773,73 +773,37 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1"]);
   });
 
-  test("code-generation refuses two decisions under one ID", () => {
+  test("code-generation owes every visible UX ID, whatever its form, and none in code or a comment", () => {
     const proj = project();
     seedExperience(proj);
     write(proj, "inception/refined-mockups/interaction-spec.md", [
       "# Interaction Spec",
       "",
-      "| ID | Decision |",
+      "**UX1.1.1** Sign in on one page, not a wizard [Q2]",
+      "",
+      "| Component | Decision | States |",
+      "|---|---|---|",
+      "| LoginForm | UX1.1.2 A failed sign-in keeps the email [Q4] | error |",
+      "",
+      "## LoginForm states",
+      "",
+      "- UX1.1.1 default",
+      "- UX1.1.2 error",
+      "",
+      "| ID | Built by |",
       "|---|---|",
-      "| UX1.1.1 | Sign in on one page [Q2] |",
-      "| UX1.1.1 | A failed sign-in keeps the email [Q4] |",
-      "",
-      "The sign-in page realises UX1.1.1.",
-    ].join("\n"));
-    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
-    expect(out.result.pass).toBe(false);
-    expect(out.result.reason).toContain("interaction-spec.md defines UX1.1.1 more than once");
-  });
-
-  test("code-generation finds a duplicate ID in any list or table form, and ignores hidden IDs", () => {
-    const proj = project();
-    seedExperience(proj);
-    const forms = [
-      ["1. UX1.1.1 Sign in on one page [Q2]", "2. UX1.1.1 A failed sign-in keeps the email [Q4]"],
-      ["| `UX1.1.1` | Sign in on one page [Q2] |", "| **UX1.1.1** | A failed sign-in keeps the email [Q4] |"],
-      ["* `UX1.1.1` Sign in on one page [Q2]", "### UX1.1.1 A failed sign-in keeps the email [Q4]"],
-      ["- [UX1.1.1](#sign-in) Sign in on one page [Q2]", "- **[`UX1.1.1`](#keep)** A failed sign-in keeps the email [Q4]"],
-      ["- <code>UX1.1.1</code> Sign in on one page [Q2]", "1. <b>UX1.1.1</b> A failed sign-in keeps the email [Q4]"],
-      ["- <span title=\"1 > 0\">UX1.1.1</span> Sign in on one page [Q2]", "- <span\n  class=\"keep\">UX1.1.1</span> A failed sign-in keeps the email [Q4]"],
-    ];
-    for (const [first, second] of forms) {
-      const table = first.startsWith("|") ? ["| ID | Decision |", "|---|---|", first, second] : [first, "", second];
-      write(proj, "inception/refined-mockups/interaction-spec.md", ["# Interaction Spec", "", ...table].join("\n"));
-      const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
-      expect(out.result.reason, first).toContain("interaction-spec.md defines UX1.1.1 more than once");
-    }
-
-    write(proj, "inception/refined-mockups/interaction-spec.md", [
-      "# Interaction Spec",
-      "",
-      "- UX1.1.1 Sign in on one page [Q2]",
+      "| UX1.1.1 | LoginForm |",
       "",
       "```",
-      "- UX1.1.2 an example in code",
+      "UX1.1.3 an example in code",
       "```",
-      "<!-- - UX1.1.3 a draft left in a comment -->",
+      "<!-- UX1.1.4 a draft left in a comment -->",
     ].join("\n"));
-    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
-    expect(out.result.pass, out.result.reason).toBe(true);
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1", "UX1.1.2"]);
 
-    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- [UX1.1.1](#sign-in) Sign in on one page [Q2]\n");
-    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
-    expect(out.result.missing_from_upstream_ids, "a linked ID is a decision").toEqual(["UX1.1.1"]);
-  });
-
-  test("code-generation reports a visible ID that no row defines, so no form can hide a decision", () => {
-    const proj = project();
-    seedExperience(proj);
-    write(proj, "inception/refined-mockups/interaction-spec.md", [
-      "# Interaction Spec",
-      "",
-      "- UX1.1.1 Sign in on one page [Q2]",
-      "",
-      "#### <b>UX1.1.2</b> A failed sign-in keeps the email [Q4]",
-    ].join("\n"));
-    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
-    expect(out.result.pass).toBe(false);
-    expect(out.result.reason).toContain("interaction-spec.md mentions UX1.1.2, but no list item, table row, or heading opens with it");
+    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2"]));
+    expect(out.result.pass, "an ID mentioned again is the same decision, not a duplicate").toBe(true);
   });
 
   test("code-generation reports a decision naming a story stories.md lacks", () => {

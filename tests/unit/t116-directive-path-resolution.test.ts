@@ -490,7 +490,6 @@ describe("t116 per-unit {unit-name} injection", () => {
   test("13: a fresh code-generation worker receives every approved Refined Mockups artifact", () => {
     const artifacts = [
       "mockups.md",
-      "mockups-preview.html",
       "interaction-spec.md",
       "design-system-mapping.md",
       "accessibility-checklist.md",

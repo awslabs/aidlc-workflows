@@ -865,11 +865,11 @@ Standard 2-option gate: **Approve** / **Request Changes**.
   API developer experience specification. When Rough Mockups did not run
   (classic, workshop), it designs from the stories and requirements instead.
 - For mvp scope, this stage executes only if the project has UI.
-- The mockups, preview, interaction specification, design-system mapping, and
+- The mockups, interaction specification, design-system mapping, and
   accessibility checklist are optional declared inputs to Construction's
   Functional Design (3.1), Code Generation (3.5), and Build and Test (3.6), so
   their plans, workers, and reviewers receive the approved experience when
-  this stage ran.
+  this stage ran; Functional Design also reads the preview.
 - The accessibility checklist provides testable criteria that feed into Build
   and Test (3.6).
 

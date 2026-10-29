@@ -367,9 +367,11 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     for (const stageSlug of ["functional-design", "code-generation", "build-and-test"]) {
       const stage = graph.find((candidate) => candidate.slug === stageSlug);
       const consumes = new Map((stage?.consumes ?? []).map((input) => [input.artifact, input.required]));
-      for (const artifact of ["mockups", "mockups-preview", "interaction-spec", "design-system-mapping", "accessibility-checklist"]) {
+      for (const artifact of ["mockups", "interaction-spec", "design-system-mapping", "accessibility-checklist"]) {
         expect(consumes.get(artifact), `${stageSlug}: ${artifact}`).toBe(false);
       }
+      // Only Functional Design, which designs the screens, reads the HTML preview.
+      expect(consumes.get("mockups-preview"), `${stageSlug}: mockups-preview`).toBe(stageSlug === "functional-design" ? false : undefined);
     }
   });
 

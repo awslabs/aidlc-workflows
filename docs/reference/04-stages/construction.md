@@ -1329,10 +1329,11 @@ with the aidlc-devsecops-agent providing security testing expertise.
 
 1. **Analyze Testing Requirements** -- Read code generation summaries and
    per-unit test instructions across all units. Build a source-complete
-   inventory of every measurable target from NFR Requirements, NFR Design, the
-   approved experience, and every current Testing Contract. Each `UX` decision
-   keeps its own ID; inventory its applicable interaction states, design-system
-   decisions, and accessibility checks too. For each target, record a stable
+   inventory of every measurable target from NFR Requirements, NFR Design, and
+   every current Testing Contract, and read the approved experience to test what
+   it decided where a test fits. Its `UX` decisions are not targets: Step 10
+   reports each built or not built and Step 12 names any no test exercised, so
+   an untested decision is never a failure. For each target, record a stable
    ID, source path/section, expected value, the check that produces its actual
    value, and any later validation stage that owns it. Catalog all required test
    types.
@@ -1368,9 +1369,6 @@ with the aidlc-devsecops-agent providing security testing expertise.
    - Coverage expectations per unit
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
-   - Every `UX` decision and its applicable interaction-state, design-system,
-     and accessibility checks have rows; an implementation path alone is not
-     execution evidence
    - Applicable targets begin `Pending`; `N/A` is valid only when the
      source-complete inventory found no applicable measurable target, or for a
      target the plan makes inapplicable here (the CI obligation of a plan that
@@ -1517,9 +1515,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
     stage or phase state; the reported gate outcome owns the transition.
 
 12. **Completion** -- Present completion message and approval gate. When
-    Refined Mockups ran, it names the built screens or API responses to compare
-    with `mockups-preview.html`; whether the build matches the approved
-    experience, brand and feel included, is the person's judgement at this gate.
+    Refined Mockups ran, it names the `UX` decisions no test exercised and the
+    built screens or API responses to compare with `mockups-preview.html`;
+    whether the build matches the approved experience, brand and feel included,
+    is the person's judgement at this gate.
 
 ### Outputs
 

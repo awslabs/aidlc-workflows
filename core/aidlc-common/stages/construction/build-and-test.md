@@ -26,8 +26,6 @@ consumes:
     required: true
   - artifact: mockups
     required: false
-  - artifact: mockups-preview
-    required: false
   - artifact: interaction-spec
     required: false
   - artifact: design-system-mapping
@@ -73,12 +71,12 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 
 - every artifact under `nfr-requirements/`
 - every artifact under `nfr-design/`
-- the approved `mockups.md`, `mockups-preview.html`, `interaction-spec.md`,
-  `design-system-mapping.md`, and `accessibility-checklist.md` under
-  `<record>/inception/refined-mockups/` when they exist. Every `UX{x}.{y}.{n}`
-  decision is a target under its own ID. Inventory each applicable interaction
-  state, design-system decision, and accessibility check needed to prove it;
-  derive a stable target ID from the source path and section when it has none.
+- the approved `mockups.md`, `interaction-spec.md`, `design-system-mapping.md`,
+  and `accessibility-checklist.md` under `<record>/inception/refined-mockups/`
+  when they exist, to test what they decided where a test fits. Their `UX`
+  decisions and checks are not targets in this inventory: Step 10's coverage
+  lines report each decision built or not built, and Step 12 names any no test
+  exercised, so an untested decision is never a failure here.
 - every current `## Testing Contract` in `code-generation-plan.md`, including
   postapproval edits permitted by Code Generation Step 3's lowered-fence rule;
   do not describe those edits as human-approved.
@@ -147,10 +145,6 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Coverage expectations per unit
 - A `## Target Verification Matrix` with one row per target and these columns:
   Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict
-- Include every `UX` decision and its applicable interaction-state,
-  design-system, and accessibility checks from Step 1. A source file or
-  implementation path alone is not execution evidence; name the test or check
-  that exercised the target.
 - Each applicable target begins with Actual and Evidence `Pending`, and Verdict
   `Pending`. `N/A` is valid only when the source inventory found no applicable
   measurable target (then write one explanatory `N/A` row), or for a target the
@@ -313,9 +307,10 @@ line, naming what and where it ran, for example: "The transfer journey was
 checked in Happy DOM, not a real browser." The person decides at the gate with
 that in front of them.
 
-When Refined Mockups ran, say in one line which built screens or API responses
-to compare with `mockups-preview.html`, and where the preview is. Whether the build matches
-the experience they approved, brand and feel included, is the person's
+When Refined Mockups ran, say in one line which `UX` decisions no test
+exercised, and in one line which built screens or API responses to compare with
+`<record>/inception/refined-mockups/mockups-preview.html`. Whether the build
+matches the experience they approved, brand and feel included, is the person's
 judgement at this gate; the tests cannot settle it.
 
 ```

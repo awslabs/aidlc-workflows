@@ -2407,10 +2407,6 @@
           "required": false
         },
         {
-          "artifact": "mockups-preview",
-          "required": false
-        },
-        {
           "artifact": "interaction-spec",
           "required": false
         },
@@ -2527,10 +2523,6 @@
         },
         {
           "artifact": "mockups",
-          "required": false
-        },
-        {
-          "artifact": "mockups-preview",
           "required": false
         },
         {

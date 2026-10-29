@@ -336,6 +336,31 @@ describe("t293 the documented workflow, end to end, through the public dispatche
   );
 
   test(
+    "list --intent keeps the space-wide rows and that intent's, and a fresh project with no knowledge folder lists none",
+    () => {
+      const p = scratchProject();
+      rmSync(join(p, "aidlc", "spaces", SPACE, "knowledge"), { recursive: true, force: true });
+      intentCreate(p, "checkout");
+      const empty = run(p, "list --intent on a fresh project", ["list", "--intent", "checkout"]);
+      expect(empty.documents, "no knowledge folder lists nothing, and refuses nothing").toEqual([]);
+
+      mkdirSync(documentsDir(p), { recursive: true });
+      doc(p, "brand.md", "brand\n");
+      doc(p, "checkout.md", "checkout\n");
+      doc(p, "billing.md", "billing\n");
+      run(p, "onboard all", ["onboard"]);
+      intentCreate(p, "billing");
+      const ids = new Map(listRows(p, "after onboard").map((row) => [row.path, row.id]));
+      run(p, "scope checkout.md", ["associate", ids.get("documents/checkout.md")!, "--intent", "checkout"]);
+      run(p, "scope billing.md", ["associate", ids.get("documents/billing.md")!, "--intent", "billing"]);
+      const scoped = run(p, "list --intent checkout", ["list", "--intent", "checkout"]);
+      expect((scoped.documents as ListedRow[]).map((row) => row.path).sort()).toEqual(["documents/brand.md", "documents/checkout.md"]);
+      expect((run(p, "list", ["list"]).documents as ListedRow[]).length, "without --intent every row stays").toBe(3);
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+
+  test(
     "growing a file past the 32 MiB cap refuses cleanly (NOT a tombstone) while it exists on disk, and a real deletion still tombstones",
     () => {
       const p = scratchProject();

@@ -50,9 +50,10 @@ opens, on the tables as they are then:
    kind gives it `frontend-components.md`, and an `OK` row there must target
    the Unit's own file, which must cite the ID. Any Functional Design row may
    target that file the same way, and a `ui` Unit, which writes no `rules.md`,
-   is not asked for one. Without `interaction-spec.md` neither owes any. Two
-   decisions defined under one ID, or a decision naming a story `stories.md`
-   lacks, is a finding to fix at Refined Mockups.
+   is not asked for one. Without `interaction-spec.md` neither owes any. Every
+   `UX` ID visible in `interaction-spec.md` is a decision, as every AC ID in
+   `stories.md` is a criterion; one naming a story `stories.md` lacks is a
+   finding to fix at Refined Mockups.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 

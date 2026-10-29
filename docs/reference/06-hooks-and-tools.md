@@ -2610,7 +2610,7 @@ Indexes the team's own documents into a per-space catalog agents can cite. Two d
 |------------|---------|-------|
 | `onboard [path]` | Index one document, or every not-yet-indexed file under `documents/`. Idempotent — an unchanged file reports `already`, not a second row. An EDITED file at an already-indexed path refreshes that row in place and reports `edited`, so one path never carries two live rows | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED` |
 | `sync` | Reconcile the catalog with `documents/`: index what is new, tombstone what was deleted, re-extract an invalidated row, and rebuild `index.json` from the per-document records if the index itself is gone | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` |
-| `list [--json]` | The catalog — every row with its extraction/availability state visible | — |
+| `list [--json]` | The catalog — every row with its extraction/availability state visible; `--intent [slug]` keeps the space-wide rows and the ones scoped to that intent | — |
 | `show <id> [--json]` | One document's record plus its extracted text, with the untrusted-content notice inline; `--brief` returns the summary, or a 2,000-character excerpt when there is none, instead of the text; `--brief --part <n>` returns part n of the text | — |
 | `associate <id> --intent [slug]` | Scope a document to one intent. Idempotent; reports `fresh` vs `already` | `DOCUMENT_UPDATED` |
 | `dissociate <id> --intent [slug]` | Remove that scoping. Deleting the last one omits the key rather than writing an empty list | `DOCUMENT_UPDATED` |

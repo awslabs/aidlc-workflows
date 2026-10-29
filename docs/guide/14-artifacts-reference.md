@@ -250,7 +250,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 | 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md`, plus quality/developer/devsecops contribution files (promoted to `aidlc/spaces/<active-space>/memory/team.md` and `project.md` after approval) | Conditional |
 | 2.3 Requirements Analysis | `requirements.md` | Always |
 | 2.4 User Stories | `stories.md`, `personas.md` | User-facing features |
-| 2.5 Refined Mockups | `mockups.md`, `interaction-spec.md`, `accessibility-checklist.md` | UI projects |
+| 2.5 Refined Mockups | `mockups.md`, `mockups-preview.html`, `interaction-spec.md`, `design-system-mapping.md`, `accessibility-checklist.md` | UI projects |
 | 2.6 Domain Design | `components.md` (consolidated component catalogue), `decisions.md` (ADR log) | When new components needed |
 | 2.7 Units Generation | `unit-of-work.md`, `unit-of-work-dependency.md`, `unit-of-work-story-map.md` | Always |
 | 2.8 Contract Design | `contract-summary.md` (inter-unit contracts and public or external APIs) | More than one unit, or a unit with an API used outside the system |

@@ -39,8 +39,6 @@ consumes:
     required: true
   - artifact: mockups
     required: false
-  - artifact: mockups-preview
-    required: false
   - artifact: interaction-spec
     required: false
   - artifact: design-system-mapping
@@ -100,7 +98,7 @@ Read all design artifacts for the current unit:
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md` (if exists)
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
-- The approved experience from `<record>/inception/refined-mockups/`: `interaction-spec.md`, `design-system-mapping.md`, `accessibility-checklist.md`, `mockups.md` and `mockups-preview.html` (if they exist); the `UX{x}.{y}.{n}` decisions of this unit's stories are inputs the plan implements
+- The approved experience from `<record>/inception/refined-mockups/`: `interaction-spec.md`, `design-system-mapping.md`, `accessibility-checklist.md` and `mockups.md` (if they exist); the `UX{x}.{y}.{n}` decisions of this unit's stories are inputs the plan implements
 
 Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
 `express` scope skip Units Generation by design. When those inputs are absent,
@@ -210,10 +208,10 @@ Built side by side, this Unit has its own copy of the project with none of
 the other Units of its batch in it: plan code and tests that pass with this
 Unit's code, the Units it depends on, and the project as it stands.
 
-Start the plan with a short `## Summary` section of three lines. The engine
-shows them to the person when it asks for approval. When the unit implements
-`UX` experience decisions, end the summary with an `Experience:` line naming
-them, so the person sees the approved experience the plan carries:
+Start the plan with a short `## Summary` section: a `Builds:`, `Touches:` and
+`Tests:` line, and, when the unit implements `UX` experience decisions, an
+`Experience:` line naming them. The engine shows these lines to the person when
+it asks for approval, so they see the approved experience the plan carries:
 
 ```
 ## Summary

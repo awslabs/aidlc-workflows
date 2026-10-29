@@ -4289,13 +4289,17 @@ export function main(argv: string[]): void {
         break;
       }
       case "list": {
-        const { space: spaceFlag, json } = parseFlags(args.slice(1));
+        const { space: spaceFlag, json, intent } = parseFlags(args.slice(1));
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
-        const rows = listDocuments(pd, space);
+        // `--intent [slug]` keeps the rows that intent can read: the space-wide
+        // ones and the ones scoped to it. A finished intent's rows can be read.
+        const scope = resolveIntentFlag(pd, space, intent, true);
+        const rows = listDocuments(pd, space)
+          .filter((row) => scope === null || row.intents === undefined || row.intents.includes(scope.uuid));
         // --json carries the SAME rows as the human view. Neither hides
-        // anything: filtering is the caller's decision to make.
+        // anything else: any other filtering is the caller's decision to make.
         if (json) emitJson({ space, documents: rows });
         else emitHuman(renderList(rows));
         break;
@@ -4436,6 +4440,7 @@ export function main(argv: string[]): void {
             "                  Add --intent [slug] to scope it, and\n" +
             "                  --allow-inactive to target a finished intent.\n" +
             "  list            The catalog: every row, with its state visible.\n" +
+            "                  Add --intent [slug] for the rows that intent can read.\n" +
             "  show <id>       One document's full record, plus its extracted text.\n" +
             "                  Add --brief for the summary, or a 2,000-character\n" +
             "                  excerpt without one, instead of the text, and\n" +
