@@ -3696,7 +3696,8 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope bugfix -- 'fix the login'"
+          "--scope bugfix --request-file",
+          "(the task: \"fix the login\")"
         ]
       },
       "end": {
@@ -3773,8 +3774,9 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope feature -- flags",
-          "-- 'feature flags'"
+          "--scope feature --request-file",
+          "(the task: \"flags\")",
+          "which keeps every word of theirs (\"feature flags\")"
         ],
         "never": [
           "engine intent create --scope feature"
@@ -7907,7 +7909,8 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope feature -- 'add CSV export'"
+          "--scope feature --request-file",
+          "(the task: \"add CSV export\")"
         ]
       },
       "end": {
@@ -12125,7 +12128,8 @@
         "words": "bugfix Fix the crash",
         "settings": [],
         "names": [
-          "--scope bugfix -- 'Fix the crash'"
+          "--scope bugfix --request-file",
+          "(the task: \"Fix the crash\")"
         ],
         "no_ask": true
       },
@@ -17269,7 +17273,8 @@
         "words": "workshop Read ./vision.md and build what it describes",
         "settings": [],
         "names": [
-          "--scope workshop -- 'Read ./vision.md and build what it describes'"
+          "--scope workshop --request-file",
+          "(the task: \"Read ./vision.md and build what it describes\")"
         ],
         "no_ask": true
       },
@@ -17298,7 +17303,8 @@
         "words": "bugfix auth",
         "settings": [],
         "names": [
-          "--scope bugfix -- auth"
+          "--scope bugfix --request-file",
+          "(the task: \"auth\")"
         ],
         "no_ask": true
       },
@@ -17327,7 +17333,8 @@
         "words": "express auth",
         "settings": [],
         "names": [
-          "--scope express -- auth"
+          "--scope express --request-file",
+          "(the task: \"auth\")"
         ],
         "no_ask": true
       },
@@ -18142,7 +18149,8 @@
         "words": "classic Build a notes app",
         "settings": [],
         "names": [
-          "--scope classic -- 'Build a notes app'"
+          "--scope classic --request-file",
+          "(the task: \"Build a notes app\")"
         ],
         "no_ask": true
       },

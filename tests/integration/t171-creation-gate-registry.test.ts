@@ -1003,6 +1003,12 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(at, message).toBeGreaterThanOrEqual(0);
       return message.slice(at).match(/`([^`]+)`/)![1];
     };
+    // The reply a command hands on: the request file it names holds it.
+    const handedOn = (command: string): string => {
+      const file = /(?:^| )--request-file (aidlc\/\.aidlc-request-text\/[^ ]+)$/.exec(command);
+      expect(file, command).not.toBeNull();
+      return readFileSync(join(proj, ...file![1].split("/")), "utf-8");
+    };
 
     test("a reshape answer from the pick list carries the reply through the record switch to the composer", () => {
       seedTwoIntentsNoCursor();
@@ -1010,12 +1016,13 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(ask.ask_type).toBe("new-work-routing");
       const [target] = ask.reshape_commands;
       const answer = reshapeNamed(routeNamed(OTHER_ANSWER).message);
-      expect(answer).toBe(`${target.command} -- ${quoteCommandArgument(OTHER_ANSWER)}`);
+      expect(answer).toStartWith(`${target.command} --request-file `);
+      expect(handedOn(answer)).toBe(OTHER_ANSWER);
       const step = JSON.parse(runEmittedCommand(answer).stdout.trim());
       expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
       const commands = [...step.message.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
       expect(commands).toHaveLength(2);
-      expect(commands[1]).toEndWith(` -- ${quoteCommandArgument(OTHER_ANSWER)}`);
+      expect(handedOn(commands[1])).toBe(OTHER_ANSWER);
       expect(runEmittedCommand(commands[0]).status).toBe(0);
       const dispatch = JSON.parse(runEmittedCommand(commands[1]).stdout.trim());
       expect(dispatch.message).toContain("RUNNING workflow");
@@ -1034,7 +1041,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
       expect(step.message).toContain("config set depth comprehensive");
       const commands = [...step.message.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
-      expect(commands.at(-1)).toEndWith(` -- ${quoteCommandArgument(OTHER_ANSWER)}`);
+      expect(handedOn(commands.at(-1)!)).toBe(OTHER_ANSWER);
       const dispatch = JSON.parse(runEmittedCommand(commands.at(-1)!).stdout.trim());
       expect(dispatch.message).toContain("RUNNING workflow");
       expect(dispatch.message).toContain(`Asked where that request belongs, the person answered: "${OTHER_ANSWER}"`);
@@ -1059,10 +1066,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const SEPARATE = "Separate new piece of work";
       const RESHAPE = "Reshape existing work";
       const commandsOf = (rows: Array<{ command: string }>) => rows.map((row) => row.command);
-      // A reshape answer hands the composer, which has no chat, the person's reply.
+      // A reshape answer hands the composer, which has no chat, the person's reply: as the agent runs it, and
+      // as `next` names it, in a request file of each record's own, so running one leaves the others whole.
       const withReply = (command: string, text: string) => `${command} -- ${quoteCommandArgument(text)}`;
-      const reshapesOf = (ask: { reshape_commands: Array<{ command: string }> }, text: string) =>
-        commandsOf(ask.reshape_commands).map((command) => withReply(command, text));
+      const reshapesOf = (ask: { reshape_commands: Array<{ command: string; selector: string }> }, text: string) =>
+        ask.reshape_commands.map(({ command, selector }) => {
+          const named = `${command} --request-file aidlc/.aidlc-request-text/reshape-${selector}.txt`;
+          expect(handedOn(named)).toBe(text);
+          return named;
+        });
       // The same line marked as a request of their own. With a question of ours
       // already open, a bare words line is read as a possible reply to it
       // (t-three-ways-to-read-a-line), so a case about a REQUEST says so.
@@ -1209,7 +1221,9 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const records = seedTwoIntentsNoCursor();
         routingAsk();
         const d = routeNamed("Separate new piece of work, and add CSV export");
-        expect(d.message).toContain(` next -- ${quoteCommandArgument("Separate new piece of work, and add CSV export")}`);
+        const other = / next (--request-file \S+)` \(their words: "Separate new piece of work, and add CSV export"\)/.exec(d.message);
+        expect(other, d.message).not.toBeNull();
+        expect(handedOn(other![1])).toBe("Separate new piece of work, and add CSV export");
         expect(recordDirs(proj)).toEqual(records);
       });
 

@@ -4559,10 +4559,12 @@ function unselectedWordsReplyDirective(
 // so no shell on the way changes a line break, a character cmd.exe reads, or an
 // apostrophe that PowerShell and Git Bash quote differently; on the line only
 // when that file cannot be written. A file per chat, so another chat's step
-// never reads these words.
+// never reads these words, and per command where a step names several, since
+// running one spends its file.
 function wordsForNextStep(pd: string, name: string, text: string): string {
-  const chat = (engineSessionId ?? "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
-  const file = `${REQUEST_TEXT_DIR}/${chat ? `${name}-${chat}` : name}.txt`;
+  const word = (part: string) => part.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  const chat = word(engineSessionId ?? "");
+  const file = `${REQUEST_TEXT_DIR}/${[name, chat].filter(Boolean).map(word).join("-")}.txt`;
   try {
     if (!isReadOnlyEngineProbe()) writeRecordFileNoFollow(pd, file, text);
     return ` --request-file ${file}`;
@@ -4784,15 +4786,15 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string, 
     pick ? question.askedAbout?.targets.map(({ intent }) => intent) : undefined,
     question.approvedRequest,
   );
-  const named = (route: NewWorkRoute, command: string): string =>
-    route === "reshape" ? `${command}${wordsForNextStep(projectDir, "reshape", words)}` : command;
+  const named = (route: NewWorkRoute, command: string, record?: string): string =>
+    route === "reshape" ? `${command}${wordsForNextStep(projectDir, record ? `reshape-${record}` : "reshape", words)}` : command;
   const otherPlans = routingScopeCommands(question.id, question.proposedScope, carried, projectDir, question.approvedRequest)
     .filter(({ scope }) => scope !== question.proposedScope);
   const answers = routingQuestionOptions(question).flatMap((option) => {
     const command = commands.route[option.route];
     if (command === undefined) {
       const each = option.route === "continue" ? commands.select : commands.reshape;
-      return [`"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${named(option.route, c)}\``).join(", ")}`];
+      return [`"${option.label}": the command for the work they named, one of ${each.map(({ command: c, selector }) => `\`${named(option.route, c, selector)}\``).join(", ")}`];
     }
     const answer = `"${option.label}": \`${named(option.route, command)}\``;
     return option.route !== "separate" || otherPlans.length === 0 ? [answer] : [

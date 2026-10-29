@@ -1026,7 +1026,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#chatReplies`]: { use: "keeps", why: "the presence shape: whether an answer recorded now carries their words (words !== null), for the step at an open question" },
   [`${LIB}#personsWordsKept`]: { use: "keeps", why: "the presence shape: whether the chat's latest message has any text (a host that hands the hook an empty prompt keeps none), for the step at a question shown again" },
   // next's request (S2b): kept and quoted, never compared; what was read is the message id.
-  [`${ORCH}#routeNext`]: { use: "decides", why: "next itself: quotes and previews the request (quoteCommandArgument) and whether one is there" },
+  [`${ORCH}#routeNext`]: { use: "decides", why: "next itself: previews the request, hands it to a step's request file (wordsForNextStep), and whether one is there" },
   [`${ORCH}#freshWorkRoute`]: { use: "decides", why: "hands the request to the plan proposal step", from: [`${ORCH}#routeNext`] },
   [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
   [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
@@ -1034,7 +1034,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#keptWordsStep`]: { use: "decides", why: "the pick step's command: the words a reading step kept from this message, handed on as kept (wordsForNextStep)" },
   [`${ORCH}#resumeWithWords`]: { use: "keeps", why: "a resume with words beside it: whether words are there, then the line read again without --resume" },
   [`${ORCH}#resumeAgain`]: { use: "decides", why: "the unpark step's re-run: the words typed with the resume, handed on as typed (wordsForNextStep)" },
-  [`${ORCH}#wordsForNextStep`]: { use: "decides", why: "a step's command: the words go to a request file of their own as given, or quoted onto the line when that file cannot be written", from: [`${ORCH}#keptWordsStep`, `${ORCH}#resumeAgain`] },
+  [`${ORCH}#wordsForNextStep`]: { use: "decides", why: "a step's command: the words go to a request file of their own as given, or quoted onto the line when that file cannot be written", from: [`${ORCH}#keptWordsStep`, `${ORCH}#reshapeReplyArgument`, `${ORCH}#resumeAgain`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
   [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given, and the isolated run's request", from: [`${ORCH}#wordsForNextStep`, `${LIB}#keepSingleRunRequest`] },
   [`${LOCKS}#writeBufferAtomic`]: { use: "keeps", why: "the atomic write under writeRecordFileNoFollow", from: [`${LIB}#writeRecordFileNoFollow`] },
   [`${ORCH}#emit`]: { use: "decides", why: "the words the person said belong to the work in progress are kept once as the code plan question's reply (keepRoutedPlanApprovalReply), and leave it by their message id" },
@@ -1092,7 +1092,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ASK}#requestChangesFor`]: { use: "keeps", why: "the audit writer: as above, on the Request Changes answer row" },
   // The request the agent forwards to next (its free text) and the question store that keeps it: shown back, quoted
   // into a command, kept; each with its reason.
-  "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#reshapeReplyArgument`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`, `${ORCH}#wordsForNextStep`] },
+  "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words onto a step's line, only when the step's request file cannot be written", from: [`${ORCH}#wordsForNextStep`] },
   "core/tools/aidlc-runtime-paths.ts#readsAlikeInDoubleQuotes": { use: "decides", why: "whether every shell reads their words alike in double quotes, for quoteCommandArgument", from: ["core/tools/aidlc-runtime-paths.ts#quoteCommandArgument"] },
   [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
   [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
@@ -1112,8 +1112,8 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#scopeConfirmAskDirective`]: { use: "keeps", why: "as above (the scope confirmation)", from: [`${ORCH}#freshWorkOfferDirective`] },
   [`${ORCH}#namedDocumentNote`]: { use: "decides", why: "as above, for the compose offer", from: [`${ORCH}#composeOfferAskDirective`] },
   [`${ORCH}#composeOfferAskDirective`]: { use: "decides", why: "as above (the compose offer)", from: [`${ORCH}#freshWorkOfferDirective`] },
-  [`${ORCH}#routingQuestionReplyDirective`]: { use: "decides", why: "the routing question's reply step hands their words back, quoted, in its command", from: [`${ORCH}#routeNext`] },
-  [`${ORCH}#reshapeReplyArgument`]: { use: "decides", why: "a print between a reshape answer and the composer hands their reply on, quoted, in its command, when the answer carried one" },
+  [`${ORCH}#routingQuestionReplyDirective`]: { use: "decides", why: "the routing question's reply step hands their words back in a request file its command names", from: [`${ORCH}#routeNext`] },
+  [`${ORCH}#reshapeReplyArgument`]: { use: "decides", why: "a print between a reshape answer and the composer hands their reply on in a request file its command names, when the answer carried one" },
   [`${ORCH}#newWorkRoutingAskDirective`]: { use: "decides", why: "as above (the routing question)", from: [`${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#routeNext`] },
   [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#jumpStepPrint`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
   [`${ORCH}#jumpStepPrint`]: { use: "keeps", why: "as above, for a step that names one jump", from: [`${ORCH}#emitTypedResumeChoice`] },
