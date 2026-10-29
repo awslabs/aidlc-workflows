@@ -1325,8 +1325,6 @@ noteUnitsReposAsked
 objectListField
 offeredChoiceLabel
 offeredGuardRemedy
-onlyAidlcFilesChangedInSwarmStage
-onlyAidlcFilesChangedSince
 openDecisionBlock
 openDecisionMenu
 openGateApprovesTogether
@@ -1815,7 +1813,6 @@ sourceBaselineAuditFields
 sourceBaselineBoundaryValue
 sourceBoundaryRepairStep
 sourceChangedOutsideAidlc
-sourceChangedOutsideAidlcSince
 sourceCheckoutLabelFor
 sourceCheckoutListingRel
 sourceClaimCheckout

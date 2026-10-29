@@ -21,7 +21,6 @@ import {
   decideFence,
   aidlcOwnedSourceKey,
   isLinkTargetListingKey,
-  sourcePathIsRegistered,
   attemptEventDefinitelyBefore,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -49,7 +48,6 @@ import {
   mainCheckoutChangeAllowed,
   mainCheckoutChangeAskedKey,
   mainCheckoutChangesAsked,
-  onlyAidlcFilesChangedInSwarmStage,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   clearPlanApprovalChallenge,
   clearPlanApprovalLegacyOffer,
@@ -172,7 +170,10 @@ import {
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
   TESTING_POSTURE_SUBCOMMANDS,
+  readWorkspaceSourceSnapshot,
+  recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
+import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } from "./aidlc-swarm-source.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
@@ -4785,39 +4786,6 @@ export function captureCodeGenerationDiscardApproval(
   }
 }
 
-// A live listing without the paths Git ignores and does not track in the
-// checkout it was read from (a .env, a log): no commit holds them and no
-// checkout of a Unit gets them, so a worktree is never asked to reproduce them.
-// check-ignore without --no-index never reports a path that checkout's own
-// index tracks, and the person's own ignore rules are read as Git reads them.
-// A path registered as source in .aidlc-source-paths.json stays, as it does
-// for a Unit's claims. Commit listings are never passed here: they hold only
-// what was tracked. When Git cannot answer, nothing is left out.
-function withoutGitIgnored(
-  repoDir: string, carriesWorkspaceShell: boolean,
-): (listing: ReadonlyMap<string, string>) => Map<string, string> {
-  const ignored = new Map<string, boolean>();
-  const pathOf = (key: string): string => key.slice(key.indexOf("\0") + 1);
-  return (listing) => {
-    const unknown = [...new Set([...listing.keys()].map(pathOf))].filter((path) => !ignored.has(path));
-    if (unknown.length > 0) {
-      const checked = spawnSync("git", ["-C", repoDir, "check-ignore", "-z", "--stdin"], {
-        input: `${unknown.join("\0")}\0`,
-        encoding: "utf-8",
-        maxBuffer: 512 * 1024 * 1024,
-        timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-      });
-      if (checked.status === 0 || checked.status === 1) {
-        const hits = new Set(checked.stdout.split("\0").filter(Boolean));
-        for (const path of unknown) {
-          ignored.set(path, hits.has(path) && !sourcePathIsRegistered(repoDir, carriesWorkspaceShell, path));
-        }
-      }
-    }
-    return new Map([...listing].filter(([key]) => ignored.get(pathOf(key)) !== true));
-  };
-}
-
 interface DiscardedWorktreeApproval {
   commit: string;
   listingSha256: string;
@@ -4989,20 +4957,26 @@ function approvedWorktreeSource(
   // Approval is kept, as on the single-agent path: generation start records it
   // and says it in one line. So is source that moved after the engine built a
   // plan with plan approval off (a skipped receipt): nobody approved it, and
-  // `next` would never ask. An AI-DLC update the person took moves only
-  // AI-DLC's own files, which is no reason to approve the plan again, and
-  // neither are files the person asked to change (swarm allow-change) that
-  // this Unit's plan does not name.
+  // `next` would never ask. An AI-DLC update the person took, or a file Git
+  // ignores written since (a test run's log), is no change to their source
+  // (aidlc-swarm-source.ts) and no reason to approve the plan again; neither
+  // are files the person asked to change (swarm allow-change) that this Unit's
+  // plan does not name.
   const named = unitPlanNamedPaths(parent, unit);
-  if (
-    !approved.continuing &&
+  const certified = approved.receipt.certifiedSourceSha256;
+  const held = !approved.continuing &&
     approved.receipt.skipped === undefined &&
-    !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint) &&
-    !guardPolicyAcceptsChanges(parent) &&
-    !onlyAidlcFilesChangedInSwarmStage(parent, CODE_GENERATION_STAGE, parentSource) &&
-    mainCheckoutChangeAllowed(parent, workspaceSourceChangedPaths(
-      parent, CODE_GENERATION_STAGE, approved.receipt.certifiedSourceSha256, parentSource, true,
-    ), {}, named) === null
+    !sameWorkspaceSource(certified, parentSource.fingerprint) &&
+    !guardPolicyAcceptsChanges(parent);
+  const recorded = held ? readWorkspaceSourceSnapshot(parent, CODE_GENERATION_STAGE, certified) : null;
+  const changed = recorded === null ? null : swarmSourceChanged(
+    parent, recordedSourceListingUnderCurrentBoundary(recorded, parentSource.listing), parentSource.listing,
+  );
+  if (
+    held &&
+    changed?.length !== 0 &&
+    !swarmSourceUnchangedInStage(parent, CODE_GENERATION_STAGE, parentSource) &&
+    mainCheckoutChangeAllowed(parent, changed, {}, named) === null
   ) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }

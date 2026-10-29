@@ -4614,21 +4614,9 @@ function sourceKeysChangedOutsideAidlc(
 }
 
 // The paths outside AI-DLC's own files that moved since a kept listing (a
-// landing's or a review's `Source Listing`). Null when no listing was kept or
-// it does not read back exactly: the caller then compares fingerprints.
-export function sourceChangedOutsideAidlcSince(
-  projectDir: string,
-  stageSlug: string,
-  listing: string | undefined,
-  current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
-): string[] | null {
-  const keys = sourceKeysChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space);
-  return keys === null ? null : renderSourcePathKeys(keys);
-}
-
-// The same, as `<repo>\0<path>` keys, for a line that names each path's repo.
+// review's `Source Listing`), as `<repo>\0<path>` keys. Null when no listing
+// was kept or it does not read back exactly: the caller then compares
+// fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
   stageSlug: string,
@@ -4659,19 +4647,6 @@ export function recordedSourceListingForCompare(
   );
   for (const key of excluded) before.delete(key);
   return before;
-}
-
-// Whether the main checkout moved from a kept listing only in AI-DLC's own
-// files. False when no listing was kept or it does not read back exactly.
-export function onlyAidlcFilesChangedSince(
-  projectDir: string,
-  stageSlug: string,
-  listing: string | undefined,
-  current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
-): boolean {
-  return sourceChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space)?.length === 0;
 }
 
 function generatedRunnerSkill(skillDir: string): boolean {
@@ -38099,30 +38074,6 @@ export function currentSwarmSourceMergeChain(
   return priorFingerprint === null
     ? { state: "none" }
     : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
-}
-
-// Whether the main checkout moved, since the build's last verified source (the
-// last landing's listing, else the stage's opening listing), only in AI-DLC's
-// own files: the comparison a landing makes. False when no listing reads back
-// or the evidence cannot be read; the caller then keeps its fingerprint compare.
-export function onlyAidlcFilesChangedInSwarmStage(
-  projectDir: string,
-  slug: string,
-  current: WorkspaceSourceState,
-): boolean {
-  try {
-    const chain = currentSwarmSourceMergeChain(projectDir, slug);
-    if (chain.state === "ready") return onlyAidlcFilesChangedSince(projectDir, slug, chain.listing, current);
-    if (chain.state !== "none") return false;
-    const opening = currentSwarmSourceOpeningFingerprint(projectDir, slug);
-    return opening.state === "ready" && opening.listing !== undefined && sourceChangedOutsideAidlc(
-      projectDir,
-      recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing),
-      current.listing,
-    ).length === 0;
-  } catch {
-    return false;
-  }
 }
 
 // --- A change the person asked for in the main checkout ----------------------

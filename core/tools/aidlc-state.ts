@@ -216,9 +216,7 @@ import {
   sourceClaimCovers,
   readUnitSourceManifest,
   aidlcOwnedSourceKey,
-  onlyAidlcFilesChangedSince,
   mainCheckoutChangeAllowed,
-  sourceChangedOutsideAidlcSince,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
   resolveProjectDir,
@@ -290,6 +288,7 @@ import {
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
+import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
@@ -3652,10 +3651,13 @@ function verifySettledSwarmSourceBinding(
     );
   }
   const current = workspaceSourceState(pd);
-  // An AI-DLC update the person took after the last merge changed only
-  // AI-DLC's own files: nobody's source moved.
-  const moved = current !== null && !sameWorkspaceSource(chain.fingerprint, current.fingerprint) &&
-    !onlyAidlcFilesChangedSince(pd, stage.slug, chain.listing, current);
+  // An AI-DLC update the person took after the last merge, or a file Git
+  // ignores written since (a dev server's log), is nobody's source
+  // (aidlc-swarm-source.ts).
+  const changed = current === null || sameWorkspaceSource(chain.fingerprint, current.fingerprint)
+    ? []
+    : swarmSourceChangedSince(pd, stage.slug, chain.listing, current);
+  const moved = changed?.length !== 0;
   if (moved && current !== null && guardPolicyAcceptsChanges(pd)) {
     // Kept under relaxed or off: edits made after the last merge stay, once recorded.
     if (changeControlPreflight) return;
@@ -3669,9 +3671,6 @@ function verifySettledSwarmSourceBinding(
   }
   // Under strict, files the person asked to change (swarm allow-change) stay
   // too, recorded with the message they asked in; that step already told them.
-  const changed = moved && current !== null
-    ? sourceChangedOutsideAidlcSince(pd, stage.slug, chain.listing, current)
-    : null;
   const asked = mainCheckoutChangeAllowed(pd, changed);
   if (moved && current !== null && asked !== null) {
     if (changeControlPreflight) return;

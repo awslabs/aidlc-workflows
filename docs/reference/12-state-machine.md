@@ -639,10 +639,13 @@ changed outside its manifest, keep the review: finalize records each once as
 `CHANGE_ACCEPTED` and returns its line in the Unit's `change_notices`. Swarm
 prepare likewise keeps parent source that moved after Plan Approval (generation
 start records it and says it), as the single-agent build does. On any Guard
-Policy prepare leaves AI-DLC's own files out (an AI-DLC update the person took):
-they need not be committed before the worktrees fork, and under `strict` they
-are no reason to approve the plan again; it refuses only when the person's own
-files moved since the build's last verified source, compared as a landing
+Policy prepare leaves AI-DLC's own files out (an AI-DLC update the person took),
+and the files Git ignores and does not track in the checkout that holds them,
+with what such an ignored link leads to (`aidlc-swarm-source.ts`, the one rule
+the landing and completion compares read too): they need not be committed
+before the worktrees fork, and under `strict` they are no reason to approve the
+plan again; it refuses only when the person's own files moved since the
+approval and since the build's last verified source, compared as a landing
 compares it, or when no listing is on record to tell (a rejection an earlier
 release wrote).
 

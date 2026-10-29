@@ -2136,9 +2136,14 @@ parent application source so the selected base can reproduce it. This includes
 approved inline skeleton source before switching to a parallel batch. Files Git
 ignores and does not track, such as a `.env` or a log, are not part of it unless
 you registered them as source in `.aidlc-source-paths.json`: they stay where they
-are, and a Unit's worktree, like any Git checkout, does not have them. The rule
-applies to legacy autonomy and new checkpoint workflows alike; an autonomy grant
-never authorizes an automatic commit.
+are, and a Unit's worktree, like any Git checkout, does not have them. Nor is what
+such an ignored link leads to, and a submodule's files are read by the
+submodule's own ignore rules. A change to one of those files (a test run's log
+written after you approved the plans, a dev server's log during the build) never
+asks for the plans' approval again, and the landings and the stage's completion
+do not count it as a change to the main checkout. The rule applies to legacy
+autonomy and new checkpoint workflows alike; an autonomy grant never authorizes
+an automatic commit.
 
 ```bash
 aidlc engine swarm prepare --batch <N> --units "<exact emitted Units>"

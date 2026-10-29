@@ -9,9 +9,9 @@
 
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { auditBlockField, boltSlugForUnit, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import {
@@ -39,8 +39,12 @@ const NOT_COMMITTED = "Approved parent source is not committed";
 const IGNORES = ".env\n*.log\nshared\n";
 
 // A project whose .gitignore covers .env, logs and a local link from before the stage began, its plans approved.
-function project(policy = "strict"): string {
-  return fixtureWithSource((code) => appendFileSync(join(code, ".gitignore"), IGNORES), UNITS, policy);
+// `more` adds to the project before the stage began.
+function project(policy = "strict", more: (code: string) => void = () => {}): string {
+  return fixtureWithSource((code) => {
+    appendFileSync(join(code, ".gitignore"), IGNORES);
+    more(code);
+  }, UNITS, policy);
 }
 
 // The same with a submodule, the ignore rules committed after the stage began and the plans approved again.
@@ -131,10 +135,13 @@ test("a link Git ignores to a folder outside the project, and an ignored .env th
   }
 }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS * 2);
 
-test("with a submodule, an ignored .env in the project and an ignored log in the submodule: the build starts", () => {
+// A submodule is its own checkout: its own rules say what Git ignores inside it.
+test("with a submodule, an ignored .env in the project and a log the submodule ignores: the build starts", () => {
   const pd = projectWithSubmodule();
+  const sub = join(pd, "vendor", "sub");
   writeFileSync(join(pd, ".env"), ENV);
-  writeFileSync(join(pd, "vendor", "sub", "build.log"), "built\n");
+  appendFileSync(resolve(sub, git(sub, ["rev-parse", "--git-path", "info/exclude"])), "*.log\n");
+  writeFileSync(join(sub, "build.log"), "built\n");
   for (const unit of UNITS) approvePlan(pd, unit, "with-env");
   prepared(pd);
   expect(readFileSync(join(pd, ".env"), "utf-8")).toBe(ENV);
@@ -190,10 +197,37 @@ test("strict: an ignored log written while the first batch was built does not re
     const landed = land(pd, unit);
     expect(landed.code, landed.out).toBe(0);
   }
+  appendFileSync(join(pd, "dev-server.log"), "request served\n");
   publish(pd, ["later"]);
   const next = swarm(pd, ["prepare", "--batch", "2", "--units", "later", "--base", "main"]);
   expect(next.code, `${next.out}\n${next.err}`).toBe(0);
   expect(existsSync(wt(pd, "later"))).toBe(true);
+});
+
+test("strict: a tracked file an ignore rule matches, or an ignored one registered as source, still stops the landing", () => {
+  const pd = project("strict", (code) => {
+    writeFileSync(join(code, "fixture.log"), "tracked log\n");
+    git(code, ["add", "-f", "fixture.log"]);
+    appendFileSync(join(code, ".gitignore"), "config/local.json\n");
+    writeFileSync(join(code, ".aidlc-source-paths.json"), JSON.stringify({ version: 1, paths: ["config/local.json"] }));
+  });
+  prepared(pd);
+  writeFileSync(join(pd, "fixture.log"), "edited during the build\n");
+  mkdirSync(join(pd, "config"));
+  writeFileSync(join(pd, "config", "local.json"), "{\"registered\":true}\n");
+  built(pd);
+  const refused = land(pd, "alpha");
+  expect(refused.code).not.toBe(0);
+  expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (config/local.json, fixture.log)");
+});
+
+test("in a workspace of several repositories, a log a repository ignores does not re-ask the plans' approval", () => {
+  const pd = fixture(UNITS, CHECK, false, "repo-a");
+  const repo = join(pd, "repo-a");
+  appendFileSync(resolve(repo, git(repo, ["rev-parse", "--git-path", "info/exclude"])), "*.log\n");
+  writeFileSync(join(repo, "test-run.log"), "tests passed\n");
+  prepared(pd);
+  expect(readFileSync(join(repo, "test-run.log"), "utf-8")).toBe("tests passed\n");
 });
 
 test("relaxed: an ignored log written during the build is not said as kept, and the person's own edit is", () => {
