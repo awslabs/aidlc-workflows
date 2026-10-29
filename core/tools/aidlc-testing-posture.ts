@@ -1494,15 +1494,21 @@ export function usableTestingContract(contract: TestingPostureContract | null): 
 //      stage's review artifact. Reviews live in review records now and nothing
 //      appends to the plan, but a plan reviewed under the earlier protocol may
 //      still carry that section, and its approval must not depend on it.
-//   2. Task boxes are reset: `[x]`, `[X]` and `[-]` become `[ ]` wherever a line
-//      puts them (a list item's start, after a step's label, in a heading or a
-//      table cell), outside fenced blocks, multi-line HTML comments and the
-//      line's inline code spans. A tick is a claim about execution, not a change
-//      to the plan, and the stage names no line shape for a step's box. A box is
-//      a token of its own: escaped, right after a word character, or a link's
-//      text (`[x](url)`), it is text. A box in a one-line HTML comment or in a
-//      code span that runs on to the next line is reset too; both sides of a
-//      comparison project alike, so only an unseen box flip there goes unbound.
+//   2. A step's own task box is reset: `[x]`, `[X]` and `[-]` become `[ ]`
+//      wherever the step's line puts it (a list item's start, after the step's
+//      label, in a heading or a table cell), outside fenced blocks, multi-line
+//      HTML comments and the line's inline code spans. A tick is a claim about
+//      execution, not a change to the plan, and the stage names no line shape for
+//      a step's box. The step's own box is the line's first box, when what comes
+//      before it, Markdown markup set aside, is nothing or a label read by its
+//      shape, not its words: at most two words, the last ending in a digit,
+//      maybe with `.`, `:`, `)` or `-` after it ("Step 3.", "3)", a table cell's
+//      "4"). Every other box is the plan's text, bound and handed to the worker
+//      as written: a box in the step's words or after its own box, and one that
+//      is escaped, right after a word character, or a link's text (`[x](url)`).
+//      A step box in a one-line HTML comment or in a code span that runs on to
+//      the next line is reset too; both sides of a comparison project alike, so
+//      only an unseen box flip there goes unbound.
 //   3. Line endings become LF, trailing whitespace per line is dropped OUTSIDE
 //      fences, runs of blank lines outside fences and comments collapse to one, and
 //      trailing blank lines are dropped. These are editor artifacts, not content.
@@ -1523,9 +1529,10 @@ export function usableTestingContract(contract: TestingPostureContract | null): 
 // This projection is for the PLAN only. The unit-test instructions are not a
 // review artifact and have no mandated post-approval mutation, so they bind
 // byte-exactly (line endings aside): see `projectInstructionsContent`.
-const PLAN_TASK_BOX_RE = /(?<![\w\]])\[[xX-]\](?=[ \t]|$)/g;
+const PLAN_TASK_BOX_RE = /(?<![\w\]])\[[ xX-]\](?=[ \t]|$)/g;
+const PLAN_STEP_LABEL_RE = /^(?:\S+[ \t]+)?\S*\d$/;
 
-/** The line with every task box outside its inline code spans set back to `[ ]`. */
+/** The line with its step's own task box, when it carries one, set back to `[ ]`. */
 function resetTaskBoxes(line: string): string {
   const spans: Array<[number, number]> = [];
   for (let cursor = 0; cursor < line.length; cursor++) {
@@ -1540,8 +1547,17 @@ function resetTaskBoxes(line: string): string {
     spans.push([cursor, close]);
     cursor = close - 1;
   }
-  return line.replace(PLAN_TASK_BOX_RE, (box, at: number) =>
-    isEscaped(line, at) || spans.some(([from, to]) => at >= from && at < to) ? box : "[ ]");
+  for (const { 0: box, index: at } of line.matchAll(PLAN_TASK_BOX_RE)) {
+    if (isEscaped(line, at) || spans.some(([from, to]) => at >= from && at < to)) continue;
+    const label = line.slice(0, at)
+      .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/, "")
+      .replace(/[#>*_|]/g, " ")
+      .replace(/[ \t.:)-]+$/, "")
+      .trim();
+    if (box === "[ ]" || (label !== "" && !PLAN_STEP_LABEL_RE.test(label))) return line;
+    return `${line.slice(0, at)}[ ]${line.slice(at + box.length)}`;
+  }
+  return line;
 }
 
 export function projectPlanApprovalContent(text: string): string {
