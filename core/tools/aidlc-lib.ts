@@ -19755,6 +19755,11 @@ function candidateAttemptEventMatches(
   );
 }
 
+// What a reviewed stage's review comes to for pin: "ready" when its last
+// verified review is READY on the candidate's documents, "approved" when it is
+// NOT-READY on them and the person's approval of the stage (the GATE_APPROVED
+// the stage gate writes) comes after it, null otherwise. A change to the
+// documents, a rejection or a revision after either undoes it.
 export function candidateReviewCoverageProjection(
   rows: ReadonlyArray<AuditShardEvent>,
   options: {
@@ -19766,7 +19771,7 @@ export function candidateReviewCoverageProjection(
     expectedFingerprint: string;
     completionRecord?: (block: string) => ReviewRecord | null;
   },
-): boolean {
+): "ready" | "approved" | null {
   const events = sortAttemptEvents(rows);
   const relevantByTimestamp = new Map<string, Set<string>>();
   for (const event of events) {
@@ -19777,6 +19782,7 @@ export function candidateReviewCoverageProjection(
         ? file.includes(options.artifactPrefix)
         : (event.event === "REVIEW_REQUESTED" ||
             event.event === "REVIEW_COMPLETED" ||
+            event.event === "GATE_APPROVED" ||
             event.event === "GATE_REJECTED" ||
             event.event === "STAGE_REVISING") &&
           candidateAttemptEventMatches(
@@ -19791,18 +19797,24 @@ export function candidateReviewCoverageProjection(
     relevantByTimestamp.set(event.timestamp, shards);
   }
   if ([...relevantByTimestamp.values()].some((shards) => shards.size > 1)) {
-    return false;
+    return null;
   }
 
   const pending = new Map<string, ReviewRequestBinding>();
-  let ready = false;
+  let coverage: "ready" | "approved" | null = null;
+  // A NOT-READY verdict on the candidate's documents: the stage gate takes the
+  // person's approval over it, and their approval after it is what covers it.
+  let concernOpen = false;
   for (const event of events) {
     if (
       event.event === "ARTIFACT_CREATED" ||
       event.event === "ARTIFACT_UPDATED"
     ) {
       const file = auditBlockField(event.block, "File") ?? "";
-      if (file.includes(options.artifactPrefix)) ready = false;
+      if (file.includes(options.artifactPrefix)) {
+        coverage = null;
+        concernOpen = false;
+      }
       continue;
     }
     if (
@@ -19820,7 +19832,13 @@ export function candidateReviewCoverageProjection(
       event.event === "STAGE_REVISING"
     ) {
       pending.clear();
-      ready = false;
+      coverage = null;
+      concernOpen = false;
+      continue;
+    }
+    if (event.event === "GATE_APPROVED") {
+      if (concernOpen) coverage = "approved";
+      concernOpen = false;
       continue;
     }
     if (
@@ -19848,12 +19866,14 @@ export function candidateReviewCoverageProjection(
       )
     ) continue;
     pending.delete(iteration);
-    ready =
-      auditBlockField(event.block, "Verdict") === "READY" &&
+    const verdict = auditBlockField(event.block, "Verdict");
+    const current =
       currentFingerprintForm(auditBlockField(event.block, "Artifact Fingerprint")) ===
         options.expectedFingerprint;
+    coverage = verdict === "READY" && current ? "ready" : null;
+    concernOpen = verdict === "NOT-READY" && current;
   }
-  return ready;
+  return coverage;
 }
 
 // A person's Request Changes that changed nothing of the stage: the stage is
@@ -29577,6 +29597,9 @@ export interface UnitMergeEvidence {
   gates_approved: string[];
   reviewers_expected: string[];
   reviewers_ready: string[];
+  // Reviewed stages the person approved after a NOT-READY review; written only
+  // when there is one, so evidence pinned before it compares the same.
+  reviewers_approved_over_concerns?: string[];
   plan_fingerprint: string | null;
   artifact_paths: string[];
   audit_shards: string[];

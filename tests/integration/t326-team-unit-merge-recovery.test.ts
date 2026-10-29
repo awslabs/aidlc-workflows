@@ -659,8 +659,10 @@ describe("t326 pinned team Unit merge", () => {
     expect(runMergeTool(UNIT, ["publish", "alpha"], reviewed.checkout).status).toBe(0);
     const reviewPin = runMergeTool(UNIT, ["pin", "alpha"], reviewFixture.seed);
     expect(reviewPin.status).not.toBe(0);
-    expect(reviewPin.out).toContain("reviewer READY receipts");
-    expect(reviewPin.out).toContain(`reviewer READY receipts (${reviewerStage.slug})`);
+    expect(reviewPin.out).toContain(
+      `${reviewerStage.name} has no review that stands for it as published: in the checkout where review-team ` +
+        "claimed alpha (not this one), have it reviewed again, then publish alpha again.",
+    );
 
     const planFixture = makeSeed();
     const planned = prepareCandidate(

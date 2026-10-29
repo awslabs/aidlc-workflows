@@ -126,7 +126,7 @@ export function runMergeTool(
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   const reviewUnit = reviewOperation ? args[1] : undefined;
   if (result.status !== 0 && reviewUnit && tracePath &&
-      (out.includes("reviewer READY receipts") || out.includes("candidate-exact"))) {
+      (out.includes("has no review that stands for") || out.includes("candidate-exact"))) {
     console.error(`t326 merge validation failed:\n${JSON.stringify({
       args, status: result.status, signal: result.signal, error: result.error?.message, out,
     }, null, 2)}`);
@@ -368,7 +368,11 @@ export function reviewAuditExtras(
   reviewer: string,
   fingerprint: string,
   nonce: string,
+  // A review the reviewer left NOT-READY, or a later pass of the stage's review.
+  options: { verdict?: "READY" | "NOT-READY"; iteration?: number } = {},
 ): { request: string; completion: string } {
+  const verdict = options.verdict ?? "READY";
+  const iteration = options.iteration ?? 1;
   const requestId = `review:${createHash("sha256").update(nonce).digest("hex").slice(0, 32)}`;
   const attempt = createHash("sha256").update(`attempt:${nonce}`).digest("hex").slice(0, 16);
   const record: ReviewRecord = {
@@ -377,30 +381,30 @@ export function reviewAuditExtras(
     unit,
     workflow: null,
     attempt,
-    iteration: 1,
+    iteration,
     reviewer,
-    verdict: "READY",
+    verdict,
     request_id: requestId,
     request_challenge: null,
     artifact_fingerprint: fingerprint,
     source_fingerprint: null,
     unit_source_fingerprint: null,
     findings: [],
-    body: `**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n`,
+    body: `**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n`,
     recorded_at: "2026-08-20T01:00:00Z",
   };
   const bytes = serializeReviewRecord(record);
-  const path = reviewRecordRelativePath(stage, unit, attempt, 1);
+  const path = reviewRecordRelativePath(stage, unit, attempt, iteration);
   const target = join(seededRecordDir(projectDir), ...path.split("/"));
   mkdirSync(join(target, ".."), { recursive: true });
   writeFileSync(target, bytes);
   return {
     request:
-      `**Reviewer**: ${reviewer}\n**Iteration**: 1\n` +
+      `**Reviewer**: ${reviewer}\n**Iteration**: ${iteration}\n` +
       `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n`,
     completion:
-      `**Reviewer**: ${reviewer}\n**Iteration**: 1\n` +
-      `**Verdict**: READY\n**Request Fingerprint**: ${fingerprint}\n` +
+      `**Reviewer**: ${reviewer}\n**Iteration**: ${iteration}\n` +
+      `**Verdict**: ${verdict}\n**Request Fingerprint**: ${fingerprint}\n` +
       `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n` +
       `**Review Record**: ${path}\n**Review Record Digest**: ${reviewRecordDigest(bytes)}\n`,
   };
