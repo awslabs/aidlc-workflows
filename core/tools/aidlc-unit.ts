@@ -1402,6 +1402,62 @@ function transportableCandidateTree(
   };
 }
 
+// Every audit shard but the claim's own, as `baseOid` has it: pin refuses any
+// change to another shard (candidateBoundary). A checkout whose own shard was
+// on main before the claim still recorded its pre-claim rows there, and
+// `git add -A` commits them. Those rows stay in the clone's history and
+// working copy, as the projected ones do.
+function auditShardsAsBase(
+  projectDir: string,
+  treeOid: string,
+  baseOid: string,
+  recordPrefix: string,
+  auditShard: string,
+): { tree: string; withheld: number } {
+  const auditRoot = `${recordPrefix}/audit`;
+  const paths = gitOutput(
+    projectDir,
+    ["diff", "--no-renames", "--name-only", baseOid, treeOid, "--", auditRoot],
+    "Cannot compare candidate audit shards",
+  )
+    .split(/\r?\n/)
+    .filter((path) => path && path !== `${auditRoot}/${auditShard}`);
+  if (paths.length === 0) return { tree: treeOid, withheld: 0 };
+  const rows = (oid: string, path: string) =>
+    gitPathExistsAt(projectDir, oid, path)
+      ? auditShardBlocks(gitTextAt(projectDir, oid, path))
+        .filter((block) => auditBlockField(block, "Event")).length
+      : 0;
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-tree-"));
+  try {
+    const env = { GIT_INDEX_FILE: join(scratch, "index") };
+    const read = git(projectDir, ["read-tree", treeOid], env);
+    if (!read.ok) fail(`git read-tree failed: ${read.stderr.trim()}`);
+    let withheld = 0;
+    for (const path of paths) {
+      withheld += Math.max(0, rows(treeOid, path) - rows(baseOid, path));
+      const [mode, , oid] = gitOutput(
+        projectDir,
+        ["ls-tree", baseOid, "--", path],
+        "Cannot read the base audit shard",
+      ).split(/\s+/);
+      const update = git(
+        projectDir,
+        oid
+          ? ["update-index", "--cacheinfo", `${mode},${oid},${path}`]
+          : ["update-index", "--force-remove", "--", path],
+        env,
+      );
+      if (!update.ok) fail(`git update-index failed: ${update.stderr.trim()}`);
+    }
+    const tree = git(projectDir, ["write-tree"], env);
+    if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
+    return { tree: tree.stdout.trim(), withheld };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 function candidateBoundary(
   projectDir: string,
   baseOid: string,
@@ -1857,15 +1913,6 @@ function publishUnit(args: string[], projectDir?: string): void {
       `Unit "${unit}" claim has no bound audit shard; release and re-claim it before publishing again.`,
     );
   }
-  const projected = transportableCandidateTree(
-    pd,
-    rawHeadTree,
-    recordPrefix,
-    auditShard,
-    unit,
-    current.generation,
-  );
-  const headTree = projected.tree;
   const integration = fetchIntegration(pd);
   const integrationIsAncestor = localGit(
     pd,
@@ -1877,6 +1924,23 @@ function publishUnit(args: string[], projectDir?: string): void {
   const publicationIntegrationRef = integrationIsAncestor
     ? integration.ref
     : current.payload.integration_ref;
+  const projected = transportableCandidateTree(
+    pd,
+    rawHeadTree,
+    recordPrefix,
+    auditShard,
+    unit,
+    current.generation,
+  );
+  const asBase = auditShardsAsBase(
+    pd,
+    projected.tree,
+    publicationBaseOid,
+    recordPrefix,
+    auditShard,
+  );
+  const headTree = asBase.tree;
+  const withheld = projected.withheld + asBase.withheld;
   if (
     current.payload.candidate_tree_oid === headTree &&
     current.payload.candidate_head_oid === headOid &&
@@ -1891,7 +1955,7 @@ function publishUnit(args: string[], projectDir?: string): void {
       unit,
       candidate_oid: current.oid,
       generation: current.generation,
-      local_rows_withheld: projected.withheld,
+      local_rows_withheld: withheld,
     }));
     return;
   }
@@ -1932,7 +1996,7 @@ function publishUnit(args: string[], projectDir?: string): void {
     generation: published.generation,
     // Said rather than done quietly: the candidate carries the Unit's evidence,
     // and this many of the clone's own local rows stayed behind.
-    local_rows_withheld: projected.withheld,
+    local_rows_withheld: withheld,
   }));
 }
 
@@ -3625,7 +3689,16 @@ function claimUnit(args: string[], projectDir?: string): void {
       : (current?.generation ?? 0) + 1;
   const nonce = randomUUID();
   const owner = claimOwnerLabel(pd, flags.team);
-  const auditShard = auditShardName(pd);
+  // Pin takes exactly one newly added team shard (candidateBoundary). A
+  // checkout whose own shard main already has (the lead's own checkout, or a
+  // copy of it) keeps the claim's evidence in a shard of the claim's own: the
+  // clone shard's shape, its token from the nonce.
+  const ownShard = auditShardName(pd);
+  const recordPrefix = relativeRecordDir(pd);
+  const auditShard = recordPrefix &&
+      gitPathExistsAt(pd, integration.oid, `${recordPrefix}/audit/${ownShard}`)
+    ? ownShard.replace(/-[a-z0-9]+\.md$/, `-${nonce.replaceAll("-", "").slice(0, 12)}.md`)
+    : ownShard;
   const rhythm =
     flags.rhythm === "unit-end" || flags.rhythm === "per-stage"
       ? flags.rhythm

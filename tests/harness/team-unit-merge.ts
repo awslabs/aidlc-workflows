@@ -503,6 +503,8 @@ export function prepareCandidate(
   unit: string,
   label: string,
   options: {
+    /** Works the Unit in this existing checkout instead of a fresh clone. */
+    checkout?: string;
     mergeHeld?: boolean;
     sourceText?: string;
     sharedText?: string;
@@ -527,7 +529,7 @@ export function prepareCandidate(
   generation: number;
   auditShard: string;
 } {
-  const checkout = clone(remote, label);
+  const checkout = options.checkout ?? clone(remote, label);
   if (options.crlf) git(checkout, ["config", "core.autocrlf", "false"]);
   const claim = runMergeTool(UNIT, ["claim", unit, "--team", label], checkout);
   expect(claim.status, claim.out).toBe(0);
