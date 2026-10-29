@@ -85,7 +85,7 @@ interface Finding {
   action: string;
 }
 
-function constructionState(rhythm: "per-stage" | "unit-end"): string {
+function constructionState(rhythm: "per-stage" | "unit-end", guardPolicy?: string): string {
   return `# AI-DLC State Tracking
 
 ## Project Information
@@ -101,7 +101,7 @@ function constructionState(rhythm: "per-stage" | "unit-end"): string {
 - **Plan Approval**: off (set by you)
 - **Unit Ownership**: team
 - **Unit Gate Rhythm**: ${rhythm}
-
+${guardPolicy === undefined ? "" : `- **Guard Policy**: ${guardPolicy}\n`}
 ## Scope Configuration
 - **Stages to Execute**: all
 - **Stages to Skip**: none
@@ -155,11 +155,11 @@ function seedRequirements(proj: string): void {
   );
 }
 
-function seedProject(rhythm: "per-stage" | "unit-end"): string {
+function seedProject(rhythm: "per-stage" | "unit-end", guardPolicy?: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
-  writeFileSync(seededStateFile(proj), constructionState(rhythm));
+  writeFileSync(seededStateFile(proj), constructionState(rhythm, guardPolicy));
   seedBoltDag(proj, ["alpha"]);
   seedRequirements(proj);
   return proj;
@@ -262,7 +262,12 @@ function logReview(proj: string, stage: string, reviewer: string, findings: Find
 // Walks alpha's stages to its gate, each reviewed with the findings given for
 // it, and returns the gate's directive. A NOT-READY review is reviewed again
 // and stays NOT-READY: the review's last pass, whose concerns go to the gate.
-function walkToGate(proj: string, reviews: Record<string, Finding[]>, stages = BLOCK): Directive {
+function walkToGate(
+  proj: string,
+  reviews: Record<string, Finding[]>,
+  stages = BLOCK,
+  beforeGate?: () => void,
+): Directive {
   for (const stage of stages) {
     const directive = runNext(proj);
     expect(directive, JSON.stringify(directive)).toMatchObject({ stage, unit: "alpha" });
@@ -279,6 +284,7 @@ function walkToGate(proj: string, reviews: Record<string, Finding[]>, stages = B
       if (findings.some((finding) => finding.severity !== "Minor")) logReview(proj, stage, directive.reviewer, findings, 2);
     }
   }
+  beforeGate?.();
   const gate = runNext(proj);
   expect(gate, JSON.stringify(gate)).toMatchObject({ unit: "alpha", gate: true });
   return gate;
@@ -403,6 +409,41 @@ describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its App
       expect.stringMatching(/\/nfr-design\/[^#]+#R-01 Fix requested$/),
       expect.stringMatching(/\/nfr-requirements\/[^#]+#R-01 Accepted risk$/),
     ]);
+  });
+
+  test("a Request Changes that rejects an earlier stage's finding records it rejected", () => {
+    const proj = seedProject("unit-end");
+    walkToGate(proj, { "nfr-design": [NFR_DESIGN_FINDINGS[0]] });
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    expect(shownOpen(brief(proj, "code-generation"))).toHaveLength(1);
+    const nfrDesign = recordedArtifact(proj, "nfr-design");
+    expect(gateReport(proj, "rejected", [
+      "--user-input", "Request Changes", "--reason", "Rename the handler",
+      "--reject-finding", `${nfrDesign}#R-01=Those documents are not this Unit's`,
+    ]).kind).toBe("print");
+    const rejected = readAuditShardEvents(proj).filter((row) =>
+      row.event === "GATE_REJECTED" && auditBlockField(row.block, "Unit") === "alpha"
+    );
+    expect(rejected).toHaveLength(1);
+    expect(JSON.parse(auditBlockField(rejected[0].block, REVIEW_FINDING_DISPOSITIONS_FIELD)!).dispositions).toEqual([
+      expect.objectContaining({ artifact: nfrDesign, id: "R-01", status: "Rejected: Those documents are not this Unit's" }),
+    ]);
+  });
+
+  test("an earlier stage's finding on work changed after its review shows and records as changed, not accepted", () => {
+    const proj = seedProject("unit-end", "relaxed (set by you)");
+    walkToGate(proj, { "nfr-design": [NFR_DESIGN_FINDINGS[0]] }, BLOCK, () => {
+      const document = join(stageDir(proj, "nfr-design"), artifactFilename(findStageBySlug("nfr-design")!.produces![1]));
+      writeFileSync(document, `${readFileSync(document, "utf-8")}\nThe handler is renamed.\n`);
+    });
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    const shown = brief(proj, "code-generation");
+    expect(shown).toContain("**Stages:** NFR Design, Code Generation");
+    expect(shown).toMatch(/^\| R-01 \| Critical \| [^|]+ \| Changed after review \|$/m);
+    expect(shown).not.toContain("Approve accepts the open review finding");
+    expect(shown).toContain("- **Approve** - continue with the work as changed after review.");
+    expect(gateReport(proj, "approved", ["--user-input", "Approve"]).kind).toBe("done");
+    expect(recorded(proj)).toEqual([expect.stringMatching(/\/nfr-design\/[^#]+#R-01 Changed after review$/)]);
   });
 
   test("with no open findings the end-of-Unit gate reads as before and records none", () => {
