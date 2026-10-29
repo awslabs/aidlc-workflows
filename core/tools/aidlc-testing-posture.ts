@@ -5635,9 +5635,10 @@ function publishCodeGenerationStart(
   if (receipt.status === "generation") {
     // An approval their change request carried was spent by the build their
     // rejection closed; this build starts on the revision. Not in `originals`:
-    // a start that fails leaves nothing to undo (only a later attempt reads the
-    // value, and the retry writes it again), and their sweep is for receipts
-    // of this attempt, not of the one the approval was given in.
+    // a start that fails leaves nothing to undo (the value is bound to this
+    // attempt, which no judgement made in this attempt can match, and the
+    // retry writes it again), and their sweep is for receipts of this
+    // attempt, not of the one the approval was given in.
     if (continuation?.carried && started !== null && started !== receipt.startedFingerprint) {
       writePlanApprovalReceipt(projectDir, { ...receipt, startedFingerprint: started });
     }
