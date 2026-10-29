@@ -774,19 +774,28 @@ function isEscaped(line: string, offset: number): boolean {
   return backslashes % 2 === 1;
 }
 
+/** The end of the first run of exactly `ticks` backticks at or after `from`, or -1. */
+function matchingTickRunEnd(
+  line: string,
+  from: number,
+  ticks: number,
+): number {
+  for (let cursor = from; cursor < line.length; cursor++) {
+    if (line[cursor] !== "`" || isEscaped(line, cursor)) continue;
+    let end = cursor + 1;
+    while (line[end] === "`") end++;
+    if (end - cursor === ticks) return end;
+    cursor = end - 1;
+  }
+  return -1;
+}
+
 function hasMatchingTickRun(
   line: string,
   from: number,
   ticks: number,
 ): boolean {
-  for (let cursor = from; cursor < line.length; cursor++) {
-    if (line[cursor] !== "`" || isEscaped(line, cursor)) continue;
-    let end = cursor + 1;
-    while (line[end] === "`") end++;
-    if (end - cursor === ticks) return true;
-    cursor = end - 1;
-  }
-  return false;
+  return matchingTickRunEnd(line, from, ticks) >= 0;
 }
 
 function stripHtmlCommentsFromLine(
@@ -1485,9 +1494,15 @@ export function usableTestingContract(contract: TestingPostureContract | null): 
 //      stage's review artifact. Reviews live in review records now and nothing
 //      appends to the plan, but a plan reviewed under the earlier protocol may
 //      still carry that section, and its approval must not depend on it.
-//   2. List task markers are reset: `[x]`, `[X]` and `[-]` become `[ ]`, outside
-//      fenced blocks and HTML comments. A tick is a claim about execution, not a
-//      change to the plan.
+//   2. Task boxes are reset: `[x]`, `[X]` and `[-]` become `[ ]` wherever a line
+//      puts them (a list item's start, after a step's label, in a heading or a
+//      table cell), outside fenced blocks, multi-line HTML comments and the
+//      line's inline code spans. A tick is a claim about execution, not a change
+//      to the plan, and the stage names no line shape for a step's box. A box is
+//      a token of its own: escaped, right after a word character, or a link's
+//      text (`[x](url)`), it is text. A box in a one-line HTML comment or in a
+//      code span that runs on to the next line is reset too; both sides of a
+//      comparison project alike, so only an unseen box flip there goes unbound.
 //   3. Line endings become LF, trailing whitespace per line is dropped OUTSIDE
 //      fences, runs of blank lines outside fences and comments collapse to one, and
 //      trailing blank lines are dropped. These are editor artifacts, not content.
@@ -1508,7 +1523,29 @@ export function usableTestingContract(contract: TestingPostureContract | null): 
 // This projection is for the PLAN only. The unit-test instructions are not a
 // review artifact and have no mandated post-approval mutation, so they bind
 // byte-exactly (line endings aside): see `projectInstructionsContent`.
-const PLAN_TASK_MARKER_RE = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[[xX-]\](?=[ \t]|$)/;
+const PLAN_TASK_BOX_RE = /(?<![\w\]])\[[xX-]\](?=[ \t]|$)/g;
+
+/** The line with every task box outside its inline code spans set back to `[ ]`. */
+function resetTaskBoxes(line: string): string {
+  const reset = (text: string) =>
+    text.replace(PLAN_TASK_BOX_RE, (box, at: number) => (isEscaped(text, at) ? box : "[ ]"));
+  let out = "";
+  let start = 0;
+  for (let cursor = 0; cursor < line.length; cursor++) {
+    if (line[cursor] !== "`" || isEscaped(line, cursor)) continue;
+    let end = cursor + 1;
+    while (line[end] === "`") end++;
+    const close = matchingTickRunEnd(line, end, end - cursor);
+    if (close < 0) {
+      cursor = end - 1;
+      continue;
+    }
+    out += reset(line.slice(start, cursor)) + line.slice(cursor, close);
+    start = close;
+    cursor = close - 1;
+  }
+  return out + reset(line.slice(start));
+}
 
 export function projectPlanApprovalContent(text: string): string {
   const retained = contentBeforeTerminalReviewAppendix(text.replace(/^\uFEFF/, ""));
@@ -1549,7 +1586,7 @@ export function projectPlanApprovalContent(text: string): string {
     const blank = line.length === 0;
     if (blank && previousBlank) continue;
     previousBlank = blank;
-    projected.push(line.replace(PLAN_TASK_MARKER_RE, "$1[ ]"));
+    projected.push(resetTaskBoxes(line));
   }
   while (projected.length > 0 && projected[projected.length - 1] === "") {
     projected.pop();
@@ -2247,11 +2284,11 @@ function stepsWithWrittenFiles(
 }
 
 /**
- * The plan with every task marker the approval projection resets (`[x]`, `[X]`,
- * `[-]` on a step outside fences and comments, before a terminal review
- * appendix) set back to `[ ]`, and every other byte as it was. Returns the plan
- * unchanged unless its approval projection is provably the same afterwards, so
- * clearing ticks can never change what was approved.
+ * The plan with every task box the approval projection resets (`[x]`, `[X]`,
+ * `[-]` wherever a line puts them, outside fences, comments and code spans,
+ * before a terminal review appendix) set back to `[ ]`, and every other byte as
+ * it was. Returns the plan unchanged unless its approval projection is provably
+ * the same afterwards, so clearing ticks can never change what was approved.
  */
 export function resetPlanTaskMarkers(plan: string): string {
   const bom = plan.startsWith("\uFEFF") ? "\uFEFF" : "";
@@ -2261,9 +2298,8 @@ export function resetPlanTaskMarkers(plan: string): string {
   // Lines at even indices, their own line endings between them.
   const parts = body.split(/(\r\n|\r|\n)/);
   visible.forEach((line, index) => {
-    if (PLAN_TASK_MARKER_RE.test(line) && PLAN_TASK_MARKER_RE.test(parts[index * 2] ?? "")) {
-      parts[index * 2] = parts[index * 2].replace(PLAN_TASK_MARKER_RE, "$1[ ]");
-    }
+    const raw = parts[index * 2];
+    if (raw !== undefined && resetTaskBoxes(line) !== line) parts[index * 2] = resetTaskBoxes(raw);
   });
   const reset = `${bom}${parts.join("")}${text.slice(body.length)}`;
   return projectPlanApprovalContent(reset) === projectPlanApprovalContent(plan) ? reset : plan;

@@ -872,14 +872,16 @@ describe("clearing a plan's ticks", () => {
     expect(readFileSync(planPath(proj), "utf-8")).toContain("- [x] Step 1:");
   });
 
-  test("only task markers on steps change; every other byte, and the projection, stay", () => {
+  test("only task boxes change, wherever a line puts them; every other byte, and the projection, stay", () => {
     const plan = "\uFEFF# Plan\r\n\r\n- [x] Step 1: keep `src/a.ts`   \r\n  - [X] sub-step\r\n1. [-] Step 2: in progress\r\n" +
-      "Prose about - [x] mid-line stays.\r\n\r\n```md\r\n- [x] inside a fence\r\n```\r\n<!--\r\n- [x] inside a comment\r\n-->\r\n" +
+      "Step 3. [x] a box after the step's label, and one mid-line - [x] too, but not `[x] in code` or items[x].\r\n" +
+      "\r\n```md\r\n- [x] inside a fence\r\n```\r\n<!--\r\n- [x] inside a comment\r\n-->\r\n" +
       "\r\n## Review\r\n\r\n- [x] Step 9: from an old review\r\n";
     const reset = resetPlanTaskMarkers(plan);
     expect(reset).toBe(
       "\uFEFF# Plan\r\n\r\n- [ ] Step 1: keep `src/a.ts`   \r\n  - [ ] sub-step\r\n1. [ ] Step 2: in progress\r\n" +
-        "Prose about - [x] mid-line stays.\r\n\r\n```md\r\n- [x] inside a fence\r\n```\r\n<!--\r\n- [x] inside a comment\r\n-->\r\n" +
+        "Step 3. [ ] a box after the step's label, and one mid-line - [ ] too, but not `[x] in code` or items[x].\r\n" +
+        "\r\n```md\r\n- [x] inside a fence\r\n```\r\n<!--\r\n- [x] inside a comment\r\n-->\r\n" +
         "\r\n## Review\r\n\r\n- [x] Step 9: from an old review\r\n",
     );
     expect(projectPlanApprovalContent(reset)).toBe(projectPlanApprovalContent(plan));
