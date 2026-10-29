@@ -643,6 +643,7 @@ import {
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
+import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import { withAuditLock } from "./aidlc-locks.ts";
 import {
   askedQuestionFields,
@@ -11556,11 +11557,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       : null;
 
   if (unitScope && (flags.stage || flags.phase)) {
-    emit(errorDirective(
-      `This checkout is scoped to Unit "${unitScope.unit}"; explicit stage/phase jumps are refused in a scoped Unit checkout. ` +
-        `Run \`${entrySkillInvocation()}\` here to carry on with Unit "${unitScope.unit}", or make the jump from the project's main checkout.`,
-    ));
-    return;
+    const move = claimedCheckoutMove(pd, stateContent!, unitScope.unit, flags);
+    if (move !== "route") {
+      emit(move);
+      return;
+    }
+    flags.stage = undefined;
+    flags.jumpUnit = undefined;
+    flags.change = undefined;
   }
 
   if (
@@ -16145,6 +16149,74 @@ function unitOutsideWork(
   if (!walk?.block.some((stage) => stage.slug === targetSlug)) return null;
   const units = walk.context.units;
   return units.includes(unit) ? null : `${unit} is not one of this work's units (${units.join(", ")}).`;
+}
+
+// A move to a stage or phase in a checkout that claimed a Unit (`next --stage`,
+// `--phase`, the recovery question's reopen). The checkout reopens its own
+// Unit's stages itself (claimedCheckoutReopens): back to one the Unit has
+// reached, for that Unit only, with the steps after it, as a solo walk reopens
+// one Unit's step (unitMajorReopen), so the redone work is the person's to
+// approve again. "route" when the walk is on that stage and the Unit has done
+// nothing there yet. Any other move waits until the Unit has landed.
+function claimedCheckoutMove(
+  projectDir: string,
+  stateContent: string,
+  claimedUnit: string,
+  flags: ParsedFlags,
+): Directive | "route" {
+  if (flags.jumpUnit !== undefined) {
+    try {
+      validateLiveUnitScope(projectDir, flags.jumpUnit);
+    } catch (e) {
+      return errorDirective(errorMessage(e));
+    }
+  }
+  const scope = getField(stateContent, "Scope")?.trim() || "feature";
+  let target = "";
+  if (!flags.phase && flags.stage) {
+    const resolved = resolveJumpTarget(scope, projectDir, { stage: flags.stage });
+    if ("kind" in resolved) return resolved;
+    target = resolved.targetSlug;
+  }
+  const name = findStageBySlug(target)?.name ?? target;
+  const unitStages = unitMajorConstructionStageSlugs(scope, stateContent, true);
+  if (target && flags.everyUnit && claimedCheckoutReopens(claimedUnit, unitStages, target)) {
+    return errorDirective(
+      `This checkout holds the claim on Unit "${claimedUnit}", so a reopen here is ${claimedUnit}'s alone: run ` +
+        `\`${entrySkillInvocation()} --stage ${target}\` to reopen ${name} for ${claimedUnit}.`,
+    );
+  }
+  if (target && claimedCheckoutReopens(claimedUnit, unitStages, target, flags.jumpUnit)) {
+    const at = unitStages.indexOf(target);
+    // The walk keeps Current Stage on the step it routes the Unit to.
+    const current = unitStages.indexOf(getField(stateContent, "Current Stage")?.trim() ?? "");
+    if (current < at) {
+      return turnEndingPrint(
+        `Nothing to reopen: tell the person in one line, "unit ${claimedUnit} has not reached ${name} yet, so there ` +
+          'is nothing to reopen." Run nothing else.',
+      );
+    }
+    if (current === at) {
+      const gate = teamUnitGateStatus(projectDir, stateContent, target, claimedUnit);
+      const done = unitLedgerFor(projectDir, target).receipts.has(claimedUnit) ||
+        (gate?.resolved === true && gate.gateStage === target && gate.status !== "pending");
+      if (!done) return "route";
+    }
+    const jump = [
+      "reopen", "--target", target, "--stages", unitStages.slice(at).join(","), "--units", claimedUnit,
+      "--scope", scope, ...(flags.change ? ["--via", "change"] : []),
+    ];
+    return jumpStepPrint(
+      `Run \`${jumpCommandText(jump)}\` to reopen "${target}" and the steps after it for unit "${claimedUnit}", ` +
+        `then tell the person in one line: "Reopened ${name} for unit ${claimedUnit}." and re-run \`next\` to continue.`,
+      jump,
+    );
+  }
+  const what = flags.phase ? `the ${canonicalisePhase(flags.phase) ?? flags.phase} phase` : name;
+  return errorDirective(
+    `This checkout holds the claim on Unit "${claimedUnit}", so it reopens only ${claimedUnit}'s own stages, and ` +
+      `${what} is not one of them. ${claimedCheckoutMovesElsewhere(claimedUnit, what)}`,
+  );
 }
 
 // A jump back to a per-unit stage a Unit already finished, in a solo unit-major

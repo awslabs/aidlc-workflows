@@ -2,6 +2,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
+import { claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import { KIRO_SESSION_DIR_RE, kiroChatRecordPaths } from "./aidlc-kiro-chat-record.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -32821,7 +32822,19 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
+    // A checkout that claimed a Unit reopens only that Unit's own stages
+    // (claimedCheckoutReopens): a reset of any other is not offered there.
+    const claim = input.projectDir === undefined
+      ? null
+      : applicableTeamUnitScopeStamp(input.projectDir, input.stateContent);
+    const resetsHere = claim === null || claimedCheckoutReopens(
+      claim.unit,
+      unitMajorConstructionStageSlugs(getField(input.stateContent, "Scope")?.trim() ?? "", input.stateContent, true),
+      input.stage,
+      input.unit,
+    );
     remedies.push(...lifecycleResetRemedies(input, state)
+      .filter((remedy) => resetsHere || remedy.operation?.kind !== "restart-stage")
       .filter((remedy) => !remedies.some((offered) => offered.op === remedy.op)));
   }
 
