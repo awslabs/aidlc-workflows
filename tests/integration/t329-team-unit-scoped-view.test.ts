@@ -2,8 +2,7 @@
 //
 // A claimed (scoped) checkout reads another Unit's receipts the way an
 // unscoped checkout reads them. Before, it refused every foreign Unit's row,
-// so from inside a claim every other Unit looked unfinished, a dependent Unit
-// could not be routed, and the fold wrote that view into main's table.
+// so from inside a claim every other Unit looked unfinished.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";

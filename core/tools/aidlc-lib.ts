@@ -32363,8 +32363,7 @@ export function eventMatchesClaimAttempt(
   const eventUnit = auditBlockField(block, "Unit");
   // Another Unit's receipt, read in a scoped checkout: it is not this claim's
   // attempt, so it is read as an unscoped checkout reads it. A scoped
-  // checkout that refused it would show every other Unit as unfinished, and
-  // fold that view into main's table when it lands its own Unit.
+  // checkout that refused it would show every other Unit as unfinished.
   const other = unit !== undefined && unit !== stamp.unit
     ? unit
     : unit === undefined && eventUnit !== null && eventUnit !== stamp.unit
