@@ -664,7 +664,7 @@ describe("t327 team construction dispatcher", () => {
     );
   });
 
-  test("an unscoped checkout with every Unit claimed says nothing runs there, names each claim, and keeps a park", () => {
+  test("an unscoped checkout with every Unit claimed says nothing runs there and names each claim", () => {
     const fixture = boardFixture();
     rmSync(join(fixture.project, "aidlc", ".aidlc-unit-merges"), {
       recursive: true,
@@ -682,13 +682,6 @@ describe("t327 team construction dispatcher", () => {
       "participant\n",
     );
     const statePath = seededStateFile(fixture.project);
-    writeFileSync(
-      statePath,
-      readFileSync(statePath, "utf-8").replace(
-        "- **Review Override**: none",
-        "- **Review Override**: none\n- **Parked**: 2026-08-20T12:00:00Z\n- **Parked At Stage**: functional-design",
-      ),
-    );
     const stateBefore = readFileSync(statePath, "utf-8");
 
     for (const nextArgs of [[], ["--resume"]]) {
@@ -703,7 +696,6 @@ describe("t327 team construction dispatcher", () => {
       expect(board).toContain(
         "`claimed` is claimed by claimed-team (attempt 2): in a checkout not on this machine, or a separate clone.",
       );
-      expect(board).toContain("| claimed (in progress: claimed by claimed-team, attempt 2) |");
     }
     expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
   });

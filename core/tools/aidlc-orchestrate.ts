@@ -5078,26 +5078,6 @@ function projectTypeIsWholeRequest(flags: ParsedFlags): boolean {
   );
 }
 
-// An unscoped checkout of a team-owned workflow while Units are claimed or
-// await their merge: the dispatcher board answers there, and no stage runs, so
-// a park in its state stays as it is. Unparking would only rewrite the state
-// and audit of a checkout where nothing runs (and leave them uncommitted); the
-// park is the person's, for when the walk comes back to this checkout.
-function teamFanoutHoldsCheckout(pd: string, stateContent: string): boolean {
-  if (!isTeamUnitOwnership(stateContent) || !existsSync(join(pd, ".git"))) return false;
-  try {
-    return unitMergeTransactions(pd).some(mergeTransactionOpen) ||
-      cachedUnitClaimOverview(pd, { writeCache: false }).claimed.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-// A merge transaction the board lists as awaiting its merge.
-function mergeTransactionOpen(transaction: { status: string }): boolean {
-  return transaction.status !== "complete";
-}
-
 function noticeDirective(message: string): NoticeDirective {
   return { kind: "notice", message };
 }
@@ -5331,8 +5311,9 @@ function localClaimCheckouts(
   });
   if (listed.exitCode !== 0) return found;
   for (const block of new TextDecoder().decode(listed.stdout).split(/\r?\n\r?\n/)) {
-    const path = /^worktree (.+)$/m.exec(block)?.[1];
-    if (!path) continue;
+    const listedPath = /^worktree (.+)$/m.exec(block)?.[1];
+    if (!listedPath) continue;
+    const path = resolve(listedPath);
     const stamp = readUnitScopeStamp(path);
     const claim = stamp && claims.find((entry) =>
       entry.status === "claimed" && entry.unit === stamp.unit && entry.nonce === stamp.nonce
@@ -5344,28 +5325,6 @@ function localClaimCheckouts(
     });
   }
   return found;
-}
-
-// Main's Unit Progress shows merged work only, so a Unit claimed elsewhere
-// reads as untouched there. Its row says it is in progress in its claim
-// (owner, attempt); the state file itself is not changed.
-function markClaimedUnitRows(
-  grid: string,
-  claims: TeamConstructionBoard["claims"],
-): string {
-  const claimed = new Map(
-    claims.filter((claim) => claim.status === "claimed").map((claim) => [claim.unit, claim]),
-  );
-  if (claimed.size === 0) return grid;
-  return grid.split("\n").map((line) => {
-    const cells = line.split("|");
-    if (cells.length < 4 || cells[0] !== "") return line;
-    const claim = claimed.get(cells[1].trim());
-    if (!claim) return line;
-    cells[1] = ` ${claim.unit} (in progress: claimed by ${claim.owner}, attempt ${claim.generation}) `;
-    cells[2] = ` ${claim.owner} `;
-    return cells.join("|");
-  }).join("\n");
 }
 
 function assembleTeamConstructionBoard(
@@ -5386,7 +5345,7 @@ function assembleTeamConstructionBoard(
       ...(checkouts.has(claim.unit) ? { checkout: checkouts.get(claim.unit)! } : {}),
     }));
   const awaitingMerge = transactions
-    .filter(mergeTransactionOpen)
+    .filter((transaction) => transaction.status !== "complete")
     .sort((a, b) => compareBoardKeys(a.unit, b.unit))
     .map((transaction) => ({
       unit: transaction.unit,
@@ -5404,7 +5363,7 @@ function assembleTeamConstructionBoard(
     }))
     .sort((a, b) => compareBoardKeys(a.unit, b.unit));
   return {
-    grid: markClaimedUnitRows(grid, claims),
+    grid,
     claims,
     awaitingMerge,
     claimable,
@@ -11295,8 +11254,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !flags.phase &&
     !parkedWorkChange &&
     !flags.newIntent &&
-    (getField(stateContent, "Parked") ?? "").trim().length > 0 &&
-    !teamFanoutHoldsCheckout(pd, stateContent)
+    (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
     const currentSlug = (getField(stateContent, "Current Stage") ?? "").trim();
@@ -11337,8 +11295,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     resuming &&
     !flags.stage &&
     !flags.phase &&
-    (getField(stateContent, "Parked") ?? "").trim().length > 0 &&
-    !teamFanoutHoldsCheckout(pd, stateContent)
+    (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     emit(printDirective(
       `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
