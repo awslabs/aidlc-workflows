@@ -2152,6 +2152,10 @@ function pinUnit(args: string[], projectDir?: string): void {
   if (!isTeamUnitOwnership(state)) fail("Unit pinning requires Unit Ownership: team.");
   const identity = activeIdentity(pd);
   const inFlight = readUnitMergeTransaction(pd, unit);
+  const integration = fetchIntegration(pd);
+  const ref = claimRef(identity.intentId8, unit);
+  const claim = currentClaim(pd, integration.remote, ref);
+  let superseded: UnitMergeTransaction | null = null;
   if (
     inFlight &&
     inFlight.space === identity.space &&
@@ -2160,13 +2164,13 @@ function pinUnit(args: string[], projectDir?: string): void {
       inFlight.status,
     )
   ) {
-    fail(
-      `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
-    );
+    if (!approvalOutlivedByRepublish(pd, inFlight, claim)) {
+      fail(
+        `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
+      );
+    }
+    superseded = inFlight;
   }
-  const integration = fetchIntegration(pd);
-  const ref = claimRef(identity.intentId8, unit);
-  const claim = currentClaim(pd, integration.remote, ref);
   if (
     claim?.status !== "claimed" ||
     claim.payload.intent_uuid !== identity.intentUuid ||
@@ -2215,7 +2219,38 @@ function pinUnit(args: string[], projectDir?: string): void {
     evidence,
     gate_required: true,
     merge_dispatch_required: true,
+    ...(superseded
+      ? { superseded: { pinned_oid: superseded.pinned_oid, status: superseded.status } }
+      : {}),
   }));
+}
+
+// An approved merge that git never landed, whose Unit was republished since
+// (a refused landing, then a reopened stage): the approval was for a candidate
+// the claim no longer holds, and gate and land both send the person back to
+// pin. Pin replaces it. The approval stays bound to its own Pinned OID and
+// Attempt Generation, so it never counts for the new candidate.
+function approvalOutlivedByRepublish(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+  claim: UnitClaimView | null,
+): boolean {
+  if (
+    transaction.status !== "approved" ||
+    transaction.git_commit_oid ||
+    transaction.checkpoint_commit_oid ||
+    claim?.status !== "claimed" ||
+    claim.payload.intent_uuid !== transaction.intent_uuid ||
+    (
+      claim.oid === transaction.pinned_oid &&
+      claim.generation === transaction.generation &&
+      claim.nonce === transaction.nonce
+    )
+  ) {
+    return false;
+  }
+  if (git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) return false;
+  return firstParentMergeOf(projectDir, transaction) === null;
 }
 
 function gateUnitMerge(args: string[], projectDir?: string): void {
@@ -2657,11 +2692,12 @@ function validateLandedMerge(
   }
 }
 
-function recoveredMergeCommit(
+// The merge commit of the pinned candidate on HEAD's first-parent line since
+// pin, or null when there is none. Undefined when the history cannot be read.
+function firstParentMergeOf(
   projectDir: string,
   transaction: UnitMergeTransaction,
-  target: string,
-): string | null {
+): string | null | undefined {
   const history = git(
     projectDir,
     [
@@ -2671,15 +2707,24 @@ function recoveredMergeCommit(
       `${transaction.main_before_oid}..HEAD`,
     ],
   );
-  if (!history.ok) return null;
+  if (!history.ok) return undefined;
   for (const line of history.stdout.split(/\r?\n/).filter(Boolean)) {
     const [commitOid, parentText = ""] = line.split("\u0000");
     const parents = parentText.split(/\s+/).filter(Boolean);
-    if (parents[1] !== transaction.pinned_oid) continue;
-    validateLandedMerge(projectDir, transaction, commitOid, target);
-    return commitOid;
+    if (parents[1] === transaction.pinned_oid) return commitOid;
   }
   return null;
+}
+
+function recoveredMergeCommit(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+  target: string,
+): string | null {
+  const commitOid = firstParentMergeOf(projectDir, transaction);
+  if (!commitOid) return null;
+  validateLandedMerge(projectDir, transaction, commitOid, target);
+  return commitOid;
 }
 
 function metadataCheckpointAtHead(

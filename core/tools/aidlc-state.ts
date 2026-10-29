@@ -2010,7 +2010,9 @@ function handleRefreshUnitProgress(
         "Refusing Unit Progress refresh: payload does not match authoritative DAG/artifact/receipt/gate evidence.",
       );
     }
-    const section = foldUnit
+    // A fold keeps the other Units' rows as main has them. A main that never
+    // walked Construction has no table to keep: it gets the whole section.
+    const section = foldUnit && unitProgressSectionRange(content)
       ? foldUnitProgressSection(
         currentUnitProgressSection(content),
         authoritative.section,

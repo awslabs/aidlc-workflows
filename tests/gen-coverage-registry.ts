@@ -109,6 +109,7 @@ const GUARD_OPERATION_PATH = join(TOOLS_DIR, "aidlc-guard-operation.ts");
 const REPLY_READER_PATH = join(TOOLS_DIR, "aidlc-reply-reader.ts");
 const MARKDOWN_PATH = join(TOOLS_DIR, "aidlc-markdown.ts");
 const LOCKS_PATH = join(TOOLS_DIR, "aidlc-locks.ts");
+const GIT_PATH = join(TOOLS_DIR, "aidlc-git.ts");
 const REVIEW_RECORDS_PATH = join(TOOLS_DIR, "aidlc-review-records.ts");
 const RUNTIME_PATHS_PATH = join(TOOLS_DIR, "aidlc-runtime-paths.ts");
 const GRAPH_PATH = join(TOOLS_DIR, "aidlc-graph.ts");
@@ -598,6 +599,7 @@ export function enumerateExportedFunctions(): Unit[] {
     [REPLY_READER_PATH, "dist/claude/.claude/tools/aidlc-reply-reader.ts"],
     [MARKDOWN_PATH, "dist/claude/.claude/tools/aidlc-markdown.ts"],
     [LOCKS_PATH, "dist/claude/.claude/tools/aidlc-locks.ts"],
+    [GIT_PATH, "dist/claude/.claude/tools/aidlc-git.ts"],
     [REVIEW_RECORDS_PATH, "dist/claude/.claude/tools/aidlc-review-records.ts"],
     [GRAPH_PATH, "dist/claude/.claude/tools/aidlc-graph.ts"],
     [

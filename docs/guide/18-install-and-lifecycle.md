@@ -1087,7 +1087,10 @@ except that on Kiro CLI a model or effort change applies from your next Kiro CLI
 session, since a running one keeps what it started with;
 a default scope applies to new work only, and a saved model profile changes
 nothing until `--from` loads it. The runtime, providers, and trust answers
-print no workflow line.
+print no workflow line, and neither does a command that records or clears a
+bypass no other settings file records while its variable is set in the
+environment the command runs in, whatever else it changes: open work reads the
+environment of the editor or CLI it runs in, which the command cannot see.
 
 A refresh that brings in release files (a plain `aidlc config`, `--from`,
 `--download`, `config project`, or the update a pinned project needs first)
@@ -1679,7 +1682,10 @@ a valid cached update notice. Interactive human `aidlc doctor`, and
 absent metadata within 750 ms. Other non-TTY, `--json`, and `--quiet` doctor
 runs are cache-only unless `--check-updates` is explicit. A doctor update row
 read from a check older than 24 hours names the version as the latest known
-one and says how long ago it was checked.
+one and says how long ago it was checked. On a machine that has never checked,
+a refresh that fails inside that budget leaves the row passing as not checked
+yet, naming `aidlc update --check`; only an explicit `--check-updates` reports
+the failed check.
 `doctor --check-updates` and `update --check` use a five-minute metadata
 backstop. Preview discovery and metadata downloads share the same deadline;
 looking up the preview release does not restart the timeout.

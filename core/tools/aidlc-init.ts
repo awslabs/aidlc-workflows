@@ -12129,9 +12129,15 @@ function openWorkflowLine(
   const now = settingLeaves(after);
   const changed = [...new Set([...was.keys(), ...now.keys()])]
     .filter((id) => !id.startsWith("models.profiles.") && was.get(id)?.value !== now.get(id)?.value);
-  const bypasses = (file: AidlcSettingsFile | null | undefined): string =>
-    canonical([...(file?.flags?.bypasses ?? [])].sort());
-  const switched = bypasses(before) !== bypasses(after);
+  const wasOff = new Set<string>(before?.flags?.bypasses ?? []);
+  const nowOff = new Set<string>(after?.flags?.bypasses ?? []);
+  const switchedNames = [...new Set([...wasOff, ...nowOff])].filter((name) => wasOff.has(name) !== nowOff.has(name));
+  // A switch whose variable is in this command's environment is decided there
+  // (resolveProjectFlag), but open work reads the environment of the editor or
+  // CLI it runs in, which this command cannot see, so the line says nothing
+  // about open work when such a switch changed.
+  if (switchedNames.some((name) => Object.hasOwn(process.env, name))) return null;
+  const switched = switchedNames.length > 0;
   const rightAway = [
     ...(switched ? ["the switch"] : []),
     ...changed.flatMap((id) => RIGHT_AWAY_FLAGS.get(id) ?? []),

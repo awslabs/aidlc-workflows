@@ -14562,6 +14562,12 @@ function summaryBoundarySpelling(line: string): boolean {
 }
 
 export function summaryConfirmationContentHash(content: string): string {
+  // The one shape a later round of questions takes in a file whose summary was
+  // already confirmed (a revision, or a reopened step): the refusals name it, so
+  // a round is never written as a section of its own or a second summary.
+  const laterRound =
+    ' A later round of questions (a revision, or a reopened step) goes in "## Q<n>" sections after the summary, numbered on from the last question; ' +
+    `then rewrite the bullets of the one "${SUMMARY_CONFIRMATION_CHECKPOINT}" section to cover every answer, blank its "[Answer]:" line, and confirm it again.`;
   const normalized = content.replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
 	const blocks = markdownBlocks(normalized);
@@ -14595,7 +14601,8 @@ export function summaryConfirmationContentHash(content: string): string {
     if (title === SUMMARY_CONFIRMATION_CHECKPOINT && atxH2) {
       if (sawSummary) {
         throw new Error(
-          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}"`,
+          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}".` +
+            laterRound,
         );
       }
       sawSummary = true;
@@ -14655,7 +14662,7 @@ export function summaryConfirmationContentHash(content: string): string {
           : `H${heading.level}`;
       throw new Error(
         `unsupported ${headingKind} heading "${title}" ` +
-          boundary,
+          boundary + "." + laterRound,
       );
     }
   }
@@ -37018,7 +37025,7 @@ export function gateStagesFromBlock(block: string): string[] {
   return stage ? [stage] : [];
 }
 
-function gateEventMatchesUnit(
+export function gateEventMatchesUnit(
   block: string,
   slug: string,
   unit: string | undefined,
