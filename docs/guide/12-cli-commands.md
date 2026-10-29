@@ -2000,7 +2000,8 @@ a file instead of the command line: the agent writes it to
 .aidlc-engine/answer-text/answer.txt`. The same file named from the project folder, or by
 its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read. `log decision` takes the question the
-same way with `--decision-file`, and `learnings surface` a correction with
+same way with `--decision-file`, and its choices, one a line, with `--options-file`
+(a choice holding a comma can also go as its own `--option '<choice>'`), and `learnings surface` a correction with
 `--correction-file`. A file the agent wrote for `next --request-file` works for an
 answer too: `log answer --request-file aidlc/.aidlc-request-text/request.txt` reads
 it as `next` does and removes it once the answer is taken, so a refused answer
