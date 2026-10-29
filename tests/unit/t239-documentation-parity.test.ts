@@ -805,13 +805,15 @@ describe("documentation parity derives current behavior from authored implementa
     expect(read("bun.lock")).toContain(`"name": "${pkg.name}"`);
   });
 
-  test("README tool inventory is derived from authored aidlc tools", () => {
-    const toolCount = readdirSync(at("core", "tools"))
-      .filter((name) => /^aidlc-.*\.ts$/.test(name))
-      .length;
-    expect(read("README.md")).toContain(
-      `${toolCount} aidlc-*.ts engine and authoring tools`,
-    );
+  // A count on this line is one every PR that adds a tool has to change, and
+  // two such PRs merge clean against main and go red only in the queue.
+  test("README tool inventory names the authored aidlc tools without a count", () => {
+    const line = read("README.md")
+      .split(/\r?\n/)
+      .find((text) => text.startsWith("- `core/tools/` - "));
+    expect(line).toBeDefined();
+    expect(line).toContain("aidlc-*.ts engine and authoring tools");
+    expect(line?.slice(0, line.indexOf("aidlc-*.ts"))).not.toMatch(/\d/);
   });
 
   test("documented model-pinning tier projections match TIER_PROJECTIONS", () => {

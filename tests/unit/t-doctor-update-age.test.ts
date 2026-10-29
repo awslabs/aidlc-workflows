@@ -5,7 +5,9 @@
 // names the version it holds as the latest known one, with how long ago it was
 // checked, never as today's latest. `--export`, a report someone asked for,
 // refreshes the check off a terminal too, and when it cannot, the row says so
-// with the same date.
+// with the same date. On a machine that has never checked, a refresh nobody
+// asked for that fails leaves the row passing as not checked yet; only a
+// requested `--check-updates` reports the failure.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -78,6 +80,20 @@ function cacheCheckedAgo(ms: number, latestVersion: string, channel: "stable" | 
   requests = [];
 }
 
+function neverChecked(): void {
+  cleanupTestProject(machine || undefined);
+  machine = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-update-age-"));
+  mkdirSync(join(machine, "bin"));
+  Object.assign(process.env, {
+    AIDLC_INSTALL_ROOT: machine,
+    AIDLC_BIN_DIR: join(machine, "bin"),
+    AIDLC_RELEASE_BASE_URL: `http://127.0.0.1:${server.port}`,
+    AIDLC_OFFLINE: "0",
+    NO_PROXY: "127.0.0.1",
+  });
+  requests = [];
+}
+
 describe("doctor's update row from an old check", () => {
   test("behind: the version is the latest known one, with its check date, and the fix is still update", () => {
     cacheCheckedAgo(12 * DAY + HOUR, NEWER);
@@ -147,5 +163,35 @@ describe("doctor off a terminal", () => {
     expect(state.message).toBe(
       `could not check for a newer release; binary ${AIDLC_VERSION}, latest known ${NEWER}, checked 2 hours ago`,
     );
+  });
+});
+
+describe("doctor on a machine that has never checked", () => {
+  test("at a terminal, a refresh that fails leaves the row passing as not checked yet", async () => {
+    neverChecked();
+    const state = await doctorUpdateState({}, true);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(state.state).toBe("absent");
+    const check = updateCheck(state);
+    expect(check.pass).toBe(true);
+    expect(check.severity).toBeUndefined();
+    expect(check.label).toMatch(/^Update: not checked yet \(run `.*update --check` to check\)$/);
+  });
+
+  test("--export off a terminal: the same, the report is not a warning about a check it never had", async () => {
+    neverChecked();
+    const state = await doctorUpdateState({ export: "true" }, false);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(state.state).toBe("absent");
+    expect(updateCheck(state).pass).toBe(true);
+  });
+
+  test("a requested --check-updates that fails still says the check could not be made", async () => {
+    neverChecked();
+    const state = await doctorUpdateState({ "check-updates": "true" }, true);
+    expect(state.state).toBe("unavailable");
+    const check = updateCheck(state);
+    expect(check.pass).toBe(false);
+    expect(check.label).toBe("Update: update refresh unavailable; release metadata could not be checked");
   });
 });

@@ -407,7 +407,7 @@ function resolveMemoryPath(
   if (!stage) {
     fail(
       `stage "${slug}" is not in the stage graph and runtime-graph.json records no ` +
-        `memory_path for it — cannot resolve the stage diary`,
+        `memory_path for it - cannot resolve the stage diary`,
       1
     );
   }
@@ -1341,7 +1341,7 @@ function stripProjectDir(args: string[]): { projectDirArg: string | undefined; r
 function printHelp(): void {
   process.stdout.write(
     [
-      "aidlc-learnings.ts — §13 learning-gate tool (tool-as-actor).",
+      "aidlc-learnings.ts - §13 learning-gate tool (tool-as-actor).",
       "",
       "Subcommands:",
       "  surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]",

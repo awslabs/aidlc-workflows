@@ -208,6 +208,10 @@ then use the ignored local `dist/copilot/` output.
   `runTerminalCommand`, `createFile`, `editFiles`, and `readFile`,
   but the IDE side has not yet been verified live — treat IDE enforcement
   as best-effort until it has.
+  The adapter also reads the Copilot runtime's own tool names and shapes,
+  which a host that does not rename them may send: `powershell` and `pwsh`
+  as the shell, `grep` with its `paths`, and an `apply_patch` whose patch
+  arrives as plain text or in `toolArgs`.
 - **In VS Code, AI-DLC's routine commands run without an Allow prompt.** VS
   Code agent mode normally asks "Run command? Allow / Skip" before every
   terminal command, so each workflow step would wait for a click. The adapter

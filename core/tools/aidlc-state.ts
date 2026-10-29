@@ -2010,7 +2010,9 @@ function handleRefreshUnitProgress(
         "Refusing Unit Progress refresh: payload does not match authoritative DAG/artifact/receipt/gate evidence.",
       );
     }
-    const section = foldUnit
+    // A fold keeps the other Units' rows as main has them. A main that never
+    // walked Construction has no table to keep: it gets the whole section.
+    const section = foldUnit && unitProgressSectionRange(content)
       ? foldUnitProgressSection(
         currentUnitProgressSection(content),
         authoritative.section,
@@ -2801,7 +2803,7 @@ function handleUnit(args: string[]): void {
       throw new UnitWaveRouteRefusalError(
         `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
           "(the orchestration engine currently routes it as a batch). " +
-          "A wave has no single active unit — every entry settles through " +
+          "A wave has no single active unit - every entry settles through " +
           `\`aidlc-state.ts unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
           `\`${action}\` would append a serial receipt and ` +
           "drop the deterministic batch path for every remaining unit of the stage. " +
@@ -6140,7 +6142,7 @@ function handleAdvance(
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to advance — fix the state file first.`
+      `State file has no Scope field. Refusing to advance - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -6387,7 +6389,7 @@ function handleFinalize(args: string[]): void {
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to finalize — fix the state file first.`
+      `State file has no Scope field. Refusing to finalize - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -6523,7 +6525,7 @@ function handleCompleteWorkflow(
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to complete workflow — fix the state file first.`
+      `State file has no Scope field. Refusing to complete workflow - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -8103,7 +8105,7 @@ function handleApprove(args: string[]): void {
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`,
+      `State file has no Scope field. Refusing to advance after approve - fix the state file first.`,
     );
   }
   if (!validScopes().has(scope)) {

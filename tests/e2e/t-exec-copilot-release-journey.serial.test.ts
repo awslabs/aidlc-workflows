@@ -12,7 +12,8 @@
 //           subagent's brief is no turn of theirs), the plan question waits
 //           for them, their files stay as they were until "1" starts the
 //           bugfix plan, Reverse Engineering asks for approval and "Approve"
-//           approves it, and doctor no longer says the hooks never ran.
+//           approves it, and doctor no longer says the hooks never ran or
+//           stopped beating while the workflow went on.
 //   case 2: the folder is NOT trusted. `copilot -p` then skips the project's
 //           hooks without a word, which is how a workshop lost a morning: no
 //           message record may appear, and doctor must tell the person the
@@ -154,8 +155,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
         if (!report.problems.length) report.problems.push(...hooksRanProblems(doctorChecks(project, env)));
         const runs = hookRuns(copilotHome);
         report.extra = { "hook runs": Object.values(runs).reduce((sum, count) => sum + count, 0), ...tokens(usageFile), hooksByKind: runs };
-        if (report.problems.length) report.extra.evidence = { ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) };
-      });
+      }, () => ({ ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) }));
       expectPersonFirstInJourney(report);
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });

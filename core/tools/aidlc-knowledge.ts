@@ -1207,7 +1207,7 @@ export function resolveSpaceFlag(raw: string | undefined, projectDir: string): s
   if (valid === null) {
     throw new Error(
       raw_
-        ? `The active-space cursor ("${candidate}") is not a valid space name — must be ` +
+        ? `The active-space cursor ("${candidate}") is not a valid space name - must be ` +
           `a lowercase slug (letters, digits, hyphens; leading letter). Pass --space ` +
           `<name> explicitly, or repair aidlc/active-space, then re-run.`
         : `Invalid --space "${raw}": must be a lowercase slug (letters, digits, hyphens; ` +
@@ -1383,7 +1383,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   if (!st.isFile()) {
     return (
       `${rel} is ${describeFileKind(st)}, not a regular file. Only regular files are ` +
-      `indexed — a FIFO, socket, or device file can block forever or never reach EOF.`
+      `indexed - a FIFO, socket, or device file can block forever or never reach EOF.`
     );
   }
   // Reuses the STAT ABOVE -- no second syscall -- and runs BEFORE the read
@@ -1411,7 +1411,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   if (st.nlink !== 1) {
     return (
       `${rel} is multiply linked (a hardlink) and is not trusted. Replace it with an ` +
-      `independent copy — cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`
+      `independent copy - cp <file> <file>.copy && mv <file>.copy <file> - and re-run.`
     );
   }
   try {
@@ -1676,7 +1676,7 @@ export function onboard(
         indexed: [],
         refused: {
           path: sourcePath,
-          reason: `duplicate document id ${row.id} generated within one batch — the batch ` +
+          reason: `duplicate document id ${row.id} generated within one batch - the batch ` +
             `was refused whole, and index.json was not modified`,
         },
       };
@@ -1690,7 +1690,7 @@ export function onboard(
         indexed: [],
         refused: {
           path: sourcePath,
-          reason: `document id ${row.id} already exists in index.json — the batch was ` +
+          reason: `document id ${row.id} already exists in index.json - the batch was ` +
             `refused whole, and index.json was not modified`,
         },
       };
@@ -2537,7 +2537,7 @@ export function renderShow(d: ShownDocument): string {
       ? ` after page ${d.extraction.pages_kept}`
       : d.extraction.chars !== undefined ? ` at ${d.extraction.chars} characters` : "";
     out.push(
-      `truncated  yes${extent} — the content below is a PARTIAL extraction, not the whole document`,
+      `truncated  yes${extent} - the content below is a PARTIAL extraction, not the whole document`,
     );
   }
   if (d.summary_text !== undefined) {

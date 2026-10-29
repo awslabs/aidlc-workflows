@@ -30,6 +30,7 @@ import {
   stagePreviewNotes,
   updateReport,
 } from "../../scripts/ci-preview-test-report.ts";
+import { type PreviewPlan, previewPlanJson, readPreviewPlan } from "../../scripts/preview-release.ts";
 import { MODEL_API_REASON } from "../lib/file-retry.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -393,18 +394,18 @@ describe("t-ci-preview-test-report", () => {
 
   test("the command stages a failing preview's notes in the plan file", () => {
     const root = fixture();
-    const plan = {
+    const plan: PreviewPlan = {
       schemaVersion: 1, version: "2.10.1-preview.20260925.1", tag: "v2.10.1-preview.20260925.1",
       sourceRepository: "owner/repo", sourceDigest: SHA, previousSourceDigest: null,
       notes: { name: "AI-DLC Workflow 2.10.1-preview.20260925.1", body: `- ${"x".repeat(124_700)}\n\nSource commit: owner/repo@a\n` },
     };
-    put(root, "plan.json", `${JSON.stringify(plan)}\n`);
+    put(root, "plan.json", previewPlanJson(plan));
     const report = `## Nightly test report\n\n${"- `t`\n".repeat(200)}`;
     put(root, "report.md", report);
     const staged = Bun.spawnSync([process.execPath, cli, "--stage-notes", join(root, "plan.json"), join(root, "report.md")],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(staged.exitCode, staged.stderr.toString()).toBe(0);
-    expect(JSON.parse(fs.readFileSync(join(root, "plan.json"), "utf8")))
+    expect(readPreviewPlan(join(root, "plan.json")))
       .toEqual({ ...plan, notes: { ...plan.notes, body: stagePreviewNotes(plan.notes.body, report) } });
 
     const usage = Bun.spawnSync([process.execPath, cli, "--stage-notes", join(root, "plan.json")],
