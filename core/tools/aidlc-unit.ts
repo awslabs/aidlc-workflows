@@ -1447,7 +1447,7 @@ function sharedRecordFilesAsBase(
 // The review record each REVIEW_COMPLETED row of the claim's shard names, from
 // this clone's disk: AI-DLC keeps them under the record's engine folder, which
 // its own .gitignore keeps out of every commit, and pin reads each one from
-// the candidate (candidateReviewerReady). Only a record whose digest matches
+// the candidate (candidateReviewCoverage). Only a record whose digest matches
 // its row is added; nothing else under the engine folder travels. A record
 // that is gone or changed is named back, since pin will refuse without it.
 function withClaimReviewRecords(
