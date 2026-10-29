@@ -72,7 +72,7 @@ describe("words on an AI-DLC command line are single-quoted in everything AI-DLC
       "`next --new-intent --scope <scope> \"<text>\"`",
       "`audit append-raw 'Error: <brief>' \"<body>\"`",
       "`report --result skipped --reason\n  \"<why>\"`",
-      "${aidlcDispatcherInvocation(\"orchestrate next\")} --new-intent --scope <the confirmed scope> \"<the words>\"",
+      `\${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> "<the words>"`,
     ].join("\n"))).toHaveLength(8);
     expect(doubleQuotedWords([
       "`report --stage x --result skipped --reason '<why>'`",
