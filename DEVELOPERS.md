@@ -33,8 +33,29 @@ Two kinds of feedback arrive before merge:
   [AI review workflow](.github/workflows/ai-pr-review.yml) supports open,
   non-draft PRs from branches in this repository targeting `main`; fork PRs
   are currently skipped. Mark a draft ready for review to start review.
-  Pushing fixes triggers another review. PR edits and eligible maintainer
-  review activity can also trigger it.
+  Later pushes and PR edits do not automatically repeat the review; eligible
+  maintainer review activity or a manual dispatch can request it.
+  PRs changing AIDA's own controls are reviewed by marking them draft and ready
+  again, as described in the [PR guidelines](CONTRIBUTING.md#submitting-your-pr).
+
+AIDA's existing comment includes a **Product Decision (advisory)** section.
+The product pass shares the review's context, model runner and job. It explains
+new features, user-facing mechanisms, supported formats and public-contract
+changes through the before/after behavior and the question for the maintainer.
+Internal changes and fixes restoring a contract can report no product change.
+Product advice does not affect technical finding severity or the next-action
+labels. A maintainer decides in the PR discussion; no approval command, required
+product check, merge-queue verification or ruleset activation is added.
+Prior judgments in PR comments and reviews appear as AIDA's interpretation, with
+a link to the maintainer's own words and without re-asking the question.
+Maintainer attribution uses the ledger's repository write-permission check.
+Unavailable permission lookups are retried up to three times. If GitHub still
+cannot confirm access, context collection stops before model calls; unknown
+authority is never recorded as verified lack of permission. Rerun the review
+when GitHub is available again.
+Product generation or validation failures do not prevent
+the technical review from publishing; product details yield to technical findings
+when the comment reaches GitHub's size limit.
 
 Respond to the findings and fix failing checks. AIDA reports an advisory next
 decision: `author/change` asks the author to address gaps; `maintainer/merge`

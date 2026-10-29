@@ -806,7 +806,8 @@ const makeRoom = (ledger: Ledger): void => {
       throw new Error(`the ledger archive holds ${MAX_ARCHIVED_DECISIONS} decisions; no authoritative decision can be discarded`);
     }
     const [archived] = ledger.findings.splice(decidedIndex, 1);
-    const archive = ledger.archivedDecisions ??= [];
+    ledger.archivedDecisions ??= [];
+    const archive = ledger.archivedDecisions;
     archive.push(archived);
   }
 };
@@ -1068,7 +1069,8 @@ export function mergeLedgers(base: Ledger, live: Ledger): Ledger {
   const insertLike = (ledger: Ledger, source: Ledger, entry: LedgerFinding): void => {
     const sourceArchived = source.archivedDecisions?.some(candidate => candidate.id === entry.id) ?? false;
     if (sourceArchived) {
-      const archive = ledger.archivedDecisions ??= [];
+      ledger.archivedDecisions ??= [];
+      const archive = ledger.archivedDecisions;
       if (archive.length >= MAX_ARCHIVED_DECISIONS) {
         throw new Error(`the ledger archive holds ${MAX_ARCHIVED_DECISIONS} decisions; no authoritative decision can be discarded`);
       }
@@ -1298,16 +1300,30 @@ export function publishLedgerComment(
   return commentId;
 }
 
-export function actorHasWrite(repository: string, login: string, ghExecutable: GhExecutable = "gh"): boolean {
+export function actorHasWrite(
+  repository: string,
+  login: string,
+  ghExecutable: GhExecutable = "gh",
+  options: { requireVerified?: boolean } = {},
+): boolean {
   assertRepository(repository);
   if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) return false;
-  try {
-    const response = ghJson(["api", `repos/${repository}/collaborators/${login}/permission`], ghExecutable);
-    const permission = isRecord(response) ? text(response.permission) : "";
-    return permission === "admin" || permission === "maintain" || permission === "write";
-  } catch {
-    return false;
+  const attempts = options.requireVerified ? 3 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = ghJson(["api", `repos/${repository}/collaborators/${login}/permission`], ghExecutable);
+      const permission = isRecord(response) ? text(response.permission) : "";
+      if (!["admin", "maintain", "write", "triage", "read", "none"].includes(permission)) {
+        throw new Error("permission response has no recognized access level");
+      }
+      return permission === "admin" || permission === "maintain" || permission === "write";
+    } catch {
+      if (options.requireVerified && attempt === attempts - 1) {
+        throw new Error(`Could not verify repository write permission for ${login}; retry the review when GitHub is available`);
+      }
+    }
   }
+  return false;
 }
 
 function react(repository: string, commentId: number, content: "+1" | "-1" | "confused", ghExecutable: GhExecutable): void {

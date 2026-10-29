@@ -54,7 +54,7 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ai-pr-review
-    timeout-minutes: 110
+    timeout-minutes: 125
     permissions:
       contents: read
       id-token: write
@@ -134,10 +134,13 @@ jobs:
             case "$path" in
               .github/workflows/ai-pr-review.yml|\
               .github/scripts/ai-pr-review.ts|\
+              .github/scripts/ai-product-decision.ts|\
               .github/scripts/ai-pr-ledger.ts|\
               .github/scripts/prepare-ai-review-runtime.sh|\
               .github/prompts/ai-pr-review-*.md|\
-              .github/prompts/ai-pr-review-*.json)
+              .github/prompts/ai-pr-review-*.json|\
+              .github/prompts/ai-product-decision*.md|\
+              .github/prompts/ai-product-decision*.json)
                 control_change=true
                 break
                 ;;
@@ -159,7 +162,9 @@ jobs:
           fi
           mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts
           cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/
+          cp .github/prompts/ai-product-decision* .ai-review-controls/prompts/
           cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts \
+            .github/scripts/ai-product-decision.ts \
             .github/scripts/prepare-ai-review-runtime.sh \
             .ai-review-controls/scripts/
           echo "::notice::AI review controls from $controls_sha"
@@ -527,6 +532,28 @@ jobs:
             '.marker == $marker and .status == "complete"' .ai-review-lenses/security.json >/dev/null \
             || { echo "::error::security lens did not complete its inspection"; exit 1; }
 
+          # Product assessment is optional; its failure must not lose technical findings.
+          set +e
+          (
+            set -e
+            product_prompt="$(cat .ai-review-controls/prompts/ai-product-decision.md)"
+            product_schema="$(jq -c . .ai-review-controls/prompts/ai-product-decision-schema.json)"
+            run_model \
+              "sol" \
+              "Product decision" \
+              "high" \
+              50000 \
+              ".ai-pr-review-final/product.json" \
+              "$product_prompt" \
+              "$product_schema"
+          )
+          product_status=$?
+          set -e
+          if [ "$product_status" -ne 0 ]; then
+            rm -f .ai-pr-review-final/product.json
+            echo "::warning::Product assessment unavailable; continuing the technical review"
+          fi
+
           aidlc_prompt="$(
             cat \
               .ai-review-controls/prompts/ai-pr-review-common.md \
@@ -610,6 +637,8 @@ jobs:
             --head "$HEAD_SHA" \
             --context-id "${{ steps.context.outputs.context_id }}" \
             --input .ai-pr-review-final/review.md \
+            --product .ai-pr-review-final/product.json \
+            --discussion .ai-review-context/discussion.json \
             --manifest .ai-review-context/changed-files.json \
             --metadata .ai-review-context/pr.json \
             --output .ai-pr-review-final/review.json \
@@ -681,6 +710,8 @@ jobs:
               --head "$HEAD_SHA" \
               --context-id "$CONTEXT_ID" \
               --input .ai-pr-review-final/review.md \
+              --product .ai-pr-review-final/product.json \
+              --discussion .ai-review-context/discussion.json \
               --manifest .ai-review-context/changed-files.json \
               --metadata .ai-review-context/pr.json \
               --output .ai-pr-review-final/review.json \
