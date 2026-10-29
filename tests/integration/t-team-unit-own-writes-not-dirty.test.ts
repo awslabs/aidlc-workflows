@@ -12,6 +12,7 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { sha256Bytes } from "../../dist/claude/.claude/tools/aidlc-distribution.ts";
 import { addRootBlocks } from "../../dist/claude/.claude/tools/aidlc-includes.ts";
 import { REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -45,6 +46,9 @@ const ROOT_FILES: Record<Runtime, string[]> = {
 function seedWithRuntime(
   runtime: Runtime = "copilot",
   teamFiles = true,
+  // The AGENTS.md the team committed, and whether the projection lists it as a
+  // file an earlier release shipped whole (the session start then adopts it).
+  agents: { text: string; recorded?: boolean } = { text: TEAM_AGENTS },
 ): { seed: string; remote: string } {
   const { seed, remote } = makeSeed();
   const shipped = join(REPO_ROOT, "dist", runtime, ".aidlc", "tools", "data");
@@ -53,8 +57,15 @@ function seedWithRuntime(
   for (const name of ["aidlc-stamp.json", "harness.json", "aidlc-projection.json", "root-blocks"]) {
     cpSync(join(shipped, name), join(data, name), { recursive: true });
   }
+  if (agents.recorded) {
+    const descriptorPath = join(data, "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.rootIntegrations.find((integration: { path: string }) => integration.path === "AGENTS.md")
+      .legacySignatures.wholeFileHashes.push(sha256Bytes(agents.text));
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor)}\n`);
+  }
   if (teamFiles) {
-    writeFileSync(join(seed, "AGENTS.md"), TEAM_AGENTS);
+    writeFileSync(join(seed, "AGENTS.md"), agents.text);
     if (runtime === "opencode") writeFileSync(join(seed, "opencode.json"), TEAM_OPENCODE);
   }
   git(seed, ["add", "-A"]);
@@ -295,4 +306,88 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
     expect(bytes(seed, ".gitignore")).toBe(gitignore);
     expect(stashes(seed)).toBe("");
   });
+  // An unmarked AGENTS.md a release shipped whole (an earlier release's, or the
+  // dev projection's, which carries the lines an earlier release did) is taken
+  // over by the session start as AI-DLC's part: it wraps it in its markers with
+  // the current text. That write is AI-DLC's own too.
+  const EARLIER_AGENTS = "# AI-DLC\n\nThis project uses AI-DLC. An earlier release's guide, committed whole.\n";
+  const adopted = (): Array<[string, { text: string; recorded?: boolean }]> => [
+    ["the dev projection's AGENTS.md", { text: readFileSync(join(REPO_ROOT, "dist", "copilot", "AGENTS.md"), "utf-8") }],
+    ["an earlier release's AGENTS.md", { text: EARLIER_AGENTS, recorded: true }],
+  ];
+  for (const [name, agents] of adopted()) {
+    test(`a team clone whose session start adopted ${name} publishes, and the file stays as it is`, () => {
+      const { remote } = seedWithRuntime("copilot", true, agents);
+      let before: Record<string, string | null> = {};
+      const { checkout } = prepareCandidate(remote, "alpha", "team-a", {
+        beforePublish: (clone) => {
+          sessionStarts(clone);
+          before = snapshot(clone, ROOT_FILES.copilot);
+        },
+      });
+      expect(before["AGENTS.md"]?.startsWith("<!-- BEGIN AI-DLC:agents -->")).toBe(true);
+      expect(snapshot(checkout, ROOT_FILES.copilot)).toEqual(before);
+      expect(stashes(checkout)).toBe("");
+    });
+
+    test(`landing from a checkout whose session start adopted ${name} lands, and the file stays uncommitted`, () => {
+      const { seed, remote } = seedWithRuntime("copilot", true, agents);
+      prepareCandidate(remote, "alpha", "team-a");
+      sessionStarts(seed);
+      const files = snapshot(seed, ROOT_FILES.copilot);
+      const head = git(seed, ["rev-parse", "HEAD"]);
+      gateAndLand(seed, "alpha");
+      expect(snapshot(seed, ROOT_FILES.copilot)).toEqual(files);
+      expect(git(seed, ["diff", "--name-only", head, "HEAD", "--", ...ROOT_FILES.copilot])).toBe("");
+      expect(stashes(seed)).toBe("");
+    });
+  }
+
+  test("a Unit that carries the adopted AGENTS.md lands over the same adoption in the landing checkout", () => {
+    const { seed, remote } = seedWithRuntime("copilot", true, { text: EARLIER_AGENTS, recorded: true });
+    const { candidateOid } = prepareCandidate(remote, "alpha", "team-a", {
+      beforePublish: (clone) => {
+        sessionStarts(clone);
+        git(clone, ["add", "--", ...ROOT_FILES.copilot]);
+        git(clone, ["commit", "-m", "AI-DLC's part of the root files"]);
+      },
+    });
+    sessionStarts(seed);
+    gateAndLand(seed, "alpha");
+    for (const path of ROOT_FILES.copilot) {
+      expect(git(seed, ["hash-object", "--", path])).toBe(git(seed, ["rev-parse", `${candidateOid}:${path}`]));
+    }
+    expect(git(seed, ["status", "--porcelain", "--", ...ROOT_FILES.copilot])).toBe("");
+    expect(stashes(seed)).toBe("");
+  });
+
+  test("a checkout that keeps CRLF line endings (core.autocrlf) publishes with the adopted AGENTS.md", () => {
+    const { remote } = seedWithRuntime("copilot", true, { text: EARLIER_AGENTS, recorded: true });
+    let before: Record<string, string | null> = {};
+    prepareCandidate(remote, "alpha", "team-a", {
+      beforePublish: (clone) => {
+        git(clone, ["config", "core.autocrlf", "true"]);
+        for (const path of ROOT_FILES.copilot) rmSync(join(clone, path));
+        git(clone, ["checkout", "--", ...ROOT_FILES.copilot]);
+        sessionStarts(clone);
+        before = snapshot(clone, ROOT_FILES.copilot);
+        expect(before["AGENTS.md"]).toContain("<!-- BEGIN AI-DLC:agents -->\r\n");
+      },
+    });
+    expect(Object.keys(before)).toEqual(ROOT_FILES.copilot);
+  });
+
+  test("beside an adopted AGENTS.md, a line of the person's own still stops publish with the same line", () => {
+    const { remote } = seedWithRuntime("copilot", true, { text: EARLIER_AGENTS, recorded: true });
+    const { checkout } = prepareCandidate(remote, "alpha", "team-a");
+    sessionStarts(checkout);
+    appendLine(checkout, "AGENTS.md", "Our own rule.");
+    const head = git(checkout, ["rev-parse", "HEAD"]);
+    const published = runMergeTool(UNIT, ["publish", "alpha"], checkout);
+    expect(published.status).not.toBe(0);
+    expect(published.out).toContain(PUBLISH_REFUSAL);
+    expect(git(checkout, ["rev-parse", "HEAD"])).toBe(head);
+    expect(stashes(checkout)).toBe("");
+  });
+
 });

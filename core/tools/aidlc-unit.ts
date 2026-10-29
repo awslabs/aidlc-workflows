@@ -2517,13 +2517,14 @@ function worktreeChanges(projectDir: string, untracked: "no" | "all", label: str
 // What AI-DLC's own write in a shared root file is: its marked part (.gitignore,
 // AGENTS.md) or its entries in a JSON file (opencode.json), as aidlcRootParts
 // reads them from what the project's harnesses ship.
-type OwnRootPart = { marker: string } | { entries: string };
+type OwnRootPart = { marker: string; legacy: string[] } | { entries: string };
 
 // The changed paths that hold only AI-DLC's own write, which the session-start
 // hook adds in a checkout config never ran in and a release brings up to date:
 // in a shared root file, its marked part as a release shipped it with the
-// person's part around it as HEAD holds it, or its entries merged onto HEAD's
-// copy exactly as the hook merges them (no copy when HEAD has none). A change
+// person's part around it as HEAD holds it, or exactly what the hook writes
+// over HEAD's copy (an unmarked copy a release shipped whole taken over as its
+// part, or its entries merged in; no copy when HEAD has none). A change
 // of the person's in that file, inside the part too (the hook and config then
 // leave the part as theirs), a file they staged, or a part that does not read,
 // leaves it theirs.
@@ -2545,15 +2546,19 @@ function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<st
       continue;
     }
     const committed = gitPathExistsAt(projectDir, "HEAD", path) ? gitTextAt(projectDir, "HEAD", path) : "";
+    // Git's copy holds the line endings the repository stores, the file the
+    // checkout's own (core.autocrlf on Windows), so they are left aside.
+    const lf = (value: string) => value.replace(/\r\n/g, "\n");
+    const written = block ? mergeBlock(path, committed, block.shipped, block.marker, block.legacy).value : undefined;
     if (
-      block && onlyMarkedPartChanged(path, text, committed, block.marker) &&
-      mergeBlock(path, text, block.shipped, block.marker, block.legacy).currentBlockShipped
+      block && (
+        (onlyMarkedPartChanged(path, text, committed, block.marker) &&
+          mergeBlock(path, text, block.shipped, block.marker, block.legacy).currentBlockShipped) ||
+        (written !== undefined && lf(written) === lf(text))
+      )
     ) {
-      own.set(path, { marker: block.marker });
+      own.set(path, { marker: block.marker, legacy: block.legacy });
     } else if (shippedEntries !== undefined) {
-      // Git's copy holds the line endings the repository stores, the file the
-      // checkout's own (core.autocrlf on Windows), so they are left aside.
-      const lf = (value: string) => value.replace(/\r\n/g, "\n");
       const merged = mergeJsonEntries(committed, shippedEntries, { kind: "none" });
       if (!("conflict" in merged) && lf(merged.text) === lf(text)) own.set(path, { entries: shippedEntries });
     }
@@ -2617,7 +2622,7 @@ function returnOwnRootParts(projectDir: string, yielded: readonly YieldedRootPar
       if (!kept || now === null) continue;
       if (now.block === null) {
         const { begin, end } = managedBlockMarkers(path, part.marker);
-        next = mergeBlock(path, merged, kept.slice(begin.length, kept.length - end.length), part.marker).value;
+        next = mergeBlock(path, merged, kept.slice(begin.length, kept.length - end.length), part.marker, part.legacy).value;
       } else {
         const at = merged.indexOf(now.block);
         next = `${merged.slice(0, at)}${kept}${merged.slice(at + now.block.length)}`;
