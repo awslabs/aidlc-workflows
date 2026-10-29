@@ -59,6 +59,10 @@ describe("a Unit merge decision in the person's words, from a request file", () 
   test.skipIf(skip !== null)("pin's reject command, with the reply the agent wrote to the file it names, records it exactly", () => {
     const { seed, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "gate-words-pin");
+    // A reply left from an earlier gate of this Unit answers nothing this pin asks.
+    const folder = join(seed, "aidlc", ".aidlc-request-text");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "gate-alpha.txt"), "Approve", "utf-8");
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
     const gate = JSON.parse(pin.stdout).merge_gate as Record<string, string>;
@@ -66,10 +70,11 @@ describe("a Unit merge decision in the person's words, from a request file", () 
     expect(named, gate.reject).not.toBeNull();
     expect(gate.approve).toEndWith(` unit gate alpha --decision approve --request-file ${named![1]}`);
     expect(gate.ask).toContain(named![1]);
-    // Pin made the folder, since some hosts' file tools make none.
-    expect(statSync(join(seed, "aidlc", ".aidlc-request-text")).isDirectory()).toBe(true);
-    replyAfterPin(seed, "alpha");
     const file = join(seed, ...named![1].split("/"));
+    expect(existsSync(file)).toBe(false);
+    // Pin keeps the folder, since some hosts' file tools make none.
+    expect(statSync(folder).isDirectory()).toBe(true);
+    replyAfterPin(seed, "alpha");
     writeFileSync(file, WORDS, "utf-8");
     const run = spawnSync(process.platform === "win32" ? gitBashPath() : "bash", [
       "-c",

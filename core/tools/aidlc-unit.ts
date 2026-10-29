@@ -2172,12 +2172,16 @@ function pinnedMergeGate(
 // reply goes in a request file the agent writes with its file tool and the
 // gate reads (readRequestFile), so no shell reads it on the way: PowerShell and
 // Git Bash quote an apostrophe differently. Pin makes the file's folder, since
-// some hosts' file tools make none.
+// some hosts' file tools make none, and removes a reply left there from an
+// earlier gate of this Unit (one a refused gate kept), which answers nothing
+// this pin asks.
 function pinMergeGateStep(pd: string, transaction: UnitMergeTransaction): Record<string, string> {
   const terms = pinnedMergeGate(transaction);
   const file = `${REQUEST_TEXT_DIR}/gate-${transaction.unit.replace(/[^A-Za-z0-9._-]+/g, "-")}.txt`;
   try {
-    mkdirSync(dirname(recordFileTargetOrThrow(pd, file)), { recursive: true });
+    const target = recordFileTargetOrThrow(pd, file);
+    mkdirSync(dirname(target), { recursive: true });
+    rmSync(target, { force: true });
   } catch {
     // A file tool that makes folders still writes it; the command is the same.
   }

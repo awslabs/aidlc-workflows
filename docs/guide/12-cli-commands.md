@@ -736,8 +736,9 @@ Accepted decisions are `approve` and `reject`. The command records the
 person's answer when a typed human turn follows the pin (pin's output names this
 command for each answer). The person's words may come in a file instead of
 `--user-input`: `--request-file aidlc/.aidlc-request-text/<name>.txt`, which
-AI-DLC writes when it prints the command for you, so no shell reads them on the
-way; the file goes once the decision is recorded. A pinned Unit lands with a
+AI-DLC writes when it prints the command for you (after pin, the agent writes
+your reply to the file pin's commands name), so no shell reads them on the way;
+the file goes once the decision is recorded. A pinned Unit lands with a
 regular merge into the integration branch pin fetched, so the reviewed OID
 remains a direct parent. A moved ref, changed generation, or HOLD-MERGE marker
 requires an explicit re-pin before approval. On approve, its output names the
