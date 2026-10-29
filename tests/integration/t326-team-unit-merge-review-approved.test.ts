@@ -5,7 +5,9 @@
 // Unit for want of a READY review and named no next step (#3309). Pin counts a
 // stage whose last review is followed by the person's approval of it, lists it
 // apart from the READY ones, and where it still refuses for a review it names
-// the stage and the person's step in the checkout that claimed the Unit.
+// the stage and the person's step in the checkout that claimed the Unit. A
+// READY review the person approved with a finding open is listed the same way,
+// with the finding, so the merge question never calls it clean.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -67,6 +69,29 @@ function reviewLeftNotReady(candidate: Candidate, label: string): void {
   writeFileSync(shardPath(candidate), shard.replace(ready.completion, notReady.completion));
 }
 
+// The person's approval of NFR Design records R-01 Major, open at its gate,
+// with this disposition. The engine names the reviewed document by its path
+// in the project.
+function approvalRecords(candidate: Candidate, status: "Accepted risk" | "Fix requested"): void {
+  const reviewed = join(
+    seededRecordDir(candidate.checkout), "construction", "alpha", STAGE, artifactFilename(nfrDesign.review_artifact!),
+  );
+  const dispositions = serializeReviewFindingDispositions([{
+    artifact: relative(candidate.checkout, reviewed).replaceAll("\\", "/"),
+    id: "R-01",
+    fingerprint: `sha256:${"b".repeat(64)}`,
+    status,
+    decided_at_severity: "Major",
+  }]);
+  const approval = `**Gate Stages**: ${STAGE}\n**User Input**: Approve\n`;
+  const shard = readFileSync(shardPath(candidate), "utf-8");
+  expect(shard).toContain(approval);
+  writeFileSync(
+    shardPath(candidate),
+    shard.replace(approval, `${approval}**${REVIEW_FINDING_DISPOSITIONS_FIELD}**: ${dispositions}\n`),
+  );
+}
+
 function appendRows(candidate: Candidate, rows: string): void {
   writeFileSync(shardPath(candidate), readFileSync(shardPath(candidate), "utf-8") + rows);
 }
@@ -83,7 +108,24 @@ describe("t326 pin and a stage approved over an open review concern", () => {
     const evidence = JSON.parse(pin.stdout).evidence;
     expect(evidence.reviewers_expected).toContain(STAGE);
     expect(evidence.reviewers_ready).not.toContain(STAGE);
-    expect(evidence.reviewers_approved_over_concerns).toEqual([STAGE]);
+    expect(evidence.reviewers_approved_over_concerns).toEqual([{ stage: STAGE, findings: [] }]);
+
+    gateAndLand(fixture.seed, "alpha");
+  });
+
+  test("a READY review approved with an open finding is named with the finding, not as clean", () => {
+    const fixture = makeSeed();
+    const candidate = prepareCandidate(fixture.remote, "alpha", "open-team");
+    approvalRecords(candidate, "Accepted risk");
+    publishAgain(candidate, "NFR Design approved with R-01 open");
+
+    const pin = runMergeTool(UNIT, ["pin", "alpha"], fixture.seed);
+    expect(pin.status, pin.out).toBe(0);
+    const evidence = JSON.parse(pin.stdout).evidence;
+    expect(evidence.reviewers_ready).not.toContain(STAGE);
+    expect(evidence.reviewers_approved_over_concerns).toEqual([
+      { stage: STAGE, findings: [{ id: "R-01", severity: "Major", status: "Accepted risk" }] },
+    ]);
 
     gateAndLand(fixture.seed, "alpha");
   });
@@ -129,25 +171,8 @@ describe("t326 pin and a stage approved over an open review concern", () => {
     const candidate = prepareCandidate(fixture.remote, "alpha", "fix-team");
     reviewLeftNotReady(candidate, "fix-team");
     // "Approve, but fix R-01": the approval records the fix the person asked
-    // for, and the finding stays open for the next review. The engine names
-    // the reviewed document by its path in the project.
-    const reviewed = join(
-      seededRecordDir(candidate.checkout), "construction", "alpha", STAGE, artifactFilename(nfrDesign.review_artifact!),
-    );
-    const dispositions = serializeReviewFindingDispositions([{
-      artifact: relative(candidate.checkout, reviewed).replaceAll("\\", "/"),
-      id: "R-01",
-      fingerprint: `sha256:${"b".repeat(64)}`,
-      status: "Fix requested",
-      decided_at_severity: "Major",
-    }]);
-    const approval = `**Gate Stages**: ${STAGE}\n**User Input**: Approve\n`;
-    const shard = readFileSync(shardPath(candidate), "utf-8");
-    expect(shard).toContain(approval);
-    writeFileSync(
-      shardPath(candidate),
-      shard.replace(approval, `${approval}**${REVIEW_FINDING_DISPOSITIONS_FIELD}**: ${dispositions}\n`),
-    );
+    // for, and the finding stays open for the next review.
+    approvalRecords(candidate, "Fix requested");
     publishAgain(candidate, "NFR Design approved with R-01 to be fixed");
 
     const pin = runMergeTool(UNIT, ["pin", "alpha"], fixture.seed);
