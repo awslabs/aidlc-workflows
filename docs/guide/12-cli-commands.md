@@ -737,7 +737,9 @@ merge gate.
 
 Accepted decisions are `approve` and `reject`. The command records the
 person's answer when a typed human turn follows the pin (pin's output names this
-command for each answer). A pinned Unit lands with a regular merge into the
+command for each answer). Its audit row keeps what the person said after the pin
+and the message it came in (`Person Reply`, `Message Id`) beside the agent's
+account, as a stage gate's row does. A pinned Unit lands with a regular merge into the
 integration branch pin fetched, so the reviewed OID remains a direct parent. A
 moved ref, changed generation, or HOLD-MERGE marker requires an explicit re-pin
 before approval. On approve, its output names the land command (`land`), which
