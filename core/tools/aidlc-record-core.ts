@@ -16,7 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath }
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { runtimeHarnessDir, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
-import { activeSpace, assertNoSymlinkInChainOrThrow, engineDirFor, intentsDir, isPlainObject, listIntentDirs, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
+import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
 
@@ -1444,6 +1444,11 @@ export const OUT_OF_DATE_MAX_CHANGED = 8;
 // to corrupt the multi-line blocks). Readers glob `audit/*.md` and merge-sort by
 // timestamp — see auditShards()/readAllAuditShards(). With no intent resolved the
 // shard lands under the bare space record root (no flat audit.md any more).
+// A checkout that claimed a team Unit writes its whole log, for the claimed
+// record, to a local record of the same name in the record's engine folder,
+// which AI-DLC's .gitignore keeps out of commits: the tracked shard gets a copy
+// of each row pin takes (appendAuditBlockAtPath, aidlc-audit.ts), so a pull of
+// the main that landed the Unit finds nothing of the checkout's own in it.
 export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
   const resolved = resolveRecordDir(projectDir, intent, space);
   if (resolved.dir === null) {
@@ -1453,7 +1458,9 @@ export function auditFilePath(projectDir: string, intent?: string, space?: strin
       auditShardName(projectDir),
     );
   }
-  return join(resolved.dir, "audit", auditShardName(projectDir));
+  const local = existsSync(unitScopePath(projectDir)) && scopedAuditShardName(projectDir) !== null &&
+    ((intent === undefined && space === undefined) || resolved.dir === resolveRecordDir(projectDir).dir);
+  return join(resolved.dir, ...(local ? [ENGINE_DIR] : []), "audit", auditShardName(projectDir));
 }
 
 // The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
@@ -1707,6 +1714,9 @@ export function auditShards(
   if (intentDir === null && dirs.length === 0) {
     dirs.push(join(spaceRecordRoot(projectDir, resolved.space), "audit"));
   }
+  // A claimed team Unit's local record (auditFilePath) is read with the
+  // tracked shards; copiedAuditBlocks reads a row both hold once.
+  if (resolved.dir !== null) dirs.push(join(resolved.dir, ENGINE_DIR, "audit"));
   const paths: string[] = [];
   for (const shardDir of dirs) {
     try {
@@ -1785,8 +1795,31 @@ export function copiedAuditBlocks(
 ): ReadonlySet<number>[] {
   const skip = shards.map(() => new Set<number>());
   if (shards.length < 2) return skip;
+  // A claimed team Unit's local record (`<record>/.aidlc-engine/audit/<name>`)
+  // is that checkout's whole log, and the tracked shard of the same name holds a
+  // copy of the rows pin takes (auditFilePath): each such row is read once, from
+  // the local record. The shard's one-line header rides in its first block, so
+  // the compare leaves it out. The local record is never a sync tool's copy.
+  const header = "# AI-DLC Audit Log\n";
+  const unheaded = (block: string) => block.startsWith(header) ? block.slice(header.length) : block;
+  const localRecords = new Set<number>();
+  shards.forEach(({ shard, content }, local) => {
+    const dir = dirname(shard);
+    if (basename(dir) !== "audit" || basename(dirname(dir)) !== ENGINE_DIR) return;
+    localRecords.add(local);
+    const trackedPath = join(dirname(dirname(dir)), "audit", basename(shard));
+    const tracked = shards.findIndex((other) => other.shard === trackedPath);
+    if (tracked < 0) return;
+    const held = new Set(
+      auditShardBlocks(content).filter((block) => auditBlockField(block, "Timestamp") !== null).map(unheaded),
+    );
+    auditShardBlocks(shards[tracked].content).forEach((block, pos) => {
+      if (auditBlockField(block, "Timestamp") !== null && held.has(unheaded(block))) skip[tracked].add(pos);
+    });
+  });
   const groups = new Map<string, number[]>();
   shards.forEach(({ content }, index) => {
+    if (localRecords.has(index)) return;
     const end = content.search(/\r?\n---\r?\n/);
     const head = (end < 0 ? content : content.slice(0, end)).replace(/\r\n/g, "\n");
     if (auditBlockField(head, "Timestamp") === null) return;

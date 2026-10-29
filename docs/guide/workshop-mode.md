@@ -268,7 +268,11 @@ attempt-keyed `UNIT_COMPLETED`, team-gate, and reviewer receipts. Those rows are
 team assertions: pin re-verifies required artifacts and fingerprints, and the
 human reviews the remaining trust at the pinned merge gate. A team shard may
 never carry `HUMAN_TURN`, `MERGE_DISPATCH_*`, `UNIT_MERGED`, a unit-merge gate,
-another Unit's receipt, or another/new audit shard. Pin and land also refuse
+another Unit's receipt, or another/new audit shard. A claimed checkout writes
+only the rows pin accepts to the claim's shard; everything else it records
+(sessions, turns, answers) stays in its local record under the intent record's
+`.aidlc-engine/audit/`, out of every commit, so the claimant's pull after the
+landing keeps every row. Pin and land also refuse
 workflow-record changes outside the claimed Unit subtree. Product-source paths
 outside the Unit's record tree remain visible in the gate evidence for human
 overlap judgment.

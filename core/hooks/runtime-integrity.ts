@@ -29,8 +29,9 @@ import {
 // AUDIT_TRAIL_PATH, because Windows resolves any casing to the same record.
 const RUNTIME_RECORD_PATH = /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-engine[\\/]+gate-words)(?:[\\/]|$)/i;
 const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-engine[\\/]+gate-words)(?=[\\/'"`\s]|$)/i;
-// The audit trail: per-intent shards under `aidlc/spaces/<space>/intents/<record>/audit/`
-// and the bare space shard directory `aidlc/spaces/<space>/intents/audit/` (see
+// The audit trail: per-intent shards under `aidlc/spaces/<space>/intents/<record>/audit/`,
+// a claimed team Unit's local record under `<record>/.aidlc-engine/audit/`, and the
+// bare space shard directory `aidlc/spaces/<space>/intents/audit/` (see
 // auditFilePath in aidlc-record-core.ts). Worktree mirrors repeat the same relative layout
 // under the worktree root. Every row is appended by an owning tool or hook through
 // appendAuditBlockAtPath; a direct write from the model's tools would let prose forge
@@ -39,7 +40,7 @@ const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-a
 // `src/audit/` is untouched; it is case-insensitive and accepts either separator so
 // Windows spellings classify like POSIX ones.
 const AUDIT_TRAIL_PATH =
-  /(?:^|[\\/])aidlc[\\/]spaces[\\/][^\\/]+[\\/]intents[\\/](?:[^\\/]+[\\/])?audit(?:[\\/]|$)/i;
+  /(?:^|[\\/])aidlc[\\/]spaces[\\/][^\\/]+[\\/]intents[\\/](?:[^\\/]+[\\/])?(?:\.aidlc-engine[\\/])?audit(?:[\\/]|$)/i;
 const HOOK_FILE = /(?:^|[\\/])hooks[\\/]aidlc-[a-z-]+\.ts$|(?:^|[\\/])aidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts$/;
 const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?$/;
 // The variables that carry AI-DLC's authority or turn a guard off: the session
@@ -992,7 +993,7 @@ export const RUNTIME_INTEGRITY_REFUSAL =
   "Use the engine commands for workflow work. For intentional installed-file maintenance, use the official updater or an external terminal outside the running agent workflow.";
 
 export const AUDIT_TRAIL_REFUSAL =
-  "The audit trail under aidlc/spaces/<space>/intents/<intent>/audit/ is written only by the framework's own tools: " +
+  "The audit trail under aidlc/spaces/<space>/intents/<intent>/audit/ and <intent>/.aidlc-engine/audit/ is written only by the framework's own tools: " +
   "record the event through the owning engine command (engine log decision and engine log answer for a question and its response, " +
   "engine audit append-raw for a free-form note, engine orchestrate report for a gate) instead of writing a shard directly.";
 

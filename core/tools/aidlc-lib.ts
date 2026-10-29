@@ -30950,8 +30950,11 @@ export function worktreeAuditFilePath(wtPath: string, recordPrefix?: string | nu
   // worktree shard across the two PIDs. A git worktree is a separate working dir
   // and would otherwise mint its own (ungitignored, untracked) clone-id, so the
   // token MUST come from the main checkout. Fall back to wtPath only when no
-  // projectDir is threaded (legacy callers without main context).
-  return join(worktreeRecordRoot(wtPath, recordPrefix), "audit", auditShardName(projectDir ?? wtPath));
+  // projectDir is threaded (legacy callers without main context). A claimed
+  // Unit's worktree writes its local record, as auditFilePath names it there.
+  const named = projectDir ?? wtPath;
+  const local = existsSync(unitScopePath(named)) && readApplicableTeamUnitScopeStamp(named)?.audit_shard !== undefined;
+  return join(worktreeRecordRoot(wtPath, recordPrefix), ...(local ? [ENGINE_DIR] : []), "audit", auditShardName(named));
 }
 
 export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string | null): string {

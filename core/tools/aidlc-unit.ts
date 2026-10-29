@@ -15,7 +15,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry } from "./aidlc-audit.ts";
+import { appendAuditEntry, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
 import { scopeStampLanded, unitRowMerged } from "./aidlc-unit-landing.ts";
 import {
   managedBlockMarkers,
@@ -30,6 +30,7 @@ import {
   activeIntentUuid,
   activeSpace,
   artifactFilename,
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditShardBlocks,
   auditShardName,
@@ -39,6 +40,7 @@ import {
   clearClaimGeneration,
   clearUnitScopeStamp,
   committedTextBytes,
+  ENGINE_DIR,
   ensureCloneId,
   errorMessage,
   extractMarkdownSection,
@@ -54,6 +56,7 @@ import {
   loadStageGraphAll,
   parseArgs,
   parseBoltDag,
+  readAppendOnlyFileNoFollowOrThrow,
   readAuditShardEvents,
   readUnitClaimRegistryCache,
   readApplicableTeamUnitScopeStamp,
@@ -526,28 +529,40 @@ function createClaimCommit(
   sourceTreeOid?: string,
   additionalParentOid?: string,
 ): string {
-  // The claim is the person's own commit: their git name, email and signing
-  // settings apply as they do to any commit they make, so a remote that
-  // matches the committer to the pusher accepts it, and the claim history
-  // shows who claimed.
   const tree = writeTreeWithBlob(
     projectDir,
     sourceTreeOid ?? parentOid,
     CLAIM_FILE,
     `${JSON.stringify(payload, null, 2)}\n`,
   );
+  return commitAsPerson(
+    projectDir,
+    tree,
+    [parentOid, ...(additionalParentOid ? [additionalParentOid] : [])],
+    `aidlc unit ${payload.status}: ${payload.unit} generation ${payload.generation}`,
+  );
+}
+
+// A claim commit, and the handover commit publish puts under it, are the
+// person's own commits: their git name, email and signing settings apply as
+// they do to any commit they make, so a remote that matches the committer to
+// the pusher accepts them, and the claim history shows who claimed.
+function commitAsPerson(
+  projectDir: string,
+  tree: string,
+  parents: string[],
+  message: string,
+): string {
   // commit-tree does not read commit.gpgsign on its own; porcelain commits do.
   const signed =
     git(projectDir, ["config", "--type=bool", "commit.gpgsign"]).stdout.trim() === "true";
   const commitArgs = [
     "commit-tree",
     tree,
-    "-p",
-    parentOid,
-    ...(additionalParentOid ? ["-p", additionalParentOid] : []),
+    ...parents.flatMap((parent) => ["-p", parent]),
     ...(signed ? ["-S"] : []),
     "-m",
-    `aidlc unit ${payload.status}: ${payload.unit} generation ${payload.generation}`,
+    message,
   ];
   const commit = git(projectDir, commitArgs);
   if (!commit.ok) {
@@ -1325,99 +1340,26 @@ function transportedAuditViolation(
   return `${event.event} is not in the transported Unit evidence allowlist`;
 }
 
-// Mirrors appendAuditBlockAtPath's on-disk shape: a one-line preamble (only
-// ever written once, fused with the first block since no `\n---\n` separates
-// them), then every block as `\n---\n`-joined `renderAuditBlock` output.
-const AUDIT_SHARD_HEADER = "# AI-DLC Audit Log\n";
-
-// A claimed checkout's own shard carries far more than the Unit's attempt
-// receipts, because appendAuditEntry has no notion of a claimed checkout:
-// session lifecycle, a typed prompt, an answered question box, sensors,
-// subagent tracking, doctor and guard refusals all land in the SAME shard.
-// Publish ships exactly the evidence pin accepts, so a real session's shard
-// publishes clean.
-//
-// transportedAuditViolation is the ONE owner of what transports: this projects
-// the shard onto that same predicate rather than restating it as a second
-// list, so no event type can be ordinary in a session yet fatal at pin (of 118
-// valid event types only a handful are transportable, and a list here would
-// silently block every type absent from both). Parsed exactly as
-// candidateAuditEvents parses it - CRLF normalised, blank blocks skipped - so
-// publish and pin can never disagree about a block.
-//
-// PROVISIONAL. This compensates at publish for a conflation at write time, and
-// for an authority model that is not expressed: a transported shard's rows are
-// refused by type because nothing records whose shard a row came from. When
-// authority is scoped by provenance, pin can select its evidence instead of
-// refusing a whole file, and this projection should be DELETED rather than
-// kept alongside it.
-//
-// Returns null when nothing is dropped, so an untouched shard keeps its own
-// bytes (a CRLF candidate is not rewritten to LF for no reason).
-function transportableAuditShardText(
-  content: string,
-  unit: string,
-  generation: number,
-): { text: string; withheld: number } | null {
-  // auditShardBlocks is the grammar the candidate walk splits with, so these
-  // are the same blocks, with the same bytes, in the same order pin reads.
-  const blocks = auditShardBlocks(content);
-  const keep = blocks.map((block, pos) => {
-    // The candidate walk drops both before it evaluates anything, so neither
-    // is ever a violation; the trailing blank block carries the last separator.
-    if (block.trim().length === 0) return true;
-    const event = auditBlockField(block, "Event");
-    if (!event) return true;
-    return transportedAuditViolation(
-      {
-        event,
-        block,
-        timestamp: auditBlockField(block, "Timestamp") ?? "",
-        shard: "",
-        shardIndex: 0,
-        pos,
-      },
-      unit,
-      generation,
-    ) === null;
-  });
-  const withheld = keep.filter((kept) => !kept).length;
-  if (withheld === 0) return null;
-  const kept = blocks.filter((_, pos) => keep[pos]).join("\n---\n");
-  // The shard's one-line header is written once, with no separator after it,
-  // so it rides inside the first block rather than standing on its own. It
-  // survives that block being withheld: each rendered block opens with its
-  // own newline, so prepending the header reproduces the on-disk shape.
-  const headerWithheld = blocks.length > 0 && !keep[0] &&
-    blocks[0].startsWith(AUDIT_SHARD_HEADER);
-  return {
-    text: headerWithheld ? AUDIT_SHARD_HEADER + kept : kept,
-    withheld,
-  };
-}
-
-// Projects the claim-bound audit shard inside `treeOid` onto the transportable
-// evidence, returning a tree equal to `treeOid` except for that one blob. The
-// clone's own history and working copy keep the whole shard; only the tree
-// about to be published is projected.
-function transportableCandidateTree(
+// What a claimed checkout's audit writer asks of its claim (appendAuditBlockAtPath,
+// aidlc-audit.ts): whether a block of the checkout's log also goes to the claim's
+// tracked shard, the one publish ships and pin reads, which is exactly whether pin
+// takes it (transportedAuditViolation, the one owner; a block with no event, a
+// note or the header alone, stays in the local record), and whether the claim's
+// base commit already holds a path, so a shard main has is never rewritten.
+export function claimAuditRules(
   projectDir: string,
-  treeOid: string,
-  recordPrefix: string,
-  auditShard: string,
-  unit: string,
-  generation: number,
-): { tree: string; withheld: number } {
-  const shardPath = `${recordPrefix}/audit/${auditShard}`;
-  if (!gitPathExistsAt(projectDir, treeOid, shardPath)) {
-    return { tree: treeOid, withheld: 0 };
-  }
-  const content = gitTextAt(projectDir, treeOid, shardPath);
-  const projected = transportableAuditShardText(content, unit, generation);
-  if (!projected) return { tree: treeOid, withheld: 0 };
+  claim: { unit: string; generation: number; claimed_from_oid: string },
+): { takes(block: string): boolean; baseHolds(path: string): boolean } {
   return {
-    tree: writeTreeWithBlob(projectDir, treeOid, shardPath, projected.text),
-    withheld: projected.withheld,
+    takes: (block) => {
+      const event = auditBlockField(block, "Event");
+      return event !== null && transportedAuditViolation(
+        { event, block, timestamp: auditBlockField(block, "Timestamp") ?? "", shard: "", shardIndex: 0, pos: 0 },
+        claim.unit,
+        claim.generation,
+      ) === null;
+    },
+    baseHolds: (path) => gitPathExistsAt(projectDir, claim.claimed_from_oid, path),
   };
 }
 
@@ -1982,17 +1924,9 @@ function publishUnit(args: string[], projectDir?: string): void {
   const publicationIntegrationRef = integrationIsAncestor
     ? integration.ref
     : current.payload.integration_ref;
-  const projected = transportableCandidateTree(
-    pd,
-    rawHeadTree,
-    recordPrefix,
-    auditShard,
-    unit,
-    current.generation,
-  );
   const asBase = sharedRecordFilesAsBase(
     pd,
-    projected.tree,
+    rawHeadTree,
     publicationBaseOid,
     recordPrefix,
     auditShard,
@@ -2002,7 +1936,6 @@ function publishUnit(args: string[], projectDir?: string): void {
   const missingReviews = reviews.missing.length > 0
     ? { review_records_missing: reviews.missing }
     : {};
-  const withheld = projected.withheld + asBase.withheld;
   if (
     current.payload.candidate_tree_oid === headTree &&
     current.payload.candidate_head_oid === headOid &&
@@ -2017,7 +1950,6 @@ function publishUnit(args: string[], projectDir?: string): void {
       unit,
       candidate_oid: current.oid,
       generation: current.generation,
-      local_rows_withheld: withheld,
       ...missingReviews,
     }));
     return;
@@ -2030,12 +1962,25 @@ function publishUnit(args: string[], projectDir?: string): void {
     candidate_tree_oid: headTree,
     candidate_head_oid: headOid,
   };
+  // The claim's second parent hands this checkout's local record over with its
+  // commit: reachable from the claim ref for a teammate's adopt, never in the
+  // candidate tree main lands.
+  const localPath = `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`;
+  const localRecord = readLocalRecord(pd, localPath);
+  const handover = localRecord === null
+    ? headOid
+    : commitAsPerson(
+      pd,
+      writeTreeWithBlob(pd, headTree, localPath, localRecord),
+      [headOid],
+      `aidlc unit handover: ${unit} generation ${current.generation}`,
+    );
   const commit = createClaimCommit(
     pd,
     current.oid,
     payload,
     headTree,
-    headOid,
+    handover,
   );
   const pushed = updateClaimRef(pd, remote, stamp.claim_ref, commit, current.oid);
   if (!pushed.ok) {
@@ -2057,11 +2002,19 @@ function publishUnit(args: string[], projectDir?: string): void {
     candidate_oid: published.oid,
     candidate_head_oid: headOid,
     generation: published.generation,
-    // Said rather than done quietly: the candidate carries the Unit's evidence,
-    // and this many of the clone's own local rows stayed behind.
-    local_rows_withheld: withheld,
     ...missingReviews,
   }));
+}
+
+// A claimed checkout's local record as it stands (auditFilePath names it), or
+// null when it has none or it is not a plain file inside the project.
+function readLocalRecord(projectDir: string, path: string): string | null {
+  try {
+    assertNoSymlinkInChainOrThrow(realpathSync(projectDir), path);
+    return readAppendOnlyFileNoFollowOrThrow(join(projectDir, ...path.split("/")), "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
 }
 
 interface PinnedClaimCheck {
@@ -3682,6 +3635,7 @@ function finalizeClaimCheckout(
   writeClaimGeneration(projectDir, stamp.unit, stamp.generation);
   ensureCloneId(projectDir);
   updateCachedClaim(projectDir, claim);
+  startClaimLocalRecord(projectDir);
 }
 
 interface PendingRelease {
@@ -3814,21 +3768,19 @@ function adoptUnit(args: string[], projectDir?: string): void {
     gate_rhythm: claim.payload.gate_rhythm,
     audit_shard: claim.payload.audit_shard,
   };
-  // Publish ships the claim shard projected onto what pin accepts; the owner's
-  // own commit, the claim commit's second parent, keeps every row. The working
-  // copy takes the owner's shard, so the person's answers stay answered here,
-  // unless this checkout has already written to it.
-  const ownerHead = claim.payload.candidate_head_oid;
+  // The owner's local record comes over with the claim: the claim's second
+  // parent (the handover publish built) carries it beside the owner's commit,
+  // never in the candidate tree. A claim published before the local record
+  // existed carries the owner's whole shard there instead. This checkout's own
+  // rows stay, and the handed-over rows it lacks join them.
   const recordPrefix = relativeRecordDir(pd);
-  if (ownerHead && recordPrefix) {
-    const shardPath = `${recordPrefix}/audit/${claim.payload.audit_shard}`;
-    const blobAt = (oid: string) => git(pd, ["rev-parse", `${oid}:${shardPath}`]).stdout;
-    if (
-      blobAt(ownerHead) !== blobAt("HEAD") &&
-      git(pd, ["diff", "--quiet", "HEAD", "--", shardPath]).ok
-    ) {
-      const owners = git(pd, ["show", `${ownerHead}:${shardPath}`, "--"]);
-      if (owners.ok) writeFileSync(join(pd, shardPath), owners.stdout);
+  if (claim.payload.candidate_head_oid && recordPrefix) {
+    const localPath = `${recordPrefix}/${ENGINE_DIR}/audit/${claim.payload.audit_shard}`;
+    for (const path of [localPath, `${recordPrefix}/audit/${claim.payload.audit_shard}`]) {
+      const handedOver = git(pd, ["show", `${claim.oid}^2:${path}`, "--"]);
+      if (!handedOver.ok) continue;
+      takeHandedOverAuditRows(pd, join(pd, ...localPath.split("/")), handedOver.stdout);
+      break;
     }
   }
   finalizeClaimCheckout(pd, stamp, claim);
@@ -3973,7 +3925,30 @@ function claimUnit(args: string[], projectDir?: string): void {
     fail(`Unit "${unit}" claim verification failed; current holder is "${winner?.owner ?? "unknown"}".`);
   }
   finalizeClaimCheckout(pd, stamp, winner);
+  if (recordPrefix && auditShard !== ownShard) {
+    moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
+  }
   console.log(JSON.stringify({ claimed: true, ...stamp }));
+}
+
+// A checkout whose own shard main already holds claims into a shard of the
+// claim's own, so the claim turn's rows (and any others not yet committed)
+// sit in the older shard, which publish carries as main has it. They join the
+// claim's local record and the shard goes back to its committed bytes: a
+// commit then takes nothing of them, and the pull after the landing finds the
+// shard as main has it. Only when the shard is main's as committed and the
+// file is that plus rows after it; anything else is left as it is.
+function moveClaimTurnRows(projectDir: string, shardPath: string, localPath: string, baseOid: string): void {
+  const head = git(projectDir, ["rev-parse", `HEAD:${shardPath}`]);
+  if (!head.ok || head.stdout.trim() !== git(projectDir, ["rev-parse", `${baseOid}:${shardPath}`]).stdout.trim()) return;
+  const committed = git(projectDir, ["show", `HEAD:${shardPath}`, "--"]).stdout.replace(/\r\n/g, "\n");
+  const working = readLocalRecord(projectDir, shardPath);
+  if (working === null) return;
+  const text = working.replace(/\r\n/g, "\n");
+  if (!text.startsWith(committed) || text.length === committed.length) return;
+  takeHandedOverAuditRows(projectDir, join(projectDir, ...localPath.split("/")), text.slice(committed.length));
+  if (readLocalRecord(projectDir, shardPath) !== working) return;
+  git(projectDir, ["checkout", "HEAD", "--", shardPath]);
 }
 
 function releaseUnit(args: string[], projectDir?: string): void {

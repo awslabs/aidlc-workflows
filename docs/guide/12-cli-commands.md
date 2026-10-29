@@ -660,9 +660,10 @@ Adoption verifies the checked-out claim OID and payload against the live ref,
 including space, intent UUID, Unit, generation, nonce, and bound audit shard,
 before writing the checkout-local scope stamp. Subsequent audit writes retain
 the claim's existing shard, and `publish` continues the same attempt. The
-shard comes back whole from the owner's published commit, including the rows
-`publish` keeps out of the claim (the questions the person already answered),
-so the work resumes without asking them again.
+owner's local audit record comes with the claim (publish's handover commit
+carries it beside the owner's commit, outside what main lands) and joins any
+rows this checkout already wrote, so the questions the person already answered
+stay answered and the work resumes without asking them again.
 
 ### `/aidlc --release <unit>` and `/aidlc unit release <unit>` — Release a claim
 
@@ -706,6 +707,12 @@ to a candidate commit that preserves both claim and implementation history.
 AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` (written when a
 session starts in a fresh clone) does not count, here or at landing; it stays
 uncommitted, and any other change still stops both.
+A claimed checkout keeps its own audit rows (sessions, turns, answers) in a
+local record under the intent record's `.aidlc-engine/audit/`, which AI-DLC's
+`.gitignore` keeps out of commits, and the claim's tracked shard takes only the
+Unit's evidence that pin accepts. So the candidate is the commit as it is, and
+after the Unit lands, a plain pull of main in the claiming checkout
+fast-forwards with every row it wrote kept.
 
 ### `/aidlc unit pin <unit>` — Pin candidate evidence
 
