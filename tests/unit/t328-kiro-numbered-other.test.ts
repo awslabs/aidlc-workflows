@@ -84,7 +84,7 @@ describe("t328 Kiro numbered Other rendering contract", () => {
     for (const rel of ANNEXES) {
       const mode = section(readAnnex(rel), "Canonical interaction-mode rendering");
       expect(mode, rel).toContain(
-        "4. **Other** — describe what you want instead",
+        "4. **Other** - describe what you want instead",
       );
       expect(mode.match(/^4\. \*\*Other\*\*/gm) ?? [], rel).toHaveLength(1);
       expect(mode, rel).toContain(

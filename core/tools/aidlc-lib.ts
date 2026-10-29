@@ -682,7 +682,7 @@ function readShippedHarnessData(): ShippedHarnessData {
         if (typeof argv === "string") {
           throw new Error(
             `${p}: harness.json field "documentExtractors" entry "${mime}" argv must be an ARRAY ` +
-              `of strings, not a shell string — it is spawned without a shell, so a string ` +
+              `of strings, not a shell string - it is spawned without a shell, so a string ` +
               `cannot be split safely.`,
           );
         }
@@ -4880,7 +4880,7 @@ export function resolveUniqueIntentDir(intentsRoot: string, base: string): strin
   }
   throw new Error(
     `Could not find a free intent record dir for "${base}" after ${MAX_DIR_COLLISIONS} attempts in ${intentsRoot}. ` +
-      `This many same-day intents with the same label indicates a bug or a runaway caller — pass a distinct --label.`,
+      `This many same-day intents with the same label indicates a bug or a runaway caller - pass a distinct --label.`,
   );
 }
 
@@ -32919,7 +32919,7 @@ export function validateBoltSlug(slug: string): string | null {
     return `Bolt slug "${slug.slice(0, 32)}..." is ${slug.length} chars; max is ${BOLT_SLUG_MAX_LENGTH}`;
   }
   if (!BOLT_SLUG_REGEX.test(slug)) {
-    return `Invalid Bolt slug "${slug}" — must match ${BOLT_SLUG_REGEX} (lowercase letter, then lowercase letters/digits/hyphens)`;
+    return `Invalid Bolt slug "${slug}" - must match ${BOLT_SLUG_REGEX} (lowercase letter, then lowercase letters/digits/hyphens)`;
   }
   return null;
 }
@@ -33613,7 +33613,7 @@ export function setFieldStrict(content: string, field: string, value: string): s
   );
   if (!regex.test(content)) {
     throw new Error(
-      `Field not found in state file: "${field}". Cannot update — refusing to silently no-op.`
+      `Field not found in state file: "${field}". Cannot update - refusing to silently no-op.`
     );
   }
   return content.replace(regex, `$1 ${value}`);
@@ -40251,7 +40251,7 @@ function objectListField(
     if (line === "" || /^[ \t]+$/.test(line)) continue;
     if (/^[ \t]+-[ \t]/.test(line)) {
       throw new Error(
-        `Blank line not allowed inside ${key}[] block — list items must be consecutive`
+        `Blank line not allowed inside ${key}[] block - list items must be consecutive`
       );
     }
     break;

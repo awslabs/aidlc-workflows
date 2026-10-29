@@ -13417,7 +13417,7 @@ export async function main(
             predatesFrameworkVersion(sibling.frameworkVersion, stamp.frameworkVersion)
           ) {
             throw new Error(
-              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first — if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
+              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first - if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
             );
           }
           throw new Error(

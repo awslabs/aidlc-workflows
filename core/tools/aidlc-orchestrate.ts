@@ -11313,7 +11313,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (retiredScopeOfFinishedWork && !startsNewWork) {
     emit({
       kind: "done",
-      reason: `Workflow complete — this intent recorded scope "${scope}", which this install no longer defines, so nothing is left to route from it.${NEW_WORK_HINT}`,
+      reason: `Workflow complete - this intent recorded scope "${scope}", which this install no longer defines, so nothing is left to route from it.${NEW_WORK_HINT}`,
       narration: "That is everything on the plan. Your work is finished and written up.",
     });
     return;
@@ -12527,7 +12527,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // No stage left to run — the workflow is complete.
     emit({
       kind: "done",
-      reason: `Workflow complete — no in-scope stage remains after ${currentSlug} (scope: ${scope}).${NEW_WORK_HINT}`,
+      reason: `Workflow complete - no in-scope stage remains after ${currentSlug} (scope: ${scope}).${NEW_WORK_HINT}`,
       // The genuine end of the work. The other `done` emissions in this file are
       // loop bookkeeping (a report landed, a read-only command already ran) and
       // stay silent: the user did not ask about the round-trip.
@@ -18129,7 +18129,7 @@ function handleSkeletonStanceReport(
   const stateContent = loadStateFileIfPresent(pd);
   if (!stateContent) {
     emit(errorDirective(
-      "No active intent workflow state found (aidlc-state.md is absent) — nothing to record a skeleton stance for.",
+      "No active intent workflow state found (aidlc-state.md is absent) - nothing to record a skeleton stance for.",
     ));
     return;
   }
@@ -18142,20 +18142,20 @@ function handleSkeletonStanceReport(
   const scope = getField(stateContent, "Scope");
   if (!slug || slug.length === 0) {
     emit(errorDirective(
-      "State file has no Current Stage field — cannot record a skeleton stance.",
+      "State file has no Current Stage field - cannot record a skeleton stance.",
     ));
     return;
   }
   if (!scope || scope.length === 0) {
     emit(errorDirective(
-      "State file has no Scope field — cannot validate the skeleton-gate stage.",
+      "State file has no Scope field - cannot validate the skeleton-gate stage.",
     ));
     return;
   }
   const node = nodeForSlug(slug);
   if (!node || !isSkeletonGateStage(node, scope, stateContent)) {
     emit(errorDirective(
-      `Current stage "${slug}" is not the skeleton-gate stage for scope "${scope}" — ` +
+      `Current stage "${slug}" is not the skeleton-gate stage for scope "${scope}" - ` +
         "a skeleton stance is only reported for the first Construction Bolt's gate.",
     ));
     return;
@@ -18175,7 +18175,7 @@ function handleSkeletonStanceReport(
 
   emit(printDirective(
     `Recorded walking-skeleton stance "${stance}" for "${slug}". ` +
-      "Re-run `next` to continue — the gate is now determined.",
+      "Re-run `next` to continue - the gate is now determined.",
   ));
 }
 
@@ -19380,7 +19380,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     emit({
       kind: "error",
       message:
-        "State file has no Current Stage field — cannot determine which stage's transition to commit.",
+        "State file has no Current Stage field - cannot determine which stage's transition to commit.",
     });
     return;
   }
@@ -19391,7 +19391,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   if (!scope || scope.length === 0) {
     emit({
       kind: "error",
-      message: "State file has no Scope field — cannot resolve the next in-scope stage.",
+      message: "State file has no Scope field - cannot resolve the next in-scope stage.",
     });
     return;
   }
@@ -19403,7 +19403,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   if (!node) {
     emit({
       kind: "error",
-      message: `Internal: reported stage "${slug}" is not in the compiled graph — cannot commit its transition.`,
+      message: `Internal: reported stage "${slug}" is not in the compiled graph - cannot commit its transition.`,
     });
     return;
   }
@@ -19411,7 +19411,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   if (!stageCheckbox) {
     emit({
       kind: "error",
-      message: `Stage "${slug}" is not present in the state file — cannot commit its transition.`,
+      message: `Stage "${slug}" is not present in the state file - cannot commit its transition.`,
     });
     return;
   }

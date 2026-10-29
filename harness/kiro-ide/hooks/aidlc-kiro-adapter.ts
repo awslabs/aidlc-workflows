@@ -2859,7 +2859,7 @@ function buildForward(): Forward {
     recordHookDrop(
       projectDir,
       "kiro-adapter",
-      `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
+      `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) - event not forwarded`,
     );
     if (
       target === "plan-approval-guard" &&
@@ -3541,7 +3541,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "audit-and-sensors: empty hook context (no stdin payload, no USER_PROMPT) — write not audited",
+          "audit-and-sensors: empty hook context (no stdin payload, no USER_PROMPT) - write not audited",
         );
         return null;
       }
@@ -3687,7 +3687,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "log-subagent: empty hook context (no stdin payload, no USER_PROMPT) — SUBAGENT_COMPLETED not recorded",
+          "log-subagent: empty hook context (no stdin payload, no USER_PROMPT) - SUBAGENT_COMPLETED not recorded",
         );
         return null;
       }
@@ -3707,7 +3707,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "log-subagent: empty tool payload — SUBAGENT_COMPLETED not recorded",
+          "log-subagent: empty tool payload - SUBAGENT_COMPLETED not recorded",
         );
         return null;
       }
@@ -3729,7 +3729,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "log-subagent: orchestrate_subagent payload names no stage — SUBAGENT_COMPLETED not recorded",
+          "log-subagent: orchestrate_subagent payload names no stage - SUBAGENT_COMPLETED not recorded",
         );
         return null;
       }
@@ -3747,7 +3747,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          `log-subagent: Kiro has no agent named ${t.agent} — SUBAGENT_COMPLETED not recorded`,
+          `log-subagent: Kiro has no agent named ${t.agent} - SUBAGENT_COMPLETED not recorded`,
         );
       }
       if (ran.length === 0) return null;

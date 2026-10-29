@@ -3608,7 +3608,7 @@ function assertNoForeignBoltDirectory(pd: string, identity: BoltIdentity, select
     if (parsed === null || parsed.slug !== identity.slug || name === identity.name) continue;
     errorWithSlug(
       identity.slug,
-      `no Bolt ${identity.slug} belongs to intent ${relativeRecordDirForSelection(selection)}; this checkout holds ${name} (${parsed.intentId8 === null ? "legacy" : `intent ${parsed.intentId8}`}) at ${join(root, name)} — select that intent to discard it`,
+      `no Bolt ${identity.slug} belongs to intent ${relativeRecordDirForSelection(selection)}; this checkout holds ${name} (${parsed.intentId8 === null ? "legacy" : `intent ${parsed.intentId8}`}) at ${join(root, name)} - select that intent to discard it`,
     );
   }
 }
@@ -3716,7 +3716,7 @@ function handleDiscard(args: string[]): void {
   if (identity.legacy && !dirExists && branchExists && authority.legacyMergeRecorded) {
     errorWithSlug(
       slug,
-      `legacy Bolt ${slug} recorded a merge; finish it with merge --slug ${slug} (cleanup-only) instead of discard — the leftover branch ${branchName} may belong to a later attempt`,
+      `legacy Bolt ${slug} recorded a merge; finish it with merge --slug ${slug} (cleanup-only) instead of discard - the leftover branch ${branchName} may belong to a later attempt`,
     );
   }
   const retained = retainedSourceRefs(repoCwd, identity);

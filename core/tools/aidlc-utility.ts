@@ -4600,7 +4600,7 @@ export async function collectDoctorReport(
         label:
           hooksDisabledBy === null
             ? "Hooks enabled (resolved disableAllHooks is not true)"
-            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
+            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} - AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
         fix:
           hooksDisabledBy === null
             ? undefined
@@ -6193,7 +6193,7 @@ export async function collectDoctorReport(
           `${cleanupOrphans.length} cleanup-orphan${cleanupOrphans.length === 1 ? "" : "s"} (merge/discard landed, dir persists): ${cleanupOrphans.join(", ")}`,
         );
       }
-      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift — ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
+      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift - ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
       fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
@@ -6260,7 +6260,7 @@ export async function collectDoctorReport(
       } else {
         results.push({
           pass: false,
-          label: `Stale branches: ${stale.length} drift — ${stale.join(", ")}`,
+          label: `Stale branches: ${stale.length} drift - ${stale.join(", ")}`,
           fix: "Inspect unrecognised names and unknown intent ownership. Recognised branches have no worktree directory and no owning WORKTREE_MERGED/_DISCARDED audit row. Delete via 'git branch -D <full-bolt-name>' only if abandoned.",
         });
       }
@@ -6328,7 +6328,7 @@ export async function collectDoctorReport(
     } else {
       results.push({
         pass: false,
-        label: `Orphan state files: ${orphan.length} drift — ${orphan.join(", ")}`,
+        label: `Orphan state files: ${orphan.length} drift - ${orphan.join(", ")}`,
         fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
       });
     }

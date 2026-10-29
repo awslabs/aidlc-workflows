@@ -1401,7 +1401,7 @@ function handleAppendRaw(
     }
     if (VALID_EVENT_TYPES.has(value)) {
       jsonError(
-        `append-raw refuses a body carrying **Event**: ${value} — that line would register as a ` +
+        `append-raw refuses a body carrying **Event**: ${value} - that line would register as a ` +
           "canonical audit event to every reader. Emit taxonomy events through their owning tool " +
           "(or `append` for diagnostic types); append-raw is for free-form notes only."
       );
