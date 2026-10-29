@@ -284,6 +284,20 @@ that can be skipped in its refusal, and offers a skip command only where
 following it drops no unit's written work; otherwise it says to continue with
 the workflow's entry command.
 
+Team-owned Units (`Unit Ownership: team`) skip the same way, on the step the
+team walk hands out: the beat is the claimed Unit's first unsettled block stage,
+read from the one walk `next` routes, before or after `unit start`. The
+transition writes only the Unit's `UNIT_SKIPPED` receipt (with its claim's
+`Attempt Generation`): the stage's checkbox is derived from every team's Units,
+so it is never marked or routed in the claimed checkout. The walk asks no
+summary, review or gate for that step, the Unit's row shows it `[x]` like a
+stage its kind writes nothing for, the receipt travels with the published
+work, and pin takes the stage as one the Unit owes nothing: no documents,
+review, receipt or per-stage gate. Pin's evidence lists it under
+`stages_skipped` with its reason (left out of `stages_completed`), and the
+merge gate step's `skipped_steps` line has the agent say it in the merge
+question.
+
 **Artifact guard (issue #366).** Every report outcome that marks a stage `[x]`
 runs a deterministic artifact check before completing it, so a stage cannot be
 marked complete without evidence of work on disk. A stage that declares
@@ -886,7 +900,7 @@ resolve v1 through the v2 hash function; no stored receipt is rewritten.
 | `UNIT_PAUSED` | `tools/aidlc-state.ts` | `unit pause` — requires `--reason` and `--next-action`; the engine routes the paused unit first and hard-stops until an explicit resume. `--set-aside-for <unit>` records `Set Aside For`: the person asked for that Unit's work meanwhile (a unit-major reopen), so the walk takes that Unit first and then asks to resume this one. With `--set-aside-for`, a unit already paused keeps its own reason and next action when they are not given |
 | `UNIT_RESUMED` | `tools/aidlc-state.ts` | `unit resume` — only a paused unit can resume, and only while no other unit of the stage is in progress |
 | `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts and refuses while the Unit's review request is open with no verdict, naming the verdict (or retry) command; the person's words since the last question, or their pick of the receipt on a recovery ask, let it record (their approval then goes over the review). A verdict the record could not verify, a stale receipt and every other freshness question stay the gate's. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies any new Unit diary entries into the parent diary with deterministic markers (leaving an absent parent diary absent when there are no new entries), binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. With Construction Checkpoints on, a wave receipt whose outputs changed after it stays a receipt while every output is there: the Unit's checkpoint re-checks the change (`strict`) or accepts it with one line (`relaxed`, `off`). Under Guard Policy `relaxed` or `off` it stays a receipt without checkpoints too, and the stage's gate says the change once. |
-| `UNIT_SKIPPED` | `tools/aidlc-state.ts` | `skip --unit`, reached only through `aidlc-orchestrate.ts report --result skipped --unit` for the unit-major walk's live (stage, unit) beat (and, for the person's own skip of the walk's first stage with no `--unit`, once for the beat's unit and once for each unit that still owes the stage), or through `aidlc-jump.ts execute --units <unit> --stages <steps>` when a forward jump moves that unit on (the jump tool runs the state tool with a token bound to its own PID; every other direct `skip` is refused). The unit owes that stage nothing in its current attempt (same `Run floor` as `UNIT_COMPLETED`), so the walk moves on while other units still owe the stage; the stage itself becomes `[S]` only once no unit owes it. A unit's step reopened behind its stage approval (a `[x]` stage before Current Stage) is skipped for that unit only, with its checkbox and Current Stage left as they are. |
+| `UNIT_SKIPPED` | `tools/aidlc-state.ts` | `skip --unit`, reached only through `aidlc-orchestrate.ts report --result skipped --unit` for the unit-major walk's live (stage, unit) beat, a team-owned Unit's included (and, for the person's own skip of the walk's first stage with no `--unit`, once for the beat's unit and once for each unit that still owes the stage), or through `aidlc-jump.ts execute --units <unit> --stages <steps>` when a forward jump moves that unit on (the jump tool runs the state tool with a token bound to its own PID; every other direct `skip` is refused). The unit owes that stage nothing in its current attempt (same `Run floor` as `UNIT_COMPLETED`), so the walk moves on while other units still owe the stage; the stage itself becomes `[S]` only once no unit owes it. A unit's step reopened behind its stage approval (a `[x]` stage before Current Stage) is skipped for that unit only, with its checkbox and Current Stage left as they are. |
 | `UNIT_MERGED` | `tools/aidlc-state.ts` | Main landed the pinned candidate content, received the team's audit shard, and folded this Unit's derived row. Fields bind the row to Unit, owner, pinned candidate OID, merge commit OID, and attempt generation. |
 
 Team-owned unit-major runs add a derived `## Unit Progress` table to state. The
