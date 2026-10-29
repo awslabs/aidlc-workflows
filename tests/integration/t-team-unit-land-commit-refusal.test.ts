@@ -11,7 +11,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import {
   UNIT,
   approveMerge,
@@ -26,7 +26,8 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
 
 describe("t-team-unit-land-commit-refusal: land says why git refused its commit", () => {
-  test("a commit git refuses on stdout is explained in land's refusal", () => {
+  // The fake git is a #!/bin/sh script, which Windows cannot run.
+  test.skipIf(process.platform === "win32")("a commit git refuses on stdout is explained in land's refusal", () => {
     const { seed, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "alpha-team");
     approveMerge(seed, "alpha");
@@ -41,7 +42,7 @@ describe("t-team-unit-land-commit-refusal: land says why git refused its commit"
     );
     chmodSync(join(bin, "git"), 0o755);
     const landed = runMergeTool(UNIT, ["land", "alpha"], seed, false, {
-      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
     });
     expect(landed.status).not.toBe(0);
     expect(landed.out).toContain("nothing to commit, working tree clean");
