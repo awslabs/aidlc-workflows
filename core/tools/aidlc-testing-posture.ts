@@ -1506,9 +1506,9 @@ export function usableTestingContract(contract: TestingPostureContract | null): 
 //      "4"). Every other box is the plan's text, bound and handed to the worker
 //      as written: a box in the step's words or after its own box, and one that
 //      is escaped, right after a word character, or a link's text (`[x](url)`).
-//      A step box in a one-line HTML comment or in a code span that runs on to
-//      the next line is reset too; both sides of a comparison project alike, so
-//      only an unseen box flip there goes unbound.
+//      A step box in a code span that runs on to the next line is reset too;
+//      both sides of a comparison project alike, so only an unseen box flip
+//      there goes unbound.
 //   3. Line endings become LF, trailing whitespace per line is dropped OUTSIDE
 //      fences, runs of blank lines outside fences and comments collapse to one, and
 //      trailing blank lines are dropped. These are editor artifacts, not content.
