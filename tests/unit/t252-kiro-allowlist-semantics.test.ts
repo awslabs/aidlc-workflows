@@ -461,30 +461,48 @@ const WRITE_ASK = [
 ];
 
 // A side-by-side build gives each worker its own checkout at
-// `.aidlc/worktrees/bolt-<id8>_<slug>`, a top-level dot entry. The unit's own
-// records there are written like the same records in the project; the worker's
-// code there, the worktree's own dot entries and the rest of `.aidlc/` still
-// ask. Measured on 2.29.0: a broader worktree glob also let a worker write its
-// worktree's `.kiro/agents` and `.github/workflows`, so those stay pinned here.
-// Kiro resolves `..` before it matches, so a record path cannot step out of it.
+// `.aidlc/worktrees/bolt-<id8>_<slug>`, a top-level dot entry. The worker writes
+// there what the developer writes in the project: the Unit's code and records
+// (Arden's call, P1457: one build asked 88 times). The checkout's own top-level
+// dot entries, the rest of `.aidlc/` and anything outside still ask. Every
+// worker shares one agent file and Kiro names no agent on a hook call, so the
+// rule covers any Unit checkout; the plan-approval guard admits a write only
+// into one bound to a listed Unit whose approval holds. Kiro resolves `..`
+// before it matches, so a path cannot step out of the checkout.
 const WORKTREE = ".aidlc/worktrees/bolt-1a2b3c4d_u1";
 const WORKTREE_RECORD = `${WORKTREE}/aidlc/spaces/default/intents/fix/construction/u1/code-generation/code-generation-plan.md`;
-const WORKTREE_WRITE_ALLOW = [WORKTREE_RECORD, `/project/${WORKTREE_RECORD}`];
-const WORKTREE_WRITE_ASK = [
+const WORKTREE_WRITE_ALLOW = [
+  WORKTREE_RECORD,
+  `/project/${WORKTREE_RECORD}`,
   `${WORKTREE}/src/app.js`,
   `${WORKTREE}/test/app.test.js`,
   `${WORKTREE}/README.md`,
-  `${WORKTREE}/.kiro/agents/aidlc.json`,
-  `${WORKTREE}/.github/workflows/ci.yml`,
+  `${WORKTREE}/web/src/deep/filter.ts`,
+  `${WORKTREE}/src/.env-probe`,
+  `/project/${WORKTREE}/src/app.js`,
+  `${WORKTREE}/aidlc/spaces/../../src/app.js`,
+];
+const WORKTREE_WRITE_ASK = [
   `${WORKTREE}/.gitignore`,
   `${WORKTREE}/.git`,
+  `${WORKTREE}/.env`,
   ".aidlc/worktrees/notes.txt",
   ".aidlc/other/notes.md",
   `${WORKTREE}/../../../../outside.txt`,
-  `${WORKTREE}/aidlc/spaces/../../src/app.js`,
-  `${WORKTREE}/aidlc/spaces/../../.kiro/agents/aidlc.json`,
+  `${WORKTREE}/../../../.github/workflows/ci.yml`,
   `${WORKTREE}/aidlc/spaces/../../../../../.kiro/agents/aidlc.json`,
   "aidlc/spaces/../../.kiro/agents/aidlc.json",
+];
+// The checkout's dot folders ask on Kiro 3.0, whose `*` stays inside one name,
+// as the project's own do. Kiro CLI 2's `*` crosses `/` (globRegExp), and no
+// allow-only glob holds one name of free length there, so on Kiro CLI 2 these
+// go through with the rest of the checkout; a `deniedPaths` entry would refuse
+// them instead of asking. Measured on 2.29.0 with this glob.
+const WORKTREE_DOT_FOLDERS = [
+  `${WORKTREE}/.kiro/agents/aidlc.json`,
+  `${WORKTREE}/.github/workflows/ci.yml`,
+  `${WORKTREE}/.husky/pre-commit`,
+  `${WORKTREE}/aidlc/spaces/../../.kiro/agents/aidlc.json`,
 ];
 
 describe("t252 Kiro execute_bash allowlist semantics", () => {
@@ -638,18 +656,20 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       expect(writeVerdict(architect, "aidlc/spaces/default/intents/fix/plan.md")).toBe("allow");
     });
 
-    test(`${harness}: a side-by-side worker writes its unit's records in its worktree, and nothing else there`, () => {
+    test(`${harness}: a side-by-side worker writes its Unit's code and records in its checkout, and its checkout's dot files and anything outside still ask`, () => {
       for (const agent of CODE_WRITERS) {
         const settings = writeSettings(harness, agent);
         for (const path of WORKTREE_WRITE_ALLOW) {
           expect(writeVerdict(settings, path), `${harness}/${agent}: should allow writing ${path}`).toBe("allow");
         }
-        for (const path of WORKTREE_WRITE_ASK) {
+        for (const path of [...WORKTREE_WRITE_ASK, ...WRITE_ASK]) {
           expect(writeVerdict(settings, path), `${harness}/${agent}: should ask before writing ${path}`).toBe("ask");
         }
       }
-      // The other personas keep their records in the project.
-      expect(writeVerdict(writeSettings(harness, "aidlc-architect-agent.json"), WORKTREE_RECORD)).toBe("ask");
+      // The other personas write neither the checkout's code nor its records.
+      const architect = writeSettings(harness, "aidlc-architect-agent.json");
+      expect(writeVerdict(architect, WORKTREE_RECORD)).toBe("ask");
+      expect(writeVerdict(architect, `${WORKTREE}/src/app.js`)).toBe("ask");
     });
   }
 });
@@ -954,6 +974,11 @@ describe("t252 Kiro allowlist after Kiro CLI's 3.0 upgrade", () => {
       const settings = writeSettings("kiro", agent);
       for (const path of [...WRITE_ALLOW, ...WRITE_ASK, ...WORKTREE_WRITE_ALLOW, ...WORKTREE_WRITE_ASK]) {
         expect(v3WriteVerdict(settings, path), `${agent}: ${path}`).toBe(writeVerdict(settings, path));
+      }
+      // The one difference: a Unit checkout's dot folders, inside the checkout either way.
+      for (const path of WORKTREE_DOT_FOLDERS) {
+        expect(v3WriteVerdict(settings, path), `${agent} on Kiro 3.0: ${path}`).toBe("ask");
+        expect(writeVerdict(settings, path), `${agent} on Kiro CLI 2: ${path}`).toBe("allow");
       }
     }
   });
