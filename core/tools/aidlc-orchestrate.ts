@@ -14851,6 +14851,13 @@ export function deriveTeamUnitProgressModel(
       }
     }
   }
+  // A claimed checkout's own Unit is its claim's: once its local row is all
+  // [x], the overview counts it complete and lists no claim for it.
+  const stamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
+  if (stamp) {
+    owners.set(stamp.unit, stamp.owner);
+    claimedUnits.add(stamp.unit);
+  }
   for (const [unit, owner] of options.ownerOverrides ?? []) {
     owners.set(unit, owner);
   }
