@@ -475,7 +475,7 @@ A note with no owning taxonomy event (an error worked around, a recovery, a
 mid-workflow change request) uses this command input:
 
 ```bash
-{{INVOKE}} engine audit append-raw "Error: <brief>" "**Severity**: <level>\n**Description**: <what happened>\n**Resolution**: <action taken>"
+{{INVOKE}} engine audit append-raw 'Error: <brief>' '**Severity**: <level>\n**Description**: <what happened>\n**Resolution**: <action taken>'
 ```
 
 Use `Recovery: <brief>` or `Change Request: <brief>` for those notes. Pass the

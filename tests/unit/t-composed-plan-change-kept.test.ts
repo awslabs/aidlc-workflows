@@ -159,7 +159,7 @@ function stateOf(proj: string): string {
 const suffixOf = (state: string, slug: string) => new RegExp(`^- \\[.\\] ${slug} \u2014 (EXECUTE|SKIP)`, "m").exec(state)?.[1];
 
 function create(proj: string, printed: Printed, message?: string): void {
-  const args = commandIn(printed, "intent create").split(" intent create ")[1].replace(/--label "[^"]*"/, "--label split-evenly")
+  const args = commandIn(printed, "intent create").split(" intent create ")[1].replace(/--label '[^']*'/, "--label split-evenly")
     .replace("'<id>'", message ?? "'<id>'");
   const run = runTool(proj, "aidlc-utility.ts", ["intent-create", ...args.split(/\s+/).filter(Boolean)]);
   expect(run.status, run.out).toBe(0);

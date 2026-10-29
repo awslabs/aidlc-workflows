@@ -357,7 +357,7 @@ describe("t114 scope precedence + validation", () => {
 
   // New work never routes through the finished intent's scope, so a retired
   // one changes nothing for it: `/aidlc-init "<description>"` (next
-  // --new-intent "<description>"), free text, and a typed scope with a
+  // --new-intent '<description>'), free text, and a typed scope with a
   // description get the answer they get over a known scope, and the plan
   // offers' answers start the work (free text's compose answer is a new-work
   // answer with no --new-intent).

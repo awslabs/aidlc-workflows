@@ -110,7 +110,7 @@ const ENSEMBLE_TOKENS = [
   "an isolated run, or the ordinary step with its gate (a settled swarm and a wave follow the module the step names)",
   'deliver the stage\'s rules per `stage-protocol.md` § "For subagent stages" step 2',
   "paste the step's brief lines into every agent brief",
-  '--result skipped --reason "<specific reason>"',
+  "--result skipped --reason '<specific reason>'",
 ];
 
 const COMPOSER_ROUTE_TOKENS = [
@@ -1036,23 +1036,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       if (rel.endsWith("SKILL.md") && !body.includes("record it with that choice's command")) {
         missing.push(`${rel}  missing: the recovery pick runs the choice's command`);
       }
-      for (const stale of [
-        /--details "Request [Cc]hanges: </, /--reason \\?"<(feedback|requested changes|their)/, /<the remedy's action>/,
-      ]) {
-        if (stale.test(body)) missing.push(`${rel}  still double-quotes the person's words: ${stale}`);
-      }
-      // A question's choices travel too, and a $0.00 in one was recorded as the shell's own name. The `|` list
-      // example stays double-quoted: the Copilot adapter's VS Code allow takes a `|` only inside double quotes.
-      if (/--(decision|options) \\?"</.test(body)) missing.push(`${rel}  still double-quotes a question's text`);
-    }
-    // The engine's own messages that print such a command, escaped quotes included.
-    const tools = join(REPO_ROOT, "core", "tools");
-    for (const name of readdirSync(tools).filter((file) => file.endsWith(".ts"))) {
-      const body = readFileSync(join(tools, name), "utf-8");
-      if (/--(details|reason) \\?\\?"(Request [Cc]hanges: <|<(feedback|requested changes))/.test(body)) {
-        missing.push(`core/tools/${name}  still double-quotes the person's words`);
-      }
-      if (/--(decision|options) \\?\\?"</.test(body)) missing.push(`core/tools/${name}  still double-quotes a question's text`);
+      // Which words a double-quoted placeholder still carries is t-free-text-single-quoted's lint.
+      if (/<the remedy's action>/.test(body)) missing.push(`${rel}  still says <the remedy's action>`);
     }
     expect(missing).toEqual([]);
   });
@@ -1434,7 +1419,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         'a trailing "or tell me" does not replace it',
         "needs the piece of work named first",
         'is only `4` or `Other`, your whole message is **"What would you like me to do instead?"**: call no tool and end your turn',
-        '`next "<their words>"`',
+        "`next '<their words>'`",
         "with their words unchanged",
       ]) {
         if (!skill.includes(token)) missing.push(`${skillRel}  missing: ${token}`);
@@ -1454,10 +1439,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ]) {
         if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
       }
-      // The Other-then-words forwarding through bare `next "<words>"` is the new-work routing question's route and
+      // The Other-then-words forwarding through bare `next '<words>'` is the new-work routing question's route and
       // lives in the skill's Other paragraph, scoped to that ask; the annex's section on every question never carries
       // it, so an Other answer at a paused Unit or the project-type question is read for what it means, not forwarded.
-      if (annex.includes('`next "<their words>"`')) missing.push(`${annexRel}  carries the routing-only forwarding`);
+      if (annex.includes("`next '<their words>'`")) missing.push(`${annexRel}  carries the routing-only forwarding`);
     }
     expect(missing).toEqual([]);
   });

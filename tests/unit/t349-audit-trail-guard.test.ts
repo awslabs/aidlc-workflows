@@ -492,7 +492,7 @@ describe("t349 audit trail prose: the manual-write instructions stay gone", () =
     expect(protocol).toContain("### Audit trail rules");
     expect(protocol).toContain("{{INVOKE}} engine log decision");
     expect(protocol).toContain("{{INVOKE}} engine log answer");
-    expect(protocol).toContain('{{INVOKE}} engine audit append-raw "<heading>" "<body>"');
+    expect(protocol).toContain("{{INVOKE}} engine audit append-raw '<heading>' '<body>'");
     expect(protocol).toContain('--result approved --user-input "Accept as-is"');
     expect(protocol).toContain("Never write the audit shard yourself");
     expect(protocol).toContain("{{INVOKE}} engine log answers --stage <slug>");

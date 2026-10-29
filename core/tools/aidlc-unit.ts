@@ -2019,7 +2019,7 @@ function currentPinnedClaim(
       fail(
         `Unit "${transaction.unit}" was released after its merge commit landed. ` +
           `Inspect the landed commit, then recover explicitly with aidlc unit land ${transaction.unit} ` +
-          '--accept-released-attempt --user-input "<human acknowledgment>".',
+          "--accept-released-attempt --user-input '<human acknowledgment>'.",
       );
     }
     return {

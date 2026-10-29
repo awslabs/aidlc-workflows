@@ -852,7 +852,7 @@ Utilities:
   unit status       Show claimable, claimed, and dependency-blocked Units
   compose "<task>"  Suggest a plan tailored to this task (mid-workflow: adjust the steps not yet run)
   compose --report <path>  Build a plan from a scan report (sort findings into a fix-and-ship run)
-  --new-scope "<task>"  Build a custom plan even when a ready-made one matches
+  --new-scope '<task>'  Build a custom plan even when a ready-made one matches
   intent list       List intents in the active space (read-only; --json for structured output; --all includes archived)
   intent switch <name>  Switch the active intent (bare intent <name> still works)
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
@@ -8030,7 +8030,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         `intent. Start work via \`${entrySkillInvocation()} "<what to build>"\` (the engine names ` +
         "the create move for you); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
-        "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
+        "ideally `--arguments '<description>' --label '<2-3 word essence>'`).",
     );
   }
 
@@ -13759,7 +13759,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
-        '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
+        "[--arguments '<description>' | --request <id>] [--label '<short label>'] " +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] " +
         "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] [--project-type <greenfield|brownfield>] " +

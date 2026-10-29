@@ -127,7 +127,7 @@ Discard parks each attempt; its snapshot remains
 recoverable with `{{INVOKE}} engine worktree restore --slug <slug>` in a
 separate restored checkout, never as current-attempt evidence. Do not spend a worker turn per unit: after
 `prepare`, run
-`check <unit> --check-cmd "<the project's convergence check>"` on every unit
+`check <unit> --check-cmd '<the convergence check the project runs>'` on every unit
 FIRST. A unit already green needs no builder turn, but before putting it in
 `finalize --claimed`, dispatch code-generation's reviewer in that fresh
 worktree and record a terminal current-attempt `REVIEW_COMPLETED`. `finalize`

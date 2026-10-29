@@ -45,7 +45,7 @@ When dispatched for trunk-based:
 1. Read `## Way of Working` from the active space's `project.md`, `team.md`, then `org.md` per `shared/rules-reading.md`; use hardcoded defaults only if all three are empty.
 2. Resolve flags: `--base main --target main --strategy squash` for the default; deviate only if `team.md` explicitly says otherwise.
 3. **Create**: invoke `{{INVOKE}} engine worktree create --slug <bolt-slug> --base main`.
-4. **Merge** (after Bolt gate approval): caller must be on `main` at the main checkout. Invoke `{{INVOKE}} engine worktree merge --slug <bolt-slug> --target main --strategy squash --message "<commit message>"`.
+4. **Merge** (after Bolt gate approval): caller must be on `main` at the main checkout. Invoke `{{INVOKE}} engine worktree merge --slug <bolt-slug> --target main --strategy squash --message '<commit message>'`.
 5. Return the JSON envelope per § Response contract back to the orchestrator.
 
 ### Failure modes
@@ -85,7 +85,7 @@ When dispatched for GitHub Flow:
 1. Read `## Way of Working` from the active space's `project.md`, `team.md`, then `org.md` (including any merge-style statement). The merge-strategy choice (squash vs merge) is what differs from trunk-based.
 2. Resolve flags: `--base main --target main --strategy <squash|merge>` per affirmation; default to `squash`.
 3. **Create**: `{{INVOKE}} engine worktree create --slug <bolt-slug> --base main`.
-4. **Merge**: `{{INVOKE}} engine worktree merge --slug <bolt-slug> --target main --strategy <squash|merge> [--message "<msg>"]`. With `--strategy merge`, a no-fast-forward merge commit preserves the bolt branch's individual commits.
+4. **Merge**: `{{INVOKE}} engine worktree merge --slug <bolt-slug> --target main --strategy <squash|merge> [--message '<msg>']`. With `--strategy merge`, a no-fast-forward merge commit preserves the bolt branch's individual commits.
 5. Return per § Response contract.
 
 ### Failure modes

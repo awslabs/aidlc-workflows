@@ -659,7 +659,7 @@ describe("t327 team construction dispatcher", () => {
     const recoveryBoard = nextDirective(race.project);
     expect(recoveryBoard.kind).toBe("notice");
     expect(recoveryBoard.message as string).toContain(
-      'aidlc unit land awaiting --accept-released-attempt --user-input "<human acknowledgment>"',
+      "aidlc unit land awaiting --accept-released-attempt --user-input '<human acknowledgment>'",
     );
   });
 

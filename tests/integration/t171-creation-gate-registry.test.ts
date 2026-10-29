@@ -208,7 +208,7 @@ function printedCommand(message: string, p = proj): string {
   const command = message.match(/Run `([^`]+)`/)?.[1];
   expect(command, message).toBeDefined();
   const approved = listMessages(p).findLast((entry) => personsWordsText(entry.text) === APPROVAL);
-  return command!.replace('"<2-3 word kebab essence>"', "pending-work")
+  return command!.replace("'<2-3 word kebab essence>'", "pending-work")
     .replace(` --message '${MESSAGE_SLOT}'`, approved === undefined ? "" : ` --message ${approved.id}`);
 }
 

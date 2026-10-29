@@ -1755,7 +1755,7 @@ export function rejectedFindingDispositionField(
     if (kind === "reject" && finding.resolvedByReviewer) {
       throw new Error(
         `Cannot reject ${named}: the reviewer marked it fixed. ` +
-          `If it is not fixed, pass --reopen-finding "${named}=<reason>" instead.`,
+          `If it is not fixed, pass --reopen-finding '${named}=<reason>' instead.`,
       );
     }
     if (
@@ -2641,7 +2641,7 @@ function reviewBriefUsage(verb: string | undefined): string {
   const invoke = (name: string) => aidlcDispatcherInvocation(`review-brief ${name}`);
   const usage: Record<(typeof REVIEW_BRIEF_VERBS)[number], string[]> = {
     review: [
-      `${invoke("review")} --stage <slug> --why <first|revision|stale> [--unit <unit>] [--fallback-finding "<why>"]`,
+      `${invoke("review")} --stage <slug> --why <first|revision|stale> [--unit <unit>] [--fallback-finding '<why>']`,
       "  Prints the Review brief that opens a reviewer-backed approval gate. Required: --stage, --why.",
     ],
     context: [

@@ -3518,7 +3518,7 @@ describe("t304 engine-owned report replay and compatibility", () => {
       "utf-8",
     ).replace(/\s+/g, " ");
     expect(reviewerProtocol).toContain(
-      "(for example `R-03 isn't fixed: <why>`), append `--reopen-finding \"<review-artifact>#R-03=<why>\"`",
+      "(for example `R-03 isn't fixed: <why>`), append `--reopen-finding '<review-artifact>#R-03=<why>'`",
     );
     const both = requestChanges(
       project,

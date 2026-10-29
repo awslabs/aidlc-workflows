@@ -4280,7 +4280,7 @@ function openPlanQuestionReplyDirective(
       "verbatim; if the words are new work, the settings ride with them."
     : "";
   const record = `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
-    `--details "<their choice>"\` ${PLAN_CHANGE_DETAILS}`;
+    `--details '<their choice>'\` ${PLAN_CHANGE_DETAILS}`;
   const answer = editing
     ? `The person is editing the code plan files themselves. If their reply says they are done, run bare \`${orchestrate} next\`.${typed}`
     : answered
@@ -4308,7 +4308,7 @@ function planQuestionAnsweredByWordsDirective(): PrintDirective {
   return printDirective(
     "The person said their words are part of the work in progress, and that work is waiting on their answer to the " +
       "code plan question, so their words are that answer. Read them and record the choice they made with " +
-      `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details "<their choice>"\`` +
+      `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\`` +
       ` ${PLAN_CHANGE_DETAILS}, then run bare ` +
       `\`${orchestrate} next\`. If you cannot tell which choice it is, run bare \`${orchestrate} next\`, show the person ` +
       "the question it returns, and end the turn.",
@@ -5428,7 +5428,7 @@ export function renderTeamConstructionBoard(
         released &&
             row.status === "git-landed" &&
             !row.releasedAfterGitAccepted
-          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`aidlc unit land ${row.unit} --accept-released-attempt --user-input "<human acknowledgment>"\`.`
+          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`aidlc unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
           : `- Resume \`${row.unit}\` with \`aidlc unit land ${row.unit}\`.`,
       );
     } else if (row.status === "rejected") {
@@ -6431,7 +6431,7 @@ export function nextArgsNameOnlyAPlan(args: string[]): string | null {
 const NEW_WORK_HINT =
   " If this input is genuinely NEW, unrelated work (not a follow-up to the " +
   "completed intent), don't stop here: offer to start a second intent, and on " +
-  "the human's yes run `next --new-intent --scope <scope> \"<text>\"` (see the " +
+  "the human's yes run `next --new-intent --scope <scope> '<text>'` (see the " +
   "SKILL's new-work offer, never auto-create).";
 
 // The typed stage changes `plan` can take, each checked on its own; undefined
@@ -6481,7 +6481,7 @@ function planStageFlags(changes: PlanChanges | undefined, planName?: string): st
 // The plan offer for new work that names no scope: a keyword hit proposes that
 // scope with its ceremony; anything else gets the compose offer. Shared by a
 // fresh workspace (Branch 8) and an explicit request for new work that named
-// no scope (`next --new-intent "<description>"`, Branch 4a).
+// no scope (`next --new-intent '<description>'`, Branch 4a).
 function freshWorkOfferDirective(
   flags: ParsedFlags,
   pd: string,
@@ -6881,7 +6881,7 @@ function createPrintDirective(
     // — the engine can't summarize. Name the missing --label in the directive so
     // the conductor adds it; the dir name becomes `<YYMMDD>-<label>`. (A bare run
     // without --label still creates a sane name by truncating the description.)
-    cmd.push(`--label "<2-3 word kebab essence>"`);
+    cmd.push(`--label '<2-3 word kebab essence>'`);
     // The request text itself stays out of this authoritative message; the
     // conductor derives the label from the request it already holds.
     labelHint =
@@ -7366,7 +7366,7 @@ function finishedWorkComposeStep(stateContent: string): PrintDirective {
   const last = nodeForSlug((getField(stateContent, "Current Stage") ?? "").trim())?.name ?? "its last stage";
   const plans = plansReopeningFinishedWork(stateContent);
   const newWork = " and offer to start what they asked for as new work; on their yes run " +
-    `\`${aidlcToolInvocation("orchestrate")} next --new-intent "<their words>"\` and follow what it returns.`;
+    `\`${aidlcToolInvocation("orchestrate")} next --new-intent '<their words>'\` and follow what it returns.`;
   if (plans.length === 0) {
     return turnEndingPrint(
       `Run nothing. This work is finished and no plan runs a stage after ${last}, so its plan takes no more stages: ` +
@@ -18985,7 +18985,7 @@ function skipTargetRefusal(
   const skipCommand = (stage: string, forUnit?: string): string =>
     `\`${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
     (forUnit ? ` --unit ${shellArg(forUnit)}` : "") +
-    ' --result skipped --reason "<why it does not apply>"`';
+    " --result skipped --reason '<why it does not apply>'`";
   const has = (units: string[]): string =>
     `${unitNames(units)} already ${units.length === 1 ? "has" : "have"}`;
   const resume = `continue with \`${entrySkillInvocation()}\``;
@@ -20445,7 +20445,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     emit(errorDirective(
       'Cannot approve "practices-discovery" because the approved practices have not been saved yet. ' +
         "Run aidlc-state.ts practices-promote after the human approves, then report " +
-        '--result approved --user-input "<exact choice>".',
+        "--result approved --user-input '<exact choice>'.",
     ));
     return;
   }

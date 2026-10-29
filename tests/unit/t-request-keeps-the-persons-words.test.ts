@@ -76,7 +76,7 @@ function create(proj: string, step: { message?: string }): void {
   const command = String(step.message).match(/Run `[^`]*?engine (intent create [^`]*)`/)?.[1];
   expect(command, String(step.message)).toBeDefined();
   const args = (command as string).replace("<2-3 word kebab essence>", "the-work").split(" ")
-    .map((arg) => arg.replace(/^"(.*)"$/, "$1"));
+    .map((arg) => arg.replace(/^["'](.*)["']$/, "$1"));
   const r = spawnSync(BUN, [DISPATCHER, "engine", ...args, "--project-dir", proj], {
     cwd: proj, env: env(), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
