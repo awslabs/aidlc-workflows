@@ -96,15 +96,19 @@ export function withoutGitIgnored(
   const ignored = new Map<string, boolean>();
   const pathOf = (key: string): string => key.slice(key.indexOf("\0") + 1);
   return (listing) => {
-    const unknown = [...new Set([...listing.keys()].map(pathOf))].filter((path) => !ignored.has(path));
+    // What a link leads to is no path of the checkout's: it is never asked of
+    // Git, and goes only with its own ignored link.
+    const own = [...listing.keys()].filter((key) => !isLinkTargetListingKey(listing, key));
+    const unknown = [...new Set(own.map(pathOf))].filter((path) => !ignored.has(path));
     const hits = gitIgnoredPaths(repoDir, unknown);
     for (const path of unknown) {
       ignored.set(path, hits.has(path) && !sourcePathIsRegistered(repoDir, carriesWorkspaceShell, path));
     }
     const ignoredLinks = new Map([...listing].filter(([key, entry]) =>
       entry.startsWith("120000 ") && ignored.get(pathOf(key)) === true));
-    return new Map([...listing].filter(([key]) =>
-      ignored.get(pathOf(key)) !== true && !isLinkTargetListingKey(ignoredLinks, key)));
+    return new Map([...listing].filter(([key]) => isLinkTargetListingKey(listing, key)
+      ? !isLinkTargetListingKey(ignoredLinks, key)
+      : ignored.get(pathOf(key)) !== true));
   };
 }
 
@@ -119,8 +123,8 @@ export function swarmSourceChanged(
   before: ReadonlyMap<string, string>,
   after: ReadonlyMap<string, string>,
 ): string[] {
-  // Only the keys that changed are asked of Git, with every link: a link keeps
-  // its own key when only what it leads to changed.
+  // Only the keys that changed are asked of Git, with every link, so an ignored
+  // link whose own entry did not change still takes its changed targets.
   const asked = new Set(sourceListingChangedKeys(before, after));
   if (asked.size === 0) return [];
   for (const [key, entry] of [...before, ...after]) if (entry.startsWith("120000 ")) asked.add(key);

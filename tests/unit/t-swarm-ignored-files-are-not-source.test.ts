@@ -221,6 +221,21 @@ test("strict: a tracked file an ignore rule matches, or an ignored one registere
   expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (config/local.json, fixture.log)");
 });
 
+// Git reads the person's rules against their own paths, never against what a tracked link leads to outside the
+// project: a log written there after the approval is compared as before.
+test("strict: a log behind a tracked link to a folder outside the project still asks for the plans' approval", () => {
+  const target = outsideFolder();
+  const pd = project("strict", (code) => {
+    if (process.platform === "win32") git(code, ["config", "core.symlinks", "true"]);
+    symlinkSync(target, join(code, "vendor-shared"), "dir");
+    git(code, ["add", "vendor-shared"]);
+  });
+  writeFileSync(join(target, "run.log"), "written behind the link\n");
+  const result = prepare(pd, UNITS);
+  expect(result.code).not.toBe(0);
+  expect(`${result.out}\n${result.err}`).toContain(REASKED);
+});
+
 test("in a workspace of several repositories, a log a repository ignores does not re-ask the plans' approval", () => {
   const pd = fixture(UNITS, CHECK, false, "repo-a");
   const repo = join(pd, "repo-a");
