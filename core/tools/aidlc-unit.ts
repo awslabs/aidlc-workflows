@@ -92,6 +92,7 @@ import {
   isCompiledExecutable,
   quoteCommandArgument,
 } from "./aidlc-runtime-paths.ts";
+import { readRequestFile } from "./aidlc-log.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -2364,13 +2365,24 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
   const decision = flags.decision;
-  const userInput = flags["user-input"]?.trim();
+  const pd = resolveProjectDir(projectDir);
+  // The person's words in the file the engine wrote for this command, so no
+  // shell reads them on the way (an apostrophe beside a ! or a $ is quoted one
+  // way for PowerShell and another for Git Bash); spent once recorded.
+  let userInput = flags["user-input"]?.trim();
+  let spend = (): void => {};
+  if (flags["request-file"] !== undefined) {
+    if (userInput) fail("Pass either --user-input or --request-file, not both.");
+    const read = readRequestFile(pd, flags["request-file"]);
+    if (typeof read === "string") fail(read);
+    userInput = read.text.trim();
+    spend = read.spend;
+  }
   if (!unit || (decision !== "approve" && decision !== "reject") || !userInput) {
     fail(
-      "Usage: aidlc-unit gate <unit> --decision <approve|reject> --user-input <text>",
+      "Usage: aidlc-unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
     );
   }
-  const pd = resolveProjectDir(projectDir);
   if (
     !humanPresenceGuardDisabled() &&
     isNonAnswer(userInput)
@@ -2446,6 +2458,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     target_branch: terms.target,
     strategy: terms.strategy,
   });
+  spend();
   console.log(JSON.stringify({
     gated: true,
     unit,

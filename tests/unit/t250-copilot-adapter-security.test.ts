@@ -2330,6 +2330,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           // a question whose choice holds a comma, one --option a choice, as the
           // protocol shows it: no | for cmd to read, and `A:` is text, not a drive
           "bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision 'Q3: how should formatPrice(0) read?' --option 'Show zero, with tax' --option 'A: hide it' --option 'Other'",
+          // one whose question or a choice holds a $ or a backtick: both in files
+          // the agent wrote, so nothing on the line is left to ask about
+          "bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision-file .aidlc-engine/answer-text/question.txt --options-file .aidlc-engine/answer-text/options.txt",
         ]) expect(decision(command, shell), `${shell}: ${command}`).toBe("allow");
         // Lettered options, which Windows would read as a path on drive A:.
         expect(decision('aidlc engine log decision --stage requirements-analysis --decision "Q3?" --options "A: yes only fix the end,B: also change start,Other"', shell), String(shell)).toBe("allow");

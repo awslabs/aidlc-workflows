@@ -7,9 +7,9 @@
 // Claude Code skill, so this follows the printed text. Mechanism: bash (Git Bash
 // on Windows, the shell Claude Code runs there) runs the shipped aidlc-log.ts.
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { optionsList, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject, seedStateFile } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
@@ -99,6 +99,36 @@ describe("t-decision-form-keeps-the-words: a choice that names a price is record
       expect(optionsList(recorded(p, "Options"))).toEqual(["Show $0.00, with tax", "Hide it", "Other"]);
     });
   }
+
+  // A question and choices holding a $ and a backtick go in files the agent
+  // writes, so no shell reads them and VS Code has nothing on the line to ask
+  // about: the form the protocol shows, read back with each choice whole.
+  test.skipIf(skip !== null)("a question and choices that hold a price and a backtick, from the files the protocol names", () => {
+    const p = createTestProject();
+    projects.push(p);
+    seedStateFile(p, "state-mid-ideation.md");
+    const printed = readFileSync(join(SHIPPED, "aidlc-common/protocols/stage-protocol.md"), "utf-8")
+      .match(/write the question to `<record>\/([^`]+)` and the choices one a line to `<record>\/([^`]+)`[^`]*`(--decision-file [^`]+ --options-file [^`]+)`/);
+    expect(printed, "the protocol names the two files").not.toBeNull();
+    const record = join(p, "aidlc", "spaces", "default", "intents");
+    const dir = readdirSync(record, { withFileTypes: true }).find((entry) => entry.isDirectory())!.name;
+    const write = (rel: string, text: string) => {
+      const file = join(record, dir, ...rel.split("/"));
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, text, "utf-8");
+      return file;
+    };
+    const question = write(printed![1], "Q1: Should formatPrice(0) show $0.00 or `\"\"`?");
+    const options = write(printed![2], "Show $0.00, with tax\nShow `\"\"` (empty)\nOther\n");
+    const quote = (value: string) => `'${value}'`;
+    const r = spawnSync(process.platform === "win32" ? gitBashPath() : "bash", [
+      "-c", `${[process.execPath, LOG].map(quote).join(" ")} decision --stage feasibility ${printed![3]} --project-dir ${quote(p)}`,
+    ], { cwd: p, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(recorded(p, "Decision")).toBe("Q1: Should formatPrice(0) show $0.00 or `\"\"`?");
+    expect(optionsList(recorded(p, "Options"))).toEqual(["Show $0.00, with tax", "Show `\"\"` (empty)", "Other"]);
+    expect(existsSync(question) || existsSync(options)).toBe(false);
+  });
 
   // The answer form log answer's usage prints, which the agent copies with the person's pick.
   test.skipIf(skip !== null)("the answer form log answer's usage shows, run through bash", () => {

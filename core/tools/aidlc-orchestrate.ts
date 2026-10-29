@@ -3422,9 +3422,7 @@ export function typedSettingModifiers(flags: ParsedFlags): string[] {
 // none of it is dropped on the re-run.
 function resumeAgain(flags: ParsedFlags, pd: string): string {
   const settings = ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
-  // A file per chat, so another chat's resume never reads these words.
-  const chat = (engineSessionId ?? "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
-  const words = flags.intent?.trim() ? wordsForNextStep(pd, chat ? `resume-${chat}` : "resume", flags.intent) : "";
+  const words = flags.intent?.trim() ? wordsForNextStep(pd, "resume", flags.intent) : "";
   return `${settings}${carriedRoutingFlags(flags).planChanges}${words}`;
 }
 
@@ -4558,10 +4556,13 @@ function unselectedWordsReplyDirective(
 
 // The person's words on a step the engine names next: a file of their own in
 // the request folder, read as any request file is (nextArgsWithRequestFile),
-// so no shell on the way changes a line break or a character cmd.exe reads;
-// on the line only when that file cannot be written.
+// so no shell on the way changes a line break, a character cmd.exe reads, or an
+// apostrophe that PowerShell and Git Bash quote differently; on the line only
+// when that file cannot be written. A file per chat, so another chat's step
+// never reads these words.
 function wordsForNextStep(pd: string, name: string, text: string): string {
-  const file = `${REQUEST_TEXT_DIR}/${name}.txt`;
+  const chat = (engineSessionId ?? "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  const file = `${REQUEST_TEXT_DIR}/${chat ? `${name}-${chat}` : name}.txt`;
   try {
     if (!isReadOnlyEngineProbe()) writeRecordFileNoFollow(pd, file, text);
     return ` --request-file ${file}`;
@@ -4784,7 +4785,7 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string, 
     question.approvedRequest,
   );
   const named = (route: NewWorkRoute, command: string): string =>
-    route === "reshape" ? `${command} -- ${quoteCommandArgument(words)}` : command;
+    route === "reshape" ? `${command}${wordsForNextStep(projectDir, "reshape", words)}` : command;
   const otherPlans = routingScopeCommands(question.id, question.proposedScope, carried, projectDir, question.approvedRequest)
     .filter(({ scope }) => scope !== question.proposedScope);
   const answers = routingQuestionOptions(question).flatMap((option) => {
@@ -4803,7 +4804,7 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string, 
     "The person has not answered the question about where their words belong, so `next` cannot tell their reply " +
     "from a new request and took nothing from the line. If their words answer that question, run the command for " +
     `their choice: ${answers.join("; ")}. If they are asking for something else, run ` +
-    `\`${tool} -- ${quoteCommandArgument(words)}\`. ` +
+    `\`${tool}${wordsForNextStep(projectDir, "other", words)}\` (their words: ${JSON.stringify(words)}). ` +
     "If you cannot tell, ask them once in plain words.",
   );
 }
@@ -7457,8 +7458,8 @@ function subagentCallShape(agent: string): string | null {
 
 // The person's reply a reshape answer carried, for a print that hands that
 // answer on to `next compose`.
-function reshapeReplyArgument(): string {
-  return routingReshapeReply === null ? "" : ` -- ${quoteCommandArgument(routingReshapeReply)}`;
+function reshapeReplyArgument(pd: string): string {
+  return routingReshapeReply === null ? "" : wordsForNextStep(pd, "reshape-reply", routingReshapeReply);
 }
 
 // `next compose` over finished work: its own plan takes no more stages
@@ -10545,12 +10546,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (step !== undefined) {
     const next = `${aidlcToolInvocation("orchestrate")} next`;
     const said = flags.intent ?? "";
-    // Their own text goes into a command someone runs, so it is one quoted
-    // argument (quoteCommandArgument, platform-aware): a line of theirs that
-    // mentions shell syntax says what they said and runs nothing of its own.
-    // After the delimiter one quoted argument is read as the request whole, so
-    // the command means exactly what it did unquoted.
-    const theirs = `run \`${next} -- ${quoteCommandArgument(said)}\`, which keeps every word of theirs`;
+    // Their own text never goes into a command someone runs: it is written to
+    // a file the command names (wordsForNextStep), since no one quoting serves
+    // every shell the agent may run it in (PowerShell and Git Bash read an
+    // apostrophe beside a ! or a $ differently). It is shown once as a quoted
+    // string for the agent to read.
+    const theirs = `run \`${next}${wordsForNextStep(resolveProjectDir(projectDir), "line", said)}\`, ` +
+      `which keeps every word of theirs (${JSON.stringify(said)})`;
     const ask = "If you cannot tell, ask them once in plain words.";
     if (step.kind === "value") {
       // Their value is shown as a quoted string, never inside backticks: in
@@ -10575,8 +10577,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
         `A plan's name and then the task ("${entrySkillInvocation()} ${step.scope} <the task>") is how ` +
         `AI-DLC's guide tells people to pick a plan: when the rest of the line reads as the task for that ` +
-        `plan, they named it, so run \`${next} --scope ${step.scope} -- ` +
-        `${quoteCommandArgument(said.slice(step.scope.length).trim())}\`. ` +
+        `plan, they named it, so run \`${next} --scope ${step.scope}` +
+        `${wordsForNextStep(resolveProjectDir(projectDir), "line-after-plan", said.slice(step.scope.length).trim())}\` ` +
+        `(the task: ${JSON.stringify(said.slice(step.scope.length).trim())}). ` +
         `When the whole line reads as one phrase with that word in it ("classic car rental website"), ` +
         `it is their own words: ${theirs}. Ask them once in plain words only when it reads both ways.`,
       ));
@@ -10684,7 +10687,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       "The person has not answered the plan question they were asked, so `next` cannot tell their reply from a " +
       `new request and took nothing from the line. If their words answer that question, run the command it gave ` +
       `for their choice: ${answer}. If they are asking for something else, run ` +
-      `\`${tool} -- ${quoteCommandArgument(flags.intent ?? "")}\`, which keeps every word of theirs. ` +
+      `\`${tool}${wordsForNextStep(questionDir, "other", flags.intent ?? "")}\`, which keeps every word of theirs (${JSON.stringify(flags.intent ?? "")}). ` +
       "If you cannot tell, ask them once in plain words.",
     ));
     return;
@@ -11317,7 +11320,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(printDirective(
         `To ${flags.continue ? "continue" : "reshape"} ${flags.record}, run ${spaceStep}\`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
           `then run \`${aidlcToolInvocation("orchestrate")} next ${route} --request ${question.id}${carriedRoutingFlags(flags).existingWork}` +
-          `${flags.compose ? reshapeReplyArgument() : ""}\` and follow what it returns.`,
+          `${flags.compose ? reshapeReplyArgument(pd) : ""}\` and follow what it returns.`,
       ));
       return;
     }
@@ -11726,7 +11729,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(printDirective(
         `Run \`${configSetCommand(reshapeSettings, unnamed)}\` to apply the settings typed with this request to the work being reshaped` +
           `${unnamed ? messageFill(pd, reshapeSettings) : ""}, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${reshapeReplyArgument()}\` and follow what it returns.`,
+          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${reshapeReplyArgument(pd)}\` and follow what it returns.`,
       ));
       return;
     }
@@ -19255,7 +19258,7 @@ function unknownWorkspaceWordStep(
   // it is named too; a mistyped verb or name alone has no such reading.
   const theirs = (command.words?.length ?? 0) > 0
     ? ` If \`${noun}\` is their own first word and the line is a request, run ` +
-      `\`${aidlcToolInvocation("orchestrate")} next -- ${quoteCommandArgument(typed)}\` instead, ` +
+      `\`${aidlcToolInvocation("orchestrate")} next${wordsForNextStep(pd, "line", typed)}\` instead, ` +
       "which keeps every word of theirs."
     : "";
   return `${names}, so nothing ran and nothing changed. The ${noun} verbs are: ${verbs}; run one as ` +

@@ -588,6 +588,7 @@ const LOG_INTERACTION_OPTIONS = [
 const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS,
   "--option",
+  "--options-file",
   "--decision",
   "--decision-file",
   "--rationale",
@@ -1151,6 +1152,19 @@ function handleDecision(args: string[]): void {
     }
   }
   if (!flags.decision) error("Missing --decision <text> (or --decision-file <file>)");
+  // A question's choices that hold a $ or a backtick arrive one a line in a file
+  // the agent wrote, as the question's text does, so no shell reads them.
+  if (flags["options-file"] !== undefined) {
+    let lines: string[] = [];
+    try {
+      lines = readAnswerTextFile(resolveActiveProjectDir(projectDir, flags.stage), flags["options-file"])
+        .split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    } catch (err) {
+      error(errorMessage(err));
+    }
+    delete flags["options-file"];
+    withEachOption(lines.flatMap((choice) => ["--option", choice]), flags);
+  }
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
@@ -5382,7 +5396,7 @@ function logUsage(subcommand: string | undefined): string {
     decision: [
       `${invoke("decision")} --stage <slug> --decision '<the question>' --options '<choice>,<choice>'`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
-      "  When a choice holds a comma, pass each choice as its own --option '<choice>' in place of --options.",
+      "  When a choice holds a comma, pass each choice as its own --option '<choice>' in place of --options; when one holds a $ or a backtick, write the choices one a line to <record>/.aidlc-engine/answer-text/options.txt and pass --options-file .aidlc-engine/answer-text/options.txt.",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],

@@ -734,11 +734,14 @@ merge gate.
 
 Accepted decisions are `approve` and `reject`. The command records the
 person's answer when a typed human turn follows the pin (pin's output names this
-command for each answer). A pinned Unit lands with a regular merge into the
-integration branch pin fetched, so the reviewed OID remains a direct parent. A
-moved ref, changed generation, or HOLD-MERGE marker requires an explicit re-pin
-before approval. On approve, its output names the land command (`land`), which
-the agent runs in the same turn.
+command for each answer). The person's words may come in a file instead of
+`--user-input`: `--request-file aidlc/.aidlc-request-text/<name>.txt`, which
+AI-DLC writes when it prints the command for you, so no shell reads them on the
+way; the file goes once the decision is recorded. A pinned Unit lands with a
+regular merge into the integration branch pin fetched, so the reviewed OID
+remains a direct parent. A moved ref, changed generation, or HOLD-MERGE marker
+requires an explicit re-pin before approval. On approve, its output names the
+land command (`land`), which the agent runs in the same turn.
 
 ### `/aidlc unit land <unit>` — Land the pinned transaction
 
