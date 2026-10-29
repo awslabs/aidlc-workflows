@@ -15613,8 +15613,9 @@ function emitTeamUnitMajorRunStage(
     emit({
       ...noticeDirective(
         `Unit "${scopeStamp.unit}" is complete and approved in this checkout. ` +
-          `Commit the completed candidate and run \`aidlc unit publish ${scopeStamp.unit}\`; ` +
-          "unscoped main will pin, gate, and land it.",
+          `Commit the completed candidate and run \`aidlc unit publish ${scopeStamp.unit}\` here; then pin, ` +
+          "gate and land it from a checkout of this project that holds no Unit claim (a fresh clone of it). " +
+          "Once it lands, pull main here and this checkout is free again.",
       ),
       unit: scopeStamp.unit,
     });
