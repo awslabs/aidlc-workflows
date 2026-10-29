@@ -30,7 +30,7 @@ diagnostic and lifecycle routes.
 | `/aidlc [description]` | Start a new workflow; the agent proposes a plan from your description (or offers to compose one when none fits) |
 | `/aidlc compose "<task>"` | Force the adaptive composer: propose a tailored EXECUTE/SKIP plan for the task |
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
-| `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom plan even when a stock scope matches |
+| `/aidlc --new-scope '<task>'` | Force the composer to synthesize a custom plan even when a stock scope matches |
 | `/aidlc` | Resume the open workflow; with no work yet, the agent asks what you want to build |
 | `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
@@ -362,7 +362,7 @@ is handed to the agent whole, to act on for the intent just selected.
 
 ### `/aidlc intent archive <name>` — Retire an intent you will not finish
 
-`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight or
+`/aidlc intent archive <name> [--reason '<text>']` moves an in-flight or
 completed intent to the `archived` status. Nothing is deleted: the record dir, its
 artifacts, and its audit shards stay exactly where they are, and the archive
 itself is recorded in that intent's audit trail as `WORKFLOW_ARCHIVED` (with
@@ -2339,7 +2339,7 @@ aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skelet
 
 When the person, as they decide, asks for a review finding to be fixed or
 rejects one, add `--fix-finding "<review-artifact>#R-NN"` to approve, or
-`--reject-finding "<review-artifact>#R-NN=<their reason>"` to reject
+`--reject-finding '<review-artifact>#R-NN=<their reason>'` to reject
 (`--reopen-finding` for one the reviewer marked fixed that they say is not),
 once per finding, as at a stage's gate.
 

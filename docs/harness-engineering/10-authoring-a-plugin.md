@@ -756,7 +756,7 @@ Plugin tests under `plugins/<name>/tests/*.test.ts` are discovered
 automatically and join the integration tier. Run one plugin's tests with:
 
 ```bash
-bash tests/run-tests.sh --integration --filter "plugin-<name>"
+bash tests/run-tests.sh --integration --filter 'plugin-<name>'
 ```
 
 These tests use this repository's own helpers in `tests/harness/plugin-kit.ts`,

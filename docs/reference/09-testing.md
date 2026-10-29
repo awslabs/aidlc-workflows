@@ -618,18 +618,18 @@ are excluded. JSON retains the full physical grid, including blank cells and
 width-zero continuation cells for wide characters.
 
 The existing `start`, `send`, plain `capture`, `startup`, and `wait` commands
-retain their calling conventions. `send --keys "<text>" --literal` sends
+retain their calling conventions. `send --keys '<text>' --literal` sends
 literal text; without `--literal`, named keys are interpreted and arbitrary
 text such as `1`/`2` remains literal. Enter is appended unless `--no-enter` is
 set. `wait --stable-ms N` retains its screen-stability condition, and
-`startup --ready-pattern "<regex>"` retains its startup navigation behavior.
+`startup --ready-pattern '<regex>'` retains its startup navigation behavior.
 
 The Bun backend supports these capture and input commands:
 
 | Command | Behavior |
 |---------|----------|
 | `resize --session <name> --width N --height N` | Resizes both the PTY and emulator: columns 2–500, rows 1–200, at most 40,000 cells. |
-| `paste --session <name> --text "<text>"` | Pastes text with **no implicit Enter**. Uses bracketed-paste markers only when the application has enabled that mode. CRLF and lone LF become CR; existing lone CR is retained. |
+| `paste --session <name> --text '<text>'` | Pastes text with **no implicit Enter**. Uses bracketed-paste markers only when the application has enabled that mode. CRLF and lone LF become CR; existing lone CR is retained. |
 | `capture --session <name> --physical` | Returns plain text with physical visible rows; preserves the default logical capture API. |
 | `capture --session <name> --json` | Returns a coherent `TuiSnapshot` with full cell data. |
 | `capture --session <name> --ansi` | Returns the current viewport with cell colors and styles as ANSI sequences. |

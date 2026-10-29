@@ -1951,23 +1951,4 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  // In double quotes a shell runs a `$(...)`, a backtick or a `$NAME` inside
-  // the text, and a choice's text can come from the project: answer text is
-  // shown single-quoted, as the protocol's own rule for the person's words says.
-  test("no SKILL, annex, protocol, stage file or doc shows a double-quoted placeholder for answer text", () => {
-    const doubleQuoted = /--(?:details|on-instruction|user-input|instruction|answer) "</;
-    const found: string[] = [];
-    const prose = [
-      ...skills,
-      ...harnessQuestionAnnexes().filter((rel) => existsSync(join(REPO_ROOT, rel))),
-      ...[...new Bun.Glob("core/aidlc-common/**/*.md").scanSync({ cwd: REPO_ROOT })].sort(),
-      ...[...new Bun.Glob("docs/**/*.md").scanSync({ cwd: REPO_ROOT })].sort(),
-    ];
-    for (const rel of prose) {
-      readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n").forEach((line, index) => {
-        if (doubleQuoted.test(line)) found.push(`${rel}:${index + 1}  ${line.trim().slice(0, 120)}`);
-      });
-    }
-    expect(found).toEqual([]);
-  });
 });

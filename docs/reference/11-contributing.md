@@ -400,7 +400,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix aidlc doctor` should report the env var as valid.
 
-6. **Check the plan's hints read well** (if `keywords` populated) - the engine no longer matches them; the agent reads them in the plan proposal step (`next "<a request your plan is for>" --project-dir /tmp/scope-smoke` prints every plan with its hints). Make sure the line for yours says what the plan is for in plain words.
+6. **Check the plan's hints read well** (if `keywords` populated) - the engine no longer matches them; the agent reads them in the plan proposal step (`next '<a request your plan is for>' --project-dir /tmp/scope-smoke` prints every plan with its hints). Make sure the line for yours says what the plan is for in plain words.
 
 7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 aidlc engine graph resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 

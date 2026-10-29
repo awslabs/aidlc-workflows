@@ -4,14 +4,21 @@
 // a `$` or a backtick in them is expanded by the shell: a choice "$0.00" was
 // recorded as "/usr/bin/bash.00" and Claude Code asked the person to allow
 // AI-DLC's own command, since it cannot vouch for an expansion (#3135). The
-// agent copies the form the shipped text shows, so this lint reads every
-// shipped prose file and engine string under core/, harness/ and plugins/ and
-// fails on a double-quoted placeholder for words: a flag's value, or what
-// `next`, `next compose` and `audit append-raw` take as their words. A flag
-// whose value the engine names (a slug, an id or a path) may stay
-// double-quoted; the `"|<A>|<B>"` list form stays, since the Copilot adapter's
-// VS Code allow takes a `|` only inside double quotes; a harness whose shell is
-// cmd.exe keeps its skill's own rule to switch to double quotes there.
+// agent copies the form the shipped text shows, and a person the form the
+// docs show, so this lint reads every shipped prose file and engine string
+// under core/, harness/ and plugins/, and every page under docs/, and fails on
+// a double-quoted placeholder for words: a flag's value, or what `next`,
+// `next compose` and `audit append-raw` take as their words. It is the one
+// check of that rule. What stays, and why the patterns leave it alone:
+//   - a flag whose value is a name the engine gave (a slug, an id or a path,
+//     ENGINE_NAMED), such as `--questions-file \"<path>\"` in core/tools;
+//   - the `"|<A>|<B>"` list form, since the Copilot adapter's VS Code allow
+//     takes a `|` only inside double quotes;
+//   - a slash command typed in the chat (`/aidlc compose "<task>"`), which no
+//     shell reads;
+//   - the cmd.exe sentence in the Copilot and opencode skills, which shows no
+//     `--flag "<...>"` form: a harness whose shell is cmd.exe switches to
+//     double quotes there by its skill's own rule.
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -20,7 +27,8 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 
 // Flags whose value is a name the engine gave: no words of anyone's.
 const ENGINE_NAMED = new Set([
-  "artifacts", "fix-finding", "override-file", "project-dir", "questions-file", "reviewer", "stage", "unit", "units",
+  "artifacts", "claimed", "fix-finding", "override-file", "project-dir", "questions-file", "receipt", "reviewer",
+  "stage", "unit", "units",
 ]);
 
 const SHIPPED = /\.(md|mdc|ts|json|toml)$/;
@@ -34,22 +42,23 @@ function shippedFiles(dir: string): string[] {
   });
 }
 
-// A flag's double-quoted value holding a placeholder, escaped quotes included;
-// not the `"|<A>|<B>"` list.
-const FLAG_VALUE = /--([a-z][a-z-]*) \\{0,3}"(?!\|)[^"\n]*</g;
+// A flag's double-quoted value holding a placeholder, escaped quotes included,
+// the value on the flag's line or wrapped onto the next; not the `"|<A>|<B>"` list.
+const GAP = String.raw`(?:[ \t]+|[ \t]*\n[ \t]*)`;
+const FLAG_VALUE = new RegExp(String.raw`--([a-z][a-z-]*)${GAP}\\{0,3}"(?!\|)[^"\n]*<`, "g");
 // The words `next` (after any flags) and `next compose` take, and each of
 // `audit append-raw`'s two.
-const POSITIONAL_WORDS = /\b(?:next(?: --[a-z-]+(?: <[^>\s]+>)?)*(?: compose)?|append-raw(?: '[^'\n]*')?) \\{0,3}"[^"\n]*</g;
+const POSITIONAL_WORDS = new RegExp(
+  String.raw`\b(?:next(?: --[a-z-]+(?: <[^>\s]+>)?)*(?: compose)?|append-raw(?:${GAP}'[^'\n]*')?)${GAP}\\{0,3}"[^"\n]*<`,
+  "g",
+);
 
 function doubleQuotedWords(text: string): string[] {
-  const found: string[] = [];
-  text.split("\n").forEach((line, index) => {
-    for (const match of line.matchAll(FLAG_VALUE)) {
-      if (!ENGINE_NAMED.has(match[1])) found.push(`${index + 1}: ${match[0]}`);
-    }
-    for (const match of line.matchAll(POSITIONAL_WORDS)) found.push(`${index + 1}: ${match[0]}`);
-  });
-  return found;
+  const line = (index: number): number => text.slice(0, index).split("\n").length;
+  return [
+    ...[...text.matchAll(FLAG_VALUE)].filter((match) => !ENGINE_NAMED.has(match[1])),
+    ...text.matchAll(POSITIONAL_WORDS),
+  ].map((match) => `${line(match.index)}: ${match[0].replace(/\s+/g, " ")}`);
 }
 
 describe("words on an AI-DLC command line are single-quoted in everything AI-DLC ships", () => {
@@ -61,7 +70,8 @@ describe("words on an AI-DLC command line are single-quoted in everything AI-DLC
       "`next compose \"<their words>\"`",
       "`next --new-intent --scope <scope> \"<text>\"`",
       "`audit append-raw 'Error: <brief>' \"<body>\"`",
-    ].join("\n"))).toHaveLength(6);
+      "`report --result skipped --reason\n  \"<why>\"`",
+    ].join("\n"))).toHaveLength(7);
     expect(doubleQuotedWords([
       "`report --stage x --result skipped --reason '<why>'`",
       "`--unit \"<directive.unit>\" --stage \"<directive.stage>\"`",
@@ -73,12 +83,12 @@ describe("words on an AI-DLC command line are single-quoted in everything AI-DLC
     ].join("\n"))).toEqual([]);
   });
 
-  test("no shipped prose file or engine string double-quotes a placeholder for words", () => {
-    const found = ["core", "harness", "plugins"].flatMap((root) =>
-      shippedFiles(join(REPO_ROOT, root)).flatMap((path) =>
+  test("no shipped prose file, engine string or doc double-quotes a placeholder for words", () => {
+    const docs = shippedFiles(join(REPO_ROOT, "docs")).filter((path) => path.endsWith(".md"));
+    const found = [...["core", "harness", "plugins"].flatMap((root) => shippedFiles(join(REPO_ROOT, root))), ...docs]
+      .flatMap((path) =>
         doubleQuotedWords(readFileSync(path, "utf-8")).map((hit) => `${relative(REPO_ROOT, path)}:${hit}`)
-      )
-    );
+      );
     expect(found).toEqual([]);
   });
 });
