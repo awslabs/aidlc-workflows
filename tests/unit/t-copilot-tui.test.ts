@@ -4,8 +4,10 @@
 // screen moving, and are counted from its session record by what drew them, a turn
 // ends only when the screen is at the prompt and the record has closed the
 // agent's last model call, any other dialog stops the turn unanswered, a
-// dialog at startup stops the journey, an earlier terminal's session in the
-// same home is never read as this one's, and an agent that runs ahead fails
+// dialog at startup stops the journey, a turn that outlives the work budget
+// comes back with its last screen, AI-DLC's own commands are told from the
+// agent's in each shell's form, an earlier terminal's session in the same home
+// is never read as this one's, and an agent that runs ahead fails
 // the moved journeys: work started in the first turn fails the release
 // journey's check, and a gate approved in the turn that opened it fails the
 // golden journey's typed turn, both as person-turn failures. A scripted screen
@@ -19,6 +21,7 @@ import { cleanupTestProject, createTestProject, seededAuditShard } from "../harn
 import { sourceListing } from "../harness/golden-journey.ts";
 import { PersonTurnError } from "../harness/person-turns.ts";
 import { checkReleaseJourneyTurn, expectPersonFirstInJourney, type ReleaseJourneyReport } from "../harness/release-journey.ts";
+import { TestBudgetExhaustedError } from "../harness/test-budget.ts";
 
 const RULE = "\u2500".repeat(60);
 const IDLE = [" \u25CF Done.", " /proj [\u2387 master]", RULE, "\u276F", RULE, " \u2190 open sidebar \u00B7 Interactive \u00B7 Manual Approval \u00B7 / commands \u00B7 ? help"].join("\n");
@@ -179,6 +182,49 @@ describe("t-copilot-tui: the person's turn in Copilot CLI's own terminal", () =>
     expect(turn.ended).toBe(true);
     expect(fake.sent).toEqual(["1", "Enter", "Enter"]);
     expect(turn.prompts.map((p) => p.kind)).toEqual(["aidlc"]);
+  });
+
+  test("a turn that outlives the work budget comes back with its last screen, read on the cleanup's time", () => {
+    const { proj, copilotHome, record } = home();
+    const fake = new ScriptedCopilot();
+    const working = [" \u25D0 Thinking (Esc to cancel)", RULE, "\u276F", RULE, " Esc to cancel"].join("\n");
+    fake.steps.push(() => {
+      record("s1", [user("1"), turnStart]);
+      fake.screen = working;
+    });
+    const end = Date.now() + 1500;
+    const copilot = new CopilotTerminal({
+      session: "t", proj, copilotHome, bin: "copilot", cleanupMs: () => 60_000, drive: fake.drive,
+      workMs: () => {
+        const left = end - Date.now();
+        if (left < 1) throw new TestBudgetExhaustedError("E2E live work", "case", left, 0);
+        return left;
+      },
+    });
+    copilot.start();
+    const seen: boolean[] = [];
+    const turn = ledgeredTurn(copilot, proj, "1", (t) => seen.push(t.ended));
+    expect(turn.ended).toBe(false);
+    expect(turn.stopped).toStartWith("the time ran out:");
+    expect(turn.stopped).toContain("Thinking");
+    expect(seen).toEqual([false]);
+  });
+
+  test("AI-DLC's own commands are told from the agent's, in each shell's form", () => {
+    const { proj, copilotHome, record } = home();
+    const fake = new ScriptedCopilot();
+    const commands = [
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next",
+      "& bun .aidlc/tools/aidlc-orchestrate.ts next --scope bugfix --request r1",
+      "bun .aidlc\\tools\\aidlc-log.ts review --stage requirements-analysis",
+      "& 'C:\\tools\\bun.exe' .aidlc\\tools\\aidlc.ts engine intent create",
+      "mkdir -p src",
+      "bun test/app.test.js",
+    ];
+    fake.steps.push(() => record("s1", [user("1"), turnStart, ...commands.map(shell), turnEnd]));
+    const copilot = terminal(fake, proj, copilotHome);
+    copilot.start();
+    expect(copilot.turn("1").prompts.map((p) => p.kind)).toEqual(["aidlc", "aidlc", "aidlc", "aidlc", "command", "command"]);
   });
 
   test("a dialog that is not a permission one stops the turn, unanswered", () => {

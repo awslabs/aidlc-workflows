@@ -1933,10 +1933,12 @@ every prompt yes. A prompt for AI-DLC's own command or record (one that names
 every other prompt is listed in its log (`tests/harness/stock-permissions.ts`).
 The other Claude SDK drives keep `bypassPermissions`. The Codex `--json`
 journeys run the shipped `workspace-write` sandbox, and a command naming
-`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI runs
-with `--allow-all-tools` (AI-DLC ships no Copilot CLI allow rules, so the
-person's own `--allow-tool` rules decide), the Claude terminal journeys skip
-permission prompts, and opencode already runs without `--auto`.
+`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI's
+terminal journeys answer each of its permission dialogs with the preselected
+"Yes" and count them by what drew them (AI-DLC ships no Copilot CLI allow rules);
+its `-p` case runs with `--allow-all-tools`, so the person's own `--allow-tool`
+rules decide. The Claude terminal journeys skip permission prompts, and opencode
+already runs without `--auto`.
 
 `--file-retries 1` retries only a short failed file after confirmed cleanup, in
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.

@@ -89,7 +89,9 @@ const bottom = (screen: string) => screen.split("\n").slice(-25).join("\n");
 // A dialog's own box, from its top border down: the lines above it (the shell
 // line's clock) keep changing while it waits, the box does not.
 const dialogBox = (tail: string) => tail.slice(Math.max(0, tail.lastIndexOf("\u256D")));
-const AIDLC_COMMAND = /^(?:bun|node|&)?\s*\S*\.aidlc[\\/]+tools[\\/]+aidlc[\w-]*\.ts\b/;
+// AI-DLC's own command: its dispatcher or a tool under .aidlc/tools, run by bun
+// or node, also as PowerShell's `& bun ...`.
+const AIDLC_COMMAND = /^(?:&\s*)?(?:["']?\S*?(?:bun|node)(?:\.exe)?["']?\s+)?["']?\S*?\.aidlc[\\/]+tools[\\/]+aidlc[\w-]*\.ts\b/;
 
 interface RecordEvent {
   type?: string;
@@ -181,7 +183,8 @@ export class CopilotTerminal {
       if (!this.waiting(this.screen())) return false;
       return this.recordShowsTurnEnded(line) || ++unclosed >= 6;
     }, this.o.workMs) && stopped === undefined;
-    if (!ended && stopped === undefined) stopped = `the time ran out:\n${bottom(this.screen())}`;
+    // The work budget is spent here, so the last screen is read on the cleanup's time.
+    if (!ended && stopped === undefined) stopped = `the time ran out:\n${bottom(this.screen(this.o.cleanupMs()))}`;
     const events = this.newEvents();
     const text = events.map((event) => JSON.stringify(event)).join("\n");
     const turn: CopilotTerminalTurn = {

@@ -156,7 +156,8 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
             spent.input += turn.tokens.input;
             spent.output += turn.tokens.output;
             if (!turn.ended) report.problems.push(`"${line}" had not ended: ${turn.stopped ?? "the time ran out"}`);
-            else checkReleaseJourneyTurn(report, project, index + 1, line);
+            // Also after a turn that did not end: work started before the person answered is never retried.
+            checkReleaseJourneyTurn(report, project, index + 1, line);
             if (report.problems.length) break;
           }
           // A subagent's brief reaches the hooks as a prompt too: only the lines
