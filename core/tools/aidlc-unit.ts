@@ -104,6 +104,7 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
+import { approvalDecidesOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
   aidlcInvocation,
@@ -1142,7 +1143,7 @@ function candidateReviewFingerprint(
   }`;
 }
 
-function candidateReviewerReady(
+function candidateReviewCoverage(
   events: CandidateAuditEvent[],
   projectDir: string,
   oid: string,
@@ -1157,7 +1158,7 @@ function candidateReviewerReady(
     produces_kinds?: Record<string, string[]>;
   },
   unitKind: string | null,
-): boolean {
+): ReturnType<typeof candidateReviewCoverageProjection> {
   const expectedFingerprint = candidateReviewFingerprint(
     projectDir,
     oid,
@@ -1183,7 +1184,12 @@ function candidateReviewerReady(
     artifactPrefix,
     expectedFingerprint,
     completionRecord,
+    approvalAccepts: (block) => approvalDecidesOpenFindings(block, artifactPrefix),
   });
+}
+
+function namesInProse(names: string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 function validateCandidateUnitProgress(
@@ -1441,7 +1447,7 @@ function sharedRecordFilesAsBase(
 // The review record each REVIEW_COMPLETED row of the claim's shard names, from
 // this clone's disk: AI-DLC keeps them under the record's engine folder, which
 // its own .gitignore keeps out of every commit, and pin reads each one from
-// the candidate (candidateReviewerReady). Only a record whose digest matches
+// the candidate (candidateReviewCoverage). Only a record whose digest matches
 // its row is added; nothing else under the engine folder travels. A record
 // that is gone or changed is named back, since pin will refuse without it.
 function withClaimReviewRecords(
@@ -1755,6 +1761,8 @@ function candidateEvidence(
   );
   const reviewersExpected: string[] = [];
   const reviewersReady: string[] = [];
+  const reviewersApprovedOverConcerns: string[] = [];
+  const unreviewed: string[] = [];
   const artifactPaths: string[] = [];
   for (const stageSlug of stages) {
     if (owesNothing(stageSlug)) continue;
@@ -1780,20 +1788,19 @@ function candidateEvidence(
       );
       if (reviewClass !== "none") {
         reviewersExpected.push(stageSlug);
-        if (
-          candidateReviewerReady(
-            events,
-            projectDir,
-            claim.oid,
-            recordPrefix,
-            claim.unit,
-            claim.generation,
-            stage,
-            unitKind,
-          )
-        ) {
-          reviewersReady.push(stageSlug);
-        }
+        const coverage = candidateReviewCoverage(
+          events,
+          projectDir,
+          claim.oid,
+          recordPrefix,
+          claim.unit,
+          claim.generation,
+          stage,
+          unitKind,
+        );
+        if (coverage === "ready") reviewersReady.push(stageSlug);
+        else if (coverage === "approved") reviewersApprovedOverConcerns.push(stageSlug);
+        else unreviewed.push(stage.name ?? stageSlug);
       }
     }
   }
@@ -1882,6 +1889,9 @@ function candidateEvidence(
     gates_approved: gatesApproved,
     reviewers_expected: reviewersExpected,
     reviewers_ready: reviewersReady,
+    ...(reviewersApprovedOverConcerns.length > 0
+      ? { reviewers_approved_over_concerns: reviewersApprovedOverConcerns }
+      : {}),
     plan_fingerprint: planFingerprint,
     artifact_paths: artifactPaths,
     audit_shards: changedAudit,
@@ -1891,18 +1901,27 @@ function candidateEvidence(
   const incomplete: string[] = [];
   if (stagesCompleted.length + skipped.size !== stages.length) incomplete.push("UNIT_COMPLETED receipts");
   if (gatesApproved.length !== gatesExpected.length) incomplete.push("team gate approvals");
-  if (reviewersReady.length !== reviewersExpected.length) {
-    const missingReviewStages = reviewersExpected.filter((stage) => !reviewersReady.includes(stage));
-    incomplete.push(`reviewer READY receipts (${missingReviewStages.join(", ")})`);
-  }
   if (buildsCode && !planFingerprint) {
     incomplete.push("Plan Approval fingerprint");
   }
   if (changedAudit.length === 0) {
     incomplete.push("transportable audit shard");
   }
-  if (incomplete.length > 0) {
-    fail(`Pinned candidate evidence is incomplete: ${incomplete.join(", ")}.`);
+  // A stage's review is the person's to have done again, where the Unit is
+  // claimed; pin runs only in a checkout that holds no claim.
+  const reviewStep = unreviewed.length === 0
+    ? ""
+    : `${namesInProse(unreviewed)} ${unreviewed.length === 1 ? "has" : "have"} no review that stands for ` +
+      `${unreviewed.length === 1 ? "it" : "them"} as published: in the checkout where ${claim.owner} claimed ` +
+      `${claim.unit} (not this one), have ${unreviewed.length === 1 ? "it" : "them"} reviewed again, then publish ` +
+      `${claim.unit} again.`;
+  if (incomplete.length > 0 || reviewStep) {
+    fail(
+      [
+        incomplete.length > 0 ? `Pinned candidate evidence is incomplete: ${incomplete.join(", ")}.` : "",
+        reviewStep,
+      ].filter(Boolean).join(" "),
+    );
   }
   return evidence;
 }

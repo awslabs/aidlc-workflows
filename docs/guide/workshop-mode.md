@@ -258,7 +258,10 @@ with git object plumbing, not by merging or creating a worktree:
 - required Unit artifacts;
 - `UNIT_COMPLETED` receipts for active stages;
 - team gate approvals at the claim rhythm;
-- required reviewer `READY` verdicts;
+- each required review's `READY` verdict, or the team's approval of the stage
+  after a review that stayed `NOT-READY`, accepting its open findings (an
+  approval that asked for a finding to be fixed waits for the next review; the
+  evidence lists the approved stages in `reviewers_approved_over_concerns`);
 - Plan Approval fingerprint and explicit approval;
 - the candidate state row;
 - the transportable team audit shard.
