@@ -63,6 +63,7 @@ import {
   enterHookWorkflow,
   promptMovesSelection,
   recordHookDrop,
+  recordHostHookCall,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
@@ -2860,6 +2861,7 @@ export async function run(
         })}\n`);
         return 0;
       }
+      recordHostHookCall(projectDir, "chat-start");
       const fwd = JSON.stringify({
         hook_event_name: "SessionStart",
         source: cursor.source ?? "startup",
@@ -2942,6 +2944,7 @@ export async function run(
       // A Cursor background agent submits prompts with no human present; its
       // turn must not mint HUMAN_TURN (the approval gates' presence evidence).
       if (isBackground()) return 0;
+      recordHostHookCall(projectDir, "prompt");
       const prompt = cursor.prompt ?? cursor.user_message ?? "";
       // Cursor's sessionStart fires only for a new conversation and carries no
       // startup/resume discriminator. Probe the core resume-rebind logic here,

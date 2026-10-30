@@ -28309,6 +28309,12 @@ export function hookLiveness(
   };
 }
 
+// When one hook last beat in a liveness read, or NaN when it has no beat.
+export function heartbeatAt(liveness: HookLiveness, hook: string): number {
+  const entry = liveness.heartbeatEntries.find((line) => line.startsWith(`${hook} `));
+  return entry === undefined ? Number.NaN : Date.parse(entry.slice(hook.length + 1));
+}
+
 // Whether a link sits on the way to a record's hooks-health directory. Hook
 // status files are never written through one, so there a missing heartbeat
 // does not show that the hooks did not run.
@@ -28346,6 +28352,34 @@ export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): vo
     writeProjectHookStatusFile(projectDir, hooksHealthDir(projectDir), `${hook}.last`, isoTimestamp());
   } catch {
     // Advisory: without it doctor keeps its "not run yet" warning.
+  }
+}
+
+// When the host itself called an adapter for a chat's start or for the
+// person's prompt, stamped before any AIDLC logic runs, so doctor can tell a
+// host that never delivered the prompt (#976) from a hook that ran and failed.
+// Kept out of hooks-health: those beats are the core hooks' own and feed
+// hookLiveness, which an adapter beat would make look fresher than it is.
+export type HostHookCall = "chat-start" | "prompt";
+
+function hostHookCallsDir(projectDir: string): string {
+  return join(sessionsDir(projectDir), "host-hooks");
+}
+
+export function recordHostHookCall(projectDir: string, call: HostHookCall): void {
+  try {
+    writeProjectHookStatusFile(projectDir, hostHookCallsDir(projectDir), `${call}.last`, isoTimestamp());
+  } catch {
+    // Advisory: without it doctor says nothing about the prompt hook.
+  }
+}
+
+export function readHostHookCall(projectDir: string, call: HostHookCall): number | null {
+  try {
+    const at = Date.parse(readFileSync(join(hostHookCallsDir(projectDir), `${call}.last`), "utf-8").trim());
+    return Number.isFinite(at) ? at : null;
+  } catch {
+    return null;
   }
 }
 
