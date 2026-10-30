@@ -7121,6 +7121,106 @@ describe("t243 release lifecycle", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a git worktree of a registered checkout runs the release its own pin names", () => {
+    const machine = temp("aidlc-t243-pin-worktree-machine-");
+    const project = temp("aidlc-t243-pin-worktree-project-");
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const git = (cwd: string, ...args: string[]): string => {
+      const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], {
+        cwd,
+        encoding: "utf-8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return (result.stdout ?? "").trim();
+    };
+    const commitPin = (cwd: string, version: string): void => {
+      writeFileSync(join(cwd, ".aidlc-version"), `${version}\n`);
+      git(cwd, "add", ".aidlc-version");
+      git(cwd, "commit", "-q", "-m", `pin ${version}`);
+    };
+    git(project, "init", "-q", "-b", "main");
+    commitPin(project, NEXT_VERSION);
+    for (const version of [NEXT_VERSION, AIDLC_VERSION]) {
+      expect(run(LIFECYCLE, [
+        "versions", "install", version, "--from", fixtureReleaseBytes(version),
+      ], project, env).status).toBe(0);
+    }
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    const dispatch = (dir: string) => resolvePinnedDispatch(["engine", "status", "--project-dir", dir]);
+    const runsNext = {
+      kind: "execute",
+      executable: join(machine, "versions", NEXT_VERSION, INSTALLED_EXECUTABLE),
+      version: NEXT_VERSION,
+    } as const;
+    const notRegistered = (version: string) => expect.objectContaining({
+      kind: "failure",
+      message: `this project's ${version} pin is not registered on this machine`,
+    });
+    const registeredFor = (dir: string): string | undefined => {
+      const pins = JSON.parse(readFileSync(join(machine, "pins.json"), "utf-8")) as Record<string, string>;
+      const key = Object.keys(pins).find((path) => existsSync(path) && realpathSync(path) === realpathSync(dir));
+      return key && pins[key];
+    };
+    try {
+      const pinned = run(INIT, ["config", "--pin", NEXT_VERSION, "--project-dir", project], project, env);
+      expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+      // A worktree carries the committed pin and no registration of its own:
+      // it is the same project, registered on first use.
+      const worktree = join(temp("aidlc-t243-pin-worktree-"), "wt");
+      git(project, "worktree", "add", "-q", worktree, "-b", "feature");
+      expect(dispatch(worktree)).toEqual(runsNext);
+      expect(registeredFor(worktree)).toBe(NEXT_VERSION);
+      expect(existsSync(projectPinTargetPath(worktree))).toBe(true);
+
+      // The checkout is registered for another release: a worktree cut from a
+      // branch whose pin moved on still runs the release its own file names.
+      const moved = run(INIT, ["config", "--pin", AIDLC_VERSION, "--project-dir", project], project, env);
+      expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+      git(project, "add", "-A");
+      git(project, "commit", "-q", "-m", "back");
+      git(project, "branch", "ahead");
+      git(project, "switch", "-q", "ahead");
+      commitPin(project, NEXT_VERSION);
+      git(project, "switch", "-q", "main");
+      const ahead = join(temp("aidlc-t243-pin-worktree-ahead-"), "wt");
+      git(project, "worktree", "add", "-q", ahead, "ahead");
+      expect(dispatch(ahead)).toEqual(runsNext);
+      expect(registeredFor(ahead)).toBe(NEXT_VERSION);
+
+      // A worktree registered before its pin moved follows the file too.
+      const before = join(temp("aidlc-t243-pin-worktree-before-"), "wt");
+      git(project, "worktree", "add", "-q", before, "-b", "before");
+      expect(dispatch(before)).toEqual({ kind: "none" });
+      expect(registeredFor(before)).toBe(AIDLC_VERSION);
+      writeFileSync(join(before, ".aidlc-version"), `${NEXT_VERSION}\n`);
+      expect(dispatch(before)).toEqual(runsNext);
+      expect(registeredFor(before)).toBe(NEXT_VERSION);
+
+      // The main checkout itself still registers a moved pin only through
+      // config --pin, and another clone is another project.
+      writeFileSync(join(project, ".aidlc-version"), `${NEXT_VERSION}\n`);
+      expect(dispatch(project)).toEqual(notRegistered(NEXT_VERSION));
+      expect(registeredFor(project)).toBe(AIDLC_VERSION);
+      const clone = temp("aidlc-t243-pin-clone-");
+      git(clone, "init", "-q", "-b", "main");
+      writeFileSync(join(clone, ".aidlc-version"), `${NEXT_VERSION}\n`);
+      expect(dispatch(clone)).toEqual(notRegistered(NEXT_VERSION));
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+  });
+
   test("fresh-clone pins require target and registry reconciliation before dispatch", () => {
     const release = fixtureReleaseBytes(NEXT_VERSION);
     const machine = temp("aidlc-t243-pin-reconcile-machine-");

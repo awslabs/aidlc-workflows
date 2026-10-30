@@ -872,7 +872,10 @@ export function resolvePinnedDispatch(
       remediation,
     };
   }
-  if (registry.pins[project] !== version) {
+  if (
+    registry.pins[project] !== version &&
+    !inheritWorktreePin(projectDir, version, registry.pins)
+  ) {
     return {
       kind: "failure",
       code: EXIT.failure,
@@ -2729,6 +2732,58 @@ export async function installPinnedRelease(options: {
     }
   } finally {
     releaseReservation?.();
+  }
+}
+
+// The repository's shared git directory and this checkout's own one, resolved;
+// they differ only in a linked worktree (`git worktree add`).
+function gitDirs(dir: string): { common: string; own: string } | null {
+  const result = Bun.spawnSync(["git", "rev-parse", "--git-common-dir", "--git-dir"], {
+    cwd: dir,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "ignore",
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+  });
+  const [common, own] = Buffer.from(result.stdout ?? new Uint8Array())
+    .toString("utf-8")
+    .trim()
+    .split(/\r?\n/);
+  if (result.exitCode !== 0 || !common || !own) return null;
+  try {
+    return { common: realpathSync(resolve(dir, common)), own: realpathSync(resolve(dir, own)) };
+  } catch {
+    return null;
+  }
+}
+
+// A linked git worktree of a checkout registered on this machine is that
+// project: the person pinned it once, and every worktree made of it (a host
+// may make one per session) runs the release its own committed
+// `.aidlc-version` names instead of refusing until `config --pin` is typed
+// again, and is registered the way `config --pin` would register it. The
+// checkout may be registered for another version: a worktree cut from a branch
+// whose pin moved on, or one registered before the pin moved, follows its
+// file. A main checkout and a separate clone still register only through
+// `config --pin`.
+function inheritWorktreePin(
+  projectDir: string,
+  version: string,
+  pins: Readonly<Record<string, string>>,
+): boolean {
+  if (!existsSync(projectDir)) return false;
+  const dirs = gitDirs(projectDir);
+  if (dirs === null || dirs.common === dirs.own) return false;
+  const project = canonicalProjectPath(projectDir);
+  const sibling = Object.keys(pins).find((path) =>
+    path !== project && existsSync(path) && gitDirs(path)?.common === dirs.common
+  );
+  if (!sibling) return false;
+  try {
+    commitProjectPin(projectDir, version);
+    return true;
+  } catch {
+    return false;
   }
 }
 

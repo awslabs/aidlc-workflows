@@ -357,6 +357,12 @@ Otherwise a copied project's line says to get that release's copy runtime file
 first, because `--download` on a copied harness that is already installed
 fetches the release it already has, and a native project's line names the
 `aidlc config --pin` that installs that release.
+A git worktree of a checkout that is registered on the machine is the same
+project: its pinned commands run the release its own `.aidlc-version` names,
+when the machine holds it, and register it, so a worktree a host makes per
+session never asks for `config --pin` again, even when its branch pins a
+different release than the checkout. The main checkout itself, and another
+clone, register a changed pin only through `config --pin`, as before.
 
 After a successful scaffold or refresh, config runs a cheap installed-result
 sweep. It checks only the non-interactive hook PATH, host trust files, and
