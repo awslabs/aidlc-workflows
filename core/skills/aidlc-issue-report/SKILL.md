@@ -118,7 +118,8 @@ wrote the wrong thing, it got slow. For each one, line up the evidence by time: 
 drops, refusal counts in the chat log, doctor findings. Prefer two independent signals; say how sure you
 are (high / medium / guess). Use the person's one-line hint to rank, not to invent. When AI-DLC asked
 for an answer again ("didn't reach AI-DLC", "no new human reply"), start from `safe.json` `replies`: it
-says which typed replies got no `HUMAN_TURN` and how they reached the tool.
+says which typed replies got no `HUMAN_TURN` and how they reached the tool. `replies.noTime` counts replies the
+tool logged with no time of their own (Kiro CLI v2): they were not checked, so say that, not that they were lost.
 
 Do not report healthy noise as issues (a few `SENSOR_FAILED` that were fixed in the next revision,
 `HEALTH_CHECKED`, info-level doctor rows).
@@ -131,6 +132,8 @@ cannot show hand runs, put that under Not checked.
 **The report session is not the run.** The session that ran this skill's scripts is counted in `reportSessions` /
 `reportModels`, apart from `models` / `efforts` / `agents` / `approvalModes`, which describe the run. Use only the run's
 values in Environment and in the GitHub draft; name the report session's model, if at all, as "(report session: <model>)".
+What a session did from the person's message that asked for the report (its replies, tool calls, commands, refusals) is
+not in the run's counts either.
 When the person asked for the report inside the run's own Kiro session (after switching model or agent, or not), the
 collector splits that session at the report's first message and says so in `notes` ("One Kiro session held the run and then
 this report …"); the run's effort and autopilot are then unknown — write "not recorded", not the report's values.
@@ -174,7 +177,8 @@ and person name you saw while reading (prompts, errors, AI-DLC's records), and h
 ```
 
 It adds them to the redaction map, cleans `safe.json` and makes the check catch them; write their labels
-(`<customer-1>`, `<org-1>`) in the report. A one-word name that is also an ordinary word (`Will`) is not hidden (`notHidden`):
+(`<customer-1>`, `<org-1>`) in the report; a name the map already hid comes back in `alreadyHidden` with the
+label it has. A one-word name that is also an ordinary word (`Will`) is not hidden (`notHidden`):
 keep it out of the report by hand. One that is part of AI-DLC's own words (`Acme` in `acme-aidlc-plugins`) gets its label
 and is refused in the report as a word of its own, while `safe.json` keeps AI-DLC's word. Then confirm with the person in the same question as below (or on
 its own when there is nothing else to ask): "I hid these names: … Is there any other name to hide?" Hide what

@@ -312,6 +312,7 @@ export function timeWindow(o: { since?: string; until?: string; days?: string; r
   const givenUntil = parse("until", o.until);
   const asked = Number(o.days ?? 7);
   const days = Number.isFinite(asked) && asked > 0 && asked <= 366 ? asked : 7;
+  if (days !== asked && givenSince === null) notes.push("--days was not a number of days from 1 to 366; left out, so the window is 7 days");
   let until = givenUntil ?? o.now;
   // Without --since, the window reaches back from the last AI-DLC activity, or from --until when that is
   // earlier: the days before the end the person gave.
@@ -327,7 +328,8 @@ export function timeWindow(o: { since?: string; until?: string; days?: string; r
 // The HUMAN_TURN rows AI-DLC's prompt hook wrote for this report's own messages are the report's, not the run's: they
 // would stand in for the replies the run did not record.
 export function withoutReportTurns(rows: AuditRow[], prompts: Prompt[]): AuditRow[] {
-  const reportTimes = prompts.filter((p) => p.report).map((p) => Date.parse(p.ts));
+  // A reply with no time of its own (Kiro CLI v2) carries its session's last write, which says nothing about its turn.
+  const reportTimes = prompts.filter((p) => p.report && !p.noTime).map((p) => Date.parse(p.ts));
   return rows.filter((r) => r.event !== "HUMAN_TURN" || !reportTimes.some((t) => Math.abs(Date.parse(r.ts) - t) <= 10_000));
 }
 
@@ -349,6 +351,7 @@ export function matchReplies(prompts: Prompt[], rows: AuditRow[]) {
       (p) =>
         !p.inherited &&
         !p.report &&
+        !p.noTime &&
         p.engineAfter !== false &&
         (turns.length ? Date.parse(p.ts) >= turns[0].t - 10_000 : p.engineAfter === true),
     )
@@ -363,10 +366,13 @@ export function matchReplies(prompts: Prompt[], rows: AuditRow[]) {
     if (k >= 0) used.add(k);
     else notRecorded.push({ ts: p.ts, tool: p.tool, ...(p.turn ? { inRunningTurn: p.inRunningTurn, sameAsBeforeInTurn: p.sameAsBeforeInTurn } : {}) });
   }
+  const noTime = prompts.filter((p) => p.noTime && !p.inherited && !p.report && p.engineAfter !== false).length;
   return {
     checked: typed.length,
     recorded: typed.length - notRecorded.length,
     notRecorded,
     inRunningTurn: typed.filter((p) => p.inRunningTurn).length,
+    // Replies the tool logged with no time of their own: not checked.
+    ...(noTime ? { noTime } : {}),
   };
 }

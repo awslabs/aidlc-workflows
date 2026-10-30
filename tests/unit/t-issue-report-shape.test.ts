@@ -18,7 +18,7 @@ const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // r
 function install(): string {
   const project = mkdtempSync(join(tmpdir(), "shape-"));
   const files: Record<string, string> = {
-    ".kiro/tools/aidlc-state.ts": `const E = ["STAGE_STARTED", "complete", "gate-unresolved", "lock busy", "engine", "orchestrate", "next", "kiro-ide", "strict", "high", "Running", "Standard", "Shell", "you"];`,
+    ".kiro/tools/aidlc-state.ts": `const E = ["STAGE_STARTED", "complete", "gate-unresolved", "lock busy", "engine", "orchestrate", "next", "kiro-ide", "strict", "high", "Running", "Standard", "Shell", "you", "guard-tool-call"];`,
     ".kiro/tools/aidlc-guard-fences.ts": `export const GUARD_FENCES = [\n  "plan-approval",\n  "review-freeze",\n] as const;`,
     ".kiro/scopes/aidlc-bugfix.md": "---\nname: bugfix\ndepth: Minimal\n---\n",
     ".kiro/agents/aidlc-architect-agent.md": "",
@@ -52,6 +52,12 @@ function install(): string {
 const shaper = () => new Shaper(loadVocab(install(), [".kiro"]), new Labels());
 
 describe("names", () => {
+  test("an engine route that runs several hooks keeps its name; a hook of the team's own gets a label", () => {
+    const s = shaper();
+    expect(s.hook("guard-tool-call")).toBe("guard-tool-call");
+    expect(s.hook("aidlc-plan-approval-guard")).toBe("plan-approval-guard");
+    expect(s.hook("globex-audit")).toMatch(/^<custom-hook-\d+>$/);
+  });
   test("AI-DLC's own stage stays; a plugin's stage gets a label, the same one each time", () => {
     const s = shaper();
     expect(s.stage("requirements-analysis")).toBe("requirements-analysis");

@@ -105,13 +105,16 @@ export type ToolVersion = { version: string | null; source: "path" | "known-loca
 
 const WIN = platform() === "win32";
 
-function versionOf(cmd: string, args: string[]): string | null {
+export function versionOf(cmd: string, args: string[]): string | null {
   // npm shims on Windows are .cmd files, which only run through a shell: the path is quoted, and one holding a sign the
   // shell reads even in quotes (`%NAME%`, `!`) or that a folder name can carry (`&`) is not run; its version is then asked.
   if (WIN && /[&|^%!<>()"]/.test(cmd)) return null;
   try {
     const file = WIN ? `"${cmd}"` : cmd;
-    const out = execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 8000, shell: WIN });
+    // `BUN_BE_BUN=1 aidlc <script>` (SKILL.md) sets it for this process; a tool compiled with Bun that honours it
+    // would then print Bun's version instead of its own.
+    const { BUN_BE_BUN: _set, ...env } = process.env;
+    const out = execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 8000, shell: WIN, env });
     return out.trim().split("\n")[0].slice(0, 80) || null;
   } catch {
     return null;

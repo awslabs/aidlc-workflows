@@ -29,3 +29,22 @@ test("the doctor child gets the project on its command line, not the AI tool's o
   expect(env.AIDLC_PROJECT_DIR).toBeUndefined();
   expect(env.PATH).toBe("/usr/bin");
 });
+
+test("a tool's version is asked without BUN_BE_BUN", async () => {
+  if (process.platform === "win32") return;
+  const { chmodSync, mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { versionOf } = await import("../../core/skills/aidlc-issue-report/scripts/lib-project.ts");
+  const tool = join(mkdtempSync(join(tmpdir(), "version-env-")), "tool");
+  writeFileSync(tool, ["#!/bin/sh", 'echo "1.2.3 $' + '{BUN_BE_BUN:-unset}"', ""].join("\n"));
+  chmodSync(tool, 0o755);
+  const before = process.env.BUN_BE_BUN;
+  process.env.BUN_BE_BUN = "1";
+  try {
+    expect(versionOf(tool, ["--version"])).toBe("1.2.3 unset");
+  } finally {
+    if (before === undefined) delete process.env.BUN_BE_BUN;
+    else process.env.BUN_BE_BUN = before;
+  }
+});

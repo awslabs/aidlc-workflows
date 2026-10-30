@@ -23,13 +23,11 @@ import { HOST_TOOLS, Labels, Shaper, time, version } from "./lib-shape.ts";
 import { claude, codex, copilotCli, editorStores, kiroV2, kiroV3, type Local, type Summary } from "./lib-transcripts.ts";
 import { loadVocab } from "./lib-vocab.ts";
 import { gateContext } from "./lib-check.ts";
+import { flagValue } from "./lib-cli.ts";
 import { safeHits } from "./lib-gate.ts";
 import { buildDictionary, type Dictionary, redactValue, useSecretRules } from "./redact.ts";
 
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(`--${name}`);
-  return i > 0 ? process.argv[i + 1] : undefined;
-}
+const arg = (name: string) => flagValue(name);
 const flag = (name: string) => process.argv.includes(`--${name}`);
 
 function stamp(): string {
@@ -56,6 +54,10 @@ function freshDefault(): string {
   return dir;
 }
 const out = resolve(arg("out") ?? freshDefault());
+if (existsSync(out) && !statSync(out).isDirectory()) {
+  console.log(JSON.stringify({ ok: false, reason: "out-not-a-folder", hint: "Leave out --out, or name a new or empty folder." }));
+  process.exit(2);
+}
 // finish.ts deletes local/ at the end: a folder that already holds anything is not this run's to fill.
 if (existsSync(out) && readdirSync(out).length > 0) {
   console.log(JSON.stringify({ ok: false, reason: "out-not-empty", hint: "Leave out --out, or name a new or empty folder." }));

@@ -4,7 +4,8 @@
 
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type AuditRow, absenceSignals, readHooksHealth, timeWindow } from "../../core/skills/aidlc-issue-report/scripts/lib-audit.ts";
@@ -527,5 +528,298 @@ test.skipIf(process.platform === "linux")("a Claude Code log is found when the p
   } finally {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});
+
+test("--days out of range is said in the window's notes", () => {
+  for (const days of ["400", "two", "0"]) {
+    const w = timeWindow({ days, rows: [row("2026-10-28T10:00:00Z", "STAGE_STARTED")], now: Date.parse("2026-10-29T12:00:00Z") });
+    expect(w.notes.some((n) => n.startsWith("--days"))).toBe(true);
+  }
+  expect(timeWindow({ days: "3", rows: [], now: Date.parse("2026-10-29T12:00:00Z") }).notes).toEqual([]);
+  // With --since the window does not use --days at all.
+  expect(timeWindow({ days: "0", since: "2026-10-01T00:00:00Z", rows: [], now: Date.parse("2026-10-29T12:00:00Z") }).notes).toEqual([]);
+});
+
+test("a hook refusal is counted however the install runs its hooks", () => {
+  const root = mkdtempSync(join(tmpdir(), "hook-tags-"));
+  const project = join(root, "proj");
+  mkdirSync(project);
+  const config = join(root, "cfg");
+  const dir = join(config, "projects", resolve(project).replace(/[^A-Za-z0-9]/g, "-"));
+  mkdirSync(dir, { recursive: true });
+  const tags = [
+    "[aidlc engine hook plan-approval-guard]",
+    '[bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook guard-tool-call]',
+    '["C:\\Users\\u\\AppData\\Local\\aidlc\\aidlc.exe" engine hook review-freeze]',
+    "[bun .codex/tools/aidlc.ts engine adapter codex guard-tool-call]",
+    // the same, inside text a reader turned into JSON (Copilot, Kiro): the quotes come escaped
+    '[\\"C:\\\\u\\\\aidlc.exe\\" engine hook state-transition-guard]',
+    // an argument after the route, PowerShell's exit line, Bun's `--`, Cursor's route-less adapter
+    "[bun .kiro/tools/aidlc.ts engine adapter kiro reviewer-scope aidlc-architecture-reviewer-agent]",
+    "[& aidlc engine hook plan-approval-guard; exit $LASTEXITCODE]",
+    '[bun ".cursor/tools/aidlc.ts" -- engine hook guard-tool-call]',
+    "[aidlc engine adapter cursor]",
+  ];
+  const lines = tags.map((tag, i) => ({
+    cwd: project,
+    sessionId: "s1",
+    type: "user",
+    timestamp: at(i + 1),
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, is_error: true, content: `PreToolUse:Bash hook error: ${tag}: refused` }] },
+  }));
+  writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  try {
+    const s = claude(project, Date.parse(at(0)) - 3_600_000, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
+    expect(s?.aidlcHookBlocks).toEqual({
+      "plan-approval-guard": 2, "guard-tool-call": 3, "review-freeze": 1, "state-transition-guard": 1, "reviewer-scope": 1, "cursor-adapter": 1,
+    });
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});
+
+test("a Codex subagent's session is not a session or a reply of the person's, and a call it copied counts once", async () => {
+  const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const home = mkdtempSync(join(tmpdir(), "codex-sub-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const day = join(home, "sessions", "2026", "10", "29");
+  mkdirSync(day, { recursive: true });
+  const user = (text: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
+  const call = (id: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: id, arguments: `{"cmd":"ls ${id}"}` } });
+  const parent = [{ timestamp: at(0), type: "session_meta", payload: { id: "t1", cwd: project } }, user("run the next stage", 1), call("c1", 2)];
+  const child = [
+    { timestamp: at(3), type: "session_meta", payload: { id: "t2", cwd: project, thread_source: "subagent", parent_thread_id: "t1" } },
+    user("run the next stage", 1),
+    call("c1", 2),
+    user("review the plan for the parent agent", 4),
+    call("c2", 5),
+  ];
+  writeFileSync(join(day, "rollout-2026-10-29T01-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a51.jsonl"), parent.map((l) => JSON.stringify(l)).join("\n"));
+  writeFileSync(join(day, "rollout-2026-10-29T01-03-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a52.jsonl"), child.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    const s = codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
+    expect([s?.sessions, s?.prompts, s?.toolCalls]).toEqual([1, 1, 2]);
+    expect(s?.notes.some((n) => n.startsWith("1 Codex subagent"))).toBe(true);
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+  }
+});
+
+test("Kiro sessions of a folder under the project are read beside the project's own", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-ws-"));
+  const project = join(home, "proj");
+  mkdirSync(join(project, "app"), { recursive: true });
+  const ws16 = (p: string) => createHash("sha256").update(resolve(p)).digest("hex").slice(0, 16);
+  for (const [ws, path, id] of [[ws16(project), project, "sess_a"], [ws16(join(project, "app")), join(project, "app"), "sess_b"]] as const) {
+    const sess = join(home, ".kiro", "sessions", ws, id);
+    mkdirSync(sess, { recursive: true });
+    writeFileSync(join(sess, "session.json"), JSON.stringify({ workspacePaths: [path] }));
+    writeFileSync(join(sess, "messages.jsonl"), JSON.stringify({ timestamp: at(1), payload: { type: "user", content: `hello from ${id}` } }));
+  }
+  const code = `const { kiroV3 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV3(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ sessions: s?.sessions }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({ sessions: 2 });
+});
+
+test("Kiro CLI v2 replies with no time of their own are marked, and the notes say why they are not matched", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-v2-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const dir = join(home, ".kiro", "sessions", "cli");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "s1.json"), JSON.stringify({ cwd: project, updated_at: at(30) }));
+  const lines = [
+    { kind: "Prompt", data: { content: "start the feature" } },
+    { kind: "AssistantMessage", data: { content: "running aidlc engine orchestrate next" } },
+  ];
+  writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const code = `const { kiroV2 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const local = { prompts: [], refusals: [], errors: [] };
+const s = kiroV2(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, local);
+console.log(JSON.stringify({ noTime: local.prompts.map((p) => !!p.noTime), note: s?.notes.some((n) => n.startsWith("Kiro CLI v2 lines carry no time")) }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({ noTime: [true], note: true });
+});
+
+test("what the report session did itself is not counted with the run", () => {
+  const root = mkdtempSync(join(tmpdir(), "report-counts-"));
+  const project = join(root, "proj");
+  mkdirSync(project);
+  const config = join(root, "cfg");
+  const dir = join(config, "projects", resolve(project).replace(/[^A-Za-z0-9]/g, "-"));
+  mkdirSync(dir, { recursive: true });
+  const base = { cwd: project, sessionId: "s1", isSidechain: false };
+  const said = (min: number, text: string) => ({ ...base, type: "user", timestamp: at(min), message: { role: "user", content: text } });
+  const ran = (min: number, command: string) => ({
+    ...base,
+    type: "assistant",
+    timestamp: at(min),
+    message: { role: "assistant", content: [{ type: "tool_use", id: `t${min}`, name: "Bash", input: { command } }] },
+  });
+  const check = "bun .claude/skills/aidlc-issue-report/scripts/check.ts --out x";
+  const failed = (min: number, id: string, text: string) => ({
+    ...base,
+    type: "user",
+    timestamp: at(min),
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: true, content: text }] },
+  });
+  const lines = [
+    said(1, "start the feature"),
+    ran(2, "aidlc engine orchestrate next"),
+    said(10, "make an issue report"),
+    ran(11, "bun .claude/skills/aidlc-issue-report/scripts/collect.ts --project ."),
+    ran(12, check),
+    ran(13, check),
+    ran(14, check),
+    ran(15, "aidlc engine sensor-traceability --stage build-and-test"),
+    failed(16, "t15", '{"pass": false}'),
+  ];
+  writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  try {
+    const local = { prompts: [], refusals: [], errors: [] };
+    const s = claude(project, Date.parse(at(0)) - 3_600_000, Date.parse(at(59)), local);
+    expect([s?.prompts, s?.toolCalls, s?.repeats.length, s?.aidlcCommands]).toEqual([1, 1, 0, { "aidlc orchestrate next": 1 }]);
+    expect([s?.handRunChecks, s?.toolErrors, local.errors]).toEqual([[], 0, []]);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});
+
+test("a Kiro CLI v2 session's report part is cut by place, its lines having no time", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-v2-report-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const dir = join(home, ".kiro", "sessions", "cli");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "s1.json"), JSON.stringify({ cwd: project, updated_at: at(30) }));
+  const tool = (command: string) => ({ kind: "AssistantMessage", data: { content: [{ kind: "toolUse", command }] } });
+  const lines = [
+    { kind: "Prompt", data: { content: "start the feature" } },
+    tool("aidlc engine orchestrate next"),
+    { kind: "Prompt", data: { content: "make an issue report" } },
+    tool("bun .kiro/skills/aidlc-issue-report/scripts/collect.ts"),
+    tool("bun .kiro/skills/aidlc-issue-report/scripts/check.ts"),
+  ];
+  writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const code = `const { kiroV2 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV2(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ prompts: s?.prompts, toolCalls: s?.toolCalls }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({ prompts: 1, toolCalls: 1 });
+});
+
+test("a project opened through a link is found under the path the tool logged", () => {
+  const root = mkdtempSync(join(tmpdir(), "linked-"));
+  const real = join(root, "real-proj");
+  mkdirSync(real);
+  const link = join(root, "link-proj");
+  symlinkSync(real, link);
+  const config = join(root, "cfg");
+  const dir = join(config, "projects", realpathSync(real).replace(/[^A-Za-z0-9]/g, "-"));
+  mkdirSync(dir, { recursive: true });
+  const line = { cwd: realpathSync(real), sessionId: "s1", type: "user", timestamp: at(1), message: { role: "user", content: "start the feature" } };
+  writeFileSync(join(dir, "s1.jsonl"), JSON.stringify(line));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  try {
+    expect(claude(link, Date.parse(at(0)) - 3_600_000, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] })?.prompts).toBe(1);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});
+
+test("a Codex approval review started while the report ran is not counted with the run", async () => {
+  const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const home = mkdtempSync(join(tmpdir(), "codex-review-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const day = join(home, "sessions", "2026", "10", "29");
+  mkdirSync(day, { recursive: true });
+  const user = (text: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
+  const call = (id: string, cmd: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: id, arguments: JSON.stringify({ cmd }) } });
+  const parent = [
+    { timestamp: at(0), type: "session_meta", payload: { id: "t1", cwd: project } },
+    user("run the next stage", 1),
+    call("c1", "aidlc engine orchestrate next", 2),
+    user("make an issue report", 10),
+    call("c2", "bun .codex/skills/aidlc-issue-report/scripts/collect.ts", 11),
+  ];
+  const review = [
+    { timestamp: at(11), type: "session_meta", payload: { id: "t2", cwd: project, thread_source: "guardian_review", parent_thread_id: "t1" } },
+    call("r1", "cat collect.ts", 12),
+    call("r2", "cat lib-gate.ts", 13),
+  ];
+  writeFileSync(join(day, "rollout-2026-10-29T01-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a61.jsonl"), parent.map((l) => JSON.stringify(l)).join("\n"));
+  writeFileSync(join(day, "rollout-2026-10-29T01-11-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a62.jsonl"), review.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    expect(codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] })?.toolCalls).toBe(1);
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+  }
+});
+
+test("a report turn with no time of its own does not take away a run reply's HUMAN_TURN", async () => {
+  const { withoutReportTurns } = await import("../../core/skills/aidlc-issue-report/scripts/lib-audit.ts");
+  const rows = [row(at(30), "HUMAN_TURN")];
+  expect(withoutReportTurns(rows, [{ tool: "kiro-cli (v2)", ts: at(30), text: "x", report: true, noTime: true }])).toEqual(rows);
+});
+
+test("a Kiro CLI v2 report that starts before any reply in the session counts none of its own calls", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-v2-first-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const dir = join(home, ".kiro", "sessions", "cli");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "s1.json"), JSON.stringify({ cwd: project, updated_at: at(30) }));
+  const lines = [{ kind: "AssistantMessage", data: { content: [{ kind: "toolUse", command: "bun .kiro/skills/aidlc-issue-report/scripts/collect.ts" }] } }];
+  writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const code = `const { kiroV2 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV2(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ toolCalls: s?.toolCalls }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({ toolCalls: 0 });
+});
+
+test("a Codex subagent's copied history from before its start is not counted, and subagents alone are no run", async () => {
+  const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const home = mkdtempSync(join(tmpdir(), "codex-orphan-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const day = join(home, "sessions", "2026", "10", "29");
+  mkdirSync(day, { recursive: true });
+  const call = (id: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: id, arguments: `{"cmd":"ls ${id}"}` } });
+  const child = [
+    { timestamp: at(20), type: "session_meta", payload: { id: "t2", cwd: project, thread_source: "subagent", parent_thread_id: "t-old" } },
+    call("old1", 5),
+    call("new1", 21),
+  ];
+  writeFileSync(join(day, "rollout-2026-10-29T01-20-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a71.jsonl"), child.map((l) => JSON.stringify(l)).join("\n"));
+  const parent = [{ timestamp: at(30), type: "session_meta", payload: { id: "t3", cwd: project } }, call("p1", 31)];
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    expect(codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] })).toBeNull();
+    writeFileSync(join(day, "rollout-2026-10-29T01-30-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a72.jsonl"), parent.map((l) => JSON.stringify(l)).join("\n"));
+    expect(codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] })?.toolCalls).toBe(2);
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
   }
 });

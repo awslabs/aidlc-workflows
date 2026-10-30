@@ -6,18 +6,10 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-
-function refuse(reason: string): never {
-  console.log(JSON.stringify({ ok: false, reason }));
-  process.exit(2);
-}
+import { flagValue, refuse, reportFolder } from "./lib-cli.ts";
 
 const argv = process.argv.slice(2);
-const at = argv.indexOf("--out");
-const out = at >= 0 ? argv[at + 1] : undefined;
-if (!out || !existsSync(join(out, "local", "redaction-map.json"))) {
-  refuse("usage: allow.ts --out <report folder made by collect.ts> --value <exact text>…");
-}
+const out = reportFolder(flagValue("out", argv)) ?? refuse("usage: allow.ts --out <report folder made by collect.ts> --value <exact text>…");
 const values = argv.flatMap((a, k) => (a === "--value" ? [argv[k + 1] ?? ""] : []));
 if (values.length === 0) refuse("no --value given");
 if (values.some((v) => v.trim().length < 2 || /[\r\n]/.test(v))) refuse("a value is one line of at least two characters");

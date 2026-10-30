@@ -59,6 +59,9 @@ export type Prompt = {
   turn?: string;
   inRunningTurn?: boolean;
   sameAsBeforeInTurn?: boolean;
+  // The log gave this reply no time of its own (Kiro CLI v2): `ts` is its session's last write, so it cannot be
+  // matched to AI-DLC's record by time.
+  noTime?: boolean;
 };
 export type Local = { prompts: Prompt[]; refusals: object[]; errors: object[] };
 
@@ -225,11 +228,12 @@ function checkPass(text: string): boolean | null {
   const m = text.match(/"pass"\s*:\s*(true|false)/);
   return m ? m[1] === "true" : null;
 }
-function noteCheck(s: Summary, pending: Map<string, { ts: string; check: string }>, id: unknown, text: string) {
+function noteCheck(t: Tally, pending: Map<string, { ts: string; check: string }>, id: unknown, text: string) {
   const c = typeof id === "string" ? pending.get(id) : undefined;
   if (!c) return;
   pending.delete(id as string);
-  s.handRunChecks.push({ ts: c.ts, check: c.check, pass: checkPass(text) });
+  const pass = checkPass(text);
+  t.add(c.ts, (s) => s.handRunChecks.push({ ts: c.ts, check: c.check, pass }));
 }
 
 function bump(m: Record<string, number>, k: string) {
@@ -240,7 +244,13 @@ function subagent(s: Summary, name: string) {
   s.subagents[name] ??= { dispatches: 0, models: {}, efforts: {} };
   return s.subagents[name];
 }
-const HOOK_BLOCK = /\[aidlc\sengine hook ([a-z0-9-]+)\]/gi;
+// A blocking hook as the host shows it: its configured command in brackets, the `aidlc` command's (`hook <name>`)
+// or a copied tree's `aidlc.ts` with the same words, also a harness adapter's (`adapter <harness> <route>`) and a
+// quoted Windows path to `aidlc.exe`.
+// The command may go on after the name (an agent argument, `--project-dir …`, PowerShell's `; exit $LASTEXITCODE`), Bun
+// may be given `--` before the words, and Cursor's adapter takes no route (`adapter cursor`).
+const HOOK_BLOCK =
+  /\[[^\]\n]{0,300}?\baidlc(?:\.ts|\.exe|\.cmd)?(?:\\?["'])?\s+(?:--\s+)?engine\s+(?:hook\s+([a-z0-9-]+)|adapter\s+([a-z-]+)(?:\s+([a-z0-9-]+))?)\b[^\]\n]{0,200}\]/gi;
 // An AI-DLC command as the agent typed it, native (`engine orchestrate next` after `aidlc`) or from a copied
 // tree (the same verbs after the tree's `aidlc.ts`, or after an `aidlc-<tool>.ts` such as `aidlc-log.ts`).
 const AIDLC_CMD = /\baidlc(?:-([a-z-]+))?(?:\.ts|\.cmd|\.exe)?["']?\s+(?:engine\s+)?([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/i;
@@ -265,7 +275,7 @@ const SUBVERBS = new Set([
   "pin", "start", "fail", "abort", "compose", "models", "trust", "flags", "runtime", "providers", "preview", "hook", "adapter",
 ]);
 
-function noteCommand(s: Summary, text: string) {
+function noteCommand(t: Tally, ts: string, text: string) {
   const m = text.match(AIDLC_CMD);
   if (!m) return;
   // `aidlc-orchestrate next` and `aidlc orchestrate next` are the same call.
@@ -273,27 +283,55 @@ function noteCommand(s: Summary, text: string) {
   const kept = [words[0], words[1] && SUBVERBS.has(words[1].toLowerCase()) ? words[1] : null, words[2] && SUBVERBS.has(words[2].toLowerCase()) ? words[2] : null];
   const verb = ["aidlc", ...kept.filter(Boolean)].join(" ").toLowerCase();
   if (!/^aidlc [a-z]/.test(verb)) return;
-  bump(s.aidlcCommands, verb.slice(0, 60));
+  t.add(ts, (s) => bump(s.aidlcCommands, verb.slice(0, 60)));
 }
 
-function noteText(s: Summary, local: Local, ts: string, text: string, isError: boolean) {
+function noteText(t: Tally, tool: string, local: Local, ts: string, text: string, isError: boolean) {
   let blocked = false;
   for (const m of text.matchAll(HOOK_BLOCK)) {
-    bump(s.aidlcHookBlocks, m[1]);
-    s.timeline.push({ ts, kind: "aidlc-hook-block", detail: m[1] });
+    // `hook <name>`, `adapter <harness> <route>`, or the route-less `adapter cursor` (its hook is `cursor-adapter`).
+    const hook = m[1] ?? m[3] ?? `${m[2]}-adapter`;
+    t.add(ts, (s) => {
+      bump(s.aidlcHookBlocks, hook);
+      s.timeline.push({ ts, kind: "aidlc-hook-block", detail: hook });
+    });
     blocked = true;
   }
   if (/Stop hook (feedback|error)/.test(text)) {
-    s.stopFeedback++;
-    s.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
+    t.add(ts, (s) => {
+      s.stopFeedback++;
+      s.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
+    });
     blocked = true;
   }
-  if (blocked) local.refusals.push({ tool: s.tool, ts, text: text.slice(0, 1500) });
-  else if (isError) local.errors.push({ tool: s.tool, ts, text: text.slice(0, 600) });
+  // The report's own refusals and errors are not the run's evidence either.
+  if (blocked) t.add(ts, () => local.refusals.push({ tool, ts, text: text.slice(0, 1500) }));
+  else if (isError) t.add(ts, () => local.errors.push({ tool, ts, text: text.slice(0, 600) }));
 }
 
 // Same tool with the same input three times or more = a loop worth naming.
 type Calls = Map<string, { tool: string | undefined; ts: string[] }>;
+
+// What one session counted, each with its time and its place, applied once the session is read: the part from where
+// this report began (its own commands, checks and refusals, a check.ts run three times) stays out of the run's counts.
+type Op = (s: Summary, calls: Calls) => void;
+class Tally {
+  private ops: { ts: string; op: Op }[] = [];
+  add(ts: string, op: Op) {
+    this.ops.push({ ts, op });
+  }
+  get size(): number {
+    return this.ops.length;
+  }
+  // What came before the time `from`, or before the `before`-th count; all of it when neither is given.
+  commit(s: Summary, calls: Calls, cut: { from?: string | null; before?: number | null } = {}) {
+    for (let i = 0; i < this.ops.length; i++) {
+      const { ts, op } = this.ops[i];
+      if ((cut.from && ts >= cut.from) || (cut.before != null && i >= cut.before)) continue;
+      op(s, calls);
+    }
+  }
+}
 
 function finishRepeats(s: Summary, calls: Calls) {
   for (const c of calls.values()) {
@@ -315,12 +353,14 @@ function toolLabel(tool: string | undefined): string | undefined {
   return /^mcp[_-]|[/@.:]/.test(tool) ? "mcp" : tool.slice(0, 60);
 }
 
-function noteCall(calls: Calls, rawTool: string | undefined, input: unknown, ts: string) {
+function noteCall(t: Tally, rawTool: string | undefined, input: unknown, ts: string) {
   const tool = toolLabel(rawTool);
   const k = callKey(rawTool, input);
-  const call = calls.get(k);
-  if (call) call.ts.push(ts);
-  else calls.set(k, { tool, ts: [ts] });
+  t.add(ts, (_, calls) => {
+    const call = calls.get(k);
+    if (call) call.ts.push(ts);
+    else calls.set(k, { tool, ts: [ts] });
+  });
 }
 
 function readJson<T>(path: string): T {
@@ -373,13 +413,47 @@ function readLines<T>(path: string): T[] {
 
 // Letter case counts only where the file system usually ignores it (Windows, macOS).
 const FOLD_CASE = platform() === "win32" || platform() === "darwin";
+// A path and the one it resolves to through links (`/tmp` is `/private/tmp` on macOS; a project opened through a
+// link): a tool logs whichever it was given. Asked once per path.
+const realPaths = new Map<string, string>();
+function realOf(path: string): string {
+  let real = realPaths.get(path);
+  if (real === undefined) {
+    try {
+      real = realpathSync(path);
+    } catch {
+      real = path; // gone since, or never on this machine
+    }
+    realPaths.set(path, real);
+  }
+  return real;
+}
 function within(project: string, cwd: unknown): boolean {
   if (typeof cwd !== "string" || !cwd) return false;
   // macOS stores a folder name decomposed (NFD); the same name typed is composed.
   const fold = (x: string) => (FOLD_CASE ? x.normalize("NFC").toLowerCase() : x.normalize("NFC"));
-  const a = fold(resolve(cwd));
-  const p = fold(resolve(project));
-  return a === p || a.startsWith(`${p}/`) || a.startsWith(`${p}\\`);
+  const inside = (a: string, p: string) => a === p || a.startsWith(`${p}/`) || a.startsWith(`${p}\\`);
+  const as = [resolve(cwd), realOf(resolve(cwd))].map(fold);
+  const ps = [resolve(project), realOf(resolve(project))].map(fold);
+  return as.some((a) => ps.some((p) => inside(a, p)));
+}
+
+// Text the tool put where the person's words go: nothing but tagged blocks, each closed by its own tag, whose names
+// carry a dash or an underscore as the tools' own do (`<system-reminder>`, Codex's `<environment_context>`). A reply
+// the person typed can start with `<` too (`<div> is not shown`, `<b>approve</b>`). Read block by block: one pattern
+// over all the blocks backtracks for minutes on a line of many.
+const BLOCK_OPEN = /^<([a-z][a-z0-9]*[-_][\w-]*)\b[^>]*>/i;
+function injectedBlock(text: string): boolean {
+  let rest = text.trim();
+  if (!rest) return false;
+  while (rest) {
+    const open = rest.match(BLOCK_OPEN);
+    if (!open) return false;
+    const close = rest.indexOf(`</${open[1]}>`, open[0].length);
+    if (close < 0) return false;
+    rest = rest.slice(close + open[1].length + 3).trimStart();
+  }
+  return true;
 }
 
 function recentFiles(dir: string, ext: string, since: number, depth = 3): string[] {
@@ -416,8 +490,9 @@ export function claude(project: string, since: number, until: number, local: Loc
   for (const r of [process.env.CLAUDE_CONFIG_DIR, join(homedir(), ".claude")]) if (r && !byReal.has(real(r))) byReal.set(real(r), r);
   const roots = [...byReal.values()].map((r) => join(r, "projects"));
   // Claude Code names a project's folder after its path, every other character a dash; a macOS path may be stored
-  // decomposed (NFD), which has more of them.
-  const keys = [...new Set(["NFC", "NFD"].map((f) => resolve(project).normalize(f).replace(/[^A-Za-z0-9]/g, "-")))];
+  // decomposed (NFD), which has more of them, and a project opened through a link under the path it resolves to.
+  const paths = [resolve(project), realOf(resolve(project))];
+  const keys = [...new Set(paths.flatMap((path) => ["NFC", "NFD"].map((f) => path.normalize(f).replace(/[^A-Za-z0-9]/g, "-"))))];
   const s = empty("claude-code");
   const calls: Calls = new Map();
   const sessions = new Map<string, TimedFact[]>();
@@ -426,6 +501,7 @@ export function claude(project: string, since: number, until: number, local: Loc
   const lastTyped = new Map<string, Prompt>();
   const reportFrom = new Map<string, string>();
   const checks = new Map<string, { ts: string; check: string }>();
+  const tallies = new Map<string, Tally>();
   for (const root of roots) {
     if (!existsSync(root)) continue;
     // The folder key is the path as Claude Code wrote it, the project's own or a folder under it (`<key>-src`); on Windows
@@ -443,6 +519,8 @@ export function claude(project: string, since: number, until: number, local: Loc
         const id = r.sessionId ?? file;
         const log = sessions.get(id) ?? [];
         sessions.set(id, log);
+        const t = tallies.get(id) ?? new Tally();
+        tallies.set(id, t);
         log.push({ ts, key: "toolVersions", value: r.version });
         if (!r.isSidechain) {
           if (r.type === "assistant") {
@@ -452,8 +530,11 @@ export function claude(project: string, since: number, until: number, local: Loc
         }
         touch(s, ts);
         if (r.toolDenialKind) {
-          bump(s.denials, String(r.toolDenialKind));
-          s.timeline.push({ ts, kind: "tool-denied", detail: String(r.toolDenialKind) });
+          const kind = String(r.toolDenialKind);
+          t.add(ts, (x) => {
+            bump(x.denials, kind);
+            x.timeline.push({ ts, kind: "tool-denied", detail: kind });
+          });
         }
         const content = r.message?.content;
         // Claude Code writes two kinds of user line nobody typed: the summary
@@ -468,12 +549,12 @@ export function claude(project: string, since: number, until: number, local: Loc
                     .map((c) => c.text)
                     .join("\n")
                 : "";
-          // A slash command the person typed is logged as `<command-name>/x</command-name>…`; other `<…>`
-          // lines are injected context.
+          // A slash command the person typed is logged as `<command-name>/x</command-name>…`; other tagged
+          // blocks are injected context.
           const command = text.match(/<command-name>([^<]{1,200})<\/command-name>(?:[\s\S]*?<command-args>([^<]{0,2000})<\/command-args>)?/);
           const typed = command ? `${command[1]} ${command[2] ?? ""}`.trim() : text;
-          if (typed.trim() && (command || !text.startsWith("<")) && !text.startsWith("[Request interrupted by user")) {
-            s.prompts++;
+          if (typed.trim() && (command || !injectedBlock(text)) && !text.startsWith("[Request interrupted by user")) {
+            t.add(ts, (x) => x.prompts++);
             const prompt: Prompt = { tool: s.tool, ts, text: typed.slice(0, 2000), session: id, engineAfter: false };
             local.prompts.push(prompt);
             lastTyped.set(id, prompt);
@@ -483,11 +564,11 @@ export function claude(project: string, since: number, until: number, local: Loc
         if (Array.isArray(content)) {
           for (const c of content) {
             if (c?.type === "tool_use") {
-              s.toolCalls++;
-              if (c.name === "AskUserQuestion") s.questionsAsked++;
-              noteCall(calls, c.name, c.input, ts);
+              t.add(ts, (x) => x.toolCalls++);
+              if (c.name === "AskUserQuestion") t.add(ts, (x) => x.questionsAsked++);
+              noteCall(t, c.name, c.input, ts);
               if (typeof c.input?.command === "string") {
-                noteCommand(s, c.input.command);
+                noteCommand(t, ts, c.input.command);
                 if (ENGINE_CALL.test(c.input.command)) {
                   if (!firstEngine.has(id) || ts < (firstEngine.get(id) ?? ts)) firstEngine.set(id, ts);
                   const last = lastTyped.get(id);
@@ -504,14 +585,14 @@ export function claude(project: string, since: number, until: number, local: Loc
                   : Array.isArray(c.content)
                     ? (c.content as ({ text?: string } | null)[]).map((x) => x?.text ?? "").join("\n")
                     : "";
-              noteCheck(s, checks, c.tool_use_id, text);
-              if (c.is_error) s.toolErrors++;
-              noteText(s, local, ts, text, !!c.is_error);
+              noteCheck(t, checks, c.tool_use_id, text);
+              if (c.is_error) t.add(ts, (x) => x.toolErrors++);
+              noteText(t, s.tool, local, ts, text, !!c.is_error);
             }
           }
         }
         if (r.type === "system" && r.subtype === "stop_hook_summary" && r.preventedContinuation) {
-          s.stopFeedback++;
+          t.add(ts, (x) => x.stopFeedback++);
         }
       }
     }
@@ -520,6 +601,7 @@ export function claude(project: string, since: number, until: number, local: Loc
   for (const [id, from] of reportFrom) markReport(local.prompts, from, (p) => p.tool === s.tool && p.session === id);
   s.sessions = sessions.size;
   for (const [id, log] of sessions) addTimedSession(s, log, reportFrom.get(id), firstEngine.get(id));
+  for (const [id, t] of tallies) t.commit(s, calls, { from: reportFrom.get(id) });
   finishRepeats(s, calls);
   return s;
 }
@@ -535,7 +617,13 @@ export function codex(project: string, since: number, until: number, local: Loca
   const root = join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "sessions");
   const s = empty("codex");
   const calls: Calls = new Map();
-  for (const file of recentFiles(root, ".jsonl", since, 4)) {
+  // A forked session's file may begin with its parent's history: a call or output already read is not counted again.
+  const seen = new Set<string>();
+  let inheritedSessions = 0;
+  // Where the report began in each session, so a subagent or approval review it started is cut at the same time.
+  const reportStart = new Map<string, string>();
+  // In time order (the file names carry the start time), so a parent is read before the sessions it started.
+  for (const file of recentFiles(root, ".jsonl", since, 4).sort()) {
     // A rollout starts with its session_meta: another project's file is dropped before it is read whole.
     if (!within(project, firstLine<CodexLine>(file)?.payload?.cwd)) continue;
     const lines = readLines<CodexLine>(file);
@@ -561,10 +649,15 @@ export function codex(project: string, since: number, until: number, local: Loca
     let reportFrom: string | null = null;
     const firstPrompt = local.prompts.length;
     const checks = new Map<string, { ts: string; check: string }>();
+    const t = new Tally();
+    const started = meta.timestamp ?? "";
     for (const l of lines) {
       if (!inWindow(l.timestamp, since, until)) continue;
       const ts = l.timestamp;
       const p: CodexPayload = l.payload ?? {};
+      // A forked session's lines from before its own start are its parent's history, read with the parent or left
+      // out with it.
+      if (inherited && ts < started) continue;
       used = true;
       touch(s, ts);
       // A subagent's or reviewer's session runs its own model: only the person's own sessions count here.
@@ -574,17 +667,21 @@ export function codex(project: string, since: number, until: number, local: Loca
       }
       if (l.type === "response_item" && p.type === "message" && p.role === "user") {
         const text = (p.content ?? []).map((c) => c?.text ?? "").join("\n");
-        const injected = text.trimStart().startsWith("<") || text.trimStart().startsWith("# AGENTS.md instructions");
+        const injected = injectedBlock(text) || text.trimStart().startsWith("# AGENTS.md instructions");
         // Codex hands a Stop hook's block back as a user line `<hook_prompt hook_run_id="stop:…">reason</hook_prompt>`
         // (shown to the person as "Blocked by hook"), dozens of them in one turn when a hook loops.
         const stopBlock = text.match(/^\s*<hook_prompt hook_run_id="stop:[^"]*">([\s\S]*?)<\/hook_prompt>/);
         if (stopBlock && !inherited) {
-          s.stopFeedback++;
-          s.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
-          local.refusals.push({ tool: s.tool, ts, text: stopBlock[1].slice(0, 1500) });
+          const reason = stopBlock[1].slice(0, 1500);
+          t.add(ts, (x) => {
+            x.stopFeedback++;
+            x.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
+            local.refusals.push({ tool: x.tool, ts, text: reason });
+          });
         }
         if (text.trim() && !injected) {
-          s.prompts++;
+          // A subagent's or reviewer's task message is the agent's, not a reply the person typed.
+          if (!inherited) t.add(ts, (x) => x.prompts++);
           const turn: string | undefined = p.internal_chat_message_metadata_passthrough?.turn_id;
           const before = turn ? lastInTurn.get(turn) : undefined;
           if (turn) lastInTurn.set(turn, text);
@@ -596,11 +693,15 @@ export function codex(project: string, since: number, until: number, local: Loca
           local.prompts.push(lastTyped);
         }
       } else if (l.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call")) {
-        s.toolCalls++;
+        const copied = !!p.call_id && seen.has(`call ${p.call_id}`);
+        if (p.call_id) seen.add(`call ${p.call_id}`);
         const input = p.arguments ?? p.input ?? "";
-        noteCall(calls, p.name, input, ts);
         const inputText = typeof input === "string" ? input : JSON.stringify(input);
-        noteCommand(s, inputText);
+        if (!copied) {
+          t.add(ts, (x) => x.toolCalls++);
+          noteCall(t, p.name, input, ts);
+          noteCommand(t, ts, inputText);
+        }
         if (ENGINE_CALL.test(inputText)) {
           firstEngineCall ??= ts;
           if (lastTyped) lastTyped.engineAfter = true;
@@ -609,27 +710,40 @@ export function codex(project: string, since: number, until: number, local: Loca
         const check = checkName(inputText);
         if (check && p.call_id) checks.set(p.call_id, { ts, check });
       } else if (l.type === "response_item" && (p.type === "function_call_output" || p.type === "custom_tool_call_output")) {
+        if (p.call_id && seen.has(`output ${p.call_id}`)) continue;
+        if (p.call_id) seen.add(`output ${p.call_id}`);
         const text = typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? "");
-        noteCheck(s, checks, p.call_id, text);
+        noteCheck(t, checks, p.call_id, text);
         const exit = text.match(/(?:exit code|exited with code|Exit code:)\s*(\d+)/i);
         const failed = CODEX_CALL_FAILED.test(text);
         const isError = (!!exit && exit[1] !== "0") || failed;
-        if (isError) s.toolErrors++;
+        if (isError) t.add(ts, (x) => x.toolErrors++);
         if (failed && CODEX_REVIEW_REJECTED.test(text)) {
-          bump(s.denials, "policy-denied");
-          s.timeline.push({ ts, kind: "tool-denied", detail: "policy-denied" });
+          t.add(ts, (x) => {
+            bump(x.denials, "policy-denied");
+            x.timeline.push({ ts, kind: "tool-denied", detail: "policy-denied" });
+          });
         }
-        noteText(s, local, ts, text, isError);
+        noteText(t, s.tool, local, ts, text, isError);
       }
     }
     markReport(local.prompts.slice(firstPrompt), reportFrom, () => true);
-    if (used) {
+    const parent = meta.payload?.parent_thread_id ?? meta.payload?.forked_from_id;
+    const from = reportFrom ?? (inherited && parent ? reportStart.get(parent) : undefined) ?? null;
+    if (meta.payload?.id && from) reportStart.set(meta.payload.id, from);
+    t.commit(s, calls, { from });
+    if (used && inherited) inheritedSessions++;
+    else if (used) {
       s.sessions++;
       addTimedSession(s, log, reportFrom ?? undefined, firstEngineCall);
     }
   }
+  // Subagent and review sessions alone (the person's own session older than the window) are not a run in it.
   if (s.sessions === 0) return null;
   finishRepeats(s, calls);
+  if (inheritedSessions) {
+    s.notes.push(`${inheritedSessions} Codex subagent or approval-review session(s): their tool calls are counted with the run; they are not counted as sessions, and their task messages not as replies.`);
+  }
   s.notes.push("Codex hook blocks: Stop hook blocks are counted from the hook prompt lines Codex writes for a Stop hook run (measured 10-18, Codex 0.162); other hooks' blocks come from refusal text only.");
   return s;
 }
@@ -637,13 +751,15 @@ export function codex(project: string, since: number, until: number, local: Loca
 // ---------- Kiro CLI v3 and Kiro IDE 1.x (shared store) ----------
 // A failed tool result; the agent profile's own refusal says `Rule: deny` (Kiro CLI v3 also `Blocked by a
 // permission rule (deny …)`, docs/guide/15-troubleshooting.md).
-function kiroFailure(s: Summary, local: Local, ts: string, text: string) {
-  s.toolErrors++;
+function kiroFailure(t: Tally, tool: string, local: Local, ts: string, text: string) {
+  t.add(ts, (s) => s.toolErrors++);
   if (/Rule: deny|Blocked by a permission rule \(deny\b/.test(text)) {
-    bump(s.denials, "agent-profile-deny");
-    s.timeline.push({ ts, kind: "tool-denied", detail: "agent-profile-deny" });
+    t.add(ts, (s) => {
+      bump(s.denials, "agent-profile-deny");
+      s.timeline.push({ ts, kind: "tool-denied", detail: "agent-profile-deny" });
+    });
   }
-  noteText(s, local, ts, text, true);
+  noteText(t, tool, local, ts, text, true);
 }
 
 export function kiroV3(project: string, since: number, until: number, local: Local): Summary | null {
@@ -654,23 +770,38 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
   s.engine = "v3";
   const calls: Calls = new Map();
   const sessionIds = new Set<string>();
-  const wsDirs = existsSync(join(root, ws16)) ? [join(root, ws16)] : [];
-  // Windows path strings may hash differently: fall back to session.json.
-  if (wsDirs.length === 0) {
-    for (const d of readdirSync(root)) {
-      if (d === "cli") continue;
-      const dir = join(root, d);
-      for (const sess of existsSync(dir) && statSync(dir).isDirectory() ? readdirSync(dir).filter((x) => x.startsWith("sess_")) : []) {
-        try {
-          const j = readJson<KiroSession>(join(dir, sess, "session.json"));
-          if ((j.workspacePaths ?? []).some((w) => within(project, w))) {
-            wsDirs.push(dir);
-            break;
-          }
-        } catch {
-          // not a session folder
-        }
+  // Kiro names a workspace's folder after a hash of its path. The project's own hash is one; a folder under the
+  // project, or the same path spelled another way (Windows path strings may hash differently), has its own, so each
+  // other folder is told by the workspace its first readable session.json names (one folder, one workspace).
+  const wsDirs: string[] = [];
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    let isDir = false;
+    try {
+      isDir = statSync(dir).isDirectory();
+    } catch {
+      // gone while listed
+    }
+    if (d === "cli" || !isDir) continue;
+    if (d === ws16) {
+      wsDirs.push(dir);
+      continue;
+    }
+    let sessions: string[] = [];
+    try {
+      sessions = readdirSync(dir).filter((x) => x.startsWith("sess_"));
+    } catch {
+      // unreadable or gone while listed
+    }
+    for (const sess of sessions) {
+      let j: KiroSession;
+      try {
+        j = readJson<KiroSession>(join(dir, sess, "session.json"));
+      } catch {
+        continue; // not a session folder, or mid-write
       }
+      if ((j.workspacePaths ?? []).some((w) => within(project, w))) wsDirs.push(dir);
+      break;
     }
   }
   for (const ws of wsDirs) {
@@ -691,6 +822,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
       // The run shows as AI-DLC engine calls, in the main file or a sub-execution's; read after all of them.
       const engineCalls: string[] = [];
       const firstPrompt = local.prompts.length;
+      const t = new Tally();
       for (const file of files) {
         if (!existsSync(file) || statSync(file).mtimeMs < since) continue;
         const sub = file.includes("sub-executions");
@@ -715,15 +847,15 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
             promptTs.push(ts);
             const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? "");
             if (text.trim()) {
-              s.prompts++;
+              t.add(ts, (x) => x.prompts++);
               local.prompts.push({ tool: s.tool, ts, text: text.slice(0, 2000) });
             }
           } else if (p.type === "tool_call") {
-            s.toolCalls++;
-            noteCall(calls, p.toolName, p.args, ts);
+            t.add(ts, (x) => x.toolCalls++);
+            noteCall(t, p.toolName, p.args, ts);
             const cmd = p.args?.command ?? p.args?.cmd;
             if (typeof cmd === "string") {
-              noteCommand(s, cmd);
+              noteCommand(t, ts, cmd);
               if (ENGINE_CALL.test(cmd)) engineCalls.push(ts);
               if (REPORT_RUN.test(cmd)) {
                 isReport = true;
@@ -734,15 +866,18 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
             }
           } else if (p.type === "tool_result" && p.toolCallId !== undefined && checks.has(p.toolCallId)) {
             const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? "");
-            noteCheck(s, checks, p.toolCallId, text);
-            if (p.success === false) kiroFailure(s, local, ts, text);
+            noteCheck(t, checks, p.toolCallId, text);
+            if (p.success === false) kiroFailure(t, s.tool, local, ts, text);
           } else if (p.type === "tool_result" && p.success === false) {
-            kiroFailure(s, local, ts, typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? ""));
+            kiroFailure(t, s.tool, local, ts, typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? ""));
           } else if (p.type === "pending_interaction" && p.interactionType === "tool_approval") {
-            s.approvalPrompts++;
-            s.timeline.push({ ts, kind: "approval-prompt", detail: "" });
+            t.add(ts, (x) => {
+              x.approvalPrompts++;
+              x.timeline.push({ ts, kind: "approval-prompt", detail: "" });
+            });
           } else if (p.type === "sub_agent_start" && p.subAgentName) {
-            subagent(s, agentName(p.subAgentName)).dispatches++;
+            const name = agentName(p.subAgentName);
+            t.add(ts, (x) => subagent(x, name).dispatches++);
           }
         }
       }
@@ -786,6 +921,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
             if (prompt < from && (!lastRunEngineCall || prompt > lastRunEngineCall)) from = prompt;
           }
         }
+        t.commit(s, calls, { from });
         // Only read while `from` is set; "" sorts before every timestamp.
         const cut = from ?? "";
         const runPrompts = from ? promptTs.filter((t) => t < cut).length : 0;
@@ -852,6 +988,7 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
   if (!existsSync(dir)) return null;
   const s = empty("kiro-cli (v2)");
   s.engine = "v2";
+  let timeless = false;
   for (const f of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
     // A session last written before the window holds nothing in it: its meta is not read.
     try {
@@ -874,14 +1011,24 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
     // An engine call before the report began: the session held the run too.
     let ranBefore = false;
     const firstPrompt = local.prompts.length;
+    // v2 lines share the session's time, so the report's part is cut by place: from the last reply before the first
+    // call of this skill's scripts.
+    const t = new Tally();
+    let lastPromptAt: number | null = null;
+    let reportAt: number | null = null;
     for (const l of lines) {
-      const ts: string | undefined = l.data?.meta?.timestamp ?? l.data?.timestamp ?? meta.updated_at;
+      const own: string | undefined = l.data?.meta?.timestamp ?? l.data?.timestamp;
+      const ts: string | undefined = own ?? meta.updated_at;
       if (!inWindow(ts, since, until)) continue;
+      if (!own) timeless = true;
       used = true;
       touch(s, ts);
       if (l.kind === "Prompt") {
-        s.prompts++;
-        lastTyped = { tool: s.tool, ts, text: JSON.stringify(l.data?.content ?? "").slice(0, 2000), engineAfter: false };
+        lastPromptAt = t.size;
+        t.add(ts, (x) => x.prompts++);
+        lastTyped = {
+          tool: s.tool, ts, text: JSON.stringify(l.data?.content ?? "").slice(0, 2000), engineAfter: false, ...(own ? {} : { noTime: true }),
+        };
         local.prompts.push(lastTyped);
       } else if (l.kind === "AssistantMessage") {
         const content = l.data?.content;
@@ -890,26 +1037,28 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
           if (lastTyped) lastTyped.engineAfter = true;
           if (!isReport) ranBefore = true;
         }
-        const parts = Array.isArray(content) ? (content as ({ kind?: string; toolUse?: unknown } | null)[]) : [];
-        for (const c of parts) if (c?.kind === "toolUse" || c?.toolUse) s.toolCalls++;
         // v2 lines share the session's time, so the report starts at the reply before the first call of
-        // this skill's scripts, counted in order.
+        // this skill's scripts, counted in order (with no reply before it, at this message, before its calls count).
         if (!isReport && REPORT_RUN.test(JSON.stringify(content ?? ""))) {
           isReport = true;
           reportFromPrompt = Math.max(firstPrompt, local.prompts.length - 1);
+          reportAt = lastPromptAt ?? t.size;
         }
+        const parts = Array.isArray(content) ? (content as ({ kind?: string; toolUse?: unknown } | null)[]) : [];
+        for (const c of parts) if (c?.kind === "toolUse" || c?.toolUse) t.add(ts, (x) => x.toolCalls++);
       } else if (l.kind === "ToolResults") {
         for (const r of Object.values(l.data?.results ?? {})) {
           const text = JSON.stringify(r?.result ?? "");
           // Kiro v2 wraps each result as `{"Success": …}` or `{"Error": …}`; the word inside file text is not one.
           const res = r?.result;
           const isError = !!res && typeof res === "object" && "Error" in res;
-          if (isError) s.toolErrors++;
-          noteText(s, local, ts, text, isError);
+          if (isError) t.add(ts, (x) => x.toolErrors++);
+          noteText(t, s.tool, local, ts, text, isError);
         }
       }
     }
     if (reportFromPrompt !== null) for (const p of local.prompts.slice(reportFromPrompt)) p.report = true;
+    t.commit(s, new Map(), { before: reportAt });
     if (used) {
       s.sessions++;
       const facts = newFacts();
@@ -924,6 +1073,9 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
     }
   }
   if (s.sessions) s.notes.push("Kiro CLI v2 logs hold no commands: AI-DLC commands, repeated calls and checks run by hand are not known.");
+  if (s.sessions && timeless) {
+    s.notes.push("Kiro CLI v2 lines carry no time of their own: a session last written in the window is read whole, its lines take that last time, and its replies are not matched to AI-DLC's record.");
+  }
   return s.sessions ? s : null;
 }
 
@@ -944,19 +1096,20 @@ export function copilotCli(project: string, since: number, until: number, local:
     let lastTyped: Prompt | null = null;
     let ranBefore = false;
     const firstPrompt = local.prompts.length;
+    const t = new Tally();
     for (const e of readLines<CopilotEvent>(join(root, id, "events.jsonl"))) {
       if (!inWindow(e.timestamp, since, until)) continue;
       used = true;
       touch(s, e.timestamp);
       if (e.type === "user.message") {
-        s.prompts++;
+        t.add(e.timestamp, (x) => x.prompts++);
         lastTyped = { tool: s.tool, ts: e.timestamp, text: String(e.data?.content ?? "").slice(0, 2000), engineAfter: false };
         local.prompts.push(lastTyped);
         if (!reportFrom) lastPrompt = e.timestamp;
       } else if (e.type === "tool.execution_start") {
-        s.toolCalls++;
+        t.add(e.timestamp, (x) => x.toolCalls++);
         const args = JSON.stringify(e.data?.arguments ?? "");
-        noteCommand(s, args);
+        noteCommand(t, e.timestamp, args);
         if (ENGINE_CALL.test(args)) {
           if (lastTyped) lastTyped.engineAfter = true;
           if (!isReport) ranBefore = true;
@@ -966,11 +1119,12 @@ export function copilotCli(project: string, since: number, until: number, local:
           if (!reportFrom) reportFrom = lastPrompt ?? e.timestamp;
         }
       } else if (e.type === "tool.execution_complete" && e.data?.success === false) {
-        s.toolErrors++;
-        noteText(s, local, e.timestamp, JSON.stringify(e.data ?? ""), true);
+        t.add(e.timestamp, (x) => x.toolErrors++);
+        noteText(t, s.tool, local, e.timestamp, JSON.stringify(e.data ?? ""), true);
       }
     }
     markReport(local.prompts.slice(firstPrompt), reportFrom, () => true);
+    t.commit(s, new Map(), { from: reportFrom });
     if (used) {
       s.sessions++;
       addSession(s, newFacts(), isReport);

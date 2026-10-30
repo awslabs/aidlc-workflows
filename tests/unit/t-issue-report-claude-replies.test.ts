@@ -160,3 +160,56 @@ test("a slash command is a typed reply; a reply no AI-DLC command followed is no
     else process.env.CLAUDE_CONFIG_DIR = before;
   }
 });
+
+test("a reply that starts with `<` is the person's; a tagged block the tool put there is not", () => {
+  const root = mkdtempSync(join(tmpdir(), "claude-angle-"));
+  const project = join(root, "proj");
+  mkdirSync(project);
+  const config = join(root, "cfg");
+  const dir = join(config, "projects", resolve(project).replace(/[^A-Za-z0-9]/g, "-"));
+  mkdirSync(dir, { recursive: true });
+  const base = { cwd: project, sessionId: "s1", isSidechain: false, type: "user" };
+  const at = (min: number) => `2026-10-29T01:${String(min).padStart(2, "0")}:00.000Z`;
+  const lines = [
+    { ...base, timestamp: at(1), message: { role: "user", content: "<div> is not shown on the page" } },
+    { ...base, timestamp: at(4), message: { role: "user", content: "<b>approve</b>" } },
+    { ...base, timestamp: at(2), message: { role: "user", content: "<system-reminder>\nthe date is today\n</system-reminder>" } },
+    { ...base, timestamp: at(3), message: { role: "user", content: "<local-command-stdout>ok</local-command-stdout>" } },
+  ];
+  writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  try {
+    const local: Local = { prompts: [], refusals: [], errors: [] };
+    claude(project, Date.parse(at(0)) - 3_600_000, Date.parse(at(59)), local);
+    expect(local.prompts.map((p) => p.text)).toEqual(["<div> is not shown on the page", "<b>approve</b>"]);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});
+
+test("a line of many tagged blocks is read at once", async () => {
+  const { claude: read } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const root = mkdtempSync(join(tmpdir(), "claude-blocks-"));
+  const project = join(root, "proj");
+  mkdirSync(project);
+  const config = join(root, "cfg");
+  const dir = join(config, "projects", resolve(project).replace(/[^A-Za-z0-9]/g, "-"));
+  mkdirSync(dir, { recursive: true });
+  const text = `${"<system-reminder>x</system-reminder>".repeat(60)} please approve`;
+  const line = { cwd: project, sessionId: "s1", type: "user", timestamp: "2026-10-29T01:01:00.000Z", message: { role: "user", content: text } };
+  writeFileSync(join(dir, "s1.jsonl"), JSON.stringify(line));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  try {
+    const local: Local = { prompts: [], refusals: [], errors: [] };
+    const started = Date.now();
+    read(project, Date.parse("2026-10-29T00:00:00Z"), Date.parse("2026-10-29T02:00:00Z"), local);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(local.prompts.length).toBe(1);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});

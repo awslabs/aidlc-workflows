@@ -48,3 +48,10 @@ test("the HUMAN_TURN of the report's own request is not the run's", async () => 
   const r = matchReplies([{ ...typed(10), engineAfter: true }, report], rows);
   expect(r.notRecorded.length).toBe(1);
 });
+
+test("a reply the log gave no time of its own is not checked, and is counted apart", () => {
+  const r = matchReplies([{ ...typed(30), noTime: true, engineAfter: true }], [turn(0)]);
+  expect(r.checked).toBe(0);
+  expect(r.notRecorded).toEqual([]);
+  expect(r.noTime).toBe(1);
+});

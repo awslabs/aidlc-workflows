@@ -13,6 +13,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { flagValue, refuse, reportFolder } from "./lib-cli.ts";
 import { importSecretRules } from "./lib-project.ts";
 import { type Dictionary, ordinaryWord, redactValue, useSecretRules } from "./redact.ts";
 
@@ -25,18 +26,9 @@ const LABEL: Record<(typeof KINDS)[number], string> = {
   other: "name",
 };
 
-function refuse(reason: string): never {
-  console.log(JSON.stringify({ ok: false, reason }));
-  process.exit(2);
-}
-
 const argv = process.argv.slice(2);
-const at = argv.indexOf("--out");
-const out = at >= 0 ? argv[at + 1] : undefined;
-const mapPath = out ? join(out, "local", "redaction-map.json") : "";
-if (!out || !existsSync(mapPath) || !existsSync(join(out, "safe.json"))) {
-  refuse("usage: hide.ts --out <report folder made by collect.ts> (--kind <kind> --name <value>)…");
-}
+const out = reportFolder(flagValue("out", argv)) ?? refuse("usage: hide.ts --out <report folder made by collect.ts> (--kind <kind> --name <value>)…");
+const mapPath = join(out, "local", "redaction-map.json");
 
 // Pairs in order: each --name takes the --kind given before it.
 const pairs: { kind: (typeof KINDS)[number]; name: string }[] = [];
@@ -62,8 +54,16 @@ const aidlcParts = new Set(
 );
 let added = 0;
 let skipped = 0;
+// A name the map hid before this run (the machine's user, a folder, a name added earlier) keeps the label it has.
+const before = new Set(dict.entries.map((e) => e.value.toLowerCase()));
+const already = new Set<string>();
 for (const { kind: k, name } of pairs) {
-  if (dict.entries.some((e) => e.value.toLowerCase() === name.toLowerCase())) continue;
+  const known = dict.entries.find((e) => e.value.toLowerCase() === name.toLowerCase());
+  if (known) {
+    // A report-only name is refused in the report but kept in safe.json's AI-DLC words: not "hidden" there.
+    if (before.has(name.toLowerCase()) && known.kind !== "report-only") already.add(known.label);
+    continue;
+  }
   const n = dict.entries.filter((e) => (e.kind === "named" || e.kind === "report-only") && e.label.startsWith(`<${LABEL[k]}-`)).length + 1;
   if (!/\s/.test(name) && !ordinaryWord(name) && aidlcParts.has(name.toLowerCase())) {
     dict.entries.push({ value: name, label: `<${LABEL[k]}-${n}>`, kind: "report-only" });
@@ -89,6 +89,7 @@ console.log(
     ok: true,
     added,
     hiddenNames: dict.entries.filter((e) => e.kind === "named" || e.kind === "report-only").map((e) => e.label),
+    ...(already.size ? { alreadyHidden: [...already] } : {}),
     ...(skipped ? { notHidden: skipped, why: "also an ordinary word: keep it out of the report by hand" } : {}),
   }),
 );

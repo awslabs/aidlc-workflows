@@ -446,7 +446,7 @@ const SAFE_FIELDS = new Set([
   "engine", "environment", "error", "event", "exe", "exists", "exit", "file", "findings", "firstTs", "generatedAt",
   "guardPolicy", "guardsOff", "guardsOn", "handRunChecks", "hook", "hooks", "id", "inProgress", "inRunningTurn", "intent",
   "intents", "kind", "kiroEngine", "kiroHomeEngine", "kiroIdePending", "knownGaps", "last", "lastAidlcActivity", "lastTs",
-  "lastUpdated", "mixedSessions", "models", "native", "nextStage", "notRecorded", "note", "notes", "openQuestions", "os",
+  "lastUpdated", "mixedSessions", "models", "native", "nextStage", "noTime", "notRecorded", "note", "notes", "openQuestions", "os",
   "otherStores", "pass", "phase", "pin", "planApproval", "problems", "prompts", "questionsAsked", "ran", "reason",
   "recorded", "repeats", "replies", "reportModels", "reportSessions", "revisionCount", "row", "rowsInWindow", "rowsTotal",
   "sameAsBeforeInTurn", "schema", "scope", "secretRules", "sensors", "sessions", "sessionsFolder", "severity", "since",

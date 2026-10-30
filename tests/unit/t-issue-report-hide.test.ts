@@ -92,3 +92,58 @@ test("a name the person hid that is only part of AI-DLC's words is refused in th
   writeFileSync(join(out, "aidlc-issue-report.md"), "The <customer-1> team saw it; acme-aidlc-plugins was on.\n");
   expect(bun("check.ts", ["--out", out]).status).toBe(0);
 });
+
+test("a name the map already hides is answered with the label it has", () => {
+  const out = reportFolder();
+  const r = bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "/tmp/p"]);
+  expect(r.status).toBe(0);
+  expect(JSON.parse(r.stdout).alreadyHidden).toEqual(["<project>"]);
+});
+
+test("a name given twice in one call is added once and not called already hidden", () => {
+  const out = reportFolder();
+  const r = bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Contoso", "--kind", "customer", "--name", "CONTOSO"]);
+  expect(JSON.parse(r.stdout)).toMatchObject({ ok: true, added: 1 });
+  expect(JSON.parse(r.stdout).alreadyHidden).toBeUndefined();
+});
+
+test("every script that takes a report folder refuses a file or a missing --out instead of failing", () => {
+  const out = reportFolder();
+  const file = join(out, "safe.json");
+  for (const [script, args] of [
+    ["check.ts", []],
+    ["check.ts", ["--out", file]],
+    ["allow.ts", ["--out", file, "--value", "two words"]],
+    ["hide.ts", ["--out", file, "--name", "Contoso"]],
+    ["set-version.ts", ["--out", file, "--tool", "claude", "--version", "1.2.3"]],
+    ["finish.ts", ["--out", file, "--no-open"]],
+  ] as const) {
+    const r = bun(script, [...args]);
+    expect([script, ...args, r.status, JSON.parse(r.stdout).ok]).toEqual([script, ...args, 2, false]);
+  }
+});
+
+test("collect.ts refuses an --out that names a file", () => {
+  const out = reportFolder();
+  const project = mkdtempSync(join(tmpdir(), "hide-project-"));
+  mkdirSync(join(project, "aidlc", "spaces", "default"), { recursive: true });
+  const r = bun("collect.ts", ["--project", project, "--out", join(out, "safe.json"), "--no-doctor"]);
+  expect(r.status).toBe(2);
+  expect(JSON.parse(r.stdout).reason).toBe("out-not-a-folder");
+});
+
+test("a name kept as one of AI-DLC's words is not said to be hidden", () => {
+  const out = reportFolder();
+  const map = join(out, "local", "redaction-map.json");
+  const dict = JSON.parse(readFileSync(map, "utf8"));
+  dict.entries.push({ value: "Acme", label: "<customer-1>", kind: "report-only" });
+  writeFileSync(map, JSON.stringify(dict));
+  expect(JSON.parse(bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Acme"]).stdout).alreadyHidden).toBeUndefined();
+});
+
+test("check.ts says a stray folder is not a report folder, not that it was finished", () => {
+  const dir = mkdtempSync(join(tmpdir(), "stray-"));
+  writeFileSync(join(dir, "aidlc-issue-report.md"), "# notes");
+  const r = bun("check.ts", ["--out", dir]);
+  expect(JSON.parse(r.stdout).reason).toContain("is not a report folder made by collect.ts");
+});

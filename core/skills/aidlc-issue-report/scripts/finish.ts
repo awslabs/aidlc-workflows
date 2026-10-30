@@ -13,23 +13,14 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { platform } from "node:os";
 import { join, resolve } from "node:path";
+import { flagValue, refuse, reportFolder } from "./lib-cli.ts";
 import { checkFolder, OS_FILES } from "./lib-check.ts";
 
-function refuse(message: string): never {
-  console.log(JSON.stringify({ ok: false, error: message }, null, 2));
-  process.exit(2);
-}
-
-const i = process.argv.indexOf("--out");
-const given = i > 0 ? process.argv[i + 1] : undefined;
-if (!given || given.startsWith("--")) refuse("--out <report folder> is required; nothing was deleted");
-const out = resolve(given);
-if (!existsSync(join(out, "safe.json")) || !existsSync(join(out, "local", "redaction-map.json"))) {
-  refuse(`${out} is not a report folder made by collect.ts; nothing was deleted`);
-}
+const given = flagValue("out") ?? refuse("--out <report folder> is required; nothing was deleted");
+const out = reportFolder(given) ?? refuse(`${resolve(given)} is not a report folder made by collect.ts; nothing was deleted`);
 const check = await checkFolder(out);
 if (!check?.ok) {
-  console.log(JSON.stringify({ ok: false, error: "the check did not pass; nothing was deleted", check }, null, 2));
+  console.log(JSON.stringify({ ok: false, reason: "the check did not pass; nothing was deleted", check }, null, 2));
   process.exit(1);
 }
 rmSync(join(out, "local"), { recursive: true, force: true });

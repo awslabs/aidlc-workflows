@@ -180,7 +180,8 @@ export class Shaper {
   hook(value: unknown): string | null {
     if (typeof value !== "string" || !value) return null;
     const bare = value.replace(/^aidlc-/, "");
-    return this.v.hooks.has(bare) ? bare : this.labels.label("hook", value);
+    // A hook file's name, or an engine route that runs several (`guard-tool-call`), which is one of AI-DLC's words.
+    return this.v.hooks.has(bare) || (/^[a-z0-9-]+$/.test(bare) && this.v.words.has(bare)) ? bare : this.labels.label("hook", value);
   }
   agent(value: unknown): string | null {
     if (typeof value !== "string" || !value) return null;
@@ -447,7 +448,7 @@ export class Shaper {
       denials: this.keys(s.denials, (k) => this.oneOf(DENIALS, "denial", k)),
       aidlcHookBlocks: this.keys(s.aidlcHookBlocks, (k) => this.hook(k)),
       aidlcCommands: this.keys(s.aidlcCommands, (k) => this.command(k)),
-      repeats: s.repeats.map((r) => ({ ...r, tool: this.tool(r.tool) ?? "unknown", firstTs: time(r.firstTs), lastTs: time(r.lastTs) })),
+      repeats: s.repeats.map((r) => ({ tool: this.tool(r.tool) ?? "unknown", count: r.count, firstTs: time(r.firstTs), lastTs: time(r.lastTs) })),
       timeline: s.timeline.map((t) => ({
         ts: time(t.ts),
         kind: t.kind,
