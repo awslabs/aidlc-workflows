@@ -225,6 +225,31 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       const shownA = run(p, "show a.md", ["show", aRow.id]);
       expect(shownA.citation as string).toContain("documents/a.md");
       expect(shownA.content as string).toBe("a v1\n");
+      const briefA = run(p, "show a.md --brief", ["show", aRow.id, "--brief"]);
+      expect(briefA.citation).toBe(shownA.citation);
+      expect(briefA.content, "--brief leaves the full text out").toBeUndefined();
+      expect(briefA.excerpt, "with no summary, the opening text stands for it").toBe("a v1\n");
+      expect(briefA.excerpt_truncated).toBe(false);
+      expect(briefA.content_notice).toBe(shownA.content_notice);
+      doc(p, "long.md", "x".repeat(5000));
+      run(p, "onboard long.md", ["onboard", join(documentsDir(p), "long.md")]);
+      const longRow = listRows(p, "after onboarding long.md").find((r) => r.path === "documents/long.md")!;
+      const briefLong = run(p, "show long.md --brief", ["show", longRow.id, "--brief"]);
+      expect((briefLong.excerpt as string).length).toBe(2000);
+      expect(briefLong.excerpt_truncated).toBe(true);
+      const human = spawnSync(
+        "bun",
+        [AIDLC, "engine", "knowledge", "show", longRow.id, "--brief", "--project-dir", p],
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
+      );
+      expect(human.status, human.stderr).toBe(0);
+      expect(human.stdout).toContain("--- excerpt (part 1 of 3 of the text, up to 2000 characters each) ---");
+      expect(human.stdout).toContain("x".repeat(2000));
+      const last = run(p, "show long.md --brief --part 3", ["show", longRow.id, "--brief", "--part", "3"]);
+      expect((last.excerpt as string).length, "the last part holds the remainder").toBe(1000);
+      expect([last.excerpt_part, last.excerpt_parts]).toEqual([3, 3]);
+      expect(knowledge(p, ["show", longRow.id, "--brief", "--part", "4"]).status, "a part past the end is refused").not.toBe(0);
+      expect(knowledge(p, ["show", longRow.id, "--part", "2"]).status, "--part needs --brief").not.toBe(0);
 
       // 4. edit a.md in place, onboard again: exactly ONE live row, status
       // "edited", same id (identity survives a same-path edit).
@@ -306,6 +331,31 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       rows = checkInvariants(p, "after sync (rebind re-extraction)");
       const shown = run(p, "show rebound row content", ["show", id]);
       expect(shown.content).toBe("policy v2 moved and edited\n");
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+
+  test(
+    "list --intent keeps the space-wide rows and that intent's, and a fresh project with no knowledge folder lists none",
+    () => {
+      const p = scratchProject();
+      rmSync(join(p, "aidlc", "spaces", SPACE, "knowledge"), { recursive: true, force: true });
+      intentCreate(p, "checkout");
+      const empty = run(p, "list --intent on a fresh project", ["list", "--intent", "checkout"]);
+      expect(empty.documents, "no knowledge folder lists nothing, and refuses nothing").toEqual([]);
+
+      mkdirSync(documentsDir(p), { recursive: true });
+      doc(p, "brand.md", "brand\n");
+      doc(p, "checkout.md", "checkout\n");
+      doc(p, "billing.md", "billing\n");
+      run(p, "onboard all", ["onboard"]);
+      intentCreate(p, "billing");
+      const ids = new Map(listRows(p, "after onboard").map((row) => [row.path, row.id]));
+      run(p, "scope checkout.md", ["associate", ids.get("documents/checkout.md")!, "--intent", "checkout"]);
+      run(p, "scope billing.md", ["associate", ids.get("documents/billing.md")!, "--intent", "billing"]);
+      const scoped = run(p, "list --intent checkout", ["list", "--intent", "checkout"]);
+      expect((scoped.documents as ListedRow[]).map((row) => row.path).sort()).toEqual(["documents/brand.md", "documents/checkout.md"]);
+      expect((run(p, "list", ["list"]).documents as ListedRow[]).length, "without --intent every row stays").toBe(3);
     },
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );

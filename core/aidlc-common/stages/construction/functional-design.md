@@ -38,6 +38,16 @@ consumes:
     required: true
   - artifact: contract-summary
     required: false
+  - artifact: mockups
+    required: false
+  - artifact: mockups-preview
+    required: false
+  - artifact: interaction-spec
+    required: false
+  - artifact: design-system-mapping
+    required: false
+  - artifact: accessibility-checklist
+    required: false
 requires_stage:
   - units-generation
   - contract-design
@@ -54,7 +64,7 @@ scopes:
   - refactor
   - classic
   - workshop
-inputs: unit-of-work.md, unit-of-work-story-map.md, user-stories stories.md (if produced), requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)
+inputs: unit-of-work.md, unit-of-work-story-map.md, user-stories stories.md (if produced), requirements.md, domain-design components.md, contract-design contract-summary.md (if produced), refined-mockups mockups.md, mockups-preview.html, interaction-spec.md, design-system-mapping.md and accessibility-checklist.md (if produced)
 outputs: "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views."
 ---
 
@@ -85,6 +95,8 @@ Execute all steps sequentially as written.
 ### Step 1: Read Unit Context
 
 Read the unit definition from `<record>/inception/units-generation/unit-of-work.md` and assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md` (if they exist), and the acceptance criteria (`ACx.y.z`) of those stories from `<record>/inception/user-stories/stories.md` (if it exists). Read `<record>/inception/requirements-analysis/requirements.md` (if exists), the component catalogue from `<record>/inception/domain-design/components.md` (if it exists), and the contracts for this unit's boundaries from `<record>/inception/contract-design/contract-summary.md` (if it exists).
+
+When this Unit has a user interface (kind `ui`, or untagged with frontend work), also read the approved experience from `<record>/inception/refined-mockups/` (if it exists): `mockups.md`, `mockups-preview.html`, `interaction-spec.md`, `design-system-mapping.md` and `accessibility-checklist.md`. The person approved it at Refined Mockups; the `UX{x}.{y}.{n}` decisions of this Unit's stories are inputs this design realises, not suggestions. A Unit of another kind does not design screens and reads none of it.
 
 Incremental scopes (refactor) deliberately skip user-stories, units-generation and domain-design, so those inputs are absent by design there. When an input is absent, work from what the scope does provide — the requirements and, on a brownfield workspace, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints) — and treat the existing code structure as the de-facto domain design. Never invent the content of a missing artifact.
 
@@ -118,7 +130,7 @@ Generate the following in `<record>/construction/{unit-name}/functional-design/`
 - **entities.md**: The entity model. Carries a fenced ```yaml source-of-truth block listing each entity with its description, attributes (name, logical type, required/unique, references, allowed values, defaults, min/max, constraints), entity-level constraints, and relationships (cardinality + direction). Follow the block with a short human-readable summary of the entity set.
 - **rules.md**: The business rules. Carries a fenced ```yaml source-of-truth block listing each numbered rule (`id: BRx.y`, e.g. `BR1.1` — the `BR{group}.{seq}` format the traceability sensor recognizes) with its statement, category (validation/authorization/constraint/calculation/policy), what it applies to, trigger, logic (IF…THEN in plain language), violation behaviour, and source (FR{n}/NFR{n}). Follow the block with a short human-readable rules summary table.
 - **functional-spec.md**: The behavioural specification. It is the **source of truth for workflows and state machines** — the numbered step sequences a use case follows and the lifecycle-entity state transitions — because `entities.md` (data shape) and `rules.md` (decision logic) do not capture ordered behaviour or transitions. It also carries two **derived** views for readability: an entity-relationship `mermaid` diagram (derived from `entities.md` — the YAML there is source of truth) and a rules summary (derived from `rules.md`). For a UI-only unit that produces `functional-spec.md` without `entities.md`/`rules.md`, this file is self-contained: it authoritatively specifies the interaction workflows and screen/state transitions from the unit definition and requirements, with no entity/rule dependency. When `stories.md` exists, name it beside the stories (`USx.y`) this Unit implements.
-- **frontend-components.md** (CONDITIONAL — only if unit includes frontend/UI): Component hierarchy, props/state design, interaction flows, form validation rules, API integration points
+- **frontend-components.md** (CONDITIONAL — only if unit includes frontend/UI): Component hierarchy, props/state design, interaction flows, form validation rules, API integration points. When Refined Mockups ran, follow the approved screens: keep their composition and the order of their sections, use the components `design-system-mapping.md` names, and cite each `UX{x}.{y}.{n}` decision of this Unit's stories at the component that realises it. A departure from the approved experience is a recorded deviation with its reason, never a silent one.
 
 Create
 `<record>/construction/{unit-name}/functional-design/traceability.json` by running
@@ -130,12 +142,18 @@ it lists in `upstream_ids` every ID this Unit answers for, each with a `GAP` row
   shared story that another Unit delivers.
 - Otherwise, with `unit-of-work-story-map.md`: every `FR` on this Unit's rows.
 - Otherwise: every `FR` Requirements Analysis recorded.
+- With `stories.md` and Refined Mockups' `interaction-spec.md`, a `ui` or
+  untagged Unit also answers for the `UX{x}.{y}.{n}` decisions of the same
+  stories (every story when there is no story map). A Unit of another kind
+  answers for none.
 
 A requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and
 needs no row of its own.
 
 Set each ID's `coverage` row: `OK` with a `target` naming one or more
-`BRx.y` IDs that exist in `rules.md`; `N/A` with the reason as its `target`
+`BRx.y` IDs that exist in `rules.md`, or `frontend-components.md` for an ID a
+component realises (always for a `UX` decision, and for a `ui` Unit, which writes
+no `rules.md`), which must cite the ID; `N/A` with the reason as its `target`
 (for example `delivered by u2-profile`); `Deferred` with the later stage that
 covers it as its `target`; or `GAP` while this design does not cover it. Use
 the optional `reverse` array to explain rules that intentionally have no
@@ -185,12 +203,13 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 
 Imports: `required-sections`, `upstream-coverage`, `linter`, `type-check`, `traceability`.
 
-Upstream targets: `unit-of-work`, `unit-of-work-story-map`, `stories`, `requirements`, `components`, `contract-summary`.
+Upstream targets: `unit-of-work`, `unit-of-work-story-map`, `stories`, `requirements`, `components`, `contract-summary`, `mockups`, `mockups-preview`, `interaction-spec`, `design-system-mapping`, `accessibility-checklist`.
 
 `linter` and `type-check` inspect matching TypeScript/JavaScript snippets.
 `traceability` verifies that every acceptance criterion of the stories mapped
-to this Unit, or every fallback `FR`, is declared and covered; checks `BRx.y`
-targets against `rules.md`; and finds unexplained business-rule orphans.
+to this Unit, or every fallback `FR`, and every owed `UX` decision is declared
+and covered; checks `BRx.y` targets against `rules.md` and `UX` targets against
+`frontend-components.md`; and finds unexplained business-rule orphans.
 
 ## Learn
 

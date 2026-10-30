@@ -419,10 +419,10 @@ consumes:
 ### `optional_produces`
 
 A plain kebab-case string list, parallel to `produces:`. It names artifacts
-the stage **may** write per unit but is **not required** to. Absent means
-none; only the one stage that needs it (`functional-design`, for
-`frontend-components`) declares it, so the compiled `stage-graph.json` stays
-minimal.
+the stage **may** write (per unit, for a per-unit stage) but is **not
+required** to. Absent means none. `functional-design` declares
+`frontend-components`, written only for a Unit with a UI, and Requirements
+Analysis and Build and Test declare outputs a run may not need.
 
 Why it exists: a per-unit Construction stage (`for_each: unit-of-work`) is
 COVERED for a unit only when every `produces[]` artifact exists on disk under

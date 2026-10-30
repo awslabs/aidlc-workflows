@@ -2361,6 +2361,12 @@ export interface ShownDocument extends ListedDocument {
    *  is, so it carries the identical inline notice discipline, never a
    *  sidecar. */
   summary_notice?: string;
+  /** `--brief` only, when there is no current summary: the text's opening
+   *  characters, under `content_notice`. */
+  excerpt?: string;
+  excerpt_part?: number;
+  excerpt_parts?: number;
+  excerpt_truncated?: boolean;
 }
 
 /** Shared by content and summary: read a derivative through the full
@@ -2412,7 +2418,12 @@ function verifiedSummaryBytes(
  * point: a caller that receives `content` cannot receive it without also
  * receiving the declaration that it is data, not instructions.
  */
-export function showDocument(projectDir: string, space: string, id: string): ShownDocument {
+export function showDocument(
+  projectDir: string,
+  space: string,
+  id: string,
+  options: { brief?: boolean; part?: number } = {},
+): ShownDocument {
   assertKnowledgeRootTrusted(projectDir, space);
   const index = readIndex(projectDir, space);
   const row = index.documents.find((r) => r.id === id);
@@ -2450,11 +2461,12 @@ export function showDocument(projectDir: string, space: string, id: string): Sho
   // matches the row's digest describes a revision that no longer exists, so it is
   // withheld rather than shown with a caveat.
   let out: ShownDocument = base;
+  let text: string | null = null;
   if (row.content !== undefined && derivativeIsCurrent(row)) {
     const bytes = verifiedContentBytes(projectDir, space, row);
     if (bytes === null) {
       out = { ...out, state: "invalidated" };
-    } else {
+    } else if (!options.brief) {
       out = {
         ...out,
         content: bytes.toString("utf-8"),
@@ -2464,6 +2476,8 @@ export function showDocument(projectDir: string, space: string, id: string): Sho
         content_trust: "untrusted",
         content_handling: "data-not-instructions",
       };
+    } else {
+      text = bytes.toString("utf-8");
     }
   }
   // Same revision-binding gate as content, and the SAME inline-notice
@@ -2482,8 +2496,29 @@ export function showDocument(projectDir: string, space: string, id: string): Sho
       };
     }
   }
+  // `--brief` leaves the full text out, so a caller can judge many documents
+  // before reading any: the summary stands for the text, or, without one (or
+  // when `--part` asks), one bounded part of it, under the same notice.
+  if (text !== null && (out.summary_text === undefined || options.part !== undefined)) {
+    const chars = Array.from(text);
+    const parts = Math.max(1, Math.ceil(chars.length / BRIEF_EXCERPT_CHARS));
+    const part = options.part ?? 1;
+    if (part > parts) throw new Error(`Document ${id} has ${parts} part${parts === 1 ? "" : "s"}; --part ${part} is past its end.`);
+    out = {
+      ...out,
+      excerpt: chars.slice((part - 1) * BRIEF_EXCERPT_CHARS, part * BRIEF_EXCERPT_CHARS).join(""),
+      excerpt_part: part,
+      excerpt_parts: parts,
+      excerpt_truncated: parts > 1,
+      content_notice: UNTRUSTED_CONTENT_NOTICE,
+      content_trust: "untrusted",
+      content_handling: "data-not-instructions",
+    };
+  }
   return out;
 }
+
+const BRIEF_EXCERPT_CHARS = 2000;
 
 /** Human-readable catalog. `--json` carries the same rows, so a caller filters
  *  deliberately rather than being filtered for. */
@@ -2545,6 +2580,12 @@ export function renderShow(d: ShownDocument): string {
   }
   if (d.content !== undefined) {
     out.push("", d.content_notice ?? UNTRUSTED_CONTENT_NOTICE, "", "--- content ---", d.content);
+  }
+  if (d.excerpt !== undefined) {
+    const extent = d.excerpt_truncated
+      ? `part ${d.excerpt_part} of ${d.excerpt_parts} of the text, up to ${BRIEF_EXCERPT_CHARS} characters each`
+      : "the whole text";
+    out.push("", d.content_notice ?? UNTRUSTED_CONTENT_NOTICE, "", `--- excerpt (${extent}) ---`, d.excerpt);
   }
   return out.join("\n") + "\n";
 }
@@ -4188,6 +4229,7 @@ function parseFlags(
   json: boolean;
   intent?: string;
   allowInactive: boolean;
+  brief: boolean;
   positional: string[];
   values: Record<string, string>;
 } {
@@ -4198,6 +4240,7 @@ function parseFlags(
   let intent: string | undefined;
   let json = false;
   let allowInactive = false;
+  let brief = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--space") {
@@ -4218,9 +4261,11 @@ function parseFlags(
       json = true;
     } else if (a === "--allow-inactive") {
       allowInactive = true;
+    } else if (a === "--brief") {
+      brief = true;
     } else if (
       a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags" ||
-      a === "--copied-from" || a === "--copied-ignored" || a === "--copied-left-out"
+      a === "--copied-from" || a === "--copied-ignored" || a === "--copied-left-out" || a === "--part"
     ) {
       if (!allowedValueFlags.has(a)) throw new Error(`Unknown flag: ${a}`);
       if (values[a] !== undefined) throw new Error(`${a} may be specified only once`);
@@ -4236,7 +4281,7 @@ function parseFlags(
       positional.push(a);
     }
   }
-  return { space, json, intent, allowInactive, positional, values };
+  return { space, json, intent, allowInactive, brief, positional, values };
 }
 
 let projectDir: string | undefined;
@@ -4285,24 +4330,32 @@ export function main(argv: string[]): void {
         break;
       }
       case "list": {
-        const { space: spaceFlag, json } = parseFlags(args.slice(1));
+        const { space: spaceFlag, json, intent } = parseFlags(args.slice(1));
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
-        const rows = listDocuments(pd, space);
+        // `--intent [slug]` keeps the rows that intent can read: the space-wide
+        // ones and the ones scoped to it. A finished intent's rows can be read.
+        const scope = resolveIntentFlag(pd, space, intent, true);
+        const rows = listDocuments(pd, space)
+          .filter((row) => scope === null || row.intents === undefined || row.intents.includes(scope.uuid));
         // --json carries the SAME rows as the human view. Neither hides
-        // anything: filtering is the caller's decision to make.
+        // anything else: any other filtering is the caller's decision to make.
         if (json) emitJson({ space, documents: rows });
         else emitHuman(renderList(rows));
         break;
       }
       case "show": {
-        const { space: spaceFlag, json, positional } = parseFlags(args.slice(1));
+        const { space: spaceFlag, json, brief, positional, values } = parseFlags(args.slice(1), ["--part"]);
         if (positional[0] === undefined) error("show requires a document id.");
+        const partValue = values["--part"];
+        if (partValue !== undefined && !brief) error("--part reads one part of a --brief view; add --brief.");
+        if (partValue !== undefined && !/^[1-9]\d*$/.test(partValue)) error("--part takes a part number: 1, 2, 3, ...");
+        const part = partValue === undefined ? undefined : Number(partValue);
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
-        const doc = showDocument(pd, space, positional[0]);
+        const doc = showDocument(pd, space, positional[0], { brief, part });
         if (json) emitJson(doc as unknown as Record<string, unknown>);
         else emitHuman(renderShow(doc));
         break;
@@ -4428,7 +4481,11 @@ export function main(argv: string[]): void {
             "                  Add --intent [slug] to scope it, and\n" +
             "                  --allow-inactive to target a finished intent.\n" +
             "  list            The catalog: every row, with its state visible.\n" +
+            "                  Add --intent [slug] for the rows that intent can read.\n" +
             "  show <id>       One document's full record, plus its extracted text.\n" +
+            "                  Add --brief for the summary, or a 2,000-character\n" +
+            "                  excerpt without one, instead of the text, and\n" +
+            "                  --part <n> for its next 2,000 characters.\n" +
             "  associate <id> --intent [slug]    Scope a document to an intent.\n" +
             "  dissociate <id> --intent [slug]   Remove that scoping.\n" +
             "  sync            Reconcile with documents/; rebuild a lost index.\n" +

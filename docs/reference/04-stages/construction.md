@@ -357,7 +357,7 @@ legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
-| Inputs            | unit-of-work.md, unit-of-work-story-map.md, stories.md (if produced), requirements.md, domain design artifacts |
+| Inputs            | unit-of-work.md, unit-of-work-story-map.md, stories.md (if produced), requirements.md, domain design artifacts, Refined Mockups' approved experience (if produced) |
 | Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, traceability.json, CONDITIONAL: frontend-components.md (per Unit kind) |
 
 ### Purpose
@@ -373,11 +373,14 @@ feasibility input.
 - Acceptance criteria of those stories from `<record>/inception/user-stories/stories.md` (if produced)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Domain design artifacts from `<record>/inception/domain-design/`
+- For a Unit with a user interface, Refined Mockups' approved experience from
+  `<record>/inception/refined-mockups/` (if produced)
 
 ### Steps
 
 1. **Read Unit Context** -- Read the unit definition, assigned stories and
-   their acceptance criteria, requirements, and domain design artifacts.
+   their acceptance criteria, requirements, and domain design artifacts. A
+   Unit with a user interface also reads the approved experience.
 
 2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
@@ -416,7 +419,9 @@ feasibility input.
      attributes, lifecycle states, and entity interaction patterns
    - **frontend-components.md** (CONDITIONAL -- only if unit includes
      frontend/UI): Component hierarchy, props/state design, interaction flows,
-     form validation rules, API integration points
+     form validation rules, API integration points. It follows the approved
+     screens and cites each `UX{x}.{y}.{n}` decision of the Unit's stories at
+     the component that realises it; a departure is a recorded deviation.
 
 5. **Prepare Completion** -- Verify the unit's Functional Design artifacts.
    Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
@@ -431,7 +436,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), plus, for a Unit that writes frontend-components.md, the `UX` decisions of its stories; each `OK` to `BRx.y` rules in rules.md or to the Unit's frontend-components.md, which must cite the ID (always for a `UX` decision, and for a `ui` Unit, which has no rules.md), `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -899,7 +904,8 @@ Code is written to the workspace root, never to
 ### Inputs
 
 - Functional design from
-  `<record>/construction/{unit-name}/functional-design/` (if exists)
+  `<record>/construction/{unit-name}/functional-design/` (if exists),
+  including `frontend-components.md` for a Unit with a user interface
 - NFR requirements from
   `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
@@ -910,6 +916,10 @@ Code is written to the workspace root, never to
   `<record>/inception/units-generation/unit-of-work.md`
 - Story map from
   `<record>/inception/units-generation/unit-of-work-story-map.md`
+- Approved mockups, interaction specification, design-system mapping, and
+  accessibility checklist from `<record>/inception/refined-mockups/` when they
+  exist. These are optional graph inputs, so scopes that skip Refined Mockups
+  gain no new requirement.
 
 ### Steps
 
@@ -919,12 +929,14 @@ This stage has a **two-part structure**: planning followed by generation.
 
 1. **Read All Unit Artifacts** -- Read all design artifacts for the current
    unit (functional design, NFR requirements, NFR design, infrastructure
-   design, domain design, unit definition, story map).
+   design, domain design, unit definition, story map, and the approved
+   experience when Refined Mockups ran).
 
 2. **Create Code Generation Plan** -- Create a detailed plan at
    `<record>/construction/{unit-name}/code-generation/code-generation-plan.md`
    with checkboxes for each implementation step. Include story-to-code-step
-   traceability -- map each plan step back to the user story it implements.
+   traceability -- map each plan step back to the user story and `UX` experience
+   decisions it implements.
 
    Run `aidlc-testing-posture.ts render` and paste its complete
    `## Testing Contract` JSON block into the plan. The resolver reads
@@ -994,8 +1006,9 @@ This stage has a **two-part structure**: planning followed by generation.
    Unit or one of its paths gets its own Unit-scoped check.
 
 
-   The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
-   the engine shows the person when it asks for approval.
+   The plan opens with a short `## Summary` (Builds, Touches, Tests lines, plus
+   an Experience line naming the `UX` decisions a unit implements) that the
+   engine shows the person when it asks for approval.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
    conductor runs `next`. A ready plan (non-empty plan and instructions, a
@@ -1305,6 +1318,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
   `<record>/construction/*/code-generation/code-summary.md`
 - Per-unit test instructions from
   `<record>/construction/*/code-generation/unit-test-instructions.md`
+- Approved mockups, interaction specification, design-system mapping, and
+  accessibility checklist from `<record>/inception/refined-mockups/` when they
+  exist. These are optional graph inputs.
 - Every applicable artifact under each unit's `nfr-requirements/` and
   `nfr-design/` directory
 - Every current `## Testing Contract` in the stage-level or per-unit
@@ -1324,9 +1340,14 @@ with the aidlc-devsecops-agent providing security testing expertise.
 1. **Analyze Testing Requirements** -- Read code generation summaries and
    per-unit test instructions across all units. Build a source-complete
    inventory of every measurable target from NFR Requirements, NFR Design, and
-   every current Testing Contract. For each target, record a stable ID, source
-   path/section, expected value, the check that produces its actual value, and
-   any later validation stage that owns it. Catalog all required test types.
+   every current Testing Contract, and read the approved experience to test what
+   it decided where a test fits. Its `UX` decisions and accessibility checks
+   are not targets: Step 10 reports each decision built or not built and Step
+   12 names every decision and measurable accessibility check no test
+   exercised, so neither is silently dropped and neither is a failure. For each target, record a stable
+   ID, source path/section, expected value, the check that produces its actual
+   value, and any later validation stage that owns it. Catalog all required test
+   types.
 
 2. **Generate Build Instructions** -- Create
    `<record>/construction/build-and-test/build-instructions.md`:
@@ -1506,8 +1527,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
     `aidlc engine sensor-traceability --stage build-and-test`. It reports every
     `FR` and `NFR` in `requirements.md` (a requirement with sub-requirements
     through its `FR{n}.{m}` IDs) and every `AC` in `stories.md` (when User
-    Stories ran), each built when a stage-level or per-unit Code Generation
-    `traceability.json` covers it `OK` with an existing target file. A
+    Stories ran), plus every owed `UX` decision in `interaction-spec.md`, each
+    built when a stage-level or per-unit Code Generation `traceability.json`
+    covers it `OK` with an existing target file. A
     requirement with sub-requirements is built when each Unit has built its own
     (the `NFR1.x` its NFR Requirements wrote; a row for `NFR1` alone does not
     cover them); otherwise by its own row or, when User Stories ran, through
@@ -1523,7 +1545,12 @@ with the aidlc-devsecops-agent providing security testing expertise.
 11. **Prepare Completion** -- Verify the build/test evidence. Do not edit
     stage or phase state; the reported gate outcome owns the transition.
 
-12. **Completion** -- Present completion message and approval gate.
+12. **Completion** -- Present completion message and approval gate. When
+    Refined Mockups ran, it names the `UX` decisions and measurable
+    accessibility checks no test exercised and the built screens or API
+    responses to compare with `mockups-preview.html`;
+    whether the build matches the approved experience, brand and feel included,
+    is the person's judgement at this gate.
 
 ### Outputs
 
@@ -1538,7 +1565,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
 | accessibility-test-instructions.md| WCAG compliance, screen reader, keyboard nav                    | If user-facing UI  |
 | build-and-test-summary.md         | Overall status, test inventory, coverage, readiness assessment  | Always             |
 | test-results.md                   | Actual build/test execution results, pass/fail, coverage        | Always             |
-| cross-unit-traceability.md        | FR/NFR/AC coverage across all Units, verdict, uncovered IDs     | Always             |
+| cross-unit-traceability.md        | FR/NFR/AC/UX coverage across all Units, verdict, uncovered IDs  | Always             |
 
 ### Approval Gate
 

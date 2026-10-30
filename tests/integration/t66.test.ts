@@ -362,6 +362,25 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     expect(expected.filter((e) => !ancestors.has(e))).toEqual([]);
   });
 
+  test("Construction declares every Refined Mockups output as an optional input", () => {
+    const graph = loadGraph();
+    for (const stageSlug of ["functional-design", "code-generation", "build-and-test"]) {
+      const stage = graph.find((candidate) => candidate.slug === stageSlug);
+      const consumes = new Map((stage?.consumes ?? []).map((input) => [input.artifact, input.required]));
+      for (const artifact of ["mockups", "interaction-spec", "design-system-mapping", "accessibility-checklist"]) {
+        expect(consumes.get(artifact), `${stageSlug}: ${artifact}`).toBe(false);
+      }
+      // Only Functional Design, which designs the screens, reads the HTML preview.
+      expect(consumes.get("mockups-preview"), `${stageSlug}: mockups-preview`).toBe(stageSlug === "functional-design" ? false : undefined);
+    }
+  });
+
+  test("Refined Mockups reads the brownfield UI inventory and writes its preview", () => {
+    const stage = loadGraph().find((candidate) => candidate.slug === "refined-mockups");
+    expect(stage?.consumes).toContainEqual({ artifact: "component-inventory", required: false, conditional_on: "brownfield" });
+    expect(stage?.produces).toContain("mockups-preview");
+  });
+
   // reverse-engineering is independent of ideation (brownfield fan-out root)
   test("reverse-engineering is independent of ideation (fan-out root for brownfield path)", () => {
     const graph = loadGraph();
@@ -1071,7 +1090,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
   });
 
   // .sh:892-900 — Group B: element counts match live sources (4 assertions)
-  test("export element counts: stages=33, scopes=11, artifacts=122, agents=14", () => {
+  test("export element counts: stages=33, scopes=11, artifacts=123, agents=14", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" });
     const out = JSON.parse(res.stdout) as {
       stages: unknown[];
@@ -1081,7 +1100,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
     };
     expect(out.stages.length).toBe(33);
     expect(Object.keys(out.scopes).length).toBe(11);
-    expect(out.artifacts.length).toBe(122);
+    expect(out.artifacts.length).toBe(123);
     expect(out.agents.length).toBe(14);
   });
 

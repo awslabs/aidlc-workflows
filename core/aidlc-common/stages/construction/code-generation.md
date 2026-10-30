@@ -23,6 +23,8 @@ consumes:
     required: false
   - artifact: entities
     required: false
+  - artifact: frontend-components
+    required: false
   - artifact: contract-summary
     required: false
   - artifact: performance-design
@@ -35,6 +37,14 @@ consumes:
     required: true
   - artifact: requirements
     required: true
+  - artifact: mockups
+    required: false
+  - artifact: interaction-spec
+    required: false
+  - artifact: design-system-mapping
+    required: false
+  - artifact: accessibility-checklist
+    required: false
 requires_stage:
   - units-generation
   - functional-design
@@ -79,7 +89,7 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 ### Step 1: Read All Unit Artifacts
 
 Read all design artifacts for the current unit:
-- Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists)
+- Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists), including `frontend-components.md` for a Unit with a user interface: the component design that realises its `UX` decisions
 - NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Infrastructure design from `<record>/construction/{unit-name}/infrastructure-design/` (if exists)
@@ -88,6 +98,7 @@ Read all design artifacts for the current unit:
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md` (if exists)
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
+- The approved experience from `<record>/inception/refined-mockups/`: `interaction-spec.md`, `design-system-mapping.md`, `accessibility-checklist.md` and `mockups.md` (if they exist); the `UX{x}.{y}.{n}` decisions of this unit's stories are inputs the plan implements
 
 Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
 `express` scope skip Units Generation by design. When those inputs are absent,
@@ -117,7 +128,8 @@ When the directive already carries `plan_approval.status: "approved"`, this plan
 Create a detailed code generation plan at
 `<code-generation-record>/code-generation-plan.md` with checkboxes for each
 implementation step. Include story-to-code-step traceability — map each plan
-step back to the user story it implements.
+step back to the user story it implements, and to the `UX` experience decisions
+it implements when `interaction-spec.md` has them.
 
 Plan should cover (as applicable to the unit):
 - [ ] Business logic implementation
@@ -212,8 +224,10 @@ with no step after it that the threshold exit would stop: Build and Test does
 not exempt a command whose exit stopped a later step. A coverage target set
 for this Unit or one of its paths still gets its own Unit-scoped check.
 
-Start the plan with a short `## Summary` section of three lines. The engine
-shows them to the person when it asks for approval:
+Start the plan with a short `## Summary` section: a `Builds:`, `Touches:` and
+`Tests:` line, and, when the unit implements `UX` experience decisions, an
+`Experience:` line naming them. The engine shows these lines to the person when
+it asks for approval, so they see the approved experience the plan carries:
 
 ```
 ## Summary
@@ -221,6 +235,7 @@ shows them to the person when it asks for approval:
 - Builds: <what this plan builds, in a few words>
 - Touches: <the main files or folders it creates or changes>
 - Tests: <how many tests, and of what kind>
+- Experience: <the UX IDs and components this plan implements>
 ```
 
 ### Step 3: Plan Approval
@@ -530,10 +545,11 @@ source instead. Its Step 5 files are
 Create
 `<code-generation-record>/traceability.json` by running
 `{{INVOKE}} engine sensor-traceability --stage code-generation --output-path <that path> --write-upstream`:
-it lists every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
-`NFR` IDs when incremental scope skipped the design chain), each with a `GAP`
-row; a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs
-and needs no row of its own. Set each row's `status` and `target`: every `OK` target
+it lists every assigned AC, detailed `NFRx.y`, `BRx.y`, and `UX{x}.{y}.{n}`
+experience decision of this Unit's stories (or direct `FR` / `NFR` IDs when
+incremental scope skipped the design chain), each with a `GAP` row; a
+requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and
+needs no row of its own. Set each row's `status` and `target`: every `OK` target
 must be one existing workspace-relative implementation or test file. When the
 person asks to leave planned work out of this build (for example "skip the
 remaining stories"), do it: list each item they left out as `Deferred` (not

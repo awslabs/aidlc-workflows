@@ -18,7 +18,7 @@
 | Stage | Name | What This Agent Does |
 |-------|------|----------------------|
 | rough-mockups | Rough Mockups and Concept Visualization | Creates low-fidelity wireframes, concept sketches, and initial information architecture during Ideation |
-| refined-mockups | Refined Mockups and UX Design | Evolves wireframes into mid-to-high fidelity mockups with interaction specs, responsive design, and accessibility annotations |
+| refined-mockups | Refined Mockups and UX Design | Evolves wireframes into mid-to-high fidelity mockups with interaction specs, responsive design, and accessibility annotations, drawing on onboarded company documents and the existing UI, plus an HTML preview of each decided screen in its states |
 
 ### Support Stages
 
@@ -56,7 +56,7 @@ Path: `.claude/knowledge/aidlc-design-agent/`
 | File | Content |
 |------|---------|
 | accessibility-wcag.md | WCAG 2.1 AA guidelines and implementation patterns |
-| component-spec-template.md | Template for documenting component specifications (states, props, behaviour) |
+| component-spec-template.md | Template for story-keyed UX decisions and component specifications (states, props, behaviour) |
 | interaction-design-patterns.md | Interaction patterns for navigation, forms, feedback, state transitions |
 | ux-guide.md | UX design methodology and principles |
 | wireframing-guide.md | Wireframing techniques for low and high fidelity |
