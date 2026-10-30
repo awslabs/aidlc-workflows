@@ -271,7 +271,7 @@ export interface ScopeValidation {
   // human sees leads with numbers the validator computed, not an LLM recount.
   // A passing --custom run adds skipped_inputs when the plan drops a stage from
   // its base or leaves a kept stage without what it uses: the offer says it
-  // once, in one line, so the approval covers every skip creation records.
+  // once, in one line.
   summary?: ScopeCostSummary & { skipped_inputs?: SkippedInput[] };
   // Graph/plugin-authored stock scopes ranked by grid distance from the
   // validated proposal; composer-authored entries are excluded. A front/report
