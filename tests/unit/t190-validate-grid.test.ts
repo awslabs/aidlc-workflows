@@ -441,6 +441,7 @@ describe("t190 validate-grid --custom names the stages a plan skips that a stage
     advisories: string[];
     routing?: string;
     base_scope?: string;
+    plan_changes?: { skip: string[]; add: string[] };
     summary: { skipped_inputs?: Array<{ stage: string; used_by: string[] }> };
   };
   function stock(scope: string, edits: Record<string, "EXECUTE" | "SKIP"> = {}): Record<string, string> {
@@ -513,6 +514,26 @@ describe("t190 validate-grid --custom names the stages a plan skips that a stage
     );
     expect(body.base_scope).toBe("classic");
     expect(body.summary.skipped_inputs).toEqual([UNITS]);
+  });
+
+  // A live run: a plan for hardening a deployment pipeline dropped Deployment
+  // Execution from express, the offer never said so, and the record then said
+  // "Stages skipped: deployment-execution" under the person's approval.
+  test("a plan that drops a stage no kept stage uses names it, with no users", () => {
+    const body = finalRun(stock("express", { "deployment-execution": SKIP }), ["--custom"], {
+      projectType: "brownfield", depth: "minimal",
+    });
+    expect(body).toMatchObject({ valid: true, base_scope: "express", plan_changes: { skip: ["deployment-execution"] } });
+    expect(body.summary.skipped_inputs).toEqual([{ stage: "Deployment Execution", used_by: [] }]);
+  });
+
+  test("existing code names a dropped Reverse Engineering; a new project, where creation skips it, does not", () => {
+    const plan = stock("express", { "reverse-engineering": SKIP });
+    const existing = finalRun(plan, ["--custom"], { projectType: "brownfield", depth: "minimal" });
+    expect(existing.summary.skipped_inputs).toEqual([{ stage: "Reverse Engineering", used_by: [] }]);
+    const fresh = finalRun(plan, ["--custom"], { projectType: "greenfield", depth: "minimal" });
+    expect(fresh.base_scope).toBe("express");
+    expect(fresh.summary).not.toHaveProperty("skipped_inputs");
   });
 
   test("two skipped stages are named in the plan's order, each with the stages that use it", () => {
