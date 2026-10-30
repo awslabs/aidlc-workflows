@@ -258,7 +258,7 @@ no standalone meaning.
 
 2. **The user named a scope** with \`--scope <name>\`: create the intent (run
    the initialization phase). Forward the recognized flags as-is, and pass any
-   freeform description text via \`--arguments "<text>"\` (\`intent-create\` reads
+   freeform description text via \`--arguments '<text>'\` (\`intent-create\` reads
    the description from the \`--arguments\` flag, NOT a positional: forwarding
    it bare would silently drop it). ALSO derive a short **\`--label\`**: a 2-3
    word kebab-case essence of what's being built (\`"I would like to build a
@@ -267,7 +267,7 @@ no standalone meaning.
    the full \`--arguments\` text is preserved separately in the audit + state:
 
    \`\`\`bash
-   ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
+   ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments '<description>' --label '<2-3 word essence>'
    \`\`\`
 
    Print the tool's output and stop. This does not advance a stage; run
@@ -705,7 +705,7 @@ ahead of that run-stage. Adopt it for the whole run.
    Legacy Plan Approval recovery keeps its explicit bare-\`next\` choice.
    Never use \`report\` as a fallback for an engine ask answer; a selected guard
    remedy may still explicitly name a stage report.
-3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` only after acting on a stage directive. A redo, jump, or start-fresh request on re-entry is the sole non-stage report round-trip and uses \`report --result resumed --choice <redo|jump|fresh>\`.
+3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input '<text>']\` only after acting on a stage directive. A redo, jump, or start-fresh request on re-entry is the sole non-stage report round-trip and uses \`report --result resumed --choice <redo|jump|fresh>\`.
 4. Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs
    bare \`${aidlcToolInvocation("orchestrate")} next\`, with no \`--scope\` and no
    \`$ARGUMENTS\` (repeating them would redo a jump or a setting the person
@@ -753,11 +753,11 @@ preserving any \`--request\` id rather than rebuilding the request.
   new-work text:
 
   \`\`\`bash
-  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> "<the new-work description>"
+  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> '<the new-work description>'
   \`\`\`
 
   The engine returns a \`print\` directive naming the \`intent-create\` command
-  (with the \`--label "<2-3 word kebab essence>"\` placeholder). Act on it exactly
+  (with the \`--label '<2-3 word kebab essence>'\` placeholder). Act on it exactly
   as the loop's \`print\` handling describes: create the intent, then re-run
   \`next\` and carry on into the new work's first stage in this chat. Say the
   narration's line about starting it in a clean chat once: it is an option for

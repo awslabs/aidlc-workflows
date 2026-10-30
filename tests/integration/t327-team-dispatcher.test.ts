@@ -11,6 +11,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -659,8 +660,44 @@ describe("t327 team construction dispatcher", () => {
     const recoveryBoard = nextDirective(race.project);
     expect(recoveryBoard.kind).toBe("notice");
     expect(recoveryBoard.message as string).toContain(
-      'aidlc unit land awaiting --accept-released-attempt --user-input "<human acknowledgment>"',
+      "aidlc unit land awaiting --accept-released-attempt --user-input '<human acknowledgment>'",
     );
+  });
+
+  test("an unscoped checkout with every Unit claimed says nothing runs there and names each claim", () => {
+    const fixture = boardFixture();
+    rmSync(join(fixture.project, "aidlc", ".aidlc-unit-merges"), {
+      recursive: true,
+      force: true,
+    });
+    writeFileSync(
+      unitDependencyPath(fixture.project),
+      dependencyBody().replace(
+        "  - name: claimable\n    depends_on: [merged]",
+        "  - name: claimable\n    depends_on: [awaiting]",
+      ),
+    );
+    writeFileSync(
+      join(fixture.project, "aidlc", ".aidlc-unit-participant"),
+      "participant\n",
+    );
+    const statePath = seededStateFile(fixture.project);
+    const stateBefore = readFileSync(statePath, "utf-8");
+
+    for (const nextArgs of [[], ["--resume"]]) {
+      const directive = nextDirective(fixture.project, {}, nextArgs);
+      expect(directive.kind).toBe("notice");
+      const board = directive.message as string;
+      expect(board).toContain("Nothing runs from this checkout");
+      expect(board).not.toContain("may resume the normal Construction walk");
+      expect(board).toContain(
+        "`awaiting` is claimed by awaiting-team (attempt 1): in a checkout not on this machine, or a separate clone.",
+      );
+      expect(board).toContain(
+        "`claimed` is claimed by claimed-team (attempt 2): in a checkout not on this machine, or a separate clone.",
+      );
+    }
+    expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
   });
 
   test("--status appends the same read-only board in unscoped and scoped checkouts", () => {
@@ -707,9 +744,17 @@ describe("t327 team construction dispatcher", () => {
     const scopedCheckoutBefore = snapshotFiles(scopedDir);
     const scoped = run(UTILITY, ["status"], scopedDir);
     expect(scoped.status, scoped.out).toBe(0);
-    expect(scoped.stdout).toBe(unscoped.stdout);
     expect(snapshotFiles(project)).toEqual(scopedBefore);
     expect(snapshotFiles(scopedDir)).toEqual(scopedCheckoutBefore);
+    // Both checkouts now see the claim's worktree, and say so the same way.
+    const unscopedWithWorktree = run(UTILITY, ["status"], project);
+    expect(scoped.stdout).toBe(unscopedWithWorktree.stdout);
+    expect(scoped.stdout).toContain(
+      `\`claimed\` is claimed by claimed-team (attempt 2): worktree \`${realpathSync(scopedDir)}\` on branch \`scoped-claimed\`.`,
+    );
+    expect(scoped.stdout.replace(/\n {2}- `claimed` is claimed by .*$/m, "")).toBe(
+      unscoped.stdout.replace(/\n {2}- `claimed` is claimed by .*$/m, ""),
+    );
 
     const routed = run(
       DISPATCHER,

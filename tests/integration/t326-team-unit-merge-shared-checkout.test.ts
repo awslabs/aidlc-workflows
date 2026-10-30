@@ -8,6 +8,7 @@ import { join, relative } from "node:path";
 import {
   auditShardHost,
   auditShardName,
+  readAllAuditShards,
   readApplicableTeamUnitScopeStamp,
   readUnitScopeStamp,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -87,7 +88,11 @@ describe("t326 pinned team Unit merge: a claim in a checkout whose shard main ha
 
     expect(candidate.auditShard).not.toBe(leadShard);
     expect(auditShardHost(candidate.auditShard)).toBe(auditShardHost(leadShard));
-    expect(readFileSync(leadShardPath, "utf-8")).toBe(leadShardBeforeClaim);
+    // The claim turn's row joined the claim's local record, and the lead's
+    // shard is as main has it, so nothing of it is left to commit or lose.
+    expect(readFileSync(leadShardPath, "utf-8")).toBe(leadShardOnMainText);
+    const localRecord = join(seededRecordDir(lead), ".aidlc-engine", "audit", candidate.auditShard);
+    expect(readFileSync(localRecord, "utf-8")).toContain(leadShardBeforeClaim.slice(leadShardOnMainText.length).trim());
     const record = relative(lead, seededAuditDir(lead)).replaceAll("\\", "/");
     expect(git(pinner, ["show", `HEAD:${record}/${leadShard}`])).toBe(leadShardOnMainText.trim());
     expect(git(pinner, ["show", `HEAD:${record}/${candidate.auditShard}`]))
@@ -97,6 +102,8 @@ describe("t326 pinned team Unit merge: a claim in a checkout whose shard main ha
     // theirs again, writing their own shard, and the next Unit claims there.
     git(pinner, ["push", "origin", "main"]);
     git(lead, ["pull", "--ff-only", "origin", "main"]);
+    expect(git(lead, ["status", "--porcelain", "--untracked-files=no"])).toBe("");
+    expect(readAllAuditShards(lead)).toContain(leadShardBeforeClaim.slice(leadShardOnMainText.length).trim());
     expect(readApplicableTeamUnitScopeStamp(lead)).toBeNull();
     expect(auditShardName(lead)).toBe(leadShard);
     expect(otherUnitWrite(lead).status).toBe(0);
@@ -141,7 +148,6 @@ describe("t326 pinned team Unit merge: a claim in a checkout whose shard main ha
     expect(JSON.parse(republished.stdout)).toMatchObject({
       recovered: true,
       candidate_oid: candidate.candidateOid,
-      local_rows_withheld: 1,
     });
   });
 

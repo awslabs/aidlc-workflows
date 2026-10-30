@@ -216,7 +216,7 @@ newest question asked; run the approve or reject command there, with no session,
 and never ask it again. A reply to a different question does not count. When they approved and asked for a change,
 approve, then make the change and say in one line what you changed. Add
 `--fix-finding "<review-artifact>#R-NN"` to `approve` for each review finding they
-asked to have fixed, and `--reject-finding "<review-artifact>#R-NN=<their reason>"`
+asked to have fixed, and `--reject-finding '<review-artifact>#R-NN=<their reason>'`
 to `reject` for each one they rejected. The response is
 one-shot and bound to this Unit, kind, current fingerprint, verification proof ID,
 and authorized command digest. If the checkpoint changes, obtain a new directive,

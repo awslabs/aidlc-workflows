@@ -1498,7 +1498,7 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
   // The creation as the agent runs it on the person's Approve: a setting the
   // print asks their message for names the message the hook kept for it.
   function runCreation(proj: string, printed: Printed): { status: number; out: string } {
-    let args = creationOf(printed).split(" intent create ")[1].replace(/--label "[^"]*"/, "--label hardening");
+    let args = creationOf(printed).split(" intent create ")[1].replace(/--label '[^']*'/, "--label hardening");
     const chat = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000352" };
     if (args.includes(`--message '${MESSAGE_SLOT}'`)) {
       const kept = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {

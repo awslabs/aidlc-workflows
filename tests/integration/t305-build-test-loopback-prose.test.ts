@@ -150,10 +150,11 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // The copy channel expands the authored `{{INVOKE}}` seam to
     // `bun <harnessDir>/tools/aidlc.ts`; fold both projections back before the
     // byte comparison so real prose drift still fails. Each tree ships only its
-    // own tool's binding subsection, so it is compared with that cut.
+    // own tool's binding subsection, so it is compared with that cut. Only the
+    // folder is folded: `.aidlc` is also the start of `aidlc/.aidlc-request-text/`.
     const normalize = (body: string, harnessDir: string) =>
       body
-        .replaceAll(harnessDir, "{{HARNESS_DIR}}")
+        .replaceAll(`${harnessDir}/`, "{{HARNESS_DIR}}/")
         .replaceAll("bun {{HARNESS_DIR}}/tools/aidlc.ts", "{{INVOKE}}");
     const authoredFor = (harness: string) =>
       keepOwnHarnessBindings(AUTHORED_CONSTRUCTION_PROTOCOL, harness, "stage-protocol-construction.md");

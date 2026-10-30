@@ -23,7 +23,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, REPO_ROOT, seededAuditDir, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -76,12 +76,15 @@ function claimedCheckout(harness: Harness, edit: (checkout: string) => void = ()
 }
 
 // The Unit's Code Generation not done: its plan approval answer blank, and the
-// approval and the stage's gate not on record.
+// approval and the stage's gate not on record, in the tracked shards and in
+// the claimed checkout's local record.
 function codeGenerationNotDone(checkout: string): void {
   const questions = join(seededRecordDir(checkout), "construction", "alpha", "code-generation", "code-generation-questions.md");
   writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]:"));
-  for (const name of readdirSync(seededAuditDir(checkout)).filter((entry) => entry.endsWith(".md"))) {
-    const path = join(seededAuditDir(checkout), name);
+  const auditDirs = [seededAuditDir(checkout), join(seededRecordDir(checkout), ".aidlc-engine", "audit")];
+  for (const path of auditDirs.flatMap((dir) =>
+    existsSync(dir) ? readdirSync(dir).filter((entry) => entry.endsWith(".md")).map((entry) => join(dir, entry)) : []
+  )) {
     const blocks = readFileSync(path, "utf-8").split(/(?<=\n---\n)/);
     writeFileSync(path, blocks.filter((block) =>
       !(block.includes("**Stage**: code-generation") &&

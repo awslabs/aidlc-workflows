@@ -11,6 +11,7 @@
 // remote, so they stay behind the host's own Allow prompt.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UNIT_VERBS } from "../../dist/claude/.claude/tools/aidlc-command.ts";
 import { classifyTerminalCommand, isReadOnlyNextArgv, readNextLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -102,10 +103,12 @@ describe("a Unit command typed after /aidlc reaches that command", () => {
     expect(parseNextFlags(["unit land alpha --step git"]).unitCommand).toEqual(["land", "alpha", "--step", "git"]);
     expect(readNextLine(["unit status"])).toEqual({ kind: "exact", unit: ["status"] });
     expect(parseNextFlags(['unit claim alpha --team "Team A"']).unitCommand).toEqual(["claim", "alpha", "--team", "Team A"]);
+    // The gate's words travel in a request file the gate reads (t-words-travel-in-a-file).
     expectUnitCommandStep(
       nextFrom(kiroIde, ['unit gate alpha --decision approve --user-input "ship it"']),
-      `${kiroIde.invoke} unit gate alpha --decision approve --user-input ${quoteCommandArgument("ship it")}`,
+      `${kiroIde.invoke} unit gate alpha --decision approve --request-file aidlc/.aidlc-request-text/gate-alpha.txt`,
     );
+    expect(readFileSync(join(projectWithWork(), "aidlc", ".aidlc-request-text", "gate-alpha.txt"), "utf-8")).toBe("ship it");
   });
 
   test("the entry word handed on as an argument is how they reached AI-DLC, not part of the command", () => {

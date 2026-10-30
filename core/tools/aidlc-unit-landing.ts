@@ -1,8 +1,10 @@
-// Whether a team Unit has landed, as a checkout that claimed it can tell: the
-// merged cell of the Unit Progress table and the claim commit main merged.
+// What a checkout that claimed a team Unit can tell on its own: whether the
+// Unit has landed (the merged cell of the Unit Progress table and the claim
+// commit main merged), and which stages it reopens itself.
 // aidlc-lib.ts loads this module at start: nothing here may import
 // aidlc-lib.ts.
 import { spawnSync } from "node:child_process";
+import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 
 // Whether the Unit Progress table records `unit` as merged: a `merged` column
 // (only land's state fold writes one) whose cell in the Unit's one row is
@@ -48,4 +50,30 @@ export function scopeStampLanded(
     LANDED_SCOPE_STAMPS.set(key, landed);
   }
   return landed;
+}
+
+// The stages a checkout that claimed `claimedUnit` reopens itself: that
+// Unit's own per-Unit Construction stages on this work's plan. `unitStages` is
+// unitMajorConstructionStageSlugs(Scope, state, true), the block its walk
+// takes the Unit through; both readers pass exactly that. Any other stage is
+// the whole project's, and another Unit's are its claimant's. The recovery
+// question's reopen (evaluateGuardRefusal) and `next --stage` (routeNext's
+// claimedCheckoutMove) both read this, so what is offered there is taken.
+export function claimedCheckoutReopens(
+  claimedUnit: string,
+  unitStages: readonly string[],
+  stage: string,
+  unit?: string,
+): boolean {
+  return (unit === undefined || unit === claimedUnit) && unitStages.includes(stage);
+}
+
+// What a checkout that claimed a Unit says of a move that is not the Unit's
+// own. True in the project's own checkout that claimed a Unit and in a team's
+// clone alike: the checkout makes the move itself once the Unit has landed
+// there (scopeStampLanded), so it never sends the person to "the main
+// checkout", where they may already be.
+export function claimedCheckoutMovesElsewhere(claimedUnit: string, action: string): string {
+  return `Run \`${entrySkillInvocation()}\` here to carry on with Unit "${claimedUnit}"; once ${claimedUnit} has landed ` +
+    `and this checkout has pulled main, ${action} from here.`;
 }

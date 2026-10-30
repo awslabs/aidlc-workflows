@@ -885,6 +885,24 @@ describe("clearing a plan's ticks", () => {
     expect(projectPlanApprovalContent(reset)).toBe(projectPlanApprovalContent(plan));
     expect(resetPlanTaskMarkers(reset)).toBe(reset);
   });
+
+  // A step's own box is cleared wherever its line puts it; a box in its words is
+  // the plan's text and stays.
+  test("a box after a step's label is cleared, and a box in the step's words is left", () => {
+    const plan = "# Plan\n\nStep 3. [x] print done items as [x] <title>\n\n| 4 | [x] | keep [x] as shown |\n";
+    const reset = resetPlanTaskMarkers(plan);
+    expect(reset).toBe("# Plan\n\nStep 3. [ ] print done items as [x] <title>\n\n| 4 | [ ] | keep [x] as shown |\n");
+    expect(projectPlanApprovalContent(reset)).toBe(projectPlanApprovalContent(plan));
+  });
+
+  // The projection keeps a multi-line comment's closing line as it is, box and
+  // all, so a box after the closer is left; the other ticks are still cleared.
+  test("a box after a multi-line comment's closer is left, and every other tick is cleared", () => {
+    const plan = "# Plan\n\n- [x] Step 1: keep `src/a.ts`\n<!--\nnote\n--> - [x] Step 2: after the comment\n";
+    const reset = resetPlanTaskMarkers(plan);
+    expect(reset).toBe("# Plan\n\n- [ ] Step 1: keep `src/a.ts`\n<!--\nnote\n--> - [x] Step 2: after the comment\n");
+    expect(projectPlanApprovalContent(reset)).toBe(projectPlanApprovalContent(plan));
+  });
 });
 
 describe("the plan's steps", () => {

@@ -455,7 +455,7 @@ describe("t297 I09: a space-wide document survives intent creation", () => {
 // An ORPHAN intent record: a dir under `intents/` holding a real
 // `aidlc-state.md` but NO row in `intents.json` -- a hand-created record, or
 // one whose registry row was lost/never written. `listIntents()`
-// (aidlc-lib.ts) reports this as `{ uuid: "", status: "unknown", ... }`, a
+// (aidlc-record-core.ts) reports this as `{ uuid: "", status: "unknown", ... }`, a
 // STRING, never `undefined`.
 //
 // The finding this closes: `resolveIntentFlag`'s bare-flag path (`--intent`

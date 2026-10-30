@@ -7,9 +7,9 @@
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   artifactFilename,
   auditShardName,
@@ -28,8 +28,11 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupTestProject,
   createTestProject,
+  intentsDirOf,
   seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
@@ -123,7 +126,7 @@ export function runMergeTool(
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   const reviewUnit = reviewOperation ? args[1] : undefined;
   if (result.status !== 0 && reviewUnit && tracePath &&
-      (out.includes("reviewer READY receipts") || out.includes("candidate-exact"))) {
+      (out.includes("has no review that stands for") || out.includes("candidate-exact"))) {
     console.error(`t326 merge validation failed:\n${JSON.stringify({
       args, status: result.status, signal: result.signal, error: result.error?.message, out,
     }, null, 2)}`);
@@ -301,21 +304,11 @@ export function makeSeed(
       'export const right = "base";\n',
   );
   completeUnitOnMain(seed, "skeleton");
+  // The block AI-DLC ships, so the fixture commits exactly what a real
+  // clone's `git add -A` commits (its engine folders stay out).
   writeFileSync(
     join(seed, ".gitignore"),
-    "aidlc/.aidlc-clone-id\naidlc/.aidlc-unit-scope.json\n" +
-      "aidlc/.aidlc-unit-parked\naidlc/.aidlc-claim-generations.json\n" +
-      "aidlc/.aidlc-unit-participant\naidlc/.aidlc-claim-registry.json\n" +
-      "aidlc/.aidlc-unit-releases/\naidlc/.aidlc-unit-merges/\n" +
-      // Matches the real shipped .gitignore: active-memory/ is the engine's
-      // own local copy of the active space's method, and hooks-health/ (at
-      // any depth under .aidlc-engine/) carries per-clone hook heartbeats -
-      // both real hooks (e.g. session-start) can create on first run in a
-      // checkout this fixture never ran them in before. .aidlc-engine/
-      // itself stays tracked: reviewAuditExtras writes review records there.
-      "aidlc/active-memory/\n**/.aidlc-engine/hooks-health/\n" +
-      // The engine's own records of the chats, as the shipped block keeps them.
-      "aidlc/.aidlc-sessions/\n",
+    readFileSync(join(AIDLC_SRC, "..", ".gitignore"), "utf-8"),
   );
   git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "main"]);
@@ -342,6 +335,10 @@ export function clone(remote: string, label: string): string {
   tempDirs.push(dir);
   git(dir, ["config", "user.name", label]);
   git(dir, ["config", "user.email", `${label}@example.test`]);
+  // The selection is the person's own and stays out of git: in a new clone
+  // they pick the work once.
+  writeFileSync(join(dir, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`);
+  writeFileSync(join(intentsDirOf(dir), "active-intent"), `${DEFAULT_RECORD_DIR}\n`);
   return dir;
 }
 
@@ -371,7 +368,11 @@ export function reviewAuditExtras(
   reviewer: string,
   fingerprint: string,
   nonce: string,
+  // A review the reviewer left NOT-READY, or a later pass of the stage's review.
+  options: { verdict?: "READY" | "NOT-READY"; iteration?: number } = {},
 ): { request: string; completion: string } {
+  const verdict = options.verdict ?? "READY";
+  const iteration = options.iteration ?? 1;
   const requestId = `review:${createHash("sha256").update(nonce).digest("hex").slice(0, 32)}`;
   const attempt = createHash("sha256").update(`attempt:${nonce}`).digest("hex").slice(0, 16);
   const record: ReviewRecord = {
@@ -380,30 +381,30 @@ export function reviewAuditExtras(
     unit,
     workflow: null,
     attempt,
-    iteration: 1,
+    iteration,
     reviewer,
-    verdict: "READY",
+    verdict,
     request_id: requestId,
     request_challenge: null,
     artifact_fingerprint: fingerprint,
     source_fingerprint: null,
     unit_source_fingerprint: null,
     findings: [],
-    body: `**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n`,
+    body: `**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n`,
     recorded_at: "2026-08-20T01:00:00Z",
   };
   const bytes = serializeReviewRecord(record);
-  const path = reviewRecordRelativePath(stage, unit, attempt, 1);
+  const path = reviewRecordRelativePath(stage, unit, attempt, iteration);
   const target = join(seededRecordDir(projectDir), ...path.split("/"));
   mkdirSync(join(target, ".."), { recursive: true });
   writeFileSync(target, bytes);
   return {
     request:
-      `**Reviewer**: ${reviewer}\n**Iteration**: 1\n` +
+      `**Reviewer**: ${reviewer}\n**Iteration**: ${iteration}\n` +
       `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n`,
     completion:
-      `**Reviewer**: ${reviewer}\n**Iteration**: 1\n` +
-      `**Verdict**: READY\n**Request Fingerprint**: ${fingerprint}\n` +
+      `**Reviewer**: ${reviewer}\n**Iteration**: ${iteration}\n` +
+      `**Verdict**: ${verdict}\n**Request Fingerprint**: ${fingerprint}\n` +
       `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n` +
       `**Review Record**: ${path}\n**Review Record Digest**: ${reviewRecordDigest(bytes)}\n`,
   };
@@ -528,6 +529,13 @@ export function prepareCandidate(
      *  written - lets a case mint a real event (e.g. a session-start hook)
      *  into the fresh checkout's shard before anything else exists there. */
     afterClaim?: (checkout: string) => void;
+    /** Runs after the Unit's commit, right before publish: what a session
+     *  writes into the checkout between the two. */
+    beforePublish?: (checkout: string) => void;
+    /** Runs once the stage documents and receipts are written, before the
+     *  Unit's work is committed and published: a case drives the engine on
+     *  the worked checkout there (a skip of the step it hands out, say). */
+    beforeCommit?: (checkout: string) => void;
   } = {},
 ): {
   checkout: string;
@@ -585,6 +593,13 @@ export function prepareCandidate(
   const graph = loadStageGraphAll();
   for (const stageSlug of stages) {
     const stage = graph.find((entry) => entry.slug === stageSlug)!;
+    // The stage's shared diary, as bootstrapDirectiveMemory writes it at the
+    // stage's start, outside the Unit's folder.
+    const diary = join(seededRecordDir(checkout), "construction", stageSlug, "memory.md");
+    if (!existsSync(diary)) {
+      mkdirSync(dirname(diary), { recursive: true });
+      copyFileSync(join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md"), diary);
+    }
     const dir = join(
       seededRecordDir(checkout),
       "construction",
@@ -606,6 +621,8 @@ export function prepareCandidate(
     unit,
     "code-generation",
   );
+  // Its folder too when the stages leave Code Generation out (a case that skips it).
+  mkdirSync(codeDir, { recursive: true });
   const contract = resolveTestingPosture(checkout);
   const plan =
     `# Code Generation Plan\n\n${renderTestingContract(contract)}\n` +
@@ -682,7 +699,7 @@ export function prepareCandidate(
         generation,
         stage,
         `**Details**: Approve Plan\n` +
-          `**Checkpoint**: Code Generation Plan Approval\n` +
+          `**Checkpoint**: plan-approval\n` +
           `**Plan Target**: unit:${unit}\n` +
           `**Intent**: ${intentUuid}\n` +
           `**Directive Epoch**: ${authority.directiveEpoch}\n` +
@@ -749,8 +766,10 @@ export function prepareCandidate(
   // real event ahead of these hand-written receipts.
   const priorShard = existsSync(shardPath) ? readFileSync(shardPath, "utf-8") : "";
   writeFileSync(shardPath, priorShard + audit);
+  options.beforeCommit?.(checkout);
   git(checkout, ["add", "-A"]);
   git(checkout, ["commit", "-m", `complete ${unit}`]);
+  options.beforePublish?.(checkout);
   const published = runMergeTool(UNIT, ["publish", unit], checkout);
   expect(published.status, published.out).toBe(0);
   return {

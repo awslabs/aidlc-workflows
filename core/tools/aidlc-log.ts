@@ -314,6 +314,7 @@ import {
   reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { chatTookStepHere } from "./aidlc-record-core.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -341,7 +342,7 @@ function unitManifestRefusal(
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
-      `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason "<why this work changes it>"`)}\` and say the line it prints once, ` +
+      `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason '<why this work changes it>'`)}\` and say the line it prints once, ` +
       "then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
   }
   return `unit "${unit}" has no valid source manifest at ${manifestPath} (${manifest.reason}). ${rewrite}`;
@@ -587,6 +588,8 @@ const LOG_INTERACTION_OPTIONS = [
 ];
 const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS,
+  "--option",
+  "--options-file",
   "--decision",
   "--decision-file",
   "--rationale",
@@ -1123,8 +1126,21 @@ function keptMessageRefusal(pd: string): string | null {
     `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
+// A question's choices given one --option each, so a choice may hold a comma
+// with no separator on the command line for a shell to read: they join any
+// --options list in the grammar optionsList reads.
+function withEachOption(args: string[], flags: Record<string, string>): void {
+  const each: string[] = [];
+  for (let i = 0; i < args.length - 1; i++) if (args[i] === "--option") each.push(args[++i]);
+  delete flags.option;
+  if (each.length === 0) return;
+  const choices = [...(flags.options === undefined ? [] : optionsList(flags.options)), ...each];
+  flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+}
+
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
+  withEachOption(args, flags);
   if (!flags.stage) error("Missing --stage <slug>");
   // A question holding the person's words arrives in a file the agent wrote, as
   // an answer's text does, so no shell reads it on the way.
@@ -1137,6 +1153,19 @@ function handleDecision(args: string[]): void {
     }
   }
   if (!flags.decision) error("Missing --decision <text> (or --decision-file <file>)");
+  // A question's choices that hold a $ or a backtick arrive one a line in a file
+  // the agent wrote, as the question's text does, so no shell reads them.
+  if (flags["options-file"] !== undefined) {
+    let lines: string[] = [];
+    try {
+      lines = readAnswerTextFile(resolveActiveProjectDir(projectDir, flags.stage), flags["options-file"])
+        .split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    } catch (err) {
+      error(errorMessage(err));
+    }
+    delete flags["options-file"];
+    withEachOption(lines.flatMap((choice) => ["--option", choice]), flags);
+  }
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
@@ -5368,12 +5397,12 @@ function logUsage(subcommand: string | undefined): string {
     decision: [
       `${invoke("decision")} --stage <slug> --decision '<the question>' --options '<choice>,<choice>'`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
-      "  When a choice holds a comma, start the list with | and separate the choices with it: \"|<choice>|<choice>\".",
+      "  When a choice holds a comma, pass each choice as its own --option '<choice>' in place of --options; when one holds a $ or a backtick, write the choices one a line to <record>/.aidlc-engine/answer-text/options.txt and pass --options-file .aidlc-engine/answer-text/options.txt.",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],
     answer: [
-      `${invoke("answer")} --stage <slug> --details "<the person's exact choice>"`,
+      `${invoke("answer")} --stage <slug> --details '<their exact choice>'`,
       "  Records the person's answer. Required: --stage, and --details, --details-file or --request-file.",
       `  --checkpoint: ${ANSWER_CHECKPOINTS.join(", ")}. Use the one its question was recorded with.`,
       `  Options: ${flags(ANSWER_OPTIONS)}`,
@@ -5417,6 +5446,9 @@ export function main(argv: string[]): void {
   if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(logUsage(undefined));
   if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(logUsage(subcommand));
   readOnlyCommand = subcommand === "answers";
+  // What the chat records here (a decision, an answer, a link, a review) is its
+  // step on the work (chatTookStepHere); reading the answers is not.
+  if (!readOnlyCommand) chatTookStepHere(resolveProjectDir(projectDir));
   if (subcommand === "decision" || subcommand === "answer") {
     refuseSplitValues(subcommand, rawArgs);
   }

@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1465,11 +1466,33 @@ describe("t325 atomic team Unit claims", () => {
       "Details=claimed worktree delta",
     ], wt);
     expect(workerEvent.status, workerEvent.out).toBe(0);
+    // The Unit's receipt for an artifact the worker wrote in the claimed
+    // worktree, as the write hook records it there.
+    const artifact = join(seededRecordDir(wt), "construction", "alpha", "functional-design", "business-logic-model.md");
+    mkdirSync(dirname(artifact), { recursive: true });
+    writeFileSync(artifact, "# Business Logic Model\n\nclaimed worktree receipt\n");
+    const hooked = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts")], {
+      cwd: wt,
+      input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: artifact } }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: wt },
+      encoding: "utf-8",
+    });
+    expect(hooked.status, `${hooked.stdout}${hooked.stderr}`).toBe(0);
     const mergedAudit = run(AUDIT, ["audit-merge", "--slug", "alpha"], checkout);
     expect(mergedAudit.status, mergedAudit.out).toBe(0);
     const mergedLedger = readAllAuditShards(checkout);
     expect(mergedLedger).toContain("claimed worktree delta");
     expect(mergedLedger.match(/Details\*\*: claim fixture/g) ?? []).toHaveLength(1);
+    // The worktree's rows come back once: the checkout's tracked shard has one
+    // copy of the receipt, and the worktree's own tracked shard none, so the
+    // Bolt's landing meets no second copy.
+    const receipt = /\*\*Event\*\*: ARTIFACT_CREATED/g;
+    const wtLocal = JSON.parse(retriedFork.stdout).worktree_audit as string;
+    expect(basename(dirname(dirname(wtLocal)))).toBe(".aidlc-engine");
+    const claimShard = JSON.parse(claim.stdout).audit_shard as string;
+    expect(readFileSync(join(seededRecordDir(checkout), "audit", claimShard), "utf-8").match(receipt) ?? []).toHaveLength(1);
+    const wtTracked = join(dirname(dirname(dirname(wtLocal))), "audit", basename(wtLocal));
+    expect(existsSync(wtTracked) ? readFileSync(wtTracked, "utf-8") : "").not.toMatch(receipt);
 
     const facilitator = clone(remote, "fork-facilitator");
     const released = run(UNIT, ["release", "alpha"], facilitator);
@@ -1540,7 +1563,9 @@ describe("t325 atomic team Unit claims", () => {
   test("direct audit fork and merge use the same claimed shard authority", () => {
     const { remote } = makeSeed();
     const checkout = clone(remote, "audit-direct");
-    expect(run(UNIT, ["claim", "alpha", "--team", "audit-direct"], checkout).status).toBe(0);
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "audit-direct"], checkout);
+    expect(claimed.status, claimed.out).toBe(0);
+    const shard = JSON.parse(claimed.stdout).audit_shard as string;
     expect(
       run(AUDIT, [
         "append",
@@ -1564,9 +1589,69 @@ describe("t325 atomic team Unit claims", () => {
         "Details=direct audit delta",
       ], wt).status,
     ).toBe(0);
+    // The Unit's receipt for an artifact the worker wrote in the worktree, as
+    // the write hook records it there.
+    const artifact = join(seededRecordDir(wt), "construction", "alpha", "functional-design", "business-logic-model.md");
+    mkdirSync(dirname(artifact), { recursive: true });
+    writeFileSync(artifact, "# Business Logic Model\n\ndirect audit receipt\n");
+    const hooked = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts")], {
+      cwd: wt,
+      input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: artifact } }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: wt },
+      encoding: "utf-8",
+    });
+    expect(hooked.status, `${hooked.stdout}${hooked.stderr}`).toBe(0);
     const merge = run(AUDIT, ["audit-merge", "--slug", "alpha"], checkout);
     expect(merge.status, merge.out).toBe(0);
     expect(readAllAuditShards(checkout)).toContain("direct audit delta");
+    // The worktree's rows come back once: the checkout's local record has them
+    // all, and its tracked shard one copy of the Unit's receipt.
+    const tracked = (dir: string) => {
+      try {
+        return readFileSync(join(seededRecordDir(dir), "audit", shard), "utf-8");
+      } catch {
+        return "";
+      }
+    };
+    const receipt = /\*\*Event\*\*: ARTIFACT_CREATED/g;
+    expect(readAllAuditShards(checkout).match(receipt) ?? []).toHaveLength(1);
+    expect(tracked(checkout).match(receipt) ?? []).toHaveLength(1);
+    expect(tracked(checkout)).not.toContain("direct audit delta");
+    expect(readFileSync(join(seededRecordDir(checkout), ".aidlc-engine", "audit", shard), "utf-8"))
+      .toContain("direct audit delta");
+  });
+
+  test("a Bolt forked before the claim's local record existed merges back after the upgrade", () => {
+    const { remote } = makeSeed();
+    const checkout = clone(remote, "audit-legacy");
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "audit-legacy"], checkout);
+    expect(claimed.status, claimed.out).toBe(0);
+    const shard = JSON.parse(claimed.stdout).audit_shard as string;
+    expect(
+      run(AUDIT, ["append", "HEALTH_CHECKED", "--field", "Details=legacy fixture"], checkout).status,
+    ).toBe(0);
+    expect(run(WORKTREE, ["create", "--slug", "alpha", "--base", "main"], checkout).status).toBe(0);
+    expect(run(STATE, ["fork", "--slug", "alpha"], checkout).status).toBe(0);
+    const fork = run(AUDIT, ["audit-fork", "--slug", "alpha"], checkout);
+    expect(fork.status, fork.out).toBe(0);
+    const wt = worktreePath(checkout, fixtureIntentId8(checkout), "alpha");
+    // Both records as an earlier AI-DLC kept them: in the tracked shards.
+    const wtLocal = JSON.parse(fork.stdout).worktree_audit as string;
+    expect(basename(dirname(dirname(wtLocal)))).toBe(".aidlc-engine");
+    for (const local of [join(seededRecordDir(checkout), ".aidlc-engine", "audit", shard), wtLocal]) {
+      const tracked = join(dirname(dirname(dirname(local))), "audit", basename(local));
+      mkdirSync(dirname(tracked), { recursive: true });
+      writeFileSync(tracked, readFileSync(local));
+      rmSync(local);
+    }
+    expect(
+      run(AUDIT, ["append", "HEALTH_CHECKED", "--field", "Details=legacy delta"], wt).status,
+    ).toBe(0);
+    const merge = run(AUDIT, ["audit-merge", "--slug", "alpha"], checkout);
+    expect(merge.status, merge.out).toBe(0);
+    const ledger = readAllAuditShards(checkout);
+    expect(ledger).toContain("legacy delta");
+    expect(ledger.match(/Details\*\*: legacy fixture/g) ?? []).toHaveLength(1);
   });
 
   // #2116: the integration branch the team wrote down under Way of Working is

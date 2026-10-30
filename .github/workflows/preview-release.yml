@@ -51,7 +51,7 @@ jobs:
           printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - name: Plan preview publication
         id: plan
         shell: bash
@@ -82,7 +82,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       # Regenerate projections, check determinism, typecheck, and lint.
       - run: bun run check
@@ -147,7 +147,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       # Missing evidence narrows the report instead of blocking the build.
       - name: Download Full Suite evidence
         if: ${{ needs.full_suite.outputs.run_id != '' }}
@@ -203,7 +203,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       # t238 builds the native binary from dist-release/; regenerate first so
       # the smoke proves CI-built bytes on every OS in the matrix.
@@ -262,7 +262,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       # Build from projections regenerated on this runner, never from the
       # committed trees; the --check that follows is the generator-determinism
@@ -317,7 +317,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -672,7 +672,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-candidate
@@ -717,7 +717,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       # Publish the commit that was tested: it must still be on main, which may
       # have advanced since (Preview Release 36351055682 refused a green run).
       - name: Recheck preview source
@@ -786,7 +786,7 @@ jobs:
           path: ${{ runner.temp }}/preview-test-report
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - name: Recheck preview source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}

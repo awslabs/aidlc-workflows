@@ -30,7 +30,7 @@ diagnostic and lifecycle routes.
 | `/aidlc [description]` | Start a new workflow; the agent proposes a plan from your description (or offers to compose one when none fits) |
 | `/aidlc compose "<task>"` | Force the adaptive composer: propose a tailored EXECUTE/SKIP plan for the task |
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
-| `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom plan even when a stock scope matches |
+| `/aidlc --new-scope '<task>'` | Force the composer to synthesize a custom plan even when a stock scope matches |
 | `/aidlc` | Resume the open workflow; with no work yet, the agent asks what you want to build |
 | `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
@@ -362,7 +362,7 @@ is handed to the agent whole, to act on for the intent just selected.
 
 ### `/aidlc intent archive <name>` — Retire an intent you will not finish
 
-`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight or
+`/aidlc intent archive <name> [--reason '<text>']` moves an in-flight or
 completed intent to the `archived` status. Nothing is deleted: the record dir, its
 artifacts, and its audit shards stay exactly where they are, and the archive
 itself is recorded in that intent's audit trail as `WORKFLOW_ARCHIVED` (with
@@ -660,9 +660,10 @@ Adoption verifies the checked-out claim OID and payload against the live ref,
 including space, intent UUID, Unit, generation, nonce, and bound audit shard,
 before writing the checkout-local scope stamp. Subsequent audit writes retain
 the claim's existing shard, and `publish` continues the same attempt. The
-shard comes back whole from the owner's published commit, including the rows
-`publish` keeps out of the claim (the questions the person already answered),
-so the work resumes without asking them again.
+owner's local audit record comes with the claim (publish's handover commit
+carries it beside the owner's commit, outside what main lands) and joins any
+rows this checkout already wrote, so the questions the person already answered
+stay answered and the work resumes without asking them again.
 
 ### `/aidlc --release <unit>` and `/aidlc unit release <unit>` — Release a claim
 
@@ -703,6 +704,15 @@ mirror, and audit shard:
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref
 to a candidate commit that preserves both claim and implementation history.
+AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` (written when a
+session starts in a fresh clone) does not count, here or at landing; it stays
+uncommitted, and any other change still stops both.
+A claimed checkout keeps its own audit rows (sessions, turns, answers) in a
+local record under the intent record's `.aidlc-engine/audit/`, which AI-DLC's
+`.gitignore` keeps out of commits, and the claim's tracked shard takes only the
+Unit's evidence that pin accepts. So the candidate is the commit as it is, and
+after the Unit lands, a plain pull of main in the claiming checkout
+fast-forwards with every row it wrote kept.
 
 ### `/aidlc unit pin <unit>` — Pin candidate evidence
 
@@ -734,11 +744,22 @@ merge gate.
 
 Accepted decisions are `approve` and `reject`. The command records the
 person's answer when a typed human turn follows the pin (pin's output names this
-command for each answer). A pinned Unit lands with a regular merge into the
-integration branch pin fetched, so the reviewed OID remains a direct parent. A
-moved ref, changed generation, or HOLD-MERGE marker requires an explicit re-pin
-before approval. On approve, its output names the land command (`land`), which
-the agent runs in the same turn.
+command for each answer). The person's words may come in a file instead of
+`--user-input`: `--request-file aidlc/.aidlc-request-text/<name>.txt`, which
+AI-DLC writes when it prints the command for you (after pin, the agent writes
+your reply to the file pin's commands name), so no shell reads them on the way;
+the file goes once the decision is recorded. A pinned Unit lands with a
+regular merge into the integration branch pin fetched, so the reviewed OID
+remains a direct parent. A moved ref, changed generation, or HOLD-MERGE marker
+requires an explicit re-pin before approval. On approve, its output names the
+land command (`land`), which the agent runs in the same turn.
+
+The gate's audit row keeps what the person said after the pin and the message it
+came in (`Person Reply`, `Message Id`) beside the agent's account, as a stage
+gate's row does. When a line of their own words typed in that chat before the
+pin has not been used by a decision, the row names the message after the pin and
+leaves the words in its record; with the human-presence guard off it keeps
+neither.
 
 ### `/aidlc unit land <unit>` — Land the pinned transaction
 
@@ -1998,7 +2019,8 @@ a file instead of the command line: the agent writes it to
 .aidlc-engine/answer-text/answer.txt`. The same file named from the project folder, or by
 its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read. `log decision` takes the question the
-same way with `--decision-file`, and `learnings surface` a correction with
+same way with `--decision-file`, and its choices, one a line, with `--options-file`
+(a choice holding a comma can also go as its own `--option '<choice>'`), and `learnings surface` a correction with
 `--correction-file`. A file the agent wrote for `next --request-file` works for an
 answer too: `log answer --request-file aidlc/.aidlc-request-text/request.txt` reads
 it as `next` does and removes it once the answer is taken, so a refused answer
@@ -2345,7 +2367,7 @@ aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skelet
 
 When the person, as they decide, asks for a review finding to be fixed or
 rejects one, add `--fix-finding "<review-artifact>#R-NN"` to approve, or
-`--reject-finding "<review-artifact>#R-NN=<their reason>"` to reject
+`--reject-finding '<review-artifact>#R-NN=<their reason>'` to reject
 (`--reopen-finding` for one the reviewer marked fixed that they say is not),
 once per finding, as at a stage's gate.
 

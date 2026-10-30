@@ -11,7 +11,7 @@ Contributions to this implementation are welcome. This guide covers prerequisite
 ## Prerequisites
 
 - **Claude Code** -- native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh | bash`; Windows PowerShell `irm https://claude.ai/install.ps1 | iex`. Or `brew install --cask claude-code`. (see [Claude Code docs](https://code.claude.com/docs/en/quickstart))
-- **bun** -- Required to build, package, test, directly run authored TypeScript sources, and use locally generated `dist/<harness>/` projections. Native release runtimes use the installed `aidlc` command. Install via `curl -fsSL https://bun.sh/install | bash`; on Windows use `powershell -c "irm bun.sh/install.ps1 | iex"`.
+- **bun 1.4.4 or newer** -- Required to build, package, test, directly run authored TypeScript sources, and use locally generated `dist/<harness>/` projections. Bun 1.4.4 includes the Brotli decoder fix for CVE-2026-111497. Native release runtimes use the installed `aidlc` command. Install via `curl -fsSL https://bun.sh/install | bash`; on Windows use `powershell -c "irm bun.sh/install.ps1 | iex"`.
 - **timeout** (GNU coreutils) -- Required by the test suite for LLM test timeouts (L2/L3). Pre-installed on Linux. macOS: `brew install coreutils` then add gnubin to PATH: `export PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH"` (in `~/.zshenv` or `~/.zshrc`).
 - **Bash** -- Optional for the POSIX compatibility wrapper (`tests/run-tests.sh`). The primary test runner is `bun tests/run-tests.ts`; at runtime, none of the distributable hooks require Bash.
 - **Bedrock access** -- Required for running live integration and e2e tests (L2/L3). Not needed for L1 protocol tests.
@@ -400,7 +400,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix aidlc doctor` should report the env var as valid.
 
-6. **Check the plan's hints read well** (if `keywords` populated) - the engine no longer matches them; the agent reads them in the plan proposal step (`next "<a request your plan is for>" --project-dir /tmp/scope-smoke` prints every plan with its hints). Make sure the line for yours says what the plan is for in plain words.
+6. **Check the plan's hints read well** (if `keywords` populated) - the engine no longer matches them; the agent reads them in the plan proposal step (`next '<a request your plan is for>' --project-dir /tmp/scope-smoke` prints every plan with its hints). Make sure the line for yours says what the plan is for in plain words.
 
 7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 aidlc engine graph resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 

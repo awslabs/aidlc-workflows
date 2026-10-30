@@ -622,10 +622,11 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name kee
       const d = next(CLAUDE_TOOLS, proj, argv);
       expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
       expect(String(d.message)).toContain(`\`classic\` ${BOTH}`);
-      expect(String(d.message)).toContain("-- 'classic car rental website'");
-      expect(String(d.message)).toContain("--scope classic -- 'car rental website'");
+      expect(String(d.message)).toContain('which keeps every word of theirs ("classic car rental website")');
+      expect(String(d.message)).toContain("--scope classic --request-file aidlc/.aidlc-request-text/line-after-plan");
+      expect(String(d.message)).toContain('(the task: "car rental website")');
       expect(questionTexts(proj)).toEqual([]);
-      const theirs = next(CLAUDE_TOOLS, proj, commandAfter(d.message, /-- 'classic/));
+      const theirs = next(CLAUDE_TOOLS, proj, commandAfter(d.message, /--request-file aidlc\/\.aidlc-request-text\/line(?!-after)/));
       expect(theirs.kind, JSON.stringify(theirs).slice(0, 300)).toBe("print");
       expect(String(theirs.message)).toContain(PROPOSAL);
       expect(String(theirs.message)).toContain('"classic car rental website"');
@@ -671,7 +672,8 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name kee
     expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
     expect(d.ask_type).toBeUndefined();
     expect(String(d.message)).toContain(`\`bugfix\` ${BOTH}`);
-    expect(String(d.message)).toContain(`--scope bugfix -- '${LINE.join(" ")}'`);
+    expect(String(d.message)).toContain("--scope bugfix --request-file aidlc/.aidlc-request-text/line-after-plan");
+    expect(String(d.message)).toContain(`(the task: ${JSON.stringify(LINE.join(" "))})`);
     expect(questionTexts(proj)).toEqual([]);
   });
 });
@@ -901,7 +903,7 @@ describe("t-plan-proposed-by-the-agent: a stage change typed with the plan rides
   /** The `intent create` a creation print names, run as the agent runs it, its label filled. */
   const runCreation = (tools: string, created: Directive): string => {
     const args = /intent create ([^`]+)`/.exec(String(created.message))![1]
-      .replace('"<2-3 word kebab essence>"', "logout-bug").split(" ");
+      .replace("'<2-3 word kebab essence>'", "logout-bug").split(" ");
     const made = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", ...args, "--project-dir", proj], {
       cwd: proj,
       encoding: "utf-8",

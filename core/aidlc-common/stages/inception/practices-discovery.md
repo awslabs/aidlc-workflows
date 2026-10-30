@@ -199,7 +199,7 @@ After integration, emit `PRACTICES_DISCOVERED`:
 ```bash
 {{INVOKE}} engine state practices-event \
   --type discovered \
-  --field "Sources Scanned: <list>" \
+  --field 'Sources Scanned: <list>' \
   --field "Drafts: team-practices.md, discovered-rules.md"
 ```
 
@@ -239,7 +239,7 @@ The orchestrator does not edit active-space memory directly. Run:
 {{INVOKE}} engine state practices-promote \
   --team-practices <record>/inception/practices-discovery/team-practices.md \
   --discovered-rules <record>/inception/practices-discovery/discovered-rules.md \
-  --affirming-user "<user>"
+  --affirming-user '<user>'
 ```
 
 The subcommand resolves the active space and:

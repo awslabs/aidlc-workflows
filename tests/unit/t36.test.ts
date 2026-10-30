@@ -136,7 +136,7 @@ function scopeChange(args: string[], p: string, env: Record<string, string> = {}
 
 /**
  * Value of `- **<key>**: <value>` from the aidlc-state.md body. Mirrors the
- * getField the tool uses (aidlc-lib.ts). Returns "" when absent.
+ * getField the tool uses (aidlc-record-core.ts). Returns "" when absent.
  */
 function stateField(file: string, key: string): string {
   if (!existsSync(file)) return "";

@@ -918,7 +918,7 @@ binding then precede the two shared per-user cursors:
 **Participation.** Resolution names a record; it does not decide whether this
 conversation may write into or be held by it. `workflowParticipation()` does, from
 machine-local evidence only: a binding whose `source` records a choice (`create`,
-`migration`, `switch`, `space-switch-cursor`, `cursor`, `stamp`), or the `active-intent`
+`migration`, `switch`, `space-switch-cursor`, `cursor`, `cursor-followed`, `stamp`), or the `active-intent`
 cursor naming the record; and, re-checked on every call rather than trusted as a
 stored source, a validated delegated worktree, this worktree's own metadata
 (checked against the creating repository's git common dir) and a Unit claimed on
@@ -936,7 +936,20 @@ by its gates, while runtime integrity, direct lifecycle-command refusals and the
 claimed-checkout write bound still apply. The engine treats such a conversation as
 having no active intent (`next` asks which intent to work on; `continue`, `report`
 and `park` refuse with a step for the agent: list the work, select the one the request is for, run the
-same command again). When participation cannot be decided because a sibling-only
+same command again). A chat that SessionStart (or its first command) put on the
+work the cursor named is `cursor-followed` on the hosts whose agent commands name
+their chat (Claude Code, Codex, Kiro CLI, opencode: `CHAT_NAMING_HOSTS`): it takes
+part in that work as any chat there does, but the gates stand aside for it
+(`hookOutsideGate`, `chatAwaitsFirstStep`) until its first AI-DLC step there
+(`next`, `continue`, `report` or `park` other than a read-only probe, what it
+records through `aidlc-log.ts` other than reading answers, a Unit checkpoint
+decision, or a setting it changes), which rewrites the source as
+`cursor` (`chatTookStep`); a worktree of this checkout or a Unit claimed here holds
+it from the start. Its developer dispatch meets the plan as any chat on the work
+does. On Cursor, Copilot and Kiro IDE (and Kiro CLI v3, which runs that tree) a
+command finds its chat only through the process tree, so first contact there
+records `cursor` and the gates hold the chat from the start. When participation
+cannot be decided because a sibling-only
 worktree's delegated metadata is malformed or stale, no workflow is selected: hooks
 write nothing, the reviewer read scope fails open, gates do not stand aside so
 Plan Approval refuses mutations, and the engine refuses with the file to repair
@@ -1021,7 +1034,7 @@ when it was minted), so a clone keeps one shard when the machine's name changes
 or the folder is copied to another machine. Shard files that start with the same
 first row are copies of one file (a sync tool's conflict copy, a hand copy);
 readers read the rows they share once (`copiedAuditBlocks` in
-`core/tools/aidlc-lib.ts`).
+`core/tools/aidlc-record-core.ts`).
 
 ## Key Design Decisions
 

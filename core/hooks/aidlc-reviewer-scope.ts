@@ -917,7 +917,10 @@ export async function run(input: string): Promise<number> {
   }
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    return await checkScope(input, projectDir, hookOutsideGate(workflow));
+    const outside = hookOutsideGate(workflow);
+    // A chat on the work that has taken no AI-DLC step there yet is outside the
+    // read scope, but the hook ran in a chat on the work: it beats.
+    return await checkScope(input, projectDir, outside, !outside || workflow.participation === "participant");
   } finally {
     workflow.restore();
   }
@@ -926,8 +929,8 @@ export async function run(input: string): Promise<number> {
 // `outside`: this conversation has not joined the selected workflow. The
 // claimed-checkout write bound still applies; its bookkeeping and the reviewer
 // read scope, which belong to that workflow, do not.
-async function checkScope(input: string, projectDir: string, outside: boolean): Promise<number> {
-  if (!outside) {
+async function checkScope(input: string, projectDir: string, outside: boolean, beats = !outside): Promise<number> {
+  if (beats) {
     try {
       const healthDir = hooksHealthDir(projectDir);
       writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());

@@ -1183,7 +1183,7 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
   test("pure-classified helpers resolve OUTSIDE knowledge/, checked not assumed", () => {
     // The purity check greps a function's OWN body, so a helper could hide an fs
     // call one level down. Two pure-classified functions have non-trivial chains
-    // into aidlc-lib.ts: spaceAuditShardPath (-> auditShardName -> cloneId, which
+    // into aidlc-record-core.ts: spaceAuditShardPath (-> auditShardName -> cloneId, which
     // reads and writes aidlc/.aidlc-clone-id) and resolveIntentFlag (-> listIntents
     // / activeIntent, which read spaces/<space>/intents/).
     //

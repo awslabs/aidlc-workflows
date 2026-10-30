@@ -221,7 +221,9 @@ Gate rhythm controls the team review points:
 - both rhythms still add one pinned merge gate on main.
 
 Commit the completed artifacts, source, state mirror, and audit shard. Publication
-requires a clean tracked checkout:
+requires a clean tracked checkout; AI-DLC's own part of `.gitignore`, `AGENTS.md`
+and `opencode.json`, which it writes when a session starts in a fresh clone, does
+not count:
 
 ```bash
 git add -A
@@ -232,9 +234,10 @@ aidlc unit publish payments
 `publish` creates a candidate commit whose tree is the team's committed work and
 whose parents bind both the claim history and the implementation history. It
 CAS-updates the claim ref. Publication is not integration. The candidate carries
-the claim's audit shard with the rows pin accepts and every other audit shard as
-main has it; the rows left out stay in the checkout's own history, and publish
-says how many.
+the claim's audit shard with the rows pin accepts and the review records its
+receipts name (AI-DLC keeps those out of commits), and every other audit shard
+and the stages' shared diaries as main has them; what is left out stays in the
+checkout's own history, and publish says how many rows.
 
 ---
 
@@ -255,7 +258,10 @@ with git object plumbing, not by merging or creating a worktree:
 - required Unit artifacts;
 - `UNIT_COMPLETED` receipts for active stages;
 - team gate approvals at the claim rhythm;
-- required reviewer `READY` verdicts;
+- each required review's `READY` verdict, or the team's approval of the stage
+  after a review that stayed `NOT-READY`, accepting its open findings (an
+  approval that asked for a finding to be fixed waits for the next review; the
+  evidence lists the approved stages in `reviewers_approved_over_concerns`);
 - Plan Approval fingerprint and explicit approval;
 - the candidate state row;
 - the transportable team audit shard.
@@ -265,7 +271,11 @@ attempt-keyed `UNIT_COMPLETED`, team-gate, and reviewer receipts. Those rows are
 team assertions: pin re-verifies required artifacts and fingerprints, and the
 human reviews the remaining trust at the pinned merge gate. A team shard may
 never carry `HUMAN_TURN`, `MERGE_DISPATCH_*`, `UNIT_MERGED`, a unit-merge gate,
-another Unit's receipt, or another/new audit shard. Pin and land also refuse
+another Unit's receipt, or another/new audit shard. A claimed checkout writes
+only the rows pin accepts to the claim's shard; everything else it records
+(sessions, turns, answers) stays in its local record under the intent record's
+`.aidlc-engine/audit/`, out of every commit, so the claimant's pull after the
+landing keeps every row. Pin and land also refuse
 workflow-record changes outside the claimed Unit subtree. Product-source paths
 outside the Unit's record tree remain visible in the gate evidence for human
 overlap judgment.
@@ -286,12 +296,14 @@ default (squash in the shipped `org.md`) holds for every other merge. The
 person's reply after the pin is the answer the gate records.
 
 The integration lead presents the evidence summary and pinned OID to the human,
-then records their answer:
+then records their answer: their reply goes in the file pin's gate commands name,
+written with the agent's file tool so no shell reads it, and the gate reads it
+from there:
 
 ```bash
 aidlc unit gate payments \
   --decision approve \
-  --user-input "Approve pinned candidate"
+  --request-file aidlc/.aidlc-request-text/gate-payments.txt
 ```
 
 An approval's output names the land command, run in the same turn with no

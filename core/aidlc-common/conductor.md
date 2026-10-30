@@ -35,7 +35,7 @@ The engine owns lifecycle bookkeeping. Open, reject, revise, approve, complete,
 or skip a stage only through `aidlc-orchestrate.ts report`; never call lifecycle
 verbs on `aidlc-state.ts` directly or hand-edit stage checkboxes. A conditional
 stage that does not apply reports
-`--stage <slug> --result skipped --reason "<reason>"`.
+`--stage <slug> --result skipped --reason '<reason>'`.
 
 ## Asking good questions
 

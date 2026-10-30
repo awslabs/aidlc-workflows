@@ -368,10 +368,19 @@ function assumptionsAcceptedOnRecord(stageDir: string, stage: string): boolean |
 	if (!recordRoot) return null;
 	let rows: AuditShardEvent[];
 	try {
-		const dir = join(recordRoot, "audit");
-		const shards = readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
-		rows = sortAttemptEvents(shards.flatMap((name, index) =>
-			parseAuditShardEvents(readFileSync(join(dir, name), "utf-8"), join(dir, name), index)));
+		const listed = (dir: string) =>
+			readdirSync(dir).filter((name) => name.endsWith(".md")).sort().map((name) => join(dir, name));
+		// A claimed team Unit's checkout keeps its questions and answers in its
+		// local record (auditFilePath in aidlc-lib.ts).
+		let local: string[] = [];
+		try {
+			local = listed(join(recordRoot, ".aidlc-engine", "audit"));
+		} catch {
+			// No claim in this checkout.
+		}
+		const shards = [...listed(join(recordRoot, "audit")), ...local];
+		rows = sortAttemptEvents(shards.flatMap((shard, index) =>
+			parseAuditShardEvents(readFileSync(shard, "utf-8"), shard, index)));
 	} catch {
 		return null;
 	}

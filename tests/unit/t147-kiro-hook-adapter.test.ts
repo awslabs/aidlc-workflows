@@ -2603,7 +2603,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     try {
       expect(process.env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP).toBeUndefined();
       // Inject the autonomy field as a bullet line in ## Current Status (getField
-      // matches `- **Field**: value`, aidlc-lib.ts). The base fixture has no
+      // matches `- **Field**: value`, aidlc-record-core.ts). The base fixture has no
       // such field; adding it flips defaultBlockCap to 8 without changing the
       // engine's pending directive (Current Stage is unchanged).
       const statePath = seededStateFile(dir);

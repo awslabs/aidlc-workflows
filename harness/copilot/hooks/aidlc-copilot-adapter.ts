@@ -632,8 +632,9 @@ export async function run(
     }
   }
   // The person's words in a recorded answer or decision are text, never a
-  // path: on Windows `--options "A: yes,B: no"` would read as drive A:.
-  const FREE_TEXT_FLAGS = new Set(["--options", "--details", "--decision", "--reason"]);
+  // path: on Windows `--options "A: yes,B: no"` would read as drive A:, and so
+  // would one choice of a question given as `--option 'A: yes, fix the end'`.
+  const FREE_TEXT_FLAGS = new Set(["--options", "--option", "--details", "--decision", "--reason"]);
   // So are the words a setter is handed as the reply that asked for it
   // (`--person-words '/aidlc turn the review freeze off'`), on the commands
   // that take them and can run without a click (`scope change` always keeps

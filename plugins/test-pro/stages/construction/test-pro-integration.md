@@ -83,8 +83,8 @@ Completion emoji: :link:
 Review path: this stage's engine-resolved record dir.
 Standard 2-option approval (Approve / Request Changes).
 STOP for the human response. Report Approve with
-`--result approved --user-input "<exact choice>"`; report
-Request Changes with `--result rejected --user-input "<feedback>"`, revise the
+`--result approved --user-input '<exact choice>'`; report
+Request Changes with `--result rejected --user-input '<feedback>'`, revise the
 artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors

@@ -52,6 +52,13 @@ function env(): Record<string, string | undefined> {
   return e;
 }
 
+// The words a printed step hands on: the request file its `command` names.
+function handedOn(proj: string, message: string | undefined, command: string): string {
+  const named = new RegExp(`${command} --request-file (aidlc/\\.aidlc-request-text/[^ \`]+)`).exec(String(message));
+  expect(named, String(message)).not.toBeNull();
+  return readFileSync(join(proj, ...named![1].split("/")), "utf-8");
+}
+
 // What the person types, through the real UserPromptSubmit route every harness uses.
 function says(proj: string, prompt: string): void {
   const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
@@ -76,7 +83,7 @@ function create(proj: string, step: { message?: string }): void {
   const command = String(step.message).match(/Run `[^`]*?engine (intent create [^`]*)`/)?.[1];
   expect(command, String(step.message)).toBeDefined();
   const args = (command as string).replace("<2-3 word kebab essence>", "the-work").split(" ")
-    .map((arg) => arg.replace(/^"(.*)"$/, "$1"));
+    .map((arg) => arg.replace(/^["'](.*)["']$/, "$1"));
   const r = spawnSync(BUN, [DISPATCHER, "engine", ...args, "--project-dir", proj], {
     cwd: proj, env: env(), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
@@ -151,9 +158,8 @@ describe("the request is recorded in the person's own words", () => {
   test("a plan's name the agent keeps in the request: the reading step carries their whole line", () => {
     says(proj, "/aidlc classic Bike Rental Shop");
     const step = next(proj, ["classic bike rental shop"]);
-    // Quoted for the platform's shell: single quotes on POSIX, double on Windows.
-    expect(step.message).toMatch(/next -- ['"]classic Bike Rental Shop['"]/);
-    expect(step.message).toMatch(/--scope classic -- ['"]Bike Rental Shop['"]/);
+    expect(handedOn(proj, step.message, "next")).toBe("classic Bike Rental Shop");
+    expect(handedOn(proj, step.message, "next --scope classic")).toBe("Bike Rental Shop");
     expect(step.message).not.toContain("bike rental shop");
   });
 
@@ -234,7 +240,7 @@ describe("the request keeps the quote marks the person typed", () => {
   test("a plan's name opening their request, the agent routing on no plan: the whole line keeps an ending empty argument", () => {
     says(proj, `/aidlc bugfix slugit should reject ""`);
     const step = next(proj, [`bugfix slugit should reject ""`]);
-    expect(step.message).toMatch(/next -- ['"]bugfix slugit should reject ""['"]/);
+    expect(handedOn(proj, step.message, "next")).toBe(`bugfix slugit should reject ""`);
   });
 
   test("a plan named by its flag: the request keeps its quote marks", () => {

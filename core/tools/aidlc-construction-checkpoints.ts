@@ -813,6 +813,13 @@ function reviewsNamed(slugs: readonly string[]): string {
   return `${named} review${names.length > 1 ? "s" : ""}`;
 }
 
+// The one line the person hears when their approval went over reviews that
+// did not finish: at a Unit's checkpoint, and at a stage's or a team Unit's
+// gate (aidlc-state.ts approve).
+export function unfinishedReviewsNotice(slugs: readonly string[], unit?: string): string {
+  return `Approved. The ${reviewsNamed(slugs)}${unit ? ` for ${unit}` : ""} did not finish.`;
+}
+
 function locked<T>(
   projectDir: string,
   fn: () => T extends Promise<unknown> ? never : T,
@@ -1836,7 +1843,7 @@ export function approveConstructionCheckpoint(
     // The person let the Unit go on without a review that did not finish: the
     // approval says so, and so does the one line they hear.
     const notFinished = rechecked.result.review_not_finished;
-    if (notFinished) notices.push(`Approved. The ${reviewsNamed(notFinished.stages)} for ${unit} did not finish.`);
+    if (notFinished) notices.push(unfinishedReviewsNotice(notFinished.stages, unit));
     const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gate,

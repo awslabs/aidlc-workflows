@@ -122,8 +122,8 @@ describe("t326 a pinned Unit's merge gate asks once", () => {
     const mergeGate = pin.merge_gate as Record<string, string>;
     expect(mergeGate).toMatchObject({ strategy: "merge", target_branch: "main" });
     expect(mergeGate.ask).toContain("alpha");
-    expect(mergeGate.approve).toContain("unit gate alpha --decision approve --user-input");
-    expect(mergeGate.reject).toContain("unit gate alpha --decision reject --user-input");
+    expect(mergeGate.approve).toContain("unit gate alpha --decision approve --request-file aidlc/.aidlc-request-text/gate-alpha.txt");
+    expect(mergeGate.reject).toContain("unit gate alpha --decision reject --request-file aidlc/.aidlc-request-text/gate-alpha.txt");
   });
 
   test("after Approve at the merge gate, the next step is the land", () => {

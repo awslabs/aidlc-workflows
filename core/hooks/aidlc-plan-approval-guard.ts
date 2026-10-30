@@ -663,16 +663,26 @@ export function receiptDetail(
 }
 
 // The refused path or command can come from the workspace, so it stays out of
-// the refusal: the agent knows what it tried, and the way on is the same.
+// the refusal: the agent knows what it tried, and the way on is the same. A
+// shell command the guard could not read (a variable, a loop, inline code) may
+// only read, so it is said to be unread, not a write, with the way a read gets
+// through: written out plainly, the POSIX and the PowerShell readings both read
+// it. AI-DLC's own command in a spelling the reading refused, and a tool that is
+// no shell, get the general refusal: the way on for them is not a read.
 export function mutationBlockReason(
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
   planApprovalOff = false,
   finished = false,
+  unreadShell = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
-  const action = opaqueShell
+  const unread = opaqueShell && unreadShell;
+  const unreadLine = unread ? "This shell command could not be read, so AI-DLC cannot tell whether it writes files. " : "";
+  const action = unread
+    ? "run it"
+    : opaqueShell
     ? "run mutation-capable shell commands"
     : "modify workspace paths";
   // A build reviewed under its plan, whose contract moved after the review, and
@@ -682,6 +692,7 @@ export function mutationBlockReason(
   // names `next` too.
   if (finished) {
     return (
+      unreadLine +
       `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
       "the Testing Contract changed after that review, which applies from the next plan. Writes inside the " +
       `selected code-generation record directory remain available. Run ${nextOnItsOwn()}: it says what this ` +
@@ -689,9 +700,12 @@ export function mutationBlockReason(
     );
   }
   return (
+    unreadLine +
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
-    `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Writes inside the selected code-generation record directory remain ` +
+    `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""}` +
+    (unread ? " A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits." : "") +
+    " Writes inside the selected code-generation record directory remain " +
     `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
   );
 }
@@ -2346,8 +2360,10 @@ async function evaluate(
   // A conversation that has not joined the selected workflow is not held to its
   // Plan Approval: its ordinary edits pass as in a workspace with no workflow.
   // Dispatching that workflow's developer is joining it without saying so, and
-  // is refused until the conversation selects the intent.
-  if (hookOutsideGate(workflow)) {
+  // is refused until the conversation selects the intent. A chat on the work
+  // that has taken no AI-DLC step there yet is held only for that dispatch (below).
+  const standAside = hookOutsideGate(workflow);
+  if (standAside && workflow.participation !== "participant") {
     const dispatchInput = parsed.tool_input ?? {};
     if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
     // `next` asks which work this is, so the record's name stays out of the
@@ -2455,10 +2471,16 @@ async function evaluate(
       recordHookDrop(projectDir, HOOK_NAME, `system install check skipped: ${errorMessage(error)}`);
     }
   }
+  // On the work with no AI-DLC step there yet: the hook ran in a chat on the
+  // work (its heartbeat is above) and the install check, which is no fence,
+  // held it; of the fence only the developer dispatch meets it.
+  if (standAside && !guardedDispatch) return 0;
   let blockedMutation: {
     target: string;
     unit: string | null;
     opaqueShell: boolean;
+    /** A shell command the reading could not read that is not AI-DLC's own. */
+    unreadShell?: boolean;
     detail: string | null;
     finished: boolean;
   } | null = null;
@@ -2913,6 +2935,7 @@ async function evaluate(
             target: outsideRecord ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
             unit,
             opaqueShell: outsideRecord === undefined,
+            unreadShell: outsideRecord === undefined && toolName === "Bash" && !mutation.engineRefused,
             detail: receiptDetail([evidence], verdict.mentioned),
             finished: !approval.ok && buildFinishes(projectDir, unit),
           };
@@ -2954,6 +2977,7 @@ async function evaluate(
           detail ?? blockedMutation.detail,
           planApprovalOff,
           blockedMutation.finished,
+          blockedMutation.unreadShell === true,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)

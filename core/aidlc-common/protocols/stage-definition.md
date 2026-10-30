@@ -138,7 +138,7 @@ active intent's record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 (a pre-workspace project is migrated to this layout on first touch — there is no
 flat-root resolution path post-migration). The resolver is `resolveArtifactPath` / `memoryPathFor` in
 `aidlc-orchestrate.ts`, threaded with the active intent's relative record dir
-(`relativeRecordDir` in `aidlc-lib.ts`). **No stage `.md` hardcodes a workspace
+(`relativeRecordDir` in `aidlc-record-core.ts`). **No stage `.md` hardcodes a workspace
 root** — the `outputs:` frontmatter and any "Create `…/…`" prose are
 human-facing documentation only; the engine hands the conductor the resolved
 `produces[]` path. Treat a rooted path literal in a stage file as a doc bug, not

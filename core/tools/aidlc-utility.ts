@@ -510,6 +510,7 @@ import {
   declaredProjectType,
   installWithoutReplacing,
 } from "./aidlc-lib.ts";
+import { chatTookStep } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -853,7 +854,7 @@ Utilities:
   unit status       Show claimable, claimed, and dependency-blocked Units
   compose "<task>"  Suggest a plan tailored to this task (mid-workflow: adjust the steps not yet run)
   compose --report <path>  Build a plan from a scan report (sort findings into a fix-and-ship run)
-  --new-scope "<task>"  Build a custom plan even when a ready-made one matches
+  --new-scope '<task>'  Build a custom plan even when a ready-made one matches
   intent list       List intents in the active space (read-only; --json for structured output; --all includes archived)
   intent switch <name>  Switch the active intent (bare intent <name> still works)
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
@@ -8034,7 +8035,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         `intent. Start work via \`${entrySkillInvocation()} "<what to build>"\` (the engine names ` +
         "the create move for you); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
-        "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
+        "ideally `--arguments '<description>' --label '<2-3 word essence>'`).",
     );
   }
 
@@ -13252,6 +13253,8 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   const { lines, checkOffInTheirName } = writeSettings(projectDir, intent, space, intentSettingsFromFlags(flags), {
     sessionId: selection.sessionId, fail: die, ...named,
   });
+  // A setting the chat changed on its work is its step there (chatTookStep).
+  chatTookStep(projectDir, selection);
   // Only the agent reads this output, and on Copilot, Cursor and Kiro no hook
   // line reaches the person, so a check of theirs switched off from the chat is
   // said by the agent or not at all; the order says the lines are theirs. A step
@@ -13763,7 +13766,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
-        '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
+        "[--arguments '<description>' | --request <id>] [--label '<short label>'] " +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] " +
         "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] [--project-type <greenfield|brownfield>] " +

@@ -3643,7 +3643,7 @@ export function resolveIntentFlag(
 }
 
 /**
- * The invariant this closes: `listIntents()` (aidlc-lib.ts) reports an ORPHAN
+ * The invariant this closes: `listIntents()` (aidlc-record-core.ts) reports an ORPHAN
  * record dir -- one with an `aidlc-state.md` but no row in `intents.json` -- as
  * `uuid: ""`, `status: "unknown"`, never as `undefined` or a thrown error. Every
  * resolution path above matches by `dirName`/`slug` and returns `match.uuid`

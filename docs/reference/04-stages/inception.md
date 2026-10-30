@@ -363,7 +363,7 @@ On affirmation, content is promoted to:
    aidlc engine state practices-promote \
      --team-practices <record>/inception/practices-discovery/team-practices.md \
      --discovered-rules <record>/inception/practices-discovery/discovered-rules.md \
-     --affirming-user "<user>"
+     --affirming-user '<user>'
    ```
 
    It writes `project.md` first and `team.md` second and emits
@@ -631,7 +631,7 @@ not in the upstream reference.
    key value areas (if executing) or alternative coverage (if skipping).
 
    If skipping, call `aidlc-orchestrate.ts report --stage user-stories
-   --result skipped --reason "<reason from the assessment>"`. The engine
+   --result skipped --reason '<reason from the assessment>'`. The engine
    records `[S]` and routes before artifact or ensemble-evidence checks.
 
 3. **Load Prior Context** -- Read

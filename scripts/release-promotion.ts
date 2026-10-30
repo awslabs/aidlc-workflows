@@ -403,11 +403,10 @@ export function promotionNotes(p: Promotion): string {
     "```bash\naidlc update\ncd /path/to/project\naidlc config --yes\naidlc doctor\n```",
     "Open work carries on through the refresh. When a project contains multiple harnesses, run `aidlc config --harness <name> --yes` for each harness you want to refresh.",
     ...entry.steps,
-    // The Bun floor is the one aidlc-markdown.ts's Bun.markdown error names;
-    // t-release-promotion pins the two together.
+    // Copy installs use their own Bun; 1.4.4 includes the CVE-2026-111497 fix.
     `Manual-copy users must copy the complete \`runtime/<harness>/\` tree from [\`aidlc-copy-runtime-${p.version}.tar.gz\`](${download}/aidlc-copy-runtime-${p.version}.tar.gz). ` +
       `Copy it over the project following the [copy-channel instructions](${github}/blob/v${p.version}/docs/guide/18-install-and-lifecycle.md#copy-channel). ` +
-      "This installation path requires **Bun 1.3.8 or newer** but does not require the native `aidlc` executable.",
+      "This installation path requires **Bun 1.4.4 or newer** but does not require the native `aidlc` executable.",
     "Chat commands below use `/aidlc`; in Codex CLI, use `$aidlc` instead.",
     "## Fresh install",
     "### macOS and Linux",
