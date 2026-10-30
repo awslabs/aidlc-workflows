@@ -99,10 +99,9 @@ providers` can apply Amazon Bedrock settings on supported project surfaces or
 record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
 answer because model access comes with Kiro. For Kiro's v3 engine on Kiro CLI
 2.24.1 or later, use `kiro` and start `kiro-cli --v3` (when it asks to trust the folder
-and you know what is in it, choose **Trust, continue**); `kiro-v2` is Kiro CLI
-(V2)
-([Kiro CLI](docs/guide/harnesses/kiro-cli.md) says how an existing Kiro
-CLI (V2) project switches). The methodology itself is
+and you know what is in it, choose **Trust, continue**); `kiro-v2` is Kiro CLI (V2)
+([Kiro CLI](docs/guide/harnesses/kiro-cli.md) says how an existing Kiro CLI
+(V2) project switches). The methodology itself is
 provider-independent.
 
 ## Recommended Model
