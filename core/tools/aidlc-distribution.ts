@@ -976,17 +976,57 @@ export function kiroAllowChanged(backup: unknown, release: unknown): boolean {
     [...after.deny].some((entry) => !before.deny.has(entry));
 }
 
+// The fields Kiro's upgrade writes into an agent file.
+const KIRO_WROTE = new Set(["tools", "hooks", "permissions"]);
+
 // Kiro's upgrade keeps every field of the file it came from as it was but
 // `tools` and `hooks`, which it rewrites, and adds `permissions` (kiro-cli
-// 2.29.0). Whether `upgraded` still holds `backup`'s kept fields unchanged.
+// 2.29.0). Whether `upgraded` still holds `backup`'s kept fields unchanged. It
+// cannot see a change to the fields Kiro wrote, so it is read only for an
+// upgrade Kiro did not stamp (kiroUpgradeIntact).
 export function kiroUpgradeKeptFields(upgraded: unknown, backup: unknown): boolean {
-  const rewritten = new Set(["tools", "hooks", "permissions"]);
   const fields = (value: unknown): Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const a = fields(upgraded);
   const b = fields(backup);
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)].filter((key) => !rewritten.has(key)));
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)].filter((key) => !KIRO_WROTE.has(key)));
   return [...keys].every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]));
+}
+
+const kiroFieldsHash = (agent: Record<string, unknown>, keep: (key: string) => boolean): string =>
+  sha256Bytes(canonical(Object.fromEntries(Object.entries(agent).filter(([key]) => keep(key)))));
+
+// Kiro CLI 2.34.2 also stamps its upgrade with `kiroUpgrade`: hashes of
+// `canonical` JSON over the fields it wrote (`fingerprint`) and over the ones
+// it kept (`source`), revision 2. The stamp Kiro writes on `agent`.
+export function kiroUpgradeStamp(agent: Record<string, unknown>): { revision: 2; fingerprint: string; source: string } {
+  return {
+    revision: 2,
+    fingerprint: kiroFieldsHash(agent, (key) => KIRO_WROTE.has(key)),
+    source: kiroFieldsHash(agent, (key) => !KIRO_WROTE.has(key) && key !== "kiroUpgrade"),
+  };
+}
+
+// Kiro reads a fingerprint that no longer matches as the person's edit and
+// leaves that file alone; this reads either hash the same way. Whether
+// `upgraded` carries Kiro's stamp and is Kiro's upgrade of `backup` with
+// nothing changed since.
+export function kiroUpgradeUntouched(upgraded: unknown, backup: unknown): boolean {
+  if (!plainObject(upgraded) || !plainObject(backup)) return false;
+  const stamp = upgraded.kiroUpgrade;
+  if (!plainObject(stamp) || stamp.revision !== 2) return false;
+  const own = kiroUpgradeStamp(upgraded);
+  return stamp.fingerprint === own.fingerprint && stamp.source === own.source &&
+    stamp.source === kiroFieldsHash(backup, (key) => !KIRO_WROTE.has(key));
+}
+
+// Whether `upgraded` is Kiro's upgrade of `backup` with nothing changed since:
+// by Kiro's stamp when it carries one, and otherwise, only when
+// `unstampedByKeptFields`, by the fields Kiro keeps (an upgrade from a Kiro CLI
+// that did not stamp it: 2.27.1 did not, 2.34.2 does).
+export function kiroUpgradeIntact(upgraded: unknown, backup: unknown, unstampedByKeptFields: boolean): boolean {
+  if (plainObject(upgraded) && "kiroUpgrade" in upgraded) return kiroUpgradeUntouched(upgraded, backup);
+  return unstampedByKeptFields && kiroUpgradeKeptFields(upgraded, backup);
 }
 
 // Earlier releases' space switch pointed the tool's include files at that
