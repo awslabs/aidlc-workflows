@@ -45,6 +45,21 @@ const tuiDrive: TuiDrive = (args, timeoutMs, env) => {
   };
 };
 
+/**
+ * The program `tui-drive start` launches for `bin` on Windows. `where` lists npm's extensionless shell shim before
+ * its .cmd launcher, and the shim is no Windows program; tui-drive starts a .cmd through cmd.exe. A path is kept as
+ * it is, and so is a name `where` does not find (the launch then reports its own error).
+ */
+export function windowsLauncher(bin: string, where: (name: string) => string[] = whereOnPath): string {
+  if (/[\\/]/.test(bin) || /^[A-Za-z]:/.test(bin)) return bin;
+  return where(bin).find((hit) => /\.(?:exe|cmd|bat)$/i.test(hit)) ?? bin;
+}
+
+function whereOnPath(name: string): string[] {
+  const res = spawnSync("where", [name], { encoding: "utf-8", timeout: 30_000 });
+  return res.status === 0 ? (res.stdout ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : [];
+}
+
 /** One Copilot permission dialog the person answered: what drew it. */
 export interface CopilotPrompt {
   /** `aidlc`: one of AI-DLC's own commands; `command`: another shell command; `write`: a file Copilot writes. */
@@ -145,8 +160,10 @@ export class CopilotTerminal {
   start(): void {
     this.skipRecord();
     const env = { ...process.env, COPILOT_HOME: this.o.copilotHome };
-    const started = this.drive(["start", "--session", this.o.session, "--cwd", this.o.proj, "--width", "200", "--height", "50", "--", this.o.bin], undefined, env);
-    if (started.rc !== 0) throw new Error(`tui-drive could not start ${this.o.bin} (exit ${started.rc})`);
+    // A scripted driver gets the name as given.
+    const bin = process.platform === "win32" && !this.o.drive ? windowsLauncher(this.o.bin) : this.o.bin;
+    const started = this.drive(["start", "--session", this.o.session, "--cwd", this.o.proj, "--width", "200", "--height", "50", "--", bin], undefined, env);
+    if (started.rc !== 0) throw new Error(`tui-drive could not start ${bin} (exit ${started.rc})`);
     const ready = waitForTurn((left) => this.wait(`${FOOTER}|${DIALOG}`, Math.min(left, 60_000), 1500), this.o.workMs);
     const screen = this.screen();
     if (!ready || !this.waiting(screen)) throw new Error(`Copilot CLI did not reach its prompt:\n${bottom(screen)}`);

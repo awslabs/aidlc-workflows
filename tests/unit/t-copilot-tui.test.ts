@@ -7,7 +7,8 @@
 // dialog at startup stops the journey, a turn that outlives the work budget
 // comes back with its last screen, AI-DLC's own commands are told from the
 // agent's in each shell's form, an earlier terminal's session in the same home
-// is never read as this one's, and an agent that runs ahead fails
+// is never read as this one's, on Windows the terminal starts npm's .cmd
+// launcher rather than its shell shim, and an agent that runs ahead fails
 // the moved journeys: work started in the first turn fails the release
 // journey's check, and a gate approved in the turn that opened it fails the
 // golden journey's typed turn, both as person-turn failures. A scripted screen
@@ -16,7 +17,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CopilotTerminal, ledgeredTurn, promptCounts, type TuiDrive } from "../harness/copilot-tui.ts";
+import { CopilotTerminal, ledgeredTurn, promptCounts, type TuiDrive, windowsLauncher } from "../harness/copilot-tui.ts";
 import { cleanupTestProject, createTestProject, seededAuditShard } from "../harness/fixtures.ts";
 import { sourceListing } from "../harness/golden-journey.ts";
 import { PersonTurnError } from "../harness/person-turns.ts";
@@ -313,5 +314,13 @@ describe("t-copilot-tui: the person's turn in Copilot CLI's own terminal", () =>
     expect((thrown as Error).message).toContain("GATE_APPROVED reverse-engineering");
     // The report still gets the turn that failed.
     expect(seen).toEqual(["aidlc"]);
+  });
+
+  test("on Windows the terminal starts the first launcher Windows can run, never npm's shell shim", () => {
+    const npm = ["C:\\Users\\a\\AppData\\Roaming\\npm\\copilot", "C:\\Users\\a\\AppData\\Roaming\\npm\\copilot.cmd"];
+    expect(windowsLauncher("copilot", () => npm)).toBe(npm[1]);
+    expect(windowsLauncher("copilot", () => ["C:\\wf\\copilot.exe", ...npm])).toBe("C:\\wf\\copilot.exe");
+    expect(windowsLauncher("C:\\tools\\copilot.cmd", () => npm)).toBe("C:\\tools\\copilot.cmd");
+    expect(windowsLauncher("copilot", () => [])).toBe("copilot");
   });
 });
