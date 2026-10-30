@@ -13141,12 +13141,14 @@ function applyGateOnlyShape(
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
     const unit = directive.unit ?? null;
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
-    // What the person left out of the build, the files of theirs it changed,
-    // and a check that still fails on a declared output, are said with the
-    // gate, each on its own line after what the stage produced: the narration
-    // is the person's line, and the produced sentence stays whole.
+    // The rules Approve adds to the project's rules, what the person left out
+    // of the build, the files of theirs it changed, and a check that still
+    // fails on a declared output, are said with the gate, each on its own line
+    // after what the stage produced: the narration is the person's line, and
+    // the produced sentence stays whole.
     const narration = [
-      line, leftOutNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
+      line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
+      broughtFilesGateLine(projectDir, gateNode, stateContent),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
@@ -18983,8 +18985,9 @@ function practicesDraftPostureProblem(pd: string): string | null {
 }
 
 // The rules Approve at Practices Discovery adds to the project's rules, said
-// with the gate from the reading practices-promote writes them from. Null when
-// it adds none, or there is no draft to read.
+// with the gate from the reading practices-promote writes them from; said too
+// when it adds none, so a summary that counts rules the draft does not hold as
+// list items never stands alone. Null when there is no draft to read.
 function practicesRulesGateLine(pd: string, node: { slug: string }): string | null {
   if (node.slug !== "practices-discovery") return null;
   const prefix = engineRelativeRecordDir(pd);
@@ -18997,9 +19000,10 @@ function practicesRulesGateLine(pd: string, node: { slug: string }): string | nu
   } catch {
     return null;
   }
-  if (rules.mandated.length + rules.forbidden.length === 0) return null;
+  const where = toPosix(relative(pd, projectRules));
+  if (rules.mandated.length + rules.forbidden.length === 0) return `Approve adds no rules to ${where}.`;
   return [
-    `Approve adds these rules to ${toPosix(relative(pd, projectRules))}, which every later stage follows:`,
+    `Approve adds these rules to ${where}, which every later stage follows:`,
     ...rules.mandated.map((rule) => `- Mandated: ${rule}`),
     ...rules.forbidden.map((rule) => `- Forbidden: ${rule}`),
   ].join("\n");

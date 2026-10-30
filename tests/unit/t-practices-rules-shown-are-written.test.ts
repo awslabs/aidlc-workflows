@@ -13,8 +13,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import {
-  AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv, seedAidlcMemory, seededAuditShard, seededRecordDir,
-  seededStateFile,
+  AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv, runOrchestrateNext, seedAidlcMemory, seededAuditShard,
+  seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
 import { extractMarkdownSection } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -31,6 +31,7 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const PROJECT_RULES = "aidlc/spaces/default/memory/project.md";
 // The state file's stage-row separator.
 const STAGE_SEP = "\u2014";
+const NO_RULES = `Approve adds no rules to ${PROJECT_RULES}.`;
 
 // A lead-only Practices Discovery in progress, so the gate opens without spoke
 // contribution files.
@@ -127,16 +128,27 @@ function shownRules(narration: string | undefined): string[] {
 }
 
 describe("Practices Discovery writes exactly the rules its gate showed", () => {
-  test("a draft whose sections say None. promotes no rule, and the gate names none", () => {
+  test("a draft whose sections say None. promotes no rule, and the gate says Approve adds none", () => {
     const { proj, draftDir } = project("# Discovered Rules\n\n## Mandated\n\nNone.\n\n## Forbidden\n\nNone.\n");
     const before = readFileSync(join(proj, PROJECT_RULES), "utf-8");
 
     const gate = openGate(proj);
     expect(gate.kind, gate.message).toBe("print");
-    expect(gate.narration ?? "").not.toContain("Approve adds these rules");
+    expect(gate.narration).toContain(NO_RULES);
+    expect(shownRules(gate.narration)).toEqual([]);
 
     expect(promote(proj, draftDir)).toMatchObject({ mandated_appended: 0, forbidden_appended: 0 });
     expect(readFileSync(join(proj, PROJECT_RULES), "utf-8")).toBe(before);
+  });
+
+  // Rules written as plain lines are prose to the reader, so the gate says
+  // what Approve will do with them rather than leave the summary to count them.
+  test("rules written as plain lines are no rule, and the gate says Approve adds none", () => {
+    const { proj, draftDir } = project(
+      "# Discovered Rules\n\n## Mandated\n\nALWAYS run the test suite in CI\n\n## Forbidden\n\nNEVER commit secrets\n",
+    );
+    expect(openGate(proj).narration).toContain(NO_RULES);
+    expect(promote(proj, draftDir)).toMatchObject({ mandated_appended: 0, forbidden_appended: 0 });
   });
 
   test("two items under each, with an intro line and wrapped lines, promote those two and nothing else, and the gate lists the same", () => {
@@ -168,6 +180,10 @@ No exceptions were discussed.
       "Forbidden: NEVER commit secrets",
       "Forbidden: NEVER deploy to production without a manual approval",
     ]);
+    // The gate shown again (a resume, a second look) names the same rules.
+    const again = runOrchestrateNext(ORCH, proj, [], { cwd: proj }).directive as { gate_only?: boolean; narration?: string };
+    expect(again?.gate_only, JSON.stringify(again)).toBe(true);
+    expect(shownRules(again.narration)).toEqual(shown);
 
     expect(promote(proj, draftDir)).toMatchObject({ mandated_appended: 2, forbidden_appended: 2 });
     const written = [
