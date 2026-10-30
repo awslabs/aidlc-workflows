@@ -1,0 +1,60 @@
+{
+  "name": "aidlc-numeric-agent",
+  "description": "Ein Prüfer — 검토 agent",
+  "prompt": "file://./aidlc-sample-agent.md",
+  "includeMcpJson": true,
+  "tools": [
+    "fs_read",
+    "fs_write",
+    "execute_bash",
+    "thinking"
+  ],
+  "allowedTools": [
+    "fs_read",
+    "thinking"
+  ],
+  "toolsSettings": {
+    "execute_bash": {
+      "allowedCommands": [
+        "bun *.kiro/tools/aidlc.ts* engine *",
+        "git status"
+      ],
+      "deniedCommands": [
+        "rm -rf /"
+      ]
+    },
+    "fs_write": {
+      "allowedPaths": [
+        "aidlc/**",
+        "10",
+        "2"
+      ]
+    },
+    "10": {
+      "b": 1,
+      "a": [
+        2,
+        1
+      ]
+    },
+    "2": {
+      "z": true
+    }
+  },
+  "resources": [
+    "file://.kiro/aidlc-common/protocols/stage-protocol.md"
+  ],
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "fs_write",
+        "command": "bun .kiro/hooks/aidlc-guard.ts"
+      }
+    ],
+    "agentSpawn": [
+      {
+        "command": "bun .kiro/hooks/aidlc-session-start.ts"
+      }
+    ]
+  }
+}

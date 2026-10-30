@@ -58,7 +58,7 @@ import {
   kiroAllowChanged,
   kiroUpgradeBackup,
   kiroUpgradedAgentFile,
-  kiroUpgradeKeptFields,
+  kiroUpgradeIntact,
   legacyAidlcHookTarget,
   mergeBlock,
   mergeJsonEntries,
@@ -7446,9 +7446,10 @@ function kiroUpgradedNote(count: number, harnessDir: string, force: string): str
 }
 
 // When the release changes what such a file allows, config puts the release's
-// file back where Kiro upgrades it again by itself (kiroAutoUpgradeOn), the
-// file Kiro upgraded from is provably the one AI-DLC wrote and Kiro's copy
-// keeps its fields; otherwise it keeps Kiro's copy and says what that leaves.
+// file back where Kiro upgrades it again by itself (kiroAutoUpgradeOn) and
+// Kiro's copy is its untouched upgrade of the file AI-DLC wrote
+// (kiroUpgradeOfOwnFile); otherwise it keeps Kiro's copy and says what that
+// leaves.
 const KIRO_KEPT_CHANGED_DETAIL = "upgraded by Kiro for its 3.0 engine: kept with an older release's allows";
 
 function kiroKeptChangedNote(count: number, harnessDir: string, force: string): string {
@@ -7456,6 +7457,18 @@ function kiroKeptChangedNote(count: number, harnessDir: string, force: string): 
   return `${count} agent ${one ? "file" : "files"} in ${harnessDir}/agents that Kiro upgraded for its 3.0 engine ` +
     `${one ? "was kept and still allows" : "were kept and still allow"} what an older release allowed; ` +
     `\`${force}\` takes this release's ${one ? "version" : "versions"}.`;
+}
+
+// A run that removes agent files Kiro upgraded leaves the backups Kiro kept of
+// them: AI-DLC never recorded those, and they are the person's way back to the
+// files from before the upgrade. The line counts only those files; a backup of
+// an upgraded file that stays is what shows it is Kiro's upgrade of AI-DLC's
+// file, so the line says the backups stay and leaves them to the person.
+function kiroBackupsKeptNote(count: number, harnessDir: string, dryRun: boolean): string {
+  return `Kiro's backups of the ${count === 1 ? "agent file" : `${count} agent files`} this run ${
+    dryRun ? "would remove" : "removes"
+  } stay in ` +
+    `${harnessDir}/agents (\`<name>.json.bak\`, \`<name>.json.bak.1\` and on); AI-DLC does not use them.`;
 }
 
 // A run that writes a model or effort value into a Kiro agent file that
@@ -9919,6 +9932,34 @@ function ownedFileHash(path: string, known: readonly (string | undefined)[]): { 
   return ownedHash(readFileSync(path), known);
 }
 
+// An agent file's JSON, or undefined when it does not parse.
+function agentJson(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return undefined;
+  }
+}
+
+// Whether the agent file at `rel` is Kiro's upgrade of a file AI-DLC wrote
+// there with nothing changed since: the backup Kiro upgraded from holds one of
+// `known`, and Kiro's stamp still matches (kiroUpgradeUntouched). Such a file
+// holds nothing of the person's, so a refresh may replace it and a switch may
+// remove it like the file it came from. A refresh also takes an upgrade Kiro
+// did not stamp by its kept fields (`unstampedByKeptFields`, kiroUpgradeIntact);
+// a switch, which removes the file, takes only a stamped one.
+function kiroUpgradeOfOwnFile(
+  projectDir: string,
+  rel: string,
+  known: readonly (string | undefined)[],
+  unstampedByKeptFields: boolean,
+): boolean {
+  if (!kiroUpgradedAgentFile(projectDir, rel)) return false;
+  const backup = kiroUpgradeBackup(projectDir, rel);
+  if (backup === null || !known.includes(ownedFileHash(backup, known).hash)) return false;
+  return kiroUpgradeIntact(agentJson(join(projectDir, rel)), agentJson(backup), unstampedByKeptFields);
+}
+
 function ownedHash(bytes: Buffer, known: readonly (string | undefined)[]): { hash: string } {
   const hash = sha256Matching(bytes, known);
   if (known.includes(hash)) return { hash };
@@ -9946,6 +9987,9 @@ function planManagedFiles(
   provenRetired: ReadonlySet<string> = new Set(),
   modelWritten: ReadonlyMap<string, string> = new Map(),
   modelStamped: ReadonlySet<string> = new Set(),
+  // Filled with each retired agent file removed as Kiro's untouched upgrade of
+  // AI-DLC's file, for kiroBackupsKeptNote.
+  kiroUpgradesRemoved: Set<string> = new Set(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -10068,30 +10112,20 @@ function planManagedFiles(
       // The person ran Kiro's upgrade for its 3.0 engine: the agent file stays
       // as Kiro left it, and the rest of the release lands around it, unless this
       // release changes what it allows, Kiro upgrades it again by itself and the
-      // file Kiro upgraded from is provably AI-DLC's; then the release's file
-      // goes back. A kept file's record stays what AI-DLC last wrote there, so a
-      // later refresh can still prove that.
+      // file is Kiro's untouched upgrade of one AI-DLC wrote; then the release's
+      // file goes back. A kept file's record stays what AI-DLC last wrote there,
+      // so a later refresh can still prove that.
       if (!force && kiroUpgradedAgentFile(projectDir, rel)) {
         const recordedAsCopied = nextHashes[rel];
         if (recordedAsCopied !== undefined && priorHash !== undefined) nextHashes[rel] = priorHash;
         const backup = kiroUpgradeBackup(projectDir, rel);
-        const parsed = (path: string): unknown => {
-          try {
-            return JSON.parse(readFileSync(path, "utf-8"));
-          } catch {
-            return undefined;
-          }
-        };
-        const was = backup === null ? undefined : parsed(backup);
-        if (was === undefined || !kiroAllowChanged(was, parsed(source))) {
+        const was = backup === null ? undefined : agentJson(backup);
+        if (was === undefined || !kiroAllowChanged(was, agentJson(source))) {
           actions.push({ path: rel, action: "preserve", detail: KIRO_UPGRADED_DETAIL });
           continue;
         }
         const known = [priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])];
-        const aidlcWroteIt = priorHash !== undefined && known.includes(ownedFileHash(backup!, known).hash);
-        if (
-          !kiroAutoUpgradeOn() || !aidlcWroteIt || !kiroUpgradeKeptFields(parsed(target), was)
-        ) {
+        if (!kiroAutoUpgradeOn() || priorHash === undefined || !kiroUpgradeOfOwnFile(projectDir, rel, known, true)) {
           actions.push({ path: rel, action: "preserve", detail: KIRO_KEPT_CHANGED_DETAIL });
           continue;
         }
@@ -10145,11 +10179,16 @@ function planManagedFiles(
     ) continue;
     const target = join(projectDir, rel);
     if (!pathPresent(target)) continue;
-    const owned = regularFile(target) && (provenRetired.has(rel) || sha256FileMatching(target, [priorHash]) === priorHash);
-    if (!owned && !force) {
+    // An agent file Kiro upgraded from the one AI-DLC wrote, untouched since,
+    // goes with the rest; its backups stay (kiroBackupsKeptNote).
+    const regular = regularFile(target);
+    const recorded = regular && (provenRetired.has(rel) || sha256FileMatching(target, [priorHash]) === priorHash);
+    const kiroUpgrade = !recorded && kiroUpgradeOfOwnFile(projectDir, rel, [priorHash], false);
+    if (!recorded && !kiroUpgrade && !force) {
       actions.push({ path: rel, action: "conflict", detail: "removed upstream but locally modified" });
       continue;
     }
+    if (kiroUpgrade) kiroUpgradesRemoved.add(rel);
     operations.push({ kind: "remove", path: rel, expected: expected(target) });
     actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
   }
@@ -13599,6 +13638,7 @@ export async function main(
     // A copied project is not a release: whenever its own files are the source,
     // keep the baseline it already has instead of adopting its current bytes.
     const retainBaseline = Boolean(selected.projectProjection) && prior !== null;
+    const kiroUpgradesRemoved = new Set<string>();
     planManagedFiles(
       projectDir,
       prepared.root,
@@ -13616,6 +13656,7 @@ export async function main(
       prepared.provenRetired,
       prepared.modelWritten,
       prepared.modelStamped,
+      kiroUpgradesRemoved,
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);
@@ -13852,6 +13893,9 @@ export async function main(
     if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
     const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
     if (kiroKeptChanged > 0) prepared.notes.push(kiroKeptChangedNote(kiroKeptChanged, descriptor.harnessDir, kiroForce));
+    if (kiroUpgradesRemoved.size > 0) {
+      prepared.notes.push(kiroBackupsKeptNote(kiroUpgradesRemoved.size, descriptor.harnessDir, argv.includes("--dry-run")));
+    }
     const kiroPins = stamp.distribution === "kiro-ide"
       ? kiroAgentPinsNote(
         projectDir,
