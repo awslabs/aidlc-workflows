@@ -15498,6 +15498,15 @@ function emitTeamUnitMajorRunStage(
     );
     directive.gate = step.kind === "gate";
     directive.unit = unit;
+    // In the checkout that claimed the Unit, what follows its step is its next
+    // one, and after its last its landing; Build and Test, next in plan order,
+    // runs once every Unit lands.
+    if (scopeStamp) {
+      const later = block.slice(block.indexOf(stage) + 1).find((entry) =>
+        teamUnitStageApplies(entry, unitKind) && !ledgers.get(entry.slug)?.skipped.has(unit)
+      );
+      directive.next_stage = later?.name ?? `landing Unit ${unit}`;
+    }
     if (step.kind === "work") {
       // A Unit whose work is done is named the step it still owes, as on the
       // solo routes, never its stage body again.
