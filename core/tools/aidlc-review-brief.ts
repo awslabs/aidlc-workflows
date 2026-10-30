@@ -2720,6 +2720,8 @@ function parseCliFlags(args: string[]): Record<string, string> {
 // record (`<engine>/reviews/<stage>/stage|units/<unit>/briefs/<sha256>.md`,
 // `latest.json` naming the newest), so the gate-open row can record the digest
 // of what the person was shown and a reader can open exactly that text later.
+// The line the gate's step says after it (gateApproveAcceptsLine) is kept with
+// it, so the approval's record names the text that told them what it accepts.
 // Best effort: a keep failure never costs the brief its print.
 function keepGateBrief(
   projectDir: string,
@@ -2803,7 +2805,8 @@ export function main(argv: string[]): void {
       )
     }\n`;
     process.stdout.write(brief);
-    keepGateBrief(projectDir, stage, flags.unit, reason, brief);
+    const accepts = gateApproveAcceptsLine(projectDir, stage, flags.unit);
+    keepGateBrief(projectDir, stage, flags.unit, reason, accepts === null ? brief : `${brief}\n${accepts}\n`);
     return;
   }
   if (command === "context") {
