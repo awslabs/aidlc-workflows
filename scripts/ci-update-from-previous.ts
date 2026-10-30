@@ -36,8 +36,9 @@ import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-name
 import kiro from "../harness/kiro/manifest.ts";
 import type { WorkResult } from "../tests/harness/work-open.ts";
 
-export const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
+export const HARNESSES = ["antigravity", "claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
 const HARNESS_DIRS: Record<(typeof HARNESSES)[number], string> = {
+  antigravity: ".agents",
   claude: ".claude",
   codex: ".codex",
   copilot: ".github",
@@ -48,6 +49,7 @@ const HARNESS_DIRS: Record<(typeof HARNESSES)[number], string> = {
 };
 // Where a copied project's own tool is: `bun <dir>/tools/aidlc.ts`.
 const COPY_TOOL_DIRS: Record<(typeof HARNESSES)[number], string> = {
+  antigravity: ".agents",
   claude: ".claude",
   codex: ".codex",
   copilot: ".aidlc",
@@ -58,9 +60,10 @@ const COPY_TOOL_DIRS: Record<(typeof HARNESSES)[number], string> = {
 };
 // A hook command a tree wires: the installed `aidlc engine ...`, a copy's own
 // `bun <dir>/tools/aidlc.ts engine ...`, or a copy's adapter file itself
-// (Copilot and Cursor).
-const DISPATCHED = /^(?:aidlc|bun (?:"\$CLAUDE_PROJECT_DIR\/)?\.[a-z]+\/tools\/aidlc\.ts"?) engine (?:hook|adapter) [a-z0-9-]+(?: [a-z0-9-]+)*$/;
-const ADAPTER_FILE = /^bun \.[a-z]+\/hooks\/aidlc-[a-z]+-adapter\.ts [a-z0-9-]+$/;
+// (Antigravity, Copilot and Cursor). Antigravity runs a hook from its .agents/
+// folder, so its commands step up first.
+const DISPATCHED = /^(?:cd \.\. && )?(?:aidlc|bun (?:"\$CLAUDE_PROJECT_DIR\/)?\.[a-z]+\/tools\/aidlc\.ts"?) engine (?:hook|adapter) [a-z0-9-]+(?: [a-z0-9-]+)*$/;
+const ADAPTER_FILE = /^(?:cd \.\. && )?bun \.[a-z]+\/hooks\/aidlc-[a-z]+-adapter\.ts [a-z0-9-]+$/;
 // A Kiro CLI hook line ends with its row's exit shape; the command is what comes before it.
 const KIRO_HOOK_SUFFIX = kiro.hookCommandSuffix ?? "";
 function hookCommandOf(line: string): string {
@@ -356,7 +359,11 @@ async function check(previous: string, candidate: string, target: string, root: 
     if (!before.output.includes(previous)) fail(`the installed release reports "${before.output}", not ${previous}`);
   }
 
-  // 2. A project for every harness, the person's own code committed, set up by the previous release.
+  // 2. A project for every harness, the person's own code committed, set up by
+  //    the previous release. A harness the previous release does not ship (new
+  //    in the candidate) is set up after the update instead, as a person adding
+  //    it to a project would.
+  const fresh = new Set<string>();
   const projects = HARNESSES.map((harness) => {
     const project = join(root, `project-${harness}`);
     mkdirSync(project, { recursive: true });
@@ -368,10 +375,21 @@ async function check(previous: string, candidate: string, target: string, root: 
     }
     if (harness === "copilot") writeFileSync(join(env.COPILOT_HOME!, "config.json"), `${JSON.stringify({ trustedFolders: [project] })}\n`);
     if (copy) {
-      cpSync(join(previousRuntime, harness), project, { recursive: true });
-      tool(`the copy's setup for ${harness} on ${previous}`, harness, project, ["config", "--from", previousRuntime, "--harness", harness]);
+      if (!existsSync(join(previousRuntime, harness))) {
+        fresh.add(harness);
+        console.log(`${harness}: not shipped by ${previous}; it is set up after the update`);
+      } else {
+        cpSync(join(previousRuntime, harness), project, { recursive: true });
+        tool(`the copy's setup for ${harness} on ${previous}`, harness, project, ["config", "--from", previousRuntime, "--harness", harness]);
+      }
     } else {
-      aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
+      const known = failures.length;
+      const set = aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
+      if (!set.ok && /harness|distribution/i.test(set.output)) {
+        failures.splice(known);
+        fresh.add(harness);
+        console.log(`${harness}: not shipped by ${previous}; it is set up after the update`);
+      }
     }
     return { harness, project };
   });
@@ -383,7 +401,7 @@ async function check(previous: string, candidate: string, target: string, root: 
   const signals = join(root, "work");
   mkdirSync(signals, { recursive: true });
   const began = Date.now();
-  const works = projects.map(({ harness, project }) => ({
+  const works = projects.filter(({ harness }) => !fresh.has(harness)).map(({ harness, project }) => ({
     harness,
     proc: Bun.spawn([process.execPath, WORK_OPEN, harness, project, copy ? "copy" : machine, signals, String(deadline), previous], {
       cwd: project,
@@ -439,6 +457,15 @@ async function check(previous: string, candidate: string, target: string, root: 
       fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
     }
   }
+  for (const { harness, project } of projects) {
+    if (!fresh.has(harness)) continue;
+    if (copy) {
+      cpSync(join(candidateRuntime, harness), project, { recursive: true });
+      tool(`the copy's setup for ${harness} on ${target}`, harness, project, ["config", "--from", candidateRuntime, "--harness", harness]);
+    } else {
+      aidlc(`aidlc config --harness ${harness} on ${target}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
+    }
+  }
 
   // 5. What the person does next, per project.
   let traces = 0;
@@ -468,8 +495,9 @@ async function check(previous: string, candidate: string, target: string, root: 
       // A hook that hung once is not run again; its first failure says so.
       if (timedOut.has(command)) continue;
       const trace = join(root, "trace", String(++traces));
+      // A command that steps up first runs from the harness folder, as its host runs it.
       const r = spawnSync(shell, ["-c", command], {
-        cwd: project,
+        cwd: command.startsWith("cd .. && ") ? join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]) : project,
         env: { ...env, CLAUDE_PROJECT_DIR: project, AIDLC_HOOK_TRACE_DIR: trace },
         encoding: "utf-8",
         input: hookInput(harness, command),

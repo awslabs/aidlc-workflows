@@ -40,6 +40,7 @@ export const MODEL_GROUPS = {
 
 export type ModelGroup = keyof typeof MODEL_GROUPS;
 export type ModelHarness =
+  | "antigravity"
   | "claude"
   | "codex"
   | "copilot"
@@ -167,6 +168,13 @@ export const HARNESS_HONESTY = Object.freeze({
     message:
       "GitHub Copilot runs every agent on the model you choose in its model picker (/model in the Copilot CLI), so a model or effort set here is kept for other tools and changes nothing in GitHub Copilot.",
   }),
+  antigravity: Object.freeze({
+    model: false,
+    effort: false,
+    groupEffort: false,
+    message:
+      "Antigravity runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Antigravity.",
+  }),
 });
 
 type HarnessHonesty = {
@@ -208,6 +216,7 @@ export function modelPolicyAgentsDir(harness: ModelHarness, harnessDir: string):
 // Fixed here rather than read from the project, so a project file cannot name
 // another host.
 export const HARNESS_PRODUCT_NAMES: Readonly<Record<ModelHarness, string>> = Object.freeze({
+  antigravity: "Google Antigravity",
   claude: "Claude Code",
   codex: "Codex CLI",
   copilot: "GitHub Copilot",

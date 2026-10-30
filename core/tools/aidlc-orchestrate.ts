@@ -9515,6 +9515,28 @@ function steeringChunks(content: RuleContent[], targetBytes: number): RuleConten
   return chunks;
 }
 
+function personaChunks(persona: string | null, targetBytes: number): string[] {
+  if (persona === null) return [];
+  if (Buffer.byteLength(JSON.stringify(persona), "utf-8") <= targetBytes) {
+    return [persona];
+  }
+  const chunks: string[] = [];
+  let current = "";
+  for (const section of markdownSections(persona)) {
+    for (const piece of splitRuleText("", section, targetBytes)) {
+      const candidate = current + piece;
+      if (current.length > 0 && Buffer.byteLength(JSON.stringify(candidate), "utf-8") > targetBytes) {
+        chunks.push(current);
+        current = piece;
+      } else {
+        current = candidate;
+      }
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
 type SteeringTokenKeyResult = {
   key: Buffer | null;
   error: string | null;
@@ -9778,7 +9800,7 @@ function steeringPart(
     parts,
     receipt,
     next: steeringNextCommand(receipt),
-    ...(part === 1 && persona !== null ? { conductor_persona: persona } : {}),
+    ...(persona !== null ? { conductor_persona: persona } : {}),
     // The Stop hook's own probe restarts the rules at part 1, so the offer the
     // run-stage carries has to ride on every part for the hook to see it.
     ...(directive.construction_policy?.offer_autonomy === true ? { offer_autonomy: true as const } : {}),
@@ -9913,7 +9935,7 @@ function retainedTransportForCurrentState(
   directiveHash: string,
   chunks: RuleContent[][],
   content: RuleContent[],
-  persona: string | null,
+  personaParts: string[],
   rulesRide: boolean,
 ): Directive | null {
   if (engineInvocation?.commandKind !== "next") return null;
@@ -9959,7 +9981,7 @@ function retainedTransportForCurrentState(
     // cannot show it holds them (a new chat, a compacted context, a resume), so
     // delivery restarts at part one. Only the Stop-hook probe and a lost race,
     // which read the step in hand, get the run-stage.
-    if (persona === null && attachRulesIfTheyFit(directive, content)) return directive;
+    if (personaParts.length === 0 && attachRulesIfTheyFit(directive, content)) return directive;
     if (!isStopHookProbe() && !continuationLoserReadsMarker) return null;
     if (rulesRide) attachRulesIfTheyFit(directive, content);
     return directive;
@@ -10002,7 +10024,7 @@ function retainedTransportForCurrentState(
     chunks.length,
     receipt,
     chunks[(part as number) - 1],
-    persona,
+    personaParts[(part as number) - 1] ?? null,
   );
   return Buffer.byteLength(JSON.stringify(load), "utf-8") > directiveMaxBytes()
     ? null
@@ -10060,11 +10082,14 @@ function transportRunStage(
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
   if (persona !== null) delete directive.conductor_persona;
-  const ruleChunks = steeringChunks(content, steeringTextTargetBytes(directive));
+  const targetBytes = steeringTextTargetBytes(directive);
+  const personaParts = personaChunks(persona, targetBytes);
+  const ruleChunks = steeringChunks(content, targetBytes);
   // With the persona gone ahead the run-stage may now carry its rules itself,
-  // which saves the rules parts: the delivery is then the persona part alone.
+  // which saves the rules parts: the delivery is then the persona parts alone.
   const rulesRide = persona !== null && rulesFitBeside(directive, content);
-  const chunks = persona === null ? ruleChunks : rulesRide ? [[]] : [[], ...ruleChunks];
+  const emptyRuleParts = personaParts.map((): RuleContent[] => []);
+  const chunks = persona === null ? ruleChunks : rulesRide ? emptyRuleParts : [...emptyRuleParts, ...ruleChunks];
   const layout = steeringLayout(chunks);
   // A run-stage that cannot fit even alone is refused before any rules part is
   // sent, so the person hears it at once and every later ask, the Stop hook's
@@ -10128,7 +10153,7 @@ function transportRunStage(
       directiveHash,
       chunks,
       content,
-      persona,
+      personaParts,
       rulesRide,
     );
     if (retained) {
@@ -10184,7 +10209,7 @@ function transportRunStage(
     chunks.length,
     minted.receipt,
     chunks[index],
-    persona,
+    personaParts[index] ?? null,
   );
   const loadBytes = Buffer.byteLength(JSON.stringify(load), "utf-8");
   if (loadBytes > directiveMaxBytes()) {

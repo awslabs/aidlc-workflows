@@ -1049,9 +1049,9 @@ function hostNamedChat(projectDir: string): string | null {
 
 // The hosts whose agent commands name the chat they run in, by tree: Claude
 // Code, Codex and Kiro CLI through hostNamedChat's variables, opencode through
-// the override its plugin hands each command. Cursor, Copilot and Kiro IDE
-// (Kiro CLI v3 runs its tree) find a command's chat only through the process
-// tree, which the chats of one window share.
+// the override its plugin hands each command. Cursor, Copilot, Google Antigravity
+// and Kiro IDE (Kiro CLI v3 runs its tree) find a command's chat only through the
+// process tree, which the chats of one window share.
 export const CHAT_NAMING_HOSTS: ReadonlySet<string> = new Set(["claude", "codex", "kiro", "opencode"]);
 
 export function claudeNamedChat(): { pid: number; session: string } | null {

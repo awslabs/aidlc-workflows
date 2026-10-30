@@ -85,12 +85,14 @@ const COMMON_EXPECTED_SKILLS = [
   COMPOSE_RUNNER_SKILL,
 ].sort();
 
-const CURSOR_SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
+// Cursor and Antigravity ship the same three slash-expanded shortcut skills.
+const SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
+const SHORTCUT_SKILL_HARNESSES = new Set(["cursor", "antigravity"]);
 
 function expectedSkills(harnessName: string): string[] {
   return [
     ...COMMON_EXPECTED_SKILLS,
-    ...(harnessName === "cursor" ? CURSOR_SHORTCUT_SKILLS : []),
+    ...(SHORTCUT_SKILL_HARNESSES.has(harnessName) ? SHORTCUT_SKILLS : []),
   ].sort();
 }
 

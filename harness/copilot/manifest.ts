@@ -200,6 +200,8 @@ const manifest: HarnessManifest = {
           // The variant whose Guards setters passed the person's words (--person-words);
           // they now name the message the person asked in (--message <id>).
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
+          // The variant shipped before the onboarding listed Google Antigravity.
+          "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
         ],
       },
     },

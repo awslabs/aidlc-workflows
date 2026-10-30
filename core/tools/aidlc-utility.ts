@@ -4143,6 +4143,10 @@ export async function collectDoctorReport(
           hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
       } else if (currentHarnessDir === ".cursor") {
         nativePermission = commands.includes(cursorTrustedShell());
+      } else if (currentHarnessDir === ".agents") {
+        // Antigravity has no project command allowlist: permissions live in
+        // the person's own settings. This row verifies native hook wiring.
+        nativePermission = nativeHooks;
       } else if (currentHarnessName === "copilot") {
         // Copilot has no project command allowlist. Its folder-trust contract
         // is checked separately below; this row verifies native hook wiring.
@@ -4652,6 +4656,7 @@ export async function collectDoctorReport(
       );
     }
     if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
+    if (harness === ".agents") tsHooks.push("aidlc-antigravity-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -4835,6 +4840,30 @@ export async function collectDoctorReport(
       pass: insideGitRepository(projectDir),
       label: "project is in a git repository (Cursor may skip project hooks outside one)",
       fix: "run `git init` in this project, then fully restart Cursor and trust the folder",
+    });
+  } else if (harness === ".agents") {
+    // Antigravity: hooks.json (the hook wiring) and the standing + phase
+    // method rule pointers are all inside .agents/.
+    for (const [file, what] of [
+      ["hooks.json", "hook wiring"],
+      ["rules/aidlc.md", "standing method rule (always-on read instruction)"],
+      ["rules/aidlc-phase-ideation.md", "Ideation phase rule (model-decided read instruction)"],
+      ["rules/aidlc-phase-inception.md", "Inception phase rule (model-decided read instruction)"],
+      ["rules/aidlc-phase-construction.md", "Construction phase rule (model-decided read instruction)"],
+      ["rules/aidlc-phase-operation.md", "Operation phase rule (model-decided read instruction)"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${file} present (${what})`,
+        fix: projectedFileRepair("antigravity", `.agents/${file}`),
+      });
+    }
+    // Codex CLI discovers its skills in the same .agents/skills/ tree, so the
+    // two harnesses cannot share a project.
+    results.push({
+      pass: !existsSync(join(projectDir, ".codex", "tools", "data", "harness.json")),
+      label: "no Codex CLI install beside this one (both read .agents/skills/)",
+      fix: "keep one of the two: run `aidlc config --harness antigravity` after removing .codex/, or use the Codex install instead",
     });
   } else if (harness === ".aidlc") {
     // opencode: the wiring config is the project-root opencode.json/jsonc
@@ -7346,6 +7375,7 @@ const SCAN_EXCLUDE = new Set([
   ".opencode",
   ".aidlc",
   ".cursor",
+  ".agents",
   "aidlc-docs",
   "node_modules",
   ".git",
