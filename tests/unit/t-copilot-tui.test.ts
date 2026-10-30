@@ -1,6 +1,7 @@
 // t-copilot-tui.test.ts - the Copilot CLI terminal the live Copilot journeys
 // type into (tests/harness/copilot-tui.ts): Copilot's permission dialogs get
-// Enter and are counted from its session record by what drew them, a turn
+// one Enter each, also while the shell line's clock above them keeps the
+// screen moving, and are counted from its session record by what drew them, a turn
 // ends only when the screen is at the prompt and the record has closed the
 // agent's last model call, any other dialog stops the turn unanswered, a
 // dialog at startup stops the journey, an earlier terminal's session in the
@@ -42,9 +43,14 @@ function auditRow(project: string, event: string, fields: Record<string, string>
   appendFileSync(shard, [`## ${event}`, `**Timestamp**: ${at}`, `**Event**: ${event}`, ...lines, "", "---", "", ""].join("\n"));
 }
 
-/** A Copilot that shows `screen`; each Enter after the typed line runs the next step. */
+/**
+ * A Copilot that shows `screen`; each Enter after the typed line runs the next
+ * step. `ticking` keeps the screen from ever holding still, as the clock on a
+ * shell line above a dialog does.
+ */
 class ScriptedCopilot {
   screen = IDLE;
+  ticking = false;
   readonly sent: string[] = [];
   readonly steps: Array<() => void> = [];
   captures = 0;
@@ -52,11 +58,13 @@ class ScriptedCopilot {
   readonly drive: TuiDrive = (args) => {
     const flag = (name: string) => args[args.indexOf(name) + 1];
     switch (args[0]) {
-      case "wait":
-        return { rc: new RegExp(flag("--pattern")).test(this.screen) ? 0 : 1, stdout: "", timedOut: false };
+      case "wait": {
+        const still = !this.ticking || flag("--stable-ms") === "0";
+        return { rc: still && new RegExp(flag("--pattern")).test(this.screen) ? 0 : 1, stdout: "", timedOut: false };
+      }
       case "capture":
         this.onCapture?.(++this.captures);
-        return { rc: 0, stdout: this.screen, timedOut: false };
+        return { rc: 0, stdout: this.ticking ? ` $ Shell Confirm bugfix plan ${this.captures}s\n${this.screen}` : this.screen, timedOut: false };
       case "send":
         this.sent.push(flag("--keys"));
         if (flag("--keys") === "Enter") this.steps.shift()?.();
@@ -120,18 +128,23 @@ describe("t-copilot-tui: the person's turn in Copilot CLI's own terminal", () =>
           { type: "session.usage_record", data: { usage: { inputTokens: 100, outputTokens: 7 } } }]);
         fake.screen = IDLE;
         const at = fake.captures;
-        // The screen is back at the prompt before the record closes the agent's last call.
+        // The screen is back at the prompt a while before the record closes the agent's last call.
         fake.onCapture = (n) => {
-          if (n === at + 3) record("s1", [turnEnd]);
+          if (n === at + 4) {
+            record("s1", [turnEnd]);
+            closed = n;
+          }
         };
       },
     );
+    let closed: number | undefined;
     const copilot = terminal(fake, proj, copilotHome);
     copilot.start();
     const turn = copilot.turn("1");
     expect(turn.ended).toBe(true);
     expect(fake.sent).toEqual(["1", "Enter", "Enter", "Enter"]);
-    expect(fake.captures).toBeGreaterThan(3);
+    expect(closed).toBeDefined();
+    expect(fake.captures).toBeGreaterThanOrEqual(closed!);
     expect(turn.prompts.map((p) => p.kind)).toEqual(["aidlc", "write", "command"]);
     expect(promptCounts(turn.prompts)).toEqual({
       "permission prompts": 3, "for AI-DLC commands": 1, "for file writes": 1, "for other commands": 1,
@@ -139,6 +152,33 @@ describe("t-copilot-tui: the person's turn in Copilot CLI's own terminal", () =>
     expect(turn.results.map((r) => [r.input.command, r.resultText])).toEqual([[next, '{"kind":"print"}'], ["mkdir -p src", ""]]);
     expect(turn.words.map((w) => w.text)).toEqual(["Reverse Engineering is ready for your review."]);
     expect(turn.tokens).toEqual({ input: 100, output: 7 });
+  });
+
+  test("a permission dialog under a ticking clock gets one Enter, and the turn goes on", () => {
+    const { proj, copilotHome, record } = home();
+    const fake = new ScriptedCopilot();
+    const next = "bun .aidlc/tools/aidlc-orchestrate.ts next --scope bugfix --request r1";
+    fake.steps.push(
+      () => {
+        record("s1", [user("1"), turnStart, shell(next)]);
+        fake.ticking = true;
+        fake.screen = dialog("Confirm bugfix plan", next, "Do you want to run this command?");
+      },
+      () => {
+        record("s1", [...ran("t1", next, "ok"), turnEnd]);
+        fake.ticking = false;
+        fake.screen = IDLE;
+      },
+    );
+    const copilot = new CopilotTerminal({
+      session: "t", proj, copilotHome, bin: "copilot", cleanupMs: () => 60_000, drive: fake.drive,
+      workMs: ((end) => () => Math.max(0, end - Date.now()))(Date.now() + 5000),
+    });
+    copilot.start();
+    const turn = copilot.turn("1");
+    expect(turn.ended).toBe(true);
+    expect(fake.sent).toEqual(["1", "Enter", "Enter"]);
+    expect(turn.prompts.map((p) => p.kind)).toEqual(["aidlc"]);
   });
 
   test("a dialog that is not a permission one stops the turn, unanswered", () => {

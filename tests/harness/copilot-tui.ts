@@ -86,6 +86,9 @@ const PERMISSION = /Do you want to (?:run|create|edit|write|make|delete|use|allo
 const STILL_MS = 10_000;
 
 const bottom = (screen: string) => screen.split("\n").slice(-25).join("\n");
+// A dialog's own box, from its top border down: the lines above it (the shell
+// line's clock) keep changing while it waits, the box does not.
+const dialogBox = (tail: string) => tail.slice(Math.max(0, tail.lastIndexOf("\u256D")));
 const AIDLC_COMMAND = /^(?:bun|node|&)?\s*\S*\.aidlc[\\/]+tools[\\/]+aidlc[\w-]*\.ts\b/;
 
 interface RecordEvent {
@@ -121,6 +124,12 @@ export class CopilotTerminal {
     return this.drive(["capture", "--session", this.o.session], timeout).stdout;
   }
 
+  // Look at the screen until `done` holds or `ms` pass.
+  private until(done: (screen: string) => boolean, ms: number): void {
+    const end = Date.now() + ms;
+    while (!done(this.screen()) && Date.now() < end) Bun.sleepSync(250);
+  }
+
   private waiting(screen: string): boolean {
     const tail = bottom(screen);
     return PROMPT_LINE.test(tail) && tail.includes(FOOTER) && !tail.includes(DIALOG);
@@ -150,7 +159,8 @@ export class CopilotTerminal {
     // error also leaves the person at the prompt, with no closing event.
     let unclosed = 0;
     const ended = waitForTurn((left) => {
-      if (!this.wait(`${FOOTER}|${DIALOG}`, Math.min(left, 60_000), 1500)) return false;
+      // A dialog's screen never holds still, so the screen is read as soon as either shows.
+      if (!this.wait(`${FOOTER}|${DIALOG}`, Math.min(left, 60_000), 0)) return false;
       const tail = bottom(this.screen());
       if (tail.includes(DIALOG)) {
         if (!PERMISSION.test(tail)) {
@@ -158,9 +168,16 @@ export class CopilotTerminal {
           return true;
         }
         this.key("Enter");
+        // One Enter per dialog: look again once Copilot has taken the answer.
+        const box = dialogBox(tail);
+        this.until((screen) => dialogBox(bottom(screen)) !== box, Math.min(left, 10_000));
         return false;
       }
-      if (!this.waiting(tail) || !this.wait(FOOTER, Math.min(left, STILL_MS * 3), STILL_MS)) return false;
+      if (!this.waiting(tail)) {
+        Bun.sleepSync(Math.max(1, Math.min(left, 1000)));
+        return false;
+      }
+      if (!this.wait(FOOTER, Math.min(left, STILL_MS * 3), STILL_MS)) return false;
       if (!this.waiting(this.screen())) return false;
       return this.recordShowsTurnEnded(line) || ++unclosed >= 6;
     }, this.o.workMs) && stopped === undefined;
