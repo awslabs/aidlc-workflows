@@ -3837,6 +3837,22 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(again.out).toContain(SPENT);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The recovery review a team Unit used in one attempt is not spent in the
+  // next: the person's Request Changes opens a new attempt for the Unit, and
+  // the review of the source it bound is available again.
+  test("strict, team: a team Unit sent back again has its recovery review back", () => {
+    const p = teamUnits();
+    const stage = findStageBySlug("code-generation")!;
+    const recoverySpent = () => freshReviewReceipts(p, readFileSync(seededStateFile(p), "utf-8"), stage).sourceRecoverySpent;
+    buildReviewed(p, "alpha", alphaAt(p, 1));
+    teamSendBack(p, "alpha", "Return a clear error for an empty name");
+    expect(buildReviewed(p, "alpha", alphaAt(p, 2)).request?.recovery).toBe("stale-receipt");
+    expect(reopenedGate(p, "alpha")).toMatchObject({ stage: "code-generation", unit: "alpha", gate: true });
+    expect(recoverySpent()).toBe(true);
+    teamSendBack(p, "alpha", "Name the field in the error");
+    expect(recoverySpent()).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // Under relaxed and off a change after the review is accepted and no further
   // review is owed (stage-protocol-reviewer.md 12a). A review the agent starts
   // on its own past the one recovery is still refused, to the agent alone, and

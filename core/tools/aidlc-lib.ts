@@ -20248,6 +20248,9 @@ export function freshReviewReceipts(
         unitIterations.delete(rejectedUnit);
         unitReceiptRecovery.delete(rejectedUnit);
         unitPending.delete(rejectedUnit);
+        // The new attempt's recovery review is available again, for the source
+        // the Unit bound as well.
+        if (newestSourceUnit === rejectedUnit) sourceRecoverySpent = false;
         for (const [key, request] of pendingRequests) {
           if (request.unit === rejectedUnit) pendingRequests.delete(key);
         }
