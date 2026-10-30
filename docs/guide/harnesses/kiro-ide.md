@@ -90,8 +90,11 @@ asks you first. Earlier releases also merged it into
 reads that key, so the entry can be removed. Before the first workflow, follow
 [First run](#first-run): open `your-project/` in Kiro IDE, trust the folder and
 reload the window, choose **aidlc** in the chat panel's agent picker, and run
-`/aidlc --doctor`. In Kiro CLI, run `kiro-cli` in the project instead; it opens
-on the `aidlc` agent.
+`/aidlc --doctor`. In Kiro CLI, run `kiro-cli --v3` in the project instead; it
+opens on the `aidlc` agent. The first time, Kiro CLI 2.33.0 or later asks
+whether you trust this workspace: if you know what is in this folder, choose
+**Trust, continue**, since Kiro CLI loads the folder's hooks and agents only
+then (**Don't trust** exits).
 
 ### Versioned manual-copy alternative
 
@@ -129,7 +132,8 @@ The first removal loop is the v2.5.57 hook-name migration. The second removes
 Kiro CLI-format agent JSON shipped by older distributions and the IDE 0.x
 `.kiro.hook` registrations, which Kiro IDE 1.x never executes. An overlay copy
 cannot delete retired files. The copy also replaces `.kiro/settings/cli.json`,
-which pins Kiro CLI to its v3 engine and the `aidlc` agent. That file is managed
+which asks Kiro CLI for its v3 engine and the `aidlc` agent (see the list below
+for which Kiro CLI releases read the engine there). That file is managed
 by AI-DLC like the rest of `.kiro/`: `aidlc config` stops with a conflict rather
 than overwrite a copy that differs from the shipped one, and `--force` replaces
 it. Keep your own Kiro CLI settings in the user-level `~/.kiro/settings/cli.json`
@@ -199,11 +203,16 @@ The install ships:
   No agent-v1 JSON ships. Their shell
   rules run AI-DLC's own commands and `bun --version` without
   asking; the project's own test and build commands still ask.
-- `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
-  agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
-  registrations, and a hook cannot detect that from inside. Kiro IDE does not
-  read this file. `kiro-cli acp` reads its `chat.defaultAgent` but not its
-  engine pin, so an ACP client has to start `kiro-cli acp --agent-engine v3`
+- `.kiro/settings/cli.json` — sets `"chat.agentEngine": "v3"` and
+  `"chat.defaultAgent": "aidlc"`. Kiro CLI's v2 engine runs none of the
+  `.kiro/hooks/` registrations, and a hook cannot detect that from inside, so
+  start Kiro CLI with `kiro-cli --v3`. Kiro CLI 2.33.0 takes the engine only
+  from the command line or your own Kiro CLI settings: it ignores the project
+  file's engine value and refuses `kiro-cli settings --workspace
+  chat.agentEngine`. Kiro CLI 2.24.1 to 2.32.x read the engine from this file.
+  Kiro IDE does not read this file. `kiro-cli acp` reads its
+  `chat.defaultAgent` but not its engine value, so an ACP client has to start
+  `kiro-cli acp --agent-engine v3`
   and declare
   `clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` in its
   `initialize` request, or the session runs no hooks (see
@@ -254,7 +263,9 @@ window. Otherwise choose **Cancel**.
 4. In chat, run `/aidlc --doctor` to verify the setup, then
    `/aidlc <description>` to start a workflow.
 
-On Kiro CLI, start `kiro-cli` in `your-project/`, then go to step 4.
+On Kiro CLI, start `kiro-cli --v3` in `your-project/`; if Kiro asks whether you
+trust this workspace and you know what is in this folder, choose **Trust,
+continue**. Then go to step 4.
 
 When `kiro-cli` is on your PATH, setup also offers Kiro CLI's session model,
 saved in your personal Kiro settings (`~/.kiro/settings/cli.json`). It is a
@@ -639,8 +650,8 @@ switch only from your own Kiro CLI settings, so a project's
 `.kiro/settings/cli.json` value does not turn it off. AI-DLC asks about it the same way, with an answer of its
 own: during `aidlc config`, or once in your first Kiro CLI chat; `aidlc config
 --yes` takes the recommended answer and turns it off. AI-DLC changes it through
-Kiro CLI's own `kiro-cli settings` command; quit Kiro CLI and start `kiro-cli`
-again afterwards. To change it later, ask the agent, or run:
+Kiro CLI's own `kiro-cli settings` command; quit Kiro CLI and start `kiro-cli
+--v3` again afterwards. To change it later, ask the agent, or run:
 
 ```bash
 aidlc config trust --kiro-cli-workflows off --yes   # or: on

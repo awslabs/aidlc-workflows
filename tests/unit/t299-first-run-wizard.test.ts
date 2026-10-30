@@ -1407,7 +1407,9 @@ describe("t299 first-run setup wizard", () => {
       "    3. Choose the aidlc agent in the chat panel's agent picker.",
       '    4. /aidlc "what you want built"  describe your first intent',
       "",
-      "    Using Kiro CLI instead? Start `kiro-cli` in this folder, then step 4.",
+      "    Using Kiro CLI instead? Start `kiro-cli --v3` in this folder. If Kiro asks",
+      "    whether you trust this workspace and you know what is in this folder,",
+      '    choose "Trust, continue". Then step 4.',
       "",
     ].join("\n"));
     expect(existsSync(join(result.project, ".kiro"))).toBe(true);
@@ -1920,7 +1922,7 @@ describe("t299 first-run setup wizard", () => {
       ["codex", "codex                         open Codex CLI in this repo"],
       ["copilot", "copilot                        open Copilot CLI in this repo"],
       ["cursor", "cursor                         open Cursor in this repo"],
-      ["kiro", "kiro-cli chat                  open Kiro CLI in this repo"],
+      ["kiro", "kiro-cli --v2                  open Kiro CLI in this repo (before Kiro CLI 2.21.4: kiro-cli)"],
       ["opencode", "opencode                       open opencode in this repo"],
     ] as const
   ) {
