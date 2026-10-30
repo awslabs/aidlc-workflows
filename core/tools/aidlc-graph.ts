@@ -1027,6 +1027,7 @@ const FIELD_ORDER = [
   "reviewer_max_iterations",
   "review_class",
   "summary_confirmation",
+  "runner",
   "inputs",
   "outputs",
   "rules_in_context",
@@ -3075,6 +3076,9 @@ function buildGraphStage(
   }
   if (parsed.summary_confirmation !== undefined) {
     stage.summary_confirmation = parsed.summary_confirmation;
+  }
+  if (parsed.runner !== undefined) {
+    stage.runner = parsed.runner;
   }
   return stage;
 }

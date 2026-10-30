@@ -540,6 +540,9 @@ export interface StageEntry {
   // approve/advance: a code-generation stage that wrote only its markdown
   // produces[] docs but no actual code must not pass (issue #366).
   workspace_requires?: boolean;
+  // False when the stage opts out of its generated `--single` stage-runner
+  // skill (aidlc-runner-gen isRunnableStage). Absent means it has one.
+  runner?: boolean;
   // Compile-resolved sensor bindings. Runtime dispatchers consume the detailed
   // graph shape; user-facing directives intentionally project only sensor ids.
   sensors_applicable?: Array<{
@@ -37592,15 +37595,16 @@ export function parseStageFrontmatter(
     }
   }
 
-  // workspace_requires is the one boolean scalar field. The generic scalar loop
-  // above captured it as a string ("true"/"false"); coerce to a real boolean so
-  // StageEntry/GraphStage and the schema validator see the typed value (mirrors
-  // consumes.required's "true"/"false" coercion in objectListField). A non-boolean
-  // token is left as the string so validateStageFrontmatter rejects it loudly.
-  if (typeof obj.workspace_requires === "string") {
-    const raw = obj.workspace_requires;
+  // workspace_requires and runner are the boolean scalar fields. The generic
+  // scalar loop above captured them as strings ("true"/"false"); coerce to real
+  // booleans so StageEntry/GraphStage and the schema validator see the typed
+  // value (mirrors consumes.required's "true"/"false" coercion in
+  // objectListField). A non-boolean token is left as the string so
+  // validateStageFrontmatter rejects it loudly.
+  for (const key of ["workspace_requires", "runner"] as const) {
+    const raw = obj[key];
     if (raw === "true" || raw === "false") {
-      obj.workspace_requires = raw === "true";
+      obj[key] = raw === "true";
     }
   }
 
@@ -37882,6 +37886,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "sensors",
     "scopes",
     "ars",
+    "runner",
     "inputs",
     "outputs",
   ] as const;
@@ -37964,9 +37969,9 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
       // dropped on emit, breaking the parse -> emit -> parse contract (t65).
       lines.push(`${key}: ${v}`);
     } else if (typeof v === "boolean") {
-      // workspace_requires round-trips as an unquoted boolean (the parser
-      // coerces the "true"/"false" token to a real boolean), so emit it
-      // unquoted to preserve the parse -> emit -> parse contract.
+      // workspace_requires and runner round-trip as unquoted booleans (the
+      // parser coerces the "true"/"false" token to a real boolean), so emit
+      // them unquoted to preserve the parse -> emit -> parse contract.
       lines.push(`${key}: ${v}`);
     }
   }
