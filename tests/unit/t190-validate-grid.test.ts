@@ -568,7 +568,9 @@ describe("t190 validate-grid --custom names every stage a plan skips, with the s
   });
 
   // The record says "Stages skipped: <plan_changes.skip>" under the person's
-  // approval, so every one of them is on the line the approval answered.
+  // approval, so every one of them is on the line the approval answered; the
+  // one exception is Reverse Engineering on a new project, which creation skips
+  // there whatever the plan says.
   test("every stage creation will record as skipped is on the line", () => {
     const graph = require("../../dist/claude/.claude/tools/data/stage-graph.json") as Array<{ slug: string; name: string }>;
     const display = new Map(graph.map((stage) => [stage.slug, stage.name]));
@@ -581,5 +583,13 @@ describe("t190 validate-grid --custom names every stage a plan skips, with the s
       expect(body.plan_changes?.skip.length, JSON.stringify(body)).toBeGreaterThan(0);
       for (const slug of body.plan_changes?.skip ?? []) expect(named(body)).toContain(display.get(slug) ?? slug);
     }
+    const fresh = finalRun(
+      stock("express", { "reverse-engineering": SKIP, "deployment-execution": SKIP }),
+      ["--custom"],
+      { projectType: "greenfield", depth: "minimal" },
+    );
+    expect(fresh.plan_changes?.skip).toEqual(["reverse-engineering", "deployment-execution"]);
+    expect((fresh.plan_changes?.skip ?? []).filter((slug) => !named(fresh).includes(display.get(slug) ?? slug)))
+      .toEqual(["reverse-engineering"]);
   });
 });
