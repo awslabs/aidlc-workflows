@@ -91,6 +91,7 @@ interface GraphStage {
   ars?: { targets: string[]; cost: number | null; role?: string; project_types?: string[] };
   scopes?: string[];
   produces?: string[];
+  produces_kinds?: Record<string, string[]>;
   requires_stage?: string[];
   consumes?: Array<{ artifact?: string; required?: boolean }>;
   sensors_applicable?: Array<{ id?: string }>;
@@ -1638,6 +1639,153 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(fm).toMatch(/^required_sections:/m);
     for (const s of ["Branch Coverage", "Edge Cases", "API Positive and Negative", "Requirement Traceability"]) {
       expect(fm).toContain(`- "${s}"`);
+    }
+  });
+
+  test("adds.produces on a stage that maps every output to Unit kinds gets an entry for the kinds the stage covers, and strips on disable", () => {
+    // functional-design maps every required output to Unit kinds and none
+    // covers packaging (on infrastructure-design none covers spec). With no
+    // entry the added output would make the stage apply to Units its review
+    // target does not cover, the compile would refuse the stage, and compose
+    // would roll back the whole plugin, its nfr-design addition included.
+    // nfr-design has unmapped required outputs, so it already applies to
+    // every kind.
+    const contrib = (target: string) => [
+      "---", `target: ${target}`, "plugin: syn-kinds",
+      "adds:", "  produces:", "    - syn-kinds-notes",
+      "---", "",
+    ].join("\n");
+    const scope = [
+      "---", "name: syn-kinds", "plugin: syn-kinds",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the produces plugin identity", "skeleton: off", "---", "",
+      "# syn-kinds", "",
+    ].join("\n");
+    const targets = ["functional-design", "nfr-design", "infrastructure-design"];
+    const shipped = new Map(targets.map((slug) => [
+      slug,
+      readFileSync(join(CLAUDE_DIST, "aidlc-common", "stages", "construction", `${slug}.md`), "utf-8"),
+    ]));
+    const { drops, proj } = composeSynthetic("syn-kinds", {
+      "scopes/syn-kinds.md": scope,
+      ...Object.fromEntries(targets.map((slug) => [`contributions/construction/${slug}.md`, contrib(slug)])),
+    });
+    expect(drops).toBe("");
+    expect(stage(proj, "functional-design")?.produces_kinds?.["syn-kinds-notes"])
+      .toEqual(["service", "spec", "ui", "library"]);
+    expect(stage(proj, "infrastructure-design")?.produces_kinds?.["syn-kinds-notes"])
+      .toEqual(["service", "ui", "packaging", "library"]);
+    expect(stage(proj, "nfr-design")?.produces).toContain("syn-kinds-notes");
+    expect(stage(proj, "nfr-design")?.produces_kinds?.["syn-kinds-notes"]).toBeUndefined();
+    // The entry travels with the output, so the sidecar records the output only.
+    const sidecarPath = join(proj, ".claude", "tools", "data", "plugin-contrib-syn-kinds.json");
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
+    for (const slug of targets) expect(sidecar[slug]).toEqual({ produces: ["syn-kinds-notes"] });
+
+    // The next session's compose finds it all in place and writes nothing.
+    const composed = new Map(targets.map((slug) => [slug, readFileSync(stageSourcePath(proj, "construction", slug), "utf-8")]));
+    const root = join(proj, "_plugin-syn-kinds");
+    const again = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(again.status).toBe(0);
+    expect(hookDrops(proj)).toBe("");
+    for (const slug of targets) {
+      expect(readFileSync(stageSourcePath(proj, "construction", slug), "utf-8"), slug).toBe(composed.get(slug)!);
+    }
+
+    const strip = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(strip.status, strip.stderr).toBe(0);
+    for (const slug of targets) {
+      expect(readFileSync(stageSourcePath(proj, "construction", slug), "utf-8"), slug).toBe(shipped.get(slug)!);
+    }
+    expect(existsSync(sidecarPath)).toBe(false);
+  });
+
+  test("adds.produces on an engine without the produces_kinds rule skips the output it cannot give an entry, and composes the rest", () => {
+    // Only the engine that strips the entry writes it. On an older one the
+    // functional-design output would fail the compile and roll the whole plugin
+    // back, so compose skips it with a drop. frontend-components, which the
+    // stage maps itself, and the nfr-design output, which needs no entry, land.
+    const contrib = (target: string, outputs: string[]) => [
+      "---", `target: ${target}`, "plugin: syn-kinds-old",
+      "adds:", "  produces:", ...outputs.map((name) => `    - ${name}`),
+      "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-kinds-old",
+      {
+        "contributions/construction/functional-design.md":
+          contrib("functional-design", ["syn-kinds-old-notes", "frontend-components"]),
+        "contributions/construction/nfr-design.md": contrib("nfr-design", ["syn-kinds-old-notes"]),
+      },
+      ".claude",
+      (_proj, harnessDir) => {
+        // An older engine has no addPluginProducesKinds. The module stays, as
+        // the installed aidlc-plugin.ts imports its strip half.
+        const tools = join(harnessDir, "tools");
+        cpSync(join(tools, "aidlc-plugin-produces-kinds.ts"), join(tools, "aidlc-plugin-produces-kinds-real.ts"));
+        writeFileSync(
+          join(tools, "aidlc-plugin-produces-kinds.ts"),
+          'export { removeOrphanProducesKinds } from "./aidlc-plugin-produces-kinds-real.ts";\n',
+        );
+      },
+    );
+    expect(drops).toContain(
+      "contribution to functional-design: adds.produces syn-kinds-old-notes would make the stage apply to Unit kinds its review target does not cover",
+    );
+    expect(drops).not.toContain("aidlc-graph compile failed");
+    expect(stage(proj, "functional-design")?.produces).not.toContain("syn-kinds-old-notes");
+    expect(stage(proj, "functional-design")?.produces).toContain("frontend-components");
+    expect(stage(proj, "nfr-design")?.produces).toContain("syn-kinds-old-notes");
+    // The sidecar records what landed, so a disable strips exactly that.
+    const sidecar = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-kinds-old.json"), "utf-8"));
+    expect(sidecar["functional-design"]).toEqual({ produces: ["frontend-components"] });
+    expect(sidecar["nfr-design"]).toEqual({ produces: ["syn-kinds-old-notes"] });
+  });
+
+  test("adds.produces skips an output the stage would still refuse with its entries, and composes the rest", () => {
+    // An installed functional-design with optional outputs of its own: one with
+    // no entry, which a plugin output gets none for, and one whose entry
+    // reaches past functional-spec, which widens the stage however it lands.
+    const contrib = (target: string, outputs: string[]) => [
+      "---", `target: ${target}`, "plugin: syn-kinds-refused",
+      "adds:", "  produces:", ...outputs.map((name) => `    - ${name}`),
+      "---", "",
+    ].join("\n");
+    const cases: Array<[string[], string]> = [
+      [["syn-kinds-local", "syn-kinds-refused-notes"], "syn-kinds-local"],
+      [["syn-kinds-refused-notes", "syn-kinds-wide"], "syn-kinds-refused-notes, syn-kinds-wide"],
+    ];
+    for (const [outputs, skipped] of cases) {
+      const { drops, proj } = composeSynthetic(
+        "syn-kinds-refused",
+        {
+          "contributions/construction/functional-design.md": contrib("functional-design", outputs),
+          "contributions/construction/nfr-design.md": contrib("nfr-design", ["syn-kinds-refused-notes"]),
+        },
+        ".claude",
+        (_proj, harnessDir) => {
+          const path = join(harnessDir, "aidlc-common", "stages", "construction", "functional-design.md");
+          writeFileSync(path, readFileSync(path, "utf-8")
+            .replace("  - frontend-components\n", "  - frontend-components\n  - syn-kinds-local\n  - syn-kinds-wide\n")
+            .replace("  frontend-components: [ui]\n", "  frontend-components: [ui]\n  syn-kinds-wide: [packaging]\n"));
+        },
+      );
+      expect(drops, skipped).toContain(
+        `contribution to functional-design: adds.produces ${skipped} would make the stage apply to Unit kinds its review target does not cover; skipped`,
+      );
+      expect(drops, skipped).not.toContain("aidlc-graph compile failed");
+      const landed = outputs.filter((name) => !skipped.split(", ").includes(name));
+      const produces = stage(proj, "functional-design")?.produces ?? [];
+      for (const name of outputs) expect(produces.includes(name), `${skipped}: ${name}`).toBe(landed.includes(name));
+      expect(stage(proj, "nfr-design")?.produces, skipped).toContain("syn-kinds-refused-notes");
+      const sidecar = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-kinds-refused.json"), "utf-8"));
+      expect(sidecar["functional-design"]?.produces, skipped).toEqual(landed.length > 0 ? landed : undefined);
     }
   });
 

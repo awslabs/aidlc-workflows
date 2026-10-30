@@ -171,6 +171,7 @@ import {
   stripRecordedAdds,
 } from "./aidlc-plugin.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
+import { addPluginProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
@@ -7221,7 +7222,13 @@ function prepareRefreshSource(
       const rank = (item: string): number => order.includes(item) ? order.indexOf(item) : order.length;
       return [...items].sort((left, right) => rank(left) - rank(right));
     };
-    fresh = mergeListField(fresh, "produces", inFileOrder("produces", record.produces ?? []));
+    // Compute the plugin's produces_kinds entries from the incoming stage, as
+    // compose would write them on that stage; an output the incoming stage
+    // already ships is core's and gets no entry.
+    const shippedProduces = listFieldItems(fresh, "produces");
+    const pluginProduces = inFileOrder("produces", record.produces ?? []);
+    fresh = mergeListField(fresh, "produces", pluginProduces);
+    fresh = addPluginProducesKinds(fresh, pluginProduces.filter((name) => !shippedProduces.includes(name)));
     fresh = mergeListField(fresh, "sensors", inFileOrder("sensors", record.sensors ?? []));
     fresh = mergeListField(fresh, "scopes", inFileOrder("scopes", record.scopes ?? []));
     fresh = removeListItems(fresh, "requires_stage", staleEdges);

@@ -32,6 +32,7 @@ import {
   resolveProjectDir,
   validScopes,
 } from "./aidlc-lib.ts";
+import { removeOrphanProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
 import { type PluginCommandSkip, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import {
@@ -1504,6 +1505,7 @@ export function stripRecordedAdds(content: string, record: StageContribRecord): 
     const items = record[field];
     if (items?.length) value = removeRecordedValues(value, field, new Set(items), false);
   }
+  if (record.produces?.length) value = removeOrphanProducesKinds(value, record.produces);
   if (record.consumes?.length) {
     const artifacts = record.consumes.flatMap((entry) =>
       typeof entry === "string"
