@@ -678,7 +678,7 @@ describe("a skip the person asks for at the walk's first stage, while a Unit is 
     const undo = /If they later ask to undo skipping it for every Unit, run `([^`]*)`/.exec(String(step.message))?.[1] ?? "";
     const late = runNamed(proj, undo);
     expect(late.status).not.toBe(0);
-    expect(late.out).toContain("Completed");
+    expect(late.out).toContain("this work is finished");
   });
 
   // Words that name another Unit are neither this Unit nor every Unit: that

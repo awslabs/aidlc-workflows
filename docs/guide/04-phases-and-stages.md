@@ -428,7 +428,6 @@ flowchart TD
     S46 -.->|CONDITIONAL| S47
 
     S47 -->|"Approve"| DONE(["Workflow Complete"])
-    S47 -->|"Start New Cycle"| IDEATION(["Return to Ideation 1.1"])
 
     style S41 fill:#fce4ec,stroke:#c62828,color:#000
     style S42 fill:#fce4ec,stroke:#c62828,color:#000
@@ -438,10 +437,9 @@ flowchart TD
     style S46 fill:#fce4ec,stroke:#c62828,color:#000
     style S47 fill:#fce4ec,stroke:#c62828,color:#000
     style DONE fill:#a5d6a7,stroke:#2e7d32,color:#000
-    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
 ```
 
-<!-- Text fallback: All Operation stages are CONDITIONAL. 4.1 through 4.7 flow sequentially. Stage 4.7 can either complete the workflow or loop back to start a new Ideation cycle at 1.1. -->
+<!-- Text fallback: All Operation stages are CONDITIONAL. 4.1 through 4.7 flow sequentially. On approval of Stage 4.7 the workflow is complete. -->
 
 | # | Stage | Lead | Supporting | Key Artifacts | Condition |
 |---|-------|------|-----------|---------------|-----------|
@@ -456,7 +454,6 @@ flowchart TD
 **Key behaviors:**
 - All 7 stages are **conditional** — the entire phase may be skipped for `mvp` and `poc` scopes
 - Stage 4.7 is the **terminal stage** — on approval, the workflow is complete
-- The **feedback loop** from 4.7 back to 1.1 enables iterative development cycles
 
 ---
 

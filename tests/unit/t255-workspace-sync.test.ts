@@ -39,6 +39,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -46,7 +47,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseWorkspaceManifest } from "../../core/tools/aidlc-workspace-manifest.ts";
 import { maskUserinfo, renameRetryingOnWindows } from "../../core/tools/aidlc-workspace-sync.ts";
 
@@ -1849,4 +1850,113 @@ describe("t255 workspace-sync - a folder move on Windows", () => {
       await releasedAgain;
     },
   );
+});
+
+// Another sync, a second chat or another computer can put a file or a clone at
+// a name between this sync's look and its install. Nothing of theirs is
+// replaced; this sync rolls back and says what happened in one line.
+describe("t255 workspace-sync - another writer at the moment of install", () => {
+  // Runs the tool in a child whose node:fs puts the other writer's file or
+  // folder in place at the named moment, then lets the real call meet it.
+  function syncWithWriter(ws: string, moment: "claim" | "clone-move"): { status: number; out: string } {
+    const r = spawnSync(BUN, ["--eval", `
+      import { mock } from "bun:test";
+      import { basename, join } from "node:path";
+      const fs = { ...await import("node:fs") };
+      let done = false;
+      const other = (path, write) => {
+        if (done) return;
+        done = true;
+        write(String(path));
+      };
+      mock.module("node:fs", () => ({
+        ...fs,
+        openSync(path, flags, ...rest) {
+          if (${JSON.stringify(moment)} === "claim" && flags === "wx" && basename(String(path)) === ".gitignore") {
+            other(path, (p) => fs.writeFileSync(p, "# theirs\\n"));
+          }
+          return fs.openSync(path, flags, ...rest);
+        },
+        linkSync(from, to) {
+          if (${JSON.stringify(moment)} === "claim" && basename(String(to)) === ".gitignore") {
+            other(to, (p) => fs.writeFileSync(p, "# theirs\\n"));
+          }
+          return fs.linkSync(from, to);
+        },
+        renameSync(from, to) {
+          if (${JSON.stringify(moment)} === "clone-move" && basename(String(to)) === "checkout-api" &&
+              String(from).includes("clones")) {
+            other(to, (p) => { fs.mkdirSync(p); fs.writeFileSync(join(p, "theirs"), "x"); });
+          }
+          return fs.renameSync(from, to);
+        },
+      }));
+      const sync = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});
+      sync.main(["--project-dir", ${JSON.stringify(ws)}]);
+    `], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: ws,
+      encoding: "utf-8",
+      env: GIT_ENV,
+    });
+    return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  test("a generated file another writer makes as this sync installs it is kept, and this sync rolls back", () => {
+    const ws = freshWorkspace(MANIFEST);
+    const result = syncWithWriter(ws, "claim");
+    expect(result.status, result.out).toBe(1);
+    expect(result.out).toContain(
+      `${join(realpathSync(ws), ".gitignore")} changed while workspace-sync was staging; no generated files were replaced`,
+    );
+    expect(result.out).not.toContain("EEXIST");
+    expect(readFileSync(join(ws, ".gitignore"), "utf-8")).toBe("# theirs\n");
+    expect(existsSync(join(ws, CODE_WORKSPACE_NAME))).toBe(false);
+  });
+
+  test("a clone another sync puts in place after this sync's look is kept, and this sync rolls back", () => {
+    const sourceWs = freshRealWorkspace('{ "org": "acme", "repos": [] }');
+    const source = makeRepo(sourceWs, "source");
+    const remote = git(source, "remote", "get-url", "origin");
+    const ws = freshRealWorkspace(
+      JSON.stringify({ org: "acme", repos: [{ name: "checkout-api", branch: "main", url: remote }] }),
+    );
+    const result = syncWithWriter(ws, "clone-move");
+    expect(result.status, result.out).toBe(1);
+    expect(result.out).toContain("checkout-api appeared while sync was staging; no changes were applied");
+    expect(result.out).not.toMatch(/ENOTEMPTY|EPERM|EEXIST/);
+    expect(readdirSync(join(ws, "checkout-api"))).toEqual(["theirs"]);
+    expect(existsSync(join(ws, ".gitignore"))).toBe(false);
+    expect(existsSync(join(ws, CODE_WORKSPACE_NAME))).toBe(false);
+  });
+
+  // A sync stopped between claiming a generated file's name and renaming its
+  // bytes over the claim leaves that file empty. The next sync renders from
+  // the empty file, as from a missing one, and keeps the empty one with its
+  // recovery files; the person's own lines from before the stopped sync are in
+  // that sync's .aidlc-workspace-sync-txn-* folder.
+  for (const name of [".gitignore", CODE_WORKSPACE_NAME]) {
+    test(`an empty ${name} a stopped sync left is written whole by the next sync`, () => {
+      const ws = freshWorkspace(MANIFEST);
+      writeFileSync(join(ws, name), "");
+      const result = runSync(ws);
+      expect(result.status, result.out).toBe(0);
+      expect(result.out).toContain("prior generated files retained at");
+      expect(readFileSync(join(ws, ".gitignore"), "utf-8")).toContain("/checkout-api/");
+      expect(JSON.parse(readFileSync(join(ws, CODE_WORKSPACE_NAME), "utf-8")).folders).toEqual([
+        { path: "." }, { path: "checkout-api" }, { path: "checkout-web" },
+      ]);
+      const recovery = readdirSync(ws).find((entry) => entry.startsWith(".aidlc-workspace-sync-recovery-"));
+      const kept = join(ws, recovery!, "generated-file-backups", name === ".gitignore" ? "gitignore" : name);
+      expect(readFileSync(kept, "utf-8")).toBe("");
+    });
+  }
+
+  test("an empty repos.json an add-repo left is never read as no repos, and nothing changes", () => {
+    const ws = freshWorkspace("");
+    const result = runSync(ws);
+    expect(result.status, result.out).toBe(1);
+    expect(result.out).toContain("repos.json is not valid JSON");
+    expect(readdirSync(ws).sort()).toEqual(["checkout-api", "checkout-web", "repos.json"]);
+  });
 });

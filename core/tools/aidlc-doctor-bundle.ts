@@ -486,8 +486,8 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     if (Number.isFinite(completedMs)) prevEndMs = completedMs;
   }
 
-  if (events.length === 0) notes.push("No audit events found — timeline is empty.");
-  if (stateContent === "") notes.push("No state file — status and checkbox cross-checks skipped.");
+  if (events.length === 0) notes.push("No audit events found - timeline is empty.");
+  if (stateContent === "") notes.push("No state file - status and checkbox cross-checks skipped.");
 
   return {
     stages,
@@ -1323,7 +1323,7 @@ function truncatePlaceholder(relPath: string, originalBytes: number, reason: str
   if (relPath.endsWith(".json")) {
     return JSON.stringify({ truncated: true, reason, originalBytes }, null, 2);
   }
-  return `[TRUNCATED: ${reason} — original ${originalBytes} bytes]\n`;
+  return `[TRUNCATED: ${reason} - original ${originalBytes} bytes]\n`;
 }
 
 function stage(relPath: string, rawContent: string, ctx: RedactionContext): StagedFile {
@@ -1494,7 +1494,7 @@ function renderReportMd(timeline: Timeline, findings: DoctorFinding[], intentHas
       L.push("");
       if (f.remedy) {
         L.push(`Remedy: ${f.remedy}`);
-        if (!f.safeToAutomate) L.push(`(Not safe to automate — run this yourself after confirming.)`);
+        if (!f.safeToAutomate) L.push(`(Not safe to automate - run this yourself after confirming.)`);
         L.push("");
       }
     }

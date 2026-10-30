@@ -281,7 +281,7 @@ if (payloadSessionId) {
   // rollout names the root itself, which noteHelperSession ignores). Note the
   // pair once, from the thread's first event, so an engine command run in that
   // thread resolves to this chat and not to whatever the shared cursor names
-  // (aidlc-lib resolveInvokingSessionId reads it).
+  // (aidlc-record-core resolveInvokingSessionId reads it).
   const ownThread = typeof codex.agent_id === "string" ? codex.agent_id : rolloutThread(codex.transcript_path);
   if (ownThread !== null) noteHelperSession(projectDir, payloadSessionId, ownThread);
 }
@@ -605,7 +605,7 @@ function reconcilePriorSession(): void {
         // exists). Emit SESSION_ENDED through the byte-shared core hook with
         // inferred provenance; the back-dating is carried in the reason.
         const reason =
-          `inferred — Codex has no SessionEnd event (D-4); reconciled at next ` +
+          `inferred - Codex has no SessionEnd event (D-4); reconciled at next ` +
           `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
         runCore(
           "aidlc-session-end.ts",

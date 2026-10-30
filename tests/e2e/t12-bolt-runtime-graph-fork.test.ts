@@ -110,7 +110,7 @@ function wtFragment(proj: string, slug: string): string {
   );
 }
 
-/** Worktree directory for a Bolt slug (worktreePath, aidlc-lib.ts). */
+/** Worktree directory for a Bolt slug (worktreePath, aidlc-record-core.ts). */
 function wtDir(proj: string, slug: string): string {
   return worktreePath(proj, fixtureIntentId8(proj), slug);
 }

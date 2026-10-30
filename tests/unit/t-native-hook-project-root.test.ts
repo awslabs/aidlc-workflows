@@ -1,11 +1,15 @@
-// covers: hook:aidlc-session-start, hook:aidlc-record-human-turn, function:resolveProjectDirFromHook
+// covers: hook:aidlc-session-start, hook:aidlc-record-human-turn, function:resolveProjectDirFromHook,
+// function:hookSessionProjectDir
 // A compiled engine loads its hooks and adapters from the runtime payload
 // beside the executable. Kiro IDE and Kiro CLI fire them from the project
 // directory and set no project variable, so the project must come from that
 // directory:
 // state written through a payload path lands in the install and never in the
 // project, and the approval gate never sees the human's turn. Claude names its
-// project in CLAUDE_PROJECT_DIR, which must keep winning over the directory.
+// project in CLAUDE_PROJECT_DIR, which must keep winning over the directory,
+// except for a session its hook payload places in another worktree of that
+// project (Claude Code's desktop app names the main checkout for a worktree
+// session), and never for a worktree AI-DLC made for a swarm Unit.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -247,5 +251,68 @@ describe("compiled hook routes resolve the project from the host", () => {
     expect(result.code, result.stderr).toBe(0);
     expect(auditRows(project)).toContain("HUMAN_TURN");
     expect(snapshot(payload)).toEqual(before);
+  });
+});
+
+function commit(project: string): void {
+  for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "project"]]) {
+    const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], {
+      cwd: project,
+      encoding: "utf-8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  }
+}
+
+function worktree(project: string, path: string, branch: string): string {
+  const result = spawnSync("git", ["worktree", "add", "-q", path, "-b", branch], { cwd: project, encoding: "utf-8" });
+  expect(result.status, result.stderr).toBe(0);
+  return path;
+}
+
+describe("a Claude hook from the main checkout follows the session's worktree", () => {
+  test("the desktop app's worktree session writes its worktree, on its pin", () => {
+    // The main checkout declares a release this machine never registered; the
+    // worktree the session works in declares none.
+    const main = fixture("claude");
+    commit(main);
+    const wt = worktree(main, mkdtempSync(join(scratch, "wt-")), "feature");
+    writeFileSync(join(main, ".aidlc-version"), "2.11.1-preview.20261013.999\n");
+    const machine = mkdtempSync(join(scratch, "machine-"));
+    const env = { CLAUDE_PROJECT_DIR: main, AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    const inWorktree = run(main, ["engine", "hook", "session-start"], { ...sessionStart, cwd: wt }, env);
+    expect(inWorktree.stderr).not.toContain("pin is not registered");
+    expect(inWorktree.code, inWorktree.stderr).toBe(0);
+    expect(wroteHealth(wt)).toBe(true);
+    expect(wroteHealth(main)).toBe(false);
+    // The main checkout's own session still answers to the main checkout's pin.
+    const inMain = run(main, ["engine", "hook", "session-start"], { ...sessionStart, cwd: main }, env);
+    expect(inMain.stderr).toContain("this project's 2.11.1-preview.20261013.999 pin is not registered on this machine");
+  });
+
+  test("a conductor's kept cd into a swarm Unit's worktree keeps the person's turn in the project", () => {
+    // Claude Code keeps a `cd`, so the payload and the hook's own directory
+    // name the Unit's worktree; the transcript says the session started in the
+    // project folder.
+    const main = fixture("claude");
+    commit(main);
+    const bolt = worktree(main, join(main, ".aidlc", "worktrees", "bolt-alpha"), "bolt-alpha");
+    mkdirSync(join(bolt, ".aidlc"), { recursive: true });
+    writeFileSync(join(bolt, ".aidlc", "worktree-meta.json"), JSON.stringify({ version: 1, swarmUnit: "alpha" }));
+    const transcript = join(scratch, `${main.split(/[\\/]/).pop()}.jsonl`);
+    writeFileSync(transcript, [main, bolt].map((cwd) => JSON.stringify({ type: "user", cwd })).join("\n") + "\n");
+    // With the transcript, and without one (a host that sends none).
+    for (const [index, session] of [{ transcript_path: transcript }, {}].entries()) {
+      const result = run(
+        main,
+        ["engine", "hook", "record-human-turn"],
+        { ...prompt, ...session, prompt: `Continue, turn ${index}`, cwd: bolt },
+        { CLAUDE_PROJECT_DIR: main },
+        bolt,
+      );
+      expect(result.code, result.stderr).toBe(0);
+      expect(auditRows(main).match(/HUMAN_TURN/g)?.length ?? 0).toBe(index + 1);
+      expect(auditRows(bolt)).not.toContain("HUMAN_TURN");
+    }
   });
 });

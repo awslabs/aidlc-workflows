@@ -14,16 +14,29 @@
 // The copy opens no file of another unit, not even one the unit's design names
 // as an integration point: the reviewer notes that point as a finding instead.
 
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type AuditShardEvent,
+  attemptEventDefinitelyBefore,
+  auditBlockField,
   decideFence,
+  gateEventMatchesUnit,
   installedKiroLayout,
+  isScopedReviewCopy,
+  maximalAttemptEvents,
+  readAuditShardEvents,
+  recordDir,
   recordHookDrop,
   relativeRecordDir,
   resolveProjectFlag,
+  reviewRequestBindingFromBlock,
+  reviewRequestReplaces,
   scopedReviewCopyName,
+  sortAttemptEvents,
   swarmWorkerWorktreeMeta,
+  unitGateStatus,
+  withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
@@ -198,5 +211,116 @@ export function removeReviewCopy(projectDir: string, requestId: string | null | 
     rmSync(join(writableAgentsDir(projectDir), `${copyName}.md`), { force: true });
   } catch {
     // A copy left behind is dispatched by nobody: its request is closed.
+  }
+}
+
+// Whether a copy's review is over for good, on what the record's ledger shows
+// after the request's latest rows (a retry included; rows whose order is not
+// known are all latest): its verdict, a request that replaces it, or the
+// person approving the Unit or the whole stage, even when the Unit was opened
+// again since. An approval over an unfinished review keeps the request open,
+// so a verdict that comes in later is still recorded; only the copy goes,
+// since nothing dispatches it again. Nothing else retires a copy: a review
+// sent back (Request Changes, a jump back) keeps it until one of those is
+// recorded. A request of the main workflow reads no row of an isolated stage
+// run (`--single`), whose approvals are its own, and an isolated run's copy
+// goes with its verdict or replacement only.
+function reviewCopyRetired(projectDir: string, rows: readonly AuditShardEvent[], latest: readonly AuditShardEvent[]): boolean {
+  const request = latest[0];
+  const requestId = auditBlockField(request.block, "Request Id");
+  const stage = auditBlockField(request.block, "Stage");
+  const unit = auditBlockField(request.block, "Unit");
+  if (requestId === null || stage === null || unit === null) return false;
+  const binding = reviewRequestBindingFromBlock(request.block);
+  const after = sortAttemptEvents(rows.filter((row) => latest.every((mine) => attemptEventDefinitelyBefore(mine, row))));
+  const closed = after.some((row) =>
+    (row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Request Id") === requestId) ||
+    (row.event === "REVIEW_REQUESTED" && reviewRequestReplaces(row.block, { binding })));
+  if (closed) return true;
+  const isolated = (row: AuditShardEvent) => auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") === true;
+  if (latest.some(isolated)) return false;
+  const main = after.filter((row) => !isolated(row));
+  // A stage gate's approval names no Unit and no checkpoint; a batch of Units
+  // built side by side is approved as a checkpoint naming its Units.
+  if (main.some((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Checkpoint") === null &&
+    gateEventMatchesUnit(row.block, stage, undefined))) return true;
+  // The Unit as it stood at each of its approvals since, with the rows another
+  // clone's log holds for that same second (their order against it is not
+  // known): a later reopen does not bring the review back.
+  const notIsolated = rows.filter((row) => !isolated(row));
+  return main.some((row) => {
+    if (row.event !== "GATE_APPROVED" || !gateEventMatchesUnit(row.block, stage, unit)) return false;
+    const upTo = sortAttemptEvents([
+      ...main.filter((other) => !attemptEventDefinitelyBefore(row, other)),
+      ...notIsolated.filter((other) => other.timestamp === row.timestamp && other.shard !== row.shard && !main.includes(other)),
+    ]);
+    return (["per-stage", "unit-end"] as const).some((scope) =>
+      unitGateStatus(projectDir, stage, unit, scope, upTo) === "approved");
+  });
+}
+
+/**
+ * Remove the reviewer copies of reviews that are over for good
+ * (reviewCopyRetired), so a review that never got its verdict does not leave
+ * its copy in Kiro's agent list: run when a chat starts and at each review
+ * request and verdict, on the record that chat or command works in. A copy a
+ * review in another chat may still dispatch is kept: the ledger cannot tell a
+ * chat that was closed from one still running. The ledger is read and the
+ * copies removed under the record's audit lock, so a retry recorded meanwhile
+ * (the same request, its copy written again) is read before its copy is
+ * judged. Kiro (kiro-ide) only; best effort. Every copy is kept when the
+ * lock is busy for more than a second, the ledger cannot be read whole, or the
+ * record is not the one the engine reads for this folder (the Unit and gate
+ * readers take that one).
+ */
+export function sweepReviewCopies(projectDir: string, record: { intent?: string; space?: string } = {}): void {
+  const { intent, space } = record;
+  try {
+    if (installedKiroLayout(projectDir) !== "kas") return;
+    const agents = writableAgentsDir(projectDir);
+    // lstat, not the folder listing's file type: some mounts report none.
+    const copies = readdirSync(agents)
+      .filter((name) => {
+        if (!name.endsWith(".md") || !isScopedReviewCopy(name)) return false;
+        try {
+          return lstatSync(join(agents, name)).isFile();
+        } catch {
+          // Gone, or being removed by another chat: not this sweep's.
+          return false;
+        }
+      })
+      .map((name) => name.slice(0, -".md".length));
+    if (copies.length === 0) return;
+    // Ten tries a tenth of a second apart: a chat's start does not wait on
+    // another chat's long command for the lock.
+    withAuditLock(projectDir, () => {
+      if (recordDir(projectDir, intent, space) !== recordDir(projectDir)) return;
+      const unreadable: string[] = [];
+      const rows = readAuditShardEvents(projectDir, intent, space, unreadable);
+      if (unreadable.length > 0) return;
+      // Each copy's request rows; a name two request ids share is no one's.
+      const requests = new Map<string, AuditShardEvent[] | null>();
+      for (const row of rows) {
+        if (row.event !== "REVIEW_REQUESTED") continue;
+        const id = auditBlockField(row.block, "Request Id");
+        const name = id === null ? null : scopedReviewCopyName(id);
+        if (name === null) continue;
+        const seen = requests.get(name);
+        if (seen === undefined) requests.set(name, [row]);
+        else if (seen !== null && auditBlockField(seen[0].block, "Request Id") === id) seen.push(row);
+        else requests.set(name, null);
+      }
+      for (const copyName of copies) {
+        const own = requests.get(copyName);
+        if (!own) continue;
+        try {
+          if (reviewCopyRetired(projectDir, rows, maximalAttemptEvents(own))) rmSync(join(agents, `${copyName}.md`), { force: true });
+        } catch {
+          // This copy stays; the next sweep reads it again.
+        }
+      }
+    }, intent, space, 10);
+  } catch {
+    // Nothing removed: the copies are AI-DLC's own gitignored files.
   }
 }

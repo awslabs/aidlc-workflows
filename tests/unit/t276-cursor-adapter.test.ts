@@ -4701,6 +4701,34 @@ if (import.meta.main) {
       // Under these policies a build or a test is still the parent's.
       expect(delegateShell("bun test").agent_message ?? "").toContain("have the parent conversation run executable probes");
     }
+    // What the shell reads inside quotes is an argument: a repo folder's name
+    // as AI-DLC quotes it for each shell.
+    const scope = "bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff";
+    for (const repo of [
+      "'lib (copy)'", "'lib [old]'", "'{repo}'", "'a;b'", "'a$b'", "'a`b'", '"lib (copy) [old] {x};"',
+      `'it'"'"'s (old)'`, `"it's (old)"`,
+    ]) {
+      const out = delegateShell(`${scope} --repo ${repo} --mint --paths ./`);
+      expect(out.permission, `${repo}: ${out.agent_message ?? ""}`).toBe("allow");
+    }
+    // Outside quotes they are the shell's, and so are "$" and "`" inside
+    // double quotes.
+    for (const command of [
+      `${scope} --repo 'lib (copy)'; bun -e 'x'`,
+      `${scope} --repo lib(copy) --mint --paths ./`,
+      `${scope} --repo "$(bun -e 'x')" --mint --paths ./`,
+      `${scope} --repo "a\`bun -e x\`" --mint --paths ./`,
+      `${scope} --repo 'lib (copy) --mint --paths ./`,
+      // A POSIX shell reads an escaped double quote inside double quotes;
+      // PowerShell ends a single-quoted word at a typographic apostrophe.
+      process.platform === "win32"
+        ? `${scope} --repo 'a\u2019; bun -e 'x'; \u2019'`
+        : `${scope} --repo "a\\"b"; bun -e 'x'; \\"`,
+    ]) {
+      const out = delegateShell(command);
+      expect(out.permission, command).toBe("deny");
+      expect(out.agent_message ?? "", command).toContain("general-purpose interpreters");
+    }
     expect(ledger()).toEqual(ledgerBefore);
   });
 });

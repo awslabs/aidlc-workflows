@@ -485,6 +485,8 @@ export interface RunStageDirective {
   // it (PrintDirective.revision_cycle and accept_as_is).
   revision_cycle?: number;
   accept_as_is?: "offered" | "next-revision";
+  /** The open gate shown again: its question's id on the record. */
+  question_id?: string;
   /** Exact remaining Unit record commands; the stage body is already written. */
   unit_record_step?: string;
   // Every Unit this per-Unit stage covers was built in the current attempt, so
@@ -645,6 +647,8 @@ interface AskDirectiveBase {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   question: string;
+  /** The question's id on the record (QUESTION_ASKED). */
+  question_id?: string;
   /** QUESTION_NOTE, on every ask that waits for the person. */
   question_note?: string;
   /**
@@ -883,6 +887,8 @@ export interface PrintDirective {
   // the note that it comes after one more round of changes.
   revision_cycle?: number;
   accept_as_is?: "offered" | "next-revision";
+  /** On the reply that opens or shows the gate: its question's id on the record. */
+  question_id?: string;
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -933,6 +939,8 @@ export interface NoticeDirective {
   kind: "notice";
   narration?: NarrationField;
   message: string;
+  /** The claimed Unit the notice says is complete and approved in this checkout. */
+  unit?: string;
 }
 
 // The Directive union — the engine emits exactly one of these per `next`.
@@ -1053,6 +1061,7 @@ const RUN_STAGE_FIELDS = [
   "gate_only",
   "revision_cycle",
   "accept_as_is",
+  "question_id",
   "unit_record_step",
   "build_settled",
   "questions_only",
@@ -1123,6 +1132,7 @@ const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = [
   "kind",
   "question",
+  "question_id",
   "question_note",
   // The request names a document in the project: how to add it to the knowledge
   // base instead of reading it by hand (a live run read a PDF with ad hoc
@@ -1160,11 +1170,13 @@ const ASK_FIELDS = [
   "repo_facts",
   "estimate_note",
 ] as const;
-const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is"] as const;
+const PRINT_FIELDS = [
+  "kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id",
+] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
-const NOTICE_FIELDS = ["kind", "message"] as const;
+const NOTICE_FIELDS = ["kind", "message", "unit"] as const;
 
 // `narration` is legal on EVERY kind, so it is folded into each allowed-key set
 // centrally rather than repeated in eleven literals. A presentation field carries no
@@ -1641,7 +1653,7 @@ export interface AskChoice {
   /** The command that answers the question when this choice is picked; absent when the pick needs one more answer. */
   command?: string;
 }
-const DASH = "\u2014";
+const DASH = "-";
 export const OTHER_OPTION_LINE = `**Other** ${DASH} describe what you want instead`;
 export const NUMBERED_REPLY_HINT = "Reply with a number (or just tell me).";
 export function numberedOptionLine(index: number, label: string, detail?: string): string {
@@ -2024,6 +2036,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "ask": {
       checkString(o, "question", kind, errors);
+      checkOptionalQuestionId(o, kind, errors);
       checkString(o, "ask_type", kind, errors);
       checkString(o, "response_route", kind, errors);
       checkOptionalString(o, "confirm_command", kind, errors);
@@ -2284,6 +2297,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkString(o, "message", kind, errors);
       checkOptionalNullableString(o, "next_stage", kind, errors);
       checkOptionalRevisionCycle(o, kind, errors);
+      checkOptionalQuestionId(o, kind, errors);
       break;
     case "error":
       checkString(o, "message", kind, errors);
@@ -2298,6 +2312,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "notice":
       checkString(o, "message", kind, errors);
+      checkOptionalString(o, "unit", kind, errors);
       break;
     // No default: the union is exhaustive — every member of DirectiveKind has a
     // case above. TS flags a missing case at compile time if a kind is added.
@@ -2405,6 +2420,7 @@ function checkRunStageShared(
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
     checkOptionalRevisionCycle(o, kind, errors);
+    checkOptionalQuestionId(o, kind, errors);
     checkOptionalString(o, "unit_record_step", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
     checkOptionalTrue(o, "questions_only", kind, errors);
@@ -3137,6 +3153,15 @@ function checkOptionalPositiveInteger(
   }
 }
 
+// The id of the question a step asks or shows again (aidlc-questions.ts): the
+// record's own, eight lowercase hex digits.
+function checkOptionalQuestionId(o: Record<string, unknown>, kind: DirectiveKind, errors: string[]): void {
+  if (!("question_id" in o)) return;
+  if (typeof o.question_id !== "string" || !/^[0-9a-f]{8}$/.test(o.question_id)) {
+    errors.push(`${kind}: question_id must be eight lowercase hex digits, got ${describe(o.question_id)}`);
+  }
+}
+
 // The gate's change-request count and what it opens, on the reply or step
 // that shows the gate.
 function checkOptionalRevisionCycle(
@@ -3805,7 +3830,7 @@ if (import.meta.main) {
     },
     { kind: "print", message: "AIDLC framework version 0.0.0" },
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
-    { kind: "done", reason: "Workflow complete — all in-scope stages approved." },
+    { kind: "done", reason: "Workflow complete - all in-scope stages approved." },
     { kind: "parked", reason: 'Workflow parked at "feasibility". Resume with /aidlc --resume.', stage: "feasibility" },
     { kind: "notice", message: "Team Unit fan-out is active." },
     // The classify-round-trip skeleton case: gate is the unresolved sentinel,
@@ -3840,7 +3865,7 @@ if (import.meta.main) {
       console.log(`${ex.kind}: VALID`);
     } else {
       allValid = false;
-      console.log(`${ex.kind}: INVALID — ${r.errors.join("; ")}`);
+      console.log(`${ex.kind}: INVALID - ${r.errors.join("; ")}`);
     }
   }
   process.exit(allValid ? 0 : 1);

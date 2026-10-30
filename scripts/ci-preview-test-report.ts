@@ -8,6 +8,7 @@
 import fs from "node:fs";
 import { basename, join } from "node:path";
 import { unmetLegs } from "./ci-full-suite-result.ts";
+import { previewPlanJson, readPreviewPlan } from "./preview-release.ts";
 
 const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z-p\d+$/;
 const FAILED_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required", "startup_failure"]);
@@ -351,7 +352,7 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
     console.error("Usage: bun scripts/ci-preview-test-report.ts --stage-notes <plan-json> <report-md>");
     process.exit(1);
   }
-  const plan = JSON.parse(fs.readFileSync(planPath, "utf8")) as { notes: { body: string } };
+  const plan = readPreviewPlan(planPath);
   // Called for a failed suite unless FULL_SUITE_RESULT says it passed.
   const update = process.env.UPDATE_RESULT;
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
@@ -361,7 +362,7 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
       ? { updateRunUrl: `${server}/${process.env.GITHUB_REPOSITORY ?? ""}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}` }
       : {}),
   });
-  await Bun.write(planPath, `${JSON.stringify(plan)}\n`);
+  await Bun.write(planPath, previewPlanJson(plan));
 } else if (import.meta.main) {
   const [evidenceDir, jobsPath, outputPath] = process.argv.slice(2);
   if (!evidenceDir || !jobsPath || !outputPath || process.argv.length !== 5) {

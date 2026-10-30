@@ -100,7 +100,6 @@ const SKILLS_DIR = IS_COPILOT
     ? join(PROJECT_DIR, ".agents", "skills")
     : join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
-const NATIVE_RUNTIME = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim());
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
@@ -139,6 +138,11 @@ const copyChannelTokens: ProjectTokens = (text, harnessDir) => text
 const projectPluginTokens: ProjectTokens = await import(join(HARNESS_DIR, "tools", "aidlc-command.ts"))
   .then((m) => typeof m.projectInvocationTokens === "function" ? m.projectInvocationTokens as ProjectTokens : copyChannelTokens)
   .catch(() => copyChannelTokens);
+// The person runs AI-DLC as `aidlc`: the installed tree was set up for it
+// (`aidlc plugin test` runs compose as Bun, in a copy of a native project). A
+// tree from before projectInvocationTokens has only the compiled engine's word.
+const NATIVE_CHANNEL = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim()) ||
+  projectPluginTokens(tokenName("INVOKE"), HARNESS_LEAF) === "aidlc";
 
 let installedLibPromise: Promise<InstalledAidlcLib | null> | null = null;
 let installedSchemaPromise: Promise<InstalledStageSchema | null> | null = null;
@@ -412,7 +416,7 @@ function selectCommandForPlugin(): string {
   const names = new Set<string>(selected ?? ["aidlc"]);
   names.add(PLUGIN_NAME);
   const selection = [...names].sort().join(",");
-  return NATIVE_RUNTIME
+  return NATIVE_CHANNEL
     ? `aidlc engine plugin select ${selection}`
     : `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${selection}`;
 }
@@ -672,8 +676,13 @@ function sameButKnowledgePreflight(installed: Buffer, current: Buffer): boolean 
 }
 
 if (!pluginEnabledBySelection()) {
+  // The plugin test tool composes into a copy and sets this when the project
+  // it copied does not have the plugin: the select knows only installed plugins.
+  const installFirst = process.env.AIDLC_PLUGIN_TEST_NOT_INSTALLED === "1"
+    ? `${PLUGIN_NAME} is not installed in this project yet: install it there first, then `
+    : "";
   recordDrop(
-    `plugin "${PLUGIN_NAME}" composed but is not enabled by tools/data/harness.json; run \`${selectCommandForPlugin()}\` to expose its stages, scopes, and runners`,
+    `plugin "${PLUGIN_NAME}" composed but is not enabled by tools/data/harness.json; ${installFirst}run \`${selectCommandForPlugin()}\` to expose its stages, scopes, and runners`,
     "advisory",
   );
 }

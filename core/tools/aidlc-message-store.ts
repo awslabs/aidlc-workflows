@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  allowMainCheckoutChangeCommand,
   APPROVED_TOGETHER_WITH_FIELD,
   auditBlockField,
   type AuditShardEvent,
@@ -12,6 +13,7 @@ import {
   isReplyTurn,
   isRequestTurn,
   rowsAfterMark,
+  mainCheckoutHeldByTeam,
   MESSAGE_SPENDING_EVENTS,
   type PersonsWords,
   promptHookRanRecently,
@@ -487,12 +489,27 @@ export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ 
 }
 
 // The step a refused request leads with: the agent names the message that asked
-// for it, when one of theirs can stand behind it, else `otherwise`.
-export function requestMessageStep(pd: string, otherwise: string, kind: RequestKind = "any"): string {
+// for it, when one of theirs can stand behind it, else `otherwise`. `command` is
+// the one to run with it when that is not the refused command, and `then` what
+// follows it.
+export function requestMessageStep(
+  pd: string, otherwise: string, kind: RequestKind = "any", command = "the same command", then = "",
+): string {
   const named = requestMessages(pd, kind);
   if (named.length === 0) return otherwise;
   return `If their message ${named.map((message) => `${message.id} (sent ${message.at})`).join(" or ")} asked for ` +
-    `it, run the same command with --message <id>. Otherwise: ${otherwise}`;
+    `it, run ${command} with --message <id>${then ? `, then ${then}` : ""}. Otherwise: ${otherwise}`;
+}
+
+// The step for a change in the main checkout that a strict Guard Policy holds
+// while the Units are built in parallel: when the person asked for it, the agent
+// names their message and `swarm allow-change` records it. A strict the team
+// holds in memory keeps the main checkout as approved, and that is said instead.
+export function mainCheckoutChangeStep(pd: string, paths: readonly string[], otherwise: string, then: string): string {
+  const held = mainCheckoutHeldByTeam(pd);
+  return held !== null
+    ? `${held} ${otherwise}`
+    : requestMessageStep(pd, otherwise, "any", `\`${allowMainCheckoutChangeCommand(paths)}\``, then);
 }
 
 // The chat a command serves, when the engine can tell (the hook's override,
@@ -634,6 +651,7 @@ const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
   STAGE_RULES_BLOCKED: true,
   REVIEW_FREEZE_BLOCKED: true,
   REVIEWER_SCOPE_BLOCKED: true,
+  SYSTEM_INSTALL_BLOCKED: true,
 };
 
 // Whether the agent is still carrying out the reply that gave the latest

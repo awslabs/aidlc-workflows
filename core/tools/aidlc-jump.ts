@@ -48,6 +48,9 @@ import {
   answerModeStageStartedFields,
   personsGateReply,
   resolveInvokingSessionId,
+  claimAttemptFields,
+  effectiveUnitGateRhythm,
+  isTeamUnitOwnership,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -306,8 +309,9 @@ function handleReopen(args: string[]): void {
     emitAudit(pd, "GATE_REJECTED", {
       Stage: targetSlug,
       "Gate Stages": stages.join(", "),
-      "Gate Scope": "unit-end",
+      "Gate Scope": isTeamUnitOwnership(content) ? effectiveUnitGateRhythm(pd, content) : "unit-end",
       Unit: unit,
+      ...claimAttemptFields(pd, unit),
       // Marks the row as a redo or the person's jump, or the change they asked
       // for at the gate.
       Reopen: flags.via ?? "jump",

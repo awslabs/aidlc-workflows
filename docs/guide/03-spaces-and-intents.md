@@ -257,6 +257,17 @@ claimed on this machine counts for that Unit's intent; the Unit participant mark
 is checkout-wide and names no intent, so it does not count as joining a
 particular record.
 
+A chat you open while your cursor names a piece of work is on that work: `/aidlc`
+in it carries the work on from where it stands, with nothing asked. On Claude Code,
+Codex CLI, Kiro CLI and opencode, that work's checks (Plan Approval during Code
+Generation, the review freeze) hold the chat from its first AI-DLC step there
+(`/aidlc`, an answer, a review you ask for, a setting you change), so a chat you opened in the same
+folder for something else runs your requests as in a folder with no workflow. On
+Cursor, GitHub Copilot and Kiro IDE (and Kiro CLI v3), a command cannot tell AI-DLC
+which chat it runs in, so there the checks hold the chat from the start. A worktree
+AI-DLC made for the work, or a Unit claimed on this machine, holds the chat from
+the start on every host.
+
 Session identity follows one order:
 
 1. The host session id delivered to a hook.
@@ -525,11 +536,10 @@ an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent
 characters break something AI-DLC relies on, so a folder whose name has one is
 left out of the work, and the first step says which folder and why: `<` `>`
 `:` `"` `|` `?` `*` (Windows cannot hold them in a folder name), `&` `^` `%`
-(AI-DLC's commands on Windows), `(` `)` `[` `]` `{` `}` `;` `$` and a backtick
-(AI-DLC's commands on Cursor), a comma (it separates repo names), an apostrophe
-together with `!` (no one quoting reads both alike in PowerShell and Git Bash on
-Windows), a name that is `-` or starts with `--`, ends with `@checkout`, or starts
-or ends with a space.
+(AI-DLC's commands on Windows), a comma (it separates repo names), an apostrophe
+together with `!`, `$` or a backtick (no one quoting reads both alike in
+PowerShell and Git Bash on Windows), a name that is `-` or starts with `--`, ends
+with `@checkout`, or starts or ends with a space.
 
 ```
 my-project/

@@ -362,7 +362,7 @@ All Ideation phase artifacts from stages 1.1-1.6.
 5. Phase boundary verification (Intent -> Scope -> Intent Backlog consistency).
 6. Verify the handoff and phase-boundary artifacts; do not edit lifecycle
    state directly.
-7. Present the 3-option approval gate. On approval, report the outcome so the
+7. Present the 2-option approval gate. On approval, report the outcome so the
    engine completes the stage and transitions to Inception atomically.
 
 ### Outputs
@@ -381,11 +381,10 @@ Phase boundary verification:
 
 ### Approval Gate
 
-Special 3-option gate:
+Standard 2-option gate:
 
 - **Approve** -- Proceed to Inception phase
 - **Request Changes** -- Provide revision feedback
-- **Reject Initiative** -- End the workflow entirely
 
 ### Notes
 

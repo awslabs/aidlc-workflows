@@ -7,9 +7,9 @@
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   artifactFilename,
   auditShardName,
@@ -28,8 +28,11 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupTestProject,
   createTestProject,
+  intentsDirOf,
   seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
@@ -123,7 +126,7 @@ export function runMergeTool(
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   const reviewUnit = reviewOperation ? args[1] : undefined;
   if (result.status !== 0 && reviewUnit && tracePath &&
-      (out.includes("reviewer READY receipts") || out.includes("candidate-exact"))) {
+      (out.includes("has no review that stands for") || out.includes("candidate-exact"))) {
     console.error(`t326 merge validation failed:\n${JSON.stringify({
       args, status: result.status, signal: result.signal, error: result.error?.message, out,
     }, null, 2)}`);
@@ -136,6 +139,74 @@ export function runMergeTool(
     stdout: result.stdout ?? "",
     out,
   };
+}
+
+// Publish a candidate the way a forger would: a claim commit over whatever
+// the worktree holds, pushed straight to the claim ref with the same
+// compare-and-swap `aidlc unit publish` uses. Publish itself projects the
+// claim-bound audit shard onto the transportable evidence before it builds the
+// candidate tree, so it is not the path that puts a withheld row in front of
+// pin - this is. Pin's own refusals are what this exercises.
+export function pushUnprojectedCandidate(checkout: string, unit: string): void {
+  const stamp = JSON.parse(
+    readFileSync(join(checkout, "aidlc", ".aidlc-unit-scope.json"), "utf-8"),
+  ) as { claim_ref: string };
+  const claimOid = git(checkout, ["ls-remote", "origin", stamp.claim_ref])
+    .split(/\s+/)[0] ?? "";
+  expect(claimOid, `no claim tip at ${stamp.claim_ref} for Unit ${unit}`)
+    .toMatch(/^[0-9a-f]{40}$/);
+  const payload = JSON.parse(
+    git(checkout, ["show", `${claimOid}:.aidlc-unit-claim.json`, "--"]),
+  );
+  const headOid = git(checkout, ["rev-parse", "HEAD"]);
+  const headTree = git(checkout, ["rev-parse", "HEAD^{tree}"]);
+  // Only the candidate identity moves; the claim keeps the base and
+  // integration ref publish already recorded, so pin reads a live candidate.
+  const forged = `${JSON.stringify({
+    ...payload,
+    predecessor_oid: claimOid,
+    candidate_tree_oid: headTree,
+    candidate_head_oid: headOid,
+  }, null, 2)}\n`;
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-inc3-forge-"));
+  tempDirs.push(scratch);
+  const index = join(scratch, "index");
+  const plumb = (args: string[], input?: string): string => {
+    const result = spawnSync("git", args, {
+      cwd: checkout,
+      encoding: "utf-8",
+      input,
+      env: { ...process.env, GIT_INDEX_FILE: index },
+    });
+    if ((result.status ?? 1) !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+    }
+    return (result.stdout ?? "").trim();
+  };
+  plumb(["read-tree", headTree]);
+  const blob = plumb(["hash-object", "-w", "--stdin"], forged);
+  plumb([
+    "update-index",
+    "--add",
+    "--cacheinfo",
+    `100644,${blob},.aidlc-unit-claim.json`,
+  ]);
+  const commit = plumb([
+    "commit-tree",
+    plumb(["write-tree"]),
+    "-p",
+    claimOid,
+    "-p",
+    headOid,
+    "-m",
+    `forged publish: ${unit}`,
+  ]);
+  git(checkout, [
+    "push",
+    "origin",
+    `--force-with-lease=${stamp.claim_ref}:${claimOid}`,
+    `${commit}:${stamp.claim_ref}`,
+  ]);
 }
 
 export function stateBody(): string {
@@ -233,12 +304,11 @@ export function makeSeed(
       'export const right = "base";\n',
   );
   completeUnitOnMain(seed, "skeleton");
+  // The block AI-DLC ships, so the fixture commits exactly what a real
+  // clone's `git add -A` commits (its engine folders stay out).
   writeFileSync(
     join(seed, ".gitignore"),
-    "aidlc/.aidlc-clone-id\naidlc/.aidlc-unit-scope.json\n" +
-      "aidlc/.aidlc-unit-parked\naidlc/.aidlc-claim-generations.json\n" +
-      "aidlc/.aidlc-unit-participant\naidlc/.aidlc-claim-registry.json\n" +
-      "aidlc/.aidlc-unit-releases/\naidlc/.aidlc-unit-merges/\n",
+    readFileSync(join(AIDLC_SRC, "..", ".gitignore"), "utf-8"),
   );
   git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "main"]);
@@ -265,6 +335,10 @@ export function clone(remote: string, label: string): string {
   tempDirs.push(dir);
   git(dir, ["config", "user.name", label]);
   git(dir, ["config", "user.email", `${label}@example.test`]);
+  // The selection is the person's own and stays out of git: in a new clone
+  // they pick the work once.
+  writeFileSync(join(dir, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`);
+  writeFileSync(join(intentsDirOf(dir), "active-intent"), `${DEFAULT_RECORD_DIR}\n`);
   return dir;
 }
 
@@ -294,7 +368,11 @@ export function reviewAuditExtras(
   reviewer: string,
   fingerprint: string,
   nonce: string,
+  // A review the reviewer left NOT-READY, or a later pass of the stage's review.
+  options: { verdict?: "READY" | "NOT-READY"; iteration?: number } = {},
 ): { request: string; completion: string } {
+  const verdict = options.verdict ?? "READY";
+  const iteration = options.iteration ?? 1;
   const requestId = `review:${createHash("sha256").update(nonce).digest("hex").slice(0, 32)}`;
   const attempt = createHash("sha256").update(`attempt:${nonce}`).digest("hex").slice(0, 16);
   const record: ReviewRecord = {
@@ -303,30 +381,30 @@ export function reviewAuditExtras(
     unit,
     workflow: null,
     attempt,
-    iteration: 1,
+    iteration,
     reviewer,
-    verdict: "READY",
+    verdict,
     request_id: requestId,
     request_challenge: null,
     artifact_fingerprint: fingerprint,
     source_fingerprint: null,
     unit_source_fingerprint: null,
     findings: [],
-    body: `**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n`,
+    body: `**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n`,
     recorded_at: "2026-08-20T01:00:00Z",
   };
   const bytes = serializeReviewRecord(record);
-  const path = reviewRecordRelativePath(stage, unit, attempt, 1);
+  const path = reviewRecordRelativePath(stage, unit, attempt, iteration);
   const target = join(seededRecordDir(projectDir), ...path.split("/"));
   mkdirSync(join(target, ".."), { recursive: true });
   writeFileSync(target, bytes);
   return {
     request:
-      `**Reviewer**: ${reviewer}\n**Iteration**: 1\n` +
+      `**Reviewer**: ${reviewer}\n**Iteration**: ${iteration}\n` +
       `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n`,
     completion:
-      `**Reviewer**: ${reviewer}\n**Iteration**: 1\n` +
-      `**Verdict**: READY\n**Request Fingerprint**: ${fingerprint}\n` +
+      `**Reviewer**: ${reviewer}\n**Iteration**: ${iteration}\n` +
+      `**Verdict**: ${verdict}\n**Request Fingerprint**: ${fingerprint}\n` +
       `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n` +
       `**Review Record**: ${path}\n**Review Record Digest**: ${reviewRecordDigest(bytes)}\n`,
   };
@@ -428,6 +506,8 @@ export function prepareCandidate(
   unit: string,
   label: string,
   options: {
+    /** Works the Unit in this existing checkout instead of a fresh clone. */
+    checkout?: string;
     mergeHeld?: boolean;
     sourceText?: string;
     sharedText?: string;
@@ -438,6 +518,24 @@ export function prepareCandidate(
     /** The recorded Plan Approval answer line; the engine's recorder writes the
      *  chosen option with its letter by default. */
     answerLine?: string;
+    /** Claim with the unit-end rhythm: one approval on the last stage, none per stage. */
+    unitEnd?: boolean;
+    /** Claim with the per-stage rhythm by name, as on a main whose own rhythm is unit-end. */
+    perStage?: boolean;
+    /** The per-Unit stages the candidate documents, reviews and approves; all
+     *  five by default. A stage left out is one the Unit's kind owes nothing. */
+    stages?: string[];
+    /** Runs right after claim, before any stage work or audit receipt is
+     *  written - lets a case mint a real event (e.g. a session-start hook)
+     *  into the fresh checkout's shard before anything else exists there. */
+    afterClaim?: (checkout: string) => void;
+    /** Runs after the Unit's commit, right before publish: what a session
+     *  writes into the checkout between the two. */
+    beforePublish?: (checkout: string) => void;
+    /** Runs once the stage documents and receipts are written, before the
+     *  Unit's work is committed and published: a case drives the engine on
+     *  the worked checkout there (a skip of the step it hands out, say). */
+    beforeCommit?: (checkout: string) => void;
   } = {},
 ): {
   checkout: string;
@@ -445,14 +543,22 @@ export function prepareCandidate(
   generation: number;
   auditShard: string;
 } {
-  const checkout = clone(remote, label);
+  const checkout = options.checkout ?? clone(remote, label);
   if (options.crlf) git(checkout, ["config", "core.autocrlf", "false"]);
-  const claim = runMergeTool(UNIT, ["claim", unit, "--team", label], checkout);
+  const claim = runMergeTool(
+    UNIT,
+    [
+      "claim", unit, "--team", label,
+      ...(options.unitEnd ? ["--rhythm", "unit-end"] : options.perStage ? ["--rhythm", "per-stage"] : []),
+    ],
+    checkout,
+  );
   expect(claim.status, claim.out).toBe(0);
+  options.afterClaim?.(checkout);
   const claimPayload = JSON.parse(claim.stdout);
   const generation = claimPayload.generation as number;
   const intentUuid = claimPayload.intent_uuid as string;
-  const stages = [
+  const stages = options.stages ?? [
     "functional-design",
     "nfr-requirements",
     "nfr-design",
@@ -487,6 +593,13 @@ export function prepareCandidate(
   const graph = loadStageGraphAll();
   for (const stageSlug of stages) {
     const stage = graph.find((entry) => entry.slug === stageSlug)!;
+    // The stage's shared diary, as bootstrapDirectiveMemory writes it at the
+    // stage's start, outside the Unit's folder.
+    const diary = join(seededRecordDir(checkout), "construction", stageSlug, "memory.md");
+    if (!existsSync(diary)) {
+      mkdirSync(dirname(diary), { recursive: true });
+      copyFileSync(join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md"), diary);
+    }
     const dir = join(
       seededRecordDir(checkout),
       "construction",
@@ -508,6 +621,8 @@ export function prepareCandidate(
     unit,
     "code-generation",
   );
+  // Its folder too when the stages leave Code Generation out (a case that skips it).
+  mkdirSync(codeDir, { recursive: true });
   const contract = resolveTestingPosture(checkout);
   const plan =
     `# Code Generation Plan\n\n${renderTestingContract(contract)}\n` +
@@ -584,7 +699,7 @@ export function prepareCandidate(
         generation,
         stage,
         `**Details**: Approve Plan\n` +
-          `**Checkpoint**: Code Generation Plan Approval\n` +
+          `**Checkpoint**: plan-approval\n` +
           `**Plan Target**: unit:${unit}\n` +
           `**Intent**: ${intentUuid}\n` +
           `**Directive Epoch**: ${authority.directiveEpoch}\n` +
@@ -625,6 +740,7 @@ export function prepareCandidate(
         review.completion,
       );
     }
+    if (options.unitEnd) continue;
     audit += auditBlock(
       "GATE_APPROVED",
       unit,
@@ -633,10 +749,27 @@ export function prepareCandidate(
       `**Gate Scope**: per-stage\n**Gate Stages**: ${stage}\n**User Input**: Approve\n`,
     );
   }
+  const lastStage = stages[stages.length - 1];
+  if (options.unitEnd && lastStage) {
+    audit += auditBlock(
+      "GATE_APPROVED",
+      unit,
+      generation,
+      lastStage,
+      `**Gate Scope**: unit-end\n**Gate Stages**: ${stages.join(", ")}\n**User Input**: Approve\n`,
+    );
+  }
   const auditShard = auditShardName(checkout);
-  writeFileSync(join(seededAuditDir(checkout), auditShard), audit);
+  const shardPath = join(seededAuditDir(checkout), auditShard);
+  // afterClaim may have already minted a real event into this shard (e.g. a
+  // session-start hook): keep it rather than clobber it, so a case can put a
+  // real event ahead of these hand-written receipts.
+  const priorShard = existsSync(shardPath) ? readFileSync(shardPath, "utf-8") : "";
+  writeFileSync(shardPath, priorShard + audit);
+  options.beforeCommit?.(checkout);
   git(checkout, ["add", "-A"]);
   git(checkout, ["commit", "-m", `complete ${unit}`]);
+  options.beforePublish?.(checkout);
   const published = runMergeTool(UNIT, ["publish", unit], checkout);
   expect(published.status, published.out).toBe(0);
   return {
@@ -754,69 +887,13 @@ export function completeUnitOnMain(projectDir: string, unit: string): void {
   );
 }
 
-export function dispatchMerge(
-  main: string,
-  unit: string,
-  pinnedOid: string,
-  generation = 1,
-): void {
-  const pinId = readUnitMergeTransaction(main, unit)?.pin_id;
-  expect(pinId).toBeTruthy();
-  const invoked = runMergeTool(
-    BOLT,
-    [
-      "dispatch-event",
-      "--event",
-      "MERGE_DISPATCH_INVOKED",
-      "--slug",
-      unit,
-      "--pinned-oid",
-      pinnedOid,
-      "--attempt-generation",
-      String(generation),
-      "--pin-id",
-      pinId!,
-      "--practices-excerpt",
-      "trunk-based integration on main",
-    ],
-    main,
-  );
-  expect(invoked.status, invoked.out).toBe(0);
-  const returned = runMergeTool(
-    BOLT,
-    [
-      "dispatch-event",
-      "--event",
-      "MERGE_DISPATCH_RETURNED",
-      "--slug",
-      unit,
-      "--pinned-oid",
-      pinnedOid,
-      "--attempt-generation",
-      String(generation),
-      "--pin-id",
-      pinId!,
-      "--strategy",
-      "merge",
-      "--target",
-      "main",
-      "--confidence",
-      "1",
-      "--notes",
-      `merge pinned candidate ${pinnedOid}`,
-    ],
-    main,
-  );
-  expect(returned.status, returned.out).toBe(0);
-}
-
 export function appendMainHumanTurn(projectDir: string): void {
   const shard = join(seededAuditDir(projectDir), auditShardName(projectDir));
   let existing = "";
   try {
     existing = readFileSync(shard, "utf-8");
   } catch {
-    // The dispatch bracket normally creates the main shard first.
+    // A main that has recorded nothing yet has no shard.
   }
   writeFileSync(
     shard,
@@ -831,15 +908,23 @@ export function appendMainHumanTurn(projectDir: string): void {
   );
 }
 
+/** The person's reply to the merge gate the pin showed: a main-shard human
+ *  turn stamped after the pin (both are second-precision), so it is the turn
+ *  the gate counts and the turn that ran the pin is not. */
+export function replyAfterPin(projectDir: string, unit: string): void {
+  const pinnedAt = readUnitMergeTransaction(projectDir, unit)?.pinned_at;
+  expect(pinnedAt).toBeTruthy();
+  while (new Date().toISOString().replace(/\.\d{3}Z$/, "Z") <= pinnedAt!) Bun.sleepSync(50);
+  appendMainHumanTurn(projectDir);
+}
+
 export function approveMerge(
   main: string,
   unit: string,
 ): { pinnedOid: string; stateBeforeGit: string } {
   const pin = runMergeTool(UNIT, ["pin", unit], main);
   expect(pin.status, pin.out).toBe(0);
-  const pinPayload = JSON.parse(pin.stdout);
-  const pinnedOid = pinPayload.pinned_oid as string;
-  dispatchMerge(main, unit, pinnedOid, pinPayload.generation);
+  const pinnedOid = JSON.parse(pin.stdout).pinned_oid as string;
   const gate = runMergeTool(
     UNIT,
     [

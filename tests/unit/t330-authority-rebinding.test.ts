@@ -348,6 +348,71 @@ describe("t330 (1) the Plan Approval content projection", () => {
     });
   }
 
+  // The stage asks for a box on each step and names no line shape, so a tick is
+  // progress in the step's own box wherever the step's line puts it. Any other
+  // box (one in the step's words, a second box on the line, one that is code,
+  // part of a word, a link, or escaped) is text, bound and handed over as written.
+  const boxed = (box: string) => [
+    "# Code Generation Plan",
+    "",
+    `Step 1. [${box}] Create the manifest (US-101)`,
+    "",
+    `**Step 2.** [${box}] Add the stage file (US-101)`,
+    "",
+    `### Step 3. [${box}] Retry the record read`,
+    "",
+    "| Step | Done | What |",
+    "| --- | --- | --- |",
+    `| 4 | [${box}] | Wire the hook |`,
+    "",
+    `- [${box}] Step 5: print done items as [x] <title>`,
+    `Step 6. [${box}] show [x] for a selected row`,
+    `**Step 7 -** [${box}] Wire the logs`,
+    "",
+    "| State | Box |",
+    "| --- | --- |",
+    "| selected | [x] |",
+    "",
+    "Check with `echo [x] done`, keep items[x] as written, mark [x]`flag` as is, see [x](notes.md), and write \\[x] literally.",
+    "",
+  ].join("\n");
+  const boxedBaseline = fingerprintOf(boxed(" "));
+  const boxedStable: Array<[string, string]> = [
+    ["every box ticked", boxed("x")],
+    ["an in-progress box after a bold label", boxed(" ").replace("**Step 2.** [ ]", "**Step 2.** [-]")],
+    ["a ticked box in a heading", boxed(" ").replace("### Step 3. [ ]", "### Step 3. [X]")],
+    ["a ticked box in a table cell", boxed(" ").replace("| 4 | [ ] |", "| 4 | [x] |")],
+    ["a ticked box after a label that ends in a dash", boxed(" ").replace("**Step 7 -** [ ]", "**Step 7 -** [x]")],
+  ];
+  for (const [name, mutated] of boxedStable) {
+    test(`stable, a box outside a list item: ${name}`, () => {
+      expect(fingerprintOf(mutated)).toBe(boxedBaseline);
+    });
+  }
+  const boxedChanged: Array<[string, string]> = [
+    ["a reworded step beside its ticked box", boxed("x").replace("Create the manifest", "Generate the manifest")],
+    ["a box inside a code span", boxed(" ").replace("`echo [x] done`", "`echo [ ] done`")],
+    ["a box glued to a word", boxed(" ").replace("items[x]", "items[-]")],
+    ["a box glued to a code span", boxed(" ").replace("[x]`flag`", "[ ]`flag`")],
+    ["a literal box in a list step's words", boxed(" ").replace("as [x] <title>", "as [ ] <title>")],
+    ["a literal box after a step's own box", boxed(" ").replace("show [x] for", "show [ ] for")],
+    ["a literal box in a table cell", boxed(" ").replace("| selected | [x] |", "| selected | [ ] |")],
+    ["a link's text", boxed(" ").replace("[x](notes.md)", "[X](notes.md)")],
+    ["an escaped box", boxed(" ").replace("\\[x]", "\\[ ]")],
+  ];
+  for (const [name, mutated] of boxedChanged) {
+    test(`changed, a box outside a list item: ${name}`, () => {
+      expect(mutated).not.toBe(boxed(" "));
+      expect(fingerprintOf(mutated)).not.toBe(boxedBaseline);
+    });
+  }
+  test("the literal boxes in a ticked plan reach the worker as written", () => {
+    const projected = projectPlanApprovalContent(boxed("x"));
+    expect(projected).toContain("- [ ] Step 5: print done items as [x] <title>");
+    expect(projected).toContain("Step 6. [ ] show [x] for a selected row");
+    expect(projected).toContain("| selected | [x] |");
+  });
+
   test("the terminal review appendix is excluded from the projected body", () => {
     // This is why the stage hands the developer agent the projected BODY: whatever
     // a reviewer appends there is not work, so it must never be delivered as work.

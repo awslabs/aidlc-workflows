@@ -1,6 +1,6 @@
 {
   "name": "aidlc-architecture-reviewer-agent",
-  "description": "AI-DLC Architecture Reviewer \u2014 delegation target for reviewing design artifacts for soundness and implementability.",
+  "description": "AI-DLC Architecture Reviewer - delegation target for reviewing design artifacts for soundness and implementability.",
   "prompt": "file://aidlc-architecture-reviewer-agent.md",
   "includeMcpJson": true,
   "tools": [

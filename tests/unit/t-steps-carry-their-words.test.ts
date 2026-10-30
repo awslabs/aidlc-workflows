@@ -36,7 +36,7 @@ import { shellArg } from "../../core/tools/aidlc-lib.ts";
 
 const INVOCATION = "bun .claude/tools/aidlc-orchestrate.ts";
 const LOG = "bun .claude/tools/aidlc-log.ts";
-const OTHER = "**Other** \u2014 describe what you want instead";
+const OTHER = "**Other** - describe what you want instead";
 const HINT = "Reply with a number (or just tell me).";
 
 type Json = Record<string, unknown>;
@@ -256,7 +256,7 @@ const ASK_TYPES = [
 describe("the engine renders every question it asks", () => {
   test("the numbered form is the prompt, the options, Other, and the reply hint, in the routing question's shape", () => {
     expect(numberedProseQuestion("Which?", [{ label: "A", detail: "the first" }, { label: "B" }])).toBe(
-      "Which?\n\n1. **A** \u2014 the first\n2. **B**\n3. " + OTHER + "\n\n" + HINT,
+      "Which?\n\n1. **A** - the first\n2. **B**\n3. " + OTHER + "\n\n" + HINT,
     );
   });
 
@@ -320,7 +320,7 @@ describe("the engine renders every question it asks", () => {
       ["The bugfix plan", `${INVOCATION} next --scope bugfix --request a1b2c3d4`],
       ["The classic plan", `${INVOCATION} next --scope classic --request a1b2c3d4`],
     ]);
-    expect(str(notes(ask("compose-offer")).numbered_prose_question)).toContain("2. **The bugfix plan** \u2014 7 stages");
+    expect(str(notes(ask("compose-offer")).numbered_prose_question)).toContain("2. **The bugfix plan** - 7 stages");
   });
 
   test("the plan question shows each plan's summary and path above the choices", () => {
@@ -333,7 +333,7 @@ describe("the engine renders every question it asks", () => {
   test("a guard question offers its ways on; a terminal one has no options; the agent's own work is no question", () => {
     const shown = notes(ask("guard-recovery"));
     expect((shown.choices as Array<{ label: string }>).map((c) => c.label)).toEqual(["Ask for changes", "Review it again"]);
-    expect(str(shown.numbered_prose_question)).toContain("1. **Ask for changes** \u2014 Say what should change");
+    expect(str(shown.numbered_prose_question)).toContain("1. **Ask for changes** - Say what should change");
     const terminal = notes(ask("guard-recovery", { remedies: [], state_signature: "sig" }));
     expect(terminal.choices).toEqual([]);
     expect(terminal.numbered_prose_question).toBe("The question for the person.");

@@ -21,7 +21,7 @@ work through one command, at any stage.
 ## 2. The command
 
 ```
-{{INVOKE}} engine intent add-repo <name> --reason "<why this work changes it>"
+{{INVOKE}} engine intent add-repo <name> --reason '<why this work changes it>'
 ```
 
 - `<name>` is the repo's folder name beside the other repos.
@@ -32,7 +32,7 @@ work through one command, at any stage.
 - Never pass `--url` yourself: a name taken from a search result must resolve
   inside the team's org. An address comes from the person. When they give one,
   pass it with `--url <address>`, and pass their words with
-  `--person-words "<their words>"` instead of `--reason`.
+  `--person-words '<their words>'` instead of `--reason`.
 - Say the line the tool prints, once. It says what happened and the way back
   (`intent remove-repo <name>`, which leaves the folder and its `repos.json`
   line in place).

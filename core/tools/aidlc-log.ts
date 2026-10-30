@@ -13,7 +13,13 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
+import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
+import {
+  askedQuestionFields,
+  QUESTION_ID_FIELD,
+  questionEntryDigests,
+  questionShows,
+} from "./aidlc-questions.ts";
 import {
   chatsSince,
   latestMessage,
@@ -66,6 +72,8 @@ import {
   verificationCommandDetails,
   readVerificationCommandFile,
   readAnswerTextFile,
+  REQUEST_TEXT_DIR,
+  isReadOnlyEngineProbe,
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
@@ -302,8 +310,11 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
   recordPlanApprovalLegacyRecoveryAnswer,
+  REVIEW_TESTING_CONTRACT_FIELD,
+  reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { chatTookStepHere } from "./aidlc-record-core.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -331,7 +342,7 @@ function unitManifestRefusal(
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
-      `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason "<why this work changes it>"`)}\` and say the line it prints once, ` +
+      `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason '<why this work changes it>'`)}\` and say the line it prints once, ` +
       "then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
   }
   return `unit "${unit}" has no valid source manifest at ${manifestPath} (${manifest.reason}). ${rewrite}`;
@@ -402,6 +413,10 @@ function emitAudit(
 let recordedRow = false;
 let rowEndsTurn = false;
 let stageWorkRow = true;
+// An answer's --request-file goes once the answer is taken, row or not (the
+// recovery and Plan Approval answers keep their own records); a refusal exits
+// first and leaves it for the same command.
+let spendRequestFile = (): void => {};
 
 // --- Flag parsing ---
 
@@ -573,6 +588,8 @@ const LOG_INTERACTION_OPTIONS = [
 ];
 const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS,
+  "--option",
+  "--options-file",
   "--decision",
   "--decision-file",
   "--rationale",
@@ -584,11 +601,12 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
 // --on-instruction: a stage question the person left to the agent, with
 // --message naming the message that left it.
 // --ends-turn: their reply also asked something, which the agent answers.
+// --request-file: the answer's words in the file `next --request-file` reads.
 // The `config set` keys: a setting the same reply asked for, beside an Approve
 // Plan (settingsBesideDecision).
 const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
-  "--details-file", "--on-instruction-file", "--ends-turn", ...CONFIG_KEYS.map((key) => `--${key}`),
+  "--details-file", "--on-instruction-file", "--request-file", "--ends-turn", ...CONFIG_KEYS.map((key) => `--${key}`),
 ]);
 
 // The person has said something in this piece of work: a turn that can carry a
@@ -825,8 +843,13 @@ function handlePlanApprovalBatch(
   try {
     withAuditLock(pd, () => {
       if (action === "decision") {
+        let questionId = "";
         const challenge = recordPlanApprovalBatchChallenge(pd, flags["batch-file"], session, (batch) => {
           withdrawProtectedQuestions(pd, session);
+          const asked = askedQuestionFields(pd, {
+            type: "plan-approval", shows: questionShows([batch.bindingSha256]), chat: session,
+          });
+          questionId = asked[QUESTION_ID_FIELD];
           emitAudit(pd, "DECISION_RECORDED", {
             Stage: flags.stage,
             Checkpoint: PLAN_APPROVAL_CHECKPOINT,
@@ -837,12 +860,14 @@ function handlePlanApprovalBatch(
             Units: batch.members.map((member) => member.unit).join(", "),
             "Batch Binding SHA-256": batch.bindingSha256,
             "Batch Members": JSON.stringify(batch.members),
+            ...asked,
           });
         });
         console.log(JSON.stringify({
           emitted: "DECISION_RECORDED",
           checkpoint: "plan-approval",
           stage: flags.stage,
+          ...(questionId ? { question_id: questionId } : {}),
           batch: challenge.batch,
           options: challenge.options,
           challengeId: challenge.challengeId,
@@ -1101,8 +1126,21 @@ function keptMessageRefusal(pd: string): string | null {
     `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
+// A question's choices given one --option each, so a choice may hold a comma
+// with no separator on the command line for a shell to read: they join any
+// --options list in the grammar optionsList reads.
+function withEachOption(args: string[], flags: Record<string, string>): void {
+  const each: string[] = [];
+  for (let i = 0; i < args.length - 1; i++) if (args[i] === "--option") each.push(args[++i]);
+  delete flags.option;
+  if (each.length === 0) return;
+  const choices = [...(flags.options === undefined ? [] : optionsList(flags.options)), ...each];
+  flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+}
+
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
+  withEachOption(args, flags);
   if (!flags.stage) error("Missing --stage <slug>");
   // A question holding the person's words arrives in a file the agent wrote, as
   // an answer's text does, so no shell reads it on the way.
@@ -1115,6 +1153,19 @@ function handleDecision(args: string[]): void {
     }
   }
   if (!flags.decision) error("Missing --decision <text> (or --decision-file <file>)");
+  // A question's choices that hold a $ or a backtick arrive one a line in a file
+  // the agent wrote, as the question's text does, so no shell reads them.
+  if (flags["options-file"] !== undefined) {
+    let lines: string[] = [];
+    try {
+      lines = readAnswerTextFile(resolveActiveProjectDir(projectDir, flags.stage), flags["options-file"])
+        .split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    } catch (err) {
+      error(errorMessage(err));
+    }
+    delete flags["options-file"];
+    withEachOption(lines.flatMap((choice) => ["--option", choice]), flags);
+  }
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
@@ -1251,6 +1302,13 @@ function handleDecision(args: string[]): void {
     fields["Message Id"] = proof.message.id;
   }
 
+  // The question this row asks, on the record (aidlc-questions.ts).
+  Object.assign(fields, askedQuestionFields(pd, {
+    type: flags.checkpoint ?? fields[QUESTION_KIND_FIELD] ?? "stage-question",
+    shows: decisionShows(pd, flags, fields),
+    ...(fields.Session ? { chat: fields.Session } : {}),
+  }));
+
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
@@ -1303,6 +1361,7 @@ function handleDecision(args: string[]): void {
     JSON.stringify({
       emitted: "DECISION_RECORDED",
       stage: flags.stage,
+      question_id: fields[QUESTION_ID_FIELD],
       ...(challenge !== null
         ? {
             challengeId: challenge.challengeId,
@@ -1322,6 +1381,25 @@ function handleDecision(args: string[]): void {
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
     })
   );
+}
+
+// What a logged question shows the person (aidlc-questions.ts): the command or
+// setting a checkpoint asks about, the plan's fingerprint, the summary's own
+// entry in its questions file with its answer blanked, else the question and
+// its choices as logged.
+function decisionShows(pd: string, flags: Record<string, string>, fields: Record<string, string>): string {
+  if (fields["Command SHA-256"]) return questionShows([fields["Command SHA-256"]]);
+  if (flags.checkpoint === "construction-policy") return questionShows([fields.Field, fields.Value]);
+  if (fields["Approval Fingerprint"]) return questionShows([fields["Approval Fingerprint"]]);
+  if (flags.checkpoint === "summary-confirmation" && fields["Questions File"]) {
+    try {
+      const entries = questionEntryDigests(readFileSync(join(pd, fields["Questions File"]), "utf-8"));
+      return questionShows([entries[SUMMARY_CONFIRMATION_CHECKPOINT] ?? "none"]);
+    } catch {
+      return questionShows(["none"]);
+    }
+  }
+  return questionShows([flags.decision, flags.options]);
 }
 
 // --- Subcommand: answers ---
@@ -1982,9 +2060,82 @@ function namedProtectedReply(
   return typed === undefined ? undefined : { message: typed.id, floor };
 }
 
+// REQUEST_TEXT_DIR is the folder where the agent writes a person's words for
+// `next --request-file` (and carries them to `log answer --request-file`), so
+// they reach AI-DLC with no shell on the way: on Windows, cmd.exe ends a
+// command at a line break and replaces a %NAME% pair even inside quotes, and
+// the aidlc launcher is read by cmd.exe again.
+const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
+
+export const REQUEST_FILE_USAGE =
+  `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
+  `${REQUEST_TEXT_DIR}/request.txt.`;
+
+// Only a plain file directly inside the folder, reached through no link, is
+// read. The command removes it once it goes ahead (spend; a probe leaves it),
+// so a command stopped before then runs again exactly as it was written. A
+// string is the refusal.
+export function readRequestFile(
+  projectDir: string,
+  file: string,
+): { text: string; spend(): void; restore(): void } | string {
+  const relativePath = file.replaceAll("\\", "/");
+  const parts = relativePath.split("/");
+  const folder = REQUEST_TEXT_DIR.split("/");
+  const name = parts[parts.length - 1];
+  if (
+    isAbsolute(file) || parts.length !== folder.length + 1 ||
+    folder.some((part, i) => parts[i] !== part) || name === "" || name === "." || name === ".."
+  ) {
+    return REQUEST_FILE_USAGE;
+  }
+  const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
+  let text: string;
+  try {
+    text = agentFileText(readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(projectDir, relativePath),
+      "The request file",
+      REQUEST_TEXT_MAX_BYTES,
+    )).replace(/\r?\n$/, "");
+  } catch {
+    return unread;
+  }
+  if (text.trim() === "") return `The request in ${relativePath} is empty. Send your request again.`;
+  return {
+    text,
+    spend: () => {
+      if (isReadOnlyEngineProbe()) return;
+      try {
+        removeRecordFileNoFollow(projectDir, relativePath);
+      } catch {
+        // Left in its gitignored folder; the next request replaces it.
+      }
+    },
+    // The words as they were read, for a step that runs the same command again.
+    restore: () => {
+      if (isReadOnlyEngineProbe()) return;
+      try {
+        writeRecordFileNoFollow(projectDir, relativePath, text);
+      } catch {
+        // Not written back: the same command says the request could not be read.
+      }
+    },
+  };
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
+  // The file an agent wrote for `next --request-file`, carried to the answer.
+  if (flags["request-file"] !== undefined) {
+    if (flags.details !== undefined || flags["details-file"] !== undefined) {
+      error("Pass one of --details, --details-file or --request-file, not two.");
+    }
+    const read = readRequestFile(resolveActiveProjectDir(projectDir, flags.stage), flags["request-file"]);
+    if (typeof read === "string") error(read);
+    flags.details = read.text;
+    spendRequestFile = read.spend;
+  }
   // Text that holds shell characters arrives in a file the agent wrote, so no
   // shell (bash, PowerShell, or cmd.exe through aidlc.cmd) reads it on the way.
   for (const [text, file] of [["details", "details-file"], ["on-instruction", "on-instruction-file"]] as const) {
@@ -2493,17 +2644,23 @@ function handleAnswer(args: string[]): void {
       // the next confirmation took it as its Person Reply.
       const asksWhat = !positive && summaryFeedback === null;
       let whatAsked = false;
+      let whatQuestionId: string | null = null;
       if (asksWhat) {
         rowEndsTurn = true;
         try {
+          const asked = askedQuestionFields(pd, {
+            type: "stage-question", shows: questionShows([SUMMARY_CHANGES_QUESTION, undefined]),
+          });
           emitAudit(pd, "DECISION_RECORDED", {
             Stage: flags.stage,
             Decision: SUMMARY_CHANGES_QUESTION,
             ...(fields.Unit !== undefined ? { Unit: fields.Unit } : {}),
             ...(fields["Attempt Generation"] !== undefined ? { "Attempt Generation": fields["Attempt Generation"] } : {}),
             ...(workflow !== undefined ? { Workflow: workflow } : {}),
+            ...asked,
           });
           whatAsked = true;
+          whatQuestionId = asked[QUESTION_ID_FIELD];
         } catch {
           // The change request is on record; the question is asked all the same.
         }
@@ -2521,6 +2678,7 @@ function handleAnswer(args: string[]): void {
           choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
+          ...(whatQuestionId !== null ? { question_id: whatQuestionId } : {}),
           ...(asksWhat
             ? {
               agent_note: `Ask the free-text question "${SUMMARY_CHANGES_QUESTION}" and end the turn; ` +
@@ -4471,8 +4629,10 @@ function handleReview(args: string[]): void {
     const swarmUnit = flags.stage === "code-generation" && flags.unit ? swarmWorkerWorktreeMeta(pd) : null;
     // On Kiro (kiro-ide), while the reviewer read-scope check holds, this
     // review's reviewer is dispatched as a copy that carries its read scope; a
-    // replaced request's copy goes with it.
+    // replaced request's copy goes with it, and so does the copy of any review
+    // that is over without its verdict.
     if (replaces !== null) removeReviewCopy(pd, replaces);
+    sweepReviewCopies(pd, { intent, space });
     const copy = requestId === null ? null : prepareReviewCopy(pd, {
       requestId,
       reviewer: flags.reviewer,
@@ -5128,6 +5288,19 @@ function handleReview(args: string[]): void {
       }
       fields["Review Record"] = slot.recordRelative;
       fields["Review Record Digest"] = reviewRecordDigest(serialized);
+      // The build this verdict covers was finished under the Testing Contract
+      // in force now; the completion reads it to tell a practice kept at the
+      // gate from a contract that moved while the build ran. A swarm worker's
+      // checkout (swarmWorkerWorktreeMeta) resolves its own memory while its
+      // approval may read the parent's, so its verdict records none and its
+      // completion is held for a moved contract, as with no contract on record.
+      // A delegated approval also never reads the field
+      // (codeGenerationApprovalArtifacts), which covers a worker checkout whose
+      // meta does not validate. A person's own Unit worktree records it.
+      const reviewedContract = flags.stage === "code-generation" && swarmWorkerWorktreeMeta(pd) === null
+        ? reviewedTestingContract(pd)
+        : null;
+      if (reviewedContract !== null) fields[REVIEW_TESTING_CONTRACT_FIELD] = reviewedContract;
       recordPath = slot.recordRelative;
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
       // The draft was the reviewer's input; the record now holds it. The
@@ -5189,8 +5362,12 @@ function handleReview(args: string[]): void {
   // the reviewer-scope hook reads it. Remove that one too, when it is this
   // review's own record; another Unit's review keeps its window.
   removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
-  // The verdict closes the request, so its reviewer copy (Kiro) goes too.
+  // The verdict closes the request, so its reviewer copy (Kiro) goes too, with
+  // the copy of any review that is over without its verdict.
+  // removeReviewCopy deletes by the request's name whatever the layout reads
+  // now; the sweep reads the ledger.
   removeReviewCopy(pd, fields["Request Id"]);
+  sweepReviewCopies(pd, { intent, space });
 
   const agentNote = recorded.context === undefined
     ? null
@@ -5220,13 +5397,13 @@ function logUsage(subcommand: string | undefined): string {
     decision: [
       `${invoke("decision")} --stage <slug> --decision '<the question>' --options '<choice>,<choice>'`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
-      "  When a choice holds a comma, start the list with | and separate the choices with it: \"|<choice>|<choice>\".",
+      "  When a choice holds a comma, pass each choice as its own --option '<choice>' in place of --options; when one holds a $ or a backtick, write the choices one a line to <record>/.aidlc-engine/answer-text/options.txt and pass --options-file .aidlc-engine/answer-text/options.txt.",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],
     answer: [
-      `${invoke("answer")} --stage <slug> --details "<the person's exact choice>"`,
-      "  Records the person's answer. Required: --stage, and --details or --details-file.",
+      `${invoke("answer")} --stage <slug> --details '<their exact choice>'`,
+      "  Records the person's answer. Required: --stage, and --details, --details-file or --request-file.",
       `  --checkpoint: ${ANSWER_CHECKPOINTS.join(", ")}. Use the one its question was recorded with.`,
       `  Options: ${flags(ANSWER_OPTIONS)}`,
     ],
@@ -5269,6 +5446,9 @@ export function main(argv: string[]): void {
   if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(logUsage(undefined));
   if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(logUsage(subcommand));
   readOnlyCommand = subcommand === "answers";
+  // What the chat records here (a decision, an answer, a link, a review) is its
+  // step on the work (chatTookStepHere); reading the answers is not.
+  if (!readOnlyCommand) chatTookStepHere(resolveProjectDir(projectDir));
   if (subcommand === "decision" || subcommand === "answer") {
     refuseSplitValues(subcommand, rawArgs);
   }
@@ -5298,6 +5478,7 @@ export function main(argv: string[]): void {
       default:
         error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
     }
+    spendRequestFile();
     // The stage's work went on through the record, not through `next`: on the
     // hosts with no transcript, the Stop hook reads that from the engine mark.
     // Advisory: a mark that is not written never fails the recorded answer.

@@ -6,7 +6,6 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
-  linkSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -77,6 +76,7 @@ import {
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
+import { main as pluginTestMain } from "./aidlc-plugin-test.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   ARCHIVED_FROM_FIELD,
@@ -508,7 +508,9 @@ import {
   PERSON_ASKED_SKIP_REASON,
   personsWordsText,
   declaredProjectType,
+  installWithoutReplacing,
 } from "./aidlc-lib.ts";
+import { chatTookStep } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -538,8 +540,8 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
-import { resolveHookPath } from "./aidlc.ts";
-import { executePlan } from "./aidlc-transaction.ts";
+import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
+import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcInvocation,
@@ -624,6 +626,8 @@ function validateIntentSettingsArgs(
 ): void {
   const allowed = new Set<string>([...CONFIG_KEYS, ...Object.keys(RETIRED_CONFIG_KEYS), "intent", "space", "project-dir"]);
   if (command === "scope-change") allowed.add("scope");
+  // The skips typed beside a switch that land before it reopens finished work.
+  if (command === "scope-change") allowed.add("skip");
   // The message the person asked in (--message), which the setter proves before
   // it records the setting as theirs; the words form from before it is taken as
   // the agent's own text.
@@ -849,7 +853,7 @@ Utilities:
   unit status       Show claimable, claimed, and dependency-blocked Units
   compose "<task>"  Suggest a plan tailored to this task (mid-workflow: adjust the steps not yet run)
   compose --report <path>  Build a plan from a scan report (sort findings into a fix-and-ship run)
-  --new-scope "<task>"  Build a custom plan even when a ready-made one matches
+  --new-scope '<task>'  Build a custom plan even when a ready-made one matches
   intent list       List intents in the active space (read-only; --json for structured output; --all includes archived)
   intent switch <name>  Switch the active intent (bare intent <name> still works)
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
@@ -1501,7 +1505,7 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       }
     } catch (err) {
       resetSelectionSensitiveCaches();
-      die(`select-plugins failed: ${errorMessage(err)}`);
+      die(`select-plugins failed: ${withTransactionFix(err, errorMessage(err))}`);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
@@ -1612,6 +1616,44 @@ function handlePluginBuild(
   pluginAuthorCommandCode(pluginBuildMain(args));
 }
 
+function handlePluginTest(
+  positional: string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+): void {
+  const { usage, options } = pluginTestCommand();
+  // Help wherever it is asked, as the standalone tool reads it.
+  if (flags.help !== undefined || positional.slice(1).includes("-h")) {
+    process.stdout.write(renderPluginTestHelp());
+    return;
+  }
+  const takesValue = new Map(
+    options.map((option) => [option.flag.slice(2), option.metavar !== undefined]),
+  );
+  const paths = positional.slice(1);
+  let reason: string | null = null;
+  for (const [name, value] of Object.entries(flags)) {
+    const valued = takesValue.get(name);
+    if (valued === undefined) reason ??= `unknown option "--${name}"`;
+    else if (valued && missingValueFlags.has(name)) reason ??= `--${name} requires a value`;
+    // The shared parser hands a bare option the word after it; that word is
+    // the plugin's folder.
+    else if (!valued && value !== "true") paths.push(value);
+  }
+  if (paths.length > 1) reason ??= `unexpected positional argument "${paths[1]}"`;
+  if (reason !== null) {
+    process.stderr.write(`Usage: ${usage}\n${reason}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  const args = [paths[0] ?? process.cwd()];
+  if (flags.install !== undefined) args.push("--install", flags.install);
+  if (flags.harness !== undefined) args.push("--harness", flags.harness);
+  if (flags.with !== undefined) args.push("--with", flags.with);
+  if (flags.json !== undefined) args.push("--json");
+  pluginAuthorCommandCode(pluginTestMain(args, `Usage: ${usage}`));
+}
+
 // The sync doctor names for these plugins: where the host lists its plugins,
 // the chat command or the engine's with the root set; elsewhere one command
 // per plugin, with its folder.
@@ -1704,7 +1746,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
         }
         await mod.compose();
       } catch (error) {
-        die(`plugin-sync failed for ${item.root}: ${errorMessage(error)}`);
+        die(`plugin-sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
       } finally {
         for (const key of envKeys) {
           const value = previous[key];
@@ -2027,7 +2069,7 @@ To get started:
   // or the engine's own) stands where the cursor stands, whatever the checkbox
   // says, so it is read first; a park the work has since moved past is stale
   // and holds nothing, the same rule the router uses (parkedWhereItStands in
-  // aidlc-orchestrate.ts). The line carries the way back, in the harness's own
+  // aidlc-testing-posture.ts). The line carries the way back, in the harness's own
   // entry word. A live run read "Status: Running" over paused work and the
   // agent had to correct it.
   // Read for the work this status is for, the one named or the selected one.
@@ -3112,12 +3154,13 @@ function projectedFileRepair(
   return `restore ${relativePath} from git, or re-copy \`dist/${distribution}/${relativePath}\` from the aidlc-workflows checkout`;
 }
 
-// Issue #1146: Kiro IDE compiles each ignore file into its own matcher. Checking
-// the project with git would let a repo negation mask a global deny; doctor's
-// subprocess reads are not IDE fs_read calls, so evaluate each source alone.
+// Issue #1146: Kiro (the IDE and Kiro CLI v3) compiles each ignore file into its
+// own matcher. Checking the project with git would let a repo negation mask a
+// global deny; doctor's subprocess reads are not Kiro fs_read calls, so evaluate
+// each source alone.
 // Doctor output reaches the model verbatim, so rows name each source by a fixed
 // identifier and never echo a path, a pattern, or git's own diagnostics.
-const KIRO_IGNORE_PREFIX = "Kiro IDE ignore sources:";
+const KIRO_IGNORE_PREFIX = "Kiro ignore sources:";
 const GLOBAL_EXCLUDES_ID = "git's global excludes file";
 
 type IgnoreSource = { id: string; file: string; workspace: boolean };
@@ -3209,8 +3252,9 @@ function gitRepositoryOnDisk(
   return { onDisk: false, linkedGitDir: false };
 }
 
-// The ignore files Kiro IDE honours, each on its own. Kiro applies git's global
-// excludes only in a git repository; git's own yes to that wins. Git exits 128
+// The ignore files Kiro honours, each on its own (Kiro CLI v3 skips .gitignore,
+// which only Kiro IDE's kiroAgent.agentIgnoreFiles turns on). Kiro applies git's
+// global excludes only in a git repository; git's own yes to that wins. Git exits 128
 // both outside a repository and when it refuses one (dubious ownership, for
 // example), so a failed probe means "not a repository" only when nothing is on
 // disk either; otherwise the global file cannot be ruled out and is skipped.
@@ -3330,15 +3374,15 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
   return env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
 }
 
-// The files Kiro IDE's agent reads through fs_read, from the roster the engine
+// The files the Kiro conductor reads through fs_read, from the roster the engine
 // hands it: for every stage harness.json selects in the compiled graph, the stage
 // file and the persona and knowledge the conductor holds inline (the shared
 // inline-context roster at Standard and Minimal depth, each under the directive's
 // byte cap), plus stage-protocol.md and its stage-protocol-<name>.md modules
 // (contributor-only protocol files such as stage-definition.md are not loaded)
 // and the files the skills name beside SKILL.md. SKILL.md files, the
-// IDE conductor agent (agents/aidlc-aidlc.md), and aidlc-common/conductor.md are loaded
-// by the IDE or the engine, not through fs_read. Without a readable graph, every
+// conductor agent (agents/aidlc-aidlc.md), and aidlc-common/conductor.md are loaded
+// by Kiro itself or the engine, not through fs_read. Without a readable graph, every
 // stage file, persona, and knowledge file stands in for the stage roster; without
 // an installed tree, one read of each kind does.
 function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
@@ -3494,13 +3538,18 @@ function hiddenReadRows(
       const what = all ? `${harness}/` : `${hidden.length} of ${probes.length} framework files (${named.join(", ")})`;
       const denies = all ? "every stage, agent, and protocol read" : "those framework reads";
       const locate = id === "core.excludesFile" ? ` (${lookup} prints its path)` : "";
+      // Kiro CLI v3 applies .kiroignore with no setting and never .gitignore;
+      // Kiro IDE applies either only when kiroAgent.agentIgnoreFiles names it.
+      const applies = id === ".kiroignore"
+        ? "Kiro CLI v3 applies .kiroignore; Kiro IDE applies it when kiroAgent.agentIgnoreFiles names it"
+        : "applies when Kiro IDE's kiroAgent.agentIgnoreFiles names .gitignore, as the default does; Kiro CLI v3 does not apply it";
       rows.push({
         pass: false,
         severity: workspace ? "warn" : undefined,
         label: workspace
-          ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
-          : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - the IDE's fs_read guard denies ${denies}`,
-        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then run doctor again`,
+          ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - ${applies})`
+          : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - Kiro's fs_read guard (Kiro IDE and Kiro CLI v3) denies ${denies}`,
+        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then run doctor again`,
       });
     }
   } catch {
@@ -4552,7 +4601,7 @@ export async function collectDoctorReport(
         label:
           hooksDisabledBy === null
             ? "Hooks enabled (resolved disableAllHooks is not true)"
-            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
+            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} - AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
         fix:
           hooksDisabledBy === null
             ? undefined
@@ -4641,7 +4690,7 @@ export async function collectDoctorReport(
 
   // 4. Harness wiring config present. Claude Code: settings.json (hooks +
   // permissions live there). Kiro CLI: agents/aidlc.json plus
-  // settings/cli.json; Kiro IDE: agents/aidlc-aidlc.md. Codex CLI: config.toml +
+  // settings/cli.json; Kiro IDE and Kiro CLI v3: agents/aidlc-aidlc.md. Codex CLI: config.toml +
   // hooks.json (the hook wiring) + rules/default.rules (permissions).
   if (harness === ".kiro") {
     const jsonAgentPath = join(projectDir, harness, "agents", "aidlc.json");
@@ -4650,7 +4699,7 @@ export async function collectDoctorReport(
     results.push({
       pass: hasJsonAgent || existsSync(markdownAgentPath) || existsSync(join(projectDir, harness, "agents", "aidlc.md")),
       label: "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
-      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE)`,
+      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE and Kiro CLI v3)`,
     });
     results.push(...kiroDisabledHookChecks(projectDir, harness));
     if (hasJsonAgent) {
@@ -4658,13 +4707,16 @@ export async function collectDoctorReport(
       results.push({
         pass: existsSync(cliSettingsPath),
         label: "settings/cli.json present (workspace default-agent activation)",
-        fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or use \`kiro-cli chat --agent aidlc\`)`,
+        fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or start Kiro CLI with \`kiro-cli --v2 --agent aidlc\`: Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide)`,
       });
     }
     if (existsSync(markdownAgentPath)) {
-      // The Markdown conductor row pins Kiro CLI to the v3 engine and the aidlc
-      // agent here: the default engine runs no project hooks, so a missing or
-      // altered pin leaves gates and audit silently off on Kiro CLI.
+      // The Markdown conductor tree asks Kiro CLI for the v3 engine and the
+      // aidlc agent here: the v2 engine runs no project hooks, so a Kiro CLI
+      // that reads the pin and finds it missing or altered leaves gates and
+      // audit silently off. Kiro CLI 2.33.0 reads the engine only from the
+      // command line or the person's own settings, so the label names the
+      // start command rather than claiming the pin starts v3.
       const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
       let pinned = false;
       try {
@@ -4675,7 +4727,7 @@ export async function collectDoctorReport(
       }
       results.push({
         pass: pinned,
-        label: 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" (Kiro CLI hooks run only on v3)',
+        label: 'settings/cli.json sets "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" (Kiro CLI hooks run only on v3: start it with `kiro-cli --v3`)',
         // Point at the two values first: the file may hold the project's own
         // Kiro CLI settings, which a whole-file restore would drop.
         fix: 'set "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" in .kiro/settings/cli.json and keep its other keys; ' +
@@ -5618,13 +5670,12 @@ export async function collectDoctorReport(
           : leak.kind === "coordination-gate" ? "lock coordination gate"
           : "legacy active-directive transaction";
         const outcome = leak.cleared ? "cleared" : "not cleared";
-        const manual = !leak.cleared;
-        results.push({
+        const label = `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) - ${outcome}`;
+        // A lock doctor cleared is fixed: its row passes and says so.
+        results.push(leak.cleared ? { pass: true, label } : {
           pass: false,
-          label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) - ${outcome}`,
-          fix: manual
-            ? `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`
-            : `the stale lock was cleared automatically; re-run your ${entrySkillInvocation()} command`,
+          label,
+          fix: `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`,
         });
       }
     }
@@ -6145,7 +6196,7 @@ export async function collectDoctorReport(
           `${cleanupOrphans.length} cleanup-orphan${cleanupOrphans.length === 1 ? "" : "s"} (merge/discard landed, dir persists): ${cleanupOrphans.join(", ")}`,
         );
       }
-      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift — ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
+      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift - ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
       fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
@@ -6212,7 +6263,7 @@ export async function collectDoctorReport(
       } else {
         results.push({
           pass: false,
-          label: `Stale branches: ${stale.length} drift — ${stale.join(", ")}`,
+          label: `Stale branches: ${stale.length} drift - ${stale.join(", ")}`,
           fix: "Inspect unrecognised names and unknown intent ownership. Recognised branches have no worktree directory and no owning WORKTREE_MERGED/_DISCARDED audit row. Delete via 'git branch -D <full-bolt-name>' only if abandoned.",
         });
       }
@@ -6280,7 +6331,7 @@ export async function collectDoctorReport(
     } else {
       results.push({
         pass: false,
-        label: `Orphan state files: ${orphan.length} drift — ${orphan.join(", ")}`,
+        label: `Orphan state files: ${orphan.length} drift - ${orphan.join(", ")}`,
         fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
       });
     }
@@ -7815,11 +7866,10 @@ function phasesWithExecuteStages(plan: Record<string, "EXECUTE" | "SKIP">): Set<
 //
 // Scope-excluded phases get NO folder: an empty `operation/` in a bugfix record
 // reads as work that was planned and skipped, when that phase was never in the
-// plan. Nothing depends on the folder pre-existing: a stage artifact is written
-// by the agent, which makes its folder first where its file tool does not (the
-// Copilot CLI's; Code Generation's plan folder `next` makes itself,
-// preparePlanRecordFolders), and every deterministic reader of a phase dir
-// guards on existence. This only ever creates: an older record that already
+// plan. Nothing depends on the folder pre-existing: `next` makes each stage's
+// folder when it hands out the step that writes there (prepareRecordFolders in
+// aidlc-orchestrate.ts), and every deterministic reader of a phase dir guards
+// on existence. This only ever creates: an older record that already
 // carries all five keeps them.
 function ensureWorkspaceDirs(
   projectDir: string,
@@ -7984,7 +8034,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         `intent. Start work via \`${entrySkillInvocation()} "<what to build>"\` (the engine names ` +
         "the create move for you); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
-        "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
+        "ideally `--arguments '<description>' --label '<2-3 word essence>'`).",
     );
   }
 
@@ -8670,7 +8720,7 @@ function handleIntentCreateStateBuild(
   for (const stage of graph) {
     const action = planStages[stage.slug] || "SKIP";
     if (action === "EXECUTE") {
-      executeStages.push(stage.number);
+      executeStages.push(`${stage.number} (${stage.slug})`);
     } else {
       skipStages.push(`${stage.number} (${stage.slug})`);
     }
@@ -8683,7 +8733,7 @@ function handleIntentCreateStateBuild(
       adjustedMapping["reverse-engineering"] = "SKIP";
       const reStage = graph.find((s) => s.slug === "reverse-engineering");
       if (reStage) {
-        const idx = executeStages.indexOf(reStage.number);
+        const idx = executeStages.indexOf(`${reStage.number} (${reStage.slug})`);
         if (idx >= 0) executeStages.splice(idx, 1);
         skipStages.push(`${reStage.number} ${GREENFIELD_RE_SKIP_LABEL}`);
       }
@@ -10551,7 +10601,9 @@ function onboardDocumentInput(
       ? ` I couldn't read any text from it: ${documentInputNoTextReason(shown)}.`
       : "") +
     (truncated
-      ? ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
+      ? shown.extraction.pages_kept !== undefined
+        ? ` Only its first ${shown.extraction.pages_kept} pages were read.`
+        : ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
       : "");
 
   process.stdout.write(
@@ -10772,8 +10824,13 @@ function documentInputNoTextReason(shown: { state: string }): string {
 // and any other moves the copy to <stem>-2<ext>, -3, and so on. Leading dots
 // are dropped and the names the knowledge walk skips are passed over, so a
 // later sync still sees the copy. The bytes land in a dot-named staging file
-// first and are published with link(), which never replaces a name.
+// first and are published with installWithoutReplacing, which never replaces a
+// name, whichever temp folder or computer the other copy runs from.
 const DOCUMENT_INPUT_COPY_NAME_LIMIT = 100;
+// ponytail: a 0-byte file made this second may be another copy's claim that
+// fills a moment later; a claim that takes over a second to fill leaves a -2
+// copy with the same bytes.
+const DOCUMENT_INPUT_CLAIM_SETTLE_MS = 1_000;
 
 function copyIntoDocuments(
   kb: typeof import("./aidlc-knowledge.ts"),
@@ -10791,7 +10848,15 @@ function copyIntoDocuments(
     const target = join(documentsReal, candidate);
     // A file already at this name with the same bytes is this copy already.
     const holdsSameBytes = (): boolean => {
-      const existing = lstatSync(target, { throwIfNoEntry: false });
+      let existing = lstatSync(target, { throwIfNoEntry: false });
+      for (
+        const deadline = Date.now() + DOCUMENT_INPUT_CLAIM_SETTLE_MS;
+        existing?.isFile() && existing.size === 0 && bytes.length > 0 &&
+        Date.now() - existing.mtimeMs < DOCUMENT_INPUT_CLAIM_SETTLE_MS && Date.now() < deadline;
+      ) {
+        Bun.sleepSync(5);
+        existing = lstatSync(target, { throwIfNoEntry: false });
+      }
       if (existing === undefined || !existing.isFile() || existing.size !== bytes.length) return false;
       try {
         return kb.sha256Hex(kb.readDocumentBytes(target, candidate, undefined, bytes.length)) === digest;
@@ -10806,7 +10871,7 @@ function copyIntoDocuments(
     const staged = join(documentsReal, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
     try {
       writeFileSync(staged, bytes, { flag: "wx" });
-      linkSync(staged, target);
+      installWithoutReplacing(staged, target);
       return { target, created: true };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -12086,15 +12151,31 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // refused, naming the setter that lets it through. Keep this guard ahead
     // of the same-scope path, including no-ops.
     if (isAutonomousMode(contentBefore) && !personAsked()) {
+      // No request on record can be a person who is there; only an
+      // unattended run has nobody here.
+      const why = process.env.AIDLC_UNATTENDED === "1"
+        ? "with nobody here to approve the new plan" : "without a request from the person for this change on record";
       die(
         "Cannot change scope while Construction runs unattended (Construction Autonomy Mode is " +
-          "autonomous) with nobody here to approve the new plan. Run " +
+          `autonomous) ${why}. Run ` +
           `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
           "approval at each Bolt), then change scope.",
       );
     }
     const oldScope = getField(contentBefore, "Scope");
     if (!oldScope) die("Cannot read current Scope from state file.");
+    // The person's skips that land before the reopen picks a stage, the only
+    // ones `next` names here; recompose takes every other skip after the switch.
+    const typedSkips = splitSlugList(flags.skip);
+    const skippedFirst = oldScope === newScope ? [] : skipsBeforeReopen(contentBefore, newScope, typedSkips);
+    const strays = typedSkips.filter((slug) => !skippedFirst.includes(slug));
+    if (strays.length > 0) {
+      die(
+        `scope-change --skip takes only the stages the switch would reopen finished work at, and ${strays.join(", ")} ` +
+          `${strays.length === 1 ? "is" : "are"} not: run it without ${strays.length === 1 ? "that one" : "them"}, then ` +
+          `\`${aidlcDispatcherInvocation("recompose")} --skip ${strays.join(",")}\`.`,
+      );
+    }
     const requested = intentSettingsFromFlags(flags);
     let keptPolicyLine: string | null = null;
     if (oldScope !== newScope) {
@@ -12148,23 +12229,25 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const auditEntries = update.audit;
     let outputLines = update.lines;
     // Finished work the new scope extends past its last stage is reopened at
-    // the first stage it adds (#2261); `next` reads the same predicate.
+    // the first stage it adds that the person did not skip with the switch
+    // (#2261); `next` reads the same predicate.
     let reopened: StageEntry | null = null;
     if (oldScope === newScope) {
       if (outputLines.length === 0) outputLines = [`Scope is already ${newScope}`];
     } else {
       const graph = loadStageGraph();
       const projectType = getField(content, "Project Type") || "Greenfield";
-      reopened = stageReopenedByScopeChange(contentBefore, newScope);
+      reopened = stageReopenedByScopeChange(contentBefore, newScope, skippedFirst);
 
       const adjustedMapping = scopeGridOnProject(newScopeDef, content);
+      for (const slug of skippedFirst) adjustedMapping[slug] = "SKIP";
 
       const executeStages: string[] = [];
       const skipStages: string[] = [];
       for (const stage of graph) {
         const action = adjustedMapping[stage.slug] || "SKIP";
         if (action === "EXECUTE") {
-          executeStages.push(stage.number);
+          executeStages.push(`${stage.number} (${stage.slug})`);
         } else {
           let reason = stage.slug;
           if (stage.slug === "reverse-engineering" && projectType.toLowerCase() === "greenfield" &&
@@ -12319,6 +12402,17 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
             "Skip Kind": "scope-change",
           },
         })),
+        // The person's skips this switch carried out, as recompose records one.
+        ...(skippedFirst.length === 0 ? [] : [{
+          eventType: "RECOMPOSED",
+          fields: {
+            Scope: newScope,
+            "Stages skipped": skippedFirst.join(", "),
+            "Stages added": "none",
+            "Stages in Scope": String(executeStages.length),
+            Reason: PERSON_ASKED_SKIP_REASON,
+          },
+        }]),
       );
       if (reopened) {
         auditEntries.push({
@@ -12438,7 +12532,7 @@ function rebuildEffectivePlanFields(
     }
   }
   for (const s of graph) {
-    if (eff(s.slug) === "EXECUTE") executeStages.push(s.number);
+    if (eff(s.slug) === "EXECUTE") executeStages.push(`${s.number} (${s.slug})`);
     else if (!preservedSlugs.has(s.slug)) skipStages.push(skipLabel(s));
   }
   let next = setField(content, "Stages to Execute", executeStages.join(", "));
@@ -12481,6 +12575,62 @@ function stagesSkippedInThisWork(projectDir: string, intent?: string, space?: st
     }
   }
   return skipped;
+}
+
+// The plans that reopen this finished work, each with the stages it runs from
+// the one the scope change starts (stageReopenedByScopeChange decides whether
+// and where). Empty while the work runs. Recompose's refusal over finished work
+// and `next compose` there both name these, so the person hears the same way
+// on from either (#3207).
+export function plansReopeningFinishedWork(stateContent: string): Array<{ scope: string; stages: StageEntry[] }> {
+  const own = (getField(stateContent, "Scope") ?? "").trim();
+  const boxes = new Map(parseCheckboxes(stateContent).map((c) => [c.slug, c.state]));
+  const graph = loadStageGraph();
+  const mapping = loadScopeMapping();
+  return [...validScopes()].sort().flatMap((scope) => {
+    const first = scope === own ? null : stageReopenedByScopeChange(stateContent, scope);
+    if (first === null) return [];
+    const grid = scopeGridOnProject(mapping[scope], stateContent);
+    const stages = graph.slice(graph.findIndex((s) => s.slug === first.slug)).filter((s) =>
+      grid[s.slug] === "EXECUTE" && boxes.get(s.slug) !== "completed" && boxes.get(s.slug) !== "skipped");
+    return [{ scope, stages }];
+  });
+}
+
+// The skips typed beside a switch to `scope` on finished work that land before
+// its reopen picks a stage: each stage it would start, in turn, while the person
+// skipped it. Once a stage has started recompose can no longer skip it, so the
+// scope change takes these off the plan itself and starts the first stage after
+// them; `next` hands it these and every other typed skip to recompose.
+export function skipsBeforeReopen(stateContent: string, scope: string, skipped: readonly string[]): string[] {
+  const passed: string[] = [];
+  for (let at = stageReopenedByScopeChange(stateContent, scope); at !== null && skipped.includes(at.slug);
+    at = stageReopenedByScopeChange(stateContent, scope, passed)) {
+    passed.push(at.slug);
+  }
+  return passed;
+}
+
+// Recompose over finished work: its own plan takes no more stages, and a plan
+// that runs the ones asked for after the last stage reopens it there.
+function finishedWorkRecomposeRefusal(content: string, added: string[]): string {
+  const graph = loadStageGraph();
+  const name = (slug: string): string => graph.find((s) => s.slug === slug)?.name || slug;
+  const listed = (slugs: string[]): string => {
+    const names = slugs.map(name);
+    return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  };
+  const last = name((getField(content, "Current Stage") ?? "").trim());
+  if (added.length === 0) return "Cannot recompose: this work is finished, so nothing on its plan is left to skip.";
+  const plans = plansReopeningFinishedWork(content)
+    .filter(({ stages }) => added.every((slug) => stages.some((s) => s.slug === slug)))
+    .map(({ scope }) => scope);
+  const typed = (args: string): string => `\`${entrySkillInvocation()} ${args}\``;
+  return plans.length > 0
+    ? `Cannot recompose: this work is finished, so its own plan takes no more stages. A plan that runs ${listed(added)} ` +
+      `after ${last} reopens it there, keeping what is done: ${plans.join(", ")}. To switch to one, type ${typed("--scope <plan>")}.`
+    : `Cannot recompose: this work is finished, so its own plan takes no more stages, and no plan runs ${listed(added)} ` +
+      `after ${last}. To run a stage on its own, type ${typed("--stage <stage> --single")}; for more, start new work.`;
 }
 
 function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
@@ -12564,9 +12714,11 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // conductor that drifts into "improving the plan") is refused, naming the
     // setter that lets it through.
     if (isAutonomousMode(content) && !personAskedSinceGate(projectDir, { intent: flags.intent, space: flags.space })) {
+      const why = process.env.AIDLC_UNATTENDED === "1"
+        ? "with nobody here to approve it" : "without a request from the person for this change on record";
       die(
         "Cannot change the plan while Construction runs unattended (Construction Autonomy Mode is " +
-          "autonomous) with nobody here to approve it. Run " +
+          `autonomous) ${why}. Run ` +
           `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
           "approval at each Bolt), then recompose.",
       );
@@ -12577,8 +12729,9 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // leave no cursor to ever reach the added stage — a corrupted record,
     // not a plan change. (With no cursor, the behind-cursor guard below is
     // also inert, so this check is the only thing standing between recompose
-    // and a finished workflow.)
+    // and a finished workflow.) Finished work is told which plans reopen it.
     const wfStatus = getField(content, "Status") || "";
+    if (wfStatus.trim() === "Completed") die(finishedWorkRecomposeRefusal(content, addList));
     if (wfStatus !== "Running") {
       die(
         `Cannot recompose: workflow Status is "${wfStatus || "unknown"}", not Running. ` +
@@ -12611,11 +12764,16 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       die(`Cannot recompose "${slug}": ${why}`);
     const typed = (args: string): string => `\`${entrySkillInvocation()} ${args}\``;
     const runAlone = (slug: string): string => `To run it on its own, type ${typed(`--stage ${slug} --single`)}.`;
-    const movePast = (slug: string): string => {
+    // A started stage (in progress, being revised, or at its own question) is
+    // skipped where it stands by the person's own skip, which `next` carries
+    // out (planChangeDirective); on the last stage that is the way on.
+    const movePast = (slug: string, started: boolean): string => {
       const next = nextInScopeStage(slug, scope, content);
       return next
         ? `To move past it, jump to the next stage with ${typed(`--stage ${next.slug}`)}.`
-        : "It is the last stage on the plan.";
+        : started
+          ? `It is the last stage on the plan; to skip it where it stands, type ${typed(`--skip ${slug}`)}.`
+          : "It is the last stage on the plan.";
     };
 
     for (const slug of [...skipList, ...addList]) {
@@ -12635,7 +12793,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
           ? `It is already done; to run it again, jump back to it with ${typed(`--stage ${slug}`)}.`
           : state === "skipped"
             ? (skipping ? "It is already skipped." : runAlone(slug))
-            : (skipping ? movePast(slug) : runAlone(slug));
+            : (skipping ? movePast(slug, true) : runAlone(slug));
         reject(slug, `${frozen} ${instead}`);
       }
       const idx = graph.findIndex((s) => s.slug === slug);
@@ -12657,7 +12815,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       if (!owedRe && !passedOver && currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
         if (putBack) reject(slug, `${frozen} ${runAlone(slug)}`);
         const instead = idx === currentIdx
-          ? (skipping ? movePast(slug) : runAlone(slug))
+          ? (skipping ? movePast(slug, false) : runAlone(slug))
           : (skipping ? "The workflow does not go back to it, so there is nothing to skip." : runAlone(slug));
         reject(slug, `it is ${idx === currentIdx ? "the current stage" : `behind the current stage ("${currentSlug}")`}, and a plan change only reaches stages ahead. ${instead}`);
       }
@@ -13094,6 +13252,8 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   const { lines, checkOffInTheirName } = writeSettings(projectDir, intent, space, intentSettingsFromFlags(flags), {
     sessionId: selection.sessionId, fail: die, ...named,
   });
+  // A setting the chat changed on its work is its step there (chatTookStep).
+  chatTookStep(projectDir, selection);
   // Only the agent reads this output, and on Copilot, Cursor and Kiro no hook
   // line reaches the person, so a check of theirs switched off from the chat is
   // said by the agent or not at all; the order says the lines are theirs. A step
@@ -13605,7 +13765,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
-        '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
+        "[--arguments '<description>' | --request <id>] [--label '<short label>'] " +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] " +
         "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] [--project-type <greenfield|brownfield>] " +
@@ -13751,6 +13911,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "plugin-build":
       handlePluginBuild(positional, flags, missingValueFlags);
+      break;
+    case "plugin-test":
+      handlePluginTest(positional, flags, missingValueFlags);
       break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is

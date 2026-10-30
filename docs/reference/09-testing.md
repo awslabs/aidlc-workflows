@@ -456,7 +456,7 @@ Linux subreaper containment and Windows Job Objects do not have this limitation.
 
 **Running the suite on Windows manually:**
 
-1. Install Bun **1.3.14 or newer**, Node.js for the suite's other tooling, and the Claude Code CLI.
+1. Install Bun **1.4.4 or newer**, Node.js for the suite's other tooling, and the Claude Code CLI.
 2. Install Git for Windows if you are running the full suite or the POSIX wrapper compatibility smoke; the native runner path itself does not require Bash.
 3. Install the repository's dev dependencies so Bun can resolve `@xterm/headless`. The default Windows TUI backend uses Bun's native PTY.
 4. Set `AIDLC_TUI_LIVE=1` for live Claude TUI coverage. Leave `AIDLC_TUI_BACKEND` unset or set it to `auto`/`bun`; use `AIDLC_BUN_BIN` to select a concrete `bun.exe` when needed.
@@ -542,7 +542,7 @@ The shared selector in `tests/harness/tui-runtime.ts` chooses its backend from
 | Selection | Platform and prerequisites |
 |-----------|----------------------------|
 | Unset or `auto` | Native `bun` on Linux, Windows and macOS. |
-| `bun` | Linux, Windows and macOS. Requires **Bun >=1.3.14**, `Bun.Terminal`, `bun:ffi`, and `@xterm/headless`. Native containment supports x64/arm64: Linux requires glibc, procfs, and kernel >=5.4 for pidfd signaling and waiting; Windows requires ConPTY; macOS uses libSystem process identities and inherited ownership tokens (see [Cross-Platform Coverage](#cross-platform-coverage) for its environment-scrubbing limitation). |
+| `bun` | Linux, Windows and macOS. Requires **Bun >=1.4.4**, `Bun.Terminal`, `bun:ffi`, and `@xterm/headless`. Native containment supports x64/arm64: Linux requires glibc, procfs, and kernel >=5.4 for pidfd signaling and waiting; Windows requires ConPTY; macOS uses libSystem process identities and inherited ownership tokens (see [Cross-Platform Coverage](#cross-platform-coverage) for its environment-scrubbing limitation). |
 | `tmux` | Explicit alternative on Linux/macOS. Requires Bun to run the driver and `tmux` on `PATH`. |
 
 `auto` chooses by platform; it does not fall back to another backend when
@@ -618,18 +618,18 @@ are excluded. JSON retains the full physical grid, including blank cells and
 width-zero continuation cells for wide characters.
 
 The existing `start`, `send`, plain `capture`, `startup`, and `wait` commands
-retain their calling conventions. `send --keys "<text>" --literal` sends
+retain their calling conventions. `send --keys '<text>' --literal` sends
 literal text; without `--literal`, named keys are interpreted and arbitrary
 text such as `1`/`2` remains literal. Enter is appended unless `--no-enter` is
 set. `wait --stable-ms N` retains its screen-stability condition, and
-`startup --ready-pattern "<regex>"` retains its startup navigation behavior.
+`startup --ready-pattern '<regex>'` retains its startup navigation behavior.
 
 The Bun backend supports these capture and input commands:
 
 | Command | Behavior |
 |---------|----------|
 | `resize --session <name> --width N --height N` | Resizes both the PTY and emulator: columns 2–500, rows 1–200, at most 40,000 cells. |
-| `paste --session <name> --text "<text>"` | Pastes text with **no implicit Enter**. Uses bracketed-paste markers only when the application has enabled that mode. CRLF and lone LF become CR; existing lone CR is retained. |
+| `paste --session <name> --text '<text>'` | Pastes text with **no implicit Enter**. Uses bracketed-paste markers only when the application has enabled that mode. CRLF and lone LF become CR; existing lone CR is retained. |
 | `capture --session <name> --physical` | Returns plain text with physical visible rows; preserves the default logical capture API. |
 | `capture --session <name> --json` | Returns a coherent `TuiSnapshot` with full cell data. |
 | `capture --session <name> --ansi` | Returns the current viewport with cell colors and styles as ANSI sequences. |
@@ -911,7 +911,7 @@ Linux/macOS/Windows. The nightly Full Suite runs no deterministic tier; its
 `scope_runs` job calls the shared workflow for the scope runs, `own-file-moves`,
 the scope-host runs and the guard matrix on all three. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
-Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
+Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.4,
 regenerates projections once, and invokes the Bash wrapper with `--debug -P 8
 --no-llm`. E2E runs retain `--isolated-e2e`; smoke remains serial within each
 checkout, and so does unit except in a macOS shard
@@ -1128,7 +1128,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: native `bun` on Linux/Windows/macOS. Explicit values: `bun`, `tmux`; see [Terminal Driver](#terminal-driver). |
 | `AIDLC_TUI_BUN_ROOT` | `<os.tmpdir()>/aidlc-bun-tui` | Native records/snapshots; use the same root across commands. Must be user-owned and private (0700 on POSIX; current-user owner, no Everyone/Users/Authenticated Users allow ACEs on Windows), never a symlink/reparse point. A missing root is created privately; an unsafe existing root or identity-replaced session directory is refused. |
 | `AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS` | unset | Set to `1` only on a controlled test host whose temporary-directory ancestors are owned by a sandbox uid (neither root nor the current user), such as an overlay filesystem where `/` belongs to `nobody`. Without it, every live native-root tier fails at setup, and the error names this variable. It skips only the POSIX explicit-root ancestor ownership check: ancestors writable by other users without the sticky bit and symlink/reparse points are still refused, and the private root's owner, mode and generation handshake stay enforced. |
-| `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.3.14. |
+| `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.4.4. |
 | `AIDLC_NODE_BIN` | unset | Node executable made available to isolated live tool environments and test fixtures; it does not select a TUI backend. |
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
 | `AIDLC_TEST_COMPILED_DIR` | `<runner log dir>/compiled` (runner-set) | Run-owned handoff from t238 to t249: the verified native `aidlc` / `aidlc.exe` plus adjacent `runtime/`. The runner replaces inherited values in every child, keeping the artifact outside per-file temp cleanup and isolated from other runs. |
@@ -2070,8 +2070,8 @@ hosted lane.
 Before selecting a preview for stable promotion, a maintainer reviews its
 recorded Kiro CLI release-journey results for the selected source SHA, one for
 each Kiro tree: `kiro`, which setup lists as "Kiro CLI (V2)", and `kiro-ide`,
-which setup lists as "Kiro" and whose `.kiro/settings/cli.json` pins Kiro CLI
-to its v3 engine. Both run in Kiro CLI; neither drives Kiro IDE. If no result
+which setup lists as "Kiro" and which is built for Kiro CLI's v3 engine; the
+journey starts each on its engine (`--v2`, `--v3`). Both run in Kiro CLI; neither drives Kiro IDE. If no result
 exists for that SHA, run the journey
 (`tests/e2e/t-tui-kiro-release-journey.serial.test.ts`, the same journey as the
 Copilot lane's, in the interactive `kiro-cli chat` terminal, once per tree) on
@@ -2093,7 +2093,11 @@ Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
 follow the model Kiro CLI uses (about 33 each on `claude-opus-5.5` with Kiro
 CLI 2.32.0). It prints one line per tree, for example
 `Kiro CLI 2.32.0 (kiro-ide) release journey on <commit>: PASS (5.1 min of
-turns, 33.23 credits, 3 permission prompts)`, and both lines are recorded,
+turns, 33.23 credits, 3 permission prompts)`; `<commit>` reads
+`<commit> plus uncommitted changes` when the checkout had changes not in that
+commit (the run packages the checkout as it is), and `<commit> (git status
+failed)` when git could not say; run it from a clean checkout of the source
+commit. Both lines are recorded,
 including the full source SHA, in the selected preview's GitHub release notes
 before promotion. Existing results for that source are reused;
 the promotion workflow does not rerun the journey on its new metadata commit.

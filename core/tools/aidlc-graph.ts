@@ -1301,7 +1301,7 @@ export function loadSensors(): Map<string, SensorFile> {
     if (typeof manifest.id === "string" && out.has(manifest.id)) {
       const previous = mustGet(out, manifest.id, "sensor-manifest dup");
       throw new Error(
-        `${filePath}: duplicate sensor id "${manifest.id}" — also declared ` +
+        `${filePath}: duplicate sensor id "${manifest.id}" - also declared ` +
           `in ${previous.path}. Rename one of them.`,
       );
     }
@@ -2688,7 +2688,7 @@ export function compileStageGraph(): {
       const previousFile = slugToFile.get(slug);
       if (previousFile) {
         throw new Error(
-          `Duplicate stage slug "${slug}" in ${filePath} — already declared ` +
+          `Duplicate stage slug "${slug}" in ${filePath} - already declared ` +
             `in ${previousFile}. Rename one of them.`
         );
       }
@@ -2756,7 +2756,7 @@ export function compileStageGraph(): {
       .map(({ file, slug }) => `${file} (stage "${slug}")`)
       .join(", ");
     throw new Error(
-      `Duplicate producers for consumed artifact "${artifact}" in ${producerList} — ` +
+      `Duplicate producers for consumed artifact "${artifact}" in ${producerList} - ` +
         `consumed by stage "${consumer.slug}" in ${consumer.file}. ` +
         `Rename one produced artifact or update the consumer.`
     );
@@ -2890,7 +2890,7 @@ export function compileStageGraph(): {
       if (numericStageOrder(depNum, stage.number) >= 0) {
         throw new Error(
           `Compile invariant violated: stage "${stage.slug}" (${stage.number}) ` +
-            `requires "${dep}" (${depNum}) — dependency must be lower-numbered. ` +
+            `requires "${dep}" (${depNum}) - dependency must be lower-numbered. ` +
             `Fix: either renumber in stage-graph.json to match the dependency ` +
             `direction, or remove the offending requires_stage edge.`
         );
@@ -2916,7 +2916,7 @@ export function compileStageGraph(): {
       console.error(
         `[advisory] stage "${stage.slug}" is the per-unit build stage ` +
           `(for_each: unit-of-work + workspace_requires) but mode is ` +
-          `"${stage.mode}", not "subagent" — the autonomous Construction ` +
+          `"${stage.mode}", not "subagent" - the autonomous Construction ` +
           `swarm will NOT fire for it; units build serially.`
       );
     }
@@ -3665,9 +3665,13 @@ export function computeArs(
 // than that scan's (the person's word, never a scan the folder has outgrown),
 // writes the scores on WORKFLOW_STARTED, then removes the record. The plan
 // also keeps the depth, settings and Guard Policy the gate showed beside its
-// stages, so the creation that approves it runs at them. It sits beside the
-// proposal, in the space's gitignored engine dir. Every step is best-effort: a
-// record that cannot be read or written records nothing.
+// stages, so the creation that approves it runs at them. The plan the gate
+// showed is the one kept before the person's reply to it: each plan keeps the
+// time it was kept, and a different plan validated later moves it to `earlier`,
+// so a composer run again after the reply (one gone by the Approve turn, a new
+// chat) never stands in for the plan they saw (keptComposerPlans). It sits
+// beside the proposal, in the space's gitignored engine dir. Every step is
+// best-effort: a record that cannot be read or written records nothing.
 export type ArsMethod = "codekb" | "fallback";
 type ProjectTypeWord = "brownfield" | "greenfield";
 interface ComposerScores {
@@ -3676,9 +3680,13 @@ interface ComposerScores {
   scores?: Record<ArsComponent, number>;
   method?: ArsMethod;
   plan?: KeptComposerPlan;
+  // The plans kept before `plan`, oldest first.
+  earlier?: KeptComposerPlan[];
+  // Creation named the approval of the plan the person saw (markComposerPlanNamed).
+  named?: true;
 }
 const isProjectTypeWord = (value: unknown): value is ProjectTypeWord => value === "brownfield" || value === "greenfield";
-interface KeptComposerPlan {
+export interface KeptComposerPlan {
   scope: string;
   changes: PlanChanges;
   projectType?: ProjectTypeWord;
@@ -3687,7 +3695,10 @@ interface KeptComposerPlan {
   depth?: CreationDepth;
   settings?: SettingsChanges;
   guardPolicy?: GuardPolicy;
+  // When a routed run kept it. A plan an older version kept has none.
+  at?: string;
 }
+const KEPT_EARLIER_MAX = 8;
 type CreationDepth = NonNullable<ScopeValidation["creation_depth"]>;
 const CREATION_DEPTHS: readonly CreationDepth[] = ["minimal", "standard", "comprehensive"];
 
@@ -3728,21 +3739,40 @@ function readComposerScores(projectDir: string): ComposerScores | null {
       record.scores = Object.fromEntries(ARS_COMPONENTS.map((c) => [c, scores[c]])) as Record<ArsComponent, number>;
     }
     if (parsed.method === "codekb" || parsed.method === "fallback") record.method = parsed.method;
-    const plan = parsed.plan;
-    const slugs = (list: unknown): list is string[] =>
-      Array.isArray(list) && list.every((slug) => typeof slug === "string" && KEPT_SLUG.test(slug));
-    if (typeof plan?.scope === "string" && KEPT_SLUG.test(plan.scope) && slugs(plan.changes?.skip) && slugs(plan.changes?.add)) {
-      record.plan = { scope: plan.scope, changes: { skip: plan.changes.skip, add: plan.changes.add } };
-      if (isProjectTypeWord(plan.projectType)) record.plan.projectType = plan.projectType;
-      if ((CREATION_DEPTHS as readonly unknown[]).includes(plan.depth)) record.plan.depth = plan.depth;
-      const settings = keptSettings(plan.settings);
-      if (settings !== null) record.plan.settings = settings;
-      if (plan.guardPolicy === "strict" || plan.guardPolicy === "relaxed") record.plan.guardPolicy = plan.guardPolicy;
-    }
+    const plan = keptPlanOf(parsed.plan);
+    if (plan !== null) record.plan = plan;
+    const earlier = Array.isArray(parsed.earlier) ? parsed.earlier.flatMap((entry) => keptPlanOf(entry) ?? []) : [];
+    if (plan !== null && earlier.length > 0) record.earlier = earlier.slice(-KEPT_EARLIER_MAX);
+    if (plan !== null && parsed.named === true) record.named = true;
     return record;
   } catch {
     return null;
   }
+}
+
+function keptPlanOf(plan: KeptComposerPlan | undefined): KeptComposerPlan | null {
+  const slugs = (list: unknown): list is string[] =>
+    Array.isArray(list) && list.every((slug) => typeof slug === "string" && KEPT_SLUG.test(slug));
+  if (typeof plan?.scope !== "string" || !KEPT_SLUG.test(plan.scope) || !slugs(plan.changes?.skip) || !slugs(plan.changes?.add)) {
+    return null;
+  }
+  const kept: KeptComposerPlan = { scope: plan.scope, changes: { skip: plan.changes.skip, add: plan.changes.add } };
+  if (isProjectTypeWord(plan.projectType)) kept.projectType = plan.projectType;
+  if ((CREATION_DEPTHS as readonly unknown[]).includes(plan.depth)) kept.depth = plan.depth;
+  const settings = keptSettings(plan.settings);
+  if (settings !== null) kept.settings = settings;
+  if (plan.guardPolicy === "strict" || plan.guardPolicy === "relaxed") kept.guardPolicy = plan.guardPolicy;
+  if (typeof plan.at === "string" && !Number.isNaN(Date.parse(plan.at))) kept.at = plan.at;
+  return kept;
+}
+
+/** The same plan, whenever it was kept. */
+function sameKeptPlan(a: KeptComposerPlan, b: KeptComposerPlan): boolean {
+  const key = (plan: KeptComposerPlan): string => JSON.stringify([
+    plan.scope, [...plan.changes.skip].sort(), [...plan.changes.add].sort(), plan.projectType ?? null, plan.depth ?? null,
+    Object.entries(plan.settings ?? {}).sort(([x], [y]) => x.localeCompare(y)), plan.guardPolicy ?? null,
+  ]);
+  return key(a) === key(b);
 }
 
 /** A front compose dispatch for `request` opens a fresh record, replacing any
@@ -3768,6 +3798,8 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
     scores: Object.fromEntries(ARS_COMPONENTS.map((c) => [c, scores[c]])) as Record<ArsComponent, number>,
     ...(method ? { method } : {}),
     ...(open.plan ? { plan: open.plan } : {}),
+    ...(open.earlier ? { earlier: open.earlier } : {}),
+    ...(open.named ? { named: open.named } : {}),
   };
   try {
     writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify(record)}\n`);
@@ -3777,44 +3809,95 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
 }
 
 /** A routed `validate-grid` run that passes keeps its plan in a record a
- *  dispatch opened, replacing an earlier run's; with none open it writes nothing. */
+ *  dispatch opened, with the time it kept it; a different plan moves the one
+ *  kept before it to `earlier` and clears the named mark, and the same plan
+ *  again keeps its first time. With no record open it writes nothing. */
 function keepComposerPlan(projectDir: string, plan: KeptComposerPlan): void {
   const open = readComposerScores(projectDir);
-  if (open === null) return;
+  if (open === null || (open.plan !== undefined && sameKeptPlan(open.plan, plan))) return;
+  const { named: _named, ...kept } = open;
+  const record: ComposerScores = {
+    ...kept,
+    plan: { ...plan, at: new Date().toISOString() },
+    ...(open.plan ? { earlier: [...(open.earlier ?? []), open.plan].slice(-KEPT_EARLIER_MAX) } : {}),
+  };
   try {
-    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ ...open, plan })}\n`);
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify(record)}\n`);
   } catch {
     // Unwritten: creation takes the stage changes and type the command carries.
   }
 }
 
-/** The plan the composer validated for one of `requests` (a creation's
- *  request and the one it was composed from) on `scope`: the stage changes
- *  creation of the approved plan carries, whatever list was typed for it, and
- *  the project type it was validated for when that is not the type the scan
- *  found as the dispatch opened the record: the composer plans on the scan's
- *  type unless the person said otherwise, so only their word is carried. The
- *  depth, settings and Guard Policy the gate showed ride with it. Null when the
- *  record belongs to other work, keeps no plan (one an older version wrote), or
- *  its plan runs on another scope. */
+/** The plans kept for one of `requests` (a creation's request and the one it
+ *  was composed from): `shown`, the newest the person replied after (`seen`
+ *  says whether they replied since a time; a plan an older version kept counts
+ *  as seen), the one their gate showed; `unseen`, the newest plan when it was
+ *  kept after that reply; and `named`, whether creation named the shown plan's
+ *  approval since. Null when the record belongs to other work or keeps no plan. */
+export function keptComposerPlans(
+  projectDir: string,
+  requests: readonly string[],
+  seen: (at: string) => boolean,
+): { shown: KeptComposerPlan | null; unseen: KeptComposerPlan | null; named: boolean } | null {
+  const record = readComposerScores(projectDir);
+  if (record?.plan === undefined || !requests.includes(record.request)) return null;
+  return { ...shownAndUnseen(record.plan, record.earlier ?? [], seen), named: record.named === true };
+}
+
+/** Creation named the approval of the plan the person saw for one of
+ *  `requests`: once said, a creation typed with that plan's stages is created
+ *  as typed, with any setting the person asked for in their own words. */
+export function markComposerPlanNamed(projectDir: string, requests: readonly string[]): void {
+  const record = readComposerScores(projectDir);
+  if (record?.plan === undefined || !requests.includes(record.request) || record.named) return;
+  try {
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ ...record, named: true })}\n`);
+  } catch {
+    // Unwritten: the step is said again at the next creation.
+  }
+}
+
+function shownAndUnseen(
+  plan: KeptComposerPlan,
+  earlier: readonly KeptComposerPlan[],
+  seen: (at: string) => boolean,
+): { shown: KeptComposerPlan | null; unseen: KeptComposerPlan | null } {
+  const plans = [...earlier, plan];
+  let shown = plans.length - 1;
+  while (shown >= 0 && plans[shown].at !== undefined && !seen(plans[shown].at as string)) shown--;
+  return { shown: plans[shown] ?? null, unseen: shown < plans.length - 1 ? plan : null };
+}
+
+/** The plan the composer validated for one of `requests` on `scope` that the
+ *  person saw (keptComposerPlans; without `seen`, the plan kept last): the
+ *  stage changes creation of the approved plan carries, whatever list was
+ *  typed for it, and the project type it was validated for when that is not
+ *  the type the scan found as the dispatch opened the record: the composer
+ *  plans on the scan's type unless the person said otherwise, so only their
+ *  word is carried. The depth, settings and Guard Policy the gate showed ride
+ *  with it. Null when the record belongs to other work, keeps no plan (one an
+ *  older version wrote), or the plan they saw runs on another scope. */
 export function approvedComposerPlan(
   projectDir: string,
   requests: readonly string[],
   scope: string,
+  seen: (at: string) => boolean = () => true,
 ): ApprovedComposerPlan | null {
   const record = readComposerScores(projectDir);
-  if (record?.plan === undefined || !requests.includes(record.request) || record.plan.scope !== scope) return null;
-  const { changes, depth, settings, guardPolicy } = record.plan;
-  const theirs = record.plan.projectType !== undefined && record.scanned !== undefined && record.plan.projectType !== record.scanned;
+  if (record?.plan === undefined || !requests.includes(record.request)) return null;
+  const plan = shownAndUnseen(record.plan, record.earlier ?? [], seen).shown;
+  if (plan === null || plan.scope !== scope) return null;
+  const { changes, depth, settings, guardPolicy } = plan;
+  const theirs = plan.projectType !== undefined && record.scanned !== undefined && plan.projectType !== record.scanned;
   return {
     changes,
-    ...(theirs ? { projectType: record.plan.projectType } : {}),
+    ...(theirs ? { projectType: plan.projectType } : {}),
     ...(depth ? { depth } : {}),
     ...(settings ? { settings } : {}),
     ...(guardPolicy ? { guardPolicy } : {}),
   };
 }
-export type ApprovedComposerPlan = Omit<KeptComposerPlan, "scope">;
+export type ApprovedComposerPlan = Omit<KeptComposerPlan, "scope" | "at">;
 
 /** The WORKFLOW_STARTED fields for a plan being created for `requests` (its
  *  request id and the one it was composed from): the composer's scores when

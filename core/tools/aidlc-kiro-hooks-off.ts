@@ -57,7 +57,7 @@ export function kiroHookOffLine(hook: KiroHookOff, now: Date = new Date()): stri
 
 // The said mark keeps, per hook, the file time the line was said for, so a hook
 // turned back on and off again is a new change that is said again. It lives
-// beside the sessions (aidlc-lib.ts sessionsDir: `aidlc/.aidlc-sessions`); a
+// beside the sessions (aidlc-record-core.ts sessionsDir: `aidlc/.aidlc-sessions`); a
 // torn or missing record only has the line said once more.
 const SAID_FILE = "kiro-hooks-off-said.json";
 

@@ -704,6 +704,15 @@ describe("t264 (a) judgeFreeze decision table", () => {
       expect(followed?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
       expect(followed?.rest.trim(), command).toBe("aidlc doctor");
     }
+    // Git Bash, Claude Code's shell on Windows, names a drive `/c`; PowerShell
+    // reads `/c` as a folder on the current drive.
+    if (process.platform === "win32") {
+      const gitBash = `/${dir[0].toLowerCase()}${dir.slice(2).replaceAll("\\", "/")}`;
+      for (const command of [`cd ${q(gitBash)} && aidlc doctor`, `cd ${gitBash}; aidlc doctor`]) {
+        expect(move(command)?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
+      }
+      expect(move(`Set-Location ${q(gitBash)} ; aidlc doctor`, "powershell")).toBeNull();
+    }
     // Folders the lexer would name but the shell would not enter: bash drops a
     // backslash-newline inside quotes, and does not split a word at U+00A0.
     if (process.platform !== "win32") mkdirSync(join(root, "a\nb"));
@@ -1022,6 +1031,30 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       throw new Error(`revise failed: ${revise.stdout}${revise.stderr}`);
     }
     expect(runHook(p, writePayload(file)).code).toBe(2);
+  });
+
+  test("a session started under a named agent is offered the check's switch; its subagent is not", () => {
+    // Claude Code 2.1.312: the session's agent in agent_type on its own calls,
+    // agent_id on a subagent's, CLAUDE_CODE_SESSION_ID = the payload's session_id.
+    const session = "c9911951-01b9-4524-b912-93aeefda2d8b";
+    const remedyOps = (caller: Record<string, unknown>): string[] => {
+      const p = projBeforeGate();
+      recordReview(p, "READY");
+      openGate(p);
+      const refused = runHook(
+        p,
+        { ...writePayload(raArtifact(p)), session_id: session, ...caller },
+        { CLAUDE_CODE_SESSION_ID: session },
+      );
+      expect(refused.code).toBe(2);
+      return refusalRecords(p).flatMap((record) =>
+        ((JSON.parse(record) as { refusal?: { remedies?: { op: string }[] } }).refusal?.remedies ?? [])
+          .map((remedy) => remedy.op)
+      );
+    };
+    expect(remedyOps({})).toContain("lower-fence");
+    expect(remedyOps({ agent_type: "claude" })).toContain("lower-fence");
+    expect(remedyOps({ agent_type: "general-purpose", agent_id: "a8a30d0b327881676" })).not.toContain("lower-fence");
   });
 
   test("advisory NOT-READY is terminal and freezes until the human gate", () => {
