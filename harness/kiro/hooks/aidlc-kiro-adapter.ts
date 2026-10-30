@@ -72,7 +72,7 @@ import {
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { SAY_ONCE_BEFORE_THEY_REPLY } from "../tools/aidlc-directive.ts";
 import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
-import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, typedHarnessName } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
@@ -228,7 +228,7 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
       `Expected resources to include ${expected}, resolving to at least one existing Markdown file. ` +
       `${agent.startsWith("aidlc-") ? step : `Add ${expected} to the resources array in the plugin's agent JSON and repair the active-space memory files before retrying.`}\n`,
   });
-  const reinstall = `Run \`${aidlcInvocation()} config --harness kiro\` in a terminal to put AI-DLC's Kiro files back, ` +
+  const reinstall = `Run \`${aidlcInvocation()} config --harness ${typedHarnessName("kiro")}\` in a terminal to put AI-DLC's Kiro files back, ` +
     `then start the specialist again; /aidlc --doctor names anything still wrong.`;
   for (const agent of new Set(workers)) {
     const file = join(projectDir, ".kiro", "agents", `${agent}.json`);

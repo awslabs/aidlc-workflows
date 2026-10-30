@@ -114,7 +114,7 @@ function installKiroIde(extra: Record<string, string>, yes = true): { project: s
   const project = temp("aidlc-t-kiro-terminal-project-");
   mkdirSync(join(project, ".git"));
   const result = runInit(
-    ["config", "--project-dir", project, "--from", DIST_RELEASE, "--harness", "kiro-ide", ...(yes ? ["--yes"] : [])],
+    ["config", "--project-dir", project, "--from", DIST_RELEASE, "--harness", "kiro", ...(yes ? ["--yes"] : [])],
     project,
     extra,
   );

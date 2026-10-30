@@ -10,8 +10,10 @@ hook wiring, activation) differs.
 Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
 whose `inclusion: always` frontmatter loads it automatically. The root
 `AGENTS.md` block is harness-neutral and shared with other installed harnesses;
-engine directories must still differ (the `kiro` and `kiro-ide` distributions cannot share `.kiro/`; in a project with
-`kiro`, `aidlc config --harness kiro-ide` switches `.kiro/` to this distribution in place).
+engine directories must still differ (the Kiro CLI (V2) and Kiro distributions cannot share `.kiro/`; in a project with
+Kiro CLI (V2), `aidlc config --harness kiro` switches `.kiro/` to this distribution in place; at a terminal it asks
+first, with `--yes` it switches, and without a terminal, or under `--quiet` or `--json`, it changes nothing and prints the
+command with `--yes`).
 
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro with Claude Opus 4.8.** The conductor drives a
@@ -59,7 +61,7 @@ curl -fsSL \
 sh "$tmp/install.sh"
 rm -rf "$tmp"
 cd your-project
-aidlc config --harness kiro-ide
+aidlc config --harness kiro
 aidlc doctor
 ```
 
@@ -125,7 +127,7 @@ if [ -f your-project/.kiro/settings/cli.json ]; then
 fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-ide
+cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro
 ```
 
 The first removal loop is the v2.5.57 hook-name migration. The second removes
@@ -404,7 +406,7 @@ over, which is why the end of a stage is the best moment (see
 
 Kiro IDE and Kiro CLI v3 register hooks through v2 hook JSON files
 (`{"version":"v1","hooks":[{name,trigger,matcher,action}]}`, PascalCase
-triggers) under `.kiro/hooks/` (a different mechanism from the `kiro` CLI
+triggers) under `.kiro/hooks/` (a different mechanism from the Kiro CLI (V2)
 distribution, which carries a `hooks` block inside the agent JSON). Native hook commands route through
 `aidlc engine adapter kiro-ide`; source/development copies route through the projected
 `aidlc-kiro-adapter.ts` shim. Both normalize the IDE event into the shape the
@@ -600,10 +602,10 @@ tool, so an effort recorded for one agent for another tool applies on Kiro too.
 An `aidlc config` run that writes a model or effort value into a Kiro agent
 file that differs from what the file had, other than a value that run changes
 itself, says so in one line and names
-`aidlc config models --show --harness kiro-ide`, which shows where each value
+`aidlc config models --show --harness kiro`, which shows where each value
 is set; `--effort default` (or `--model default`) for that agent, with
 `--project`, `--local` or `--global` (machine settings) for the file it is in,
-and `--harness kiro-ide` when the project has another harness, takes it out
+and `--harness kiro` when the project has another harness, takes it out
 (an effort taken out this way is gone for every tool).
 `effortLevel` is not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on
 its v3 engine and Kiro IDE 1.3.0.
@@ -753,16 +755,16 @@ files (`hooks/`), the personas' delegate shell deny (`delegate-shell-deny.ts`),
 and onboarding fills — edit those
 (or `core/`), never hand-edit the generated `dist/kiro-ide`.
 
-This harness differs from the `kiro` CLI harness (`harness/kiro/`) in four ways:
+This harness differs from the Kiro CLI (V2) harness (`harness/kiro/`) in four ways:
 the `/aidlc` skill and the Markdown `agents/aidlc-aidlc.md` are its conductor surfaces
 (`settings/cli.json` also makes that agent Kiro CLI's default); it ships v2 hook
-JSON files (the `kiro` harness relies on the agent-JSON `hooks` block); it preloads standing rules through
+JSON files (the Kiro CLI (V2) harness relies on the agent-JSON `hooks` block); it preloads standing rules through
 always-included steering rather than CLI agent resources; the shared Kiro
 projection removes the core persona's Claude-only `disallowedTools` key; and
 its manifest adds `permissions.rules` frontmatter to every persona, beside the
 `tools:` line both harnesses add (each persona a stage reads inline also ships without them, as
 `.kiro/aidlc-common/personas/<agent>.md`, the file the lead reads in its own chat).
-It does not ship the `kiro` harness's agent-v1 JSON.
+It does not ship the Kiro CLI (V2) harness's agent-v1 JSON.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Next steps

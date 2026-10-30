@@ -37,6 +37,7 @@ import {
   invalidateSettingsCache,
   resolveAidlcSettings,
 } from "../../core/tools/aidlc-settings.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 // Cases install and refresh multiple harness projections. Their aggregate
 // workload needs the shared fixture backstop, separate from each subprocess.
@@ -102,7 +103,7 @@ function install(harness = "claude", mcp: "defaults" | "none" = "none"): string 
     "--from",
     join(DIST_RELEASE, harness),
     "--harness",
-    harness,
+    typedHarnessName(harness),
     "--mcp",
     mcp,
     "--yes",

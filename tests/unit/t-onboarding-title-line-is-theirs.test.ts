@@ -22,6 +22,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { instructionFileDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { copyChannelOmits, projectionFiles, walkFiles } from "../../core/tools/aidlc-distribution.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -68,7 +69,7 @@ function config(project: string, from: string, harness: string, ...extra: string
   const machine = temp("aidlc-t-title-machine-");
   const result = spawnSync(
     BUN,
-    [INIT, "config", "--project-dir", project, "--from", from, "--harness", harness, "--mcp", "none", ...extra],
+    [INIT, "config", "--project-dir", project, "--from", from, "--harness", typedHarnessName(harness), "--mcp", "none", ...extra],
     {
       cwd: project,
       env: { ...process.env, AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"), AIDLC_BIN_DIR: join(machine, "bin") },

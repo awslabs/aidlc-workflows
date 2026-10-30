@@ -367,7 +367,7 @@ projection remains deferred (doc 18 §9 Status).
   creates the native `.opencode/agents/` subagent twin and denies nested
   `task` delegation. See
   [Adding an Agent](03-adding-an-agent.md).
-  On Kiro IDE and Kiro CLI v3 (the `kiro-ide` projection), compose gives your
+  On Kiro IDE and Kiro CLI v3 (the Kiro projection, built with `kiro`), compose gives your
   agent the tools, MCP servers and rules AI-DLC's own personas have, so leave
   Kiro's `tools:` and `permissions:` out of the agent (Claude Code would read a
   `tools:` line as its allowlist); your stages can dispatch it. Kiro asks the
@@ -375,7 +375,7 @@ projection remains deferred (doc 18 §9 Status).
   it asks before each MCP call (the aidlc agent allows only AI-DLC's own
   personas by name). This needs a
   plugin built with this release or later: rebuild it and drop it in again.
-  On Kiro CLI V2 (the `kiro` projection), a plugin's agent that a stage
+  On Kiro CLI V2 (the Kiro CLI (V2) projection, built with `kiro-v2`), a plugin's agent that a stage
   dispatches needs a hand-written agent file, `.kiro/agents/<agent>.json`
   (agent-v1 JSON, naming each MCP server it uses as `@<server>` in `tools`),
   and a trust entry for it in `toolsSettings.subagent.trustedAgents` of
@@ -469,7 +469,10 @@ bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir]
 ```
 
 The default output is `<plugin-root>/dist/<harness>/`. Run it once for each
-harness you publish. The repository packager uses the same emitter to build
+harness you publish. `<harness>` is the name `aidlc config --harness` takes; the
+two Kiro names keep their folder names in the output: `kiro` (Kiro IDE and Kiro
+CLI v3) builds `dist/kiro-ide/`, and `kiro-v2` (Kiro CLI (V2)) builds
+`dist/kiro/`. The repository packager uses the same emitter to build
 first-party `dist/plugins/<name>/<harness>/` trees, so its byte-parity guard also
 guards external builds. Publish the output to a git repo with semver tags and a
 `marketplace.json`; teams then install through the host's native commands.
@@ -547,14 +550,14 @@ AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<pro
 # fallback: run the composer explicitly:
 AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<project>" \
   AIDLC_HARNESS_DIR=.kiro bun "<project>/.kiro/aidlc-plugins/<name>/hooks/compose.ts"
-# open in Kiro IDE or start kiro-cli --v3 (kiro-cli --v2 for the kiro projection, on Kiro CLI 2.21.4 or later) → /aidlc
+# open in Kiro IDE or start kiro-cli --v3 (kiro-cli --v2 for the Kiro CLI (V2) projection built with kiro-v2, on Kiro CLI 2.21.4 or later) → /aidlc
 ```
 
-> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
+> **Kiro note.** Use the Kiro projection (built with `kiro`, in its `kiro-ide/` folder) for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
 > includes a `version: "v1"` `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
 > that runs `aidlc engine plugin sync --harness-dir .kiro --plugin-root ./.kiro/aidlc-plugins/<name>` from the workspace root,
 > or that plugin folder's cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher where `aidlc` is not installed.
-> The `kiro` projection emits no hook registration,
+> The Kiro CLI (V2) projection (built with `kiro-v2`, in its `kiro/` folder) emits no hook registration,
 > so run one of the explicit composer commands above. Neither projection emits the
 > retired `.kiro.hook` plugin registration.
 
@@ -711,8 +714,8 @@ missing plugin node, or second-pass file change exits `1`; invalid command
 usage exits `2`. The live install is hashed before and after and is never a
 compose target.
 
-Pass `--harness` when the install is ambiguous, including `.kiro` (Kiro CLI vs
-Kiro IDE) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
+Pass `--harness` when the install is ambiguous, including `.kiro` (`kiro-v2` for
+Kiro CLI (V2) vs `kiro` for Kiro) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
 `--with <base-root>` composes your checkout of the base into the candidate
 first, as sync composes bases first, so the install does not need the base. The
 standalone tool reserves `--dist <version>` until RFC #722 milestone 2 defines

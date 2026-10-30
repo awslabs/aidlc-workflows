@@ -30,6 +30,7 @@ import {
   SPACE_NAME_REGEX,
   repoNameProblem,
   repoNameRefusal,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
@@ -27920,7 +27921,7 @@ export function projectSettingsRepair(distribution: string): string {
   const source = invoke === "aidlc"
     ? ""
     : ` --from <the runtime/${distribution} root you copied from>`;
-  return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
+  return `run \`${invoke} config --harness ${typedHarnessName(distribution)}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
 }
 
 // Missing, or there and not valid JSON (read as doctor reads it); null for a

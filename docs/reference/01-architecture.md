@@ -938,7 +938,7 @@ having no active intent (`next` asks which intent to work on; `continue`, `repor
 and `park` refuse with a step for the agent: list the work, select the one the request is for, run the
 same command again). A chat that SessionStart (or its first command) put on the
 work the cursor named is `cursor-followed` on the hosts whose agent commands name
-their chat (Claude Code, Codex, Kiro CLI, opencode: `CHAT_NAMING_HOSTS`): it takes
+their chat (Claude Code, Codex, Kiro CLI (V2), opencode: `CHAT_NAMING_HOSTS`, by harness id): it takes
 part in that work as any chat there does, but the gates stand aside for it
 (`hookOutsideGate`, `chatAwaitsFirstStep`) until its first AI-DLC step there
 (`next`, `continue`, `report` or `park` other than a read-only probe, what it
@@ -946,7 +946,7 @@ records through `aidlc-log.ts` other than reading answers, a Unit checkpoint
 decision, or a setting it changes), which rewrites the source as
 `cursor` (`chatTookStep`); a worktree of this checkout or a Unit claimed here holds
 it from the start. Its developer dispatch meets the plan as any chat on the work
-does. On Cursor, Copilot and Kiro IDE (and Kiro CLI v3, which runs that tree) a
+does. On Cursor, Copilot and Kiro (Kiro IDE, and Kiro CLI on `kiro-cli --v3`, which runs that tree) a
 command finds its chat only through the process tree, so first contact there
 records `cursor` and the gates hold the chat from the start. When participation
 cannot be decided because a sibling-only

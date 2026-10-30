@@ -66,6 +66,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
   kiroTreeLayout,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
@@ -233,7 +234,7 @@ export function workspaceShellRefreshCommand(
   distribution: string,
 ): string {
   const invoke = invocationForHarness(harnessDir);
-  return `${invoke} config --harness ${distribution}${invoke === "aidlc" ? "" : " --download"}`;
+  return `${invoke} config --harness ${typedHarnessName(distribution)}${invoke === "aidlc" ? "" : " --download"}`;
 }
 
 export type RuntimeBinaryProbe = {
@@ -1104,7 +1105,7 @@ export function runtimeIssues(diagnostics: RuntimeDiagnostics): DiagnosticIssue[
   ) {
     issues.push({
       id: "runtime-harness-cli-missing",
-      message: `${diagnostics.cli.command} is required for ${diagnostics.cli.harness} but is not on PATH`,
+      message: `${diagnostics.cli.command} is required for ${typedHarnessName(diagnostics.cli.harness)} but is not on PATH`,
       remediation: diagnostics.cli.remediation ?? "Install the selected harness CLI.",
     });
   } else if (
@@ -2350,10 +2351,10 @@ export function projectMcpNote(
   if (!record?.mcp) return null;
   const surface = projectMcpSurface(projectDir, harnessDir, harness);
   if (surface.kind === "always" && record.mcp === "none") {
-    return `${harness} ships ${surface.path} as a framework file; MCP none is an instruct-only preference and does not remove that file.`;
+    return `${typedHarnessName(harness)} ships ${surface.path} as a framework file; MCP none is an instruct-only preference and does not remove that file.`;
   }
   if (surface.kind === "none") {
-    return `${harness} has no shipped MCP surface; the recorded ${record.mcp} answer is informational.`;
+    return `${typedHarnessName(harness)} has no shipped MCP surface; the recorded ${record.mcp} answer is informational.`;
   }
   return null;
 }
@@ -2912,8 +2913,8 @@ export function workspaceSiblingIssues(
     remediation: `Run ${
       harnessDir
         ? workspaceShellRefreshCommand(harnessDir, harness)
-        : `aidlc config --harness ${harness}`
-    } to restore the complete ${harness} projection, including sibling directories.`,
+        : `aidlc config --harness ${typedHarnessName(harness)}`
+    } to restore the complete ${typedHarnessName(harness)} projection, including sibling directories.`,
   }));
 }
 
@@ -3638,7 +3639,7 @@ export function runtimeDoctorChecks(
     label: cli.status === "found"
       ? `Harness CLI: ${cli.command} ${cli.version || ""} at ${cli.path}`.trim()
       : cli.status === "not-applicable"
-      ? `Harness CLI: none required for ${cli.harness}`
+      ? `Harness CLI: none required for ${typedHarnessName(cli.harness)}`
       : cli.status === "too-old"
       ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
       : cli.required

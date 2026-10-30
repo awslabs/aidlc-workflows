@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { frameworkFilesDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -99,7 +100,7 @@ type Project = { dir: string; harness: Harness; env: Record<string, string>; plu
 
 function config(project: Project, ...extra: string[]): { status: number; out: string } {
   return run(
-    [INIT, "config", "--project-dir", project.dir, "--from", join(REPO_ROOT, "dist", project.harness), "--harness", project.harness, "--mcp", "none", ...extra],
+    [INIT, "config", "--project-dir", project.dir, "--from", join(REPO_ROOT, "dist", project.harness), "--harness", typedHarnessName(project.harness), "--mcp", "none", ...extra],
     project.dir,
     project.env,
   );

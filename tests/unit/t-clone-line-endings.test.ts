@@ -25,6 +25,7 @@ import {
   instructionFileDoctorCheck,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -73,7 +74,7 @@ function config(
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(BUN, [
     INIT, "config", "--project-dir", project, "--from", join(REPO_ROOT, "dist-release", harness),
-    "--harness", harness, "--mcp", "none", ...extra,
+    "--harness", typedHarnessName(harness), "--mcp", "none", ...extra,
   ], { cwd: project, encoding: "utf-8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
   if (result.error) throw result.error;
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -101,7 +102,7 @@ function copyConfig(project: string, harness: string, extra: string[]): { status
   const harnessDir = HARNESS_DIRS[harness as keyof typeof HARNESS_DIRS];
   const result = spawnSync(BUN, [
     join(project, harnessDir, "tools", "aidlc.ts"), "config", "--from", join(REPO_ROOT, "dist", harness),
-    "--harness", harness, "--mcp", "none", ...extra,
+    "--harness", typedHarnessName(harness), "--mcp", "none", ...extra,
   ], { cwd: project, encoding: "utf-8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
   if (result.error) throw result.error;
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };

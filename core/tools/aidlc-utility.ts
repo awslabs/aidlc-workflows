@@ -557,6 +557,7 @@ import {
   runtimeHarnessDir,
   runtimeHarnessName,
   runtimeProjectDir,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
@@ -3863,14 +3864,14 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   // first records them at its own.
   const steps = behind.flatMap((tree) =>
     native
-      ? [`${tool} config --harness ${tree.distribution}${target}`]
+      ? [`${tool} config --harness ${typedHarnessName(tree.distribution)}${target}`]
       : pinned
-      ? [`${tool} config --harness ${tree.distribution} --download${target}`]
+      ? [`${tool} config --harness ${typedHarnessName(tree.distribution)} --download${target}`]
       : [
         ...(existsSync(join(tree.root, "tools", "data", "aidlc-manifest.json"))
           ? []
-          : [`${tool} config --harness ${tree.distribution} --download${target}`]),
-        `${tool} config --harness ${tree.distribution} --from <that file>${target}`,
+          : [`${tool} config --harness ${typedHarnessName(tree.distribution)} --download${target}`]),
+        `${tool} config --harness ${typedHarnessName(tree.distribution)} --from <that file>${target}`,
       ]
   );
   const run = `run ${steps.map((step) => `\`${step}\``).join(", then ")}`;
@@ -4261,11 +4262,11 @@ export async function collectDoctorReport(
         label: stampVersion !== engineVersion
           ? `Project runtime stamp: ${stampVersion}; ${engine}`
           : pinnedEngine && pinnedEngine !== AIDLC_VERSION
-          ? `Project runtime stamp: ${stampVersion} (${distribution}); ${engine}`
-          : `Project runtime stamp: ${stampVersion} (${distribution})`,
+          ? `Project runtime stamp: ${stampVersion} (${typedHarnessName(distribution)}); ${engine}`
+          : `Project runtime stamp: ${stampVersion} (${typedHarnessName(distribution)})`,
         fix: pinnedEngine
           ? `refresh the project to the pinned release with \`${aidlcInvocation()} config${
-              stamp.distribution ? ` --harness ${stamp.distribution}` : ""
+              stamp.distribution ? ` --harness ${typedHarnessName(stamp.distribution)}` : ""
             }\` or pin the project's release with \`${aidlcInvocation()} config --pin ${stampVersion}\``
           : `run \`${aidlcInvocation()} config\` or select the machine release with \`${aidlcInvocation()} use ${stampVersion}\``,
       });
@@ -4699,7 +4700,7 @@ export async function collectDoctorReport(
     results.push({
       pass: hasJsonAgent || existsSync(markdownAgentPath) || existsSync(join(projectDir, harness, "agents", "aidlc.md")),
       label: "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
-      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE and Kiro CLI v3)`,
+      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI (V2)) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE and Kiro CLI v3)`,
     });
     results.push(...kiroDisabledHookChecks(projectDir, harness));
     if (hasJsonAgent) {

@@ -136,6 +136,7 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   runtimeHarnessDir,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
@@ -1975,7 +1976,7 @@ async function installVersion(options: {
       const root = join(candidate, "runtime", distribution);
       const { stamp } = projectionFiles(root);
       if (stamp.frameworkVersion !== version || stamp.distribution !== distribution) {
-        throw new Error(`${distribution} runtime stamp does not match release ${version}`);
+        throw new Error(`${typedHarnessName(distribution)} runtime stamp does not match release ${version}`);
       }
     }
     const baselinePath = join(candidate, basename(runtimeIntegrityPath(version)));
@@ -2725,7 +2726,7 @@ export async function installPinnedRelease(options: {
           caBundle: options.caBundle,
         })).distributions;
     if (!distributions.includes(options.distribution)) {
-      commandError(`${version} does not contain the ${options.distribution} runtime`, EXIT.usage);
+      commandError(`${version} does not contain the ${typedHarnessName(options.distribution)} runtime`, EXIT.usage);
     }
   } finally {
     releaseReservation?.();
@@ -2830,7 +2831,7 @@ export async function configureProjectPin(
       }
       const distribution = projectDistribution(projectDir);
       if (distribution && !distributions.includes(distribution)) {
-        commandError(`${version} does not contain this project's ${distribution} runtime`, EXIT.usage);
+        commandError(`${version} does not contain this project's ${typedHarnessName(distribution)} runtime`, EXIT.usage);
       }
       if (dryRun) {
         return success(
