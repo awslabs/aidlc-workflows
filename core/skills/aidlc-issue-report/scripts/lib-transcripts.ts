@@ -248,9 +248,10 @@ function subagent(s: Summary, name: string) {
 // or a copied tree's `aidlc.ts` with the same words, also a harness adapter's (`adapter <harness> <route>`) and a
 // quoted Windows path to `aidlc.exe`.
 // The command may go on after the name (an agent argument, `--project-dir …`, PowerShell's `; exit $LASTEXITCODE`), Bun
-// may be given `--` before the words, and Cursor's adapter takes no route (`adapter cursor`).
+// may be given `--` before the words, and Cursor's adapter may take no route (`adapter cursor`). A copied tree may run
+// its adapter script itself (`aidlc-copilot-adapter.ts <route>`, `aidlc-cursor-adapter.ts <event>`).
 const HOOK_BLOCK =
-  /\[[^\]\n]{0,300}?\baidlc(?:\.ts|\.exe|\.cmd)?(?:\\?["'])?\s+(?:--\s+)?engine\s+(?:hook\s+([a-z0-9-]+)|adapter\s+([a-z-]+)(?:\s+([a-z0-9-]+))?)\b[^\]\n]{0,200}\]/gi;
+  /\[[^\]\n]{0,300}?\b(?:aidlc(?:\.ts|\.exe|\.cmd)?(?:\\?["'])?\s+(?:--\s+)?engine\s+(?:hook\s+(?<hook>[a-z0-9-]+)|adapter\s+(?<harness>[a-z-]+)(?:\s+(?<route>[a-z][a-z0-9-]*))?)|aidlc-(?<script>copilot|cursor|codex|kiro)-adapter\.ts(?:\\?["'])?\s+(?<scriptRoute>[a-z][a-z0-9-]*))\b[^\]\n]{0,200}\]/gi;
 // An AI-DLC command as the agent typed it, native (`engine orchestrate next` after `aidlc`) or from a copied
 // tree (the same verbs after the tree's `aidlc.ts`, or after an `aidlc-<tool>.ts` such as `aidlc-log.ts`).
 const AIDLC_CMD = /\baidlc(?:-([a-z-]+))?(?:\.ts|\.cmd|\.exe)?["']?\s+(?:engine\s+)?([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/i;
@@ -289,8 +290,11 @@ function noteCommand(t: Tally, ts: string, text: string) {
 function noteText(t: Tally, tool: string, local: Local, ts: string, text: string, isError: boolean) {
   let blocked = false;
   for (const m of text.matchAll(HOOK_BLOCK)) {
-    // `hook <name>`, `adapter <harness> <route>`, or the route-less `adapter cursor` (its hook is `cursor-adapter`).
-    const hook = m[1] ?? m[3] ?? `${m[2]}-adapter`;
+    // A hook's or a route's name; Cursor's adapter takes its host's event names (`guards`, `stop`), so its blocks are
+    // all `cursor-adapter`, native or copied.
+    const g = Object.fromEntries(Object.entries(m.groups ?? {}).map(([k, v]) => [k, v?.toLowerCase()]));
+    const harness = g.harness ?? g.script;
+    const hook = harness === "cursor" ? "cursor-adapter" : (g.hook ?? g.route ?? g.scriptRoute ?? `${harness}-adapter`);
     t.add(ts, (s) => {
       bump(s.aidlcHookBlocks, hook);
       s.timeline.push({ ts, kind: "aidlc-hook-block", detail: hook });
@@ -629,11 +633,14 @@ export function codex(project: string, since: number, until: number, local: Loca
     const lines = readLines<CodexLine>(file);
     const meta = lines.find((l) => l.type === "session_meta");
     if (!meta || !within(project, meta.payload?.cwd)) continue;
-    // Only a session the person opened holds their replies. A subagent's file starts with its parent's history (copies),
-    // and Codex's automatic approval review (`thread_source: "guardian_review"`) writes
-    // its own user lines; both carry a parent thread.
+    // Only a session the person opened holds their replies. A subagent and Codex's automatic approval review
+    // (`thread_source: "guardian_review"`) write their own user lines and carry a parent thread. A fork, the person's
+    // own included, starts with a copy of the history it was forked from: those lines, from before its start, are skipped.
     const ts0 = meta.payload?.thread_source;
-    const inherited = (ts0 !== undefined && ts0 !== "user") || !!meta.payload?.forked_from_id || !!meta.payload?.parent_thread_id;
+    const inherited = (ts0 !== undefined && ts0 !== "user") || !!meta.payload?.parent_thread_id;
+    const forked = inherited || !!meta.payload?.forked_from_id;
+    // A fork with no start time: its copied lines cannot be told from its own, so its replies are not counted.
+    const copiedReplies = inherited || (forked && Number.isNaN(Date.parse(meta.timestamp ?? "")));
     // Codex folds a reply typed before the turn has ended into that same turn (same turn_id, no new
     // task_started); AI-DLC's prompt hook then may not record it (the replies seen not
     // recorded were exactly these, each the same text as the reply before it in that turn).
@@ -650,14 +657,14 @@ export function codex(project: string, since: number, until: number, local: Loca
     const firstPrompt = local.prompts.length;
     const checks = new Map<string, { ts: string; check: string }>();
     const t = new Tally();
-    const started = meta.timestamp ?? "";
+    const started = Date.parse(meta.timestamp ?? "");
     for (const l of lines) {
       if (!inWindow(l.timestamp, since, until)) continue;
       const ts = l.timestamp;
       const p: CodexPayload = l.payload ?? {};
       // A forked session's lines from before its own start are its parent's history, read with the parent or left
       // out with it.
-      if (inherited && ts < started) continue;
+      if (forked && Date.parse(ts) < started) continue;
       used = true;
       touch(s, ts);
       // A subagent's or reviewer's session runs its own model: only the person's own sessions count here.
@@ -671,7 +678,7 @@ export function codex(project: string, since: number, until: number, local: Loca
         // Codex hands a Stop hook's block back as a user line `<hook_prompt hook_run_id="stop:…">reason</hook_prompt>`
         // (shown to the person as "Blocked by hook"), dozens of them in one turn when a hook loops.
         const stopBlock = text.match(/^\s*<hook_prompt hook_run_id="stop:[^"]*">([\s\S]*?)<\/hook_prompt>/);
-        if (stopBlock && !inherited) {
+        if (stopBlock && !copiedReplies) {
           const reason = stopBlock[1].slice(0, 1500);
           t.add(ts, (x) => {
             x.stopFeedback++;
@@ -681,13 +688,13 @@ export function codex(project: string, since: number, until: number, local: Loca
         }
         if (text.trim() && !injected) {
           // A subagent's or reviewer's task message is the agent's, not a reply the person typed.
-          if (!inherited) t.add(ts, (x) => x.prompts++);
+          if (!copiedReplies) t.add(ts, (x) => x.prompts++);
           const turn: string | undefined = p.internal_chat_message_metadata_passthrough?.turn_id;
           const before = turn ? lastInTurn.get(turn) : undefined;
           if (turn) lastInTurn.set(turn, text);
           if (!reportFrom) lastPrompt = turnStart ?? ts;
           lastTyped = {
-            tool: s.tool, ts, text: text.slice(0, 2000), inherited, session: meta.payload?.id, engineAfter: false,
+            tool: s.tool, ts, text: text.slice(0, 2000), inherited: copiedReplies, session: meta.payload?.id, engineAfter: false,
             ...(turn ? { turn, inRunningTurn: before !== undefined, sameAsBeforeInTurn: before === text } : {}),
           };
           local.prompts.push(lastTyped);
@@ -800,7 +807,10 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
       } catch {
         continue; // not a session folder, or mid-write
       }
-      if ((j.workspacePaths ?? []).some((w) => within(project, w))) wsDirs.push(dir);
+      // A session.json that names no workspace (an older build, a write cut short) says nothing: the next one is read.
+      const paths = j && Array.isArray(j.workspacePaths) ? j.workspacePaths : [];
+      if (!paths.length) continue;
+      if (paths.some((w) => within(project, w))) wsDirs.push(dir);
       break;
     }
   }

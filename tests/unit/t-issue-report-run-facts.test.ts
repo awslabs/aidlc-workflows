@@ -560,6 +560,12 @@ test("a hook refusal is counted however the install runs its hooks", () => {
     "[& aidlc engine hook plan-approval-guard; exit $LASTEXITCODE]",
     '[bun ".cursor/tools/aidlc.ts" -- engine hook guard-tool-call]',
     "[aidlc engine adapter cursor]",
+    "[aidlc engine adapter cursor --project-dir /x]",
+    "[bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call]",
+    "[bun .cursor/hooks/aidlc-cursor-adapter.ts guards]",
+    "[aidlc engine adapter cursor guards]",
+    "[bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard]",
+    "[AIDLC-COPILOT-adapter.ts guard-tool-call]",
   ];
   const lines = tags.map((tag, i) => ({
     cwd: project,
@@ -574,7 +580,7 @@ test("a hook refusal is counted however the install runs its hooks", () => {
   try {
     const s = claude(project, Date.parse(at(0)) - 3_600_000, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
     expect(s?.aidlcHookBlocks).toEqual({
-      "plan-approval-guard": 2, "guard-tool-call": 3, "review-freeze": 1, "state-transition-guard": 1, "reviewer-scope": 1, "cursor-adapter": 1,
+      "plan-approval-guard": 3, "guard-tool-call": 5, "review-freeze": 1, "state-transition-guard": 1, "reviewer-scope": 1, "cursor-adapter": 4,
     });
   } finally {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -822,4 +828,52 @@ test("a Codex subagent's copied history from before its start is not counted, an
     if (before === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = before;
   }
+});
+
+test("a Codex session the person forked is their run; the history it copied is not counted again", async () => {
+  const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const home = mkdtempSync(join(tmpdir(), "codex-fork-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const day = join(home, "sessions", "2026", "10", "29");
+  mkdirSync(day, { recursive: true });
+  const user = (text: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
+  const fork = [
+    // the start written without milliseconds, the first reply with them in the same second
+    { timestamp: "2026-10-29T01:20:00Z", type: "session_meta", payload: { id: "t2", cwd: project, thread_source: "user", forked_from_id: "t-old" } },
+    user("what we said before the fork", 5),
+    { ...user("go on", 20), timestamp: "2026-10-29T01:20:00.412Z" },
+    user("run the next stage", 21),
+  ];
+  writeFileSync(join(day, "rollout-2026-10-29T01-20-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a81.jsonl"), fork.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    const s = codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
+    expect([s?.sessions, s?.prompts]).toEqual([1, 2]);
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+  }
+});
+
+test("a Kiro workspace folder is told by a session.json that names its workspace", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-ws-empty-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const ws = join(home, ".kiro", "sessions", "0123456789abcdef");
+  // A broken session.json in another folder must not stop the reader.
+  mkdirSync(join(home, ".kiro", "sessions", "fedcba9876543210", "sess_x"), { recursive: true });
+  writeFileSync(join(home, ".kiro", "sessions", "fedcba9876543210", "sess_x", "session.json"), "null");
+  for (const [id, meta] of [["sess_a", {}], ["sess_b", { workspacePaths: [project] }]] as const) {
+    mkdirSync(join(ws, id), { recursive: true });
+    writeFileSync(join(ws, id, "session.json"), JSON.stringify(meta));
+    writeFileSync(join(ws, id, "messages.jsonl"), JSON.stringify({ timestamp: at(1), payload: { type: "user", content: `hello from ${id}` } }));
+  }
+  const code = `const { kiroV3 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV3(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ found: !!s }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect([r.status, r.stderr]).toEqual([0, ""]);
+  expect(JSON.parse(r.stdout)).toEqual({ found: true });
 });
