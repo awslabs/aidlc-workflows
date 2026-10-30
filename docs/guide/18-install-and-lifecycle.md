@@ -1400,7 +1400,7 @@ Successful config prints the host-specific next step:
 | Harness | Next step |
 |---------|-----------|
 | Claude Code | Open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor` |
-| Kiro CLI | Run `kiro-cli --v2` (on Kiro CLI older than 2.21.4, plain `kiro-cli`), then `/aidlc --doctor` |
+| Kiro CLI | Run `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)), then `/aidlc --doctor` |
 | Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli --v3` in the project instead; if Kiro asks whether you trust this workspace and you know what is in this folder, choose "Trust, continue"; then run `/aidlc --doctor`) |
 | Codex CLI | Run `codex` (when it asks about hooks, choose Trust all and continue), then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |

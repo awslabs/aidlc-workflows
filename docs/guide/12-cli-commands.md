@@ -1650,8 +1650,8 @@ another agent picked in `/agent` is never recorded, that line is "Your answer
 didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." When
 Kiro says agent "aidlc" needs upgrading for its 3.0 engine, the line is "Your
 answer didn't reach AI-DLC. Quit Kiro and start it again in this folder with:
-kiro-cli --v2 --agent aidlc (before Kiro CLI 2.21.4: kiro-cli chat --agent-engine v2
---agent aidlc), then give it once more." The
+kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), then give it
+once more." The
 agent is told never to offer to turn a check off for them.
 
 A `log answer` for a question the agent logged after the person's reply is

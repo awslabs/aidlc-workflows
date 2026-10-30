@@ -55,7 +55,7 @@ import {
 } from "../harness/release-journey.ts";
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
-import { kiroCliAsksWorkspaceTrust, kiroCliV2Args } from "../harness/kiro-cli-launch.ts";
+import { installedKiroCliVersion, kiroCliAsksWorkspaceTrust, kiroCliV2Args } from "../harness/kiro-cli-launch.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
@@ -109,9 +109,8 @@ function sessionCredits(text: string): number | undefined {
 }
 
 function kiroVersion(): string | null {
-  const result = spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
-  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
-  return result.status === 0 ? (result.stdout.match(/\d+\.\d+\.\d+/)?.[0] ?? result.stdout.trim()) : null;
+  const out = installedKiroCliVersion();
+  return out === null ? null : (out.match(/\d+\.\d+\.\d+/)?.[0] ?? out.trim());
 }
 
 // The runner gives this file the production guard profile on its own (it looks
@@ -155,12 +154,13 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
         const session = `aidlc_tui_${tree.replace("-", "_")}_release_${process.pid}`;
         const kiroHome = join(project.root, "kiro-home");
         mkdirSync(kiroHome, { recursive: true });
-        // The engine flag each tree's guide names.
-        const engine = tree === "kiro-ide" ? ["--v3"] : kiroCliV2Args(kiroVersion());
+        // The engine flag each tree's guide names, on the `kiro-cli chat` this journey drives.
+        const version = kiroVersion();
+        const engine = tree === "kiro-ide" ? ["--v3"] : kiroCliV2Args(version);
         const launch = process.platform === "linux"
           ? ["env", `HOME=${kiroHome}`, `XDG_DATA_HOME=${process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")}`, "kiro-cli", "chat", ...engine]
           : ["kiro-cli", "chat", ...engine];
-        const report: ReleaseJourneyReport = { harness: tree, toolVersion: kiroVersion() ?? "?", turns: [], extra: {}, problems: [] };
+        const report: ReleaseJourneyReport = { harness: tree, toolVersion: version ?? "?", turns: [], extra: {}, problems: [] };
         let prompts = 0;
         let last: string | { unreadable: string } | undefined;
         try {
@@ -174,7 +174,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
               // choose Trust, continue, the first choice, for a known folder.
               // A folder Kiro already trusts goes straight to the chat, so either
               // comes next.
-              if (kiroCliAsksWorkspaceTrust(kiroVersion()) !== false) {
+              if (kiroCliAsksWorkspaceTrust(version) !== false) {
                 expect(waitFor(session, `Trust this workspace|${IDLE}`, remainingWorkMs(), 400)).toBe(true);
                 if (/Trust this workspace/.test(screen(session))) {
                   drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);

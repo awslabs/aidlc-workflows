@@ -594,7 +594,7 @@ describe("Kiro CLI's own Workflows switch", () => {
     const setup = installKiroIde({ ...m.env, ...cli.env });
     expect(writesIn(cli.writes)).toContainEqual(["settings", "chat.enableWorkflows", "false"]);
     expect(setup.out).toContain("Turned Kiro CLI's Workflows feature off, so AI-DLC's reviews and helpers run in your Kiro CLI chats.");
-    expect(setup.out).toContain("Quit Kiro CLI and start `kiro-cli --v3` again");
+    expect(setup.out).toContain("Quit Kiro CLI and start `kiro-cli --v3` again in this project");
     expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("off\n");
     expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-workflows"))).toBe(false);
     expect(readFileSync(m.settingsPath, "utf-8")).toBe("{}\n");

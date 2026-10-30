@@ -8624,7 +8624,7 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["codex                         open Codex CLI in this repo", '$aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro") {
-    return ["kiro-cli --v2                  open Kiro CLI in this repo (before Kiro CLI 2.21.4: kiro-cli)", '/aidlc "what you want built"  describe your first intent'];
+    return ["kiro-cli --v2                  open Kiro CLI in this repo (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide)", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "opencode") {
     return ["opencode                       open opencode in this repo", '/aidlc "what you want built"  describe your first intent'];

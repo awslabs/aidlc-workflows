@@ -4708,7 +4708,7 @@ export async function collectDoctorReport(
       results.push({
         pass: existsSync(cliSettingsPath),
         label: "settings/cli.json present (workspace default-agent activation)",
-        fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or start Kiro CLI with \`kiro-cli --v2 --agent aidlc\`, or \`kiro-cli --agent aidlc\` before Kiro CLI 2.21.4)`,
+        fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or start Kiro CLI with \`kiro-cli --v2 --agent aidlc\`: Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide)`,
       });
     }
     if (existsSync(markdownAgentPath)) {

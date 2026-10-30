@@ -2072,7 +2072,7 @@ recorded Kiro CLI release-journey results for the selected source SHA, one for
 each Kiro tree: `kiro`, which setup lists as "Kiro CLI (V2)", and `kiro-ide`,
 which setup lists as "Kiro" and which is built for Kiro CLI's v3 engine (the
 tree ids, not the names `aidlc config --harness` takes: those are `kiro-v2` and
-`kiro`). Both run in Kiro CLI; neither drives Kiro IDE. If no result
+`kiro`); the journey starts each on its engine (`--v2`, `--v3`). Both run in Kiro CLI; neither drives Kiro IDE. If no result
 exists for that SHA, run the journey
 (`tests/e2e/t-tui-kiro-release-journey.serial.test.ts`, the same journey as the
 Copilot lane's, in the interactive `kiro-cli chat` terminal, once per tree) on

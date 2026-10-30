@@ -9,8 +9,9 @@
 //     from inside. Kiro CLI 2.33.0 reads the engine only from the person's own
 //     settings or the command line (measured: a project value is ignored, and
 //     `kiro-cli settings --workspace chat.agentEngine` is refused), so every
-//     line that starts Kiro CLI here says `kiro-cli --v3`; older Kiro CLI
-//     releases still read the pin. Kiro IDE does not read this file.
+//     line here that tells a person to start Kiro CLI's chat says
+//     `kiro-cli --v3`; older Kiro CLI releases still read the pin. Kiro IDE
+//     does not read this file.
 //   - Always-included steering carries the active-space memory text, written
 //     by the engine (core/tools/aidlc-includes.ts kiroIdeSteering) and
 //     gitignored; the shipped file is its reference form.
@@ -149,7 +150,12 @@ const KIRO_IDE_TRUST_STEP =
   "carry on.";
 
 // The same step outside Kiro IDE, for Kiro CLI and an ACP client on this tree.
-const KIRO_CLI_RESTART = "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder";
+// A restart after a start on the wrong engine can be the folder's first v3
+// start, where Kiro CLI 2.33.0 or later first asks whether to trust it. Single
+// quotes: the agent shows this step inside a double-quoted line.
+const KIRO_CLI_RESTART =
+  "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you " +
+  "trust this workspace and you know what is in this folder, choose 'Trust, continue')";
 const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
 const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
 
@@ -246,7 +252,7 @@ const manifest: HarnessManifest = {
       "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
       "doctor again. If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen " +
       "it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload " +
-      "Window does not change that. In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder.",
+      `Window does not change that. ${KIRO_CLI_RESTART}.`,
     // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
     // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
     // started with hooks off for the untrusted folder ("hooks.v2.execution
