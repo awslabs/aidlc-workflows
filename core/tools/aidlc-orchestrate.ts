@@ -669,6 +669,7 @@ import {
   openPlanApprovalQuestion,
   planApprovalKeptReplyWaits,
   planApprovalOverrideOffers,
+  planApprovalCoversAttempt,
   planApprovalQuestionId,
   withdrawPlanApprovalReplies,
   planRecordFolders,
@@ -14811,8 +14812,14 @@ function emitPerUnitRunStage(
     // builds, so the plans they were built from are not asked about again. A
     // beat whose Units have no completion receipt in this attempt (a loop-back
     // over artifacts alone) may still apply a fix, so it is not marked.
+    // A Code Generation beat is settled only when the plan approval also covers
+    // this attempt: a completion recorded in a new attempt without a rebuild
+    // leaves the approval behind, and the plan is asked about again first.
     const built = units.filter((u) => !ledger.skipped.has(u));
-    if (built.length > 0 && built.every((u) => ledger.receipts.has(u))) {
+    if (
+      built.length > 0 && built.every((u) => ledger.receipts.has(u)) &&
+      (node.slug !== "code-generation" || built.every((u) => planApprovalCoversAttempt(projectDir, u, directive)))
+    ) {
       directive.build_settled = true;
     }
     // Unit-major with checkpoints off: the stages still waiting are one question.

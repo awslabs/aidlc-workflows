@@ -63,9 +63,11 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   stateDigest,
   unitCompletedReceipts,
+  writePlanApprovalReceipt,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   renderTestingContract,
+  resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
@@ -432,6 +434,40 @@ describe("t272 code-generation joins the unit-major walk", () => {
     });
     expect(last.plan_approval).toBeUndefined();
     expect(last.ask_type).toBeUndefined();
+  });
+
+  // 5b: a Unit whose plan was approved in an earlier attempt and whose completion
+  // was recorded in this one without a new approval: the plan is asked about
+  // again before the gate, since the plan-approval guard binds the approval to
+  // the attempt.
+  test("5b: a plan approved only in an earlier attempt is asked about again before the last gate", () => {
+    const sep = "—";
+    const proj = seedProject({
+      current: "code-generation",
+      checkboxes: [
+        "- [x] functional-design", "- [x] nfr-requirements", "- [x] nfr-design",
+        "- [x] infrastructure-design", "- [-] code-generation", "- [ ] build-and-test",
+      ].map((row) => `${row} ${sep} EXECUTE`).join("\n"),
+    });
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverFullGrid(proj, ["alpha", "beta"]);
+    for (const unit of ["alpha", "beta"]) {
+      for (const stage of BLOCK) logReviewReady(proj, stage, unit);
+      buildUnit(proj, unit);
+    }
+    expect(runNext(proj)).toMatchObject({ unit: "beta", build_settled: true });
+    const authority = resolveCodeGenerationAuthority(proj, { unit: "beta" });
+    writePlanApprovalReceipt(proj, {
+      version: 1,
+      targetId: authority.targetId,
+      intentId: authority.intentId,
+      runFloor: `${authority.runFloor}-earlier`,
+      fingerprint: "earlier-attempt",
+    } as Parameters<typeof writePlanApprovalReceipt>[1]);
+    const last = runNext(proj);
+    expect(last).toMatchObject({ stage: "code-generation", unit: "beta" });
+    expect(last.build_settled).toBeUndefined();
+    expect(last.plan_approval).toBeDefined();
   });
 
   // 2: a degenerate block - every design stage completed ([x]) leaves
