@@ -337,8 +337,8 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
     expect(text).toContain("In Kiro CLI, type /agent and pick aidlc, then carry on.");
     expect(text).toContain(
-      "quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (before Kiro CLI 2.21.4: " +
-        "kiro-cli chat --agent-engine v2 --agent aidlc). From an ACP client, start `kiro-cli acp --agent-engine v2`.",
+      "quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide). " +
+        "From an ACP client, start `kiro-cli acp --agent-engine v2`.",
     );
     expect(text).not.toContain("fully restart the harness");
     for (const advice of KIRO_IDE_ADVICE) expect(text).not.toContain(advice);

@@ -9,8 +9,8 @@
 
 > [!IMPORTANT]
 > This page covers the `kiro` harness, which pins no Kiro engine; start it
-> with `kiro-cli --v2` (Kiro CLI before 2.21.4 has no `--v2` and starts on V2:
-> use plain `kiro-cli`). The
+> with `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see
+> [Prerequisites](#prerequisites)). The
 > interactive `aidlc config` lists it as Kiro CLI (V2); when it detects Kiro
 > CLI 2.24.1 or later, it makes it the default over Kiro, except in Kiro IDE's
 > own terminal, where Kiro leads. For Kiro's v3 engine on Kiro CLI 2.24.1 or
@@ -34,8 +34,15 @@ install).
 ## Prerequisites
 
 - **Kiro CLI ≥ 2.6** (`kiro-cli --version`), logged in (`kiro-cli login`). The
-  `kiro-cli --v2` commands on this page need Kiro CLI 2.21.4 or later; an older
-  one has no `--v2` and starts on V2, so drop the flag there.
+  commands on this page start Kiro CLI on its V2 engine with `--v2`, which
+  needs Kiro CLI 2.21.4 or later. On an older one, see what
+  `kiro-cli chat --help` lists:
+  - with `--agent-engine` (2.19.2 has it), put `chat --agent-engine v2` in
+    place of `--v2`: `kiro-cli --v2 --agent aidlc` becomes
+    `kiro-cli chat --agent-engine v2 --agent aidlc`, and `kiro-cli chat --v2 …`
+    becomes `kiro-cli chat --agent-engine v2 …`;
+  - without it, start with `kiro-cli chat` and no engine flag (for example
+    `kiro-cli chat --agent aidlc`).
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes are
   self-contained.
@@ -189,7 +196,7 @@ up by an earlier release removes AI-DLC's old effort map (`claude-opus-4.8` at
 extra-high) from `.kiro/settings/cli.json` and says so; run
 `aidlc config models` to choose the session model.
 Override one session with `/effort <level>` in chat or `kiro-cli chat --v2
---effort <level>` (low|medium|high|xhigh|max; before Kiro CLI 2.21.4, drop `--v2`). The Kiro IDE does not read `cli.json`.
+--effort <level>` (low|medium|high|xhigh|max; for older Kiro CLI, see Prerequisites). The Kiro IDE does not read `cli.json`.
 
 ## Refresh and version skew
 
@@ -293,8 +300,7 @@ this project yet and names the same step. Restarting on the v3
 engine does not fix it. With another agent picked, type `/agent` and pick
 `aidlc`, then carry on in the same chat. On the 3.0 engine (Kiro prints
 `agent "aidlc" needs upgrading for this agent engine` under its replies), quit
-and start `kiro-cli --v2 --agent aidlc` (before Kiro CLI 2.21.4,
-`kiro-cli chat --agent-engine v2 --agent aidlc`) in this folder
+and start `kiro-cli --v2 --agent aidlc` in this folder
 instead (an ACP client starts `kiro-cli acp --agent-engine v2`). To run Kiro
 CLI on its v3 engine, use the
 [Kiro IDE](kiro-ide.md) distribution instead; in an existing project,

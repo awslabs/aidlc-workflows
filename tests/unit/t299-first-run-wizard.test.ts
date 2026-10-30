@@ -1922,7 +1922,7 @@ describe("t299 first-run setup wizard", () => {
       ["codex", "codex                         open Codex CLI in this repo"],
       ["copilot", "copilot                        open Copilot CLI in this repo"],
       ["cursor", "cursor                         open Cursor in this repo"],
-      ["kiro", "kiro-cli --v2                  open Kiro CLI in this repo (before Kiro CLI 2.21.4: kiro-cli)"],
+      ["kiro", "kiro-cli --v2                  open Kiro CLI in this repo (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide)"],
       ["opencode", "opencode                       open opencode in this repo"],
     ] as const
   ) {

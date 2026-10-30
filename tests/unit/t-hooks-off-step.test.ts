@@ -72,7 +72,7 @@ const HARNESSES: Harness[] = [
     dir: ".kiro",
     lines: () => [
       "Type /agent and pick aidlc, then carry on.",
-      "Quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (before Kiro CLI 2.21.4: kiro-cli chat --agent-engine v2 --agent aidlc), " +
+      "Quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), " +
         "then type /aidlc to carry on.",
     ],
   },

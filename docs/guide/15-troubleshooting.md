@@ -251,16 +251,14 @@ doctor reports "Hooks have never executed". Restarting on the same engine
 changes nothing.
 
 - **`kiro` distribution** (`.kiro/agents/aidlc.json`): hooks run on Kiro CLI's
-  v2 engine, so start it with `kiro-cli --v2` (plain `kiro-cli` before Kiro CLI
-  2.21.4, which has no `--v2`), with the `aidlc` agent active; v3 does not run
-  the file as AI-DLC
-  ships it. With another agent picked, type `/agent` and pick `aidlc`, then
-  carry on in the same chat. If Kiro prints `agent "aidlc" needs upgrading for
-  this agent engine` under its replies, the session is on the 3.0 engine: quit
-  Kiro and start it again in this folder with
-  `kiro-cli --v2 --agent aidlc` (before Kiro CLI 2.21.4,
-  `kiro-cli chat --agent-engine v2 --agent aidlc`). From an ACP client, start
-  `kiro-cli acp --agent-engine v2`.
+  v2 engine, so start it with `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for
+  an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)), with the
+  `aidlc` agent active; v3 does not run the file as AI-DLC ships it. With
+  another agent picked, type `/agent` and pick `aidlc`, then carry on in the
+  same chat. If Kiro prints `agent "aidlc" needs upgrading for this agent
+  engine` under its replies, the session is on the 3.0 engine: quit Kiro and
+  start it again in this folder with `kiro-cli --v2 --agent aidlc`. From an ACP
+  client, start `kiro-cli acp --agent-engine v2`.
 - **`kiro-ide` distribution** (`.kiro/hooks/aidlc-*.json`): hooks run only on
   Kiro CLI's v3 engine, so start it with `kiro-cli --v3`. Kiro CLI 2.33.0 takes
   the engine only from the command line or your own Kiro CLI settings: it

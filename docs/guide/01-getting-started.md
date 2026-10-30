@@ -643,7 +643,7 @@ The steps are the same everywhere; these differ:
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
 | Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) | `/aidlc` |
-| Kiro CLI (V2) | `kiro` | `kiro-cli --v2` (before Kiro CLI 2.21.4: `kiro-cli`) | `/aidlc` |
+| Kiro CLI (V2) | `kiro` | `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)) | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -655,7 +655,7 @@ After config, complete the one step config names for your tool:
 | --- | --- |
 | Claude Code | If Claude Code is already open in this folder, exit it and start it again |
 | Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) |
-| Kiro CLI (V2) | Start `kiro-cli --v2` (before Kiro CLI 2.21.4: `kiro-cli`); the project selects the AI-DLC agent |
+| Kiro CLI (V2) | Start `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)); the project selects the AI-DLC agent |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
