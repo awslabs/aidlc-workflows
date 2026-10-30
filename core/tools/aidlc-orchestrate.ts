@@ -18388,7 +18388,7 @@ function addReviewCheckOffer(
 // Review brief it was lost whenever the agent retold the brief in its own
 // words. A line, never a check: a record that cannot be read says nothing.
 function addApproveAcceptsLine(
-  reply: { change_notices?: string[] },
+  reply: { kind: string; change_notices?: string[] },
   projectDir: string,
   node: GraphStage,
   unit: string | null,
