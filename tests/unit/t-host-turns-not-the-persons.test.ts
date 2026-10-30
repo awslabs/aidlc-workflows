@@ -651,11 +651,12 @@ describe("a prompt the host injected is not the person's turn", () => {
 
       // The person's own messages: one the app marks as typed, one under an unmarked
       // `sdk` row (no origin) that quotes the resume note, and
-      // one whose row is not written yet. Each counts.
+      // two whose row is not written yet (one opens with a reminder). Each counts.
       const typed: Array<{ prompt: string; extra: Record<string, unknown> | null }> = [
         { prompt: "Approve", extra: { promptSource: "sdk", turnOrigin: "human", origin: { kind: "human" } } },
         { prompt: `It said "${CLAUDE_APP_RESUME}" but I am here. Approve`, extra: appRow },
         { prompt: "<side-sessions-event> is noise, ignore it. Approve", extra: null },
+        { prompt: "<system-reminder>\nA note.\n</system-reminder>\n\nApprove", extra: null },
       ];
       typed.forEach((turn, index) => {
         const promptId = `0c000000-0000-4000-8000-00000000000${index}`;

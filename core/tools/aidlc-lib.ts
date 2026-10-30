@@ -2488,7 +2488,11 @@ export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
   { name: "claude side sessions event", pattern: /^<side-sessions-event>[\s\S]*<\/side-sessions-event>$/ },
   { name: "claude ci monitor event", pattern: /^<ci-monitor-event>[\s\S]*<\/ci-monitor-event>$/ },
   { name: "claude app resume", pattern: /^The app was quit while you were working\. Please continue from where you left off\.$/ },
-  { name: "claude session brief", pattern: /^(?:Background|Task) \(from the session that started this one\):\r?\n/ },
+  // The app puts its own `<system-reminder>` blocks ahead of the brief.
+  {
+    name: "claude session brief",
+    pattern: /^\s*(?:<system-reminder>(?:(?!<\/system-reminder>)[\s\S])*<\/system-reminder>\s*)*(?:Background|Task) \(from the session that started this one\):\r?\n/,
+  },
 ];
 
 // The whole prompt is one of the host's fixed sentences. Null otherwise.
