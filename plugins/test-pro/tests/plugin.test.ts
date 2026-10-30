@@ -55,6 +55,54 @@ describe("test-pro plugin own content validation", () => {
   });
 });
 
+describe(`${PLUGIN_NAME} plugin — sensor tools honor the main(argv) contract`, () => {
+  const SENSOR_TOOLS = [
+    "aidlc-sensor-coverage-threshold.ts",
+    "aidlc-sensor-requirement-coverage.ts",
+  ];
+
+  for (const tool of SENSOR_TOOLS) {
+    const toolPath = join(PLUGIN_ROOT, "tools", tool);
+
+    test(`${tool} exports main(argv) and does not run on import under engine argv`, () => {
+      const probe = [
+        `const mod = await import(${JSON.stringify(toolPath)});`,
+        `if (typeof mod.main !== "function") { console.error("no-main"); process.exit(3); }`,
+        `console.log("imported");`,
+      ].join("\n");
+      const result = spawnSync(
+        process.execPath,
+        ["-e", probe, "engine", "--stage", "code-generation"],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+        },
+      );
+      expect(result.status, `${result.stdout ?? ""}${result.stderr ?? ""}`).toBe(0);
+      expect(result.stdout).toContain("imported");
+      expect(result.stdout).not.toContain('"pass"');
+    });
+
+    test(`${tool} parses the argv it is handed, not process.argv`, () => {
+      const probe = [
+        `const mod = await import(${JSON.stringify(toolPath)});`,
+        `mod.main(["--stage", "code-generation", "--output-path", "/nonexistent/other.json"]);`,
+      ].join("\n");
+      const result = spawnSync(
+        process.execPath,
+        ["-e", probe, "engine", "--unknown-engine-flag"],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+        },
+      );
+      expect(result.status, `${result.stdout ?? ""}${result.stderr ?? ""}`).toBe(0);
+      expect(result.stdout).toContain('"pass":true');
+      expect(result.stderr).not.toContain("--output-path is required");
+    });
+  }
+});
+
 describe(`${PLUGIN_NAME} plugin — composed doctor check`, () => {
   let tmp = "";
   let project = "";
