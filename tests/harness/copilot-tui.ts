@@ -26,12 +26,24 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { copilotReplies, copilotToolResults } from "./exec-drive.ts";
 import { type AgentWords, keepAgentWords, keepLegAudit } from "./leg-evidence.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import { waitForTurn } from "./release-journey.ts";
 import type { CapturedToolResult } from "./sdk-drive.ts";
 import { assertTuiDriveKill } from "./tui-fixtures.ts";
 import { resolveTuiRuntime } from "./tui-runtime.ts";
 
-const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(join(import.meta.dir, "tui-drive.ts"));
+/** One tui-drive.ts command (start, send, wait, capture, kill) and what it returned. */
+export type TuiDrive = (args: string[], timeoutMs: number, env?: NodeJS.ProcessEnv) => { rc: number; stdout: string; stderr?: string; timedOut: boolean };
+
+let runtime: { bin: string; prefix: string[] } | undefined;
+const tuiDrive: TuiDrive = (args, timeoutMs, env) => {
+  runtime ??= resolveTuiRuntime(join(import.meta.dir, "tui-drive.ts"));
+  const res = spawnSync(runtime.bin, [...runtime.prefix, ...args], { timeout: timeoutMs, encoding: "utf-8", ...(env ? { env } : {}) });
+  return {
+    rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "",
+    timedOut: (res.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
+};
 
 /** One Copilot permission dialog the person answered: what drew it. */
 export interface CopilotPrompt {
@@ -61,10 +73,12 @@ export interface CopilotTerminalOptions {
   /** The work time left for one drive call, and the time cleanup keeps. */
   workMs: () => number;
   cleanupMs: () => number;
+  /** The terminal driver: tui-drive.ts unless a test scripts one. */
+  drive?: TuiDrive;
 }
 
 // The empty prompt above Copilot's footer, and the footer's own words.
-const PROMPT_LINE = /^\s*❯\s*$/m;
+const PROMPT_LINE = /^\s*\u276F\s*$/m;
 const FOOTER = "/ commands";
 const DIALOG = "enter to select";
 const PERMISSION = /Do you want to (?:run|create|edit|write|make|delete|use|allow)\b/;
@@ -90,9 +104,8 @@ export class CopilotTerminal {
 
   constructor(private readonly o: CopilotTerminalOptions) {}
 
-  private drive(args: string[], timeout = this.o.workMs(), env?: NodeJS.ProcessEnv): { rc: number; stdout: string; timedOut: boolean } {
-    const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout, encoding: "utf-8", ...(env ? { env } : {}) });
-    return { rc: res.status ?? -1, stdout: res.stdout ?? "", timedOut: (res.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" };
+  private drive(args: string[], timeout = this.o.workMs(), env?: NodeJS.ProcessEnv): ReturnType<TuiDrive> {
+    return (this.o.drive ?? tuiDrive)(args, timeout, env);
   }
 
   private wait(pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -214,6 +227,26 @@ export class CopilotTerminal {
     const last = own.slice(at).filter((event) => /^(?:assistant\.turn_(?:start|end)|tool\.execution_start|permission\.requested)$/.test(event.type ?? "")).at(-1);
     return last?.type === "assistant.turn_end";
   }
+}
+
+/**
+ * One line the person types in a golden journey: sent on its own ledger
+ * before the agent can act on it, so a decision recorded as theirs in a turn
+ * that ended with no line of theirs after its question opened (the agent ran
+ * ahead) fails as a PersonTurnError. `seen` gets the turn first, so a report
+ * keeps the turn that failed.
+ */
+export function ledgeredTurn(
+  terminal: CopilotTerminal, proj: string, line: string, seen?: (turn: CopilotTerminalTurn) => void,
+): CopilotTerminalTurn {
+  const ledger = new PersonTurnLedger(proj);
+  ledger.sent(line);
+  const turn = terminal.turn(line);
+  seen?.(turn);
+  if (!turn.ended) return turn;
+  const unbacked = ledger.unbacked();
+  if (unbacked.length > 0) throw unbackedFailure(`The Copilot turn "${line}"`, unbacked);
+  return turn;
 }
 
 function prompts(events: readonly RecordEvent[]): CopilotPrompt[] {

@@ -45,7 +45,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { CopilotTerminal, type CopilotPrompt, promptCounts } from "../harness/copilot-tui.ts";
+import { CopilotTerminal, type CopilotPrompt, ledgeredTurn, promptCounts } from "../harness/copilot-tui.ts";
 import { trustCopilotFolder } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
@@ -57,7 +57,6 @@ import {
   GUARD_SWITCHES,
   writeGoldenReport,
 } from "../harness/golden-journey.ts";
-import { PersonTurnLedger, unbackedFailure } from "../harness/person-turns.ts";
 import { journeyBudgets, RELEASE_JOURNEY_REQUEST, recordedPersonLines, setupReleaseJourneyProject } from "../harness/release-journey.ts";
 import { tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
@@ -131,20 +130,17 @@ describe("t-exec-copilot-journey-golden-bugfix: fix existing code on Copilot CLI
             terminal.start();
             tokens.push({ input: 0, output: 0 });
           }
-          const ledger = new PersonTurnLedger(proj);
-          ledger.sent(line);
           const started = Date.now();
-          const turn = terminal!.turn(line);
-          turns.push({ line, newSession, seconds: Math.round((Date.now() - started) / 1000) });
-          prompts.push(...turn.prompts);
-          tokens[tokens.length - 1].input += turn.tokens.input;
-          tokens[tokens.length - 1].output += turn.tokens.output;
+          const turn = ledgeredTurn(terminal!, proj, line, (seen) => {
+            turns.push({ line, newSession, seconds: Math.round((Date.now() - started) / 1000) });
+            prompts.push(...seen.prompts);
+            tokens[tokens.length - 1].input += seen.tokens.input;
+            tokens[tokens.length - 1].output += seen.tokens.output;
+          });
           if (!turn.ended) {
             lastScreen = turn.stopped ?? "";
             throw new Error(`Copilot had not finished "${line}": ${(turn.stopped ?? "the time ran out").split("\n")[0]}`);
           }
-          const unbacked = ledger.unbacked();
-          if (unbacked.length > 0) throw unbackedFailure(`The Copilot turn "${line}"`, unbacked);
           return { results: turn.results, words: turn.words };
         });
         problems.push(...run.problems, ...goldenPathProblems(journey, run));
