@@ -208,7 +208,8 @@ describe("Windows native process identity", () => {
     const absent = windowsApi({ open: false, error: 87 });
     expect(readWindowsNativeProcessIdentity(42, absent.api)).toBeNull();
     expect(absent.calls).toEqual(["open"]);
-    // ACCESS_DENIED (5) reads as another account's process: t-tui-windows-native-identity.
+    // ACCESS_DENIED (5) is another account's process holding the PID, never the recorded one.
+    expect(readWindowsNativeProcessIdentity(42, windowsApi({ open: false, error: 5 }).api)).toBe("win32:42:0");
     for (const error of [6, 8]) {
       const denied = windowsApi({ open: false, error });
       expect(() => readWindowsNativeProcessIdentity(42, denied.api)).toThrow(`Windows error ${error}`);

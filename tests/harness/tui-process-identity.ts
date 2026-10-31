@@ -209,9 +209,11 @@ function inspectWindowsProcess<Handle, Result>(
 
 
 /**
- * The runner opens its own processes with these rights, so ACCESS_DENIED means
- * the PID now belongs to another account's process (a closed daemon's PID
- * reused): creation time 0, which no recorded identity has.
+ * The runner's account always opens its own processes with these rights (the
+ * daemon reads its own PID for the identity runBunDaemon records), so
+ * ACCESS_DENIED means another account's process holds the PID now, such as a
+ * closed daemon's PID reused. GetProcessTimes never gives a live process
+ * creation time 0, so `win32:<pid>:0` matches no recorded identity.
  */
 export function readWindowsNativeProcessIdentity<Handle>(
   pid: number,
