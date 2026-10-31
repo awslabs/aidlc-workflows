@@ -688,6 +688,9 @@ export function claude(project: string, since: number, until: number, local: Loc
 // (measured 10-29 on Codex 0.16x logs). A rejection by the approval review is a denial as well.
 const CODEX_CALL_FAILED = /^\s*(?:[a-z_]+ failed:|apply_patch verification failed|failed to parse function arguments)/;
 const CODEX_REVIEW_REJECTED = /Rejected\(\\?"This action was rejected/;
+// A PreToolUse hook's refusal, as Codex hands it back for the call (a shell command or a patch, measured on 0.166):
+// the reason, never the hook's command.
+const CODEX_HOOK_BLOCK = /^\s*Command blocked by PreToolUse hook: /;
 
 export function codex(project: string, since: number, until: number, local: Local): Summary | null {
   const root = join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "sessions");
@@ -795,7 +798,8 @@ export function codex(project: string, since: number, until: number, local: Loca
         noteCheck(t, checks, p.call_id, text);
         const exit = text.match(/(?:exit code|exited with code|Exit code:)\s*(\d+)/i);
         const failed = CODEX_CALL_FAILED.test(text);
-        const isError = (!!exit && exit[1] !== "0") || failed;
+        const hookBlock = CODEX_HOOK_BLOCK.test(text);
+        const isError = (!!exit && exit[1] !== "0") || failed || hookBlock;
         if (isError) t.add(ts, (x) => x.toolErrors++);
         if (failed && CODEX_REVIEW_REJECTED.test(text)) {
           t.add(ts, (x) => {
@@ -803,7 +807,8 @@ export function codex(project: string, since: number, until: number, local: Loca
             x.timeline.push({ ts, kind: "tool-denied", detail: "policy-denied" });
           });
         }
-        if (isError) noteError(t, s.tool, local, ts, text);
+        if (hookBlock) noteHookBlock(t, s.tool, local, ts, null, text);
+        else if (isError) noteError(t, s.tool, local, ts, text);
       }
     }
     markReport(local.prompts.slice(firstPrompt), reportFrom, () => true);
@@ -823,7 +828,7 @@ export function codex(project: string, since: number, until: number, local: Loca
   if (inheritedSessions) {
     s.notes.push(`${inheritedSessions} Codex subagent or approval-review session(s): their tool calls are counted with the run; they are not counted as sessions, and their task messages not as replies.`);
   }
-  s.notes.push("Codex hook blocks: Stop hook blocks are counted from the hook prompt lines Codex writes for a Stop hook run (measured 10-18, Codex 0.162); how Codex records another hook's refusal is not measured, so those show only as failed calls (toolErrors).");
+  s.notes.push("Codex hook blocks: Stop hook blocks are counted from the hook prompt lines Codex writes for a Stop hook run (measured 10-18, Codex 0.162); a PreToolUse hook's refusal of a shell command or a patch comes back without the hook's command (measured on 0.166), so those count as unattributedHookBlocks; other calls' and other events' refusals are not measured and show at most as failed calls.");
   return s;
 }
 

@@ -110,14 +110,15 @@ tool — 0 on Claude Code or Codex means AI-DLC's token count did not see this r
   short time = a refusal loop to look at; check whether `audit` has matching `*_BLOCKED` rows — if not, it is the
   known gap (refusals that write no audit row).
 - `unattributedHookBlocks`: hook refusals whose record does not say which hook refused — Claude Code's PreToolUse
-  refusals from AI-DLC 2.11.0 on (AI-DLC gives the reason alone there), and every Kiro CLI v2 one. Usually AI-DLC's,
-  but another hook in the project can make them too, so they are not proof of an AI-DLC refusal and a missing audit
-  row beside them is not the known gap.
+  refusals from AI-DLC 2.11.0 on (AI-DLC gives the reason alone there), Codex's PreToolUse refusals of a shell command
+  or a patch, and every Kiro CLI v2 one. Usually AI-DLC's, but another hook in the project can make them too, so they
+  are not proof of an AI-DLC refusal and a missing audit row beside them is not the known gap.
 - `otherHookBlocks`: refusals whose record names a hook command this skill does not know as AI-DLC's — usually the
   person's own or another tool's hook, or AI-DLC run through a wrapper script.
 - Not counted in any of these: on Claude Code, a block record for a hook event other than PostToolUse and Stop (a
-  prompt hook or SubagentStop, for one), whose record is not measured; a note gives how many there were. Codex and
-  Copilot CLI record refusals in ways not measured yet: there they show only in `toolErrors` (the `notes` say so).
+  prompt hook or SubagentStop, for one), whose record is not measured; a note gives how many there were. Copilot
+  CLI records refusals in a way not measured yet, and Codex's other refusals (another call or hook event) too: there
+  they show at most in `toolErrors` (the `notes` say so).
 - `denials`: the tool itself refused (`user-rejected` = the person said no, `automode-blocked`,
   `agent-profile-deny` on Kiro = an agent permission rule, `policy-denied` on Codex = its automatic approval
   review rejected the command). Kiro CLI v3 and Kiro IDE log a hook's refusal as a denied call with no reason:

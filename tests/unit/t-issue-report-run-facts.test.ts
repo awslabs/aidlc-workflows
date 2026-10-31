@@ -662,7 +662,7 @@ test("Claude Code counts the refusals it recorded itself, named only when the re
   }
 });
 
-test("Codex output that quotes a hook command or a Stop hook line is no refusal, failed or not", async () => {
+test("Codex counts the refusal it hands back for a call, and no hook command or Stop hook line its output quotes", async () => {
   const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
   const home = mkdtempSync(join(tmpdir(), "codex-quoted-"));
   const project = join(home, "proj");
@@ -674,6 +674,8 @@ test("Codex output that quotes a hook command or a Stop hook line is no refusal,
     { timestamp: at(0), type: "session_meta", payload: { id: "t1", cwd: project } },
     out(`Process exited with code 0\nOutput:\n${QUOTED}`, 1),
     out(`Process exited with code 2\nOutput:\n${QUOTED}`, 2),
+    out("Command blocked by PreToolUse hook: AI-DLC: the code plan is not approved yet.. Command: echo hi", 3), // as Codex 0.166 writes it
+    out("Process exited with code 0\nOutput:\nCommand blocked by PreToolUse hook: quoted from a file", 4),
   ];
   writeFileSync(join(day, "rollout-2026-10-29T01-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
   const before = process.env.CODEX_HOME;
@@ -681,7 +683,7 @@ test("Codex output that quotes a hook command or a Stop hook line is no refusal,
   try {
     const s = codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
     expect({ named: s?.aidlcHookBlocks, unattributed: s?.unattributedHookBlocks, stop: s?.stopFeedback, errors: s?.toolErrors }).toEqual({
-      named: {}, unattributed: 0, stop: 0, errors: 1,
+      named: {}, unattributed: 1, stop: 0, errors: 2,
     });
   } finally {
     if (before === undefined) delete process.env.CODEX_HOME;
