@@ -251,8 +251,11 @@ intent record. A session bound by an earlier version keeps working its intent wh
 cursor names the same record; otherwise it is offered a rebind to that intent. A
 session an earlier version stamped but never bound follows its stamp when it
 resumes, so a chat left open across an upgrade continues its own intent.
-A plain `git worktree` created without AI-DLC's worktree command has no local
-evidence either, so it also selects its intent with `/aidlc intent <slug>`. A Unit
+A plain `git worktree` created without AI-DLC's worktree command (or one a host
+makes for each chat) starts without cursors of its own, so until it switches on its
+own it reads the ones its main checkout holds on this machine, and opens the space
+and intent the main checkout is on. When the main checkout has no cursor either,
+it selects its intent with `/aidlc intent <slug>`. A Unit
 claimed on this machine counts for that Unit's intent; the Unit participant marker
 is checkout-wide and names no intent, so it does not count as joining a
 particular record.

@@ -16,7 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath }
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
-import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
+import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
 
@@ -44,15 +44,25 @@ export function canonicalPathKey(path: string): string {
 // The record the per-user `active-intent` cursor names, when it names a real
 // record — never the lone-record fallback. The cursor is gitignored and written
 // only by intent create and switch on this machine, so unlike a lone committed
-// record it is local evidence of a choice.
+// record it is local evidence of a choice. A git worktree with no cursor of its
+// own reads its main checkout's, as activeSpace does, when it names a record
+// this checkout has.
 export function readActiveIntentCursor(projectDir: string, space?: string): string | null {
-  const dir = intentsDir(projectDir, space ?? activeSpace(projectDir));
+  const sp = space ?? activeSpace(projectDir);
+  const dir = intentsDir(projectDir, sp);
+  let raw: string;
   try {
-    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
-    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
+    raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
   } catch {
-    // no cursor
+    const main = mainCheckoutOfWorktree(projectDir);
+    if (main === null) return null;
+    try {
+      raw = readFileSync(join(intentsDir(main, sp), ACTIVE_INTENT_POINTER), "utf-8").trim();
+    } catch {
+      return null;
+    }
   }
+  if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
   return null;
 }
 

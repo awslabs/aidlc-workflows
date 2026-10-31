@@ -367,10 +367,13 @@ import {
   activeDirectiveLockBudgetMs,
   activeSpace,
   assertNoSymlinkInChainOrThrow,
+  boundedGitMetadataText,
   DEFAULT_SPACE,
   ENGINE_DIR,
   engineDirFor,
   errorMessage,
+  gitCommonDirectory,
+  gitMetadataDirectory,
   intentsDir,
   isPlainObject,
   isReadOnlyEngineProbe,
@@ -384,6 +387,7 @@ import {
   refuseEngineObserverWrite,
   releaseAuditLock,
   releaseCanonicalOwnerStampedLock,
+  singleGitMetadataLine,
   spaceRecordRoot,
   withAuditLock,
   workspaceRoot,
@@ -23221,114 +23225,6 @@ interface FilesystemSourceIdentity {
 }
 
 type SourceSymlinkTargetMode = "follow" | "tree-only";
-
-function boundedGitMetadataText(path: string, maxBytes: number): string | null {
-  let fd: number | undefined;
-  try {
-    const pathStat = lstatSync(path);
-    if (!pathStat.isFile() || pathStat.size > maxBytes) return null;
-    fd = openSync(path, "r");
-    const before = fstatSync(fd);
-    if (!before.isFile() || before.size > maxBytes) return null;
-    const bytes = Buffer.alloc(before.size);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const count = readSync(
-        fd,
-        bytes,
-        offset,
-        bytes.length - offset,
-        offset,
-      );
-      if (count === 0) return null;
-      offset += count;
-    }
-    const after = fstatSync(fd);
-    if (
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    ) {
-      return null;
-    }
-    return bytes.toString("utf-8");
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // The metadata read already fails closed on any earlier error.
-      }
-    }
-  }
-}
-
-function singleGitMetadataLine(raw: string): string | null {
-  const line = raw.replace(/\r?\n$/, "");
-  if (line.length === 0 || line.includes("\n") || line.includes("\r")) {
-    return null;
-  }
-  return line;
-}
-
-function gitMetadataDirectory(worktreeDir: string): string | null {
-  const marker = join(worktreeDir, ".git");
-  try {
-    const markerStat = lstatSync(marker);
-    if (markerStat.isDirectory()) return realpathSync(marker);
-    if (!markerStat.isFile()) return null;
-  } catch {
-    return null;
-  }
-  const pointerRaw = boundedGitMetadataText(marker, 8192);
-  const pointerLine =
-    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
-  if (pointerLine === null || !pointerLine.startsWith("gitdir: ")) {
-    return null;
-  }
-  const pointer = pointerLine.slice("gitdir: ".length);
-  if (pointer.length === 0 || pointer.includes("\0")) return null;
-  const target = isAbsolute(pointer)
-    ? pointer
-    : resolvePath(worktreeDir, pointer);
-  try {
-    if (!lstatSync(target).isDirectory()) return null;
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
-
-function gitCommonDirectory(gitDir: string): string | null {
-  const marker = join(gitDir, "commondir");
-  try {
-    if (!lstatSync(marker).isFile()) return null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return gitDir;
-    return null;
-  }
-  const pointerRaw = boundedGitMetadataText(marker, 8192);
-  const pointerLine =
-    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
-  if (
-    pointerLine === null ||
-    pointerLine.length === 0 ||
-    pointerLine.includes("\0")
-  ) {
-    return null;
-  }
-  const target = isAbsolute(pointerLine)
-    ? pointerLine
-    : resolvePath(gitDir, pointerLine);
-  try {
-    if (!lstatSync(target).isDirectory()) return null;
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
 
 type GitObjectType = "commit" | "other";
 
