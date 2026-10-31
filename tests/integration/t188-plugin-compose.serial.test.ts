@@ -391,6 +391,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
               name?: string;
               trigger?: string;
               action?: { type?: string; command?: string };
+              timeout?: number;
             }>;
           };
           expect(registration.version).toBe("v1");
@@ -399,6 +400,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           expect(hook?.name).toBe(`aidlc-${PLUGIN}-compose`);
           expect(hook?.trigger).toBe("SessionStart");
           expect(hook?.action?.type).toBe("command");
+          // Kiro stops a hook with no timeout after 60 seconds.
+          expect(hook?.timeout).toBe(1800);
           const command = hook?.action?.command ?? "";
           expect(command).toBe(
             `aidlc engine plugin sync --harness-dir .kiro --plugin-root ./.kiro/aidlc-plugins/aidlc-${PLUGIN} || bun ./.kiro/aidlc-plugins/aidlc-${PLUGIN}/hooks/aidlc-plugin-compose.ts .kiro kiro-ide`,

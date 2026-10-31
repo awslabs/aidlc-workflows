@@ -1078,6 +1078,13 @@ describe("t243 project initialization", () => {
     expect(edited.stdout).toContain(
       "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")",
     );
+    // So is one whose timeout a person changed.
+    expect(written).toContain('"timeout": 1800');
+    writeFileSync(registration, written.replace('"timeout": 1800', '"timeout": 60'));
+    const retimed = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(retimed.stdout).toContain(
+      "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")",
+    );
     // A Windows team clone checks the file out with CRLF line endings.
     writeFileSync(registration, written.replaceAll("\n", "\r\n"));
     const crlf = run(INIT, [...switchArgs, "--dry-run"], project);
