@@ -64,7 +64,13 @@ function utility(proj: string, args: readonly string[], timeoutMs: number) {
 export function seedLiveWork(proj: string, seed: LiveWorkSeed, timeoutMs: number): void {
   const created = utility(
     proj,
-    ["intent-create", "--scope", seed.scope, ...(seed.settings ?? [])],
+    [
+      "intent-create",
+      "--scope", seed.scope,
+      "--arguments", seed.request,
+      "--label", seed.label,
+      ...(seed.settings ?? []),
+    ],
     timeoutMs,
   );
   expect(created.status, created.output).toBe(0);
