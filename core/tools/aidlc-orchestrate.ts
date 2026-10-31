@@ -20083,9 +20083,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // The person's own skip of the walk's first stage naming no unit is for
     // every unit from here: the beat's unit and each unit that still owes the
     // stage, one by one. A unit that already did the stage keeps that work for
-    // the stage's approval.
+    // the stage's approval. A team's other Units are worked in their own
+    // checkouts, so there it is the beat's Unit alone, also on a main that
+    // claims none and so walks every Unit.
     if (beat && personAsked && !unit && slug === beat.stage.slug && slug === currentSlug) {
-      const fromHere = [beat.unit, ...unitsOwingStage(pd, beat.stage, beat.context, stateContent).filter((u) => u !== beat.unit)];
+      const fromHere = isTeamUnitOwnership(stateContent)
+        ? [beat.unit]
+        : [beat.unit, ...unitsOwingStage(pd, beat.stage, beat.context, stateContent).filter((u) => u !== beat.unit)];
       for (const each of fromHere) {
         const res = spawnState(pd, ["skip", slug, "--reason", reason, "--unit", each]);
         if (res.exitCode !== 0) {

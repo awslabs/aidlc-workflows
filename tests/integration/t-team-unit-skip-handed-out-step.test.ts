@@ -26,8 +26,10 @@ import {
   cleanupTempDirs,
   gateAndLand,
   git,
+  clone,
   makeSeed,
   nextDirective,
+  parallelDependencyBody,
   prepareCandidate,
   runMergeTool,
   unitProgressRow,
@@ -63,9 +65,9 @@ function handedOut(checkout: string): void {
   expect(step.unit).toBe("alpha");
 }
 
-function unitSkips(checkout: string): string[] {
+function unitSkips(checkout: string, stage = STAGE): string[] {
   return readAuditShardEvents(checkout)
-    .filter((row) => row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Stage") === STAGE)
+    .filter((row) => row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Stage") === stage)
     .map((row) => `${auditBlockField(row.block, "Unit")}@${auditBlockField(row.block, "Attempt Generation")}`);
 }
 
@@ -82,6 +84,19 @@ function teamSeed(): { seed: string; remote: string } {
   git(made.seed, ["commit", "-am", "skeleton stance"]);
   git(made.seed, ["push", "origin", "main"]);
   return made;
+}
+
+// Main working the team's Units itself, with no claim, over two Units that
+// both owe every step: the walk hands out the first Unit's first step.
+function unclaimedMain(): string {
+  const { remote } = makeSeed(parallelDependencyBody());
+  const checkout = clone(remote, "main-unclaimed");
+  const statePath = seededStateFile(checkout);
+  writeFileSync(
+    statePath,
+    readFileSync(statePath, "utf-8").replace("- **Unit Gate Rhythm**: per-stage", "- **Unit Gate Rhythm**: per-stage\n- **Skeleton Stance**: on"),
+  );
+  return checkout;
 }
 
 function writeStageFiles(checkout: string): void {
@@ -258,5 +273,23 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
     gateAndLand(seed, "alpha");
     const cells = unitProgressRow(seed, "alpha").split("|").slice(1, -1).map((cell) => cell.trim());
     expect(cells.slice(2)).toEqual(cells.slice(2).map(() => "[x]"));
+  });
+
+  test("on a main working its Units unclaimed, the person's skip naming no Unit is for the Unit handed out, not every Unit", () => {
+    const checkout = unclaimedMain();
+    const first = nextDirective(checkout);
+    expect(first, JSON.stringify(first)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha" });
+    const skipped = runMergeTool(ORCH, [
+      "report", "--stage", "functional-design", "--result", "skipped", "--reason", PERSON_ASKED_SKIP_REASON,
+    ], checkout);
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(JSON.parse(skipped.stdout).kind, skipped.out).toBe("done");
+    expect(JSON.parse(skipped.stdout).reason).toBe('Skipped "functional-design" for unit "alpha". Run next to continue.');
+    // Beta is worked by someone else, and still owes the step.
+    expect(unitSkips(checkout, "functional-design").map((row) => row.split("@")[0])).toEqual(["alpha"]);
+    expect(readFileSync(seededStateFile(checkout), "utf-8")).not.toMatch(/^- \[[xS]\] functional-design/m);
+    const cell = (unit: string) => unitProgressRow(checkout, unit).split("|").slice(1, -1).map((entry) => entry.trim())[2];
+    expect(cell("beta")).toBe("[ ]");
+    expect(nextDirective(checkout)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
   });
 });
