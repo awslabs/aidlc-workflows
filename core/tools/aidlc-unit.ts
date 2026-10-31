@@ -2625,6 +2625,22 @@ function isEngineMergeMetadata(
   ]).has(path);
 }
 
+// A review record the candidate carries for pin (withClaimReviewRecords) that
+// this checkout's .gitignore ignores, as AI-DLC's own does for its engine
+// folder, and that main does not hold: the landing keeps it out of the merge
+// commit, so main never tracks a file its own .gitignore ignores.
+function isCarriedReviewRecord(
+  projectDir: string,
+  path: string,
+  recordPrefix: string | null,
+  mainTreeish: string,
+): boolean {
+  return recordPrefix !== null &&
+    path.startsWith(`${recordPrefix}/${REVIEW_RECORDS_DIR}/`) &&
+    !gitPathExistsAt(projectDir, mainTreeish, path) &&
+    git(projectDir, ["check-ignore", "-q", "--no-index", "--", path]).ok;
+}
+
 // The paths `git status` lists as changed: tracked changes, and with
 // `untracked: "all"` every untracked file Git does not ignore.
 function worktreeChanges(projectDir: string, untracked: "no" | "all", label: string): string[] {
@@ -2952,9 +2968,11 @@ function inspectLandedTree(
     : {
         violations: ["active intent record is unavailable"],
       };
+  const carriedOnly = (path: string): boolean =>
+    isCarriedReviewRecord(projectDir, path, recordPrefix, mainParent);
   const allowedCommitChanges = new Set(
     candidatePaths.filter((path) =>
-      !isEngineMergeMetadata(projectDir, path, recordPrefix)
+      !isEngineMergeMetadata(projectDir, path, recordPrefix) && !carriedOnly(path)
     ),
   );
   const actualCommitChanges = gitOutput(
@@ -2969,7 +2987,7 @@ function inspectLandedTree(
   const objectMismatches: CandidateExactDetails["object_mismatches"] = [];
   for (const path of candidatePaths) {
     const actual = gitObjectAt(projectDir, treeish, path);
-    const expectedTreeish = isEngineMergeMetadata(projectDir, path, recordPrefix)
+    const expectedTreeish = isEngineMergeMetadata(projectDir, path, recordPrefix) || carriedOnly(path)
       ? mainParent
       : transaction.pinned_oid;
     const expected = gitObjectAt(projectDir, expectedTreeish, path);
@@ -3269,6 +3287,13 @@ function landGit(
         ["merge", "--no-commit", "--no-ff", transaction.pinned_oid],
       );
     restoreMainMetadata(projectDir, changed);
+    const landingRecordPrefix = relativeRecordDir(projectDir);
+    for (const path of changed.filter((path) =>
+      isCarriedReviewRecord(projectDir, path, landingRecordPrefix, "HEAD")
+    )) {
+      const dropped = git(projectDir, ["rm", "-q", "--cached", "--ignore-unmatch", "--", path]);
+      if (!dropped.ok) fail(`Failed to leave the review record ${path} out of the merge: ${dropped.stderr.trim()}.`);
+    }
     const conflicts = conflictFiles(projectDir).filter(
       (path) => !isEngineMergeMetadata(projectDir, path),
     );
