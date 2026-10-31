@@ -553,7 +553,7 @@ test("a hook refusal is counted however the install runs its hooks", () => {
     '[bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook guard-tool-call]',
     '["C:\\Users\\u\\AppData\\Local\\aidlc\\aidlc.exe" engine hook review-freeze]',
     "[bun .codex/tools/aidlc.ts engine adapter codex guard-tool-call]",
-    // the same, inside text a reader turned into JSON (Copilot, Kiro): the quotes come escaped
+    // a command whose quotes came escaped
     '[\\"C:\\\\u\\\\aidlc.exe\\" engine hook state-transition-guard]',
     // an argument after the route, PowerShell's exit line, Bun's `--`, Cursor's route-less adapter
     "[bun .kiro/tools/aidlc.ts engine adapter kiro reviewer-scope aidlc-architecture-reviewer-agent]",
@@ -586,6 +586,197 @@ test("a hook refusal is counted however the install runs its hooks", () => {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = before;
   }
+});
+
+// What a file says is not a refusal: a hook command or a Stop hook line the agent read counts nowhere, on any channel.
+const QUOTED = '"command": "[aidlc engine hook plan-approval-guard]" … Stop hook feedback: keep going';
+
+test("Claude Code counts the refusals it recorded itself, named only when the record names the hook", () => {
+  const root = mkdtempSync(join(tmpdir(), "claude-blocks-"));
+  const project = join(root, "proj");
+  mkdirSync(project);
+  const config = join(root, "cfg");
+  const dir = join(config, "projects", resolve(project).replace(/[^A-Za-z0-9]/g, "-"));
+  mkdirSync(dir, { recursive: true });
+  const base = { cwd: project, sessionId: "s1" };
+  const result = (min: number, content: string, isError: boolean) => ({
+    ...base, type: "user", timestamp: at(min),
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${min}`, is_error: isError, content }] },
+  });
+  const blocking = (min: number, hookEvent: string, command: string) => ({
+    ...base, type: "attachment", timestamp: at(min),
+    attachment: { type: "hook_blocking_error", hookName: `${hookEvent}:Bash`, hookEvent, blockingError: { blockingError: `[${command}]: no`, command } },
+  });
+  const lines = [
+    result(1, QUOTED, false), // a file the agent read
+    result(2, `cat: x: No such file\n${QUOTED}`, true), // a failed command that printed one
+    result(3, "PreToolUse:Bash hook error: AI-DLC: the code plan is not approved yet.", true), // a JSON deny: no command
+    result(4, "PreToolUse:Bash hook error: [aidlc engine hook review-freeze]: frozen", true),
+    blocking(5, "PostToolUse", 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook run-sensors'),
+    blocking(6, "PostToolUse", "~/bin/lint-on-save"), // the person's own hook
+    blocking(7, "Stop", "aidlc engine hook continue-workflow"), // counted from the Stop summary instead
+    blocking(9, "UserPromptSubmit", "aidlc engine hook record-human-turn"), // not measured: left out, with a note
+    result(10, "PreToolUse:Bash hook error: [~/bin/guard.sh]: no", true), // the person's own PreToolUse hook
+    result(11, "PreToolUse:Task hook error: [aidlc] The subagent was not started. Next step [Plan Approval]: approve it", true), // AI-DLC's tag
+    // a Stop hook that kept the turn going: the line handed to the model, and AI-DLC's carry-on context
+    { ...base, type: "user", isMeta: true, timestamp: at(12), message: { role: "user", content: "Stop hook feedback:\n[aidlc engine hook continue-workflow]: keep going" } },
+    { ...base, type: "attachment", timestamp: at(13), attachment: { type: "hook_additional_context", hookEvent: "Stop", content: ["AI-DLC is carrying on."] } },
+    { ...base, type: "system", subtype: "stop_hook_summary", timestamp: at(14), preventedContinuation: false, hookErrors: ["keep going"] },
+    { ...base, type: "user", isMeta: true, timestamp: at(17), message: { role: "user", content: "Stop hook error:\n[~/bin/stop-guard.sh]: not yet" } }, // before 2.1.163
+    { ...base, type: "system", subtype: "stop_hook_summary", timestamp: at(18), preventedContinuation: true, hookErrors: [] }, // a hook stopped Claude
+    { ...base, type: "system", subtype: "stop_hook_summary", isSidechain: true, timestamp: at(19), preventedContinuation: true, hookErrors: [] }, // a subagent's
+    { ...base, type: "user", isMeta: true, isSidechain: true, timestamp: at(19), message: { role: "user", content: "Stop hook feedback:\nsubagent" } },
+    { ...base, type: "user", timestamp: at(15), message: { role: "user", content: "Stop hook feedback: what does this mean?" } }, // typed by the person
+    blocking(16, "SubagentStop", "aidlc engine hook continue-workflow"),
+    result(8, "PreToolUse:Bash hook error: [[ -x .claude/tools/aidlc.ts ] && bun .claude/tools/aidlc.ts engine hook plan-approval-guard]: no", true),
+    // the report made in the same session: its own block records are not the run's
+    { ...base, type: "user", timestamp: at(20), message: { role: "user", content: "make an issue report" } },
+    {
+      ...base, type: "assistant", timestamp: at(21),
+      message: { role: "assistant", content: [{ type: "tool_use", id: "r1", name: "Bash", input: { command: "bun .claude/skills/aidlc-issue-report/scripts/collect.ts" } }] },
+    },
+    blocking(22, "UserPromptSubmit", "aidlc engine hook record-human-turn"),
+    blocking(23, "PostToolUse", "aidlc engine hook run-sensors"),
+  ];
+  writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  try {
+    const local = { prompts: [], refusals: [] as { owner: string }[], errors: [] as object[] };
+    const s = claude(project, Date.parse(at(0)) - 3_600_000, Date.parse(at(59)), local as never);
+    expect({ named: s?.aidlcHookBlocks, other: s?.otherHookBlocks, unattributed: s?.unattributedHookBlocks, stop: s?.stopFeedback, errors: s?.toolErrors }).toEqual({
+      named: { "review-freeze": 1, "run-sensors": 1, "plan-approval-guard": 1 }, other: 2, unattributed: 2, stop: 3, errors: 6,
+    });
+    expect(local.refusals.map((r) => r.owner)).toEqual(["unknown", "aidlc", "aidlc", "other", "aidlc", "other", "unknown", "aidlc", "unknown", "other"]);
+    expect(s?.notes.some((n) => n.startsWith("1 time(s) a Stop hook stopped Claude from going on"))).toBe(true);
+    expect(s?.notes.some((n) => n.startsWith("Claude Code names the hook only"))).toBe(true);
+    expect(s?.notes.some((n) => n.startsWith("2 hook block record(s) for hook events other than"))).toBe(true);
+    // with only the report's own block record left, no note
+    writeFileSync(join(dir, "s1.jsonl"), lines.filter((l) => l.timestamp !== at(9) && l.timestamp !== at(16)).map((l) => JSON.stringify(l)).join("\n"));
+    const again = claude(project, Date.parse(at(0)) - 3_600_000, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
+    expect(again?.notes.some((n) => n.includes("hook block record(s) for hook events other than"))).toBe(false);
+    expect(local.errors.length).toBe(1);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});
+
+test("Codex output that quotes a hook command or a Stop hook line is no refusal, failed or not", async () => {
+  const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const home = mkdtempSync(join(tmpdir(), "codex-quoted-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const day = join(home, "sessions", "2026", "10", "29");
+  mkdirSync(day, { recursive: true });
+  const out = (output: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "function_call_output", call_id: `c${min}`, output } });
+  const lines = [
+    { timestamp: at(0), type: "session_meta", payload: { id: "t1", cwd: project } },
+    out(`Process exited with code 0\nOutput:\n${QUOTED}`, 1),
+    out(`Process exited with code 2\nOutput:\n${QUOTED}`, 2),
+  ];
+  writeFileSync(join(day, "rollout-2026-10-29T01-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    const s = codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
+    expect({ named: s?.aidlcHookBlocks, unattributed: s?.unattributedHookBlocks, stop: s?.stopFeedback, errors: s?.toolErrors }).toEqual({
+      named: {}, unattributed: 0, stop: 0, errors: 1,
+    });
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+  }
+});
+
+test("a Codex Stop hook's block counts once, and its words are not taken as a named hook's", async () => {
+  const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const home = mkdtempSync(join(tmpdir(), "codex-stop-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const day = join(home, "sessions", "2026", "10", "29");
+  mkdirSync(day, { recursive: true });
+  const lines = [
+    { timestamp: at(0), type: "session_meta", payload: { id: "t1", cwd: project } },
+    { timestamp: at(1), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: '<hook_prompt hook_run_id="stop:1">Keep going: the stage is not done.</hook_prompt>' }] } },
+  ];
+  writeFileSync(join(day, "rollout-2026-10-29T01-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    const local = { prompts: [], refusals: [] as { hook?: string | null }[], errors: [] };
+    const s = codex(project, 0, Date.parse(at(59)), local as never);
+    expect({ stop: s?.stopFeedback, hooks: local.refusals.map((r) => r.hook) }).toEqual({ stop: 1, hooks: [null] });
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+  }
+});
+
+test("a Kiro call it denied counts by what the log says: the person, a rule, or no reason after AI-DLC hooks or not", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-denied-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const sess = join(home, ".kiro", "sessions", "ws", "sess_1");
+  mkdirSync(sess, { recursive: true });
+  writeFileSync(join(sess, "session.json"), JSON.stringify({ workspacePaths: [project] }));
+  const hook = (min: number, name: string) => ({ timestamp: at(min), payload: { type: "ContextualHookInvoked", name, hookActionType: "runCommand", status: "completed" } });
+  const call = (min: number, status: string) => ({ timestamp: at(min), payload: { type: "tool_call", toolCallId: `c${min}`, toolName: "execute_bash", args: { command: "ls" }, status } });
+  const result = (min: number, content: string) => ({ timestamp: at(min), payload: { type: "tool_result", toolCallId: `c${min - 1}`, content, success: false } });
+  const lines = [
+    hook(1, "aidlc-enforce-approval-gate"), hook(2, "aidlc-plan-approval-guard"), call(3, "denied"), result(4, "{}"),
+    hook(5, "probe-pre"), call(6, "denied"), result(7, "{}"),
+    call(8, "denied"), result(9, "The user rejected this tool call."),
+    hook(10, "aidlc-guard-tool-call"), call(11, "denied"), result(12, "Tool call denied by user's permissions. Rule: deny fs_write"),
+    hook(13, "aidlc-guard-tool-call"), call(14, "completed"), result(15, "{}"), // failed for another reason
+    call(16, "denied"), result(17, QUOTED), // a reason Kiro does not write: not taken for any kind
+  ];
+  writeFileSync(join(sess, "messages.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const code = `const { kiroV3 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV3(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ denials: s?.denials, named: s?.aidlcHookBlocks, unattributed: s?.unattributedHookBlocks, errors: s?.toolErrors }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({
+    denials: { "denied-after-aidlc-hooks": 1, "denied-no-reason": 1, "user-rejected": 1, "agent-profile-deny": 1 },
+    named: {}, unattributed: 0, errors: 6,
+  });
+});
+
+test("Kiro CLI v2 counts the hook refusal it wrote itself, and no hook command a result quotes", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-v2-blocks-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const dir = join(home, ".kiro", "sessions", "cli");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "s1.json"), JSON.stringify({ cwd: project, updated_at: at(30) }));
+  const results = (result: unknown) => ({ kind: "ToolResults", data: { results: { r: { result } } } });
+  const lines = [
+    results({ Error: { Custom: "PreToolHook blocked the tool execution: Code generation cannot run until the plan is approved." } }),
+    results({ Success: { items: [{ Text: QUOTED }] } }),
+    results({ Error: { Custom: `failed: ${QUOTED}` } }),
+  ];
+  writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const code = `const { kiroV2 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV2(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ named: s?.aidlcHookBlocks, unattributed: s?.unattributedHookBlocks, stop: s?.stopFeedback, errors: s?.toolErrors }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({ named: {}, unattributed: 1, stop: 0, errors: 2 });
+});
+
+test("a failed Copilot CLI call that quotes a hook command is a failed call, not a refusal", () => {
+  const home = mkdtempSync(join(tmpdir(), "copilot-quoted-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const sess = join(home, ".copilot", "session-state", "s1");
+  mkdirSync(sess, { recursive: true });
+  writeFileSync(join(sess, "workspace.yaml"), `cwd: ${project}\n`);
+  const events = [{ type: "tool.execution_complete", timestamp: at(1), data: { success: false, result: QUOTED } }];
+  writeFileSync(join(sess, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n"));
+  const code = `const { copilotCli } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = copilotCli(${JSON.stringify(project)}, ${Date.parse(at(0)) - 3_600_000}, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ named: s?.aidlcHookBlocks, stop: s?.stopFeedback, errors: s?.toolErrors }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({ named: {}, stop: 0, errors: 1 });
 });
 
 test("a Codex subagent's session is not a session or a reply of the person's, and a call it copied counts once", async () => {

@@ -132,13 +132,32 @@ describe("other fields", () => {
     const s = shaper();
     const t = s.transcript({
       tool: "kiro (v3)", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 0, toolErrors: 0, denials: {}, aidlcHookBlocks: {},
-      stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: { "aidlc engine orchestrate next": 2, "aidlc acme-portal": 1 },
+      otherHookBlocks: 0, unattributedHookBlocks: 0, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: { "aidlc engine orchestrate next": 2, "aidlc acme-portal": 1 },
       repeats: [], timeline: [], subagents: {}, engine: "v3", toolVersions: { "2.33.1": 1 }, models: {}, efforts: {}, agents: {},
       approvalModes: {}, handRunChecks: [], reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [],
     });
     expect(t).toMatchObject({ aidlcCommands: { "aidlc engine orchestrate next": 2 } });
     expect(s.doctorFinding({ id: "acme-plugin-check", severity: "WARNING" })).toEqual({ id: "<custom-doctor-finding-1>", severity: "warning" });
     expect(s.doctorFinding({ id: "gate-unresolved", severity: "ERROR" })).toEqual({ id: "gate-unresolved", severity: "error" });
+  });
+  test("a refusal the log does not name and Kiro's denied calls keep their own words", () => {
+    const t = shaper().transcript({
+      tool: "kiro (v3)", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 2, toolErrors: 2,
+      denials: { "denied-after-aidlc-hooks": 1, "denied-no-reason": 1 }, aidlcHookBlocks: {}, otherHookBlocks: 1, unattributedHookBlocks: 1,
+      stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {}, repeats: [],
+      timeline: [
+        { ts: "2026-10-29T01:00:00Z", kind: "hook-block", detail: "" },
+        { ts: "2026-10-29T01:01:00Z", kind: "tool-denied", detail: "denied-after-aidlc-hooks" },
+      ],
+      subagents: {}, engine: "v3", toolVersions: {}, models: {}, efforts: {}, agents: {}, approvalModes: {}, handRunChecks: [],
+      reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [],
+    });
+    expect(t).toMatchObject({
+      otherHookBlocks: 1,
+      unattributedHookBlocks: 1,
+      denials: { "denied-after-aidlc-hooks": 1, "denied-no-reason": 1 },
+      timeline: [{ kind: "hook-block", detail: "" }, { kind: "tool-denied", detail: "denied-after-aidlc-hooks" }],
+    });
   });
   test("an install's source tag stays; a private build name is a label", () => {
     const env = (sourceRef: string) =>

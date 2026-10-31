@@ -185,7 +185,8 @@ its own when there is nothing else to ask): "I hid these names: … Is there any
 they add the same way. Do not ask twice.
 
 **AI-DLC's own messages may be quoted as they are, without asking** — an engine refusal or an error line AI-DLC
-printed (in `local/refusals.jsonl`, `errors.jsonl`, the tool's output): they are often what the team needs most. The check
+printed (in `local/refusals.jsonl`, `errors.jsonl`, the tool's output): they are often what the team needs most. A
+refusal there whose `owner` is not `aidlc` may be another hook's words; quote it only when the check takes it as AI-DLC's. The check
 knows AI-DLC's message text from the project's install and reads only what the message filled in (a stage, a path, a
 name), like any other word. Quote the message itself, not your paraphrase of it; to shorten one, cut with `…` and add no
 `<…>` of your own.

@@ -19,7 +19,11 @@ export type Summary = {
   toolCalls: number;
   toolErrors: number;
   denials: Record<string, number>;
+  // A hook refusal as the host itself records it: under the AI-DLC hook or route when the record names its command,
+  // as another hook's when it names a command not known as AI-DLC's, else unattributed (a hook refused, not whose).
   aidlcHookBlocks: Record<string, number>;
+  otherHookBlocks: number;
+  unattributedHookBlocks: number;
   stopFeedback: number;
   approvalPrompts: number;
   questionsAsked: number;
@@ -96,6 +100,7 @@ type ClaudeLine = {
   permissionMode?: unknown;
   toolDenialKind?: unknown;
   preventedContinuation?: boolean;
+  attachment?: { type?: string; hookEvent?: string; content?: unknown; blockingError?: { blockingError?: unknown; command?: unknown } };
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;
@@ -130,6 +135,8 @@ type KiroPayload = {
   args?: { command?: unknown; cmd?: unknown };
   toolCallId?: string;
   success?: boolean;
+  status?: string;
+  name?: string;
   interactionType?: string;
   subAgentName?: string;
 };
@@ -156,7 +163,7 @@ type SubagentStart = { subagentId?: unknown; modelId?: unknown; modelOverride?: 
 function empty(tool: string): Summary {
   return {
     tool, sessions: 0, firstTs: null, lastTs: null, prompts: 0, toolCalls: 0, toolErrors: 0, denials: {}, aidlcHookBlocks: {},
-    stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {}, repeats: [], timeline: [], subagents: {},
+    otherHookBlocks: 0, unattributedHookBlocks: 0, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {}, repeats: [], timeline: [], subagents: {},
     engine: null, toolVersions: {}, models: {}, efforts: {}, agents: {}, approvalModes: {}, handRunChecks: [], reportSessions: 0,
     mixedSessions: 0, reportModels: {}, notes: [],
   };
@@ -244,14 +251,33 @@ function subagent(s: Summary, name: string) {
   s.subagents[name] ??= { dispatches: 0, models: {}, efforts: {} };
   return s.subagents[name];
 }
-// A blocking hook as the host shows it: its configured command in brackets, the `aidlc` command's (`hook <name>`)
-// or a copied tree's `aidlc.ts` with the same words, also a harness adapter's (`adapter <harness> <route>`) and a
-// quoted Windows path to `aidlc.exe`.
+// An AI-DLC hook's configured command: the `aidlc` command's (`hook <name>`) or a copied tree's `aidlc.ts` with the
+// same words, also a harness adapter's (`adapter <harness> <route>`) and a quoted Windows path to `aidlc.exe`.
 // The command may go on after the name (an agent argument, `--project-dir …`, PowerShell's `; exit $LASTEXITCODE`), Bun
 // may be given `--` before the words, and Cursor's adapter may take no route (`adapter cursor`). A copied tree may run
 // its adapter script itself (`aidlc-copilot-adapter.ts <route>`, `aidlc-cursor-adapter.ts <event>`).
-const HOOK_BLOCK =
-  /\[[^\]\n]{0,300}?\b(?:aidlc(?:\.ts|\.exe|\.cmd)?(?:\\?["'])?\s+(?:--\s+)?engine\s+(?:hook\s+(?<hook>[a-z0-9-]+)|adapter\s+(?<harness>[a-z-]+)(?:\s+(?<route>[a-z][a-z0-9-]*))?)|aidlc-(?<script>copilot|cursor|codex|kiro)-adapter\.ts(?:\\?["'])?\s+(?<scriptRoute>[a-z][a-z0-9-]*))\b[^\]\n]{0,200}\]/gi;
+const AIDLC_HOOK_COMMAND =
+  /\b(?:aidlc(?:\.ts|\.exe|\.cmd)?(?:\\?["'])?\s+(?:--\s+)?engine\s+(?:hook\s+(?<hook>[a-z0-9-]+)|adapter\s+(?<harness>[a-z-]+)(?:\s+(?<route>[a-z][a-z0-9-]*))?)|aidlc-(?<script>copilot|cursor|codex|kiro)-adapter\.ts(?:\\?["'])?\s+(?<scriptRoute>[a-z][a-z0-9-]*))\b/i;
+// The hosts' own refusal records, each read only from a failed result (a file the agent read can quote any of
+// them). Claude Code starts a PreToolUse refusal with `PreToolUse:<tool> hook error: `, then the hook's command in
+// brackets when the hook only exited 2; a JSON deny, which AI-DLC prints on Claude, gives the reason alone, and an
+// AI-DLC reason may start with its own `[aidlc] ` tag, which is no command. Kiro CLI v2 gives `PreToolHook blocked the
+// tool execution: <reason>` and no command.
+const CLAUDE_HOOK_ERROR = /^PreToolUse:[^\s:]+ hook error: (?:\[(?!aidlc\]\s)([^\n]{1,2000}?)\]: )?/;
+const KIRO_V2_HOOK_BLOCK = /^PreToolHook blocked the tool execution: /;
+const CLAUDE_STOP_FEEDBACK = /^Stop hook (?:feedback|error):\s*(?:\[(?!aidlc\]\s)([^\n]{1,2000}?)\]: )?/;
+
+// The AI-DLC hook or route a hook command runs, or null for a command that is not AI-DLC's.
+function aidlcHookName(command: string): string | null {
+  const m = command.match(AIDLC_HOOK_COMMAND);
+  if (!m) return null;
+  // Cursor's adapter takes its host's event names (`guards`, `stop`), so its blocks are all `cursor-adapter`, native
+  // or copied.
+  const g = Object.fromEntries(Object.entries(m.groups ?? {}).map(([k, v]) => [k, v?.toLowerCase()]));
+  const harness = g.harness ?? g.script;
+  return harness === "cursor" ? "cursor-adapter" : (g.hook ?? g.route ?? g.scriptRoute ?? `${harness}-adapter`);
+}
+
 // An AI-DLC command as the agent typed it, native (`engine orchestrate next` after `aidlc`) or from a copied
 // tree (the same verbs after the tree's `aidlc.ts`, or after an `aidlc-<tool>.ts` such as `aidlc-log.ts`).
 const AIDLC_CMD = /\baidlc(?:-([a-z-]+))?(?:\.ts|\.cmd|\.exe)?["']?\s+(?:engine\s+)?([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/i;
@@ -287,30 +313,37 @@ function noteCommand(t: Tally, ts: string, text: string) {
   t.add(ts, (s) => bump(s.aidlcCommands, verb.slice(0, 60)));
 }
 
-function noteText(t: Tally, tool: string, local: Local, ts: string, text: string, isError: boolean) {
-  let blocked = false;
-  for (const m of text.matchAll(HOOK_BLOCK)) {
-    // A hook's or a route's name; Cursor's adapter takes its host's event names (`guards`, `stop`), so its blocks are
-    // all `cursor-adapter`, native or copied.
-    const g = Object.fromEntries(Object.entries(m.groups ?? {}).map(([k, v]) => [k, v?.toLowerCase()]));
-    const harness = g.harness ?? g.script;
-    const hook = harness === "cursor" ? "cursor-adapter" : (g.hook ?? g.route ?? g.scriptRoute ?? `${harness}-adapter`);
-    t.add(ts, (s) => {
-      bump(s.aidlcHookBlocks, hook);
-      s.timeline.push({ ts, kind: "aidlc-hook-block", detail: hook });
-    });
-    blocked = true;
-  }
-  if (/Stop hook (feedback|error)/.test(text)) {
-    t.add(ts, (s) => {
-      s.stopFeedback++;
-      s.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
-    });
-    blocked = true;
-  }
-  // The report's own refusals and errors are not the run's evidence either.
-  if (blocked) t.add(ts, () => local.refusals.push({ tool, ts, text: text.slice(0, 1500) }));
-  else if (isError) t.add(ts, () => local.errors.push({ tool, ts, text: text.slice(0, 600) }));
+const HOOK_BLOCK_KIND = { aidlc: "aidlc-hook-block", other: "other-hook-block", unknown: "hook-block" } as const;
+
+// A hook refusal the host recorded, with the hook's command when the record names one; a command not known as
+// AI-DLC's is another hook's (another hook's reason that itself starts with `[…]: ` reads as such a command). Like
+// noteError, it goes through the tally: what the report did itself is not the run's evidence.
+function noteHookBlock(t: Tally, tool: string, local: Local, ts: string, command: string | null, text: string) {
+  const hook = command ? aidlcHookName(command) : null;
+  const owner = hook ? "aidlc" : command ? "other" : "unknown";
+  const kind = HOOK_BLOCK_KIND[owner];
+  t.add(ts, (s) => {
+    if (hook) bump(s.aidlcHookBlocks, hook);
+    else if (owner === "other") s.otherHookBlocks++;
+    else s.unattributedHookBlocks++;
+    s.timeline.push({ ts, kind, detail: hook ?? "" });
+  });
+  t.add(ts, () => local.refusals.push({ tool, ts, hook, owner, text: text.slice(0, 1500) }));
+}
+
+// A Stop hook that kept the turn going, with the hook's command when the record names one.
+function noteStop(t: Tally, tool: string, local: Local, ts: string, command: string | null, text: string) {
+  const hook = command ? aidlcHookName(command) : null;
+  const owner = hook ? "aidlc" : command ? "other" : "unknown";
+  t.add(ts, (s) => {
+    s.stopFeedback++;
+    s.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
+  });
+  t.add(ts, () => local.refusals.push({ tool, ts, hook, owner, text: text.slice(0, 1500) }));
+}
+
+function noteError(t: Tally, tool: string, local: Local, ts: string, text: string) {
+  t.add(ts, () => local.errors.push({ tool, ts, text: text.slice(0, 600) }));
 }
 
 // Same tool with the same input three times or more = a loop worth naming.
@@ -506,6 +539,8 @@ export function claude(project: string, since: number, until: number, local: Loc
   const reportFrom = new Map<string, string>();
   const checks = new Map<string, { ts: string; check: string }>();
   const tallies = new Map<string, Tally>();
+  let otherEventBlocks = 0;
+  let stopsHalted = 0;
   for (const root of roots) {
     if (!existsSync(root)) continue;
     // The folder key is the path as Claude Code wrote it, the project's own or a folder under it (`<key>-src`); on Windows
@@ -590,13 +625,41 @@ export function claude(project: string, since: number, until: number, local: Loc
                     ? (c.content as ({ text?: string } | null)[]).map((x) => x?.text ?? "").join("\n")
                     : "";
               noteCheck(t, checks, c.tool_use_id, text);
-              if (c.is_error) t.add(ts, (x) => x.toolErrors++);
-              noteText(t, s.tool, local, ts, text, !!c.is_error);
+              if (c.is_error) {
+                t.add(ts, (x) => x.toolErrors++);
+                const hook = text.match(CLAUDE_HOOK_ERROR);
+                if (hook) noteHookBlock(t, s.tool, local, ts, hook[1] ?? null, text);
+                else noteError(t, s.tool, local, ts, text);
+              }
             }
           }
         }
-        if (r.type === "system" && r.subtype === "stop_hook_summary" && r.preventedContinuation) {
-          t.add(ts, (x) => x.stopFeedback++);
+        // A blocking PostToolUse hook leaves the tool's result as it was and writes its own record, command included. A
+        // Stop block is counted from the line it hands the model, below; other events' block records are not measured
+        // and not counted.
+        const blocked = r.type === "attachment" && r.attachment?.type === "hook_blocking_error" ? r.attachment : undefined;
+        if (blocked?.hookEvent === "PostToolUse") {
+          const command = typeof blocked.blockingError?.command === "string" ? blocked.blockingError.command : null;
+          noteHookBlock(t, s.tool, local, ts, command, String(blocked.blockingError?.blockingError ?? ""));
+        } else if (blocked && blocked.hookEvent !== "Stop") {
+          t.add(ts, () => otherEventBlocks++);
+        }
+        // A Stop hook that kept the turn going, as Claude Code hands it to the model: a meta line `Stop hook feedback:`
+        // (`Stop hook error:` before 2.1.163) for a block, the hook's command in brackets when it only exited 2, or a
+        // Stop additional-context record for AI-DLC's carry-on from 2.1.163. The Stop summary's preventedContinuation
+        // stays false for all three (measured on 2.1.314): it marks a hook that stopped Claude from going on (its
+        // `continue: false`, not measured here), said in a note.
+        if (r.type === "system" && r.subtype === "stop_hook_summary" && r.preventedContinuation && !r.isSidechain) {
+          t.add(ts, () => stopsHalted++);
+        }
+        if (r.type === "user" && r.isMeta && !r.isSidechain) {
+          const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((c) => c?.text ?? "").join("\n") : "";
+          const stop = text.match(CLAUDE_STOP_FEEDBACK);
+          if (stop) noteStop(t, s.tool, local, ts, stop[1] ?? null, text);
+        }
+        const extra = r.type === "attachment" ? r.attachment : undefined;
+        if (extra?.type === "hook_additional_context" && extra.hookEvent === "Stop" && !r.isSidechain) {
+          noteStop(t, s.tool, local, ts, null, Array.isArray(extra.content) ? extra.content.join("\n") : String(extra.content ?? ""));
         }
       }
     }
@@ -606,6 +669,15 @@ export function claude(project: string, since: number, until: number, local: Loc
   s.sessions = sessions.size;
   for (const [id, log] of sessions) addTimedSession(s, log, reportFrom.get(id), firstEngine.get(id));
   for (const [id, t] of tallies) t.commit(s, calls, { from: reportFrom.get(id) });
+  if (s.unattributedHookBlocks) {
+    s.notes.push("Claude Code names the hook only when it refused by exit code alone; AI-DLC's PreToolUse refusals (from 2.11.0) give the reason without it, so those count as unattributedHookBlocks.");
+  }
+  if (stopsHalted) {
+    s.notes.push(`${stopsHalted} time(s) a Stop hook stopped Claude from going on (Claude Code's Stop summary).`);
+  }
+  if (otherEventBlocks) {
+    s.notes.push(`${otherEventBlocks} hook block record(s) for hook events other than PostToolUse and Stop (a prompt hook or SubagentStop, for one) are not counted: their record is not measured.`);
+  }
   finishRepeats(s, calls);
   return s;
 }
@@ -683,7 +755,7 @@ export function codex(project: string, since: number, until: number, local: Loca
           t.add(ts, (x) => {
             x.stopFeedback++;
             x.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
-            local.refusals.push({ tool: x.tool, ts, text: reason });
+            local.refusals.push({ tool: x.tool, ts, hook: null, owner: "unknown", text: reason });
           });
         }
         if (text.trim() && !injected) {
@@ -731,7 +803,7 @@ export function codex(project: string, since: number, until: number, local: Loca
             x.timeline.push({ ts, kind: "tool-denied", detail: "policy-denied" });
           });
         }
-        noteText(t, s.tool, local, ts, text, isError);
+        if (isError) noteError(t, s.tool, local, ts, text);
       }
     }
     markReport(local.prompts.slice(firstPrompt), reportFrom, () => true);
@@ -751,22 +823,30 @@ export function codex(project: string, since: number, until: number, local: Loca
   if (inheritedSessions) {
     s.notes.push(`${inheritedSessions} Codex subagent or approval-review session(s): their tool calls are counted with the run; they are not counted as sessions, and their task messages not as replies.`);
   }
-  s.notes.push("Codex hook blocks: Stop hook blocks are counted from the hook prompt lines Codex writes for a Stop hook run (measured 10-18, Codex 0.162); other hooks' blocks come from refusal text only.");
+  s.notes.push("Codex hook blocks: Stop hook blocks are counted from the hook prompt lines Codex writes for a Stop hook run (measured 10-18, Codex 0.162); how Codex records another hook's refusal is not measured, so those show only as failed calls (toolErrors).");
   return s;
 }
 
 // ---------- Kiro CLI v3 and Kiro IDE 1.x (shared store) ----------
 // A failed tool result; the agent profile's own refusal says `Rule: deny` (Kiro CLI v3 also `Blocked by a
-// permission rule (deny …)`, docs/guide/15-troubleshooting.md).
-function kiroFailure(t: Tally, tool: string, local: Local, ts: string, text: string) {
+// permission rule (deny …)`, docs/guide/15-troubleshooting.md). A call Kiro marked denied says why only when the person
+// rejected it or a permission rule did; a hook's refusal leaves `{}` and no reason, and the hooks that ran before it
+// are logged without their answers, so `aidlcHooksRan` (AI-DLC hooks ran right before the call) is context, not whose
+// refusal it was. Undefined for a call that was not denied.
+function kiroFailure(t: Tally, tool: string, local: Local, ts: string, text: string, aidlcHooksRan?: boolean) {
   t.add(ts, (s) => s.toolErrors++);
-  if (/Rule: deny|Blocked by a permission rule \(deny\b/.test(text)) {
+  let kind: string | null = null;
+  if (/Rule: deny|Blocked by a permission rule \(deny\b/.test(text)) kind = "agent-profile-deny";
+  else if (aidlcHooksRan !== undefined && /^(?:Output:\n)?The user rejected this tool call\./.test(text)) kind = "user-rejected";
+  else if (aidlcHooksRan !== undefined && /^\s*(?:\{\}|"")?\s*$/.test(text)) kind = aidlcHooksRan ? "denied-after-aidlc-hooks" : "denied-no-reason";
+  if (kind) {
+    const k = kind;
     t.add(ts, (s) => {
-      bump(s.denials, "agent-profile-deny");
-      s.timeline.push({ ts, kind: "tool-denied", detail: "agent-profile-deny" });
+      bump(s.denials, k);
+      s.timeline.push({ ts, kind: "tool-denied", detail: k });
     });
   }
-  noteText(t, tool, local, ts, text, true);
+  noteError(t, tool, local, ts, text);
 }
 
 export function kiroV3(project: string, since: number, until: number, local: Local): Summary | null {
@@ -833,13 +913,19 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
       const engineCalls: string[] = [];
       const firstPrompt = local.prompts.length;
       const t = new Tally();
+      // Calls Kiro denied, each with whether AI-DLC hooks ran right before it (the hook records just above the call).
+      const denied = new Map<string, boolean>();
       for (const file of files) {
         if (!existsSync(file) || statSync(file).mtimeMs < since) continue;
         const sub = file.includes("sub-executions");
+        let aidlcHookRan = false;
         for (const l of readLines<KiroLine>(file)) {
           if (!inWindow(l.timestamp, since, until)) continue;
           const ts = l.timestamp;
           const p: KiroPayload = l.payload ?? {};
+          const aidlcHookBefore = aidlcHookRan;
+          if (p.type === "ContextualHookInvoked") aidlcHookRan ||= typeof p.name === "string" && p.name.startsWith("aidlc-");
+          else if (p.type !== "session_metadata") aidlcHookRan = false;
           used = true;
           touch(s, ts);
           if (!sub) {
@@ -863,6 +949,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
           } else if (p.type === "tool_call") {
             t.add(ts, (x) => x.toolCalls++);
             noteCall(t, p.toolName, p.args, ts);
+            if (p.status === "denied" && p.toolCallId) denied.set(p.toolCallId, aidlcHookBefore);
             const cmd = p.args?.command ?? p.args?.cmd;
             if (typeof cmd === "string") {
               noteCommand(t, ts, cmd);
@@ -877,9 +964,10 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
           } else if (p.type === "tool_result" && p.toolCallId !== undefined && checks.has(p.toolCallId)) {
             const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? "");
             noteCheck(t, checks, p.toolCallId, text);
-            if (p.success === false) kiroFailure(t, s.tool, local, ts, text);
+            if (p.success === false) kiroFailure(t, s.tool, local, ts, text, denied.get(p.toolCallId));
           } else if (p.type === "tool_result" && p.success === false) {
-            kiroFailure(t, s.tool, local, ts, typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? ""));
+            const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? "");
+            kiroFailure(t, s.tool, local, ts, text, p.toolCallId === undefined ? undefined : denied.get(p.toolCallId));
           } else if (p.type === "pending_interaction" && p.interactionType === "tool_approval") {
             t.add(ts, (x) => {
               x.approvalPrompts++;
@@ -987,7 +1075,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
     }
   }
   finishRepeats(s, calls);
-  s.notes.push("Kiro records hook runs by name only; the text of a hook refusal is not in Kiro's session store.");
+  s.notes.push("Kiro records hook runs by name only and a hook's refusal as a denied call with no reason: such a call counts under denials as denied-after-aidlc-hooks when AI-DLC hooks ran right before it (which hook refused is not recorded), else denied-no-reason.");
   s.notes.push("Kiro writes no client version into its session store (measured 2026-10-22, CLI 2.33.1): its version is the one measured at collection time.");
   return s;
 }
@@ -1062,8 +1150,12 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
           // Kiro v2 wraps each result as `{"Success": …}` or `{"Error": …}`; the word inside file text is not one.
           const res = r?.result;
           const isError = !!res && typeof res === "object" && "Error" in res;
-          if (isError) t.add(ts, (x) => x.toolErrors++);
-          noteText(t, s.tool, local, ts, text, isError);
+          if (isError) {
+            t.add(ts, (x) => x.toolErrors++);
+            const custom = (res as { Error?: { Custom?: unknown } }).Error?.Custom;
+            if (typeof custom === "string" && KIRO_V2_HOOK_BLOCK.test(custom)) noteHookBlock(t, s.tool, local, ts, null, custom);
+            else noteError(t, s.tool, local, ts, text);
+          }
         }
       }
     }
@@ -1082,7 +1174,10 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
       }
     }
   }
-  if (s.sessions) s.notes.push("Kiro CLI v2 logs hold no commands: AI-DLC commands, repeated calls and checks run by hand are not known.");
+  if (s.sessions) {
+    s.notes.push("Kiro CLI v2 logs hold no commands: AI-DLC commands, repeated calls and checks run by hand are not known.");
+    if (s.unattributedHookBlocks) s.notes.push("Kiro CLI v2 records a hook's refusal without the hook's name: those count as unattributedHookBlocks.");
+  }
   if (s.sessions && timeless) {
     s.notes.push("Kiro CLI v2 lines carry no time of their own: a session last written in the window is read whole, its lines take that last time, and its replies are not matched to AI-DLC's record.");
   }
@@ -1130,7 +1225,7 @@ export function copilotCli(project: string, since: number, until: number, local:
         }
       } else if (e.type === "tool.execution_complete" && e.data?.success === false) {
         t.add(e.timestamp, (x) => x.toolErrors++);
-        noteText(t, s.tool, local, e.timestamp, JSON.stringify(e.data ?? ""), true);
+        noteError(t, s.tool, local, e.timestamp, JSON.stringify(e.data ?? ""));
       }
     }
     markReport(local.prompts.slice(firstPrompt), reportFrom, () => true);
@@ -1142,7 +1237,7 @@ export function copilotCli(project: string, since: number, until: number, local:
     }
   }
   if (!s.sessions) return null;
-  s.notes.push("Copilot CLI fields are from public docs, not measured; hook refusals may be missed.");
+  s.notes.push("Copilot CLI fields are from public docs, not measured; how it records a hook refusal is not measured either, so those show only as failed calls (toolErrors).");
   return s;
 }
 

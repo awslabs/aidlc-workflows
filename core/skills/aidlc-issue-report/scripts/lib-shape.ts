@@ -77,7 +77,10 @@ const APPROVAL_MODES = new Set([
   "untrusted", "on-failure", "on-request", "never", "autopilot on", "autopilot off",
 ]);
 // Tool denial kinds the hosts write, and the ones the Kiro and Codex readers name.
-const DENIALS = new Set(["user-rejected", "automode-blocked", "agent-profile-deny", "permission-denied", "hook-denied", "policy-denied"]);
+const DENIALS = new Set([
+  "user-rejected", "automode-blocked", "agent-profile-deny", "permission-denied", "hook-denied", "policy-denied",
+  "denied-after-aidlc-hooks", "denied-no-reason",
+]);
 const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max", "none", "auto"]);
 // The hosts' own tool names; any other tool is a label (an MCP tool is `mcp`).
 export const HOST_TOOLS = new Set([
@@ -436,6 +439,8 @@ export class Shaper {
       prompts: s.prompts,
       toolCalls: s.toolCalls,
       toolErrors: s.toolErrors,
+      otherHookBlocks: s.otherHookBlocks,
+      unattributedHookBlocks: s.unattributedHookBlocks,
       stopFeedback: s.stopFeedback,
       approvalPrompts: s.approvalPrompts,
       questionsAsked: s.questionsAsked,

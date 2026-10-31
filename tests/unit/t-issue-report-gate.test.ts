@@ -92,6 +92,24 @@ describe("what a report says is not refused", () => {
 
 describe("safe.json", () => {
   const field = (value: unknown) => safeHits(ctx(), value).map((h) => `${h.field}: ${h.reason}`);
+  test("a refusal the log does not name and Kiro's denied calls pass as written", () => {
+    expect(
+      field({
+        transcripts: [
+          {
+            otherHookBlocks: 1,
+            unattributedHookBlocks: 2,
+            denials: { "denied-after-aidlc-hooks": 1, "denied-no-reason": 1 },
+            timeline: [
+              { ts: "2026-10-29T01:00:00.000Z", kind: "hook-block", detail: "" },
+              { ts: "2026-10-29T01:00:30.000Z", kind: "other-hook-block", detail: "" },
+              { ts: "2026-10-29T01:01:00.000Z", kind: "tool-denied", detail: "denied-no-reason" },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
   test("AI-DLC's words, the skill's own, labels, times, versions and counts pass", () => {
     expect(
       field({

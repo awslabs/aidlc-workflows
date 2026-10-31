@@ -447,12 +447,12 @@ const SAFE_FIELDS = new Set([
   "guardPolicy", "guardsOff", "guardsOn", "handRunChecks", "hook", "hooks", "id", "inProgress", "inRunningTurn", "intent",
   "intents", "kind", "kiroEngine", "kiroHomeEngine", "kiroIdePending", "knownGaps", "last", "lastAidlcActivity", "lastTs",
   "lastUpdated", "mixedSessions", "models", "native", "nextStage", "noTime", "notRecorded", "note", "notes", "openQuestions", "os",
-  "otherStores", "pass", "phase", "pin", "planApproval", "problems", "prompts", "questionsAsked", "ran", "reason",
+  "otherHookBlocks", "otherStores", "pass", "phase", "pin", "planApproval", "problems", "prompts", "questionsAsked", "ran", "reason",
   "recorded", "repeats", "replies", "reportModels", "reportSessions", "revisionCount", "row", "rowsInWindow", "rowsTotal",
   "sameAsBeforeInTurn", "schema", "scope", "secretRules", "sensors", "sessions", "sessionsFolder", "severity", "since",
   "source", "sourceRef", "stage", "stages", "stampVersion", "status", "stopFeedback", "subagents", "testStrategy",
   "timeline", "tool", "toolCalls", "toolErrors", "toolVersions", "tools", "toolsUsed", "totalStages", "transcriptCursors",
-  "transcripts", "trees", "ts", "unboundApprovals", "until", "version", "versionsMissing", "window",
+  "transcripts", "trees", "ts", "unattributedHookBlocks", "unboundApprovals", "until", "version", "versionsMissing", "window",
 ]);
 
 // `parent`: the field the object sits under, "" below a data map's key. lib-check.ts reads safe.json by the

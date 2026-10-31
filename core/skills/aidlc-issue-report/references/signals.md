@@ -104,16 +104,32 @@ tool — 0 on Claude Code or Codex means AI-DLC's token count did not see this r
 
 ## `transcripts[]` — the AI tool's own log for this project
 
-- `aidlcHookBlocks`: refusals by AI-DLC hooks the model saw, by hook (Claude Code, Codex text). Many of the
-  same hook in a short time = a refusal loop; check whether `audit` has matching `*_BLOCKED` rows — if
-  not, it is the known gap (refusals that write no audit row).
+- `aidlcHookBlocks`: hook refusals the AI tool recorded itself, by AI-DLC hook or route, when its record names the
+  hook's command (Claude Code when the hook refused by exit code alone, and its PostToolUse block records). Only that
+  record is read: a hook command quoted in a file or in a command's output is not counted. Many of the same hook in a
+  short time = a refusal loop to look at; check whether `audit` has matching `*_BLOCKED` rows — if not, it is the
+  known gap (refusals that write no audit row).
+- `unattributedHookBlocks`: hook refusals whose record does not say which hook refused — Claude Code's PreToolUse
+  refusals from AI-DLC 2.11.0 on (AI-DLC gives the reason alone there), and every Kiro CLI v2 one. Usually AI-DLC's,
+  but another hook in the project can make them too, so they are not proof of an AI-DLC refusal and a missing audit
+  row beside them is not the known gap.
+- `otherHookBlocks`: refusals whose record names a hook command this skill does not know as AI-DLC's — usually the
+  person's own or another tool's hook, or AI-DLC run through a wrapper script.
+- Not counted in any of these: on Claude Code, a block record for a hook event other than PostToolUse and Stop (a
+  prompt hook or SubagentStop, for one), whose record is not measured; a note gives how many there were. Codex and
+  Copilot CLI record refusals in ways not measured yet: there they show only in `toolErrors` (the `notes` say so).
 - `denials`: the tool itself refused (`user-rejected` = the person said no, `automode-blocked`,
   `agent-profile-deny` on Kiro = an agent permission rule, `policy-denied` on Codex = its automatic approval
-  review rejected the command).
+  review rejected the command). Kiro CLI v3 and Kiro IDE log a hook's refusal as a denied call with no reason:
+  `denied-after-aidlc-hooks` = AI-DLC hooks ran right before it (which one refused is not recorded),
+  `denied-no-reason` = none did.
 - `toolErrors` (on Codex also a call that failed before it ran: it could not start, a patch did not apply, the
   arguments did not parse), `repeats` (the same call with the same input 3+ times — a loop or re-reading),
   `approvalPrompts` (Kiro: how many times the person was asked to approve a tool — "why is it asking again?"),
-  `questionsAsked` (Claude Code question boxes), `stopFeedback` (AI-DLC's Stop hook kept the turn going).
+  `questionsAsked` (Claude Code question boxes), `stopFeedback` (a Stop hook kept the turn going: on Claude Code the
+  line it handed the model or AI-DLC's carry-on context; a Stop hook of the project's own counts too, and the
+  `owner` of its row in `local/refusals.jsonl` says whose when the line names the command). A note counts the times a
+  Stop hook stopped Claude Code from going on instead (no time or hook is kept for those).
 - `aidlcCommands`: which AI-DLC steps the assistant ran and how often. `orchestrate next` far more often
   than stages moved = the run kept trying to advance.
 - `subagents` (Kiro): dispatches per agent, and model/effort from Kiro's log when it is still there.
@@ -122,7 +138,9 @@ tool — 0 on Claude Code or Codex means AI-DLC's token count did not see this r
   session did not run AI-DLC's agent; `custom` = an agent the person made, name withheld), `approvalModes` (Claude `permissionMode`, Codex `approval_policy`, Kiro
   `autopilot on/off` — read with `approvalPrompts` and `denials` when the complaint is about approvals),
   `engine` (above). A Kiro `models` value `auto` means Kiro chose the model per turn.
-- `timeline`: times of refusals, denials and approval prompts — use it to line up with `audit`.
+- `timeline`: times of refusals (`aidlc-hook-block` with the hook, `other-hook-block`, `hook-block` unattributed),
+  Stop hooks that kept the turn going (`stop-hook-feedback`), denials and approval prompts — use it to line up with
+  `audit`. A PreToolUse refusal also counts in `toolErrors`: one event, not two signals.
 
 ## `replies` — did each typed reply reach AI-DLC?
 
