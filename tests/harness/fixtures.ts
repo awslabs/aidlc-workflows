@@ -338,7 +338,7 @@ export function seededAuditDir(proj: string, space = DEFAULT_SPACE): string {
 /**
  * The DETERMINISTIC audit shard path a spawned tool resolves in a fixture
  * project: `<record>/audit/<host-slug>-<FIXTURE_CLONE_ID>.md`. Mirrors
- * auditShardName() in aidlc-lib.ts (hostname slugified + the pinned clone token).
+ * auditShardName() in aidlc-record-core.ts (hostname slugified + the pinned clone token).
  * A test that pre-seeds an audit header or reads a single shard should target
  * THIS path so it agrees with the tool's own resolution.
  */

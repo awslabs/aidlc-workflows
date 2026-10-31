@@ -50,7 +50,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
-> Setting up a bugfix workflow for this: 6 stages, 6 approval gates.
+> Setting up the bugfix workflow for this: 6 stages, 6 approval gates.
 
 ### Stage 2.1 — Reverse Engineering
 
@@ -207,7 +207,7 @@ This example builds a notification service for a task management application. Th
 
 The 3 Initialization stages run automatically inside `aidlc-utility intent-create`. Workspace Detection identifies: TypeScript, Node.js 20, Express, PostgreSQL, brownfield project with existing task and user services.
 
-> Setting up a feature workflow for this: 30 stages, 30 approval gates, 5 stages repeat per unit of work in Construction.
+> Setting up the feature workflow for this: 30 stages, 30 approval gates, 5 stages repeat per unit of work in Construction.
 
 ### Ideation Phase (stages 1.1-1.7)
 

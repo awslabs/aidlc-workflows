@@ -1753,10 +1753,11 @@ function traceabilityTableWrite(args: readonly string[]): string | undefined {
  * folder is certain: one literal absolute operand with no glob, `.` or `..`
  * part, naming a folder that exists and can be entered now (so after a `;` the
  * rest runs there too). On Windows the folder names the drive `cwd` is on, in
- * either case: cmd.exe's `cd` never changes the drive, and Git Bash reads `/x`
- * from its own root. A group, subshell, redirect, variable, option or wrapper on
- * the move is not followed, nor is a line whose whitespace or continuations the
- * lexer decodes differently from the shell.
+ * either case: cmd.exe's `cd` never changes the drive. Git Bash, the POSIX
+ * shell there, names drive C `/c`, so a POSIX `/c/x` is read as `C:/x`, and
+ * any other `/x` is under Git Bash's own root. A group, subshell, redirect,
+ * variable, option or wrapper on the move is not followed, nor is a line whose
+ * whitespace or continuations the lexer decodes differently from the shell.
  */
 export function leadingDirectoryChange(
   command: string,
@@ -1773,7 +1774,10 @@ export function leadingDirectoryChange(
   const operands = shell === "powershell"
     ? Object.hasOwn(POWERSHELL_LOCATION_COMMANDS, name.toLowerCase()) ? powerShellLocationChanges(first, 0) : []
     : typeof move === "object" ? [move.operand] : [];
-  const operand = operands.length === 1 ? operands[0] : null;
+  const written = operands.length === 1 ? operands[0] : null;
+  const operand = process.platform === "win32" && shell !== "powershell"
+    ? written?.replace(/^\/([A-Za-z])(?:\/|$)/, (_, drive: string) => `${drive.toUpperCase()}:/`) ?? null
+    : written;
   if (
     typeof operand !== "string" || !isAbsolute(operand) ||
     operand.split(/[\\/]+/).some((part) => part === "." || part === "..") ||

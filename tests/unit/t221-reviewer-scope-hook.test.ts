@@ -538,6 +538,13 @@ function scratchProject(): string {
     "aidlc-lib.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-settings.ts",
+    "aidlc-markdown.ts",
+    "aidlc-locks.ts",
+    "aidlc-review-records.ts",
+    "aidlc-record-core.ts",
+    "aidlc-learned-date.ts",
+    "aidlc-unit-landing.ts",
+    "aidlc-kiro-chat-record.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
     "aidlc-channel.ts",
@@ -545,6 +552,7 @@ function scratchProject(): string {
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
     "aidlc-lock-line.ts",
+    "aidlc-review-manifest.ts",
     "aidlc-command.ts",
     "aidlc-color.ts",
     "aidlc-guard-fences.ts",
@@ -968,6 +976,19 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     // The named step works: the main checkout carries no Unit stamp, and the write goes through there.
     rmSync(join(proj, "aidlc", ".aidlc-unit-scope.json"));
     expect(runHook(proj, write).code).toBe(0);
+  });
+
+  test("a merged cell alone, without the landing in the checkout's history, keeps a claimed checkout held", () => {
+    const proj = scratchProject();
+    seedUnitScope(
+      proj,
+      "U03-scoring",
+      "\n## Unit Progress\n| unit | owner | code-generation | merged |\n| --- | --- | --- | --- |\n" +
+        "| U03-scoring | t221 | [x] | [x] |\n",
+    );
+    const r = runHook(proj, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "touch Construction/u05-API/result.md" } });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('scoped to Unit "U03-scoring"');
   });
 
   test.each([

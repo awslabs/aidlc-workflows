@@ -279,7 +279,7 @@ describe("t345 complete nightly coverage", () => {
     expect(setup[bind].run).toContain('test "$(git rev-parse HEAD)" = "$TEST_REF"');
     expect(packageIndex).toBeGreaterThan(install);
     expect(packageIndex).toBeLessThan(setup.findIndex((step) => step.name === "Run deterministic tier"));
-    expect(setup.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"]).toBe("1.4.2");
+    expect(setup.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"]).toBe("1.4.4");
     const substrate = setup.find((step) => step.name === "Prepare unit test substrates")!;
     expect(substrate.if).toBe("inputs.tier == 'unit' && runner.os != 'Windows' && steps.select.outputs.mode != 'none'");
     expect(substrate.run).toContain('command -v "$tool"');

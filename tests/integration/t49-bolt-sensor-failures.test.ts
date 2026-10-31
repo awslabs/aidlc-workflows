@@ -33,7 +33,7 @@
 //     outcome (STATE_MERGED->approved, else BOLT_FAILED->failed, else pending),
 //     parent rollup (anyFailed->failed), per-instance sensor_firings:[]
 //     forward-noted gap.
-//   - aidlc-lib.ts auditLockDir - md5(auditLockIdentity(projectDir, intent,
+//   - aidlc-locks.ts auditLockDir - md5(auditLockIdentity(projectDir, intent,
 //     space)).slice(0,8) prefixed `.aidlc-audit-` + `.lock` under tmpdir; the
 //     directory whose presence case 6 plants to force a lock-acquire failure.
 //
@@ -414,7 +414,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     expect(wtCreate(proj, "solo").status).toBe(0);
     expect(boltStart(proj, "solo").status).toBe(0);
 
-    // Plant the exact lock-dir path aidlc-lib.ts auditLockDir() computes. The
+    // Plant the exact lock-dir path aidlc-locks.ts auditLockDir() computes. The
     // merge keys the PER-INTENT bucket (the active-intent cursor resolves the lone
     // seeded record), NOT the workspace sentinel — they hash to distinct dirs, so
     // a sentinel lock would not block the per-intent state-merge. Call the real

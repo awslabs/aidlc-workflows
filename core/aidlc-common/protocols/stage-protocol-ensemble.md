@@ -76,7 +76,7 @@ If a Task tool call fails (timeout, error, or returns truncated/incomplete outpu
 2. If the retry also fails, **tell the user plainly what failed** and offer two options via a structured question:
    - "Run it here": do the stage's work in this conversation instead of handing it off; slower, but it sidesteps whatever is failing
    - "Skip and revisit": leave the stage unfinished, keep going, and come back to it later
-3. Record the failure and resolution with `{{INVOKE}} engine audit append-raw "Error: <brief>" "<body>"` (the audit trail rules in section 4)
+3. Record the failure and resolution with `{{INVOKE}} engine audit append-raw 'Error: <brief>' '<body>'` (the audit trail rules in section 4)
 
 ---
 

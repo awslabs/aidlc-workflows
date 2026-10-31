@@ -41,7 +41,7 @@ import {
 import { waitForBarrierLine } from "../harness/barrier-file.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
@@ -91,6 +91,7 @@ import {
   structuredField,
   writeActiveDirectiveMarker,
   writeCurrentSessionId,
+  writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -232,6 +233,13 @@ function project(scope: string, extra: string[] = [], env: NodeJS.ProcessEnv = {
   const state = join(intents, active, "aidlc-state.md");
   expect(existsSync(state)).toBe(true);
   return { proj, state };
+}
+
+// The work's own chat, bound as a chat that took its steps there is: one that
+// only followed the cursor is held from its first step
+// (t-second-chat-held-from-its-first-step).
+function onTheWork(proj: string, state: string): void {
+  writeSessionBinding(proj, FENCE_SESSION, "default", basename(dirname(state)), "cursor");
 }
 
 function memoryFile(proj: string, layer: "org" | "team" | "project"): string {
@@ -683,6 +691,25 @@ describe("t333 (3) resolution precedence", () => {
     const { proj } = project("enterprise");
     expect(resolveGuardPolicy(proj).value).toBe("strict");
     expect(resolveGuardPolicy(proj).source).toBe("scope enterprise");
+  });
+
+  // The learnings tool once wrote its visible date after the text of every
+  // line it kept, a `Mode:` line too. Such a line already in memory declares
+  // its value, under either heading; anything else after the value is still
+  // refused.
+  test("a Mode line the learnings tool wrote with its date declares its value", () => {
+    const { proj } = project("classic");
+    declareMemoryMode(proj, "project", "strict (learned 2026-10-26) <!-- cid:unscoped:user-stories:3c289971 -->");
+    expect(memoryGuardPolicyDeclarations(proj)).toEqual([
+      { layer: "project", path: memoryFile(proj, "project"), heading: "## Guard Policy", value: "strict" },
+    ]);
+    expect(resolveGuardPolicy(proj).value).toBe("strict");
+    const legacy = project("classic");
+    declareLegacyMemoryMode(legacy.proj, "team", "relaxed (learned 2026-10-26)");
+    expect(memoryGuardPolicyDeclarations(legacy.proj).map((d) => d.value)).toEqual(["relaxed"]);
+    const other = project("classic");
+    declareMemoryMode(other.proj, "team", "strict (learned yesterday)");
+    expect(() => resolveGuardPolicy(other.proj)).toThrow('Invalid Guard Policy Mode "strict (learned yesterday)"');
   });
 
   test("an invalid memory value is a validation error naming the file, the section, and the allowed values", () => {
@@ -2730,6 +2757,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   test("memory strict raises a previously lowered fence and refuses unapproved source writes", () => {
     const { proj, state } = project("enterprise");
+    onTheWork(proj, state);
     const content = setGuardsOffLine(
       setField(readFileSync(state, "utf-8"), "Current Stage", "code-generation"),
       ["state-transition"],
@@ -3260,6 +3288,7 @@ describe("t333 (10) retired policy confirmation", () => {
   test("retired guard policies preserve initial approval requirements without changing the fence setting", () => {
     for (const policy of ["relaxed", "strict"]) {
       const { proj, state } = project("classic");
+      onTheWork(proj, state);
       const retired = setField(readFileSync(state, "utf-8"), "Current Stage", "code-generation")
         .replace(/^- \*\*Guard Policy\*\*:.*$/m, `- **Change Control**: ${policy} (from scope classic)`);
       writeFileSync(state, retired);

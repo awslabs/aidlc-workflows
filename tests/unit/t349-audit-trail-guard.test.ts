@@ -45,6 +45,8 @@ const CWD = "/work/proj";
 const RECORD = "aidlc/spaces/default/intents/260925-login";
 const AUDIT = `${RECORD}/audit`;
 const SHARD = `${AUDIT}/host-fixturecloneid01.md`;
+// A claimed team Unit's checkout keeps its whole log here, out of commits.
+const LOCAL_RECORD = `${RECORD}/.aidlc-engine/audit/host-fixturecloneid01.md`;
 
 function kind(
   tool_name: string,
@@ -93,6 +95,9 @@ describe("t349 audit trail guard: file-write tools", () => {
       ["Write", { file_path: "aidlc/spaces/default/intents/audit/space.md" }, CWD],
       // A relative target resolved against a cwd inside the record.
       ["Write", { file_path: "audit/host.md" }, `${CWD}/${RECORD}`],
+      ["Write", { file_path: LOCAL_RECORD }, CWD],
+      ["Edit", { file_path: LOCAL_RECORD, old_string: "a", new_string: "b" }, CWD],
+      ["Write", { file_path: ".aidlc-engine/audit/host.md" }, `${CWD}/${RECORD}`],
     ];
     for (const [tool, input, cwd] of cases) {
       expect(kind(tool, input, cwd), JSON.stringify(input)).toBe("audit");
@@ -105,6 +110,8 @@ describe("t349 audit trail guard: file-write tools", () => {
       String.raw`c:\proj\AIDLC\Spaces\default\Intents\260925-login\AUDIT\host-abc.md`,
       "c:/proj/aidlc/spaces/default/intents/260925-login/audit/host-abc.md",
       String.raw`\\server\share\proj\aidlc\spaces\team\intents\audit\space.md`,
+      String.raw`C:\proj\aidlc\spaces\default\intents\260925-login\.aidlc-engine\audit\host-abc.md`,
+      String.raw`c:\proj\AIDLC\Spaces\default\Intents\260925-login\.AIDLC-ENGINE\Audit\host-abc.md`,
     ]) {
       expect(kind("Write", { file_path: path }), path).toBe("audit");
       expect(kind("Edit", { file_path: path, old_string: "a", new_string: "b" }), path).toBe("audit");
@@ -118,6 +125,8 @@ describe("t349 audit trail guard: file-write tools", () => {
       `${RECORD}/inception/requirements-analysis/requirements-analysis-questions.md`,
       `${RECORD}/audit-notes.md`,
       `${RECORD}/construction/audit/log.md`,
+      `${RECORD}/.aidlc-engine/reviews/functional-design/review.md`,
+      `${RECORD}/.aidlc-engine/audit-notes.md`,
       "aidlc/spaces/default/memory/project.md",
       "src/audit/service.ts",
       "docs/audit/README.md",
@@ -181,6 +190,8 @@ describe("t349 audit trail guard: shell commands", () => {
     for (const command of [
       `cat >> ${SHARD} <<'EOF'\n## Questions: Feasibility\n**Timestamp**: 2026-09-25T00:00:00Z\nEOF`,
       `echo x >> ${SHARD}`,
+      `echo x >> ${LOCAL_RECORD}`,
+      `rm ${LOCAL_RECORD}`,
       `printf '%s\\n' x > ${SHARD}`,
       `printf x | tee -a ${SHARD}`,
       `sed -i 's/a/b/' ${SHARD}`,
@@ -492,7 +503,7 @@ describe("t349 audit trail prose: the manual-write instructions stay gone", () =
     expect(protocol).toContain("### Audit trail rules");
     expect(protocol).toContain("{{INVOKE}} engine log decision");
     expect(protocol).toContain("{{INVOKE}} engine log answer");
-    expect(protocol).toContain('{{INVOKE}} engine audit append-raw "<heading>" "<body>"');
+    expect(protocol).toContain("{{INVOKE}} engine audit append-raw '<heading>' '<body>'");
     expect(protocol).toContain('--result approved --user-input "Accept as-is"');
     expect(protocol).toContain("Never write the audit shard yourself");
     expect(protocol).toContain("{{INVOKE}} engine log answers --stage <slug>");

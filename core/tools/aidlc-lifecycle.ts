@@ -82,6 +82,10 @@ import {
   targetTriple,
   versionRoot,
   versionsRoot,
+  readWindowsExeCommandMarker,
+  WINDOWS_EXE_COMMAND_ASIDE,
+  windowsExeCommandMarkerPath,
+  windowsExeCommandPath,
   windowsPosixCommandPath,
   windowsPosixShim,
   windowsPosixLauncherBodyIsOwned,
@@ -105,6 +109,8 @@ import {
 } from "./aidlc-release.ts";
 import {
   executePlan,
+  TransactionBusyError,
+  type TransactionOperation,
   transactionSourceHash,
   transactionState,
   type TransactionPlan,
@@ -128,6 +134,7 @@ import {
 import {
   compiledExecutable,
   discoverProjectHarnesses,
+  isCompiledExecutable,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
@@ -171,7 +178,9 @@ type PublicLifecycleGrammar = {
   positionals: number;
 };
 
-const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
+// Exported so t230 can prove command help names every flag this grammar
+// accepts: the parser is the owner of what is legal, help must not lag it.
+export const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
   Record<PublicLifecycleCommand, PublicLifecycleGrammar>
 > = {
   update: {
@@ -364,7 +373,7 @@ const RESERVATION_RETRY_MS = 25;
 const DISPATCH_RESERVATION_WAIT_MS = 30_000;
 
 function machineLockBusy(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith("another AI-DLC mutation holds ");
+  return error instanceof TransactionBusyError;
 }
 
 function reserveVersion(
@@ -1064,6 +1073,94 @@ function projectDistribution(projectDir: string): string | null {
     .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
 }
 
+// bin\aidlc.exe is a copy of the running binary, which knows the launcher mode
+// whatever version it activates (run from source there is none to copy, and the
+// install keeps aidlc.cmd and the Git Bash launcher). It is written when absent
+// or when the copy there is the one AI-DLC wrote; a file AI-DLC did not write is
+// left as it is. inPlace: one of AI-DLC's is there once the operations commit,
+// so Git Bash finds aidlc.exe itself and the extensionless launcher goes.
+function exeCommandPlan(root: string): {
+  exe: string;
+  replaces: boolean;
+  inPlace: boolean;
+  operations: TransactionOperation[];
+} | null {
+  const exe = windowsExeCommandPath();
+  if (exe === null) return null;
+  const source = isCompiledExecutable() ? process.execPath : null;
+  const hash = source !== null ? transactionSourceHash(source) : null;
+  const state = transactionState(exe);
+  const write = hash !== null && state !== hash &&
+    (state === "absent" || state === readWindowsExeCommandMarker());
+  return {
+    exe,
+    replaces: write && state !== "absent",
+    inPlace: write || (hash !== null && state === hash),
+    operations: write
+      ? [
+          {
+            kind: "copy",
+            path: relative(root, exe),
+            source: source as string,
+            sourceHash: hash as string,
+            mode: 0o700,
+            expected: "absent",
+          },
+          writeOperation(
+            relative(root, windowsExeCommandMarkerPath()),
+            `${hash}\n`,
+            transactionState(windowsExeCommandMarkerPath()),
+            0o600,
+          ),
+        ]
+      : [],
+  };
+}
+
+function removeOwnedGitBashLauncher(root: string): TransactionOperation[] {
+  const path = windowsPosixCommandPath();
+  return path !== null && pathEntryExists(path) && windowsPosixLauncherOwnedByInstaller()
+    ? [{ kind: "remove", path: relative(root, path), expected: transactionState(path) }]
+    : [];
+}
+
+// An activation run by a release from before bin\aidlc.exe leaves none, or
+// writes the Git Bash launcher back beside it. The release it made active
+// catches up at its first command (aidlc.ts), as its own activation would have:
+// it writes a missing copy, and with one there the Git Bash launcher goes.
+export function catchUpWindowsExeCommand(): void {
+  try {
+    const exe = windowsExeCommandPath();
+    if (
+      exe === null || activeVersion() !== AIDLC_VERSION || !windowsLauncherOwnedByInstaller() ||
+      resolve(installedExecutablePath(AIDLC_VERSION)).toLowerCase() !== resolve(process.execPath).toLowerCase()
+    ) return;
+    const root = machineTransactionRoot();
+    const present = pathEntryExists(exe);
+    const operations = present ? [] : (exeCommandPlan(root)?.operations ?? []);
+    if (present || operations.length > 0) operations.push(...removeOwnedGitBashLauncher(root));
+    if (operations.length > 0) executePlan({ schemaVersion: 1, root, operations });
+  } catch {
+    // aidlc.cmd still starts aidlc; a later command retries.
+  }
+}
+
+function removeStoppedExeCommandAsides(bin: string): void {
+  let names: string[] = [];
+  try {
+    names = readdirSync(bin);
+  } catch {
+    return;
+  }
+  for (const name of names.filter((entry) => WINDOWS_EXE_COMMAND_ASIDE.test(entry))) {
+    try {
+      rmSync(join(bin, name));
+    } catch {
+      // Still running; a later activation removes it.
+    }
+  }
+}
+
 function activateReserved(version: string, options: { failAfter?: number } = {}): void {
   if (!completeVersion(version)) {
     commandError(`retained version ${version} is incomplete`, EXIT.unavailable);
@@ -1078,6 +1175,9 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   // so a foreign or directory bin/aidlc is named as itself.
   const posixCommand = windows ? windowsPosixCommandPath() : null;
   const posixShim = windowsPosixShim();
+  const exePlan = windows ? exeCommandPlan(root) : null;
+  const exe = exePlan?.exe ?? null;
+  const exeInPlace = exePlan?.inPlace ?? false;
   if (
     posixCommand !== null &&
     existsSync(posixCommand) &&
@@ -1145,12 +1245,15 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
                 0o700,
               )]
             : []),
-          writeOperation(
-            relative(root, posixCommand as string),
-            posixShim,
-            transactionState(posixCommand as string),
-            0o700,
-          ),
+          ...(exePlan?.operations ?? []),
+          ...(!exeInPlace
+            ? [writeOperation(
+                relative(root, posixCommand as string),
+                posixShim,
+                transactionState(posixCommand as string),
+                0o700,
+              )]
+            : removeOwnedGitBashLauncher(root)),
         ]
       : [writeOperation(
           relative(root, commandPath()),
@@ -1175,47 +1278,58 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
         );
       }),
   ];
-  executePlan({
-    schemaVersion: 1,
-    root,
-    operations,
-  }, {
-    ...options,
-    validateLocked: () => {
-      const inspection = inspectInstalledVersion(version);
-      if (!inspection.complete) {
-        commandError(
-          `retained version ${version} became incomplete before activation: ${
-            inspection.reason ?? "integrity validation failed"
-          }`,
-          EXIT.integrity,
-        );
-      }
-    },
-    validateCommitted: () => {
-      if (
-        readActiveExecutable() !== resolve(target) ||
-        (windows
-          ? !windowsLauncherOwnedByInstaller() || !windowsPosixLauncherOwnedByInstaller()
-          : !unixLauncherOwnedByInstaller())
-      ) {
-        throw new Error(`command pointer validation failed for ${version}`);
-      }
-      const probe = Bun.spawnSync([commandPath(), "version"], {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const output = Buffer.from(probe.stdout ?? new Uint8Array()).toString("utf-8").trim();
-      if (probe.exitCode !== 0 || output !== `aidlc ${version} (runtime ${version})`) {
-        throw new Error(
-          `command pointer validation failed for ${version}: version probe returned ${
-            probe.exitCode ?? "no exit"
-          } ${JSON.stringify(output)}`,
-        );
-      }
-    },
-  });
+  // Windows does not let a running program be replaced, only renamed.
+  const aside = exePlan?.replaces ? `${exe}.old-${randomUUID()}` : null;
+  if (aside !== null) renameSync(exe as string, aside);
+  try {
+    executePlan({
+      schemaVersion: 1,
+      root,
+      operations,
+    }, {
+      ...options,
+      validateLocked: () => {
+        const inspection = inspectInstalledVersion(version);
+        if (!inspection.complete) {
+          commandError(
+            `retained version ${version} became incomplete before activation: ${
+              inspection.reason ?? "integrity validation failed"
+            }`,
+            EXIT.integrity,
+          );
+        }
+      },
+      validateCommitted: () => {
+        if (
+          readActiveExecutable() !== resolve(target) ||
+          (windows
+            ? !windowsLauncherOwnedByInstaller() || !windowsPosixLauncherOwnedByInstaller()
+            : !unixLauncherOwnedByInstaller())
+        ) {
+          throw new Error(`command pointer validation failed for ${version}`);
+        }
+        for (const command of [commandPath(), ...(exeInPlace ? [exe as string] : [])]) {
+          const probe = Bun.spawnSync([command, "version"], {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          const output = Buffer.from(probe.stdout ?? new Uint8Array()).toString("utf-8").trim();
+          if (probe.exitCode !== 0 || output !== `aidlc ${version} (runtime ${version})`) {
+            throw new Error(
+              `command pointer validation failed for ${version}: version probe returned ${
+                probe.exitCode ?? "no exit"
+              } ${JSON.stringify(output)}`,
+            );
+          }
+        }
+      },
+    });
+  } catch (error) {
+    if (aside !== null && !pathEntryExists(exe as string)) renameSync(aside, exe as string);
+    throw error;
+  }
+  if (exe !== null) removeStoppedExeCommandAsides(dirname(exe));
 }
 
 export type PluginCatalogueRefresh = {
@@ -1454,7 +1568,7 @@ function stableOnlyUnixShim(): string {
   return renderUnixShim(STABLE_ONLY_VALID_VERSION);
 }
 
-function windowsShim(): string {
+export function windowsShim(): string {
   const helper = windowsShimPath().replaceAll("%", "%%");
   return [
     "@echo off",
@@ -1770,7 +1884,8 @@ export function replacePreviousWindowsShimHelper(): void {
 // release wrote; a file of anyone else's stays, and doctor names it.
 function gitBashLauncherCatchUp(root: string): ReturnType<typeof writeOperation>[] {
   const path = windowsPosixCommandPath();
-  if (path === null || !windowsPosixLauncherOwnedByInstaller()) return [];
+  const exe = windowsExeCommandPath();
+  if (path === null || !windowsPosixLauncherOwnedByInstaller() || (exe !== null && pathEntryExists(exe))) return [];
   const body = windowsPosixShim();
   if (existsSync(path) && readFileSync(path, "utf-8") === body) return [];
   return [writeOperation(relative(root, path), body, transactionState(path), 0o700)];

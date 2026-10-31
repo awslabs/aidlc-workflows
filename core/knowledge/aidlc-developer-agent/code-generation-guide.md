@@ -73,10 +73,11 @@ When modifying existing codebases (most common scenario):
 Before adding coverage-ignore pragmas, read and apply
 [Coverage-Ignore Pragmas](../aidlc-quality-agent/testing-guide.md#coverage-ignore-pragmas).
 Verify each new or changed exclusion during the current work; do not assume a
-later verification stage is scheduled. Record the selected provider, coverage
-command, and rationale in the test instructions, and the observed effect and
-report location with the verification results. If coverage cannot be run, record
-the effect as unverified and follow the linked guidance for unresolved targets.
+later verification stage is scheduled. Record the selected provider and
+rationale in the test instructions, and the coverage command you ran, its
+observed effect and the report location with the verification results. If
+coverage cannot be run, record the effect as unverified and follow the linked
+guidance for unresolved targets.
 
 ### Unit Test Structure
 Follow the Arrange-Act-Assert (AAA) pattern:

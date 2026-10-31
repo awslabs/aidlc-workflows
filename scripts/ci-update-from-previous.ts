@@ -225,7 +225,9 @@ export function tracedToCompletion(directory: string): boolean {
 // bash call, and the end of the turn. Each must reach the engine hooks it maps to.
 const OPENCODE_EVENT_HOOKS = ["session-start", "record-human-turn", "rebuild-stage-graph", "continue-workflow"];
 const OPENCODE_EVENTS = `
-const plugin = (await import(process.env.AIDLC_CHECK_PLUGIN)).default;
+const loaded = (await import(process.env.AIDLC_CHECK_PLUGIN)).default;
+// The previous release exports the V1 factory; the current one exports { server, setup }.
+const plugin = typeof loaded === "function" ? loaded : loaded.server;
 const client = {
   session: { get: async () => ({ data: {} }), prompt: async () => ({}) },
   tui: { showToast: async () => ({}) },

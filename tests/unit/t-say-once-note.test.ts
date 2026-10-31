@@ -207,7 +207,7 @@ describe("where the host hands the model a note the person does not see, the ord
     const id = said("turn the summary confirmation off");
     const out = set(id);
     expect(out).not.toContain(ORDER);
-    const adapter = await createAdapter({ client: opencodeClient(), directory: proj, aidlcCommand: HOOK_TEST_DRIVER });
+    const adapter = await createAdapter.server({ client: opencodeClient(), directory: proj, aidlcCommand: HOOK_TEST_DRIVER });
     // opencode's TUI draws a bash call from its metadata.output; the model reads output.
     const result = { title: setter(id), output: out, metadata: { output: out, exit: 0 } };
     await adapter["tool.execute.after"](

@@ -281,7 +281,7 @@ if (payloadSessionId) {
   // rollout names the root itself, which noteHelperSession ignores). Note the
   // pair once, from the thread's first event, so an engine command run in that
   // thread resolves to this chat and not to whatever the shared cursor names
-  // (aidlc-lib resolveInvokingSessionId reads it).
+  // (aidlc-record-core resolveInvokingSessionId reads it).
   const ownThread = typeof codex.agent_id === "string" ? codex.agent_id : rolloutThread(codex.transcript_path);
   if (ownThread !== null) noteHelperSession(projectDir, payloadSessionId, ownThread);
 }
@@ -605,7 +605,7 @@ function reconcilePriorSession(): void {
         // exists). Emit SESSION_ENDED through the byte-shared core hook with
         // inferred provenance; the back-dating is carried in the reason.
         const reason =
-          `inferred — Codex has no SessionEnd event (D-4); reconciled at next ` +
+          `inferred - Codex has no SessionEnd event (D-4); reconciled at next ` +
           `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
         runCore(
           "aidlc-session-end.ts",
@@ -1056,9 +1056,10 @@ switch (target) {
     // The core hook's note says what a switch the person typed did, and that the
     // engine already tells them. Dropping it is why the agent ran a setter of its
     // own on the piece of work that was open instead of the one they asked about.
-    // Same context envelope as session-start; an output with nothing in it stays
+    // Same context envelope as session-start, under the event Codex fired (a box
+    // answer's line goes back as PostToolUse); an output with nothing in it stays
     // empty, so a turn with no note answers exactly as before.
-    const context = wrapContext(turn.stdout, "UserPromptSubmit");
+    const context = wrapContext(turn.stdout, forwarded.hook_event_name);
     persistResponse(context, 0);
     if (context) process.stdout.write(context);
     return 0;

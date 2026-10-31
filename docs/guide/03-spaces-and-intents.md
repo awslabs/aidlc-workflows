@@ -257,6 +257,17 @@ claimed on this machine counts for that Unit's intent; the Unit participant mark
 is checkout-wide and names no intent, so it does not count as joining a
 particular record.
 
+A chat you open while your cursor names a piece of work is on that work: `/aidlc`
+in it carries the work on from where it stands, with nothing asked. On Claude Code,
+Codex CLI, Kiro CLI and opencode, that work's checks (Plan Approval during Code
+Generation, the review freeze) hold the chat from its first AI-DLC step there
+(`/aidlc`, an answer, a review you ask for, a setting you change), so a chat you opened in the same
+folder for something else runs your requests as in a folder with no workflow. On
+Cursor, GitHub Copilot and Kiro IDE (and Kiro CLI v3), a command cannot tell AI-DLC
+which chat it runs in, so there the checks hold the chat from the start. A worktree
+AI-DLC made for the work, or a Unit claimed on this machine, holds the chat from
+the start on every host.
+
 Session identity follows one order:
 
 1. The host session id delivered to a hook.
@@ -520,6 +531,16 @@ of the workspace root that has its own `.git`) and records the set in the intent
 `intents.json` row. During Construction, each git operation is then anchored to
 the right repo automatically.
 
+Each repo is recorded by its folder's name as you gave it: a space, an accent,
+an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent). A few
+characters break something AI-DLC relies on, so a folder whose name has one is
+left out of the work, and the first step says which folder and why: `<` `>`
+`:` `"` `|` `?` `*` (Windows cannot hold them in a folder name), `&` `^` `%`
+(AI-DLC's commands on Windows), a comma (it separates repo names), an apostrophe
+together with `!`, `$` or a backtick (no one quoting reads both alike in
+PowerShell and Git Bash on Windows), a name that is `-` or starts with `--`, ends
+with `@checkout`, or starts or ends with a space.
+
 ```
 my-project/
 ├── aidlc/          # AI-DLC's records
@@ -551,8 +572,9 @@ records that expected set so it can be reproduced with one command:
 `org` supplies the default clone host (a repo with no `url` clones from
 `git@github.com:<org>/<name>.git`; set `url` on an entry to override). `branch`
 selects the checkout for a new clone and is an advisory expectation for a repo
-already on disk; omit it to use the repo's own default. Repo names must be safe
-single path segments, matching the runtime's immediate-child discovery model. The
+already on disk; omit it to use the repo's own default. A repo name is the name
+of one folder directly in the workspace, with the characters a discovered folder
+may have (above). The
 [CLI Commands](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
 guide documents the `aidlc-workspace-sync` tool that reads this file to clone
 missing repos, keep the gitignore block current, and generate a VSCode

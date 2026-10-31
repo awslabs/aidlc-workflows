@@ -39,6 +39,11 @@ import { basename, dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
+  approvalDecidesOpenFindings,
+  REVIEW_FINDING_DISPOSITIONS_FIELD,
+  serializeReviewFindingDispositions,
+} from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+import {
   worktreePath,
   type ActiveDirectiveGuardRemedy,
   type AttemptView,
@@ -2152,7 +2157,7 @@ describe("AttemptView projections and refusal streaks", () => {
         artifactPrefix: "construction/alpha/functional-design/",
         expectedFingerprint: `sha256:${"a".repeat(64)}`,
       }),
-    ).toBe(true);
+    ).toBe("ready");
     expect(
       candidateReviewCoverageProjection(
         [
@@ -2178,7 +2183,100 @@ describe("AttemptView projections and refusal streaks", () => {
           expectedFingerprint: `sha256:${"a".repeat(64)}`,
         },
       ),
-    ).toBe(false);
+    ).toBe(null);
+  });
+
+  test("candidate coverage counts the person's approval after a NOT-READY review", () => {
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const attempt = { Unit: "alpha", "Attempt Generation": "1" };
+    const review = (verdict: string, iteration: number, pos: number): AuditShardEvent[] => [
+      event("REVIEW_REQUESTED", "2026-08-28T00:00:01Z", {
+        ...attempt, Stage: "nfr-design", Reviewer: "reviewer", Iteration: String(iteration),
+        "Artifact Fingerprint": fingerprint,
+      }, "a.md", 0, pos),
+      event("REVIEW_COMPLETED", "2026-08-28T00:00:01Z", {
+        ...attempt, Stage: "nfr-design", Reviewer: "reviewer", Iteration: String(iteration),
+        Verdict: verdict, "Artifact Fingerprint": fingerprint,
+      }, "a.md", 0, pos + 1),
+    ];
+    const approval = (pos: number, fields: Record<string, string> = {}): AuditShardEvent =>
+      event("GATE_APPROVED", "2026-08-28T00:00:01Z", {
+        ...attempt, Stage: "nfr-design", "Gate Scope": "per-stage", "Gate Stages": "nfr-design",
+        "User Input": "Approve", ...fields,
+      }, "a.md", 0, pos);
+    const coverage = (rows: AuditShardEvent[]) =>
+      candidateReviewCoverageProjection(rows, {
+        unit: "alpha",
+        generation: 1,
+        stage: "nfr-design",
+        reviewer: "reviewer",
+        artifactPrefix: "construction/alpha/nfr-design/",
+        expectedFingerprint: fingerprint,
+      });
+
+    expect(coverage(review("NOT-READY", 1, 0))).toBe(null);
+    expect(coverage([...review("NOT-READY", 1, 0), approval(2)])).toBe("approved");
+    // A READY review stands with or without the approval after it.
+    expect(coverage([...review("READY", 1, 0), approval(2)])).toBe("ready");
+    // One unit-end approval names every stage it covers.
+    expect(coverage([...review("NOT-READY", 1, 0), approval(2, {
+      Stage: "code-generation", "Gate Scope": "unit-end",
+      "Gate Stages": "functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation",
+    })])).toBe("approved");
+    // The approval came before the review that left the concern.
+    expect(coverage([...review("READY", 1, 0), approval(2), ...review("NOT-READY", 2, 3)])).toBe(null);
+    // Another attempt's approval is not this attempt's.
+    expect(coverage([...review("NOT-READY", 1, 0), approval(2, { "Attempt Generation": "2" })])).toBe(null);
+    // The stage's documents changed after the approval.
+    expect(coverage([
+      ...review("NOT-READY", 1, 0),
+      approval(2),
+      event("ARTIFACT_UPDATED", "2026-08-28T00:00:01Z", {
+        File: "aidlc/construction/alpha/nfr-design/nfr-design-patterns.md",
+      }, "a.md", 0, 3),
+    ])).toBe(null);
+    // An approval decides the concern only when it accepted every open finding
+    // it recorded, as the review-disposition owner reads it.
+    type Status = "Accepted risk" | "Fix requested" | "Changed after review";
+    const decided = (status: Status, other?: Status) =>
+      candidateReviewCoverageProjection([...review("NOT-READY", 1, 0), approval(2, {
+        [REVIEW_FINDING_DISPOSITIONS_FIELD]: serializeReviewFindingDispositions([
+          // The engine names each reviewed document by its path in the project.
+          {
+            artifact: "aidlc/construction/alpha/nfr-design/security-design.md",
+            id: "R-01", fingerprint: `sha256:${"b".repeat(64)}`, status,
+          },
+          // One unit-end approval records every stage's findings; another
+          // stage's are not this stage's.
+          ...(other
+            ? [{
+              artifact: "aidlc/construction/alpha/nfr-requirements/nfr-requirements.md",
+              id: "R-01", fingerprint: `sha256:${"c".repeat(64)}`, status: other,
+            }]
+            : []),
+        ])!,
+      })], {
+        unit: "alpha",
+        generation: 1,
+        stage: "nfr-design",
+        reviewer: "reviewer",
+        artifactPrefix: "construction/alpha/nfr-design/",
+        expectedFingerprint: fingerprint,
+        approvalAccepts: (block) => approvalDecidesOpenFindings(block, "construction/alpha/nfr-design/"),
+      });
+    expect(decided("Accepted risk")).toBe("approved");
+    expect(decided("Fix requested")).toBe(null);
+    expect(decided("Changed after review")).toBe(null);
+    expect(decided("Accepted risk", "Fix requested")).toBe("approved");
+    expect(decided("Fix requested", "Accepted risk")).toBe(null);
+    // A rejection after the approval opens the stage again.
+    expect(coverage([
+      ...review("NOT-READY", 1, 0),
+      approval(2),
+      event("GATE_REJECTED", "2026-08-28T00:00:01Z", {
+        ...attempt, Stage: "nfr-design", "Gate Stages": "nfr-design",
+      }, "a.md", 0, 3),
+    ])).toBe(null);
   });
 
   test("alternating refusal codes share one capped guard-state signature", () => {

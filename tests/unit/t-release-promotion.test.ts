@@ -375,7 +375,7 @@ describe("the stable page", () => {
 
   // 2.11.1 shipped its bullets flat; the fixture groups the same bullets as
   // its page does.
-  test("the 2.11.1 bullets, grouped as its page groups them, render the published 2.11.1 page byte for byte", () => {
+  test("the 2.11.1 bullets render with the current installation guidance", () => {
     const changelog = readFileSync(join(REPO_ROOT, "CHANGELOG.md"), "utf8");
     const bullets = (text: string) => text.split("\n").filter((line) => line.startsWith("* ")).sort();
     const entry = changelog.slice(changelog.indexOf("## [2.11.1]"), changelog.indexOf("## [2.11.0]"));
@@ -393,10 +393,8 @@ describe("the stable page", () => {
     expect(thanks).not.toContain("## New Contributors");
   });
 
-  test("the copy-channel line names the Bun floor the product enforces", () => {
-    const floor = /requires Bun\.markdown \(Bun ([0-9.]+) or newer\)/.exec(readFileSync(join(REPO_ROOT, "core/tools/aidlc-lib.ts"), "utf8"))?.[1];
-    expect(floor).toBeDefined();
-    expect(promotionNotes(shipped)).toContain(`This installation path requires **Bun ${floor} or newer**`);
+  test("the copy-channel line names a Bun version with the Brotli security fix", () => {
+    expect(promotionNotes(shipped)).toContain("This installation path requires **Bun 1.4.4 or newer**");
     expect(readFileSync(join(REPO_ROOT, "docs/guide/18-install-and-lifecycle.md"), "utf8")).toMatch(/^## Copy Channel$/m);
   });
 

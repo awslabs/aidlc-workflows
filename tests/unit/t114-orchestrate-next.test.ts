@@ -357,7 +357,7 @@ describe("t114 scope precedence + validation", () => {
 
   // New work never routes through the finished intent's scope, so a retired
   // one changes nothing for it: `/aidlc-init "<description>"` (next
-  // --new-intent "<description>"), free text, and a typed scope with a
+  // --new-intent '<description>'), free text, and a typed scope with a
   // description get the answer they get over a known scope, and the plan
   // offers' answers start the work (free text's compose answer is a new-work
   // answer with no --new-intent).
@@ -1288,10 +1288,10 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(directive.question).toContain('(1) a separate new piece of work - start new "bugfix" work for it');
     expect(directive.question).toContain('(2) part of that work - change it to "bugfix"');
     expect(directive.numbered_prose_question).toContain(
-      '1. **Separate new piece of work** — Start new "bugfix" work for it; the current work stays as it is',
+      '1. **Separate new piece of work** - Start new "bugfix" work for it; the current work stays as it is',
     );
     expect(directive.numbered_prose_question).toContain(
-      '2. **Part of the active work** — Change the current workflow to "bugfix" and continue it',
+      '2. **Part of the active work** - Change the current workflow to "bugfix" and continue it',
     );
   });
 
@@ -1766,7 +1766,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       const ask = routingAsk();
       const d = directive([reply]);
       expect(d.message).toContain(ROUTING_STEP);
-      expect(routingStepCommand(d.message, "Reshape the active work")).toStartWith(`${ask.compose_command!} -- `);
+      expect(routingStepCommand(d.message, "Reshape the active work")).toStartWith(`${ask.compose_command!} --request-file aidlc/.aidlc-request-text/reshape`);
     });
   }
 
@@ -1785,7 +1785,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     const d = directive([OTHER_ANSWER]);
     expect(d.message).toContain(ROUTING_STEP);
     const reshape = routingStepCommand(d.message, "Reshape the active work");
-    expect(reshape).toStartWith(`${ask.compose_command!} -- `);
+    expect(reshape).toStartWith(`${ask.compose_command!} --request-file aidlc/.aidlc-request-text/reshape`);
     const dispatch = runWords(reshape);
     expect(dispatch.kind, JSON.stringify(dispatch).slice(0, 300)).toBe("print");
     expect(dispatch.message).toContain("RUNNING workflow");
@@ -1808,7 +1808,8 @@ describe("t114 Branch 9c: replies that are not new work", () => {
   });
 
   // A Kiro agent runs the printed command through the dispatcher's route, which
-  // pins the project folder ahead of the `--` mark on a line with their words.
+  // pins the project folder right after `next`, ahead of the request file that
+  // holds their words.
   test("the reshape answer run through the dispatcher reaches the composer, not a step about its folder", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
@@ -1816,7 +1817,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     const words = shellWords(routingStepCommand(directive([OTHER_ANSWER]).message, "Reshape the active work"));
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of ["AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "KIRO_PROJECT_DIR"]) delete env[key];
-    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "orchestrate", ...words.slice(words.indexOf("next"))], {
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "orchestrate", ...words.slice(words.indexOf("next")), "--project-dir", proj], {
       cwd: proj,
       encoding: "utf-8",
       env,
@@ -1836,7 +1837,11 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     const d = directive([OTHER_ANSWER]);
     expect(d.message).toContain(ROUTING_STEP);
     expect(d.message).not.toContain("which keeps every word of theirs");
-    expect(d.message).toContain(` next -- '${OTHER_ANSWER}'`);
+    // Their words go to `next` in a file the step names, never on its line.
+    const file = / next --request-file (aidlc\/\.aidlc-request-text\/other[^ `]*\.txt)`/.exec(String(d.message))?.[1];
+    expect(file, String(d.message)).toBeDefined();
+    expect(readFileSync(join(proj, ...file!.split("/")), "utf-8")).toBe(OTHER_ANSWER);
+    expect(d.message).toContain(`(their words: ${JSON.stringify(OTHER_ANSWER)})`);
   });
 
   for (const reply of ["1", "2", "Separate new piece of work"]) {
@@ -1884,8 +1889,11 @@ describe("t114 Branch 9c: replies that are not new work", () => {
         const label = route === "new_intent_command" ? "Separate new piece of work"
           : route === "continue_command" ? "Part of the active work" : "Reshape the active work";
         const command = routingStepCommand(d.message, label);
-        if (route === "compose_command") expect(command).toBe(`${ask[route]!} -- ${reply}`);
-        else expect(command).toBe(ask[route]!);
+        if (route === "compose_command") {
+          // Their reply goes to the composer in a file the command names.
+          expect(command).toBe(`${ask[route]!} --request-file aidlc/.aidlc-request-text/reshape.txt`);
+          expect(readFileSync(join(proj, "aidlc", ".aidlc-request-text", "reshape.txt"), "utf-8")).toBe(reply);
+        } else expect(command).toBe(ask[route]!);
         expect(runCommand(command).ask_type).not.toBe("new-work-routing");
       });
     }
@@ -1934,8 +1942,8 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       const d = directive([reply]);
       expect(d.kind).toBe("print");
       expect(d.message).toContain(ROUTING_STEP);
-      // Words about something else keep every word through `next -- <their words>`.
-      expect(d.message).toContain(" next -- ");
+      // Words about something else keep every word through `next --request-file <their words>`.
+      expect(d.message).toContain(" next --request-file aidlc/.aidlc-request-text/other");
     });
   }
 });

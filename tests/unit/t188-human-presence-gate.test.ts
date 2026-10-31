@@ -375,7 +375,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(elsewhere);
     expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" })).toBe(elsewhere);
     expect(elsewhere).toContain(
-      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
+      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose \'Trust, continue\'). If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
     );
     expect(elsewhere).not.toContain("Reload Window");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
@@ -397,7 +397,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusal).toContain('agent "aidlc" needs upgrading for this agent engine, using "default"');
     expect(refusal).toContain('"Type /agent and pick aidlc, then carry on."');
     expect(refusal).toContain(
-      '"Quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc, ' +
+      '"Quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), ' +
         'then type /aidlc to carry on."',
     );
     expect(refusal).not.toContain("reply again");
@@ -477,7 +477,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         expect(refusal).toContain('If Kiro\'s own line under your replies says `agent "aidlc" needs upgrading');
         expect(refusal).toContain(
           '"Your answer didn\'t reach AI-DLC. Quit Kiro and start it again in this folder with: ' +
-            'kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more."',
+            'kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), then give it once more."',
         );
       }
     }
@@ -2491,8 +2491,9 @@ describe("t188: what the person's message asks for outlives the approval given i
   });
 
   // A setting is the exception (Arden's rule for every setting): a message that
-  // already gave an approval does not also stand for one, so the setting goes
-  // first, then the approval, which the message still backs.
+  // already gave an approval does not also stand for one later, so the setting
+  // goes first, then the approval, which the message still backs, or follows
+  // it while that reply is in hand (t-setting-rides-approval).
   test("approve, and turn plan approval off: the setting first, then the approval, both carried out", () => {
     const slug = openGate();
     const id = recordTypedReply(proj, "approve, and turn plan approval off");
@@ -2505,16 +2506,15 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(planApproval()).toBe("off");
   });
 
-  test("approve, and turn plan approval off: the approval first, then the setter on that message, is refused", () => {
+  test("approve, and turn plan approval off: the approval first, then the setter on that message, both carried out", () => {
     const slug = openGate();
     const id = recordTypedReply(proj, "approve, and turn plan approval off");
     tick();
     const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(approved.rc, approved.out).toBe(0);
     const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
-    expect(off.rc).not.toBe(0);
-    expect(off.out).not.toContain(id);
-    expect(planApproval()).not.toBe("off");
+    expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
   });
 
   test("approve the plan, and turn plan approval off: after the plan answers for several Units, the setter is refused", () => {

@@ -94,8 +94,8 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
+  beforeDelimiter,
   type ClaudeCodeHookInput,
-  codeGenerationIsTheStep,
   composerProposalPath,
   docsRoot,
   ENGINE_TEXT_DIRS,
@@ -120,7 +120,11 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   CEREMONY_ENV,
+  mainCheckoutChangeAllowed,
+  mainCheckoutChangeRefusal,
+  mainCheckoutPathKey,
   personAskedSinceGate,
+  plansNamePath,
   readActiveDirectiveMarker,
   readIssuedDirectiveMarker,
   spacesRoot,
@@ -128,6 +132,7 @@ import {
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
+  runStateContent,
   resolveProjectFlag,
   resolveProjectDirFromHook,
   jumpClaimSha256,
@@ -148,6 +153,7 @@ import {
   personLineHeardThisTurn,
   takeActiveDirectiveReleaseHeld,
   recordGuardBlockedRow,
+  unitCompletedReceipts,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -155,7 +161,7 @@ import {
   LOCK_FOLDER_HELD_SAID_KEY,
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
-import { personTurnStands } from "../tools/aidlc-message-store.ts";
+import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
@@ -169,8 +175,10 @@ import {
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   codeGenerationRulesArrivingReason,
+  codeGenerationStepOnRecord,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
+  parkedWhereItStands,
   planReviewAppendix,
   promptTestingContractMarkers,
   setAsideBuildUnderOff,
@@ -178,6 +186,7 @@ import {
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
+import { unaskedSystemInstall } from "./system-install.ts";
 
 export { questionsFileHasPendingPlanApproval } from "../tools/aidlc-testing-posture.ts";
 
@@ -313,9 +322,11 @@ const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
 // Under strict every landing of the stage checks the main checkout against the
 // stage's start (assertAggregateSourceBeforeMerge), so nothing else changes it
-// while a parallel batch is out.
+// while a parallel batch is out but the files the person asked to change
+// (mainCheckoutChangeAllowed), which the landings keep.
 const SWARM_MAIN_CHECKOUT_HELD =
   "While the Units are built in parallel, the main checkout changes only by their landings, so each landing can check it";
+const SWARM_MAIN_CHECKOUT_LATER = "A change the person asks for in the main checkout can be made once Code Generation is over.";
 
 // --- The decision -------------------------------------------------------------
 
@@ -498,6 +509,12 @@ function promptCarriesReviewAppendix(
 // every call, since an adapter can run several calls through this module
 // (runHookHere), and the command is worked out only when a refusal names it.
 let judgedStep: { projectDir: string; marker: ActiveDirectiveMarker | null; next?: string } | null = null;
+// AI-DLC's own `next` in the call, when it carries the person's words in a
+// request file (mutationIntent): a refusal names it, flags and file whole, in
+// place of the step's `next`, so their words go on with it. Kept out of
+// stepNext, which also names the `next` run again after their answer, when the
+// file is gone. Reset with judgedStep.
+let judgedNext: EngineInvocation | null = null;
 
 function workflowNext(): string {
   return `${aidlcToolInvocation("orchestrate")} next`;
@@ -516,7 +533,8 @@ function stepNext(): string {
 // a held jump's wait names is the invocation its claim is hashed over
 // (nextStageInvocation).
 function nextOnItsOwn(wayOn: EngineInvocation | null = null): string {
-  const command = wayOn === null ? stepNext() : renderEngineInvocation(wayOn);
+  const step = wayOn ?? judgedNext;
+  const command = step === null ? stepNext() : renderEngineInvocation(step);
   return `\`${command}\` ${AS_ITS_OWN_COMMAND}`;
 }
 
@@ -645,21 +663,49 @@ export function receiptDetail(
 }
 
 // The refused path or command can come from the workspace, so it stays out of
-// the refusal: the agent knows what it tried, and the way on is the same.
+// the refusal: the agent knows what it tried, and the way on is the same. A
+// shell command the guard could not read (a variable, a loop, inline code) may
+// only read, so it is said to be unread, not a write, with the way a read gets
+// through: written out plainly, the POSIX and the PowerShell readings both read
+// it. AI-DLC's own command in a spelling the reading refused, and a tool that is
+// no shell, get the general refusal: the way on for them is not a read.
 export function mutationBlockReason(
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
   planApprovalOff = false,
+  finished = false,
+  unreadShell = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
-  const action = opaqueShell
+  const unread = opaqueShell && unreadShell;
+  const unreadLine = unread ? "This shell command could not be read, so AI-DLC cannot tell whether it writes files. " : "";
+  const action = unread
+    ? "run it"
+    : opaqueShell
     ? "run mutation-capable shell commands"
     : "modify workspace paths";
+  // A build reviewed under its plan, whose contract moved after the review, and
+  // whose plan the person has not asked to see again (codeGenerationBuildFinishes):
+  // the moved contract is for the next plan, so no approval is promised. A
+  // developer handoff refused for such a build keeps the ordinary refusal, which
+  // names `next` too.
+  if (finished) {
+    return (
+      unreadLine +
+      `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
+      "the Testing Contract changed after that review, which applies from the next plan. Writes inside the " +
+      `selected code-generation record directory remain available. Run ${nextOnItsOwn()}: it says what this ` +
+      "build does next."
+    );
+  }
   return (
+    unreadLine +
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
-    `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Writes inside the selected code-generation record directory remain ` +
+    `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""}` +
+    (unread ? " A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits." : "") +
+    " Writes inside the selected code-generation record directory remain " +
     `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
   );
 }
@@ -741,10 +787,11 @@ function authorityBlockReason(
   asked: ReturnType<typeof planApprovalAskState> = null,
   editingReply: string | null = null,
   wayOn: EngineInvocation | null = null,
+  // For a write held while the Units are built: the step the person's own request takes.
+  heldWayOn: string | null = null,
 ): string {
   if (reason === SWARM_MAIN_CHECKOUT_HELD) {
-    return `${authorityRemedy(reason, standing)} A change the person asks for in the main checkout can be made once ` +
-      "Code Generation is over.";
+    return `${authorityRemedy(reason, standing)} ${heldWayOn ?? SWARM_MAIN_CHECKOUT_LATER}`;
   }
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
     return authorityRemedy(reason, standing, asked, editingReply);
@@ -943,12 +990,7 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
     return false;
   }
   if (planPaths === null || planPaths.length === 0) return DOCUMENT_EXTENSIONS.has(extname(target).toLowerCase());
-  const fold = (path: string): string => process.platform === "win32" ? path.toLowerCase() : path;
-  const rel = fold(relative(resolve(projectDir), resolve(target)).split(sep).join("/"));
-  return !planPaths.some((named) => {
-    const path = fold(named.replace(/\/+$/, ""));
-    return rel === path || rel.startsWith(`${path}/`) || (!path.includes("/") && rel.split("/").at(-1) === path);
-  });
+  return !plansNamePath(relative(resolve(projectDir), resolve(target)).split(sep).join("/"), planPaths);
 }
 
 // A path into the project spelled another way than the project is (a Windows
@@ -1002,6 +1044,18 @@ function isOutsideProject(projectDir: string, target: string): boolean {
   }
 }
 
+// Whether the target's build is finished and `next` hands over its finish
+// (codeGenerationBuildFinishes), loaded only for a write already refused. False
+// when that module cannot be read, which keeps the ordinary refusal.
+function buildFinishes(projectDir: string, unit: string | null): boolean {
+  try {
+    const ask = require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts");
+    return ask.codeGenerationBuildFinishes(projectDir, unit);
+  } catch {
+    return false;
+  }
+}
+
 // The files and folders the waiting plans name, loaded only while the engine's
 // Plan Approval question is open, or one target's plan before it is asked.
 // Null when that module cannot be read.
@@ -1012,6 +1066,37 @@ function planApprovalPlanNamedPaths(projectDir: string, unit?: string | null): s
   } catch {
     return null;
   }
+}
+
+// The files the parked build's plans name as they are on disk: the stage-level
+// plan's and each known Unit's with no Code Generation completion on record. A
+// built Unit's files are beside the build, as they are at the next Unit's plan
+// question; a ledger that cannot be read leaves every Unit's plan waiting. Null
+// when a plan cannot be read.
+function parkedBuildPlansNamedPaths(projectDir: string): string[] | null {
+  let built = new Set<string>();
+  try {
+    built = unitCompletedReceipts(projectDir, GUARDED_STAGE);
+  } catch {
+    // Every Unit's plan waits.
+  }
+  const named: string[] = [];
+  for (const unit of [null, ...knownUnits(projectDir, docsRoot(projectDir)).filter((unit) => !built.has(unit))]) {
+    const paths = planApprovalPlanNamedPaths(projectDir, unit);
+    if (paths === null) return null;
+    named.push(...paths);
+  }
+  return named;
+}
+
+// While the build is not running, only the build waits: a call that is not
+// AI-DLC's own command the admission holds and whose every seen target is
+// beside the build against the plans `planPaths` reads (read only when there
+// is a target), so a command that names no file it writes passes.
+function besideTheBuild(projectDir: string, mutation: MutationIntent, planPaths: () => string[] | null): boolean {
+  if (mutation.engineRefused) return false;
+  const paths = mutation.targets.length > 0 ? planPaths() : null;
+  return mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, paths));
 }
 
 // While the engine's Plan Approval question is open and the person has replied,
@@ -1202,6 +1287,8 @@ interface MutationIntent {
   readable?: boolean;
   /** AI-DLC's own command that the shell reading or engineCommandAdmitted refuses. */
   engineRefused?: boolean;
+  /** AI-DLC's own `next` on the line that carries a request file, when its reading admits it. */
+  ownNext?: EngineInvocation;
 }
 
 function normalizedCommandName(name: string): string {
@@ -1763,6 +1850,13 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
   return !lowers || personAskedSinceGate(projectDir);
 }
 
+// What follows `next` in the engine's own arguments (`next` or `orchestrate
+// next`, `engine` in front or not); null for any other command.
+function nextArguments(engineArgs: readonly string[]): readonly string[] | null {
+  const args = engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
+  return args[0] === "next" ? args.slice(1) : args[0] === "orchestrate" && args[1] === "next" ? args.slice(2) : null;
+}
+
 // What this guard still asks of AI-DLC's own command: a recorded switch that
 // turns a check off (`--bypass <switch>`, in any spelling) passes only once a
 // person has asked since the last decision, because its setter never refuses
@@ -1787,8 +1881,8 @@ function engineCommandAdmitted(
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
   // tool reads it.
-  const nextAt = args[0] === "next" ? 0 : args[0] === "orchestrate" && args[1] === "next" ? 1 : -1;
-  const switches = nextAt >= 0 ? nextLineFlags(args.slice(nextAt + 1)).map((flag) => flag.token) : args;
+  const after = nextArguments(args);
+  const switches = after !== null ? nextLineFlags(after).map((flag) => flag.token) : args;
   if (!switches.some((arg) => arg === "--bypass" || arg.startsWith("--bypass="))) return true;
   if (args[0] === "config" && args[1] === "flags") return recordedSwitchChangeAdmitted(projectDir, args);
   return personAskedSinceGate(projectDir);
@@ -1982,6 +2076,7 @@ async function mutationIntent(
   let shellCommand: string | null = null;
   let readable = true;
   let engineRefused = false;
+  let ownNext: EngineInvocation | undefined;
   if (toolName === "Bash") {
     const command = toolInput?.command;
     if (typeof command !== "string") {
@@ -2053,6 +2148,21 @@ async function mutationIntent(
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
       (dynamic && (ENGINE_WORD.test(analysed) || (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand))));
     engineRefused = looksLikeEngine && opaqueShell;
+    // Its `next` that carries a request file, read where the engine reads the
+    // flag (before `--`), however it was wrapped (judgedNext).
+    for (const invocation of invocations) {
+      const engineArgs = installedEngineArgs(
+        projectDir, from, invocation.executable ?? invocation.name, invocation.args, true, dialect.enginePaths,
+      );
+      const args = engineArgs && nextArguments(engineArgs);
+      if (
+        engineArgs && args && beforeDelimiter(args).includes("--request-file") &&
+        engineCommandAdmitted(projectDir, engineArgs, context)
+      ) {
+        ownNext = { route: "orchestrate", args: ["next", ...args] };
+        break;
+      }
+    }
     // An escaped operator (`\>`, `\&`) is read as the lexer decodes it, which
     // is not trusted here; a variable, substitution or backtick (`dynamic`) can
     // hide a command or a write target, and a shell script run by name hides
@@ -2083,6 +2193,7 @@ async function mutationIntent(
     shellCommand,
     ...(readable ? {} : { readable }),
     ...(engineRefused ? { engineRefused } : {}),
+    ...(ownNext ? { ownNext } : {}),
   };
 }
 
@@ -2239,6 +2350,7 @@ async function evaluate(
   workflow: ReturnType<typeof enterHookWorkflow>,
 ): Promise<number> {
   judgedStep = null;
+  judgedNext = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   // Kept whatever this guard then decides, in a chat that joined no work too:
@@ -2248,8 +2360,10 @@ async function evaluate(
   // A conversation that has not joined the selected workflow is not held to its
   // Plan Approval: its ordinary edits pass as in a workspace with no workflow.
   // Dispatching that workflow's developer is joining it without saying so, and
-  // is refused until the conversation selects the intent.
-  if (hookOutsideGate(workflow)) {
+  // is refused until the conversation selects the intent. A chat on the work
+  // that has taken no AI-DLC step there yet is held only for that dispatch (below).
+  const standAside = hookOutsideGate(workflow);
+  if (standAside && workflow.participation !== "participant") {
     const dispatchInput = parsed.tool_input ?? {};
     if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
     // `next` asks which work this is, so the record's name stays out of the
@@ -2322,6 +2436,8 @@ async function evaluate(
   // admits: the refusal stands with the fence on, and a lowered fence stands
   // aside for it as for any other write of an approved plan.
   let swarmBatchOut = false;
+  // For a write held while the Units are built: the step the person's own request takes.
+  let swarmHeldWayOn: string | null = null;
   // The build step set aside since it was issued, when the fence is lowered and
   // the person's approval for it still stands (setAsideBuildUnderOff): the last
   // instruction on record, so its work goes on as it did before.
@@ -2332,11 +2448,41 @@ async function evaluate(
   // it is written. A path or command the reason quotes stays on the one line.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
   const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
+  // A system package install nobody asked for waits for the person at every
+  // stage and under every Guard Policy: it is not a fence (system-install.ts).
+  // The run's state is the work's, or an isolated run's with no work, which
+  // has no state file and names its stage on its step.
+  if (toolName === "Bash" && typeof toolInput.command === "string") {
+    try {
+      const runState = runStateContent(projectDir);
+      if (runState !== null && !selectedRecordIsFinished(projectDir, workflow.selection)) {
+        const command = oneLine(toolInput.command).trim();
+        const refusal = unaskedSystemInstall(projectDir, toolInput.command, command.length > 160 ? `${command.slice(0, 160)}...` : command, {
+          hook: HOOK_NAME,
+          session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+          stage: getField(runState, "Current Stage") ?? readActiveDirectiveMarker(projectDir, runState)?.stage ?? "",
+        });
+        if (refusal !== null) {
+          process.stderr.write(`${refusal}\n`);
+          return 2;
+        }
+      }
+    } catch (error) {
+      recordHookDrop(projectDir, HOOK_NAME, `system install check skipped: ${errorMessage(error)}`);
+    }
+  }
+  // On the work with no AI-DLC step there yet: the hook ran in a chat on the
+  // work (its heartbeat is above) and the install check, which is no fence,
+  // held it; of the fence only the developer dispatch meets it.
+  if (standAside && !guardedDispatch) return 0;
   let blockedMutation: {
     target: string;
     unit: string | null;
     opaqueShell: boolean;
+    /** A shell command the reading could not read that is not AI-DLC's own. */
+    unreadShell?: boolean;
     detail: string | null;
+    finished: boolean;
   } | null = null;
   const refusalFields = (): { tool: string; target: string; unit?: string } => {
     const unit = blockedMutation?.unit ?? (verdict.mentioned[0] === `stage:${GUARDED_STAGE}`
@@ -2485,7 +2631,7 @@ async function evaluate(
     // The step on record is the engine's to read too: where it is Code
     // Generation, `next --stage` leaves a jump to the `jump execute` judged here.
     const codeGenerationRelevant =
-      codeGenerationIsTheStep(directiveStage, durableStage) ||
+      codeGenerationStepOnRecord(projectDir, state, activeDirective) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
@@ -2517,6 +2663,7 @@ async function evaluate(
             opaqueShell: true,
             shellCommand: `unknown mutation-capable tool: ${toolName}`,
           };
+    judgedNext = mutation.ownNext ?? null;
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
       return 0;
     }
@@ -2586,6 +2733,14 @@ async function evaluate(
         judgedStep = { projectDir, marker: activeDirective };
       }
     }
+    // Work parked where it stands is not being built: as while its plan waits,
+    // only the build waits for the resume (the developer, the files its plans
+    // name, AI-DLC's own commands the admission holds), and what else the
+    // person asks for in the project runs, under every Guard Policy.
+    if (
+      !guardedDispatch && knownMutationTool && parkedWhereItStands(state) &&
+      besideTheBuild(projectDir, mutation, () => parkedBuildPlansNamedPaths(projectDir))
+    ) return 0;
     rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
     if (
       activeDirective?.version !== 2 ||
@@ -2640,10 +2795,7 @@ async function evaluate(
         // plan names. What else the person asks for runs now: a commit, an
         // install, a test run, or a write to a file the plan does not name,
         // under every Guard Policy.
-        if (knownMutationTool && !mutation.engineRefused) {
-          const planPaths = mutation.targets.length > 0 ? planApprovalPlanNamedPaths(projectDir) : null;
-          if (mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, planPaths))) return 0;
-        }
+        if (knownMutationTool && besideTheBuild(projectDir, mutation, () => planApprovalPlanNamedPaths(projectDir))) return 0;
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
         // Loaded only here: the question's own record, read the way its owner
@@ -2693,7 +2845,6 @@ async function evaluate(
           (seen.length === 0 || preparedBoltWorktreeUnit(projectDir, seen, listed) !== null) &&
           gatherUnitEvidence(projectDir, listed).every(approvalEvidenceIsCurrent)
         ) return 0;
-        swarmBatchOut = true;
         // A write seen only in the main checkout, at a step still current,
         // waits for the landings; one that reaches under the worktrees folder
         // (a Unit's own worktree whose approval no longer holds included), or a
@@ -2707,10 +2858,29 @@ async function evaluate(
             const inside = relative(worktrees, resolve(candidate));
             return inside.startsWith("..") || isAbsolute(inside);
           });
+        // Files the person asked to change there while the Units are built
+        // (swarm allow-change) go in: the landings keep them. A file a listed
+        // Unit's plan names waits for that Unit, whenever it was asked for.
+        const keys = mainCheckoutOnly && !mutation.opaqueShell
+          ? seen.map((candidate) => mainCheckoutPathKey(projectDir, candidate))
+          : [];
+        const theirs = keys.length > 0 && keys.every((key) => key !== null) ? keys as string[] : null;
+        const planNamed = new Map(theirs === null ? [] : listed.map((unit) => [unit, planApprovalPlanNamedPaths(projectDir, unit)]));
+        const notNamedBy = [...planNamed.values()].some((paths) => paths === null)
+          ? null
+          : [...planNamed.values()].flatMap((paths) => paths ?? []);
+        if (theirs !== null && mainCheckoutChangeAllowed(projectDir, theirs, {}, notNamedBy) !== null) return 0;
+        swarmBatchOut = true;
         authorityFailure = mainCheckoutOnly
           ? SWARM_MAIN_CHECKOUT_HELD
           : `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
             outOfDate;
+        if (
+          theirs !== null &&
+          mainCheckoutChangeRefusal(projectDir, theirs, listed, (unit) => planNamed.get(unit) ?? null) === null
+        ) {
+          swarmHeldWayOn = mainCheckoutChangeStep(projectDir, theirs, SWARM_MAIN_CHECKOUT_LATER, "make the change");
+        }
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: listed };
         blockedMutation = {
@@ -2718,6 +2888,7 @@ async function evaluate(
           unit: null,
           opaqueShell: mutation.targets.length === 0,
           detail: null,
+          finished: false,
         };
       } else if (activeDirective.kind !== "run-stage" && setAside === null) {
         authorityFailure =
@@ -2764,7 +2935,9 @@ async function evaluate(
             target: outsideRecord ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
             unit,
             opaqueShell: outsideRecord === undefined,
+            unreadShell: outsideRecord === undefined && toolName === "Bash" && !mutation.engineRefused,
             detail: receiptDetail([evidence], verdict.mentioned),
+            finished: !approval.ok && buildFinishes(projectDir, unit),
           };
         }
       }
@@ -2796,13 +2969,15 @@ async function evaluate(
   }
   const refusalProse = (detail: string | null): string =>
     authorityFailure
-      ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn)
+      ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn, swarmHeldWayOn)
       : blockedMutation
       ? mutationBlockReason(
           blockedMutation.unit,
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,
           planApprovalOff,
+          blockedMutation.finished,
+          blockedMutation.unreadShell === true,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)

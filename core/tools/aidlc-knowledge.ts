@@ -477,7 +477,7 @@ export const EXTRACT_INPUT_BYTE_CAP = 32 * 1024 * 1024;
 export const EXTRACT_TIMEOUT_MS = LONG_SUBPROCESS_TIMEOUT_MS;
 /** Startup/probe backstop, allowing cold executable startup under contention. */
 export const EXTRACT_PROBE_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
-/** Pages converted per document. */
+/** Pages kept per document by the default PDF extractor. */
 export const EXTRACT_PAGE_CAP = 50;
 /** Characters kept in `content.md`. Reuses the donor's CONTENT_CHAR_CAP, which
  *  already drove its `truncated` flag -- same constant, same flag, so this is a
@@ -504,10 +504,44 @@ export const SUMMARY_MAX_CHARS = 4_000;
  *  full SUMMARY_MAX_CHARS summary in any valid UTF-8 text. */
 export const SUMMARY_TEXT_FILE_BYTE_CAP = SUMMARY_MAX_CHARS * 4;
 
-/** The default extractor when a harness configures none. */
+/** The default extractor when a harness configures none. Its page-51 check
+ *  (`pdfGoesPastPageCap`) shares its flags, so the two runs read alike. */
+const DEFAULT_PDF_FLAGS: readonly string[] = ["-q"];
 const DEFAULT_PDF_ARGV: readonly string[] = [
-  "pdftotext", "-q", "-l", String(EXTRACT_PAGE_CAP), "$IN", "-",
+  "pdftotext", ...DEFAULT_PDF_FLAGS, "-l", String(EXTRACT_PAGE_CAP), "$IN", "-",
 ];
+
+/**
+ * Whether a PDF the default extractor just read goes on past the page cap.
+ * `-l 50` stops at page 50 without saying whether there was more. pdftotext
+ * ends every page with a form feed, so output with 1 to 49 of them is a short
+ * document and needs no second look. Otherwise (50 pages, or page breaks
+ * turned off, as Xpdf's `textPageBreaks no` does) ask for page 51 alone:
+ * Poppler refuses a range past the last page (exit 99), Xpdf may instead print
+ * nothing and exit 0, and a page 51 prints at least its form feed. Two cases
+ * stay as `-l 50` left them, with no signal: that run failing, and a blank
+ * page 51 under Xpdf with page breaks off, which prints nothing either;
+ * telling those apart needs a page count from another program.
+ */
+function pdfGoesPastPageCap(absPath: string, out: string): boolean {
+  const pageBreaks = out.split("\f").length - 1;
+  if (pageBreaks > 0 && pageBreaks < EXTRACT_PAGE_CAP) return false;
+  const next = String(EXTRACT_PAGE_CAP + 1);
+  const r = spawnSync(
+    DEFAULT_PDF_ARGV[0],
+    [...DEFAULT_PDF_FLAGS, "-f", next, "-l", next, absPath, "-"],
+    // One byte of stdout answers; more ends the run with ENOBUFS, also a page
+    // 51. stderr is dropped: the buffer bound would count a refusal's message.
+    {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: EXTRACT_PROBE_TIMEOUT_MS,
+      maxBuffer: 1,
+    },
+  );
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") return true;
+  return r.error === undefined && r.status === 0 && (r.stdout ?? "").length > 0;
+}
 
 export interface ExtractorProbe {
   name: string;
@@ -704,16 +738,21 @@ export function extractDocument(
       },
     };
   }
-  const truncated = out.length > EXTRACT_OUTPUT_CHAR_CAP;
+  const charCut = out.length > EXTRACT_OUTPUT_CHAR_CAP;
+  // The page cap is the default argv's own; a configured extractor sets its own bounds.
+  const pageCut = !charCut && argv === DEFAULT_PDF_ARGV && pdfGoesPastPageCap(absPath, out);
   return {
     record: {
       state: "extracted",
       extractor: { name: argv[0], version },
       chars: Math.min(out.length, EXTRACT_OUTPUT_CHAR_CAP),
-      truncated,
+      truncated: charCut || pageCut,
+      // Only when the page cap is what ended the text: a character cut inside
+      // the first 50 pages kept fewer pages than that.
+      ...(pageCut ? { pages_kept: EXTRACT_PAGE_CAP } : {}),
       source_revision: sourceRevision,
     },
-    text: truncated ? out.slice(0, EXTRACT_OUTPUT_CHAR_CAP) : out,
+    text: charCut ? out.slice(0, EXTRACT_OUTPUT_CHAR_CAP) : out,
   };
 }
 
@@ -1161,14 +1200,14 @@ export function resolveSpaceFlag(raw: string | undefined, projectDir: string): s
   // The FALLBACK is validated exactly like an explicit flag, not trusted raw:
   // every downstream path in this file is a plain `join()` off `space`. The
   // cursor itself already reads as "default" unless it names a space this
-  // project has (activeSpace in aidlc-lib.ts), so this keeps one rule for both.
+  // project has (activeSpace in aidlc-locks.ts), so this keeps one rule for both.
   const raw_ = raw === undefined;
   const candidate = raw ?? resolveWorkflowSelection(projectDir).space;
   const valid = validSpaceFlag(candidate);
   if (valid === null) {
     throw new Error(
       raw_
-        ? `The active-space cursor ("${candidate}") is not a valid space name — must be ` +
+        ? `The active-space cursor ("${candidate}") is not a valid space name - must be ` +
           `a lowercase slug (letters, digits, hyphens; leading letter). Pass --space ` +
           `<name> explicitly, or repair aidlc/active-space, then re-run.`
         : `Invalid --space "${raw}": must be a lowercase slug (letters, digits, hyphens; ` +
@@ -1344,7 +1383,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   if (!st.isFile()) {
     return (
       `${rel} is ${describeFileKind(st)}, not a regular file. Only regular files are ` +
-      `indexed — a FIFO, socket, or device file can block forever or never reach EOF.`
+      `indexed - a FIFO, socket, or device file can block forever or never reach EOF.`
     );
   }
   // Reuses the STAT ABOVE -- no second syscall -- and runs BEFORE the read
@@ -1372,7 +1411,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   if (st.nlink !== 1) {
     return (
       `${rel} is multiply linked (a hardlink) and is not trusted. Replace it with an ` +
-      `independent copy — cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`
+      `independent copy - cp <file> <file>.copy && mv <file>.copy <file> - and re-run.`
     );
   }
   try {
@@ -1637,7 +1676,7 @@ export function onboard(
         indexed: [],
         refused: {
           path: sourcePath,
-          reason: `duplicate document id ${row.id} generated within one batch — the batch ` +
+          reason: `duplicate document id ${row.id} generated within one batch - the batch ` +
             `was refused whole, and index.json was not modified`,
         },
       };
@@ -1651,7 +1690,7 @@ export function onboard(
         indexed: [],
         refused: {
           path: sourcePath,
-          reason: `document id ${row.id} already exists in index.json — the batch was ` +
+          reason: `document id ${row.id} already exists in index.json - the batch was ` +
             `refused whole, and index.json was not modified`,
         },
       };
@@ -2491,12 +2530,14 @@ export function renderShow(d: ShownDocument): string {
   // A truncated extraction must announce itself: an agent answering from the
   // first 50 pages of a 300-page policy with no signal it read a fraction is
   // exactly the silent-partial-knowledge failure this feature exists to
-  // prevent. The flag was always recorded; this line makes it visible where
-  // the content is served.
+  // prevent. This line makes the recorded flag visible where the content is
+  // served, naming the cap that ended the text.
   if (d.extraction.truncated === true) {
-    const extent = d.extraction.chars !== undefined ? ` at ${d.extraction.chars} characters` : "";
+    const extent = d.extraction.pages_kept !== undefined
+      ? ` after page ${d.extraction.pages_kept}`
+      : d.extraction.chars !== undefined ? ` at ${d.extraction.chars} characters` : "";
     out.push(
-      `truncated  yes${extent} — the content below is a PARTIAL extraction, not the whole document`,
+      `truncated  yes${extent} - the content below is a PARTIAL extraction, not the whole document`,
     );
   }
   if (d.summary_text !== undefined) {
@@ -3602,7 +3643,7 @@ export function resolveIntentFlag(
 }
 
 /**
- * The invariant this closes: `listIntents()` (aidlc-lib.ts) reports an ORPHAN
+ * The invariant this closes: `listIntents()` (aidlc-record-core.ts) reports an ORPHAN
  * record dir -- one with an `aidlc-state.md` but no row in `intents.json` -- as
  * `uuid: ""`, `status: "unknown"`, never as `undefined` or a thrown error. Every
  * resolution path above matches by `dirName`/`slug` and returns `match.uuid`

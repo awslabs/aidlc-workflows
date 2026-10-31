@@ -19,10 +19,12 @@ import {
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import createAdapter, {
+import adapterPlugin, {
   type PluginInput,
 } from "../../harness/opencode/plugin/aidlc-opencode-adapter.ts";
 import { windowsScriptLaunch } from "../../core/tools/aidlc-executable-path.ts";
+
+const createAdapter = adapterPlugin.server;
 import {
   createTestProject,
   seedAidlcMemory,
@@ -140,6 +142,13 @@ function copyCore(root: string, relativePath: string): void {
   if (relativePath === "tools/aidlc-lib.ts") {
     for (const dependency of [
       "aidlc-settings.ts",
+      "aidlc-markdown.ts",
+      "aidlc-locks.ts",
+      "aidlc-review-records.ts",
+      "aidlc-record-core.ts",
+      "aidlc-learned-date.ts",
+      "aidlc-unit-landing.ts",
+      "aidlc-kiro-chat-record.ts",
       "aidlc-install-paths.ts",
       "aidlc-distribution.ts",
       "aidlc-channel.ts",
@@ -150,6 +159,7 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-reply-reader.ts",
       "aidlc-runtime-budget.ts",
       "aidlc-lock-line.ts",
+      "aidlc-review-manifest.ts",
       "aidlc-command.ts",
       "aidlc-color.ts",
     ]) {

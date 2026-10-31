@@ -506,6 +506,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
       .split(",").map((n) => n.trim()).filter(Boolean);
     expect(previewed).toBeGreaterThan(0);
     expect(previewed).toBe(executed.filter((n) => !n.startsWith("0.")).length);
+    // Each executed stage is named the way the Stages to Skip row names it.
+    for (const entry of executed) expect(entry).toMatch(/^\d+\.\d+ \([a-z0-9-]+\)$/);
   });
 
   test("an empty --skip or --add list changes nothing, and the plan is still created", () => {
@@ -1496,7 +1498,7 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
   // The creation as the agent runs it on the person's Approve: a setting the
   // print asks their message for names the message the hook kept for it.
   function runCreation(proj: string, printed: Printed): { status: number; out: string } {
-    let args = creationOf(printed).split(" intent create ")[1].replace(/--label "[^"]*"/, "--label hardening");
+    let args = creationOf(printed).split(" intent create ")[1].replace(/--label '[^']*'/, "--label hardening");
     const chat = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000352" };
     if (args.includes(`--message '${MESSAGE_SLOT}'`)) {
       const kept = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
@@ -1584,7 +1586,7 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const printed = next(proj, approvalOf(next(proj, ["--scope", "bugfix", "--skip", "deployment-pipeline", "--request", id])));
     expect(printed.kind, printed.message).toBe("print");
     expect(creationOf(printed)).not.toContain("--skip");
-    expect(printed.narration).toContain("Setting up a bugfix workflow for this:");
+    expect(printed.narration).toContain("Setting up the bugfix workflow for this:");
   });
 
   test("a report-only composition's approval creates the plan kept for the entry it was composed from", () => {
@@ -1675,7 +1677,7 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const printed = next(proj, ["--scope", "bugfix", "--request", id]);
     expect(printed.kind, printed.message).toBe("print");
     expect(creationOf(printed)).toContain("--project-type brownfield");
-    expect(printed.narration).toContain(`Setting up a bugfix workflow for this: ${echoed.summary?.shown} stages, `);
+    expect(printed.narration).toContain(`Setting up the bugfix workflow for this: ${echoed.summary?.shown} stages, `);
     expect(printed.narration).not.toContain("The folder has no code yet");
   });
 

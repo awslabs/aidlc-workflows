@@ -246,7 +246,7 @@ that reply and never counts in the chat, so the count holds across a park.
 With `accept_as_is: "offered"`, the gate adds a third option:
 
 ```
-{ label: "Accept as-is", description: "Archive current version and move on" }
+{ label: "Accept as-is", description: "Approve it as it is and move on" }
 ```
 
 The question text changes to include the cycle count, `[N]` from
@@ -653,7 +653,7 @@ task status in the sidebar, and the tool-stamped audit trail.
 not. Report gate and terminal outcomes through `aidlc-orchestrate.ts`.
 
 **`[S]` behavior:**
-- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump; under unit-major iteration a skip names the walk's `directive.stage` and `--unit <directive.unit>`, covers that unit only, and `[S]` follows once no unit owes the stage
+- Set by `report --stage <current> --result skipped --reason '<reason>'`, scope composition, or Stage/Phase Jump; under unit-major iteration a skip names the walk's `directive.stage` and `--unit <directive.unit>`, covers that unit only, and `[S]` follows once no unit owes the stage
 - Excluded from statusline progress counts (not counted in total or done)
 - Preserved while the engine routes onward; never paired with `STAGE_COMPLETED`
 - On resume, treated as completed for task tracking (task created and immediately marked completed)
@@ -710,8 +710,8 @@ boundary, and reads stay open by any means.
   `aidlc engine log link`. Lifecycle and configuration commands record their
   own events; artifact and session hooks record the activity they observe.
 - Free-form notes with no owning event (errors worked around, recoveries,
-  mid-workflow change requests): `aidlc engine audit append-raw "<heading>"
-  "<body>"` with the heading `Error: <brief>`, `Recovery: <brief>`, or
+  mid-workflow change requests): `aidlc engine audit append-raw '<heading>'
+  '<body>'` with the heading `Error: <brief>`, `Recovery: <brief>`, or
   `Change Request: <brief>` and the details as `**Field**: value` lines in the
   body. The tool stamps the timestamp and refuses a body naming a taxonomy
   event.
@@ -938,7 +938,7 @@ If user inputs from different stages contradict:
 2. Do NOT resolve by choosing one interpretation
 3. Ask which takes priority
 4. Update overridden artifact
-5. Record the resolution with `aidlc engine audit append-raw "Recovery: <brief>" "<body>"`
+5. Record the resolution with `aidlc engine audit append-raw 'Recovery: <brief>' '<body>'`
 
 ### Severity Levels
 
@@ -974,7 +974,7 @@ Affect prior stages:
 ### Scope Changes
 
 New requirements or scope-level modifications:
-1. Record the request with `aidlc engine audit append-raw "Change Request: <brief>" "<body>"`
+1. Record the request with `aidlc engine audit append-raw 'Change Request: <brief>' '<body>'`
 2. Return to Requirements Analysis (2.3) or Delivery Planning (2.9)
 3. Re-plan from that point
 4. If change affects stage selection (e.g., `poc` -> `feature`), use the
@@ -1167,7 +1167,7 @@ investigation before marking complete.
 1. **Retry once** with reduced context (summarize inception, current unit only)
 2. If retry fails, offer user: "Run inline" (execute in orchestrator) or
    "Skip and revisit" (mark incomplete, continue)
-3. Record the failure with `aidlc engine audit append-raw "Error: <brief>" "<body>"`
+3. Record the failure with `aidlc engine audit append-raw 'Error: <brief>' '<body>'`
 
 ---
 
@@ -1217,6 +1217,14 @@ working tree) still matches the same content. Only text Git itself converts
 is read this way: a file with a NUL byte, a lone CR, or more than one control
 byte in 128 printable ones is binary to Git and fingerprinted as it is, so a
 lone CR in it is a change. Source files are read a chunk at a time.
+
+**Optional outputs.** A declared output that is not there is a `missing`
+entry in the review fingerprint, optional or not. A receipt recorded before
+the stage declared an optional output has no entry for it, so while that
+output is still missing the receipt matches the same documents (over LF or
+raw line endings; `reviewManifestForms` in `aidlc-review-manifest.ts`). An
+optional output that appears, changes or goes away after the review is still
+a change.
 
 Reviewed outputs remain frozen. If `review_artifact` explicitly names a
 questions artifact, it remains fully byte-bound and frozen, including its
@@ -1329,12 +1337,16 @@ change. See
    or reject one as not applying, with their reason (`--reject-finding` on a
    Request Changes, whose gate comes back with the review as it stands when
    nothing else changed); the Approve option then does not say it again. The ids come from the builder
-   `GATE_APPROVED` writes through. A Unit's own approval (`--unit`, below), and
-   a gate whose one approval also covers later stages with open findings of
-   their own, show no such line. The final gate of a per-Unit stage renders every Unit
+   `GATE_APPROVED` writes through. A Unit's Construction checkpoint, a
+   per-stage team Unit gate, and a gate whose one approval also covers later
+   stages with open findings of their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
    checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
-   Unit's review; reviewer dispatch context is always Unit-filtered.
+   Unit's review; at a team Unit's end-of-Unit gate that is every gated stage's
+   review with an open finding or that did not finish, ahead of the last
+   stage's own, with the line naming what its one Approve accepts
+   (`teamUnitGateStages` gives both the brief and the approval the same
+   stages), and the line after Approve names each review that did not finish. Reviewer dispatch context is always Unit-filtered.
    On `adversarial`: READY → run the learnings ritual only when its module is listed, then proceed to the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
@@ -1438,6 +1450,11 @@ the recovery bound only the passes the conductor starts on its own. When they
 spoke but the flag is missing, the refusal is the conductor's step: it names
 the flag first, then the usual way on if they did not ask, and puts no question
 to the person.
+After Request Changes at a stage gate the count usually starts again from the
+rejection, and the conductor re-reviews the revision before it reports
+revised, with no `next` in between: the rejection's reply names that request's
+exact command when one stage-level request reviews the stage (not where each
+Unit has its own review, on a pipeline stage, or on a stage with no review).
 When Construction runs one Unit at a time and a Unit's finished step loses its
 work, the walk hands the step back and the Unit starts it again (`unit start`
 after its `UNIT_COMPLETED`, a wave completion included). That run of the step

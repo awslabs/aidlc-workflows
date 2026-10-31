@@ -721,6 +721,32 @@ describe("person-turn check", () => {
     expect(problems[1][0]).toContain('recorded words "Guide me"');
   });
 
+  // Run 40779000516 on Linux: the person picked "You pick" and "SQLite" on a
+  // two-question form, and the agent recorded both as a choice left to it,
+  // naming the Submit's message. The hook keeps the picks one per line in the
+  // message's words; the driver joins them with "; ".
+  test("a form's picks back an answer the agent records naming its message", () => {
+    ledgerFolder();
+    const problems = ["You pick; SQLite", ""].map((words, which) => {
+      const dir = project();
+      const session = `t-person-turns-form-pick-${which}-${process.pid}`;
+      startPersonTurnSession(session, dir);
+      submittedToPersonTurnSession(session, "/aidlc --scope classic Build a simple task tracker");
+      row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis", Decision: "Q5 tech stack; Q6 storage" });
+      nextPersonTurnCarriesPicks(session, 2, words);
+      submittedToPersonTurnSession(session, "");
+      const id = kept(dir, "You pick", "You pick\nSQLite");
+      row(dir, "QUESTION_ANSWERED", {
+        Stage: "requirements-analysis", Details: "Q5: You pick; Q6: SQLite", "Person Reply": "You pick\\nSQLite",
+        "Answer Source": "chosen by the agent, reading their message", "Message Id": id,
+      });
+      return unbackedTuiDecisions(dir);
+    });
+    expect(problems[0]).toEqual([]);
+    expect(problems[1]).toHaveLength(1);
+    expect(problems[1][0]).toContain("QUESTION_ANSWERED requirements-analysis");
+  });
+
   test("a form's picks are read off its review screen, or its ticked tabs when the review is out of view", () => {
     const review = [
       "────────────────────────────────────────",

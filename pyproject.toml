@@ -5,4 +5,4 @@ description = "Documentation site build for AI-DLC Workflows (zensical)"
 requires-python = ">=3.12"
 
 [dependency-groups]
-docs = ["zensical==0.0.70"]
+docs = ["zensical==0.0.71"]

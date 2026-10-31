@@ -77,6 +77,8 @@ export interface ExtractionRecord {
   extractor?: ExtractorIdentity;
   chars?: number;
   truncated?: boolean;
+  // Present only when the PDF page cap ended the text: the pages kept.
+  pages_kept?: number;
   reason?: string;
   detectedType?: string;
   // The sha256 this derivative was produced FROM. Compared against the row's
@@ -184,7 +186,7 @@ export function isValidIsoTimestamp(raw: unknown): boolean {
 
 // Bounds for the LLM-authored `tags` field. The precedent where the engine
 // stores anything free-form (`EXTRACT_OUTPUT_CHAR_CAP` in aidlc-knowledge.ts,
-// `BOLT_SLUG_MAX_LENGTH`, `UNIT_NAME_MAX_LENGTH` in aidlc-lib.ts) is: cap it,
+// `BOLT_SLUG_MAX_LENGTH` in aidlc-record-core.ts, `UNIT_NAME_MAX_LENGTH` in aidlc-review-records.ts) is: cap it,
 // don't trust the producer to self-limit. A tag is a short label, not prose,
 // so the per-tag cap is the same order of magnitude as those slug/name caps;
 // the count cap keeps a runaway generation from turning `tags` into an
@@ -257,7 +259,7 @@ function validateSource(raw: unknown, where: string, errors: string[]): void {
   if (!validDocumentPath(raw.path)) {
     errors.push(
       `${where}.source.path must be a relative POSIX path with no ".." segment ` +
-        `(got ${JSON.stringify(raw.path)}) — an absolute path in committed metadata ` +
+        `(got ${JSON.stringify(raw.path)}) - an absolute path in committed metadata ` +
         `leaks one machine's layout to every clone`,
     );
   }
@@ -382,19 +384,19 @@ function validateExtraction(raw: unknown, where: string, errors: string[]): void
     }
   } else if (!isObject(raw.extractor) || typeof raw.extractor.name !== "string") {
     errors.push(
-      `${where}.extraction.extractor.name is required when state is "${state}" — ` +
+      `${where}.extraction.extractor.name is required when state is "${state}" - ` +
         `extracted text is only interpretable if you know what produced it`,
     );
   } else if (req.extractor === "name-and-version" && typeof raw.extractor.version !== "string") {
     errors.push(
-      `${where}.extraction.extractor.version is required when state is "${state}" — ` +
+      `${where}.extraction.extractor.version is required when state is "${state}" - ` +
         `the extractor ran, and a version change is grounds for re-extraction`,
     );
   } else if (req.extractor === "name-only" && raw.extractor.version !== undefined) {
     // Not pedantry: a version here would be a fabricated fact, since the state
     // means the extractor was never found, let alone run.
     errors.push(
-      `${where}.extraction.extractor.version must be absent when state is "${state}" — ` +
+      `${where}.extraction.extractor.version must be absent when state is "${state}" - ` +
         `no extractor was found, so there is no version to report`,
     );
   }
@@ -405,7 +407,7 @@ function validateExtraction(raw: unknown, where: string, errors: string[]): void
   }
   if (req.sourceRevision && raw.source_revision === undefined) {
     errors.push(
-      `${where}.extraction.source_revision is required when state is "${state}" — ` +
+      `${where}.extraction.source_revision is required when state is "${state}" - ` +
         `without it there is no way to tell whether the derivative still matches the original`,
     );
   }
@@ -416,13 +418,22 @@ function validateExtraction(raw: unknown, where: string, errors: string[]): void
   }
   if (req.truncated && typeof raw.truncated !== "boolean") {
     errors.push(
-      `${where}.extraction.truncated must be a boolean when state is "${state}" — ` +
+      `${where}.extraction.truncated must be a boolean when state is "${state}" - ` +
         `a reader cannot tell a complete extraction from a capped one without it`,
+    );
+  }
+  if (
+    raw.pages_kept !== undefined &&
+    (typeof raw.pages_kept !== "number" || !Number.isInteger(raw.pages_kept) || raw.pages_kept < 1 ||
+      raw.truncated !== true)
+  ) {
+    errors.push(
+      `${where}.extraction.pages_kept must be a positive integer, and only on a truncated extraction`,
     );
   }
   if (req.reason && typeof raw.reason !== "string") {
     errors.push(
-      `${where}.extraction.reason is required when state is "${state}" — ` +
+      `${where}.extraction.reason is required when state is "${state}" - ` +
         `each distinct failure needs its own reason, or every bound trip looks alike`,
     );
   }
@@ -488,7 +499,7 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
       // Stated verbatim in the RFC. Ambiguous between "space-wide" (which is
       // spelled by OMITTING the key) and "scoped to nothing".
       errors.push(
-        `${where}.related_intent_ids must be OMITTED for a space-wide document — ` +
+        `${where}.related_intent_ids must be OMITTED for a space-wide document - ` +
           `an empty list is invalid, because it is ambiguous between "space-wide" ` +
           `and "scoped to nothing"`,
       );
@@ -515,7 +526,7 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
       // between "not yet tagged" and "deliberately tagged with nothing", and
       // the two would need different remedies if this ever surfaces in retrieval.
       errors.push(
-        `${where}.tags must be OMITTED when a document has no tags — an empty ` +
+        `${where}.tags must be OMITTED when a document has no tags - an empty ` +
           `list is invalid, because it is ambiguous between "not yet tagged" ` +
           `and "tagged with nothing"`,
       );
@@ -538,7 +549,7 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
         }
         if (hasTagControlChar(tag)) {
           errors.push(
-            `${where}.tags[${i}] must not contain control characters (tab/newline/NUL/etc) — ` +
+            `${where}.tags[${i}] must not contain control characters (tab/newline/NUL/etc) - ` +
               `a tag is a short label, not prose (got ${JSON.stringify(tag)})`,
           );
           continue;
@@ -546,7 +557,7 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
         if (tag.trim() !== tag || tag.trim().length === 0) {
           errors.push(
             `${where}.tags[${i}] must not have leading/trailing whitespace and must not be ` +
-              `whitespace-only (got ${JSON.stringify(tag)}) — trim it before writing, this ` +
+              `whitespace-only (got ${JSON.stringify(tag)}) - trim it before writing, this ` +
               `schema does not trim on your behalf`,
           );
           continue;
@@ -670,7 +681,7 @@ export function validateDocumentIndex(raw: unknown): SchemaResult<DocumentIndex>
   }
   for (const id of dupes) {
     errors.push(
-      `duplicate document id ${id} — lookups are by id, so all but the first row ` +
+      `duplicate document id ${id} - lookups are by id, so all but the first row ` +
         `would be silently unreachable`,
     );
   }
@@ -698,7 +709,7 @@ export function validateDocumentMetadata(raw: unknown): SchemaResult<DocumentMet
   validateRow(raw, "metadata.json", errors);
   if (raw.content_trust !== "untrusted") {
     errors.push(
-      `metadata.json content_trust must be "untrusted" — extracted text is data, ` +
+      `metadata.json content_trust must be "untrusted" - extracted text is data, ` +
         `never instructions, and the framing is recorded at write time`,
     );
   }

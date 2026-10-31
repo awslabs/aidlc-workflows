@@ -44,7 +44,9 @@ import {
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
-import createAdapter from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
+import adapterPlugin from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
+
+const createAdapter = adapterPlugin.server;
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

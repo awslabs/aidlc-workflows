@@ -168,7 +168,7 @@ under "Session resume" above.)
 
 If a resumed active or revising CONDITIONAL stage proves inapplicable, route
 the outcome through `aidlc-orchestrate.ts report --stage <slug> --result
-skipped --reason "<reason>"`. Never call `aidlc-state.ts skip` directly and
+skipped --reason '<reason>'`. Never call `aidlc-state.ts skip` directly and
 never mark the checkbox by hand.
 
 ### Context compaction
@@ -213,7 +213,7 @@ When errors or issues are detected during workflow execution, classify them by s
 **Escalation guidelines:**
 - **Critical / High**: Stop and ask the user immediately. Do not attempt to proceed or guess.
 - **Medium**: Attempt resolution (e.g., re-read artifacts, infer from context). If unresolved, ask the user.
-- **Low**: Handle silently and record a note with `{{INVOKE}} engine audit append-raw "Error: <brief>" "<body>"` (the audit trail rules in section 4). No user interruption needed.
+- **Low**: Handle silently and record a note with `{{INVOKE}} engine audit append-raw 'Error: <brief>' '<body>'` (the audit trail rules in section 4). No user interruption needed.
 
 ### Contradictory inputs recovery
 If user inputs from different stages contradict each other (detected during execution):
@@ -221,7 +221,7 @@ If user inputs from different stages contradict each other (detected during exec
 2. Do NOT attempt to resolve the contradiction by choosing one interpretation
 3. Ask the user which input takes priority
 4. Update the overridden artifact to reflect the user's resolution
-5. Record the resolution with `{{INVOKE}} engine audit append-raw "Recovery: <brief>" "<body>"`, quoting the user's ruling verbatim in the body
+5. Record the resolution with `{{INVOKE}} engine audit append-raw 'Recovery: <brief>' '<body>'`, quoting the user's ruling verbatim in the body
 
 ---
 
@@ -271,7 +271,7 @@ Generation.
 4. Report every rerun lifecycle outcome through `aidlc-orchestrate.ts`; never edit `aidlc-state.md` directly
 
 ### Scope changes (new requirements):
-1. Record the request with `{{INVOKE}} engine audit append-raw "Change Request: <brief>" "<body>"`, carrying the user's exact words in the body
+1. Record the request with `{{INVOKE}} engine audit append-raw 'Change Request: <brief>' '<body>'`, carrying the user's exact words in the body
 2. Return to requirements-analysis or delivery-planning as appropriate
 3. Re-plan execution from that point forward
 4. If the stage set changes, run `aidlc-utility.ts recompose` (or a scope change through `aidlc-orchestrate.ts next`); never edit scope configuration in `aidlc-state.md`

@@ -5,6 +5,7 @@ import {
   checkpointRecordForms, loadConstructionEvidence, type ApprovalFindingDispositions, type ConstructionEvidence,
   type RejectedFindingDispositions,
 } from "./aidlc-construction-checkpoints.ts";
+import { askedQuestionFields, QUESTION_ID_FIELD, questionShows } from "./aidlc-questions.ts";
 import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
@@ -372,15 +373,20 @@ export function askSwarmCheckpoint(pd: string, batch: number, units: string[], s
     const notices = recordAcceptedChanges(pd, current.accepted);
     withdrawProtectedQuestions(pd, session);
     const choices = current.result.ready ? APPROVAL_GATE_CHOICES : ["Request Changes" as const];
+    const asked = askedQuestionFields(pd, {
+      type: "swarm-batch", shows: questionShows([current.result.fingerprint]), chat: session,
+    });
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Swarm Batch Approval", Stage: STAGE, "Batch number": String(batch),
       Units: current.result.units.join(", "), Fingerprint: current.result.fingerprint,
       Session: session, Options: choices.join(","),
+      ...asked,
     }, pd, selection.intent, selection.space);
     mintProtectedQuestion(pd, {
       kind: "checkpoint-approval", session, target: approvalTarget(current.result, current.commandSha256s), choices,
     });
-    return notices.length > 0 ? { ...current.result, notices } : current.result;
+    const result = { ...current.result, question_id: asked[QUESTION_ID_FIELD] };
+    return notices.length > 0 ? { ...result, notices } : result;
   });
 }
 

@@ -874,7 +874,7 @@ describe("t318b workflow participation", () => {
 
   test("a binding participates only through a trusted source or the cursor", () => {
     const record = loneRecordWithoutCursor();
-    for (const source of ["create", "migration", "switch", "space-switch-cursor", "cursor", "stamp"] as const) {
+    for (const source of ["create", "migration", "switch", "space-switch-cursor", "cursor", "cursor-followed", "stamp"] as const) {
       writeSessionBinding(proj, `s-${source}`, "default", record, source);
       expect(readSessionBinding(proj, `s-${source}`)?.source).toBe(source);
       expect(classify(`s-${source}`)).toBe("participant");

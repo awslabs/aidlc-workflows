@@ -829,6 +829,24 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     expect(nextAfterChange(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", gate_only: true });
   });
 
+  // The re-check report would show the joint gate as its first stage's alone,
+  // so a change reported as revised there is sent to the same one question.
+  test("12c: a change at the joint late gate reported as revised names the step that shows the same one question", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" });
+    guardPolicyOff(proj);
+    runReport(proj, ["--stage", "functional-design", "--result", "awaiting-approval"]);
+    askedChange(proj, "functional-design", "alpha");
+    const revised = runReport(proj, ["--stage", "functional-design", "--result", "revised"]);
+    expect(revised.kind).toBe("print");
+    expect(String(revised.message)).toContain(" next`");
+    expect(String(revised.message)).not.toContain("--result awaiting-approval");
+    const again = nextAfterChange(proj);
+    expect(again).toMatchObject({ kind: "run-stage", stage: "functional-design", gate_only: true });
+    expect(again.approve_together?.stages?.map((s) => s.slug)).toEqual(BLOCK);
+    expect(again.approve_together?.prompt).toBe(ONE_QUESTION);
+    expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
+  });
+
   test("7: no shipped prose still describes the late per-stage cascade", () => {
     const files = spawnSync("git", ["ls-files", "core", "harness", "docs", "README.md"], {
       cwd: REPO_ROOT,

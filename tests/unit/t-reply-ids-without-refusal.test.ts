@@ -130,7 +130,16 @@ describe("t-reply-ids-without-refusal: the hook's line names the kept message", 
       const here = await run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", "--local", "--yes",
         "--message", await ask("turn the reviewer read scope check off for this project")]);
       expect(here.status, here.stdout + here.stderr).toBe(0);
-      expect(here.stdout).toContain("Recorded AIDLC_DISABLE_REVIEWER_SCOPE_HOOK");
+      // The production guard profile sets the switch's variable to 0, which
+      // outranks the file, so the line says the recording landed and does not
+      // turn the check off here.
+      expect(env(proj).AIDLC_DISABLE_REVIEWER_SCOPE_HOOK).toBe("0");
+      expect(JSON.parse(readFileSync(join(proj, "aidlc.settings.local.json"), "utf-8")).flags.bypasses)
+        .toContain("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK");
+      expect(here.stdout).toContain(
+        "is recorded off for this project, but AIDLC_DISABLE_REVIEWER_SCOPE_HOOK is set to something other than 1",
+      );
+      expect(here.stdout).toContain("so the recording does not turn the check off");
       const policy = await run(["engine", "config", "set", "guard-policy", "relaxed", "--message",
         await ask("stop asking me to re-approve when files change")]);
       expect(policy.status, policy.stdout + policy.stderr).toBe(0);

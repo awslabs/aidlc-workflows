@@ -135,18 +135,47 @@ export function commandPath(): string {
 }
 
 // A POSIX-shell launcher installed on Windows ALONGSIDE aidlc.cmd. CMD and
-// PowerShell resolve a bare `aidlc` through PATHEXT to aidlc.cmd, but Git Bash
+// PowerShell resolve a bare `aidlc` through PATHEXT (to aidlc.exe first), but Git Bash
 // and other MSYS shells use execvp PATH lookup and ignore PATHEXT, so a bare
-// `aidlc` there finds nothing. This extensionless sibling makes `aidlc`
-// resolve in those shells. It is null off Windows, where commandPath() is
-// already the extensionless launcher.
+// `aidlc` there finds no .cmd. This extensionless sibling makes `aidlc`
+// resolve in those shells while aidlc.exe is not beside it (they find that one
+// themselves). It is null off Windows, where commandPath() is already the
+// extensionless launcher.
 export function windowsPosixCommandPath(): string | null {
   return platform() === "win32" ? join(binRoot(), "aidlc") : null;
 }
 
+// A copy of the aidlc binary installed on Windows beside aidlc.cmd. PowerShell
+// and cmd.exe find a bare `aidlc` here before aidlc.cmd (PATHEXT), and Git Bash
+// finds it once the extensionless launcher is gone. Windows starts a .cmd only
+// through cmd.exe, which reads & | < > ^ and %NAME% in the arguments however the
+// caller quoted them; this copy hands them on as given (aidlc-native-launcher.ts).
+export function windowsExeCommandPath(): string | null {
+  return platform() === "win32" ? join(binRoot(), "aidlc.exe") : null;
+}
+
+// The sha256 of the bin\aidlc.exe AI-DLC wrote, so a file there that is not
+// that copy is left as it is.
+export function windowsExeCommandMarkerPath(): string {
+  return join(installRoot(), "launcher-sha256");
+}
+
+export function readWindowsExeCommandMarker(): string | null {
+  try {
+    return readFileSync(windowsExeCommandMarkerPath(), "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// A replaced bin\aidlc.exe that was still running (the command that replaced
+// it, mostly) is renamed aside under this name; it goes once it has stopped.
+export const WINDOWS_EXE_COMMAND_ASIDE = /^aidlc\.exe\.old-[0-9a-f-]{36}$/;
+
 // The POSIX-shell launcher installed alongside aidlc.cmd on Windows so a bare
-// `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT). It simply
-// forwards to its sibling aidlc.cmd, which runs the same aidlc-shim.ps1 chain.
+// `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT) while
+// aidlc.exe is not there. It simply forwards to its sibling aidlc.cmd, which
+// runs the same aidlc-shim.ps1 chain.
 // The body is location-independent ($0's directory), so it is a constant both
 // the install-time ownership check and the uninstall plan compare against
 // verbatim, exactly like the other shims. Lives here (not in lifecycle) so the
@@ -232,8 +261,9 @@ export type WindowsGitBashLauncherState =
   | { ok: false; launcher: string; foreign: boolean; fix: string };
 
 // Whether Git Bash, where Claude Code runs its hooks on Windows, can run a bare
-// `aidlc` from this native install: only through the extensionless launcher
-// beside aidlc.cmd. Null off Windows and when there is no native command here.
+// `aidlc` from this native install: through the extensionless launcher beside
+// aidlc.cmd, or without it through aidlc.exe. Null off Windows and when there is
+// no native command here.
 export function windowsGitBashLauncherState(): WindowsGitBashLauncherState | null {
   const launcher = windowsPosixCommandPath();
   if (launcher === null || !existsSync(commandPath())) return null;
@@ -254,6 +284,7 @@ export function windowsGitBashLauncherState(): WindowsGitBashLauncherState | nul
     // Missing.
   }
   if (body !== null && windowsPosixLauncherBodyIsOwned(body)) return { ok: true };
+  if (!present && existsSync(join(binRoot(), "aidlc.exe"))) return { ok: true };
   return present
     ? { ok: false, launcher, foreign: true, fix: `move ${launcher} aside, then ${repair}` }
     : { ok: false, launcher, foreign: false, fix: repair };
