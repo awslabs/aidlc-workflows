@@ -538,10 +538,14 @@ export function kiroIdeComposeRegistration(
   return composeRegistration(target, pluginName, composeCommand(target, hostName));
 }
 
+// Kiro stops a hook with no timeout after 60 seconds, so the registration asks
+// for EXTENDED_SUBPROCESS_TIMEOUT_MS in seconds, as the Claude and Codex compose
+// hooks do. null renders a registration as builds wrote it before it carried one.
 function composeRegistration(
   target: PluginTarget,
   pluginName: string,
   command: string,
+  timeout: number | null = EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000,
 ): { path: string; text: string } {
   return {
     path: `${target.harnessLeaf}/hooks/aidlc-${pluginName}-compose.json`,
@@ -554,6 +558,7 @@ function composeRegistration(
             trigger: "SessionStart",
             description: `Composes the ${pluginName} AIDLC plugin at session start.`,
             action: { type: "command", command },
+            ...(timeout === null ? {} : { timeout }),
           },
         ],
       },
@@ -563,17 +568,25 @@ function composeRegistration(
   };
 }
 
-// The session-start commands Kiro IDE builds have written into a plugin's
-// registration, so a drop from an earlier build still reads as the plugin's.
-// For a plugin in its own folder: this build's, then the launcher alone, which
-// 2.11.1-preview.20261018.1 wrote. With no folder (null): the launcher from the
-// workspace root, which 2.11.0 and the 2.11.1 previews before that one wrote,
-// as their projection was dropped whole into the workspace.
-function writtenComposeCommands(target: PluginTarget, hostName: string | null): string[] {
-  if (hostName === null) return [kiroIdeLauncher(target, "")];
+// The session-start registrations Kiro IDE builds have written for a plugin,
+// so a drop from an earlier build still reads as the plugin's. For a plugin in
+// its own folder: this build's; its command without a timeout, which builds
+// from 2.11.1-preview.20261019.1 wrote until the registration carried one;
+// then the launcher alone, which 2.11.1-preview.20261018.1 wrote. With no
+// folder (null): the launcher from the workspace root, which 2.11.0 and the
+// 2.11.1 previews before that one wrote, as their projection was dropped whole
+// into the workspace. No build wrote either launcher with a timeout.
+function writtenRegistrations(
+  target: PluginTarget,
+  pluginName: string,
+  hostName: string | null,
+): Array<{ path: string; text: string }> {
+  const untimed = (command: string) => composeRegistration(target, pluginName, command, null);
+  if (hostName === null) return [untimed(kiroIdeLauncher(target, ""))];
   return [
-    composeCommand(target, hostName),
-    kiroIdeLauncher(target, `${droppedPluginFolder(target.harnessLeaf, hostName)}/`),
+    kiroIdeComposeRegistration(target, pluginName, hostName),
+    untimed(composeCommand(target, hostName)),
+    untimed(kiroIdeLauncher(target, `${droppedPluginFolder(target.harnessLeaf, hostName)}/`)),
   ];
 }
 
@@ -597,8 +610,7 @@ export function droppedPluginRegistrations(
   const owned: string[] = [];
   const ownIfWritten = (pluginName: unknown, hostName: string | null): void => {
     if (typeof pluginName !== "string" || !/^[a-z][a-z0-9-]*$/.test(pluginName)) return;
-    const written = writtenComposeCommands(target, hostName)
-      .map((command) => composeRegistration(target, pluginName, command));
+    const written = writtenRegistrations(target, pluginName, hostName);
     let onDisk: Buffer;
     try {
       onDisk = committedTextBytes(readFileSync(join(projectDir, written[0].path)));
