@@ -158,6 +158,7 @@ function inspectWindowsProcess<Handle, Result>(
   api: WindowsIdentityApi<Handle>,
   access: number,
   inspect: (handle: Handle, creation: bigint) => Result,
+  denied?: () => Result,
 ): Result | null {
   validatePid(pid);
   const failure = (call: string, code = api.GetLastError()) =>
@@ -167,8 +168,10 @@ function inspectWindowsProcess<Handle, Result>(
   if (handle === null) {
     const code = api.GetLastError();
     // With a validated nonzero PID and fixed flags, INVALID_PARAMETER means
-    // there is no process for that PID. ACCESS_DENIED (5) remains an error.
+    // there is no process for that PID. ACCESS_DENIED (5) is an error unless
+    // the caller says what it means.
     if (code === 87) return null;
+    if (code === 5 && denied) return denied();
     throw failure("OpenProcess", code);
   }
   const running = (): boolean => {
@@ -205,11 +208,17 @@ function inspectWindowsProcess<Handle, Result>(
 }
 
 
+/**
+ * The runner opens its own processes with these rights, so ACCESS_DENIED means
+ * the PID now belongs to another account's process (a closed daemon's PID
+ * reused): creation time 0, which no recorded identity has.
+ */
 export function readWindowsNativeProcessIdentity<Handle>(
   pid: number,
   api: WindowsIdentityApi<Handle>,
 ): string | null {
-  return inspectWindowsProcess(pid, api, 0x101000, (_handle, creation) => `win32:${pid}:${creation}`);
+  return inspectWindowsProcess(pid, api, 0x101000, (_handle, creation) => `win32:${pid}:${creation}`,
+    () => `win32:${pid}:0`);
 }
 
 export interface WindowsProcessDetails {
@@ -487,7 +496,10 @@ export async function getNativeProcessIdentityWithBun(
   });
 }
 
-/** Null means observed absence/exit; inability to establish identity always throws. */
+/**
+ * Null means observed absence/exit; inability to establish identity throws,
+ * except a Windows PID another account holds (readWindowsNativeProcessIdentity).
+ */
 export async function getNativeProcessIdentity(pid: number, timeoutMs = NATIVE_PROCESS_IDENTITY_TIMEOUT_MS): Promise<string | null> {
   validatePid(pid);
   if (process.platform === "linux") return readLinuxNativeProcessIdentity(pid);
