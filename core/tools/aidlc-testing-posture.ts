@@ -118,6 +118,7 @@ import {
   stateDigest,
   swarmConvergedUnits,
   serializeSourceListing,
+  splitSourcePathKey,
   sourceListingSha256,
   parseSourceListing,
   parseCheckboxes,
@@ -5214,6 +5215,57 @@ function unitPlanNamedPaths(parent: string, unit: string): string[] | null {
   }
 }
 
+// How many differing paths the "not committed" refusals name before "and N more".
+const SOURCE_DIFFERENCE_LIMIT = 3;
+
+/**
+ * Names the first paths by which the selected repository's HEAD fails to
+ * reproduce the approved source, and the nested repository one sits in, so the
+ * refusal says what to commit and where. Both arguments are serialized source
+ * listings; returns "" when none can be told apart.
+ */
+function describeSourceDifferences(
+  repoCwd: string,
+  repoName: string | null,
+  committedBytes: string,
+  expectedBytes: string,
+): string {
+  const committed = parseSourceListing(committedBytes);
+  const expected = parseSourceListing(expectedBytes);
+  if (!committed || !expected) return "";
+  const differing = new Map<string, "new" | "deleted" | "modified">();
+  for (const key of new Set([...committed.keys(), ...expected.keys()])) {
+    const path = splitSourcePathKey(key)?.path;
+    if (path === undefined) continue;
+    if (!committed.has(key)) differing.set(path, "new");
+    else if (!expected.has(key)) differing.set(path, "deleted");
+    else if (committed.get(key) !== expected.get(key)) differing.set(path, "modified");
+  }
+  const sorted = [...differing].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const nestedRepoOf = (path: string): string | null => {
+    const dirs = path.split("/").slice(0, -1);
+    for (let depth = dirs.length; depth > 0; depth--) {
+      if (existsSync(join(repoCwd, ...dirs.slice(0, depth), ".git"))) return dirs.slice(0, depth).join("/");
+    }
+    return null;
+  };
+  const prefix = repoName === null ? "" : `${repoName}/`;
+  let nestedShown = false;
+  const shown = sorted.slice(0, SOURCE_DIFFERENCE_LIMIT).map(([path, kind]) => {
+    const nested = nestedRepoOf(path);
+    nestedShown ||= nested !== null;
+    const where = nested === null ? "" : ` in the nested repository ${prefix}${nested}`;
+    const what = kind === "new" ? "is not committed (new or untracked)"
+      : kind === "deleted" ? "is deleted but still committed"
+        : "differs from the last commit (modified)";
+    return `${prefix}${path} ${what}${where}`;
+  });
+  if (shown.length === 0) return "";
+  const more = sorted.length - shown.length;
+  return ` ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}.${
+    nestedShown ? " Commit inside the nested repository first, then commit it in the parent repository." : ""}`;
+}
+
 function approvedWorktreeSource(
   parent: string,
   unit: string,
@@ -5350,7 +5402,8 @@ export function validateCodeGenerationForkApproval(
   const parentHead = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const committed = gitCommitSourceListing(repo.cwd, parentHead, repo.repo === null);
   if (!committed || theirs(committed) !== expectedBytes) {
-    throw new Error("Approved parent source is not committed. Commit the already-approved parent source before prepare, then retry. No child was created and no parent commit was made.");
+    const detail = committed ? describeSourceDifferences(repo.cwd, repo.repo, theirs(committed), expectedBytes) : "";
+    throw new Error(`Approved parent source is not committed.${detail} Commit the already-approved parent source before prepare, then retry. No child was created and no parent commit was made.`);
   }
   const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
   const baseSource = gitCommitSourceListing(repo.cwd, base, repo.repo === null);
@@ -5411,7 +5464,8 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);
     const committed = gitCommitSourceListing(provenance.repo.cwd, parentHead, provenance.repo.repo === null);
     if (!committed || theirs(committed) !== expectedBytes) {
-      throw new Error("Clean worktree needs approved parent source that is not committed. Commit the already-approved parent source, then retry; the worktree was preserved.");
+      const detail = committed ? describeSourceDifferences(provenance.repo.cwd, provenance.repo.repo, theirs(committed), expectedBytes) : "";
+      throw new Error(`Clean worktree needs approved parent source that is not committed.${detail} Commit the already-approved parent source, then retry; the worktree was preserved.`);
     }
     try {
       worktreeApprovalGit(provenance.child, ["merge-base", "--is-ancestor", childHead, parentHead]);

@@ -2174,7 +2174,7 @@ aidlc engine swarm prepare --batch <N> --units "<exact emitted Units>"
 
 The tool performs a read-only source/approval preflight for all Units before
 creating any child worktree. If the source is uncommitted, it returns a
-commit-and-retry instruction with no child left behind by that refusal. Commit
+commit-and-retry instruction that names the first paths that differ, with no child left behind by that refusal. Commit
 only with explicit authorization, then retry with current approval evidence.
 If the application source or plan changed, re-present any required Plan Approval.
 The requirement concerns application source, not a blanket commit of unrelated
