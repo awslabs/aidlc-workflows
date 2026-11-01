@@ -229,6 +229,10 @@ describe("t315 standalone plugin builder", () => {
     expect(readdirSync(kiro).sort()).toEqual([".aidlc-plugin-projection.json", ".kiro"]);
     expect(readdirSync(join(kiro, ".kiro")).sort()).toEqual(["aidlc-plugins", "hooks"]);
     expect(readdirSync(join(kiro, ".kiro", "hooks"))).toEqual(["aidlc-acme-standards-compose.json"]);
+    const registration = JSON.parse(
+      readFileSync(join(kiro, ".kiro", "hooks", "aidlc-acme-standards-compose.json"), "utf-8"),
+    ) as { hooks: Array<{ timeout?: number }> };
+    expect(registration.hooks[0].timeout).toBe(1800);
   });
 
   test("default output is <plugin-root>/dist/<harness>", () => {
