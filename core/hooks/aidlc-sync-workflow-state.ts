@@ -17,6 +17,7 @@ import {
   hookStandsOutside,
   enterHookWorkflow,
   type ClaudeCodeHookInput,
+  findStageBySlug,
   getField,
   hookDebug,
   hooksHealthDir,
@@ -33,7 +34,7 @@ import {
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
-import { setStatus } from "../tools/aidlc-utility.ts";
+import { setStatus, statusSyncLeavesUnitCursor } from "../tools/aidlc-utility.ts";
 
 // Whether Current Stage `stage` is where a Unit reopen moved the work back to,
 // with no main-workflow STAGE_STARTED definitely after it. `aidlc-jump.ts
@@ -141,6 +142,24 @@ if (source === "ide-audit-sync") {
   //     back on it while the Units redo their step.
   if (unitReopenMovedTo(readAuditShardEvents(projectDir), current)) {
     hookDebug(projectDir, "sync-workflow-state", "skip: a Unit reopen after the last start", {
+      auditSlug,
+      current,
+    });
+    return noop();
+  }
+  // (e) The step in hand is a Unit's Construction step and the cursor already
+  //     sits where the engine put it: in a checkout that claimed the Unit, on
+  //     the Unit's own stage. A Unit step writes no STAGE_STARTED, so the last
+  //     start names the block's first stage, not where the work is. The rule
+  //     is statusSyncLeavesUnitCursor's; asking it here leaves the state file
+  //     untouched, so the front gate can skip the next command's call.
+  if (statusSyncLeavesUnitCursor(
+    stateContent,
+    readActiveDirectiveMarker(projectDir, stateContent),
+    auditSlug,
+    (findStageBySlug(auditSlug)?.phase ?? "").toUpperCase(),
+  )) {
+    hookDebug(projectDir, "sync-workflow-state", "skip: a Unit step holds the cursor", {
       auditSlug,
       current,
     });

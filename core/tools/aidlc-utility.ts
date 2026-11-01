@@ -363,6 +363,7 @@ import {
   unitLifecycleSnapshot,
   unitPlainName,
   recoveryRepoCandidates,
+  type ActiveDirectiveMarker,
   readActiveDirectiveMarker,
   openPlanApprovalAsk,
   activeDirectiveOutOfDateReason,
@@ -13340,6 +13341,35 @@ function applyKeptToPickedWork(projectDir: string, sessionId: string, space: str
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
+// Whether a status sync to `stage` leaves the main cursor (Current Stage, In
+// Progress, the cursor checkbox) where it is. During a per-Unit Construction
+// step under unit-major the cursor is the engine's, in two shapes. In an
+// unscoped checkout it rests on the block's first stage while the Units walk,
+// and the task slug names the Unit's stage. In a checkout that claimed the Unit
+// (Unit Ownership: team), `aidlc-state.ts sync-unit-scope-stage` rests it on
+// the Unit's own stage, and the audit tail's last STAGE_STARTED still names the
+// block's first stage, because a Unit step writes UNIT_STARTED rows and no
+// STAGE_STARTED. Moving the cursor in either shape retires the step the engine
+// just issued, and the marker is not refreshed (its stage is not the sync's):
+// on Kiro IDE, where the sync runs after every shell command, `continue` then
+// restarts at part one and Plan Approval finds no current directive, forever.
+// The hook's audit-tail path asks this before it writes; set-status applies it
+// to the slug it is given.
+export function statusSyncLeavesUnitCursor(
+  stateContent: string,
+  activeDirective: ActiveDirectiveMarker | null,
+  stage: string,
+  phase: string,
+): boolean {
+  const currentStage = (getField(stateContent, "Current Stage") ?? "").trim();
+  return getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
+    phase === "CONSTRUCTION" &&
+    activeDirective?.unit !== undefined &&
+    currentStage.length > 0 &&
+    currentStage !== stage &&
+    (activeDirective.stage === stage || activeDirective.stage === currentStage);
+}
+
 export function setStatus(
   projectDir: string,
   flags: Record<string, string>,
@@ -13357,15 +13387,8 @@ export function setStatus(
   const agent = flags.agent || entry.lead_agent;
 
   const previousContent = readStateFile(projectDir, flags.intent, flags.space);
-  const currentStage = (getField(previousContent, "Current Stage") ?? "").trim();
   const activeDirective = readActiveDirectiveMarker(projectDir, previousContent);
-  const preserveUnitMajorCursor =
-    getField(previousContent, "Construction Iteration")?.trim() === "unit-major" &&
-    phase === "CONSTRUCTION" &&
-    activeDirective?.stage === stage &&
-    activeDirective.unit !== undefined &&
-    currentStage.length > 0 &&
-    currentStage !== stage;
+  const preserveUnitMajorCursor = statusSyncLeavesUnitCursor(previousContent, activeDirective, stage, phase);
   let content = previousContent;
   content = setField(content, "Lifecycle Phase", phase);
   content = setField(content, "Active Agent", agent);
