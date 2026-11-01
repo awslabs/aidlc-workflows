@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1846,6 +1847,32 @@ describe("t294 trust diagnostics", () => {
       const leftover = await kiroNativeTrust(project, harness);
       expect(leftover.pass, leftover.label).toBe(false);
       expect(leftover.label).toBe(KIRO_TRUST_INCOMPLETE);
+    });
+
+    test(`${harness}: Kiro native trust counts a compose hook beside a plugin folder no build names`, async () => {
+      const project = temp(`aidlc-t294-trust-kiro-plugin-folder-${harness}-`);
+      cpSync(join(DIST_RELEASE, harness), project, { recursive: true });
+      cpSync(join(DIST, "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
+      const plugins = join(project, ".kiro", "aidlc-plugins");
+      const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+      const written = readFileSync(registration, "utf-8");
+      // The plugin's folder renamed, and its registration rewritten as a build
+      // would write it for that folder.
+      let folder = "aidlc-test-pro";
+      const moveTo = (name: string): void => {
+        renameSync(join(plugins, folder), join(plugins, name));
+        folder = name;
+        const text = written.replaceAll("aidlc-plugins/aidlc-test-pro", `aidlc-plugins/${name}`);
+        expect(text).not.toBe(written);
+        writeFileSync(registration, text);
+      };
+      // A build of a plugin someone else makes names the folder after the plugin alone.
+      moveTo("test-pro");
+      const ownName = await kiroNativeTrust(project, harness);
+      expect(ownName.pass, ownName.label).toBe(true);
+      moveTo("test-pro-copy");
+      const renamed = await kiroNativeTrust(project, harness);
+      expect(renamed.label).toBe(KIRO_TRUST_INCOMPLETE);
     });
 
     for (const earlier of EARLIER_KIRO_IDE_DROPS) {

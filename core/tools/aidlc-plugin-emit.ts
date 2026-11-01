@@ -624,14 +624,23 @@ export function droppedPluginRegistrations(
   };
   const folder = join(projectDir, harnessLeaf, DROPPED_PLUGINS_FOLDER);
   for (const hostName of existsSync(folder) ? readdirSync(folder).sort() : []) {
-    let pluginName: unknown;
+    let manifest: Record<string, unknown>;
     try {
-      pluginName = (JSON.parse(
+      const parsed: unknown = JSON.parse(
         readFileSync(join(folder, hostName, ".aidlc-plugin", "plugin.json"), "utf-8"),
-      ) as { name?: unknown }).name;
+      );
+      if (!isPlainRecord(parsed)) continue;
+      manifest = parsed;
     } catch {
       continue;
     }
+    const pluginName = manifest.name;
+    // A build names the folder after the plugin, so a folder it never names
+    // holds no drop of that plugin, whatever registration sits beside it.
+    if (
+      typeof pluginName !== "string" ||
+      ![false, true].some((firstParty) => pluginHostNames(pluginName, manifest, firstParty).plugin === hostName)
+    ) continue;
     ownIfWritten(pluginName, hostName);
   }
   const marker = readProjectionMarker(projectDir);
