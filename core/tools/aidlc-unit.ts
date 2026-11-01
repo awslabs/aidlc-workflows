@@ -1714,12 +1714,22 @@ function candidateEvidence(
     return (stage?.produces ?? []).length > 0 &&
       filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
   }));
+  // The clone stamped each receipt with the run floor it read from the whole
+  // audit record (the workflow's own rows plus its own). Read the candidate's
+  // receipts against the same floor: this checkout's rows that are not Unit
+  // attempt rows, with the transported rows on top. Transported rows alone
+  // hold no WORKFLOW_STARTED, so every real receipt would miss the floor.
+  const floorRows = orderedAuditRows(projectDir).filter((row) =>
+    !TRANSPORTED_ATTEMPT_EVENTS.has(row.event) &&
+    !TRANSPORTED_DATA_EVENTS.has(row.event)
+  );
+  const snapshotRows = [...floorRows, ...authorityRows];
   const snapshots = new Map(stages.map((stage) => [
     stage,
     unitLifecycleSnapshot(
       projectDir,
       stage,
-      authorityRows,
+      snapshotRows,
       integrationState,
       {
         artifactFingerprint: (stageNode, unitName) =>
@@ -2769,17 +2779,11 @@ function conflictFiles(projectDir: string): string[] {
     : [];
 }
 
-function checkpointMainMetadata(
-  projectDir: string,
-  message: string,
-): { parentOid: string; commitOid?: string } {
-  const parentOid = gitOutput(
-    projectDir,
-    ["rev-parse", "HEAD"],
-    "Cannot resolve metadata checkpoint parent",
-  );
+// The paths of the landing checkout's worktree a checkpoint commits. Anything
+// else in it (a person's uncommitted source, a stray audit file) is refused.
+function checkpointPaths(projectDir: string): string[] {
   const changed = worktreeChanges(projectDir, "all", "Cannot inspect main worktree");
-  if (changed.length === 0) return { parentOid };
+  if (changed.length === 0) return [];
   const recordPrefix = relativeRecordDir(projectDir);
   if (!recordPrefix) {
     fail("Cannot resolve active intent metadata for Unit landing.");
@@ -2797,6 +2801,19 @@ function checkpointMainMetadata(
       `Unit landing requires a clean source worktree; commit or stash: ${unsafe.join(", ")}.`,
     );
   }
+  return paths;
+}
+
+function checkpointMainMetadata(
+  projectDir: string,
+  message: string,
+): { parentOid: string; commitOid?: string } {
+  const parentOid = gitOutput(
+    projectDir,
+    ["rev-parse", "HEAD"],
+    "Cannot resolve metadata checkpoint parent",
+  );
+  const paths = checkpointPaths(projectDir);
   if (paths.length === 0) return { parentOid };
   const added = git(projectDir, ["add", "-A", "--", ...paths]);
   if (!added.ok) {
@@ -3602,6 +3619,9 @@ function landUnit(args: string[], projectDir?: string): void {
           `${landingHead}. Fast-forward or rebase "${target}", then re-run landing.`,
       );
     }
+    // A stray file in the landing checkout's audit directory would move the
+    // run floor the evidence is read against; name it as what it is first.
+    checkpointPaths(pd);
     const liveEvidence = candidateEvidence(
       pd,
       claimCheck.claim,
