@@ -556,9 +556,11 @@ describe("t326 pinned team Unit merge", () => {
       ["add", "-f", "aidlc/.aidlc-unit-merges/forged.json"],
     );
     git(journalCandidate.checkout, ["commit", "-m", "force merge journal"]);
+    // Publish refuses it first; pin refuses it on its own for a candidate pushed around that check.
     expect(
       runMergeTool(UNIT, ["publish", "alpha"], journalCandidate.checkout).status,
-    ).toBe(0);
+    ).not.toBe(0);
+    pushUnprojectedCandidate(journalCandidate.checkout, "alpha");
     const journalPin = runMergeTool(UNIT, ["pin", "alpha"], journalFixture.seed);
     expect(journalPin.status).not.toBe(0);
     expect(journalPin.out).toContain("engine merge journals");

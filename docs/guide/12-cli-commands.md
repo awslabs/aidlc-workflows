@@ -707,6 +707,10 @@ to a candidate commit that preserves both claim and implementation history.
 AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` (written when a
 session starts in a fresh clone) does not count, here or at landing; it stays
 uncommitted, and any other change still stops both.
+A change to a record outside the Unit's `construction/<unit>/` folder (an Inception
+artifact such as `contract-summary.md`, say) also stops it: pin would refuse that
+candidate, so publish names the file and says to take it out of the branch and
+change it on main instead.
 A claimed checkout keeps its own audit rows (sessions, turns, answers) in a
 local record under the intent record's `.aidlc-engine/audit/`, which AI-DLC's
 `.gitignore` keeps out of commits, and the claim's tracked shard takes only the
