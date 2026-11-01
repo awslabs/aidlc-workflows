@@ -6680,7 +6680,17 @@ function teamGateContext(
         `"${final?.slug ?? "unknown"}", not "${stage.slug}".`,
     );
   }
-  return { unit, scope: "unit-end", stages };
+  // The gate covers the stages this Unit ran: one skipped for it (UNIT_SKIPPED
+  // in the current attempt) owes no artifacts and no review, and Request
+  // Changes must not reopen it, as a construction checkpoint's gate leaves out
+  // a stage skipped for every Unit.
+  return {
+    unit,
+    scope: "unit-end",
+    stages: stages.filter(
+      (entry) => entry === final || !unitSkippedUnits(pd, entry.slug, undefined, content).has(unit),
+    ),
+  };
 }
 
 function applicableUnitProduces(
