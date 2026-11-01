@@ -1,7 +1,7 @@
 // covers: function:planChangesBetween, function:planWithChanges,
 // function:splitSlugList, function:composedPlanLabel, function:PLAN_NAME_PATTERN,
 // function:savedScopeNameRefusal,
-// function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
+// function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart, function:matchedPlanStart,
 // function:guardPolicyAtLeast,
 // function:composerScoresPath, function:openComposerScores, function:takeComposerScores,
 // function:approvedComposerPlan, function:planApprovalCreationAsked,
@@ -1201,6 +1201,57 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     expect(matched.body).not.toHaveProperty("custom_start");
   });
 
+  test("validate-grid echoes matched_start, the stock scope's own depth, Guard Policy and settings, on every run", () => {
+    // A report composed on macOS (nightly 11-01) missed aidlc-bugfix.md, guessed
+    // every setting on and a relaxed Guard Policy, and the card said they were bugfix's.
+    const BUGFIX = {
+      scope: "bugfix",
+      depth: "minimal",
+      guard_policy: "off",
+      scope_settings: { sensors: "on", learnings: "off", summary_confirmation: "off", plan_approval: "on", collaborators: "off", review_cap: "advisory" },
+    };
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      expect(BUGFIX).toEqual({
+        scope: "bugfix",
+        depth: loadScopeMapping().bugfix.depth.toLowerCase(),
+        guard_policy: scopeGuardPolicyDefault("bugfix"),
+        scope_settings: scopeSettingsOf("bugfix")!,
+      });
+    });
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    const unrouted = validate(proj, { stages: stockGrid("bugfix") }, ["--report"]);
+    expect(unrouted.status, unrouted.out).toBe(0);
+    expect(unrouted.body.matched_start).toEqual(BUGFIX);
+    // One flip from bugfix: the nearest stock scope is still the one it names.
+    const near = validate(proj, { stages: { ...stockGrid("bugfix"), "deployment-execution": "SKIP" } }, ["--report"]);
+    expect(near.status, near.out).toBe(0);
+    expect((near.body.nearest_stock as Array<{ scope: string }>)[0].scope).toBe("bugfix");
+    expect(near.body.matched_start).toEqual(BUGFIX);
+    // The macOS proposal itself: it passes, and the stock values sit beside the changes it would make.
+    const ALL_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on", review_cap: "advisory" };
+    const guessed = validate(proj, { stages: stockGrid("bugfix"), scopeSettings: ALL_ON, guardPolicy: "relaxed" }, ["--report", "--matched", "bugfix"]);
+    expect(guessed.status, guessed.out).toBe(0);
+    expect(guessed.body.matched_start).toEqual(BUGFIX);
+    expect(guessed.body.creation_settings).toEqual({ learnings: "on", summary_confirmation: "on", collaborators: "on" });
+    const custom = validate(proj, { stages: composedGrid(), scopeSettings: CLASSIC.scope_settings, guardPolicy: "off", depth: "Standard" }, ["--custom"]);
+    expect(custom.status, custom.out).toBe(0);
+    const nearestCustom = (custom.body.nearest_stock as Array<{ scope: string }>)[0].scope;
+    expect((custom.body.matched_start as { scope: string }).scope).toBe(nearestCustom);
+    // Any stock scope, not only bugfix: an express grid names express's own values.
+    const express = validate(proj, { stages: stockGrid("express") }, []);
+    expect(express.status, express.out).toBe(0);
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      expect(express.body.matched_start).toEqual({
+        scope: "express",
+        depth: loadScopeMapping().express.depth.toLowerCase(),
+        guard_policy: scopeGuardPolicyDefault("express"),
+        scope_settings: scopeSettingsOf("express")!,
+      });
+    });
+  });
+
   test("on a bugfix base, classic's ceremony becomes this work's settings at creation, with no typed switch", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
@@ -1300,6 +1351,18 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     const dispatch = read("core/tools/aidlc-orchestrate.ts");
     expect(dispatch).toContain("a custom one starts from the classic scope's default, which the validator echoes as custom_start");
     expect(dispatch).not.toContain("a custom one the composer's choice");
+  });
+
+  test("the composer takes a matched plan's Guard Policy and settings from matched_start, never from a scope file", () => {
+    for (const surface of ["core/agents/aidlc-composer-agent.md", "core/knowledge/aidlc-composer-agent/composing.md"]) {
+      const text = read(surface);
+      expect(text, surface).toContain("`matched_start.guard_policy`");
+      expect(text, surface).toContain("`matched_start.scope_settings`");
+      // The file a stock scope lives in is aidlc-<name>.md; the read missed it.
+      expect(text, surface).not.toContain("under `scopesDir`");
+      expect(text, surface).not.toContain("the order the scope loader reads it");
+      expect(text, surface).not.toMatch(/from (its|that one scope) `\.md`/);
+    }
   });
 });
 
