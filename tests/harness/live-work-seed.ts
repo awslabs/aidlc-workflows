@@ -8,7 +8,7 @@
  * passes: only `next` writes the question copy a request id names, and `next`
  * run from a test process outside a chat stops at the hooks-presence step.
  * handleIntentCreate turns a request id into the same `arguments` field, so the
- * record is the one a person's start writes.
+ * description record is the one a person's start writes.
  */
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
