@@ -201,6 +201,28 @@ interface InstanceFingerprint {
   present: boolean;
 }
 
+// Lining up a Markdown table's columns is no change: outside a code block, a
+// table's cells are read trimmed and its delimiter row's dashes as `---`.
+function markdownTableText(path: string, text: Buffer): Buffer {
+  if (!/\.(md|markdown)$/i.test(path) || !text.includes(0x7c) || text.includes(13)) return text;
+  const source = text.toString("utf-8");
+  let fence = "";
+  let row = 0;
+  const read = source.split("\n").map((line) => {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (!fence && marker) fence = marker;
+    else if (fence && marker?.[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = "";
+    row = !fence && !marker && line.startsWith("|") ? row + 1 : 0;
+    if (row === 0) return line;
+    const cells = line.split(/(?<!\\)\|/).slice(1, line.trimEnd().endsWith("|") ? -1 : undefined).map((cell) => cell.trim());
+    if (row === 2 && cells.every((cell) => /^:?-+:?$/.test(cell))) {
+      return `|${cells.map((cell) => cell.replace(/-+/, "---")).join("|")}|`;
+    }
+    return `| ${cells.join(" | ")} |`;
+  }).join("\n");
+  return read === source ? text : Buffer.from(read, "utf-8");
+}
+
 function fingerprintInstance(instance: ArtifactInstance): InstanceFingerprint {
   const path = instance.absolutePath;
   if (!existsSync(path)) {
@@ -213,7 +235,7 @@ function fingerprintInstance(instance: ArtifactInstance): InstanceFingerprint {
     // A CRLF line ending is no change: text is read with CRLF as LF; a file Git
     // would take as binary (a lone CR, a NUL) is read as it is.
     const bytes = readFileSync(path);
-    const text = committedTextBytes(bytes);
+    const text = markdownTableText(path, committedTextBytes(bytes));
     return {
       instance,
       sha256: `sha256:${sha256(text)}`,
