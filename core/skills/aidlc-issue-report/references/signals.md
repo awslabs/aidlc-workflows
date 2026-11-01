@@ -112,9 +112,8 @@ tool — 0 on Claude Code or Codex means AI-DLC's token count did not see this r
   hook's command (Claude Code when the hook refused by exit code alone, and its PostToolUse block records). Only that
   record is read: a hook command quoted in a file or in a command's output is not counted. Many of the same hook in a
   short time = a refusal loop to look at; check whether `audit` has matching `*_BLOCKED` rows (in `counts` too:
-  `problems` keeps the last 300). None does not settle the cause by itself: before AI-DLC 2.11.2 several guard
-  refusals wrote no row, the refusal that protects AI-DLC's own records still writes none, and a busy audit lock can
-  drop one (the hook's drops file then says so).
+  `problems` keeps the last 300). None does not settle the cause by itself: some refusals write no row (fewer
+  from AI-DLC 2.11.2 on; `knownGaps` says what is known).
 - `unattributedHookBlocks`: hook refusals whose record does not say which hook refused — Claude Code's PreToolUse
   refusals from AI-DLC 2.11.0 on (AI-DLC gives the reason alone there), Codex's PreToolUse refusals of a shell command
   or a patch, and every Kiro CLI v2 one. Usually AI-DLC's, but another hook in the project can make them too, so they

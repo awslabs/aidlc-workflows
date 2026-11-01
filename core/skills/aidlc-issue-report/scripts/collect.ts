@@ -293,7 +293,7 @@ const safe = {
   // Where the secret rules came from (the project's AI-DLC install), or null: the check then reads with its own rules only.
   secretRules: secretRules && secretFrom ? relative(project, secretFrom) : null,
   knownGaps: [
-    "Before AI-DLC 2.11.2 some guard refusals wrote no audit row (upstream issue #2706), and the refusal that protects AI-DLC's own records still writes none; the tool's own log is then the only trace.",
+    "Some refusals write no audit row (fewer from AI-DLC 2.11.2 on, upstream issue #2706); the tool's own log is then the only trace.",
     "When the audit lock is busy a blocked row can be dropped; only a line in the hook's drops file remains.",
     "Files written by shell commands get no audit row.",
     "Hooks that never ran leave nothing but missing heartbeat files.",

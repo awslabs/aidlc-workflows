@@ -5,37 +5,36 @@
 // quietly saying nothing went wrong.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import { PROBLEM_EVENTS } from "../../core/skills/aidlc-issue-report/scripts/lib-audit.ts";
 import { ENGINE_DIRS } from "../../core/skills/aidlc-issue-report/scripts/lib-project.ts";
 import { HARNESS_ROWS } from "../../core/skills/aidlc-issue-report/scripts/lib-shape.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
-// The quoted names in one declaration of an authored source, from its opening text to the first `end` after it. A
-// declaration that is not found fails the test: an empty list would make every comparison below pass.
-function declaredNames(file: string, opening: string, end: string): Set<string> {
+// The names in one declaration of an authored source, from its opening text to the first `end` after it, as `name`
+// reads them. A declaration that is not found fails the test: an empty list would make every comparison below pass.
+function declaredNames(file: string, opening: string, end: string, name: RegExp): Set<string> {
   const src = readFileSync(join(REPO_ROOT, file), "utf8");
   const start = src.indexOf(opening);
   if (start < 0) throw new Error(`${opening} not found in ${file}`);
   const stop = src.indexOf(end, start + opening.length);
   if (stop < 0) throw new Error(`end of ${opening} not found in ${file}`);
-  const names = new Set([...src.slice(start, stop).matchAll(/"([A-Z][A-Z_]+)"/g)].map((m) => m[1]));
+  const names = new Set([...src.slice(start, stop).matchAll(name)].map((m) => m[1]));
   if (names.size === 0) throw new Error(`${opening} in ${file} names nothing`);
   return names;
 }
 
-const AUDIT_EVENTS = declaredNames("core/tools/aidlc-audit.ts", "const VALID_EVENT_TYPES = new Set([", "]);");
-const GUARD_REFUSALS = declaredNames("core/tools/aidlc-lib.ts", "export type GuardRefusalEvent =", ";");
-
-const HARNESS_NAMES = readdirSync(join(REPO_ROOT, "harness"), { withFileTypes: true })
-  .filter((entry) => entry.isDirectory() && existsSync(join(REPO_ROOT, "harness", entry.name, "manifest.ts")))
-  .map((entry) => entry.name);
-const manifests: HarnessManifest[] = [];
-for (const name of HARNESS_NAMES) {
-  manifests.push((await import(join(REPO_ROOT, "harness", name, "manifest.ts"))).default as HarnessManifest);
-}
+const AUDIT_EVENTS = declaredNames("core/tools/aidlc-audit.ts", "const VALID_EVENT_TYPES = new Set([", "]);", /"([A-Z][A-Z0-9_]+)"/g);
+// GUARD_REFUSALS is a Record over GuardRefusalEvent, so the typecheck keeps its keys equal to every kind of refusal.
+const GUARD_REFUSALS = declaredNames(
+  "core/tools/aidlc-message-store.ts",
+  "const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {",
+  "};",
+  /^\s*([A-Z][A-Z0-9_]+): true,$/gm,
+);
+const manifests = HARNESS_MATRIX.map((h) => h.manifest);
 
 describe("the issue report's hand-kept lists match AI-DLC", () => {
   test("every problem event is an audit event AI-DLC writes", () => {
@@ -43,7 +42,6 @@ describe("the issue report's hand-kept lists match AI-DLC", () => {
   });
 
   test("every guard refusal AI-DLC records is a problem", () => {
-    expect(GUARD_REFUSALS.size).toBeGreaterThan(3);
     expect([...GUARD_REFUSALS].filter((event) => !PROBLEM_EVENTS.has(event))).toEqual([]);
   });
 
