@@ -31,6 +31,7 @@ import {
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+import { kiroCliV2Args } from "../harness/kiro-cli-launch.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
@@ -114,6 +115,7 @@ function launch(session: string, sandbox: string): void {
       "--",
       "kiro-cli",
       "chat",
+      ...kiroCliV2Args(),
       "--trust-all-tools",
     ]).rc,
   ).toBe(0);

@@ -995,7 +995,7 @@ describe("t243 project initialization", () => {
     expect(preview.stdout).not.toContain("no longer part of AI-DLC");
     expect(preview.stdout).toContain("conflict=0");
     const hookWarning =
-      "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/my-hook.json\"); Kiro runs it on its v3 engine, which .kiro/settings/cli.json now pins, and in Kiro IDE";
+      "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/my-hook.json\"); Kiro runs it in Kiro IDE and in Kiro CLI on its v3 engine (`kiro-cli --v3`)";
     expect(preview.stdout).toContain(hookWarning);
     expect(stamp()).toBe("kiro");
 
