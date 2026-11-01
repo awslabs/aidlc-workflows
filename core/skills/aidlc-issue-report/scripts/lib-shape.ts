@@ -100,7 +100,7 @@ export const HOST_TOOLS = new Set([
   "bash", "view", "edit", "create", "str_replace", "str_replace_editor", "read_bash", "write_bash", "stop_bash",
 ]);
 // AI-DLC's harness rows.
-const HARNESS_ROWS = new Set(["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]);
+export const HARNESS_ROWS = new Set(["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]);
 
 // A kernel release as Linux, WSL and macOS write it (`6.8.0-45-generic`, `5.15.167.4-microsoft-standard-WSL2`,
 // `6.1.112-122.189.amzn2023.x86_64`, `25.6.0`): a major of one or two digits, then the distributions' own words; any

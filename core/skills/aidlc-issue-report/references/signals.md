@@ -68,10 +68,14 @@ Kiro IDE sessions land in the v3 store.
 | `PLAN_APPROVAL_BLOCKED` | "can't write code before the plan is approved" | refusals of `plan-approval-guard` in the chat log |
 | `REVIEW_FREEZE_BLOCKED` | a write was refused because a review was ready | `review-freeze` refusals |
 | `REVIEWER_SCOPE_BLOCKED` | the reviewer was stopped reading another Unit | — |
+| `STATE_TRANSITION_BLOCKED` | a helper agent was stopped from moving the stage or routing (only the main session may) | `state-transition-guard` refusals |
+| `STAGE_RULES_BLOCKED` | a helper agent was not started because the stage's rules could not be given to it | `deliver-stage-rules` refusals |
+| `SYSTEM_INSTALL_BLOCKED` | a system package install nobody asked for was held until the person says so | `plan-approval-guard` refusals |
 | `GUARD_DISABLED`, `GUARD_STOOD_ASIDE` | a safety check was off or stepped aside | `guardsOff` in `intents[]` |
 | `GATE_REJECTED`, `STAGE_REVISING` | the person asked for changes (normal), many in a row = struggle | revision count |
 | `STAGE_JUMPED`, `STAGE_SKIPPED` | a redo or skip | — |
 | `SENSOR_FAILED`, `SENSOR_BUDGET_OVERRIDE` | a check found problems / ran out of time | later `SENSOR_PASSED` = fixed |
+| `SENSOR_COULD_NOT_RUN` | a check's script crashed, could not start or gave no verdict | — |
 | `BOLT_FAILED`, `SWARM_*`, `MERGE_DISPATCH_FALLBACK` | building a Unit failed or fell back | — |
 | `QUESTION_UNANSWERED` | a question box came back empty | — |
 | `SESSION_COMPACTED` | the chat ran out of context and was compacted | re-asked questions after it |
@@ -107,12 +111,14 @@ tool — 0 on Claude Code or Codex means AI-DLC's token count did not see this r
 - `aidlcHookBlocks`: hook refusals the AI tool recorded itself, by AI-DLC hook or route, when its record names the
   hook's command (Claude Code when the hook refused by exit code alone, and its PostToolUse block records). Only that
   record is read: a hook command quoted in a file or in a command's output is not counted. Many of the same hook in a
-  short time = a refusal loop to look at; check whether `audit` has matching `*_BLOCKED` rows — if not, it is the
-  known gap (refusals that write no audit row).
+  short time = a refusal loop to look at; check whether `audit` has matching `*_BLOCKED` rows (in `counts` too:
+  `problems` keeps the last 300). None does not settle the cause by itself: before AI-DLC 2.11.2 several guard
+  refusals wrote no row, the refusal that protects AI-DLC's own records still writes none, and a busy audit lock can
+  drop one (the hook's drops file then says so).
 - `unattributedHookBlocks`: hook refusals whose record does not say which hook refused — Claude Code's PreToolUse
   refusals from AI-DLC 2.11.0 on (AI-DLC gives the reason alone there), Codex's PreToolUse refusals of a shell command
   or a patch, and every Kiro CLI v2 one. Usually AI-DLC's, but another hook in the project can make them too, so they
-  are not proof of an AI-DLC refusal and a missing audit row beside them is not the known gap.
+  are not proof of an AI-DLC refusal, and a missing audit row beside them does not make them AI-DLC's unrecorded ones.
 - `otherHookBlocks`: refusals whose record names a hook command this skill does not know as AI-DLC's — usually the
   person's own or another tool's hook, or AI-DLC run through a wrapper script.
 - Not counted in any of these: on Claude Code, a block record for a hook event other than PostToolUse and Stop (a
