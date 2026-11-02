@@ -137,6 +137,11 @@ const RECORD_DIRS = new Set([
 // The AI tools' own folders at the project's top (`.kiro/steering/`), and the folders under them they name.
 const TOOL_TOP = new Set([".claude", ".kiro", ".codex", ".copilot", ".cursor", ".agents", ".aidlc", ".github", ".vscode"]);
 const TOOL_SUB = new Set(["settings", "steering", "skills", "prompts", "agents", "hooks", "tools", "rules", "commands", "data", "aidlc-common"]);
+// File names that have no dot; any other name with none is read as a folder.
+const DOTLESS_FILES = new Set([
+  "Makefile", "Dockerfile", "Containerfile", "Jenkinsfile", "Vagrantfile", "Procfile", "Gemfile", "Rakefile", "Brewfile",
+  "Pipfile", "Justfile", "LICENSE", "NOTICE", "README", "CHANGELOG", "CODEOWNERS", "AUTHORS", "VERSION",
+]);
 // The default space AI-DLC makes; any other space is named by the person.
 const DEFAULT_SPACE = "default";
 
@@ -180,7 +185,7 @@ function layoutSegment(v: RowVocab, s: Shape, parts: string[], i: number, last: 
   if (last && (((extensionOf(part) || part.startsWith(".")) && v.words.has(part)) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part))) return part;
   const known = s.known(part);
   if (known) return known;
-  if (!part.includes(".")) return s.label("unit", part);
+  if (!part.includes(".") && !DOTLESS_FILES.has(part)) return s.label("unit", part);
   return fileLabel(s, /^<[^<>/]+>(?:\.[a-z0-9]{1,12})?$/.test(part) ? part : parts.slice(0, i + 1).join("/"));
 }
 const inLayout = (first: string) => first === "aidlc" || first === ".aidlc-engine" || TOOL_TOP.has(first);

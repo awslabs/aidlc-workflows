@@ -15,6 +15,7 @@ type Safe = {
     tools?: Record<string, { version?: string | null; source?: string | null }>;
     toolsUsed?: string[];
     versionsMissing?: string[];
+    toolsNamed?: string[];
   };
   trees?: { dir?: string; row?: string | null; stampVersion?: string | null; channel?: string }[];
   intents?: unknown[];
@@ -49,7 +50,8 @@ for (const t of safe.trees ?? []) lines.push(`- AI-DLC in ${or(t.dir)}: ${or(t.s
 for (const tool of safe.environment?.toolsUsed ?? []) {
   const v = safe.environment?.tools?.[tool];
   const from = v?.source === "person" ? " (from the person)" : v?.source && v.source !== "log" ? " (at collection)" : "";
-  lines.push(`- ${tool}: ${or(v?.version, "not found")}${v?.version ? from : ""}`);
+  const named = (safe.environment?.toolsNamed ?? []).includes(tool) ? " (named by the person; no chat log of it was read)" : "";
+  lines.push(`- ${tool}: ${or(v?.version, "not found")}${v?.version ? from : ""}${named}`);
 }
 lines.push(`- OS: ${or(safe.environment?.os)}`);
 

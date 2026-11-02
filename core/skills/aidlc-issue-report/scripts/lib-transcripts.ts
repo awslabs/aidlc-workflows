@@ -157,7 +157,7 @@ type KiroPayload = {
   subAgentName?: string;
 };
 type KiroLine = { timestamp?: string; payload?: KiroPayload };
-type KiroLogLine = { conversationId?: string; message?: unknown };
+type KiroLogLine = { timestamp?: string; conversationId?: string; message?: unknown };
 type KiroSession = { workspacePaths?: string[]; modelId?: unknown; effortLevel?: unknown; agentMode?: unknown; autopilot?: unknown };
 type KiroV2Meta = {
   cwd?: string;
@@ -323,7 +323,7 @@ const SUBVERBS = new Set([
   "pin", "start", "fail", "abort", "compose", "models", "trust", "flags", "runtime", "providers", "preview", "hook", "adapter",
 ]);
 
-function noteCommand(t: Tally, ts: string, text: string) {
+function noteCommand(t: Tally, ts: string, text: string, noTime = false) {
   const m = text.match(AIDLC_CMD);
   if (!m) return;
   // `aidlc-orchestrate next` and `aidlc orchestrate next` are the same call.
@@ -332,7 +332,7 @@ function noteCommand(t: Tally, ts: string, text: string) {
   const verb = ["aidlc", ...kept.filter(Boolean)].join(" ").toLowerCase();
   if (!/^aidlc [a-z]/.test(verb)) return;
   t.add(ts, (s) => bump(s.aidlcCommands, verb.slice(0, 60)));
-  ev(t, ts, { kind: "aidlc-command", verb: verb.slice(0, 60) });
+  ev(t, ts, { kind: "aidlc-command", verb: verb.slice(0, 60), ...(noTime ? { noTime: true } : {}) });
 }
 
 const HOOK_BLOCK_KIND = { aidlc: "aidlc-hook-block", other: "other-hook-block", unknown: "hook-block" } as const;
@@ -903,6 +903,8 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
   s.engine = "v3";
   const calls: Calls = new Map();
   const sessionIds = new Set<string>();
+  // Where each session's run ends (the report's part starts), for the engine log's dispatch lines below.
+  const runUntil = new Map<string, string>();
   // Kiro names a workspace's folder after a hash of its path. The project's own hash is one; a folder under the
   // project, or the same path spelled another way (Windows path strings may hash differently), has its own, so each
   // other folder is told by the workspace its first readable session.json names (one folder, one workspace).
@@ -1067,6 +1069,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
           }
         }
         t.commit(s, calls, { from });
+        if (from) runUntil.set(sess, from);
         // Only read while `from` is set; "" sorts before every timestamp.
         const cut = from ?? "";
         const runPrompts = from ? promptTs.filter((t) => t < cut).length : 0;
@@ -1109,6 +1112,11 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
     for (const l of readLines<KiroLogLine>(file)) {
       const message = l.message;
       if (l.conversationId === undefined || !sessionIds.has(l.conversationId)) continue;
+      // A dispatch line has its own time (measured on Kiro 2026-10-31): outside the window, or in the report's part of
+      // the session, it is not the run's.
+      if (!inWindow(l.timestamp, since, until)) continue;
+      const cut = runUntil.get(l.conversationId);
+      if (cut && l.timestamp >= cut) continue;
       if (typeof message !== "string" || !message.startsWith("invoke_subagent.starting")) continue;
       try {
         const j = JSON.parse(message.slice(message.indexOf("{"))) as SubagentStart;
@@ -1122,7 +1130,6 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
     }
   }
   finishRepeats(s, calls);
-  s.notes.push("Each dispatched agent's model and effort come from Kiro's engine log, whose lines this reader reads without a time: a dispatch of the same session outside the window counts too.");
   s.notes.push("Kiro records hook runs by name only and a hook's refusal as a denied call with no reason: such a call counts under denials as denied-after-aidlc-hooks when AI-DLC hooks ran right before it (which hook refused is not recorded), else denied-no-reason.");
   s.notes.push("Kiro writes no client version into its session store (measured 2026-10-22, CLI 2.33.1): its version is the one measured at collection time.");
   return s;
@@ -1196,10 +1203,12 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
         for (const c of parts) {
           if (c?.kind !== "toolUse" && !c?.toolUse) continue;
           t.add(ts, (x) => x.toolCalls++);
-          const use = (c.data ?? c.toolUse ?? {}) as { name?: unknown; input?: { command?: unknown } | unknown };
-          noteCall(t, typeof use.name === "string" ? use.name : undefined, use.input, ts, !own);
-          const command = (use.input as { command?: unknown } | undefined)?.command;
-          if (typeof command === "string") noteCommand(t, ts, command);
+          // An earlier shape put the call under `toolUse` with `args`.
+          const use = (c.data ?? c.toolUse ?? c) as { name?: unknown; input?: unknown; args?: unknown };
+          const input = use.input ?? use.args;
+          noteCall(t, typeof use.name === "string" ? use.name : undefined, input, ts, !own);
+          const command = (input as { command?: unknown } | undefined)?.command;
+          if (typeof command === "string") noteCommand(t, ts, command, !own);
         }
       } else if (l.kind === "ToolResults") {
         for (const r of Object.values(l.data?.results ?? {})) {

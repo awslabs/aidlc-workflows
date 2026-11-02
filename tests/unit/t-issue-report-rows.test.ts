@@ -138,6 +138,13 @@ describe("what the rule wrote reads back as it was", () => {
     expect(shapeValue(v, s, "ERROR_LOGGED", "Error", 'Refusing to complete unit "12"')).toBe('Refusing to complete unit "12"');
     expect(valueOk(v, "ERROR_LOGGED", "Error", 'Refusing to complete unit "481516"')).toBe(false);
   });
+  test("a well-known file with no dot in AI-DLC's path is a file, not a folder", () => {
+    const v = vocab();
+    const s = shape();
+    const out = String(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/u1/Makefile"));
+    expect(out.split("/").pop()).toMatch(/^<custom-file-\d+>$/);
+    expect(valueOk(v, "ARTIFACT_UPDATED", "File", out)).toBe(true);
+  });
   test("two files of one name in two folders are two files", () => {
     const v = vocab();
     const s = shape();

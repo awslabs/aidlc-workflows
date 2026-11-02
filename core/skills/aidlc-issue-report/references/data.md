@@ -27,7 +27,7 @@ two folders are unrelated.
 - `window`: the time span read (`since`, `until`, UTC) and `lastAidlcActivity`; `notes` when a given time was not used.
 - `environment`: the OS line, Bun, the AI-DLC native install, each AI tool's version and where it was read
   (`path`, `known-location`, `app` = measured at collection; `person` = the person read it off the screen; a version
-  from the tool's own log is under `transcripts[].toolVersions`), `toolsUsed`, `versionsMissing`, and `toolsNamed`: the tools in `toolsUsed` that the person named because no chat log showed one.
+  from the tool's own log is under `transcripts[].toolVersions`), `toolsUsed`, `versionsMissing`, and `toolsNamed` (only when the person named one): the tools in `toolsUsed` the person named while no chat log showed which tool the run used.
   `kiroHomeEngine`: `chat.agentEngine` in the home folder's Kiro settings file (`file: false` = no such file). Which of
   the two decides has changed across Kiro CLI versions: on 2.21.1 the project's, on 2.33.1 only the home one
   (measured 2026-10-22: project `v3` alone gave a v2 session; home `v3` with project `v2` gave v3); between them it is
@@ -61,7 +61,8 @@ two folders are unrelated.
     `owner` (`aidlc`, `other`, `unknown`) of a refusal, `detail` of a denial, `reply` (what the person typed, as a
     label). Kinds: `person-turn`, `call`, `aidlc-command`, `tool-error`, `tool-denied`, `approval-prompt`,
     `stop-hook-feedback`, `aidlc-hook-block`, `other-hook-block`, `hook-block` (a refusal whose record does not say
-    whose). `noTime`: the tool logged no time of its own for it (Kiro CLI v2), so `ts` is its session's.
+    whose). `noTime`: the tool logged no time of its own for it (Kiro CLI v2), so `ts` is its session's; Kiro CLI v2's
+    `repeats` carry its session's time the same way.
   - Counts over the same records: `sessions`, `prompts`, `toolCalls`, `toolErrors`, `denials`, `aidlcHookBlocks`,
     `otherHookBlocks`, `unattributedHookBlocks`, `stopFeedback`, `approvalPrompts`, `questionsAsked`, `aidlcCommands`,
     `repeats` (the same call input three times or more), `subagents`, `handRunChecks` (an AI-DLC check the agent ran

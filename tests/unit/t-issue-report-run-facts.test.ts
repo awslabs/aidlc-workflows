@@ -1127,6 +1127,52 @@ console.log(JSON.stringify({ events: s?.events.map((e) => [e.kind, e.tool ?? e.v
   const out = JSON.parse(r.stdout);
   expect(out.repeats).toEqual([3]);
   expect(out.events).toEqual([
-    ["call", "shell", true], ["call", "shell", true], ["call", "shell", true], ["call", "shell", true], ["aidlc-command", "aidlc orchestrate next", false],
+    ["call", "shell", true], ["call", "shell", true], ["call", "shell", true], ["call", "shell", true], ["aidlc-command", "aidlc orchestrate next", true],
   ]);
+});
+
+test("Kiro CLI v2 calls in the earlier toolUse shape are read too", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-v2-old-shape-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const dir = join(home, ".kiro", "sessions", "cli");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "s1.json"), JSON.stringify({ cwd: project, updated_at: at(30) }));
+  const use = (command: string) => ({ kind: "AssistantMessage", data: { content: [{ kind: "toolUse", toolUse: { name: "execute_bash", args: { command } } }] } });
+  writeFileSync(join(dir, "s1.jsonl"), [use("ls"), use("pwd")].map((l) => JSON.stringify(l)).join("\n"));
+  const code = `const { kiroV2 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV2(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+const calls = s?.events.filter((e) => e.kind === "call") ?? [];
+console.log(JSON.stringify({ tools: calls.map((e) => e.tool), distinct: new Set(calls.map((e) => e.input)).size }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({ tools: ["execute_bash", "execute_bash"], distinct: 2 });
+});
+
+test("a Kiro dispatch's model counts only inside the window and before the report's part of its session", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-log-time-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const sess = join(home, ".kiro", "sessions", "ws", "sess_1");
+  mkdirSync(sess, { recursive: true });
+  writeFileSync(join(sess, "session.json"), JSON.stringify({ workspacePaths: [project], modelId: "auto", agentMode: "aidlc" }));
+  const lines = [
+    { timestamp: at(1), payload: { type: "user", content: "start the feature" } },
+    { timestamp: at(3), payload: { type: "tool_call", toolName: "execute_bash", args: { command: "bun .kiro/tools/aidlc.ts engine orchestrate next" } } },
+    { timestamp: at(10), payload: { type: "user", content: "make an issue report" } },
+    { timestamp: at(11), payload: { type: "tool_call", toolName: "execute_bash", args: { command: "bun .kiro/skills/aidlc-issue-report/scripts/collect.ts" } } },
+  ];
+  writeFileSync(join(sess, "messages.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const logs = join(home, ".kiro", "logs", "run1");
+  mkdirSync(logs, { recursive: true });
+  // The dispatch line Kiro writes (field names as measured 2026-10-31).
+  const dispatch = (ts: string, modelId: string) => ({
+    timestamp: ts, level: "info", conversationId: "sess_1", requestId: "r", rootConversationId: "sess_1", turnId: "t", rootTurnId: "t",
+    message: `invoke_subagent.starting ${JSON.stringify({ subagentId: "aidlc-developer-agent", modelId })}`,
+  });
+  writeFileSync(join(logs, "kiro.log"), [dispatch("2026-10-20T00:00:00.000Z", "before-window"), dispatch(at(4), "in-run"), dispatch(at(12), "in-report")].map((l) => JSON.stringify(l)).join("\n"));
+  const code = `const { kiroV3 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV3(${JSON.stringify(project)}, ${Date.parse(at(0))}, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify(s?.subagents["aidlc-developer-agent"]?.models ?? null));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
+  expect(JSON.parse(r.stdout)).toEqual({ "in-run": 1 });
 });
