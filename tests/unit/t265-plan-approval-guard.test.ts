@@ -538,6 +538,8 @@ function scratchProject(): string {
     "aidlc-log.ts",
     // aidlc-log.ts writes and removes the Kiro reviewer copy through this.
     "aidlc-kiro-review-copy.ts",
+    // aidlc-log.ts reads a team's revised Unit plan against its claims here.
+    "aidlc-unit.ts",
     "aidlc-message-store.ts",
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",

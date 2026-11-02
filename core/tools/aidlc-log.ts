@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:p
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
+import { unitPlanRefusal } from "./aidlc-unit.ts";
 import {
   askedQuestionFields,
   QUESTION_ID_FIELD,
@@ -4005,7 +4006,12 @@ function handleReview(args: string[]): void {
     // would have the agent tell the person a step to take.
     if (flags.stage === "units-generation" && flags.single !== "true") {
       const dag = resolveBoltDag(pd, intent, space);
-      if (dag.state === "malformed") {
+      // A team's revised plan is read against the Units it already landed or
+      // claimed (unitPlanRefusal) once the block itself reads.
+      const repair = dag.state === "malformed"
+        ? unitsBlockRepair(dag.reason, dag.detail)
+        : dag.state === "ok" ? unitPlanRefusal(pd) : null;
+      if (repair !== null) {
         const again = renderReviewRequestCommand({
           projectDir: pd,
           stage: flags.stage,
@@ -4015,7 +4021,7 @@ function handleReview(args: string[]): void {
         });
         console.log(JSON.stringify({
           kind: "print",
-          message: `${unitsBlockRepair(dag.reason, dag.detail)} Then run \`${again}\` again.`,
+          message: `${repair} Then run \`${again}\` again.`,
         }));
         return;
       }
