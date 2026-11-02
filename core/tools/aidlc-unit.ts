@@ -1636,12 +1636,15 @@ function candidateEvidence(
   if (!dag.ok) {
     fail(`Pinned integration Unit DAG is ${dag.reason}: ${dag.detail}.`);
   }
+  // The contract a candidate is built against is its own Unit's entry (kind,
+  // dependencies) and the per-Unit stage columns: a Unit the plan adds, drops or
+  // changes elsewhere does not make this Unit's work stale.
   const contract = (
     units: typeof dag.units,
     stageColumns: string[],
   ): string => JSON.stringify({
     stage_columns: stageColumns,
-    units: units.map((entry) => ({
+    unit: units.filter((entry) => entry.name === claim.unit).map((entry) => ({
       name: entry.name,
       kind: entry.kind ?? null,
       depends_on: [...entry.depends_on].sort(),
