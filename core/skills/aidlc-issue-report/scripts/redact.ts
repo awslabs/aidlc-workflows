@@ -41,15 +41,12 @@ export function smallLabel(label: string): boolean {
 }
 
 // Labels and nothing else, each small: what a value replaced by labels is (one, or several the redaction wrote side by
-// side, `<user><host>`). Side by side, their serials hold eight digits at most together and none is an `<id:…>`, so a
-// run cannot spell a long number or hex string out. The one reading of a label for row values (lib-rows.ts) and for
-// every field, sentence and slot the check reads (lib-gate.ts).
+// side, `<user><host>`). Labels are this skill's counters and the redaction's names, so a run of them carries nothing a
+// value copied by mistake could; text made up to look like labels is outside what the check is for (lib-gate.ts). The
+// one reading of a label for row values (lib-rows.ts) and for every field, sentence and slot the check reads.
 const LABEL_RUN = new RegExp(`^(?:${LABEL.source})+$`);
 export function onlyLabels(v: string): boolean {
-  const labels = [...v.matchAll(LABEL)].map((m) => m[0]);
-  if (!LABEL_RUN.test(v) || !labels.every(smallLabel)) return false;
-  if (labels.length === 1) return true;
-  return !labels.some((l) => l.startsWith("<id:")) && labels.join("").replace(/\D/g, "").length <= 8;
+  return LABEL_RUN.test(v) && [...v.matchAll(LABEL)].every((m) => smallLabel(m[0]));
 }
 
 // Too short or too generic to replace without wrecking the text.

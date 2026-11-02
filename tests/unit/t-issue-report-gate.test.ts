@@ -162,6 +162,11 @@ describe("this skill's own code, read as code", () => {
     expect(fills("seen", ["seen"], () => true)).toBe(true);
     expect(fills("seenundefined", ["seen"], () => true)).toBe(false);
     expect(fills("a\nb done", ["", " done"], () => true)).toBe(false);
+    // A slot before the last fixed part holds 400 characters, the last slot 2,000.
+    expect(fills(`x ${"a".repeat(400)} y`, ["x ", " y"], () => true)).toBe(true);
+    expect(fills(`x ${"a".repeat(401)} y z`, ["x ", " y", ""], () => true)).toBe(false);
+    expect(fills(`x ${"a".repeat(2000)}`, ["x ", ""], () => true)).toBe(true);
+    expect(fills(`x ${"a".repeat(2001)}`, ["x ", ""], () => true)).toBe(false);
   });
   test("a template's slots may be empty or hold the text of the next fixed part; every placing is tried", () => {
     const ok = (slot: string) => slot === "" || /^[a-z ]+$/.test(slot);
@@ -209,11 +214,9 @@ describe("a prose field holds only this skill's own sentences", () => {
     expect(safeHits(c, { knownGaps: ["x <redacted>", "<redacted> Contoso", "<contoso>", "\uE000\uE000", "<user><contoso>", "<customer-12345>"] }).length).toBe(6);
     // Labels side by side (the redaction writes `<user><host>` for a folder named after both) carry no value: they pass.
     expect(safeHits(c, { knownGaps: ["<user><host><project>"] })).toEqual([]);
-    // Side by side, labels' serials hold eight digits at most together; four labels with short serials pass.
-    expect(safeHits(c, { knownGaps: ["<customer-1234><customer-5678><customer-9012><customer-3456>"] }).length).toBe(1);
-    expect(safeHits(c, { knownGaps: ["<custom-id-123456><custom-id-789012>"] }).length).toBe(1);
-    expect(safeHits(c, { knownGaps: ["<user><host><project><custom-value-1>"] })).toEqual([]);
-    expect(safeHits(c, { knownGaps: ["<id:deadbeef><id:cafebabe><id:abcdefab>"] }).length).toBe(1);
+    // Several small labels side by side pass; one that is not small does not.
+    expect(safeHits(c, { knownGaps: ["<user><host><project><custom-value-1>", "<user><id:deadbeef>"] })).toEqual([]);
+    expect(safeHits(c, { knownGaps: ["<user><customer-12345>"] }).length).toBe(1);
     const surface = (slot: string) => `Kiro surface per session: ${slot} Kiro CLI, 0 Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`;
     expect(safeHits(c, { transcripts: [{ notes: [surface("<custom-value-1>")] }] })).toEqual([]);
     expect(safeHits(c, { transcripts: [{ notes: [surface("\uE000\uE000"), surface("<user><contoso>")] }] }).length).toBe(2);
