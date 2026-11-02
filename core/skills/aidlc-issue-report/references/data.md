@@ -27,7 +27,7 @@ two folders are unrelated.
 - `window`: the time span read (`since`, `until`, UTC) and `lastAidlcActivity`; `notes` when a given time was not used.
 - `environment`: the OS line, Bun, the AI-DLC native install, each AI tool's version and where it was read
   (`path`, `known-location`, `app` = measured at collection; `person` = the person read it off the screen; a version
-  from the tool's own log is under `transcripts[].toolVersions`), `toolsUsed`, `versionsMissing`.
+  from the tool's own log is under `transcripts[].toolVersions`), `toolsUsed`, `versionsMissing`, and `toolsNamed`: the tools in `toolsUsed` that the person named because no chat log showed one.
   `kiroHomeEngine`: `chat.agentEngine` in the home folder's Kiro settings file (`file: false` = no such file). Which of
   the two decides has changed across Kiro CLI versions: on 2.21.1 the project's, on 2.33.1 only the home one
   (measured 2026-10-22: project `v3` alone gave a v2 session; home `v3` with project `v2` gave v3); between them it is
