@@ -311,6 +311,8 @@ import {
   harnessOwnsModelAccess,
   providerAnswerIsTheSession,
   sessionModelAccessFact,
+  aidlcSkillRel,
+  aidlcSkillsDirs,
   availableScopeNames,
   CODEX_HOOK_TRUST_UNMET,
   codexHookTrustStep,
@@ -350,10 +352,13 @@ import {
   readPluginSelection,
   readConfigDiagnosticRecords,
   reconcileProviderActions,
+  refreshedTablesRel,
   runtimeFixesNeeded,
   runtimeIssues,
+  SHARED_SURFACE_DIRS,
   stripLegacyClaudeModelAliases,
   trustStatus,
+  unbaselinedGenerated,
   workspaceShellRefreshCommand,
   type ConfigDiagnosticOverrides,
   type ConfigDiagnosticRecords,
@@ -4927,19 +4932,6 @@ function runtimeGenerated(
   return regenerated.has(normalized) || unbaselinedGenerated(harnessDir).includes(normalized);
 }
 
-// Written by the engine from project state, so never recorded as shipped: a
-// refresh writes the staged copy over whatever is there, and never reports it
-// as a local change. Kiro IDE's steering file carries the project's memory text
-// (aidlc-includes.ts kiroIdeSteering).
-function unbaselinedGenerated(harnessDir: string): string[] {
-  return [
-    `${harnessDir}/tools/data/harness.json`,
-    `${harnessDir}/tools/data/stage-graph.json`,
-    `${harnessDir}/tools/data/scope-grid.json`,
-    ...(harnessDir === ".kiro" ? [KIRO_IDE_STEERING] : []),
-  ];
-}
-
 function resetProjectionCaches(): void {
   __resetGraphCache();
   _resetHarnessDataForTests();
@@ -5261,11 +5253,6 @@ function earlierSkillTablesOnly(
   }
   return ownedHash(Buffer.from(restored, "utf-8"), [priorHash]).hash === priorHash;
 }
-
-// The folders outside the harness dir where a harness keeps the skills and
-// agents the engine generates and a plugin composes: Codex's `.agents/`, and
-// Copilot's `.github/` (its skills and agent files both live there).
-const SHARED_SURFACE_DIRS = [".agents", ".github"] as const;
 
 function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
   return rel.startsWith(`${harnessDir}/aidlc-common/stages/`) ||
@@ -7335,16 +7322,16 @@ function prepareRefreshSource(
 
     // The harness's skills folder: inside the harness dir, or one of the shared
     // folders (Codex's .agents/, Copilot's .github/).
-    const skillsDirs = [join(stagedHarness, "skills"), ...SHARED_SURFACE_DIRS.map((dir) => join(root, dir, "skills"))];
-    const skillPath = skillsDirs.map((dir) => join(dir, "aidlc", "SKILL.md")).find((path) => existsSync(path)) ??
-      join(stagedHarness, "skills", "aidlc", "SKILL.md");
+    const skillsDirs = aidlcSkillsDirs(descriptor.harnessDir).map((dir) => join(root, dir));
     // The generated tables live beside the skill, out of its body.
-    const tablesPath = join(dirname(skillPath), "tables.md");
-    if (existsSync(tablesPath)) {
-      const skillRel = relative(root, skillPath).replaceAll("\\", "/");
+    const staged = (rel: string): boolean => existsSync(join(root, rel));
+    const tablesRel = refreshedTablesRel(descriptor.harnessDir, staged);
+    if (tablesRel !== undefined) {
+      const tablesPath = join(root, tablesRel);
+      const skillRel = aidlcSkillRel(descriptor.harnessDir, staged);
       if (earlierSkillTablesOnly(
         join(projectDir, skillRel),
-        join(sourceRoot, relative(root, tablesPath)),
+        join(sourceRoot, tablesRel),
         prior?.files[skillRel],
       )) {
         regenerated.add(skillRel);
@@ -7363,7 +7350,7 @@ function prepareRefreshSource(
       writeFileSync(tablesPath, generated);
       // Written from the compiled graph, as stage-graph.json is, so a plugin
       // compose or a selection that rewrote it is not the person's edit.
-      regenerated.add(relative(root, tablesPath).replaceAll("\\", "/"));
+      regenerated.add(tablesRel);
     }
     regenerated.add(`${descriptor.harnessDir}/tools/data/stage-graph.json`);
     for (const directory of skillsDirs) {
