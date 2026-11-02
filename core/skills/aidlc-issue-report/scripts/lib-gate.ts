@@ -10,45 +10,118 @@
 // mistake from a log or a record, in the form such values are usually written; it does not try to defeat text
 // written to get past it (a name split by invisible characters or by a reference link).
 // safe.json's audit rows pass only as lib-rows.ts writes them (rowHits). The rest of safe.json: each string, and
-// each key that is data, is one of AI-DLC's words (local/vocab.json), this skill's own words (the literals in its
-// scripts), a label, a time, a version, a count, a public model id or its field's own shape; the skill's own
-// sentences (notes, knownGaps) get the cover's rules.
+// each key that is data, is one of AI-DLC's words (as collect.ts read them, lib-check.ts keptVocab), this skill's own
+// words (the literals in its scripts), a label, a time, a version, a count, a public model id or its field's own
+// shape; a prose field (PROSE_FIELDS) is one of this skill's own sentences or one label standing alone (ownSentence).
 // A refusal names the line or field and the reason, never the value.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, PUBLIC_URL, smallLabel, TOOL_DIRS } from "./redact.ts";
+import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, PUBLIC_URL, redact, smallLabel, TOOL_DIRS, wholeLabel } from "./redact.ts";
 import { isOsLine, isVersion, KERNEL_RELEASE, OWN, PUBLIC_MODEL } from "./lib-shape.ts";
 import { fieldNameOk, isRowLabel, type RowVocab, valueOk } from "./lib-rows.ts";
 
 export type GateContext = {
-  // AI-DLC's words (collect.ts keeps them in local/vocab.json) and this skill's own.
+  // AI-DLC's words (as collect.ts read them from the install) and this skill's own.
   words: Set<string>;
   dict: Dictionary;
-  // The fixed text of AI-DLC's own messages (local/phrases.json), so one can be quoted as it is.
+  // The fixed text of AI-DLC's own messages (read the same way), so one can be quoted as it is.
   phrases?: string[];
   // AI-DLC's words by kind, for the audit rows (lib-rows.ts); without them every row value must be a label.
   rows?: RowVocab;
 };
 export type GateHit = { line: number; reason: string; field?: string };
 
+// This skill's scripts as code: line comments cut first (a `/*` in one, such as a glob, opens nothing), then block
+// comments. Their examples (`~/Clients/Contoso Merger.pdf`) are made-up names, not the skill's words.
+const sources = new Map<string, string[]>();
+function skillCode(dir: string): string[] {
+  const cached = sources.get(dir);
+  if (cached) return cached;
+  const code = readdirSync(dir)
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) =>
+      readFileSync(join(dir, f), "utf8")
+        .split("\n")
+        .filter((l) => !/^\s*\/\//.test(l))
+        .map((l) => l.replace(/\s\/\/\s.*$/, ""))
+        .join("\n")
+        .replace(/\/\*[\s\S]*?\*\//g, ""),
+    );
+  sources.set(dir, code);
+  return code;
+}
+
 // Every string literal in this skill's code: its own enumerations, kinds, labels and fixed words
-// (`kiro (v3: Kiro CLI)`), which are the skill's text, never the person's. Comments are left out: their examples
-// (`~/Clients/Contoso Merger.pdf`) are made-up names, not the skill's words.
+// (`kiro (v3: Kiro CLI)`), which are the skill's text, never the person's.
 const OWN_LITERAL = /"([^"\\\n]{1,120})"|'([^'\\\n]{1,120})'/g;
 export function skillWords(dir = import.meta.dir): Set<string> {
   const words = new Set<string>();
-  for (const f of readdirSync(dir)) {
-    if (!f.endsWith(".ts")) continue;
-    const code = readFileSync(join(dir, f), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .split("\n")
-      .filter((l) => !/^\s*\/\//.test(l))
-      .map((l) => l.replace(/\s\/\/\s.*$/, ""))
-      .join("\n");
-    for (const m of code.matchAll(OWN_LITERAL)) words.add(m[1] ?? m[2]);
-  }
+  for (const code of skillCode(dir)) for (const m of code.matchAll(OWN_LITERAL)) words.add(m[1] ?? m[2]);
   return words;
+}
+
+// This skill's own sentences, for the prose fields of safe.json (PROSE_FIELDS):
+// each string literal of its scripts as written, and each template literal with every `${…}` slot filled by a number,
+// a time, a version, a label or one of the words a field may hold.
+type Sentences = { literals: Set<string>; templates: string[][] };
+const LONG_LITERAL = /"((?:[^"\\\n]|\\.){1,600})"|'((?:[^'\\\n]|\\.){1,600})'/g;
+const TEMPLATE = /`((?:[^`\\]|\\.)*)`/gs;
+const SLOT = /\$\{(?:[^{}]|\{[^{}]*\})*\}/g;
+const sentenceCache = new Map<string, Sentences>();
+function skillSentences(dir = import.meta.dir): Sentences {
+  const cached = sentenceCache.get(dir);
+  if (cached) return cached;
+  const literals = new Set<string>();
+  const templates: string[][] = [];
+  for (const code of skillCode(dir)) {
+    for (const m of code.replace(TEMPLATE, "``").matchAll(LONG_LITERAL)) literals.add((m[1] ?? m[2]).replace(/\\(["'\\])/g, "$1"));
+    for (const m of code.matchAll(TEMPLATE)) {
+      const fixed = m[1].split(SLOT).map((p) => p.replace(/\\(.)/g, "$1"));
+      if (fixed.length < 2 || fixed.join("").replace(/\s+/g, "").length < 10 || /\n/.test(m[1])) continue;
+      templates.push(fixed);
+    }
+  }
+  const s = { literals, templates };
+  sentenceCache.set(dir, s);
+  return s;
+}
+const escapeText = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// The skill's sentences as they can stand in safe.json: as written, and as the redaction writes them with this
+// folder's map (collect.ts and hide.ts run it over safe.json, so a hidden name inside a sentence is its label there).
+// The same rule as the redaction itself, never a second reading of which word a label may stand for.
+type Written = { literals: Set<string>; templates: RegExp[] };
+const writtenCache = new WeakMap<Dictionary, Written>();
+function writtenSentences(dict: Dictionary): Written {
+  const cached = writtenCache.get(dict);
+  if (cached) return cached;
+  const s = skillSentences();
+  const forms = (t: string) => [...new Set([t, redact(t, dict), redact(t, dict, { ids: true })])];
+  const literals = new Set([...s.literals].flatMap(forms));
+  const templates: RegExp[] = [];
+  const seen = new Set<string>();
+  for (const fixed of s.templates) {
+    for (const variant of [fixed, fixed.map((p) => redact(p, dict)), fixed.map((p) => redact(p, dict, { ids: true }))]) {
+      const key = variant.join("\u0000");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      templates.push(new RegExp(`^${variant.map(escapeText).join("(.{1,200}?)")}$`));
+    }
+  }
+  const w = { literals, templates };
+  writtenCache.set(dict, w);
+  return w;
+}
+const TIME_SLOT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?Z$/;
+function slotOk(ctx: GateContext, v: string): boolean {
+  return v.split(/,\s*/).every((p) => /^\d{1,9}$/.test(p) || TIME_SLOT.test(p) || isVersion(p) || known(ctx, p) || wholeLabel(p));
+}
+export function ownSentence(ctx: GateContext, v: string): boolean {
+  // One label standing alone (what a refusal asks to write in place of a value) passes, as it does in any other field.
+  if (wholeLabel(v)) return true;
+  const w = writtenSentences(ctx.dict);
+  if (w.literals.has(v)) return true;
+  return w.templates.some((t) => v.match(t)?.slice(1).every((g) => slotOk(ctx, g)) ?? false);
 }
 
 // Stands in for a label or AI-DLC's message text while the rules read the text, one for each character it covers, so
@@ -390,7 +463,7 @@ function dedupe(hits: GateHit[]): GateHit[] {
   });
 }
 
-// safe.json fields that hold this skill's own sentences: read as text.
+// safe.json fields that hold this skill's own sentences (ownSentence).
 const PROSE_FIELDS = new Set(["notes", "note", "knownGaps", "error", "otherStores"]);
 // Fields with a shape of their own.
 const PATH_FIELDS = new Set(["dir", "exe", "secretRules"]);
@@ -510,12 +583,9 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
     // A count holds up to nine digits; a longer number can be an account or a phone number.
     if (typeof v === "number" && Math.abs(v) >= 1e9) hits.push({ line: n, field: path, reason: "a long number (replace it with <redacted>)" });
     if (typeof v !== "string") return;
-    // The skill's own sentences get the report's rules, unless one is a sentence of this skill as written; a value the
-    // person allowed is for the report only.
-    if (PROSE_FIELDS.has(field) && ctx.words.has(v)) {
-      // one of this skill's fixed sentences
-    } else if (PROSE_FIELDS.has(field)) {
-      for (const h of textHits({ ...ctx, phrases: [] }, v)) hits.push({ line: n, field: path, reason: h.reason });
+    // A prose field passes only as one of this skill's own sentences.
+    if (PROSE_FIELDS.has(field)) {
+      if (!ownSentence(ctx, v)) hits.push({ line: n, field: path, reason: "not one of this skill's own sentences (replace it with <redacted>)" });
     } else if (!atomOk(ctx, v, field)) {
       hits.push({ line: n, field: path, reason: "not one of AI-DLC's words, a label or a known shape (replace it with <redacted>)" });
     }

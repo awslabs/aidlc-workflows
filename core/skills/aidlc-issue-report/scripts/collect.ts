@@ -21,9 +21,9 @@ import {
 } from "./lib-project.ts";
 import { HOST_TOOLS, Labels, Shaper, time, version } from "./lib-shape.ts";
 import { claude, codex, copilotCli, editorStores, kiroV2, kiroV3, type Local, type Summary } from "./lib-transcripts.ts";
-import { fieldName, type Shape, shapeValue, VOCAB_KINDS } from "./lib-rows.ts";
+import { fieldName, type Shape, shapeValue } from "./lib-rows.ts";
 import { loadVocab } from "./lib-vocab.ts";
-import { gateContext } from "./lib-check.ts";
+import { gateContext, keepVocab } from "./lib-check.ts";
 import { flagValue } from "./lib-cli.ts";
 import { safeHits } from "./lib-gate.ts";
 import { buildDictionary, type Dictionary, redactValue, useSecretRules } from "./redact.ts";
@@ -140,11 +140,8 @@ const aidlcNames = new Set([
 const dict: Dictionary = buildDictionary(project, { intents: intentDirs, spaces, units, paths: installPaths, ordinary: aidlcNames });
 dict.secretRulesFrom = secretRules ? secretFrom : null;
 writeFileSync(join(localDir, "redaction-map.json"), JSON.stringify(dict, null, 2));
-// AI-DLC's words, for the check (lib-gate.ts) after this run.
-writeFileSync(join(localDir, "vocab.json"), JSON.stringify([...vocab.words].sort()));
-writeFileSync(join(localDir, "phrases.json"), JSON.stringify([...vocab.phrases].sort()));
-// Which of those words is a stage, a phase, an agent …: the check reads a row's field by its kind (lib-rows.ts).
-writeFileSync(join(localDir, "vocab-kinds.json"), JSON.stringify(Object.fromEntries(VOCAB_KINDS.map((k) => [k, [...vocab[k]].sort()]))));
+// AI-DLC's words as read now, for the check and hide.ts on this folder (lib-check.ts keptVocab).
+keepVocab(out, vocab);
 // A Unit's and an intent's label in safe.json is the dictionary's, so it is the same one the report uses.
 // A Unit or an intent left out of the replacements as an ordinary word (`backend`) keeps the label the map gives it.
 const known = new Map([...dict.entries, ...(dict.skipped ?? [])].filter((e) => e.kind === "unit" || e.kind === "intent").map((e) => [e.value, e.label]));
@@ -320,7 +317,7 @@ writeFileSync(join(localDir, "errors.jsonl"), local.errors.map((p) => JSON.strin
 
 // The check's own reading of safe.json: a hit is a field this collector shaped wrong, named for the agent to
 // replace with `<redacted>` before the check can pass.
-const safeJsonHits = safeHits(gateContext(out, dict), JSON.parse(safeText));
+const safeJsonHits = safeHits(gateContext(vocab, dict), JSON.parse(safeText));
 console.log(
   JSON.stringify(
     {

@@ -10,8 +10,9 @@
 //
 // Usage: hide.ts --out <dir> (--kind <org|customer|product|person|other> --name <value>)…
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { keptVocab } from "./lib-check.ts";
 import { flagValue, refuse, reportFolder } from "./lib-cli.ts";
 import { importSecretRules } from "./lib-project.ts";
 import { type Dictionary, ordinaryWord, redactValue, useSecretRules } from "./redact.ts";
@@ -47,10 +48,8 @@ if (pairs.length === 0) refuse("no --name given");
 
 const dict = JSON.parse(readFileSync(mapPath, "utf8")) as Dictionary;
 useSecretRules(await importSecretRules(dict.secretRulesFrom));
-const vocabPath = join(out, "local", "vocab.json");
-const aidlcParts = new Set(
-  (existsSync(vocabPath) ? (JSON.parse(readFileSync(vocabPath, "utf8")) as string[]) : []).flatMap((w) => w.toLowerCase().split(/[-_ .:/]+/)),
-);
+// AI-DLC's words as collect.ts kept them for this folder, as the check reads them.
+const aidlcParts = new Set([...keptVocab(out).words].flatMap((w) => w.toLowerCase().split(/[-_ .:/]+/)));
 let added = 0;
 let skipped = 0;
 // A name the map hid before this run (the machine's user, a folder, a name added earlier) keeps the label it has.

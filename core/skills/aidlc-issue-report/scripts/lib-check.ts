@@ -5,12 +5,13 @@
 // refused, since parsing keeps only the last value). AI-DLC's own secret rules, when the install has them, run over
 // both as written too. Reports where each hit is and why, never the value.
 
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type GateContext, type GateHit, safeHits, skillWords, textHits } from "./lib-gate.ts";
 import { importSecretRules } from "./lib-project.ts";
 import { type RowVocab, VOCAB_KINDS } from "./lib-rows.ts";
 import { type Dictionary, findSecrets, loadDictionary, useSecretRules } from "./redact.ts";
+import { emptyVocab, type Vocab } from "./lib-vocab.ts";
 
 export const REPORT = "aidlc-issue-report.md";
 // Files the operating system writes into any folder the person opens: not sent, and removed by finish.ts.
@@ -27,29 +28,33 @@ export type CheckResult = {
   missing?: string;
 };
 
-function readList(path: string): string[] {
+// AI-DLC's words as collect.ts read them from the install, kept in the folder's local/ (never sent) for the check and
+// hide.ts: an update or a moved project after collect.ts ran changes nothing for this folder. With none kept, none,
+// and every row value must then be a label.
+const KEPT = ["words", "phrases", ...VOCAB_KINDS] as const;
+export function keepVocab(out: string, v: Vocab): void {
+  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify(Object.fromEntries(KEPT.map((k) => [k, [...v[k]].sort()]))));
+}
+export function keptVocab(out: string): Vocab {
+  const v = emptyVocab();
+  let kept: unknown;
   try {
-    const v = JSON.parse(readFileSync(path, "utf8"));
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    kept = JSON.parse(readFileSync(join(out, "local", "vocab.json"), "utf8"));
   } catch {
-    return [];
+    return v;
   }
+  if (!kept || typeof kept !== "object" || Array.isArray(kept)) return v;
+  for (const k of KEPT) {
+    const list = (kept as Record<string, unknown>)[k];
+    if (Array.isArray(list)) for (const x of list) if (typeof x === "string") v[k].add(x);
+  }
+  return v;
 }
 
-export function gateContext(out: string, dict: Dictionary): GateContext {
-  const aidlcWords = new Set(readList(join(out, "local", "vocab.json")));
-  const words = new Set([...aidlcWords, ...skillWords()]);
-  const phrases = readList(join(out, "local", "phrases.json"));
-  let kinds: Record<string, unknown> = {};
-  try {
-    kinds = JSON.parse(readFileSync(join(out, "local", "vocab-kinds.json"), "utf8")) as Record<string, unknown>;
-  } catch {
-    // no kinds: every row value must then be a label
-  }
-  const kind = (k: string) => new Set(Array.isArray(kinds[k]) ? (kinds[k] as unknown[]).filter((x): x is string => typeof x === "string") : []);
+export function gateContext(vocab: Vocab, dict: Dictionary): GateContext {
   // A row's values are read against AI-DLC's words only, never this skill's own.
-  const rows: RowVocab = { words: aidlcWords, phrases: new Set(phrases), ...Object.fromEntries(VOCAB_KINDS.map((k) => [k, kind(k)])) } as RowVocab;
-  return { words, dict, phrases, rows };
+  const rows: RowVocab = { words: vocab.words, phrases: vocab.phrases, ...Object.fromEntries(VOCAB_KINDS.map((k) => [k, vocab[k]])) } as RowVocab;
+  return { words: new Set([...vocab.words, ...skillWords()]), dict, phrases: [...vocab.phrases], rows };
 }
 
 const STRING_TOKEN = /"(?:[^"\\]|\\.)*"/g;
@@ -58,7 +63,7 @@ export async function checkFolder(out: string): Promise<CheckResult | null> {
   const dict: Dictionary = loadDictionary(join(out, "local", "redaction-map.json"));
   if (dict.entries.length === 0) return null;
   useSecretRules(await importSecretRules(dict.secretRulesFrom));
-  const ctx = gateContext(out, dict);
+  const ctx = gateContext(keptVocab(out), dict);
 
   const hits: Hit[] = [];
   const refused: string[] = [];

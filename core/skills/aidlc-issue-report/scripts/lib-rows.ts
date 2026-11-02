@@ -7,7 +7,7 @@
 // error, a command, a "phase > unit > stage > file" context) keep their fixed text and label what was filled in.
 
 import { HOST_TOOLS } from "./lib-shape.ts";
-import { LABEL, smallLabel } from "./redact.ts";
+import { wholeLabel } from "./redact.ts";
 
 export type RowVocab = {
   words: Set<string>;
@@ -24,19 +24,16 @@ export type RowVocab = {
 
 export type RowValue = string | number | string[];
 
-// The kinds of AI-DLC's words a field is read against; collect.ts keeps them in local/vocab-kinds.json for the check.
+// The kinds of AI-DLC's words a field is read against (lib-vocab.ts reads each from the install).
 export const VOCAB_KINDS = ["stages", "phases", "agents", "scopes", "sensors", "hooks", "tools", "guards"] as const;
 
 // The label kinds a row writes. Fixed: a field's name never becomes a kind.
 export const ROW_KINDS = ["value", "text", "file", "hash", "id", "session", "field", "unit", "intent", "space"] as const;
 export type RowKind = (typeof ROW_KINDS)[number];
 
-// A label as this skill and AI-DLC's redaction write it (redact.ts LABEL: `<custom-unit-3>`, `<unit-2>`, `<user>`,
-// `<project>`), whole and small (redact.ts smallLabel).
-const WHOLE_LABEL = new RegExp(`^(?:${LABEL.source})$`);
-export function isRowLabel(v: string): boolean {
-  return WHOLE_LABEL.test(v) && smallLabel(v);
-}
+// A label as this skill and AI-DLC's redaction write it (`<custom-unit-3>`, `<unit-2>`, `<user>`, `<project>`): redact.ts
+// wholeLabel.
+export const isRowLabel = wholeLabel;
 
 export type Shape = {
   label(kind: RowKind, raw: string): string;
@@ -139,8 +136,8 @@ const TOOL_TOP = new Set([".claude", ".kiro", ".codex", ".copilot", ".cursor", "
 const TOOL_SUB = new Set(["settings", "steering", "skills", "prompts", "agents", "hooks", "tools", "rules", "commands", "data", "aidlc-common"]);
 // File names that have no dot; any other name with none is read as a folder.
 const DOTLESS_FILES = new Set([
-  "Makefile", "Dockerfile", "Containerfile", "Jenkinsfile", "Vagrantfile", "Procfile", "Gemfile", "Rakefile", "Brewfile",
-  "Pipfile", "Justfile", "LICENSE", "NOTICE", "README", "CHANGELOG", "CODEOWNERS", "AUTHORS", "VERSION",
+  "makefile", "dockerfile", "containerfile", "jenkinsfile", "vagrantfile", "procfile", "gemfile", "rakefile", "brewfile",
+  "pipfile", "justfile", "license", "notice", "readme", "changelog", "codeowners", "authors", "version",
 ]);
 // The default space AI-DLC makes; any other space is named by the person.
 const DEFAULT_SPACE = "default";
@@ -185,7 +182,7 @@ function layoutSegment(v: RowVocab, s: Shape, parts: string[], i: number, last: 
   if (last && (((extensionOf(part) || part.startsWith(".")) && v.words.has(part)) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part))) return part;
   const known = s.known(part);
   if (known) return known;
-  if (!part.includes(".") && !DOTLESS_FILES.has(part)) return s.label("unit", part);
+  if (!part.includes(".") && !(last && DOTLESS_FILES.has(part.toLowerCase()))) return s.label("unit", part);
   return fileLabel(s, /^<[^<>/]+>(?:\.[a-z0-9]{1,12})?$/.test(part) ? part : parts.slice(0, i + 1).join("/"));
 }
 const inLayout = (first: string) => first === "aidlc" || first === ".aidlc-engine" || TOOL_TOP.has(first);

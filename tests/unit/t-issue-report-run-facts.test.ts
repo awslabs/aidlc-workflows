@@ -1169,10 +1169,12 @@ test("a Kiro dispatch's model counts only inside the window and before the repor
     timestamp: ts, level: "info", conversationId: "sess_1", requestId: "r", rootConversationId: "sess_1", turnId: "t", rootTurnId: "t",
     message: `invoke_subagent.starting ${JSON.stringify({ subagentId: "aidlc-developer-agent", modelId })}`,
   });
-  writeFileSync(join(logs, "kiro.log"), [dispatch("2026-10-20T00:00:00.000Z", "before-window"), dispatch(at(4), "in-run"), dispatch(at(12), "in-report")].map((l) => JSON.stringify(l)).join("\n"));
+  const untimed = { ...dispatch(at(5), "no-time"), timestamp: undefined };
+  const otherUntimed = { level: "info", conversationId: "sess_1", message: "some other line" };
+  writeFileSync(join(logs, "kiro.log"), [dispatch("2026-10-20T00:00:00.000Z", "before-window"), dispatch(at(4), "in-run"), dispatch("2026-10-29T01:12:00.5Z", "in-report"), untimed, otherUntimed, otherUntimed].map((l) => JSON.stringify(l)).join("\n"));
   const code = `const { kiroV3 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
 const s = kiroV3(${JSON.stringify(project)}, ${Date.parse(at(0))}, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
-console.log(JSON.stringify(s?.subagents["aidlc-developer-agent"]?.models ?? null));`;
+console.log(JSON.stringify({ models: s?.subagents["aidlc-developer-agent"]?.models ?? null, noted: s?.notes.some((n) => n.startsWith("1 dispatch line(s)")) }));`;
   const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
-  expect(JSON.parse(r.stdout)).toEqual({ "in-run": 1 });
+  expect(JSON.parse(r.stdout)).toEqual({ models: { "in-run": 1, "no-time": 1 }, noted: true });
 });

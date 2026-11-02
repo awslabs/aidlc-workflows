@@ -1105,6 +1105,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
   s.tool = cliIds.length && ideCount ? "kiro (v3: Kiro CLI + Kiro IDE)" : cliIds.length ? "kiro (v3: Kiro CLI)" : "kiro (v3: Kiro IDE)";
   s.notes.push(`Kiro surface per session: ${cliIds.length} Kiro CLI, ${ideCount} Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`);
   // Model and effort per dispatched agent from the engine log.
+  let untimedDispatches = 0;
   const logs = join(kiroHome(), "logs");
   for (const run of existsSync(logs) ? readdirSync(logs) : []) {
     const file = join(logs, run, "kiro.log");
@@ -1112,15 +1113,20 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
     for (const l of readLines<KiroLogLine>(file)) {
       const message = l.message;
       if (l.conversationId === undefined || !sessionIds.has(l.conversationId)) continue;
-      // A dispatch line has its own time (measured on Kiro 2026-10-31): outside the window, or in the report's part of
-      // the session, it is not the run's.
-      if (!inWindow(l.timestamp, since, until)) continue;
-      const cut = runUntil.get(l.conversationId);
-      if (cut && l.timestamp >= cut) continue;
       if (typeof message !== "string" || !message.startsWith("invoke_subagent.starting")) continue;
+      // A dispatch line has its own time (measured on Kiro 2026-10-31): outside the window, or in the report's part of
+      // the session, it is not the run's. A line without a readable time counts, as the note below says; a report start
+      // that cannot be read as a time cuts nothing it cannot place.
+      const at = Date.parse(l.timestamp ?? "");
+      if (!Number.isNaN(at)) {
+        if (at < since || at > until) continue;
+        const cut = Date.parse(runUntil.get(l.conversationId) ?? "");
+        if (!Number.isNaN(cut) && at >= cut) continue;
+      }
       try {
         const j = JSON.parse(message.slice(message.indexOf("{"))) as SubagentStart;
         if (typeof j.subagentId !== "string") continue;
+        if (Number.isNaN(at)) untimedDispatches++;
         const a = subagent(s, agentName(j.subagentId));
         if (typeof j.modelId === "string") bump(a.models, `${j.modelId}${j.modelOverride ? OWN : ""}`);
         if (typeof j.effortLevel === "string") bump(a.efforts, `${j.effortLevel}${j.effortOverride ? OWN : ""}`);
@@ -1130,6 +1136,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
     }
   }
   finishRepeats(s, calls);
+  if (untimedDispatches) s.notes.push(`${untimedDispatches} dispatch line(s) in Kiro's engine log had no readable time: counted with the run.`);
   s.notes.push("Kiro records hook runs by name only and a hook's refusal as a denied call with no reason: such a call counts under denials as denied-after-aidlc-hooks when AI-DLC hooks ran right before it (which hook refused is not recorded), else denied-no-reason.");
   s.notes.push("Kiro writes no client version into its session store (measured 2026-10-22, CLI 2.33.1): its version is the one measured at collection time.");
   return s;

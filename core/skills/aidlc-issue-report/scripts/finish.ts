@@ -5,7 +5,7 @@
 // collect's `safe.json` and `local/redaction-map.json`. Without --out, or in
 // any other folder, it refuses and deletes nothing, so a missing flag can never
 // remove a `local/` folder of the person's own. When the check does not pass
-// (lib-check.ts: a hit, a refused file, or no report yet), it prints the check
+// (lib-check.ts: a hit, a refused file, a missing cover or safe.json), it prints the check
 // and deletes nothing: the redaction map in local/ is what the check needs to
 // run again after a fix.
 

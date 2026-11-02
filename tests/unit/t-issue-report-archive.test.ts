@@ -9,6 +9,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { extractArchive, walkFiles } from "../../core/skills/aidlc-issue-report/scripts/lib-archive.ts";
 
+// AI-DLC's words as collect.ts keeps them for the check (local/vocab.json).
+function useWords(out: string, words: string[]) {
+  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify({ words }));
+}
+
 // The AI-DLC secret rules collect.ts would have found in the project's install.
 const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // rules-path
 const SCRIPTS = resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts");
@@ -107,7 +112,7 @@ test.skipIf(process.platform === "win32")("a link or a folder in the report fold
 
 test("a value or a key in safe.json that is not AI-DLC's, the skill's, a label or a known shape is refused", () => {
   const out = reportFolder();
-  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify(["complete", "STAGE_STARTED"]));
+  useWords(out, ["complete", "STAGE_STARTED"]);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ intents: [{ status: "complete" }], audit: { counts: { STAGE_STARTED: 1, "<custom-event-1>": 2 } } }));
   expect(check(out).status).toBe(0);
   for (const json of ['{"intents": [{"status": "Contoso"}]}', '{"Contoso": {}}', '{"Contoso": []}', '{"audit": {"counts": {"Contoso": 1}}}', '{"password=hunter22x": {}}']) {

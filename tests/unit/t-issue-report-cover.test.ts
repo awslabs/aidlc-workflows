@@ -7,6 +7,11 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// AI-DLC's words as collect.ts keeps them for the check (local/vocab.json).
+function useWords(out: string, words: string[]) {
+  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify({ words }));
+}
+
 const SCRIPTS = resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts");
 // The AI-DLC install whose own rules the skill borrows (secret rules, file match, copied shards).
 const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // rules-path
@@ -16,9 +21,7 @@ function folder(safe: object): string {
   mkdirSync(join(out, "local"));
   writeFileSync(join(out, "local", "redaction-map.json"), JSON.stringify({ entries: [{ value: "/tmp/p", label: "<project>", kind: "path" }], secretRulesFrom: RULES }));
   writeFileSync(join(out, "safe.json"), JSON.stringify(safe));
-  // AI-DLC's words as collect.ts keeps them for the check.
-  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify(["UNIT_STARTED", "code-generation", "construction"]));
-  writeFileSync(join(out, "local", "vocab-kinds.json"), JSON.stringify({ stages: ["code-generation"], phases: ["construction"] }));
+  useWords(out, ["UNIT_STARTED"]);
   return out;
 }
 const run = (script: string, out: string) => spawnSync(process.execPath, [join(SCRIPTS, script), "--out", out], { encoding: "utf8" });
@@ -29,9 +32,9 @@ test("the cover names a tool the person named, counts each label once, and passe
     environment: { os: "darwin 25.6.0 arm64", tools: { "kiro-ide": { version: "1.4.13", source: "person" } }, toolsUsed: ["kiro-ide"], toolsNamed: ["kiro-ide"], versionsMissing: [] },
     trees: [],
     intents: [],
-    audit: { rows: [{ seq: 1, ts: null, event: "UNIT_STARTED", intent: "<intent-1>", fields: [["Unit", "<unit-1>"], ["Context", "construction > <custom-unit-1> > code-generation"]] }] },
+    audit: { rows: [{ seq: 1, ts: null, event: "UNIT_STARTED", intent: "<intent-1>", fields: [["Unit", "<unit-1>"], ["Context", "<custom-unit-2> > <custom-unit-1>"]] }] },
     transcripts: [],
-    doctor: { ran: false, findings: [], note: "skipped" },
+    doctor: { ran: false, findings: [], note: "skipped (--no-doctor)" },
     hooks: { drops: [] },
     knownGaps: [],
   });
@@ -39,7 +42,7 @@ test("the cover names a tool the person named, counts each label once, and passe
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
   expect(cover).toContain("- kiro-ide: 1.4.13 (from the person) (named by the person; no chat log of it was read)");
   // `<unit-1>` (the redaction map's) and `<custom-unit-1>` (a row's) are two Units.
-  expect(cover).toContain("- unit: 2");
+  expect(cover).toContain("- unit: 3");
   const check = run("check.ts", out);
   expect([check.status, JSON.parse(check.stdout).hits]).toEqual([0, []]);
 });

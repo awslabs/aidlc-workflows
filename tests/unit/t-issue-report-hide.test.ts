@@ -8,6 +8,11 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// AI-DLC's words as collect.ts keeps them for the check (local/vocab.json).
+function useWords(out: string, words: string[]) {
+  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify({ words }));
+}
+
 const SCRIPTS = resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts");
 // The AI-DLC secret rules collect.ts would have found in the project's install.
 const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // rules-path
@@ -42,7 +47,10 @@ test("hidden names leave safe.json and are caught in the report", () => {
   const c = bun("check.ts", ["--out", out]);
   expect(c.status).toBe(1);
   expect(c.stdout).not.toContain("contoso");
-  expect(JSON.parse(c.stdout).hits).toEqual([{ file: "aidlc-issue-report.md", line: 1, reason: "a name in the redaction map (write <customer-1>)" }]);
+  // The note itself is not one of the skill's sentences, which the check refuses on its own; here only the cover counts.
+  expect(JSON.parse(c.stdout).hits.filter((h: { file: string }) => h.file === "aidlc-issue-report.md")).toEqual([
+    { file: "aidlc-issue-report.md", line: 1, reason: "a name in the redaction map (write <customer-1>)" },
+  ]);
 });
 
 test("refuses a folder collect.ts did not make", () => {
@@ -63,7 +71,7 @@ test("without AI-DLC's secret rules the check still refuses a credential by its 
 
 test("a one-word name that is also an ordinary word or part of AI-DLC's words is not hidden, and says so", () => {
   const out = reportFolder();
-  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify(["BOLT_FAILED", "units-generation"]));
+  useWords(out, ["BOLT_FAILED", "units-generation"]);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
   const r = JSON.parse(bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Bolt", "--kind", "product", "--name", "Units", "--kind", "person", "--name", "Will"]).stdout);
   expect(r).toMatchObject({ ok: true, added: 0, notHidden: 3 });
@@ -82,7 +90,7 @@ test("a hidden name that is a key of a data map in safe.json is replaced too", (
 
 test("a name the person hid that is only part of AI-DLC's words is refused in the report, and safe.json keeps AI-DLC's word", () => {
   const out = reportFolder();
-  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify(["acme-aidlc-plugins", "BOLT_FAILED"]));
+  useWords(out, ["acme-aidlc-plugins", "BOLT_FAILED"]);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
   const r = JSON.parse(bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Acme"]).stdout);
   expect(r.ok).toBe(true);

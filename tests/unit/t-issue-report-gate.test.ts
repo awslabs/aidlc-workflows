@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type GateContext, safeHits, skillWords, textHits } from "../../core/skills/aidlc-issue-report/scripts/lib-gate.ts";
+import { type GateContext, ownSentence, safeHits, skillWords, textHits } from "../../core/skills/aidlc-issue-report/scripts/lib-gate.ts";
 import { importSecretRules } from "../../core/skills/aidlc-issue-report/scripts/lib-project.ts";
 import { type Dictionary, redact, useSecretRules } from "../../core/skills/aidlc-issue-report/scripts/redact.ts";
 
@@ -134,6 +134,47 @@ test("the skill's own sentences in safe.json pass the report's rules", () => {
   const sentences = [...readFileSync(join(scripts, "collect.ts"), "utf8").matchAll(/^\s*"([A-Z][^"\n]{20,})",$/gm)].map((m) => m[1]);
   expect(sentences.length).toBeGreaterThan(3);
   for (const s of sentences) expect([s, reasons(s)]).toEqual([s, []]);
+});
+
+describe("a prose field holds only this skill's own sentences", () => {
+  test("every note the scripts write as a plain sentence, and every known gap, is one of its own sentences", () => {
+    const dir = join(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts");
+    const c = ctx();
+    const written: string[] = [];
+    for (const f of ["collect.ts", "lib-transcripts.ts", "lib-audit.ts"]) {
+      const code = readFileSync(join(dir, f), "utf8");
+      for (const m of code.matchAll(/notes\.push\("((?:[^"\\]|\\.)+)"\)/g)) written.push(m[1].replace(/\\(.)/g, "$1"));
+      for (const m of code.matchAll(/note(?: \|\|)?= "((?:[^"\\]|\\.)+)"/g)) written.push(m[1].replace(/\\(.)/g, "$1"));
+    }
+    const gaps = readFileSync(join(dir, "collect.ts"), "utf8").match(/knownGaps: \[([\s\S]*?)\],/)?.[1] ?? "";
+    for (const m of gaps.matchAll(/"((?:[^"\\]|\\.)+)"/g)) written.push(m[1].replace(/\\(.)/g, "$1"));
+    expect(written.length).toBeGreaterThan(10);
+    expect(written.filter((w) => !ownSentence(c, w))).toEqual([]);
+  });
+  test("a sentence as the redaction wrote it with the folder's map is still one; a label it did not write is not", () => {
+    const gap = "VS Code Copilot Chat and Cursor chat stores are not read by this version.";
+    const hid = (value: string) => ctx({ entries: [{ value, label: "<product-1>", kind: "named" }] });
+    expect(ownSentence(hid("Cursor"), gap.replace("Cursor", "<product-1>"))).toBe(true);
+    expect(ownSentence(hid("version"), gap.replace("version", "<product-1>"))).toBe(true);
+    expect(ownSentence(ctx(), gap.replace("Cursor", "<product-1>"))).toBe(false);
+    expect(ownSentence(hid("Cursor"), gap.replace("Cursor", "<contoso-merger>"))).toBe(false);
+    expect(ownSentence(hid("Cursor"), gap.replace("Cursor", "<id:123456789012345>"))).toBe(false);
+  });
+  test("a fixed sentence and a sentence with its slots filled pass; a name in a slot or any other text does not", () => {
+    const c = { ...ctx(), words: new Set([...ctx().words, "since"]) };
+    expect(safeHits(c, { doctor: { note: "skipped (--no-doctor)" } })).toEqual([]);
+    expect(safeHits(c, { window: { notes: ["--since was not a time (ISO with Z, e.g. 2026-10-17T08:00:00Z); left out"] } })).toEqual([]);
+    expect(safeHits(c, { transcripts: [{ notes: ["Kiro surface per session: 2 Kiro CLI, 0 Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder)."] }] })).toEqual([]);
+    expect(safeHits(c, { transcripts: [{ notes: ["Kiro surface per session: Contoso Kiro CLI, 0 Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder)."] }] }).length).toBe(1);
+    expect(safeHits(c, { doctor: { note: "doctor could not run for Contoso" } }).length).toBe(1);
+    expect(safeHits(c, { knownGaps: ["Ask Kim at Contoso about the run"] }).length).toBe(1);
+    // What the refusal asks to write passes, so the check can always be met.
+    expect(safeHits(c, { knownGaps: ["<redacted>", "<redacted-token>", "<customer-1>"], doctor: { note: "<redacted>" }, transcripts: [{ error: "<redacted>" }] })).toEqual([]);
+    expect(safeHits(c, { knownGaps: ["x <redacted>", "<redacted> Contoso", "<contoso>", "\uE000\uE000", "<user><host><project>"] }).length).toBe(5);
+    const surface = (slot: string) => `Kiro surface per session: ${slot} Kiro CLI, 0 Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`;
+    expect(safeHits(c, { transcripts: [{ notes: [surface("<custom-value-1>")] }] })).toEqual([]);
+    expect(safeHits(c, { transcripts: [{ notes: [surface("\uE000\uE000"), surface("<user><host>")] }] }).length).toBe(2);
+  });
 });
 
 describe("shapes the round-11 reviews found", () => {

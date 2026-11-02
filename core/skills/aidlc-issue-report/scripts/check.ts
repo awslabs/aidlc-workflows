@@ -1,5 +1,5 @@
-// The check before anything is handed over (lib-check.ts). Exit 1 when anything is found, a file is refused or
-// the report is not written yet.
+// The check before anything is handed over (lib-check.ts). Exit 1 when anything is found, a file is refused, or the
+// cover or safe.json is missing.
 //
 // Usage: check.ts --out <dir>
 

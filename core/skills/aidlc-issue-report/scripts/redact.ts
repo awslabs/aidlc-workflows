@@ -40,6 +40,13 @@ export function smallLabel(label: string): boolean {
   return !serial || serial.length <= (label.startsWith("<custom-") ? 6 : 4);
 }
 
+// One label, whole and small: what a value replaced by a label is. lib-rows.ts (row values) and lib-gate.ts (prose
+// sentences and their slots) read a label by it.
+const ONE_LABEL = new RegExp(`^(?:${LABEL.source})$`);
+export function wholeLabel(v: string): boolean {
+  return ONE_LABEL.test(v) && smallLabel(v);
+}
+
 // Too short or too generic to replace without wrecking the text.
 const GENERIC = new Set([
   "user", "users", "admin", "administrator", "root", "home", "dev", "test", "main", "work", "src", "app",

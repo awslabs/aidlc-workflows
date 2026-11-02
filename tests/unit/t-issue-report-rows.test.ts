@@ -145,6 +145,12 @@ describe("what the rule wrote reads back as it was", () => {
     expect(out.split("/").pop()).toMatch(/^<custom-file-\d+>$/);
     expect(valueOk(v, "ARTIFACT_UPDATED", "File", out)).toBe(true);
   });
+  test("a well-known file name is read in any case at the end, and a folder of that name in the middle is a folder", () => {
+    const v = vocab();
+    const s = shape();
+    expect(String(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/u1/makefile")).split("/").pop()).toMatch(/^<custom-file-\d+>$/);
+    expect(String(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/VERSION/notes.md")).split("/").at(-2)).toMatch(/^<custom-unit-\d+>$/);
+  });
   test("two files of one name in two folders are two files", () => {
     const v = vocab();
     const s = shape();
