@@ -19,6 +19,7 @@ const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // r
 function folder(safe: object): string {
   const out = mkdtempSync(join(tmpdir(), "cover-"));
   mkdirSync(join(out, "local"));
+  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify({ words: [] }));
   writeFileSync(join(out, "local", "redaction-map.json"), JSON.stringify({ entries: [{ value: "/tmp/p", label: "<project>", kind: "path" }], secretRulesFrom: RULES }));
   writeFileSync(join(out, "safe.json"), JSON.stringify(safe));
   useWords(out, ["UNIT_STARTED"]);

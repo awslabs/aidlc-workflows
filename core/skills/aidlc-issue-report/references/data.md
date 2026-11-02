@@ -15,6 +15,7 @@ two folders are unrelated.
 |---|---|
 | `unit`, `intent`, `space` | a Unit's, an intent's or a space's name (`<unit-N>`, `<intent-N>` are the same, from the redaction map) |
 | `file` | a project file, by its path; a common extension is kept beside it (`.ts`, `.md`) |
+| `dir` | a folder inside AI-DLC's or an AI tool's own folders that is not a Unit's, an intent's or a space's |
 | `text` | anything a person or an agent wrote: a reply, a request, feedback, an agent's message, a question's option |
 | `value` | a word in a field that holds names, which is not AI-DLC's (a plugin's stage, an unknown status) |
 | `hash`, `id`, `session` | a digest or fingerprint, a record or call id, a session id (the same session id in `audit` and `transcripts`) |

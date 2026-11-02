@@ -41,6 +41,7 @@ test.skipIf(process.platform === "win32")("walking a folder does not follow a li
 function reportFolder(): string {
   const out = mkdtempSync(join(tmpdir(), "archive-check-"));
   mkdirSync(join(out, "local"));
+  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify({ words: [] }));
   writeFileSync(join(out, "local", "redaction-map.json"), JSON.stringify({ entries: [{ value: "/tmp/p", label: "<project>", kind: "path" }], secretRulesFrom: RULES }));
   writeFileSync(join(out, "safe.json"), "{}\n");
   writeFileSync(join(out, "aidlc-issue-report.md"), "# AI-DLC issue report\n\nNothing looked wrong.\n");
@@ -150,4 +151,14 @@ test("a folder whose safe.json is missing does not pass", () => {
   const { status, result } = check(out);
   expect(status).toBe(1);
   expect(result.missing).toBe("safe.json is missing: put back the one collect.ts wrote");
+});
+
+test("a folder whose kept words are gone asks for collect.ts again; an earlier plain list of words still reads", () => {
+  const out = reportFolder();
+  rmSync(join(out, "local", "vocab.json"));
+  const gone = check(out);
+  expect([gone.status, gone.result.missing]).toEqual([1, expect.stringContaining("run collect.ts again")]);
+  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify(["complete"]));
+  writeFileSync(join(out, "safe.json"), JSON.stringify({ intents: [{ status: "complete" }] }));
+  expect(check(out).status).toBe(0);
 });

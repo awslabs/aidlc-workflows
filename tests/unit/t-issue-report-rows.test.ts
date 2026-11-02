@@ -149,7 +149,7 @@ describe("what the rule wrote reads back as it was", () => {
     const v = vocab();
     const s = shape();
     expect(String(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/u1/makefile")).split("/").pop()).toMatch(/^<custom-file-\d+>$/);
-    expect(String(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/VERSION/notes.md")).split("/").at(-2)).toMatch(/^<custom-unit-\d+>$/);
+    expect(String(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/VERSION/notes.md")).split("/").at(-2)).toMatch(/^<custom-dir-\d+>$/);
   });
   test("two files of one name in two folders are two files", () => {
     const v = vocab();
@@ -158,18 +158,40 @@ describe("what the rule wrote reads back as it was", () => {
     const b = shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/u2/notes.md");
     expect(String(a).split("/").pop()).not.toBe(String(b).split("/").pop());
   });
-  test("a name in AI-DLC's path is labelled by its own text, the same wherever it stands", () => {
+  test("a Unit's name in AI-DLC's path is the Unit's label wherever it stands; another name is a folder before the end and a file at it", () => {
     const v = vocab();
-    const s = shape();
+    const s = { ...shape(), known: (raw: string) => (raw === "billing" ? "<unit-1>" : undefined) };
     const end = shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/billing");
     const middle = shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/billing/plan.md");
-    expect(String(middle).startsWith(`${end}/`)).toBe(true);
-    expect(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/billing")).toBe(
-      "aidlc/spaces/default/intents/<custom-intent-1>/construction/<custom-unit-1>",
+    expect(String(end).endsWith("/construction/<unit-1>")).toBe(true);
+    expect(String(middle)).toMatch(/\/construction\/<unit-1>\/<custom-file-\d+>\.md$/);
+    const t = shape();
+    expect(shapeValue(v, t, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/notes")).toBe(
+      "aidlc/spaces/default/intents/<custom-intent-1>/construction/<custom-file-1>",
     );
-    expect(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/inception/requirements-analysis/requirements.md")).toBe(
+    expect(shapeValue(v, t, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/notes/plan.md")).toBe(
+      "aidlc/spaces/default/intents/<custom-intent-1>/construction/<custom-dir-1>/<custom-file-2>.md",
+    );
+    expect(shapeValue(v, t, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/inception/requirements-analysis/requirements.md")).toBe(
       "aidlc/spaces/default/intents/<custom-intent-1>/inception/requirements-analysis/requirements.md",
     );
+  });
+
+});
+
+describe("a gate's check states", () => {
+  test("each entry keeps its check, its result and AI-DLC's layout; a value of another shape is one label", () => {
+    const v = vocab();
+    const s = shape();
+    const raw = "required-sections@aidlc/spaces/default/intents/261022-x/inception/requirements-analysis/requirements.md=passed; traceability@aidlc/spaces/default/intents/261022-x/construction/u1/plan.md=failed(2) [detail: aidlc/spaces/default/intents/261022-x/.aidlc-engine/sensors/code-generation/required-sections-1a2b3c4d.md]; +3 more";
+    const out = String(shapeValue(v, s, "STAGE_AWAITING_APPROVAL", "Sensor State", raw));
+    expect(out.split("; ").map((e) => e.replace(/@.*=/, "@=").replace(/ \[detail: .*\]/, " [detail]"))).toEqual(["required-sections@=passed", "traceability@=failed(2) [detail]", "+3 more"]);
+    expect(out).not.toContain("261022-x");
+    expect(valueOk(v, "STAGE_AWAITING_APPROVAL", "Sensor State", out)).toBe(true);
+    expect(shapeValue(v, s, "STAGE_AWAITING_APPROVAL", "Sensor State", "none")).toBe("none");
+    const plugin = String(shapeValue(v, s, "STAGE_AWAITING_APPROVAL", "Sensor State", "plugin-check@aidlc/spaces/default/intents/x/construction/u1/plan.md=passed"));
+    expect([plugin.startsWith("<custom-value-"), valueOk(v, "STAGE_AWAITING_APPROVAL", "Sensor State", plugin)]).toEqual([true, true]);
+    expect(shapeValue(v, s, "STAGE_AWAITING_APPROVAL", "Sensor State", "required-sections looked fine to Kim")).toMatch(/^<custom-text-\d+>$/);
   });
 });
 
@@ -181,7 +203,7 @@ describe("paths", () => {
       "aidlc/spaces/default/intents/<custom-intent-1>/inception/requirements-analysis/requirements.md",
     );
     expect(shapeValue(v, s, "ARTIFACT_CREATED", "File", "aidlc/spaces/acme-team/intents/x/construction/u1/notes.md")).toBe(
-      "aidlc/spaces/<custom-space-1>/intents/<custom-intent-2>/construction/<custom-unit-1>/<custom-file-1>.md",
+      "aidlc/spaces/<custom-space-1>/intents/<custom-intent-2>/construction/<custom-dir-1>/<custom-file-1>.md",
     );
     expect(shapeValue(v, s, "REVIEW_COMPLETED", "Review File", ".aidlc-engine/reviews/code-generation/stage/aac1a74fe7dc7bbc/1.e9adff770ddb3ca88e6a635ed47dfdb9.review.md")).toBe(
       ".aidlc-engine/reviews/code-generation/stage/<custom-hash-1>/1.<custom-hash-2>.review.md",
@@ -231,17 +253,18 @@ describe("the check refuses a raw value in every kind of field", () => {
 // Producer and check agree, and nothing planted gets through: rows made of AI-DLC's words, ordinary words the list
 // holds and planted names, through the rule, always pass the check and never carry a planted name.
 describe("what the rule writes always passes the check, and carries no planted name", () => {
-  const NAMES = ["Unit", "Stage", "Person Reply", "File", "Context", "Error", "Command", "Options", "Details", "Status", "Exit Code", "Source", "Target", "Session", "Mystery Field", "Changed"];
+  const NAMES = ["Unit", "Stage", "Person Reply", "File", "Context", "Error", "Command", "Options", "Details", "Status", "Exit Code", "Source", "Target", "Session", "Mystery Field", "Changed", "Sensor State"];
   const PLANTED = ["ContosoPay", "zorbleq", "acme-ledger", "kimjiwoo", "Project Falcon", "481516"];
-  const PIECES = [...PLANTED, "billing", "feature", "code-generation", "construction", "typed", "src/", "aidlc/spaces/default/intents/", "Refusing to complete unit \"", "\"", " > ", ", ", ".ts", "--unit ", "aidlc-log engine log review ", "Q1: A", "aidlc", ".claude", "--foo=", "x ", "<repo>", "<user>", " (and 3 more)"];
+  const PIECES = [...PLANTED, "billing", "feature", "code-generation", "construction", "typed", "src/", "aidlc/spaces/default/intents/", "Refusing to complete unit \"", "\"", " > ", ", ", ".ts", "--unit ", "aidlc-log engine log review ", "Q1: A", "aidlc", ".claude", "--foo=", "x ", "<repo>", "<user>", " (and 3 more)", "required-sections@", "=passed", "; ", "=failed(2) [detail: ", "]"];
   let seed = 7;
   const rnd = (n: number) => {
     seed = (seed * 1103515245 + 12345) % 2147483648;
     return seed % n;
   };
-  test("4,000 seeded fields", () => {
+  test("4,000 seeded fields from each of three seeds", () => {
     const v = vocab();
-    for (let i = 0; i < 4000; i++) {
+    for (let i = 0; i < 12000; i++) {
+      if (i % 4000 === 0) seed = [7, 11, 13][i / 4000];
       const s = shape();
       const name = NAMES[rnd(NAMES.length)];
       const raw = Array.from({ length: 1 + rnd(5) }, () => PIECES[rnd(PIECES.length)]).join("");
@@ -249,9 +272,10 @@ describe("what the rule writes always passes the check, and carries no planted n
       const out = shapeValue(v, s, event, name, raw);
       const shownName = fieldName(v, s, name);
       expect([name, raw, out, valueOk(v, event, shownName, out)]).toEqual([name, raw, out, true]);
-      for (const p of PLANTED) expect([raw, flat(out).includes(p)]).toEqual([raw, false]);
-      // A raw value that is not what the rule writes is refused, unless it is what the rule writes.
-      expect([raw, valueOk(v, event, shownName, raw) && JSON.stringify(out) !== JSON.stringify(raw)]).toEqual([raw, false]);
+      // A number field keeps AI-DLC's own number (an exit code, a duration), so a planted number may stay there.
+      for (const p of PLANTED) if (!(name === "Exit Code" && typeof out === "number")) expect([raw, flat(out).includes(p)]).toEqual([raw, false]);
+      // A raw value the check passes as it stands carries no planted name either.
+      if (valueOk(v, event, shownName, raw)) for (const p of PLANTED) expect([raw, raw.includes(p)]).toEqual([raw, false]);
     }
   });
 });

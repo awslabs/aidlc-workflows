@@ -43,7 +43,9 @@ export function keptVocab(out: string): Vocab {
   } catch {
     return v;
   }
-  if (!kept || typeof kept !== "object" || Array.isArray(kept)) return v;
+  // An earlier collect.ts kept a plain list of words: they read as words, with no kinds (stages, agents …) known.
+  if (Array.isArray(kept)) kept = { words: kept };
+  if (!kept || typeof kept !== "object") return v;
   for (const k of KEPT) {
     const list = (kept as Record<string, unknown>)[k];
     if (Array.isArray(list)) for (const x of list) if (typeof x === "string") v[k].add(x);
@@ -64,6 +66,7 @@ export async function checkFolder(out: string): Promise<CheckResult | null> {
   if (dict.entries.length === 0) return null;
   useSecretRules(await importSecretRules(dict.secretRulesFrom));
   const ctx = gateContext(keptVocab(out), dict);
+  const hasVocab = existsSync(join(out, "local", "vocab.json"));
 
   const hits: Hit[] = [];
   const refused: string[] = [];
@@ -123,10 +126,16 @@ export async function checkFolder(out: string): Promise<CheckResult | null> {
     }
   }
   return {
-    ok: hits.length === 0 && refused.length === 0 && hasReport && hasSafe,
+    ok: hits.length === 0 && refused.length === 0 && hasReport && hasSafe && hasVocab,
     checked,
     hits,
     ...(refused.length ? { refused, refusedWhy: `only ${REPORT} and safe.json are sent: move anything else out of the folder` } : {}),
-    ...(hasReport ? (hasSafe ? {} : { missing: "safe.json is missing: put back the one collect.ts wrote" }) : { missing: `${REPORT} is not written yet` }),
+    ...(!hasSafe
+      ? { missing: "safe.json is missing: put back the one collect.ts wrote" }
+      : !hasVocab
+        ? { missing: "local/vocab.json is missing (the words collect.ts read): run collect.ts again" }
+        : hasReport
+          ? {}
+          : { missing: `${REPORT} is not written yet` }),
   };
 }

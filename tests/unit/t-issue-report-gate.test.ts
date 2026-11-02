@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type GateContext, ownSentence, safeHits, skillWords, textHits } from "../../core/skills/aidlc-issue-report/scripts/lib-gate.ts";
+import { fills, type GateContext, ownSentence, safeHits, scanCode, skillWords, textHits } from "../../core/skills/aidlc-issue-report/scripts/lib-gate.ts";
 import { importSecretRules } from "../../core/skills/aidlc-issue-report/scripts/lib-project.ts";
 import { type Dictionary, redact, useSecretRules } from "../../core/skills/aidlc-issue-report/scripts/redact.ts";
 
@@ -136,6 +136,42 @@ test("the skill's own sentences in safe.json pass the report's rules", () => {
   for (const s of sentences) expect([s, reasons(s)]).toEqual([s, []]);
 });
 
+describe("this skill's own code, read as code", () => {
+  test("a backtick in a string, a quote in a regex and a backtick in a comment open nothing", () => {
+    const code = [
+      'const a = "a `tick` inside";',
+      "const re = /\"(?:x)\"/g; // a `comment` with a backtick",
+      "/* a block with ` and \" */ const b = 'plain';",
+      // A template literal as source text (`$\{` writes its slots without opening one here).
+      `s.notes.push(\`Kiro saw $\{n} session(s) in $\{"the run"}.\`);`,
+    ].join("\n");
+    const lits = scanCode(code);
+    expect(lits.filter((l) => !l.template).map((l) => (l.template ? "" : l.text))).toEqual(["a `tick` inside", "plain", "the run"]);
+    expect(lits.filter((l) => l.template).map((l) => (l.template ? l.parts : []))).toEqual([["Kiro saw ", " session(s) in ", "."]]);
+  });
+  test("a division after an indented line, after x++ or after .of is not a regex", () => {
+    const lits = scanCode("const r = total\n        / count; const s = 'kept';\nconst t = a++ / 2; const u = 'also';\nconst w = y.of / 2; const z = 'third';");
+    expect(lits.map((l) => (l.template ? "" : l.text))).toEqual(["kept", "also", "third"]);
+  });
+  test("a regex after a keyword such as of, or after a compound assignment, is a regex", () => {
+    expect(scanCode("for (const m of /a'b/g.exec(s)) {}; const q = 'x';").map((l) => (l.template ? "" : l.text))).toEqual(["x"]);
+    expect(scanCode("s += /a'b/.source; const q = 'x';").map((l) => (l.template ? "" : l.text))).toEqual(["x"]);
+    expect(scanCode("return /a'b/.test(v) ? 'yes' : 'no';").map((l) => (l.template ? "" : l.text))).toEqual(["yes", "no"]);
+  });
+  test("one fixed part is the whole sentence; a slot holds one line", () => {
+    expect(fills("seen", ["seen"], () => true)).toBe(true);
+    expect(fills("seenundefined", ["seen"], () => true)).toBe(false);
+    expect(fills("a\nb done", ["", " done"], () => true)).toBe(false);
+  });
+  test("a template's slots may be empty or hold the text of the next fixed part; every placing is tried", () => {
+    const ok = (slot: string) => slot === "" || /^[a-z ]+$/.test(slot);
+    expect(fills("seen  done", ["seen ", " done"], ok)).toBe(true);
+    expect(fills("seen a done b done", ["seen ", " done"], ok)).toBe(true);
+    expect(fills("a b c", ["", "", "", ""], ok)).toBe(true);
+    expect(fills("seen 42 done", ["seen ", " done"], ok)).toBe(false);
+  });
+});
+
 describe("a prose field holds only this skill's own sentences", () => {
   test("every note the scripts write as a plain sentence, and every known gap, is one of its own sentences", () => {
     const dir = join(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts");
@@ -170,10 +206,18 @@ describe("a prose field holds only this skill's own sentences", () => {
     expect(safeHits(c, { knownGaps: ["Ask Kim at Contoso about the run"] }).length).toBe(1);
     // What the refusal asks to write passes, so the check can always be met.
     expect(safeHits(c, { knownGaps: ["<redacted>", "<redacted-token>", "<customer-1>"], doctor: { note: "<redacted>" }, transcripts: [{ error: "<redacted>" }] })).toEqual([]);
-    expect(safeHits(c, { knownGaps: ["x <redacted>", "<redacted> Contoso", "<contoso>", "\uE000\uE000", "<user><host><project>"] }).length).toBe(5);
+    expect(safeHits(c, { knownGaps: ["x <redacted>", "<redacted> Contoso", "<contoso>", "\uE000\uE000", "<user><contoso>", "<customer-12345>"] }).length).toBe(6);
+    // Labels side by side (the redaction writes `<user><host>` for a folder named after both) carry no value: they pass.
+    expect(safeHits(c, { knownGaps: ["<user><host><project>"] })).toEqual([]);
+    // Side by side, labels' serials hold eight digits at most together; four labels with short serials pass.
+    expect(safeHits(c, { knownGaps: ["<customer-1234><customer-5678><customer-9012><customer-3456>"] }).length).toBe(1);
+    expect(safeHits(c, { knownGaps: ["<custom-id-123456><custom-id-789012>"] }).length).toBe(1);
+    expect(safeHits(c, { knownGaps: ["<user><host><project><custom-value-1>"] })).toEqual([]);
+    expect(safeHits(c, { knownGaps: ["<id:deadbeef><id:cafebabe><id:abcdefab>"] }).length).toBe(1);
     const surface = (slot: string) => `Kiro surface per session: ${slot} Kiro CLI, 0 Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`;
     expect(safeHits(c, { transcripts: [{ notes: [surface("<custom-value-1>")] }] })).toEqual([]);
-    expect(safeHits(c, { transcripts: [{ notes: [surface("\uE000\uE000"), surface("<user><host>")] }] }).length).toBe(2);
+    expect(safeHits(c, { transcripts: [{ notes: [surface("\uE000\uE000"), surface("<user><contoso>")] }] }).length).toBe(2);
+    expect(safeHits(c, { transcripts: [{ notes: [surface("<user><host>")] }] })).toEqual([]);
   });
 });
 

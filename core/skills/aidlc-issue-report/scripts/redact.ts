@@ -28,23 +28,28 @@ export const PUBLIC_URL = /^https?:\/\/(?:github\.com\/awslabs\/aidlc-workflows|
 // The labels this skill and AI-DLC's own redaction write. A dictionary name is never looked for inside one
 // (a Unit called `email` would break `<email>`); any other `<…>` is ordinary text, `List<Contoso>` included.
 export const LABEL =
-  /<(?:user|host|project|org|repo|email|url|ip|account|path|id|git-remote|aidlc-install|field|id:[0-9a-f]+|redacted(?:-(?:token|key|hex|jwt|aws-key|private-key))?|(?:intent|space|unit|org|customer|product|person|name)-\d+|custom-(?:stage|phase|scope|sensor|hook|agent|model|effort|tool|value|event|guard|harness|denial|mode|check|build|doctor-finding|unit|intent|text|file|hash|id|session|field|space)-\d+)>/g;
+  /<(?:user|host|project|org|repo|email|url|ip|account|path|id|git-remote|aidlc-install|field|id:[0-9a-f]+|redacted(?:-(?:token|key|hex|jwt|aws-key|private-key))?|(?:intent|space|unit|org|customer|product|person|name)-\d+|custom-(?:stage|phase|scope|sensor|hook|agent|model|effort|tool|value|event|guard|harness|denial|mode|check|build|doctor-finding|unit|intent|text|file|dir|hash|id|session|field|space)-\d+)>/g;
 
 // A label small enough to stand for a value and not carry one: an `<id:…>` as AI-DLC's doctor writes it (eight hex
 // digits, aidlc-doctor-bundle.ts shortHash), and a serial of four digits (a dictionary label, `<customer-12>`) or six
-// (this skill's own counter, `<custom-id-12345>`) at most, since a longer number could be an account. lib-gate.ts (the
-// cover) and lib-rows.ts (the rows) read labels by it.
+// (this skill's own counter, `<custom-id-12345>`) at most, since a longer number could be an account. onlyLabels and
+// lib-gate.ts labelMask (the cover's lines) read labels by it.
 export function smallLabel(label: string): boolean {
   if (label.startsWith("<id:")) return /^<id:[0-9a-f]{8}>$/.test(label);
   const serial = label.match(/-(\d+)>$/)?.[1];
   return !serial || serial.length <= (label.startsWith("<custom-") ? 6 : 4);
 }
 
-// One label, whole and small: what a value replaced by a label is. lib-rows.ts (row values) and lib-gate.ts (prose
-// sentences and their slots) read a label by it.
-const ONE_LABEL = new RegExp(`^(?:${LABEL.source})$`);
-export function wholeLabel(v: string): boolean {
-  return ONE_LABEL.test(v) && smallLabel(v);
+// Labels and nothing else, each small: what a value replaced by labels is (one, or several the redaction wrote side by
+// side, `<user><host>`). Side by side, their serials hold eight digits at most together and none is an `<id:…>`, so a
+// run cannot spell a long number or hex string out. The one reading of a label for row values (lib-rows.ts) and for
+// every field, sentence and slot the check reads (lib-gate.ts).
+const LABEL_RUN = new RegExp(`^(?:${LABEL.source})+$`);
+export function onlyLabels(v: string): boolean {
+  const labels = [...v.matchAll(LABEL)].map((m) => m[0]);
+  if (!LABEL_RUN.test(v) || !labels.every(smallLabel)) return false;
+  if (labels.length === 1) return true;
+  return !labels.some((l) => l.startsWith("<id:")) && labels.join("").replace(/\D/g, "").length <= 8;
 }
 
 // Too short or too generic to replace without wrecking the text.

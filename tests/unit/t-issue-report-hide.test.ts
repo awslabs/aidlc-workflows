@@ -24,6 +24,7 @@ function bun(script: string, args: string[]) {
 function reportFolder(): string {
   const out = mkdtempSync(join(tmpdir(), "hide-test-"));
   mkdirSync(join(out, "local"));
+  writeFileSync(join(out, "local", "vocab.json"), JSON.stringify({ words: [] }));
   writeFileSync(
     join(out, "local", "redaction-map.json"),
     JSON.stringify({ entries: [{ value: "/tmp/p", label: "<project>", kind: "path" }], secretRulesFrom: RULES }),

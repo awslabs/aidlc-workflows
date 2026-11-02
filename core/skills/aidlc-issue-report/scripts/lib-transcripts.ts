@@ -1117,7 +1117,10 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
       // A dispatch line has its own time (measured on Kiro 2026-10-31): outside the window, or in the report's part of
       // the session, it is not the run's. A line without a readable time counts, as the note below says; a report start
       // that cannot be read as a time cuts nothing it cannot place.
-      const at = Date.parse(l.timestamp ?? "");
+      // A time with no zone is read as UTC, as Kiro's own (`…Z`) are, never as this machine's local time.
+      const stamp = l.timestamp ?? "";
+      const zoneless = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?$/.test(stamp);
+      const at = Date.parse(zoneless ? `${stamp.replace(" ", "T")}Z` : stamp);
       if (!Number.isNaN(at)) {
         if (at < since || at > until) continue;
         const cut = Date.parse(runUntil.get(l.conversationId) ?? "");

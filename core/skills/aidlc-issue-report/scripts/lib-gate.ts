@@ -12,14 +12,14 @@
 // safe.json's audit rows pass only as lib-rows.ts writes them (rowHits). The rest of safe.json: each string, and
 // each key that is data, is one of AI-DLC's words (as collect.ts read them, lib-check.ts keptVocab), this skill's own
 // words (the literals in its scripts), a label, a time, a version, a count, a public model id or its field's own
-// shape; a prose field (PROSE_FIELDS) is one of this skill's own sentences or one label standing alone (ownSentence).
+// shape; a prose field (PROSE_FIELDS) is one of this skill's own sentences or labels standing alone (ownSentence).
 // A refusal names the line or field and the reason, never the value.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, PUBLIC_URL, redact, smallLabel, TOOL_DIRS, wholeLabel } from "./redact.ts";
+import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, onlyLabels, PUBLIC_URL, redact, smallLabel, TOOL_DIRS } from "./redact.ts";
 import { isOsLine, isVersion, KERNEL_RELEASE, OWN, PUBLIC_MODEL } from "./lib-shape.ts";
-import { fieldNameOk, isRowLabel, type RowVocab, valueOk } from "./lib-rows.ts";
+import { fieldNameOk, type RowVocab, valueOk } from "./lib-rows.ts";
 
 export type GateContext = {
   // AI-DLC's words (as collect.ts read them from the install) and this skill's own.
@@ -32,65 +32,163 @@ export type GateContext = {
 };
 export type GateHit = { line: number; reason: string; field?: string };
 
-// This skill's scripts as code: line comments cut first (a `/*` in one, such as a glob, opens nothing), then block
-// comments. Their examples (`~/Clients/Contoso Merger.pdf`) are made-up names, not the skill's words.
-const sources = new Map<string, string[]>();
-function skillCode(dir: string): string[] {
-  const cached = sources.get(dir);
-  if (cached) return cached;
-  const code = readdirSync(dir)
-    .filter((f) => f.endsWith(".ts"))
-    .map((f) =>
-      readFileSync(join(dir, f), "utf8")
-        .split("\n")
-        .filter((l) => !/^\s*\/\//.test(l))
-        .map((l) => l.replace(/\s\/\/\s.*$/, ""))
-        .join("\n")
-        .replace(/\/\*[\s\S]*?\*\//g, ""),
-    );
-  sources.set(dir, code);
-  return code;
+// This skill's scripts read as code: string literals and template literals (their fixed parts between `${…}` slots),
+// with comments, regular expressions and code left out. A small scanner, not a pattern over the text: a backtick or a
+// quote inside a string, a regex or a comment opens nothing. Comments' examples (`~/Clients/Contoso Merger.pdf`) are
+// made-up names, not the skill's words.
+type Literal = { text: string; template: false } | { parts: string[]; template: true };
+// A `/` opens a regex when the token before it is an operator or a keyword (and not `++`, `--`, a closing bracket, a
+// name, a property such as `.of` or a literal), else it divides.
+const OPERATOR = /^[(,=:[!&|?{};+\-*%<>~^]$/;
+const KEYWORDS = new Set(["return", "typeof", "case", "of", "in", "void", "throw", "else", "delete", "new", "instanceof", "yield", "await", "do"]);
+function unescapeLiteral(raw: string): string {
+  return raw.replace(/\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([\s\S]))/g, (_m, u1, u2, x, c) =>
+    u1 || u2 || x ? String.fromCodePoint(Number.parseInt(u1 ?? u2 ?? x, 16)) : ({ n: "\n", t: "\t", r: "\r" } as Record<string, string>)[c] ?? c,
+  );
+}
+export function scanCode(src: string): Literal[] {
+  const out: Literal[] = [];
+  // The token before the current place: an operator character, `++`/`--`, a word (with whether a `.` came before
+  // it), or a literal.
+  let prev = "";
+  let prevWordAfterDot = false;
+  let beforePrev = "";
+  const regexHere = () =>
+    prev === "" || (OPERATOR.test(prev) && !((prev === "+" || prev === "-") && beforePrev === prev)) || (KEYWORDS.has(prev) && !prevWordAfterDot);
+  const token = (t: string, afterDot = false) => {
+    beforePrev = prev;
+    prev = t;
+    prevWordAfterDot = afterDot;
+  };
+  // A template from its opening backtick; returns where it ends. Literals inside its slots are read too.
+  const template = (start: number): number => {
+    const parts: string[] = [];
+    let j = start + 1;
+    let text = "";
+    while (j < src.length && src[j] !== "`") {
+      if (src[j] === "\\") {
+        text += src.slice(j, j + 2);
+        j += 2;
+      } else if (src[j] === "$" && src[j + 1] === "{") {
+        parts.push(unescapeLiteral(text));
+        text = "";
+        j = code(j + 2, "}");
+      } else text += src[j++];
+    }
+    parts.push(unescapeLiteral(text));
+    out.push({ parts, template: true });
+    return j + 1;
+  };
+  // Code from `from` until the closing `close` at depth zero (or the end); returns the index after it.
+  const code = (from: number, close: string | null): number => {
+    let j = from;
+    let depth = 0;
+    while (j < src.length) {
+      const c = src[j];
+      if (close && c === close && depth === 0) return j + 1;
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      if (c === "/" && src[j + 1] === "/") {
+        const nl = src.indexOf("\n", j);
+        j = nl < 0 ? src.length : nl;
+        continue;
+      }
+      if (c === "/" && src[j + 1] === "*") {
+        const end = src.indexOf("*/", j + 2);
+        j = end < 0 ? src.length : end + 2;
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        let k = j + 1;
+        let text = "";
+        while (k < src.length && src[k] !== c && src[k] !== "\n") {
+          text += src[k] === "\\" ? src.slice(k, k + 2) : src[k];
+          k += src[k] === "\\" ? 2 : 1;
+        }
+        out.push({ text: unescapeLiteral(text), template: false });
+        j = k + 1;
+        token("lit");
+        continue;
+      }
+      if (c === "`") {
+        j = template(j);
+        token("lit");
+        continue;
+      }
+      if (c === "/" && regexHere()) {
+        let k = j + 1;
+        let cls = false;
+        while (k < src.length && src[k] !== "\n" && (cls || src[k] !== "/")) {
+          if (src[k] === "\\") k++;
+          else if (src[k] === "[") cls = true;
+          else if (src[k] === "]") cls = false;
+          k++;
+        }
+        j = k + 1;
+        while (/[a-z]/.test(src[j] ?? "")) j++;
+        token("lit");
+        continue;
+      }
+      if (/[A-Za-z_$0-9]/.test(c)) {
+        let k = j;
+        while (k < src.length && /[A-Za-z_$0-9]/.test(src[k])) k++;
+        token(src.slice(j, k), prev === ".");
+        j = k;
+        continue;
+      }
+      if (!/\s/.test(c)) token(c);
+      j++;
+    }
+    return j;
+  };
+  code(0, null);
+  return out;
+}
+const scanned = new Map<string, Literal[]>();
+function skillLiterals(dir: string): Literal[] {
+  let lits = scanned.get(dir);
+  if (!lits) {
+    lits = readdirSync(dir)
+      .filter((f) => f.endsWith(".ts"))
+      .flatMap((f) => scanCode(readFileSync(join(dir, f), "utf8")));
+    scanned.set(dir, lits);
+  }
+  return lits;
 }
 
-// Every string literal in this skill's code: its own enumerations, kinds, labels and fixed words
+// Every short string literal in this skill's code: its own enumerations, kinds, labels and fixed words
 // (`kiro (v3: Kiro CLI)`), which are the skill's text, never the person's.
-const OWN_LITERAL = /"([^"\\\n]{1,120})"|'([^'\\\n]{1,120})'/g;
 export function skillWords(dir = import.meta.dir): Set<string> {
   const words = new Set<string>();
-  for (const code of skillCode(dir)) for (const m of code.matchAll(OWN_LITERAL)) words.add(m[1] ?? m[2]);
+  for (const l of skillLiterals(dir)) if (!l.template && l.text.length <= 120 && !/[\n\\]/.test(l.text)) words.add(l.text);
   return words;
 }
 
-// This skill's own sentences, for the prose fields of safe.json (PROSE_FIELDS):
-// each string literal of its scripts as written, and each template literal with every `${…}` slot filled by a number,
-// a time, a version, a label or one of the words a field may hold.
+// This skill's own sentences, for the prose fields of safe.json (PROSE_FIELDS): each string literal of its scripts
+// (and each template with no slot) as written, and each template literal of one line with every `${…}` slot filled by
+// a number, a time, a version, a label or one of the words a field may hold, or left empty.
 type Sentences = { literals: Set<string>; templates: string[][] };
-const LONG_LITERAL = /"((?:[^"\\\n]|\\.){1,600})"|'((?:[^'\\\n]|\\.){1,600})'/g;
-const TEMPLATE = /`((?:[^`\\]|\\.)*)`/gs;
-const SLOT = /\$\{(?:[^{}]|\{[^{}]*\})*\}/g;
 const sentenceCache = new Map<string, Sentences>();
 function skillSentences(dir = import.meta.dir): Sentences {
   const cached = sentenceCache.get(dir);
   if (cached) return cached;
   const literals = new Set<string>();
   const templates: string[][] = [];
-  for (const code of skillCode(dir)) {
-    for (const m of code.replace(TEMPLATE, "``").matchAll(LONG_LITERAL)) literals.add((m[1] ?? m[2]).replace(/\\(["'\\])/g, "$1"));
-    for (const m of code.matchAll(TEMPLATE)) {
-      const fixed = m[1].split(SLOT).map((p) => p.replace(/\\(.)/g, "$1"));
-      if (fixed.length < 2 || fixed.join("").replace(/\s+/g, "").length < 10 || /\n/.test(m[1])) continue;
-      templates.push(fixed);
-    }
+  for (const l of skillLiterals(dir)) {
+    if (!l.template) literals.add(l.text);
+    else if (l.parts.length === 1) literals.add(l.parts[0]);
+    else if (!l.parts.some((p) => p.includes("\n")) && l.parts.join("").replace(/\s+/g, "").length >= 10) templates.push(l.parts);
   }
   const s = { literals, templates };
   sentenceCache.set(dir, s);
   return s;
 }
-const escapeText = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 // The skill's sentences as they can stand in safe.json: as written, and as the redaction writes them with this
 // folder's map (collect.ts and hide.ts run it over safe.json, so a hidden name inside a sentence is its label there).
-// The same rule as the redaction itself, never a second reading of which word a label may stand for.
-type Written = { literals: Set<string>; templates: RegExp[] };
+// The same rule as the redaction itself, run over every sentence once per folder map, never a second reading of what
+// the redaction may change.
+type Written = { literals: Set<string>; templates: string[][] };
 const writtenCache = new WeakMap<Dictionary, Written>();
 function writtenSentences(dict: Dictionary): Written {
   const cached = writtenCache.get(dict);
@@ -98,30 +196,62 @@ function writtenSentences(dict: Dictionary): Written {
   const s = skillSentences();
   const forms = (t: string) => [...new Set([t, redact(t, dict), redact(t, dict, { ids: true })])];
   const literals = new Set([...s.literals].flatMap(forms));
-  const templates: RegExp[] = [];
+  const templates: string[][] = [];
   const seen = new Set<string>();
   for (const fixed of s.templates) {
-    for (const variant of [fixed, fixed.map((p) => redact(p, dict)), fixed.map((p) => redact(p, dict, { ids: true }))]) {
+    const variants = [fixed, fixed.map((p) => redact(p, dict)), fixed.map((p) => redact(p, dict, { ids: true }))];
+    for (const variant of variants) {
       const key = variant.join("\u0000");
       if (seen.has(key)) continue;
       seen.add(key);
-      templates.push(new RegExp(`^${variant.map(escapeText).join("(.{1,200}?)")}$`));
+      templates.push(variant);
     }
   }
   const w = { literals, templates };
   writtenCache.set(dict, w);
   return w;
 }
+// Does `v` read as the template's fixed parts with its slots filled, each slot taking what `ok` takes? Every way of
+// placing the fixed parts is tried, so a slot may hold text that also appears in the next fixed part.
+const SLOT_MAX = 400;
+const TAIL_SLOT_MAX = 2000;
+export function fills(v: string, parts: string[], ok: (slot: string) => boolean): boolean {
+  if (parts.length === 1) return v === parts[0];
+  if (!v.startsWith(parts[0])) return false;
+  // A slot holds one line; the last one may run longer (a list of sessions or files).
+  const fit = (slot: string, max: number) => slot.length <= max && !slot.includes("\n") && ok(slot);
+  // Each (place, part) is tried once: slots side by side (`${a}${b}`) would otherwise try every split again and again.
+  const tried = new Set<string>();
+  const go = (pos: number, k: number): boolean => {
+    const key = `${pos}:${k}`;
+    if (tried.has(key)) return false;
+    tried.add(key);
+    if (k === parts.length - 1) {
+      const end = v.length - parts[k].length;
+      return end >= pos && v.endsWith(parts[k]) && fit(v.slice(pos, end), TAIL_SLOT_MAX);
+    }
+    // indexOf("") answers the end again past it, so the search stops once it no longer moves on.
+    for (let at = v.indexOf(parts[k], pos); at >= pos && at - pos <= SLOT_MAX; ) {
+      if (fit(v.slice(pos, at), SLOT_MAX) && go(at + parts[k].length, k + 1)) return true;
+      const next = v.indexOf(parts[k], at + 1);
+      if (next <= at) break;
+      at = next;
+    }
+    return false;
+  };
+  return go(parts[0].length, 1);
+}
 const TIME_SLOT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?Z$/;
 function slotOk(ctx: GateContext, v: string): boolean {
-  return v.split(/,\s*/).every((p) => /^\d{1,9}$/.test(p) || TIME_SLOT.test(p) || isVersion(p) || known(ctx, p) || wholeLabel(p));
+  if (v === "") return true;
+  return v.split(/,\s*/).every((p) => /^\d{1,9}$/.test(p) || TIME_SLOT.test(p) || isVersion(p) || known(ctx, p) || onlyLabels(p));
 }
 export function ownSentence(ctx: GateContext, v: string): boolean {
-  // One label standing alone (what a refusal asks to write in place of a value) passes, as it does in any other field.
-  if (wholeLabel(v)) return true;
+  // Labels standing alone (what a refusal asks to write in place of a value) pass, as they do in any other field.
+  if (onlyLabels(v)) return true;
   const w = writtenSentences(ctx.dict);
   if (w.literals.has(v)) return true;
-  return w.templates.some((t) => v.match(t)?.slice(1).every((g) => slotOk(ctx, g)) ?? false);
+  return w.templates.some((t) => fills(v, t, (slot) => slotOk(ctx, slot)));
 }
 
 // Stands in for a label or AI-DLC's message text while the rules read the text, one for each character it covers, so
@@ -467,13 +597,13 @@ function dedupe(hits: GateHit[]): GateHit[] {
 const PROSE_FIELDS = new Set(["notes", "note", "knownGaps", "error", "otherStores"]);
 // Fields with a shape of their own.
 const PATH_FIELDS = new Set(["dir", "exe", "secretRules"]);
-const labelOr = (ctx: GateContext, v: string) => known(ctx, v) || isMask(labelMask(v));
+const labelOr = (ctx: GateContext, v: string) => known(ctx, v) || onlyLabels(v);
 
 function atomOk(ctx: GateContext, value: string, field: string): boolean {
   if (value === "") return true;
   const v = value.endsWith(OWN) ? value.slice(0, -OWN.length) : value;
   if (PRIVATE_USE.test(v)) return false;
-  if (isMask(labelMask(v)) || known(ctx, v)) return true;
+  if (onlyLabels(v) || known(ctx, v)) return true;
   // A count (`3`, `2 / 5`), or a mark of a few signs (a stage's `-`).
   if (/^\d{1,9}(?:\s*\/\s*\d{1,9})?$/.test(v) || /^[!-/:-@[-`{-~]{1,3}$/.test(v)) return true;
   // A stage's mark in the state file (`x`, `S`, `-`).
@@ -518,8 +648,8 @@ function rowHits(ctx: GateContext, rows: unknown, hits: GateHit[], start: number
     if (Object.keys(r).some((k) => !ROW_KEYS.includes(k))) refuse(at, "a key a row does not have");
     if (typeof r.seq !== "number" || !Number.isInteger(r.seq) || r.seq < 1 || r.seq > 1e7) refuse(`${at}.seq`);
     if (r.ts !== null && !(typeof r.ts === "string" && TIME.test(r.ts))) refuse(`${at}.ts`);
-    if (typeof r.event !== "string" || !(isRowLabel(r.event) || (/^[A-Z][A-Z0-9_]{1,59}$/.test(r.event) && v.words.has(r.event)))) refuse(`${at}.event`);
-    if (r.intent !== null && !(typeof r.intent === "string" && (r.intent === "(space)" || isRowLabel(r.intent)))) refuse(`${at}.intent`);
+    if (typeof r.event !== "string" || !(onlyLabels(r.event) || (/^[A-Z][A-Z0-9_]{1,59}$/.test(r.event) && v.words.has(r.event)))) refuse(`${at}.event`);
+    if (r.intent !== null && !(typeof r.intent === "string" && (r.intent === "(space)" || onlyLabels(r.intent)))) refuse(`${at}.intent`);
     const event = typeof r.event === "string" ? r.event : "";
     if (!Array.isArray(r.fields)) {
       refuse(`${at}.fields`, "not a list of fields");

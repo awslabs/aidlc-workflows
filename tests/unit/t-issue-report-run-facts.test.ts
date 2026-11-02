@@ -1171,10 +1171,11 @@ test("a Kiro dispatch's model counts only inside the window and before the repor
   });
   const untimed = { ...dispatch(at(5), "no-time"), timestamp: undefined };
   const otherUntimed = { level: "info", conversationId: "sess_1", message: "some other line" };
-  writeFileSync(join(logs, "kiro.log"), [dispatch("2026-10-20T00:00:00.000Z", "before-window"), dispatch(at(4), "in-run"), dispatch("2026-10-29T01:12:00.5Z", "in-report"), untimed, otherUntimed, otherUntimed].map((l) => JSON.stringify(l)).join("\n"));
+  writeFileSync(join(logs, "kiro.log"), [dispatch("2026-10-20T00:00:00.000Z", "before-window"), dispatch(at(4), "in-run"), dispatch("2026-10-29T01:12:00.5Z", "in-report"), dispatch("2026-10-29 01:05:00", "zone-less"), untimed, otherUntimed, otherUntimed].map((l) => JSON.stringify(l)).join("\n"));
   const code = `const { kiroV3 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
 const s = kiroV3(${JSON.stringify(project)}, ${Date.parse(at(0))}, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
 console.log(JSON.stringify({ models: s?.subagents["aidlc-developer-agent"]?.models ?? null, noted: s?.notes.some((n) => n.startsWith("1 dispatch line(s)")) }));`;
   const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
-  expect(JSON.parse(r.stdout)).toEqual({ models: { "in-run": 1, "no-time": 1 }, noted: true });
+  // A zone-less time is UTC (01:05Z, inside the run), never this machine's local time.
+  expect(JSON.parse(r.stdout)).toEqual({ models: { "in-run": 1, "zone-less": 1, "no-time": 1 }, noted: true });
 });

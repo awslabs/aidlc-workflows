@@ -7,7 +7,7 @@
 // error, a command, a "phase > unit > stage > file" context) keep their fixed text and label what was filled in.
 
 import { HOST_TOOLS } from "./lib-shape.ts";
-import { wholeLabel } from "./redact.ts";
+import { onlyLabels } from "./redact.ts";
 
 export type RowVocab = {
   words: Set<string>;
@@ -28,12 +28,9 @@ export type RowValue = string | number | string[];
 export const VOCAB_KINDS = ["stages", "phases", "agents", "scopes", "sensors", "hooks", "tools", "guards"] as const;
 
 // The label kinds a row writes. Fixed: a field's name never becomes a kind.
-export const ROW_KINDS = ["value", "text", "file", "hash", "id", "session", "field", "unit", "intent", "space"] as const;
+export const ROW_KINDS = ["value", "text", "file", "dir", "hash", "id", "session", "field", "unit", "intent", "space"] as const;
 export type RowKind = (typeof ROW_KINDS)[number];
 
-// A label as this skill and AI-DLC's redaction write it (`<custom-unit-3>`, `<unit-2>`, `<user>`, `<project>`): redact.ts
-// wholeLabel.
-export const isRowLabel = wholeLabel;
 
 export type Shape = {
   label(kind: RowKind, raw: string): string;
@@ -134,11 +131,6 @@ const RECORD_DIRS = new Set([
 // The AI tools' own folders at the project's top (`.kiro/steering/`), and the folders under them they name.
 const TOOL_TOP = new Set([".claude", ".kiro", ".codex", ".copilot", ".cursor", ".agents", ".aidlc", ".github", ".vscode"]);
 const TOOL_SUB = new Set(["settings", "steering", "skills", "prompts", "agents", "hooks", "tools", "rules", "commands", "data", "aidlc-common"]);
-// File names that have no dot; any other name with none is read as a folder.
-const DOTLESS_FILES = new Set([
-  "makefile", "dockerfile", "containerfile", "jenkinsfile", "vagrantfile", "procfile", "gemfile", "rakefile", "brewfile",
-  "pipfile", "justfile", "license", "notice", "readme", "changelog", "codeowners", "authors", "version",
-]);
 // The default space AI-DLC makes; any other space is named by the person.
 const DEFAULT_SPACE = "default";
 
@@ -175,14 +167,14 @@ function layoutSegment(v: RowVocab, s: Shape, parts: string[], i: number, last: 
   if (/^[0-9a-f]{8,64}$/.test(part)) return s.label("hash", part);
   const review = part.match(/^(\d{1,6})\.([0-9a-f]{8,64}|<[^<>]+>)\.review\.md$/);
   if (review) return `${review[1]}.${s.label("hash", review[2])}.review.md`;
-  // A file AI-DLC names (`requirements.md`, `.aidlc-request-text`) stays. A Unit's name gets the Unit's label wherever
-  // it stands; another name without a dot is a folder, labelled by its own text like a Unit (a file with no dot, such
-  // as a Makefile, reads as one too); a name with a dot is a file, labelled by its whole path with its common
-  // extension kept (a label already there is the rule's own).
+  // A file AI-DLC names (`requirements.md`, `.aidlc-request-text`) stays. A Unit's or an intent's name gets its label
+  // wherever it stands. Any other name before the last is a folder (`<custom-dir-N>`, by its own text); the last is a
+  // file, labelled by its whole path with its common extension kept (a path ending in `/` is a folder's). A label
+  // already there is the rule's own.
   if (last && (((extensionOf(part) || part.startsWith(".")) && v.words.has(part)) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part))) return part;
   const known = s.known(part);
   if (known) return known;
-  if (!part.includes(".") && !(last && DOTLESS_FILES.has(part.toLowerCase()))) return s.label("unit", part);
+  if (!last) return s.label("dir", part);
   return fileLabel(s, /^<[^<>/]+>(?:\.[a-z0-9]{1,12})?$/.test(part) ? part : parts.slice(0, i + 1).join("/"));
 }
 const inLayout = (first: string) => first === "aidlc" || first === ".aidlc-engine" || TOOL_TOP.has(first);
@@ -200,7 +192,7 @@ function shapePath(v: RowVocab, s: Shape, raw: string): string {
   }
   const trailing = p.endsWith("/") ? "/" : "";
   const parts = p.replace(/\/+$/, "").split("/");
-  if (!inLayout(parts[0])) return lead + fileLabel(s, p) + trailing;
+  if (!inLayout(parts[0])) return lead + fileLabel(s, p.replace(/\/+$/, "")) + trailing;
   return lead + parts.map((_, i) => layoutSegment(v, s, parts, i, i === parts.length - 1 && !trailing)).join("/") + trailing;
 }
 // Small words AI-DLC's sentences join their fixed parts with; they name nothing.
@@ -323,7 +315,8 @@ export function shapeValue(v: RowVocab, s: Shape, event: string, name: string, r
     case "paths": {
       const more = value.match(/^(.*) \(and (\d{1,6}) more\)$/);
       const paths = list(more ? more[1] : value);
-      if (paths.some((p) => /\s/.test(p))) return s.label("text", value);
+      // Always a list: one that is not a list of paths is a list of one label.
+      if (paths.some((p) => /\s/.test(p))) return [s.label("text", value)];
       const shaped = paths.map((p) => shapePath(v, s, p));
       return more ? [...shaped, `(and ${more[2]} more)`] : shaped;
     }
@@ -344,10 +337,8 @@ export function shapeValue(v: RowVocab, s: Shape, event: string, name: string, r
       const m = value.match(/^([A-Z][A-Z0-9_]{1,59}):([0-9T:.\-Z+]{10,35})#(\d{1,6})$/);
       return m && v.words.has(m[1]) && TIME.test(m[2]) ? value : s.label("text", value);
     }
-    case "sensor-state": {
-      const m = value.match(/^([a-z][a-z0-9-]{0,40})@(.*)$/);
-      return m && v.sensors.has(m[1]) ? `${m[1]}@${shapePath(v, s, m[2])}` : s.label("text", value);
-    }
+    case "sensor-state":
+      return shapeSensorState(v, s, value);
     case "plan-target": {
       const m = value.match(/^unit:(.+)$/);
       return m ? `unit:${s.known(m[1]) ?? s.label("unit", m[1])}` : pick(v.stages.has(value));
@@ -371,6 +362,26 @@ export function shapeValue(v: RowVocab, s: Shape, event: string, name: string, r
   }
 }
 
+// A gate's checks as AI-DLC writes them (aidlc-state.ts sensorStateAtGate): `none`, or `<check>@<path>=<result>` with an
+// optional ` [detail: <path>]`, entries joined by `; `, a last `+N more`. Each entry keeps its check, result and the
+// layout of its paths; a value of any other shape is one label.
+const SENSOR_ENTRY = /^([a-z][a-z0-9-]{0,40}|<[a-z][a-z0-9:-]{0,40}>)@(.+?)=(passed|not-run|could-not-run|failed\(\d{1,6}\))(?: \[detail: (.+)\])?$/;
+function shapeSensorState(v: RowVocab, s: Shape, value: string): string {
+  if (value === "none") return value;
+  const shaped: string[] = [];
+  for (const entry of value.split("; ")) {
+    if (/^\+\d{1,6} more$/.test(entry)) {
+      shaped.push(entry);
+      continue;
+    }
+    const m = entry.match(SENSOR_ENTRY);
+    if (!m || (m[1].startsWith("<") && !onlyLabels(m[1]))) return s.label("text", value);
+    const check = v.sensors.has(m[1]) ? m[1] : s.label("value", m[1]);
+    shaped.push(`${check}@${shapePath(v, s, m[2])}=${m[3]}${m[4] ? ` [detail: ${shapePath(v, s, m[4])}]` : ""}`);
+  }
+  return shaped.join("; ");
+}
+
 // `--stage <stage>`, `--unit <Unit>`: a flag's value by the flag; a bare word only when it is AI-DLC's command or a
 // stage, phase, agent or tool name; a quoted value is text.
 const FLAG_KIND: Record<string, "stage" | "unit" | "intent" | "agent" | "phase" | "path"> = {
@@ -381,12 +392,15 @@ function commandPieces(value: string): string[] {
   return value.match(/"(?:[^"\\]|\\.)*"|'[^']*'|\S+/g) ?? [];
 }
 // Only a command line of AI-DLC's own tools is read piece by piece; any other command is the person's or the agent's.
-const aidlcCommand = (v: RowVocab, first: string | undefined) => !!first && (v.tools.has(first) || /^aidlc(?:-[a-z-]+)?(?:\.ts)?$/.test(first));
+// The first word is AI-DLC's own command (one of the install's tools, or `aidlc` itself) and stays as it is.
+const AIDLC_SELF = new Set(["aidlc", "aidlc.ts", "aidlc.exe", "aidlc.cmd"]);
+const aidlcCommand = (v: RowVocab, first: string | undefined) => !!first && (v.tools.has(first) || AIDLC_SELF.has(first));
 function shapeCommand(v: RowVocab, s: Shape, value: string): string {
   const pieces = commandPieces(value);
   if (!aidlcCommand(v, pieces[0])) return s.label("text", value);
-  const out: string[] = [];
+  const out: string[] = [pieces[0]];
   for (const [i, piece] of pieces.entries()) {
+    if (i === 0) continue;
     const flag = piece.match(/^--?([a-z][a-z0-9-]{0,40})(?:=(.*))?$/);
     if (flag) {
       const known = v.words.has(flag[1]) || Object.hasOwn(FLAG_KIND, flag[1]);
@@ -423,7 +437,7 @@ function asWritten(): Shape & { refused: boolean } {
   const s = {
     refused: false,
     label: (_kind: RowKind, raw: string) => {
-      if (!isRowLabel(raw)) s.refused = true;
+      if (!onlyLabels(raw)) s.refused = true;
       return raw;
     },
     known: () => undefined,

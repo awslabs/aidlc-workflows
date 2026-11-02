@@ -21,6 +21,7 @@ function run(cwd: string, args: string[]) {
 function folderWithLocal(): string {
   const dir = mkdtempSync(join(tmpdir(), "finish-test-"));
   mkdirSync(join(dir, "local"));
+  writeFileSync(join(dir, "local", "vocab.json"), JSON.stringify({ words: [] }));
   writeFileSync(join(dir, "local", "keep.txt"), "the person's own file");
   return dir;
 }
