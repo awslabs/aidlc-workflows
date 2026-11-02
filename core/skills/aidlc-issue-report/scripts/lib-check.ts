@@ -9,6 +9,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type GateContext, type GateHit, safeHits, skillWords, textHits } from "./lib-gate.ts";
 import { importSecretRules } from "./lib-project.ts";
+import { type RowVocab, VOCAB_KINDS } from "./lib-rows.ts";
 import { type Dictionary, findSecrets, loadDictionary, useSecretRules } from "./redact.ts";
 
 export const REPORT = "aidlc-issue-report.md";
@@ -24,8 +25,6 @@ export type CheckResult = {
   refused?: string[];
   refusedWhy?: string;
   missing?: string;
-  // How many values the person chose to include (allow.ts); they pass in the report only.
-  allowedValues: number;
 };
 
 function readList(path: string): string[] {
@@ -38,8 +37,19 @@ function readList(path: string): string[] {
 }
 
 export function gateContext(out: string, dict: Dictionary): GateContext {
-  const words = new Set([...readList(join(out, "local", "vocab.json")), ...skillWords()]);
-  return { words, dict, allowed: readList(join(out, "local", "allowed.json")), phrases: readList(join(out, "local", "phrases.json")) };
+  const aidlcWords = new Set(readList(join(out, "local", "vocab.json")));
+  const words = new Set([...aidlcWords, ...skillWords()]);
+  const phrases = readList(join(out, "local", "phrases.json"));
+  let kinds: Record<string, unknown> = {};
+  try {
+    kinds = JSON.parse(readFileSync(join(out, "local", "vocab-kinds.json"), "utf8")) as Record<string, unknown>;
+  } catch {
+    // no kinds: every row value must then be a label
+  }
+  const kind = (k: string) => new Set(Array.isArray(kinds[k]) ? (kinds[k] as unknown[]).filter((x): x is string => typeof x === "string") : []);
+  // A row's values are read against AI-DLC's words only, never this skill's own.
+  const rows: RowVocab = { words: aidlcWords, phrases: new Set(phrases), ...Object.fromEntries(VOCAB_KINDS.map((k) => [k, kind(k)])) } as RowVocab;
+  return { words, dict, phrases, rows };
 }
 
 const STRING_TOKEN = /"(?:[^"\\]|\\.)*"/g;
@@ -113,6 +123,5 @@ export async function checkFolder(out: string): Promise<CheckResult | null> {
     hits,
     ...(refused.length ? { refused, refusedWhy: `only ${REPORT} and safe.json are sent: move anything else out of the folder` } : {}),
     ...(hasReport ? (hasSafe ? {} : { missing: "safe.json is missing: put back the one collect.ts wrote" }) : { missing: `${REPORT} is not written yet` }),
-    allowedValues: ctx.allowed.length,
   };
 }

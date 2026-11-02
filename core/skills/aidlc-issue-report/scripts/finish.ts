@@ -37,4 +37,4 @@ if (!process.argv.includes("--no-open")) {
     // no desktop: the path below is enough
   }
 }
-console.log(JSON.stringify({ ok: true, folder: out, files, localRemoved: !existsSync(join(out, "local")), allowedValues: check.allowedValues }, null, 2));
+console.log(JSON.stringify({ ok: true, folder: out, files, localRemoved: !existsSync(join(out, "local")) }, null, 2));

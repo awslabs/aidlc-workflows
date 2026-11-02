@@ -2,7 +2,6 @@
 // Only names, times, counts and AI-DLC's own vocabulary are kept; every field
 // that can carry the person's words or the project's content is left out
 
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Prompt } from "./lib-transcripts.ts";
@@ -12,20 +11,13 @@ export type AuditRow = { ts: string; event: string; fields: Record<string, strin
 
 // The session a row was recorded for (its Session field), kept beside the row and never in safe.json.
 export const rowSession = new WeakMap<AuditRow, string>();
+// Every field of a row in the order the record writes them, each read the way AI-DLC reads it (its first
+// occurrence); lib-rows.ts shapes them for safe.json.
+export const rowEntries = new WeakMap<AuditRow, [string, string][]>();
+const FIELD_LINE = /^\s*(?:-\s+)?\*\*([^*\n]{1,80})\*\*:/gm;
 
-// Events that show something went wrong.
-export const PROBLEM_EVENTS = new Set([
-  "ERROR_LOGGED", "PLAN_APPROVAL_BLOCKED", "REVIEW_FREEZE_BLOCKED", "REVIEWER_SCOPE_BLOCKED", "STATE_TRANSITION_BLOCKED",
-  "STAGE_RULES_BLOCKED", "SYSTEM_INSTALL_BLOCKED", "GUARD_DISABLED", "GUARD_STOOD_ASIDE", "CHANGE_ACCEPTED",
-  "GATE_REJECTED", "STAGE_REVISING", "STAGE_JUMPED", "STAGE_SKIPPED", "SENSOR_FAILED", "SENSOR_COULD_NOT_RUN",
-  "SENSOR_BUDGET_OVERRIDE", "BOLT_FAILED", "WORKTREE_DISCARDED", "SWARM_UNIT_FAILED", "SWARM_DEGRADED",
-  "MERGE_DISPATCH_FALLBACK", "QUESTION_UNANSWERED", "SESSION_COMPACTED", "RECOVERY_COMPLETED", "PLAN_APPROVAL_SKIPPED",
-  "PLAN_APPROVAL_OVERRIDDEN", "UNIT_PAUSED", "WORKFLOW_PARKED", "PRACTICES_SECTION_EMPTY", "MEMORY_EMPTY",
-  "SUBAGENT_PROMPT_UNMATCHED", "COORDINATION_STOOD_ASIDE",
-]);
-
-// Fields safe to copy: AI-DLC vocabulary, numbers, stage/guard/sensor names.
-// Unit and stage names are run through the dictionary later.
+// The fields the collector itself reads off a row (the Units for the dictionary, a guard switch's scope); safe.json
+// carries every field of every row through lib-rows.ts instead.
 export const AUDIT_FIELDS = new Set([
   "Stage", "Stage slug", "Current Stage", "Next Stage", "Phase", "Lifecycle Phase", "Unit", "Tool", "Guard", "Sensor ID",
   "Direction", "Exit Code", "Error Fingerprint", "Findings count", "Revision count", "Revision Count", "State Validity",
@@ -67,19 +59,18 @@ function parseAuditBlocks(blocks: string[], intent: string, field: FieldReader):
       if (k === "Source" && !STAGE_ENDPOINT_EVENTS.has(event) && !GUARD_SWITCH_EVENTS.has(event)) continue;
       safe[k] = v.slice(0, 120);
     }
-    // Two ERROR_LOGGED rows are "the same error" when their error text matches
-    // once numbers and quoted words are taken out; only a short hash is kept.
-    if (event === "ERROR_LOGGED" && fields.Error) {
-      const norm = fields.Error.toLowerCase()
-        // a quoted span ("x", “x”, 'x'), but not an apostrophe inside a word (can't)
-        .replace(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|(?<![\p{L}\p{N}])'[^'\n]*'(?![\p{L}\p{N}])/gu, "")
-        .replace(/[0-9]+/g, "")
-        .replace(/\s+/g, " ")
-        .slice(0, 160);
-      safe["Error Group"] = createHash("sha256").update(norm).digest("hex").slice(0, 8);
-    }
     const row: AuditRow = { ts, event, fields: safe, intent };
     if (fields.Session) rowSession.set(row, fields.Session);
+    const entries: [string, string][] = [];
+    const seen = new Set<string>();
+    for (const m of block.matchAll(FIELD_LINE)) {
+      const name = m[1].trim();
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const value = field(block, name);
+      if (value !== null) entries.push([name, value]);
+    }
+    rowEntries.set(row, entries);
     rows.push(row);
   }
   return rows;
@@ -123,34 +114,6 @@ export function readAudit(project: string, intents: Intent[], tools?: AidlcTools
   return rows;
 }
 
-// Signals from what is missing.
-export function absenceSignals(rows: AuditRow[]): { kind: string; ts: string; stage: string | null; intent: string }[] {
-  const out: { kind: string; ts: string; stage: string | null; intent: string }[] = [];
-  // An approval gate still open is doctor's to say ("Approval gate pending"), by the engine's own
-  // reading of the record; a second reading here would disagree with it.
-  const byIntent = new Map<string, AuditRow[]>();
-  for (const r of rows) {
-    const list = byIntent.get(r.intent);
-    if (list) list.push(r);
-    else byIntent.set(r.intent, [r]);
-  }
-  for (const [intent, list] of byIntent) {
-    const gates = list.filter((r) => r.event.startsWith("GATE_")).length;
-    const turns = list.filter((r) => r.event === "HUMAN_TURN").length;
-    if (gates > 0 && turns === 0) out.push({ kind: "no-human-turn-recorded", ts: list[list.length - 1].ts, stage: null, intent });
-  }
-  const errors = new Map<string, AuditRow[]>();
-  for (const r of rows.filter((r) => r.event === "ERROR_LOGGED")) {
-    const k = `${r.intent}|${r.fields.Tool ?? ""}|${r.fields["Error Fingerprint"] ?? r.fields["Error Group"] ?? r.fields["Exit Code"] ?? ""}`;
-    const list = errors.get(k);
-    if (list) list.push(r);
-    else errors.set(k, [r]);
-  }
-  for (const list of errors.values()) {
-    if (list.length >= 2) out.push({ kind: `same-error-repeated x${list.length} (${list[0].fields.Tool ?? "?"})`, ts: list[0].ts, stage: list[0].fields.Stage ?? null, intent: list[0].intent });
-  }
-  return out;
-}
 
 // aidlc-state.md: current position and lowered checks.
 // `getField`: AI-DLC's own state-field reader, from the install (lib-project.ts importAidlcTools). Without it, a field

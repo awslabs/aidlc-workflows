@@ -12,7 +12,7 @@ const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // r
 useSecretRules(await importSecretRules(RULES));
 
 // What the check (lib-gate.ts) refuses in a line of the report, with no AI-DLC words known.
-const gate = (text: string, dict: Dictionary) => textHits({ words: new Set(), dict, allowed: [] }, text);
+const gate = (text: string, dict: Dictionary) => textHits({ words: new Set(), dict }, text);
 
 const empty: Dictionary = { entries: [] };
 // Made-up secret values, built from pieces so the source holds no secret-shaped literal.
@@ -327,8 +327,9 @@ describe("hidden names inside URLs, emails, secrets and home paths", () => {
     };
     expect(redact("opened /srv/AcmeCorporation-private/x", d)).toBe("opened <project>/x");
   });
-  test("an audit field name copied into safe.json stays a field name when a hidden name equals it", () => {
-    expect(redactValue({ audit: { problems: [{ Stage: "requirements-analysis" }] } }, named("Stage"))).toEqual({ audit: { problems: [{ Stage: "requirements-analysis" }] } });
+  test("an audit field name in safe.json stays a field name when a hidden name equals it", () => {
+    const rows = { audit: { rows: [{ seq: 1, event: "GATE_APPROVED", fields: [["Stage", "requirements-analysis"]] }] } };
+    expect(redactValue(rows, named("Stage"))).toEqual(rows);
   });
 });
 

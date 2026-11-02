@@ -13,7 +13,7 @@ import { buildDictionary, type Dictionary, redact } from "../../core/skills/aidl
 import { textHits } from "../../core/skills/aidlc-issue-report/scripts/lib-gate.ts";
 
 // What the check (lib-gate.ts) refuses in a line of the report, with no AI-DLC words known.
-const gate = (text: string, dict: Dictionary) => textHits({ words: new Set(), dict, allowed: [] }, text);
+const gate = (text: string, dict: Dictionary) => textHits({ words: new Set(), dict }, text);
 
 function project(folder: string, gitName: string): string {
   const p = join(mkdtempSync(join(tmpdir(), "dict-test-")), folder);

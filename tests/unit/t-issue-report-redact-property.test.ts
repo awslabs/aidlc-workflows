@@ -15,7 +15,7 @@ const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // r
 useSecretRules(await importSecretRules(RULES));
 
 // What the check (lib-gate.ts) refuses in a line of the report, with no AI-DLC words known.
-const gate = (text: string, dict: Dictionary) => textHits({ words: new Set(), dict, allowed: [] }, text);
+const gate = (text: string, dict: Dictionary) => textHits({ words: new Set(), dict }, text);
 
 const dict: Dictionary = {
   entries: [

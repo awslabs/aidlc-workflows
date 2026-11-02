@@ -47,6 +47,22 @@ export type Summary = {
   mixedSessions: number;
   reportModels: Record<string, number>;
   notes: string[];
+  // What happened, one event at a time, in each session's own order; lib-shape.ts turns the raw values (a session
+  // id, a call's input, a reply's text) into labels, the same value the same label.
+  events: TurnEvent[];
+};
+export type TurnEvent = {
+  ts: string;
+  session: string;
+  kind: string;
+  tool?: string;
+  input?: string;
+  verb?: string;
+  hook?: string;
+  owner?: string;
+  detail?: string;
+  reply?: string;
+  noTime?: boolean;
 };
 // A reply the person typed, as the tool logged it. Codex adds how it reached the tool.
 export type Prompt = {
@@ -165,7 +181,7 @@ function empty(tool: string): Summary {
     tool, sessions: 0, firstTs: null, lastTs: null, prompts: 0, toolCalls: 0, toolErrors: 0, denials: {}, aidlcHookBlocks: {},
     otherHookBlocks: 0, unattributedHookBlocks: 0, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {}, repeats: [], timeline: [], subagents: {},
     engine: null, toolVersions: {}, models: {}, efforts: {}, agents: {}, approvalModes: {}, handRunChecks: [], reportSessions: 0,
-    mixedSessions: 0, reportModels: {}, notes: [],
+    mixedSessions: 0, reportModels: {}, notes: [], events: [],
   };
 }
 
@@ -311,6 +327,7 @@ function noteCommand(t: Tally, ts: string, text: string) {
   const verb = ["aidlc", ...kept.filter(Boolean)].join(" ").toLowerCase();
   if (!/^aidlc [a-z]/.test(verb)) return;
   t.add(ts, (s) => bump(s.aidlcCommands, verb.slice(0, 60)));
+  ev(t, ts, { kind: "aidlc-command", verb: verb.slice(0, 60) });
 }
 
 const HOOK_BLOCK_KIND = { aidlc: "aidlc-hook-block", other: "other-hook-block", unknown: "hook-block" } as const;
@@ -329,6 +346,7 @@ function noteHookBlock(t: Tally, tool: string, local: Local, ts: string, command
     s.timeline.push({ ts, kind, detail: hook ?? "" });
   });
   t.add(ts, () => local.refusals.push({ tool, ts, hook, owner, text: text.slice(0, 1500) }));
+  ev(t, ts, { kind, owner, ...(hook ? { hook } : {}) });
 }
 
 // A Stop hook that kept the turn going, with the hook's command when the record names one.
@@ -340,10 +358,12 @@ function noteStop(t: Tally, tool: string, local: Local, ts: string, command: str
     s.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
   });
   t.add(ts, () => local.refusals.push({ tool, ts, hook, owner, text: text.slice(0, 1500) }));
+  ev(t, ts, { kind: "stop-hook-feedback", owner, ...(hook ? { hook } : {}) });
 }
 
 function noteError(t: Tally, tool: string, local: Local, ts: string, text: string) {
   t.add(ts, () => local.errors.push({ tool, ts, text: text.slice(0, 600) }));
+  ev(t, ts, { kind: "tool-error" });
 }
 
 // Same tool with the same input three times or more = a loop worth naming.
@@ -351,9 +371,11 @@ type Calls = Map<string, { tool: string | undefined; ts: string[] }>;
 
 // What one session counted, each with its time and its place, applied once the session is read: the part from where
 // this report began (its own commands, checks and refusals, a check.ts run three times) stays out of the run's counts.
-type Op = (s: Summary, calls: Calls) => void;
+type Op = (s: Summary, calls: Calls, session: string) => void;
 class Tally {
   private ops: { ts: string; op: Op }[] = [];
+  // The session the events belong to (the tool's own id for it).
+  constructor(readonly session = "") {}
   add(ts: string, op: Op) {
     this.ops.push({ ts, op });
   }
@@ -365,9 +387,18 @@ class Tally {
     for (let i = 0; i < this.ops.length; i++) {
       const { ts, op } = this.ops[i];
       if ((cut.from && ts >= cut.from) || (cut.before != null && i >= cut.before)) continue;
-      op(s, calls);
+      op(s, calls, this.session);
     }
   }
+}
+
+// One event of the stream, counted with the rest of the session (the report's own part stays out the same way).
+function ev(t: Tally, ts: string, e: Omit<TurnEvent, "ts" | "session">) {
+  t.add(ts, (s, _calls, session) => s.events.push({ ts, session, ...e }));
+}
+function notePrompt(t: Tally, ts: string, text: string, noTime = false) {
+  t.add(ts, (x) => x.prompts++);
+  ev(t, ts, { kind: "person-turn", reply: text, ...(noTime ? { noTime: true } : {}) });
 }
 
 function finishRepeats(s: Summary, calls: Calls) {
@@ -398,6 +429,7 @@ function noteCall(t: Tally, rawTool: string | undefined, input: unknown, ts: str
     if (call) call.ts.push(ts);
     else calls.set(k, { tool, ts: [ts] });
   });
+  ev(t, ts, { kind: "call", ...(tool ? { tool } : {}), input: k });
 }
 
 function readJson<T>(path: string): T {
@@ -558,7 +590,7 @@ export function claude(project: string, since: number, until: number, local: Loc
         const id = r.sessionId ?? file;
         const log = sessions.get(id) ?? [];
         sessions.set(id, log);
-        const t = tallies.get(id) ?? new Tally();
+        const t = tallies.get(id) ?? new Tally(id);
         tallies.set(id, t);
         log.push({ ts, key: "toolVersions", value: r.version });
         if (!r.isSidechain) {
@@ -574,6 +606,7 @@ export function claude(project: string, since: number, until: number, local: Loc
             bump(x.denials, kind);
             x.timeline.push({ ts, kind: "tool-denied", detail: kind });
           });
+          ev(t, ts, { kind: "tool-denied", detail: kind });
         }
         const content = r.message?.content;
         // Claude Code writes two kinds of user line nobody typed: the summary
@@ -593,7 +626,7 @@ export function claude(project: string, since: number, until: number, local: Loc
           const command = text.match(/<command-name>([^<]{1,200})<\/command-name>(?:[\s\S]*?<command-args>([^<]{0,2000})<\/command-args>)?/);
           const typed = command ? `${command[1]} ${command[2] ?? ""}`.trim() : text;
           if (typed.trim() && (command || !injectedBlock(text)) && !text.startsWith("[Request interrupted by user")) {
-            t.add(ts, (x) => x.prompts++);
+            notePrompt(t, ts, typed);
             const prompt: Prompt = { tool: s.tool, ts, text: typed.slice(0, 2000), session: id, engineAfter: false };
             local.prompts.push(prompt);
             lastTyped.set(id, prompt);
@@ -731,7 +764,7 @@ export function codex(project: string, since: number, until: number, local: Loca
     let reportFrom: string | null = null;
     const firstPrompt = local.prompts.length;
     const checks = new Map<string, { ts: string; check: string }>();
-    const t = new Tally();
+    const t = new Tally(String(meta.payload?.id ?? file));
     const started = Date.parse(meta.timestamp ?? "");
     for (const l of lines) {
       if (!inWindow(l.timestamp, since, until)) continue;
@@ -760,10 +793,11 @@ export function codex(project: string, since: number, until: number, local: Loca
             x.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
             local.refusals.push({ tool: x.tool, ts, hook: null, owner: "unknown", text: reason });
           });
+          ev(t, ts, { kind: "stop-hook-feedback", owner: "unknown" });
         }
         if (text.trim() && !injected) {
           // A subagent's or reviewer's task message is the agent's, not a reply the person typed.
-          if (!copiedReplies) t.add(ts, (x) => x.prompts++);
+          if (!copiedReplies) notePrompt(t, ts, text);
           const turn: string | undefined = p.internal_chat_message_metadata_passthrough?.turn_id;
           const before = turn ? lastInTurn.get(turn) : undefined;
           if (turn) lastInTurn.set(turn, text);
@@ -806,6 +840,7 @@ export function codex(project: string, since: number, until: number, local: Loca
             bump(x.denials, "policy-denied");
             x.timeline.push({ ts, kind: "tool-denied", detail: "policy-denied" });
           });
+          ev(t, ts, { kind: "tool-denied", detail: "policy-denied" });
         }
         if (hookBlock) noteHookBlock(t, s.tool, local, ts, null, text);
         else if (isError) noteError(t, s.tool, local, ts, text);
@@ -850,6 +885,7 @@ function kiroFailure(t: Tally, tool: string, local: Local, ts: string, text: str
       bump(s.denials, k);
       s.timeline.push({ ts, kind: "tool-denied", detail: k });
     });
+    ev(t, ts, { kind: "tool-denied", detail: k });
   }
   noteError(t, tool, local, ts, text);
 }
@@ -917,7 +953,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
       // The run shows as AI-DLC engine calls, in the main file or a sub-execution's; read after all of them.
       const engineCalls: string[] = [];
       const firstPrompt = local.prompts.length;
-      const t = new Tally();
+      const t = new Tally(sess);
       // Calls Kiro denied, each with whether AI-DLC hooks ran right before it (the hook records just above the call).
       const denied = new Map<string, boolean>();
       for (const file of files) {
@@ -948,7 +984,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
             promptTs.push(ts);
             const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? "");
             if (text.trim()) {
-              t.add(ts, (x) => x.prompts++);
+              notePrompt(t, ts, text);
               local.prompts.push({ tool: s.tool, ts, text: text.slice(0, 2000) });
             }
           } else if (p.type === "tool_call") {
@@ -978,6 +1014,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
               x.approvalPrompts++;
               x.timeline.push({ ts, kind: "approval-prompt", detail: "" });
             });
+            ev(t, ts, { kind: "approval-prompt" });
           } else if (p.type === "sub_agent_start" && p.subAgentName) {
             const name = agentName(p.subAgentName);
             t.add(ts, (x) => subagent(x, name).dispatches++);
@@ -1116,7 +1153,7 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
     const firstPrompt = local.prompts.length;
     // v2 lines share the session's time, so the report's part is cut by place: from the last reply before the first
     // call of this skill's scripts.
-    const t = new Tally();
+    const t = new Tally(f);
     let lastPromptAt: number | null = null;
     let reportAt: number | null = null;
     for (const l of lines) {
@@ -1128,7 +1165,7 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
       touch(s, ts);
       if (l.kind === "Prompt") {
         lastPromptAt = t.size;
-        t.add(ts, (x) => x.prompts++);
+        notePrompt(t, ts, JSON.stringify(l.data?.content ?? ""), !own);
         lastTyped = {
           tool: s.tool, ts, text: JSON.stringify(l.data?.content ?? "").slice(0, 2000), engineAfter: false, ...(own ? {} : { noTime: true }),
         };
@@ -1206,13 +1243,13 @@ export function copilotCli(project: string, since: number, until: number, local:
     let lastTyped: Prompt | null = null;
     let ranBefore = false;
     const firstPrompt = local.prompts.length;
-    const t = new Tally();
+    const t = new Tally(id);
     for (const e of readLines<CopilotEvent>(join(root, id, "events.jsonl"))) {
       if (!inWindow(e.timestamp, since, until)) continue;
       used = true;
       touch(s, e.timestamp);
       if (e.type === "user.message") {
-        t.add(e.timestamp, (x) => x.prompts++);
+        notePrompt(t, e.timestamp, String(e.data?.content ?? ""));
         lastTyped = { tool: s.tool, ts: e.timestamp, text: String(e.data?.content ?? "").slice(0, 2000), engineAfter: false };
         local.prompts.push(lastTyped);
         if (!reportFrom) lastPrompt = e.timestamp;

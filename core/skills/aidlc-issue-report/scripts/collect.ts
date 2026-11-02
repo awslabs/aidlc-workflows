@@ -13,14 +13,15 @@ import { platform } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { extractArchive, walkFiles } from "./lib-archive.ts";
 import {
-  absenceSignals, hookHealthDirs, matchReplies, PROBLEM_EVENTS, readAudit, readHooksHealth, readSessionsFolder, readState, timeWindow,
-  withoutReportTurns,
+  hookHealthDirs, matchReplies, readAudit, readHooksHealth, readSessionsFolder, readState, rowEntries,
+  timeWindow, withoutReportTurns,
 } from "./lib-audit.ts";
 import {
   doctorEnv, environment, findProjectRoot, importAidlcTools, listIntents, nativeInstall, readTrees, secretRulesFile, toolsUsed, type Tree,
 } from "./lib-project.ts";
 import { HOST_TOOLS, Labels, Shaper, time, version } from "./lib-shape.ts";
 import { claude, codex, copilotCli, editorStores, kiroV2, kiroV3, type Local, type Summary } from "./lib-transcripts.ts";
+import { fieldName, type Shape, shapeValue, VOCAB_KINDS } from "./lib-rows.ts";
 import { loadVocab } from "./lib-vocab.ts";
 import { gateContext } from "./lib-check.ts";
 import { flagValue } from "./lib-cli.ts";
@@ -142,11 +143,14 @@ writeFileSync(join(localDir, "redaction-map.json"), JSON.stringify(dict, null, 2
 // AI-DLC's words, for the check (lib-gate.ts) after this run.
 writeFileSync(join(localDir, "vocab.json"), JSON.stringify([...vocab.words].sort()));
 writeFileSync(join(localDir, "phrases.json"), JSON.stringify([...vocab.phrases].sort()));
+// Which of those words is a stage, a phase, an agent …: the check reads a row's field by its kind (lib-rows.ts).
+writeFileSync(join(localDir, "vocab-kinds.json"), JSON.stringify(Object.fromEntries(VOCAB_KINDS.map((k) => [k, [...vocab[k]].sort()]))));
 // A Unit's and an intent's label in safe.json is the dictionary's, so it is the same one the report uses.
 // A Unit or an intent left out of the replacements as an ordinary word (`backend`) keeps the label the map gives it.
 const known = new Map([...dict.entries, ...(dict.skipped ?? [])].filter((e) => e.kind === "unit" || e.kind === "intent").map((e) => [e.value, e.label]));
 for (const it of intents) if (!known.has(it.dir)) known.set(it.dir, `<intent-${intents.indexOf(it) + 1}>`);
 const shaper = new Shaper(vocab, new Labels(), known);
+const rowShape: Shape = { label: (kind, raw) => shaper.labels.label(kind, raw), known: (raw) => known.get(raw) };
 
 // Versions of the tools this run used. A version the tool wrote into its own log (`toolVersions`) is the
 // one at the time of the run; the rest are measured now, and the ones not found at all are asked of the
@@ -163,7 +167,6 @@ const versionsMissing = usedTools.filter((k) => version(env.tools[k].version) ==
 const runRows = withoutReportTurns(winRows, local.prompts);
 const counts: Record<string, number> = {};
 for (const r of runRows) counts[r.event] = (counts[r.event] ?? 0) + 1;
-const problems = runRows.filter((r) => PROBLEM_EVENTS.has(r.event));
 
 // ---- did each typed reply reach AI-DLC? ----
 const replies = matchReplies(local.prompts, runRows);
@@ -231,9 +234,10 @@ if (flag("no-doctor")) {
           : "doctor could not run";
     }
     writeFileSync(join(localDir, "doctor-stdout.txt"), `${r.stdout ?? ""}\n${r.stderr ?? ""}`);
-    const found: { id: string; severity: string }[] = [];
-    // An info row is not a finding, here as in report.json.
-    for (const m of (r.stdout ?? "").matchAll(/^\s*(ERROR|WARNING|WARN)\s+([a-z][a-z0-9-]+)\s*$/gm)) found.push({ severity: m[1], id: m[2] });
+    // Every finding, info rows too: report.json's list when the export has one, else the rows doctor printed.
+    const printed: { id: string; severity: string }[] = [];
+    for (const m of (r.stdout ?? "").matchAll(/^\s*(ERROR|WARNING|WARN|INFO)\s+([a-z][a-z0-9-]+)\s*$/gm)) printed.push({ severity: m[1], id: m[2] });
+    const fromReport: { id: string; severity: string }[] = [];
     doctor.checksFailed = [...(r.stdout ?? "").matchAll(/^\s*(?:✗|FAIL|\[fail\]|×)\s+.{3,80}$/gim)].length;
     // The export's report.json lists the findings; it is read where doctor wrote it.
     const tgz = readdirSync(rawDir).find((f) => f.endsWith(".tar.gz"));
@@ -253,18 +257,13 @@ if (flag("no-doctor")) {
       try {
         const j = JSON.parse(readFileSync(f, "utf8")) as { findings?: { id?: unknown; severity?: unknown }[] };
         for (const x of j.findings ?? []) {
-          if (x?.id && String(x.severity ?? "").toLowerCase() !== "info") found.push({ id: String(x.id), severity: String(x.severity ?? "") });
+          if (x?.id) fromReport.push({ id: String(x.id), severity: String(x.severity ?? "") });
         }
       } catch {
         // report.json shape not as expected
       }
     }
-    const seen = new Set<string>();
-    doctor.findings = found.filter((f) => {
-      if (seen.has(f.id)) return false;
-      seen.add(f.id);
-      return true;
-    });
+    doctor.findings = fromReport.length ? fromReport : printed;
     if (doctor.ran && !doctor.note) doctor.note = "the export stays in local/doctor-raw and is not sent";
   }
 }
@@ -280,9 +279,17 @@ const safe = {
   audit: {
     rowsTotal: rows.length,
     rowsInWindow: winRows.length,
+    // Every row of the run in time order, every field by its own rule (lib-rows.ts).
+    rows: runRows.map((r, i) => ({
+      seq: i + 1,
+      ts: time(r.ts),
+      event: shaper.event(r.event),
+      intent: shaper.intent(r.intent),
+      fields: (rowEntries.get(r) ?? [])
+        .filter(([name]) => name !== "Timestamp" && name !== "Event")
+        .map(([name, value]) => [fieldName(vocab, rowShape, name), shapeValue(vocab, rowShape, r.event, name, value)]),
+    })),
     counts: shaper.keys(counts, (k) => shaper.event(k)),
-    problems: problems.slice(-300).map((r) => shaper.problem(r)),
-    absence: absenceSignals(runRows).map((a) => shaper.absence(a)),
   },
   hooks: shaper.hooks(health),
   sessionsFolder: readSessionsFolder(project),
@@ -321,8 +328,8 @@ console.log(
       local: localDir,
       window: safe.window,
       found: {
-        problemEvents: problems.length,
-        absence: safe.audit.absence.length,
+        auditRows: safe.audit.rows.length,
+        events: transcripts.reduce((n, t) => n + ("events" in t ? t.events.length : 0), 0),
         hookDrops: health.drops.length,
         repliesNotRecorded: replies.notRecorded.length,
         toolsUsed: usedTools,

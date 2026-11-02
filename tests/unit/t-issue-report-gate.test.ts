@@ -1,5 +1,5 @@
 // The check (lib-gate.ts) reads the files to be sent as written, never through redaction: a value redaction
-// left behind is refused here, a label and a value the person allowed exempt only their own span, and safe.json
+// left behind is refused here, a label and AI-DLC's own message text exempt only their own span, and safe.json
 // holds only AI-DLC's words, this skill's, labels and known shapes.
 
 import { describe, expect, test } from "bun:test";
@@ -13,10 +13,9 @@ const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // r
 useSecretRules(await importSecretRules(RULES));
 
 const AIDLC_WORDS = ["code-generation", "functional-design", "traceability", "HUMAN_TURN", "GATE_OPENED", "SENSOR_PASSED", "aidlc-state.md", "feature", "kiro"];
-const ctx = (dict: Dictionary = { entries: [] }, allowed: string[] = []): GateContext => ({
+const ctx = (dict: Dictionary = { entries: [] }): GateContext => ({
   words: new Set([...AIDLC_WORDS, ...skillWords()]),
   dict,
-  allowed,
 });
 const reasons = (text: string, c = ctx()) => textHits(c, text).map((h) => h.reason);
 
@@ -82,12 +81,7 @@ describe("what a report says is not refused", () => {
       expect([line, reasons(line)]).toEqual([line, []]);
     }
   });
-  test("a value the person allowed passes exactly, and nothing around it", () => {
-    const allowed = ["Error: ENOENT /srv/shop/contoso.yaml"];
-    expect(reasons("The tool printed Error: ENOENT /srv/shop/contoso.yaml once.", ctx(undefined, allowed))).toEqual([]);
-    expect(reasons("The tool printed Error: ENOENT /srv/shop/contoso.yaml.bak once.", ctx(undefined, allowed)).length).toBeGreaterThan(0);
-    expect(reasons("Error: ENOENT /srv/shop/contoso.yaml and password=hunter22x", ctx(undefined, allowed))).toContain("a credential");
-  });
+
 });
 
 describe("safe.json", () => {
@@ -116,7 +110,7 @@ describe("safe.json", () => {
         schema: 2,
         generatedAt: "2026-10-30T08:00:00.000Z",
         environment: { os: "linux 6.8.0-45-generic x64", toolsUsed: ["kiro-cli"], native: { sourceRef: "refs/tags/v2.11.2" } },
-        audit: { counts: { HUMAN_TURN: 4, "<custom-event-1>": 1 }, absence: [{ kind: "same-error-repeated x2 (<custom-tool-1>)" }] },
+        audit: { counts: { HUMAN_TURN: 4, "<custom-event-1>": 1 } },
         transcripts: [{ tool: "kiro (v3: Kiro CLI)", handRunChecks: [{ check: "sensor-traceability --stage functional-design", pass: true }] }],
         intents: [{ scope: "feature", stages: { "code-generation": "-", "<custom-stage-1>": "S" } }],
       }),
@@ -160,11 +154,7 @@ describe("shapes the round-11 reviews found", () => {
       expect([line, reasons(line, { ...ctx(), words: new Set([...ctx().words, "AIDLC_PLUGIN_KEY"]) })]).toEqual([line, []]);
     }
   });
-  test("an allowed value exempts only itself as a whole word, and never in safe.json", () => {
-    expect(reasons("connect to 192.168.10.5 failed", ctx(undefined, ["10"])).length).toBeGreaterThan(0);
-    expect(reasons("account 123456789012", ctx(undefined, ["3456"])).length).toBeGreaterThan(0);
-    expect(safeHits(ctx(undefined, ["192.168.10.5"]), { notes: ["connect 192.168.10.5"] }).length).toBeGreaterThan(0);
-  });
+
   test("invisible characters, full-width signs and grouped digits do not hide a value", () => {
     for (const line of ["bob​@​example​.com", "bob＠example．com", "10．0．0．5", "1234-5678-9012", "card 4111 1111 1111 1111", "a\u00a0b", "x\u200by", "a\u001bb"]) {
       expect(reasons(line).length).toBeGreaterThan(0);
@@ -209,10 +199,7 @@ describe("shapes the round-11 Codex review found", () => {
     expect(reasons("<customer-123456789012>").length).toBeGreaterThan(0);
     expect(reasons("<customer-12> and <custom-stage-3>")).toEqual([]);
   });
-  test("an allowed value never takes a credential's name with it, and passes a hidden name it is", () => {
-    expect(reasons("password=abc", ctx(undefined, ["password"]))).toContain("a credential");
-    expect(textHits(ctx(d, ["Contoso"]), "the Contoso log")).toEqual([]);
-  });
+
   test("an OS release, a model with its context suffix pass", () => {
     for (const line of ["6.8.0-45-generic", "5.15.167.4-microsoft-standard-WSL2", "claude-opus-5-5[1m]"]) expect([line, reasons(line)]).toEqual([line, []]);
   });
@@ -244,12 +231,7 @@ describe("shapes the round-12 reviews found (values copied by mistake)", () => {
       expect([t, reasons(t)]).toEqual([t, []]);
     }
   });
-  test("an allowed value exempts only what it covers whole", () => {
-    expect(refused("Fabrikam Bank rejected the call.", ctx(d, ["Bank"]))).toBe(true);
-    expect(refused("password : hunter2", ctx(d, ["password"]))).toBe(true);
-    expect(refused("Authorization: Bearer abc", ctx(d, ["Authorization: Bearer"]))).toBe(true);
-    expect(textHits(ctx(d, ["Contoso"]), "the **Contoso** log")).toEqual([]);
-  });
+
   test("long numbers, card, phone and personal numbers are refused", () => {
     for (const t of ["Card 4111111111111111", "SSN 123-45-6789", "+1 425 555 0100", "010-1234-5678", "tel: 4255550100", "acct 1234567890123", "Phone: +1 (206) 555-0123"]) {
       expect([t, refused(t)]).toEqual([t, true]);

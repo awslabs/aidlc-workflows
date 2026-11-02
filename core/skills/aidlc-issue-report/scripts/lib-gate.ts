@@ -5,7 +5,7 @@
 // The report (English the model wrote) is refused line by line wherever a shape that can carry identity
 // appears: an address, an email, an IP, a path or a dotted name outside AI-DLC's and the AI tools' own, an
 // opaque token, a credential, an encoded spelling, markup, a letter outside ASCII, or a name in the redaction
-// map. A label (`<project>`), a value the person allowed (allow.ts) and the fixed text of one of AI-DLC's own
+// map. A label (`<project>`) and the fixed text of one of AI-DLC's own
 // messages (lib-vocab.ts phrases) exempt only their own span: what a message filled in is read like any other word.
 // What it is for: a value the model copies by mistake from a log or a record, in the form such values are usually
 // written. It does not try to defeat text written to get past it (a name split by invisible characters or by a
@@ -19,15 +19,16 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, PUBLIC_URL, TOOL_DIRS } from "./redact.ts";
 import { isOsLine, isVersion, KERNEL_RELEASE, OWN, PUBLIC_MODEL } from "./lib-shape.ts";
+import { fieldNameOk, isRowLabel, type RowVocab, valueOk } from "./lib-rows.ts";
 
 export type GateContext = {
   // AI-DLC's words (collect.ts keeps them in local/vocab.json) and this skill's own.
   words: Set<string>;
   dict: Dictionary;
-  // Exact values the person chose to include (allow.ts); they pass in the report only.
-  allowed: string[];
   // The fixed text of AI-DLC's own messages (local/phrases.json), so one can be quoted as it is.
   phrases?: string[];
+  // AI-DLC's words by kind, for the audit rows (lib-rows.ts); without them every row value must be a label.
+  rows?: RowVocab;
 };
 export type GateHit = { line: number; reason: string; field?: string };
 
@@ -50,7 +51,7 @@ export function skillWords(dir = import.meta.dir): Set<string> {
   return words;
 }
 
-// Stands in for a label or an allowed value while the rules read the text, one for each character it covers, so
+// Stands in for a label or AI-DLC's message text while the rules read the text, one for each character it covers, so
 // places in the text hold: not a letter, a digit, a space or any character a rule looks for, so the text around it
 // is read as written and the span itself never matches. Text that already holds one is refused.
 const MASK = "\uE000";
@@ -314,18 +315,6 @@ function lineReasons(ctx: GateContext, masked: string): string[] {
   return [...out];
 }
 
-// Where each value the person allowed stands as a whole word: start or end of the line, a space, a bracket, a quote or
-// emphasis around it (`10` never inside `192.168.10.5`, `password` never in `password=…`).
-function allowedSpans(ctx: GateContext, text: string): [number, number][] {
-  const out: [number, number][] = [];
-  for (const v of ctx.allowed) {
-    const body = v.normalize("NFC").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (!body) continue;
-    const re = new RegExp(String.raw`(?<=^|[\s(\[{"'\x60*_~])${body}(?=$|[\s)\]}"'\x60*_~,;!?]|\.(?:\s|$))`, "gm");
-    for (const m of text.matchAll(re)) out.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
-  }
-  return out;
-}
 const inside = (spans: [number, number][], [s, e]: [number, number]) => spans.some(([a, b]) => a <= s && e <= b);
 // Where AI-DLC's own message text stands, as written.
 function phraseSpans(ctx: GateContext, text: string): [number, number][] {
@@ -335,7 +324,7 @@ function phraseSpans(ctx: GateContext, text: string): [number, number][] {
   }
   return out;
 }
-function maskAllowed(text: string, spans: [number, number][]): string {
+function maskFixed(text: string, spans: [number, number][]): string {
   let out = text;
   for (const [a, b] of spans) out = out.slice(0, a) + MASK.repeat(b - a) + out.slice(b);
   return out;
@@ -361,33 +350,33 @@ function visible(text: string): { text: string; lineOf: (at: number) => number }
 
 const lineAt = (text: string, at: number) => text.slice(0, at).split(/\r?\n/).length;
 
-// The report, or any text the model wrote: every line refused for each reason that holds in it.
+// The cover, or any other text: every line refused for each reason that holds in it.
 export function textHits(ctx: GateContext, raw: string): GateHit[] {
   const text = raw.normalize("NFC");
   const hits: GateHit[] = [];
-  const allowed = [...allowedSpans(ctx, text), ...phraseSpans(ctx, text)];
+  const fixed = phraseSpans(ctx, text);
   const labelled = labelMask(text);
-  const masked = labelMask(maskAllowed(text, allowed));
-  // Shapes, word by word, with labels and allowed values standing in.
+  const masked = labelMask(maskFixed(text, fixed));
+  // Shapes, word by word, with labels and AI-DLC's own message text standing in.
   masked.split(/\r?\n/).forEach((line, i) => {
     for (const reason of lineReasons(ctx, line)) hits.push({ line: i + 1, reason });
   });
   text.split(/\r?\n/).forEach((line, i) => {
     if (PRIVATE_USE.test(line)) hits.push({ line: i + 1, reason: "a character outside ASCII (write it in English, or hide the name)" });
   });
-  // Credentials and names, as written: an allowed value exempts one only when it covers the whole of it.
-  for (const span of credentialSpans(labelled)) if (!inside(allowed, span)) hits.push({ line: lineAt(text, span[0]), reason: "a credential" });
+  // Credentials and names, as written: AI-DLC's message text exempts one only when it covers the whole of it.
+  for (const span of credentialSpans(labelled)) if (!inside(fixed, span)) hits.push({ line: lineAt(text, span[0]), reason: "a credential" });
   for (const { entry, at, length } of namesAt(text, ctx.dict)) {
-    if (!inside(allowed, [at, at + length])) hits.push({ line: lineAt(text, at), reason: `a name in the redaction map (write ${entry.label})` });
+    if (!inside(fixed, [at, at + length])) hits.push({ line: lineAt(text, at), reason: `a name in the redaction map (write ${entry.label})` });
   }
-  // The same on the visible text, with allowed values left out.
+  // The same on the visible text, with AI-DLC's message text left out.
   const shown = visible(masked);
   for (const [at] of credentialSpans(shown.text)) hits.push({ line: shown.lineOf(at), reason: "a credential" });
-  for (const { entry, at } of namesAt(visible(maskAllowed(text, allowed)).text, ctx.dict)) {
+  for (const { entry, at } of namesAt(visible(maskFixed(text, fixed)).text, ctx.dict)) {
     hits.push({ line: shown.lineOf(at), reason: `a name in the redaction map (write ${entry.label})` });
   }
   // AI-DLC's own secret rules, when the install has them, find what the shapes above do not.
-  for (const s of findSecrets(maskAllowed(text, allowed))) hits.push({ line: s.line, reason: "a secret, by AI-DLC's own rules" });
+  for (const s of findSecrets(maskFixed(text, fixed))) hits.push({ line: s.line, reason: "a secret, by AI-DLC's own rules" });
   return dedupe(hits);
 }
 
@@ -404,7 +393,6 @@ function dedupe(hits: GateHit[]): GateHit[] {
 // safe.json fields that hold this skill's own sentences: read as text.
 const PROSE_FIELDS = new Set(["notes", "note", "knownGaps", "error", "otherStores"]);
 // Fields with a shape of their own.
-const HEX_FIELDS = new Set(["Error Fingerprint", "Error Group"]);
 const PATH_FIELDS = new Set(["dir", "exe", "secretRules"]);
 const labelOr = (ctx: GateContext, v: string) => known(ctx, v) || isMask(labelMask(v));
 
@@ -417,7 +405,6 @@ function atomOk(ctx: GateContext, value: string, field: string): boolean {
   if (/^\d{1,9}(?:\s*\/\s*\d{1,9})?$/.test(v) || /^[!-/:-@[-`{-~]{1,3}$/.test(v)) return true;
   // A stage's mark in the state file (`x`, `S`, `-`).
   if (field === "stages" && /^[A-Za-z]{1,2}$/.test(v)) return true;
-  if (HEX_FIELDS.has(field)) return /^[0-9a-f]{6,64}$/i.test(v);
   if (field === "sourceRef") return /^[0-9a-f]{7,13}$/.test(v) || /^refs\/tags\/v\d{1,4}\.\d{1,4}\.\d{1,4}(?:-preview\.\d{8}\.\d{1,4})?$/.test(v);
   if (field === "os") return isOsLine(v);
   // The project's own AI-DLC file the secret rules came from (`.claude/tools/aidlc-doctor-bundle.ts`).
@@ -431,6 +418,56 @@ function atomOk(ctx: GateContext, value: string, field: string): boolean {
   // A command AI-DLC gave: AI-DLC's words with its own spacing.
   const parts = v.split(/ |, /);
   return parts.length > 1 && parts.every((p) => labelOr(ctx, p));
+}
+
+const NO_ROW_WORDS: RowVocab = {
+  words: new Set(), stages: new Set(), phases: new Set(), agents: new Set(), scopes: new Set(), sensors: new Set(),
+  hooks: new Set(), tools: new Set(), guards: new Set(), phrases: new Set(),
+};
+const ROW_KEYS = ["seq", "ts", "event", "intent", "fields"];
+function rowHits(ctx: GateContext, rows: unknown, hits: GateHit[], start: number, names: (v: string) => string[]): number {
+  let n = start;
+  const v = ctx.rows ?? NO_ROW_WORDS;
+  const refuse = (field: string, reason = "not what this field's rule writes (replace it with <redacted>)") => hits.push({ line: n, field, reason });
+  if (!Array.isArray(rows)) {
+    n++;
+    refuse("safe.audit.rows", "not a list of rows");
+    return n;
+  }
+  for (const [i, row] of rows.entries()) {
+    const at = `safe.audit.rows[${i}]`;
+    n++;
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      refuse(at, "not a row");
+      continue;
+    }
+    const r = row as Record<string, unknown>;
+    if (Object.keys(r).some((k) => !ROW_KEYS.includes(k))) refuse(at, "a key a row does not have");
+    if (typeof r.seq !== "number" || !Number.isInteger(r.seq) || r.seq < 1 || r.seq > 1e7) refuse(`${at}.seq`);
+    if (r.ts !== null && !(typeof r.ts === "string" && TIME.test(r.ts))) refuse(`${at}.ts`);
+    if (typeof r.event !== "string" || !(isRowLabel(r.event) || (/^[A-Z][A-Z0-9_]{1,59}$/.test(r.event) && v.words.has(r.event)))) refuse(`${at}.event`);
+    if (r.intent !== null && !(typeof r.intent === "string" && (r.intent === "(space)" || isRowLabel(r.intent)))) refuse(`${at}.intent`);
+    const event = typeof r.event === "string" ? r.event : "";
+    if (!Array.isArray(r.fields)) {
+      refuse(`${at}.fields`, "not a list of fields");
+      continue;
+    }
+    for (const [j, entry] of r.fields.entries()) {
+      n++;
+      const f = `${at}.fields[${j}]`;
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") {
+        refuse(f, "not a [name, value] pair");
+        continue;
+      }
+      const [name, value] = entry as [string, unknown];
+      if (!fieldNameOk(v, name)) refuse(`${f} (a name)`);
+      else if (!valueOk(v, event, name, value)) refuse(f);
+      for (const s of [name, ...(Array.isArray(value) ? value : [value])]) {
+        if (typeof s === "string") for (const reason of names(s)) refuse(f, reason);
+      }
+    }
+  }
+  return n;
 }
 
 // safe.json, decoded: each string checked by its field, each key that is data (not one of this skill's field
@@ -455,6 +492,11 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
         if (!own && leaves.some((val) => val === null || typeof val !== "object") && leaves.some((val) => (val === null || typeof val !== "object") && pair(val))) {
           hits.push({ line: n + 1, field: `${path}.<key>`, reason: "a credential" });
         }
+        // The audit rows: each value read by its own field's rule (lib-rows.ts), the one that wrote it.
+        if (path === "safe.audit" && k === "rows") {
+          n = rowHits(ctx, x, hits, n, names);
+          continue;
+        }
         if (!own) {
           n++;
           if (!atomOk(ctx, k, parent)) hits.push({ line: n, field: `${path} (a key)`, reason: "not one of AI-DLC's words, a label or a known shape" });
@@ -473,7 +515,7 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
     if (PROSE_FIELDS.has(field) && ctx.words.has(v)) {
       // one of this skill's fixed sentences
     } else if (PROSE_FIELDS.has(field)) {
-      for (const h of textHits({ ...ctx, allowed: [], phrases: [] }, v)) hits.push({ line: n, field: path, reason: h.reason });
+      for (const h of textHits({ ...ctx, phrases: [] }, v)) hits.push({ line: n, field: path, reason: h.reason });
     } else if (!atomOk(ctx, v, field)) {
       hits.push({ line: n, field: path, reason: "not one of AI-DLC's words, a label or a known shape (replace it with <redacted>)" });
     }

@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { shapeValue } from "../../core/skills/aidlc-issue-report/scripts/lib-rows.ts";
 import { Labels, Shaper } from "../../core/skills/aidlc-issue-report/scripts/lib-shape.ts";
 import { loadVocab } from "../../core/skills/aidlc-issue-report/scripts/lib-vocab.ts";
 import { importAidlcTools } from "../../core/skills/aidlc-issue-report/scripts/lib-project.ts";
@@ -87,34 +88,35 @@ describe("names", () => {
   });
 });
 
-describe("audit rows", () => {
-  test("a Bolt's name is not sent; an MCP tool is mcp; a status someone typed is a label", () => {
-    const s = shaper();
-    const out = s.auditFields({
-      "Failed Bolt": "Contoso checkout integration",
-      Tool: "mcp__contoso_crm__lookup",
-      Status: "Waiting for Contoso sign-off",
-      Stage: "requirements-analysis",
-      "Exit Code": "1",
-      "Sensor ID": "acme-lint",
-    });
-    expect(out).toEqual({ Tool: "mcp", Status: "<custom-value-1>", Stage: "requirements-analysis", "Exit Code": "1", "Sensor ID": "<custom-sensor-1>" });
+describe("audit rows, read against a real install's words", () => {
+  const field = (event: string, name: string, value: string) => {
+    const labels = new Labels();
+    return shapeValue(loadVocab(install(), [".kiro"]), { label: (k, raw) => labels.label(k, raw), known: () => undefined }, event, name, value);
+  };
+  test("a Bolt's name, a status someone typed and a plugin's check are labels; an MCP tool is a label too", () => {
+    expect(field("BOLT_FAILED", "Failed Bolt", "Contoso checkout integration")).toBe("<custom-unit-1>");
+    expect(field("UNIT_PAUSED", "Status", "Waiting for Contoso sign-off")).toBe("<custom-value-1>");
+    expect(field("SENSOR_FAILED", "Sensor ID", "acme-lint")).toBe("<custom-value-1>");
+    expect(field("ARTIFACT_UPDATED", "Tool", "mcp__contoso_crm__lookup")).toBe("<custom-value-1>");
+    expect(field("SENSOR_FAILED", "Exit Code", "1")).toBe(1);
   });
   test("an MCP tool the readers already wrote as mcp stays mcp", () => {
     expect(shaper().tool("mcp")).toBe("mcp");
   });
-  test("AI-DLC's own tool and status words stay", () => {
-    expect(shaper().auditFields({ Tool: "aidlc-state.ts", Status: "complete" })).toEqual({ Tool: "aidlc-state.ts", Status: "complete" });
-  });
-  test("a guard is one of AI-DLC's fences or hooks, not any word AI-DLC's source has", () => {
-    expect(shaper().auditFields({ Guard: "plan-approval" })).toEqual({ Guard: "plan-approval" });
-    expect(shaper().auditFields({ Guard: "plan-approval-guard" })).toEqual({ Guard: "plan-approval-guard" });
-    expect(shaper().auditFields({ Guard: "Shell" })).toEqual({ Guard: "<custom-hook-1>" });
+  test("AI-DLC's own tool, status, stage and guard words stay", () => {
+    expect(field("ARTIFACT_UPDATED", "Tool", "aidlc-state.ts")).toBe("aidlc-state.ts");
+    expect(field("UNIT_COMPLETED", "Status", "complete")).toBe("complete");
+    expect(field("STAGE_STARTED", "Stage", "requirements-analysis")).toBe("requirements-analysis");
+    expect(field("GUARD_DISABLED", "Guard", "plan-approval")).toBe("plan-approval");
+    expect(field("GUARD_DISABLED", "Guard", "plan-approval-guard")).toBe("plan-approval-guard");
+    expect(field("GUARD_DISABLED", "Guard", "Shell")).toBe("<custom-value-1>");
   });
   test("a guard switch keeps its scope and who switched it", () => {
-    expect(shaper().auditFields({ Guard: "review-freeze", Scope: "bugfix", Source: "you" })).toEqual({ Guard: "review-freeze", Scope: "bugfix", Source: "you" });
+    expect(field("GUARD_DISABLED", "Scope", "bugfix")).toBe("bugfix");
+    expect(field("GUARD_DISABLED", "Source", "you")).toBe("you");
   });
 });
+
 
 describe("other fields", () => {
   test("a hook drop's reason is AI-DLC's own words or other", () => {
@@ -128,13 +130,38 @@ describe("other fields", () => {
     expect(Object.keys(h.last).sort()).toEqual(["<custom-hook-1>", "plan-approval-guard"]);
     expect(h.drops.map((d) => d.reason)).toEqual(["lock busy", "other"]);
   });
+  test("the event stream keeps its kinds and AI-DLC's names; a session, an input and a reply are labels, the same value the same label", () => {
+    const s = shaper();
+    const base = {
+      tool: "codex", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 0, toolErrors: 0, denials: {}, aidlcHookBlocks: {},
+      otherHookBlocks: 0, unattributedHookBlocks: 0, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {},
+      repeats: [], timeline: [], subagents: {}, engine: null, toolVersions: {}, models: {}, efforts: {}, agents: {},
+      approvalModes: {}, handRunChecks: [], reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [],
+    };
+    const t = s.transcript({
+      ...base,
+      events: [
+        { ts: "2026-10-29T01:02:00Z", session: "sess-acme-9", kind: "call", tool: "exec_command", input: "k1" },
+        { ts: "2026-10-29T01:01:00Z", session: "sess-acme-9", kind: "person-turn", reply: "approve it for ContosoPay" },
+        { ts: "2026-10-29T01:03:00Z", session: "sess-acme-9", kind: "call", tool: "mcp__contoso_crm__lookup", input: "k1" },
+        { ts: "2026-10-29T01:04:00Z", session: "sess-acme-9", kind: "made-up-kind", reply: "approve it for ContosoPay" },
+      ],
+    }) as { events: Record<string, unknown>[] };
+    expect(t.events).toEqual([
+      { seq: 1, ts: "2026-10-29T01:01:00.000Z", session: "<custom-session-1>", kind: "person-turn", reply: "<custom-text-1>" },
+      { seq: 2, ts: "2026-10-29T01:02:00.000Z", session: "<custom-session-1>", kind: "call", tool: "exec_command", input: "<custom-id-1>" },
+      { seq: 3, ts: "2026-10-29T01:03:00.000Z", session: "<custom-session-1>", kind: "call", tool: "mcp", input: "<custom-id-1>" },
+      { seq: 4, ts: "2026-10-29T01:04:00.000Z", session: "<custom-session-1>", kind: "other", reply: "<custom-text-1>" },
+    ]);
+    expect(JSON.stringify(t.events)).not.toMatch(/acme|Contoso/i);
+  });
   test("a command keeps only AI-DLC's words; a doctor finding not AI-DLC's is a label", () => {
     const s = shaper();
     const t = s.transcript({
       tool: "kiro (v3)", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 0, toolErrors: 0, denials: {}, aidlcHookBlocks: {},
       otherHookBlocks: 0, unattributedHookBlocks: 0, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: { "aidlc engine orchestrate next": 2, "aidlc acme-portal": 1 },
       repeats: [], timeline: [], subagents: {}, engine: "v3", toolVersions: { "2.33.1": 1 }, models: {}, efforts: {}, agents: {},
-      approvalModes: {}, handRunChecks: [], reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [],
+      approvalModes: {}, handRunChecks: [], reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [], events: [],
     });
     expect(t).toMatchObject({ aidlcCommands: { "aidlc engine orchestrate next": 2 } });
     expect(s.doctorFinding({ id: "acme-plugin-check", severity: "WARNING" })).toEqual({ id: "<custom-doctor-finding-1>", severity: "warning" });
@@ -150,7 +177,7 @@ describe("other fields", () => {
         { ts: "2026-10-29T01:01:00Z", kind: "tool-denied", detail: "denied-after-aidlc-hooks" },
       ],
       subagents: {}, engine: "v3", toolVersions: {}, models: {}, efforts: {}, agents: {}, approvalModes: {}, handRunChecks: [],
-      reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [],
+      reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [], events: [],
     });
     expect(t).toMatchObject({
       otherHookBlocks: 1,

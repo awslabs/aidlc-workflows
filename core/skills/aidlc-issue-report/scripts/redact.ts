@@ -14,7 +14,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
 import { basename, resolve } from "node:path";
-import { AUDIT_FIELDS } from "./lib-audit.ts";
 
 export type Entry = { value: string; label: string; kind: string };
 // `skipped`: one-word values left out because they are ordinary words or too short; kept in
@@ -29,7 +28,7 @@ export const PUBLIC_URL = /^https?:\/\/(?:github\.com\/awslabs\/aidlc-workflows|
 // The labels this skill and AI-DLC's own redaction write. A dictionary name is never looked for inside one
 // (a Unit called `email` would break `<email>`); any other `<…>` is ordinary text, `List<Contoso>` included.
 export const LABEL =
-  /<(?:user|host|project|org|repo|email|url|ip|account|path|id|git-remote|aidlc-install|field|id:[0-9a-f]+|redacted(?:-(?:token|key|hex|jwt|aws-key|private-key))?|(?:intent|space|unit|org|customer|product|person|name)-\d+|custom-(?:stage|phase|scope|sensor|hook|agent|model|effort|tool|value|event|guard|harness|denial|mode|check|build|doctor-finding|unit|intent)-\d+)>/g;
+  /<(?:user|host|project|org|repo|email|url|ip|account|path|id|git-remote|aidlc-install|field|id:[0-9a-f]+|redacted(?:-(?:token|key|hex|jwt|aws-key|private-key))?|(?:intent|space|unit|org|customer|product|person|name)-\d+|custom-(?:stage|phase|scope|sensor|hook|agent|model|effort|tool|value|event|guard|harness|denial|mode|check|build|doctor-finding|unit|intent|text|file|hash|id|session|field|space)-\d+)>/g;
 
 // Too short or too generic to replace without wrecking the text.
 const GENERIC = new Set([
@@ -439,20 +438,21 @@ const DATA_MAPS = new Set([
 // tools' keys. One of them is kept as it is outside the data maps; any other key, and every key of a data map,
 // is data.
 const SAFE_FIELDS = new Set([
-  ...AUDIT_FIELDS, "Error Group", "kiro-ide", "kiro-cli",
-  "absence", "agentEngine", "agents", "aidlcCommands", "aidlcHookBlocks", "approvalModes", "approvalPrompts", "audit",
+  "kiro-ide", "kiro-cli",
+  "agentEngine", "agents", "aidlcCommands", "aidlcHookBlocks", "approvalModes", "approvalPrompts", "audit",
   "buildVersion", "bun", "channel", "check", "checked", "checksFailed", "claude", "codex", "completed", "copilot", "count",
   "counts", "currentStage", "degraded", "denials", "depth", "detail", "dir", "dispatches", "doctor", "drops", "efforts",
   "engine", "environment", "error", "event", "exe", "exists", "exit", "file", "findings", "firstTs", "generatedAt",
   "guardPolicy", "guardsOff", "guardsOn", "handRunChecks", "hook", "hooks", "id", "inProgress", "inRunningTurn", "intent",
   "intents", "kind", "kiroEngine", "kiroHomeEngine", "kiroIdePending", "knownGaps", "last", "lastAidlcActivity", "lastTs",
   "lastUpdated", "mixedSessions", "models", "native", "nextStage", "noTime", "notRecorded", "note", "notes", "openQuestions", "os",
-  "otherHookBlocks", "otherStores", "pass", "phase", "pin", "planApproval", "problems", "prompts", "questionsAsked", "ran", "reason",
+  "otherHookBlocks", "otherStores", "pass", "phase", "pin", "planApproval", "prompts", "questionsAsked", "ran", "reason",
   "recorded", "repeats", "replies", "reportModels", "reportSessions", "revisionCount", "row", "rowsInWindow", "rowsTotal",
   "sameAsBeforeInTurn", "schema", "scope", "secretRules", "sensors", "sessions", "sessionsFolder", "severity", "since",
   "source", "sourceRef", "stage", "stages", "stampVersion", "status", "stopFeedback", "subagents", "testStrategy",
   "timeline", "tool", "toolCalls", "toolErrors", "toolVersions", "tools", "toolsUsed", "totalStages", "transcriptCursors",
   "transcripts", "trees", "ts", "unattributedHookBlocks", "unboundApprovals", "until", "version", "versionsMissing", "window",
+  "rows", "seq", "fields", "events", "session", "input", "verb", "owner", "reply",
 ]);
 
 // `parent`: the field the object sits under, "" below a data map's key. lib-check.ts reads safe.json by the
@@ -465,6 +465,11 @@ export function keepsKey(parent: string, key: string): boolean {
 // stays valid JSON.
 export function redactValue(value: unknown, dict: Dictionary, opts: { ids?: boolean } = {}, parent = ""): unknown {
   if (typeof value === "string") return redact(value, dict, opts);
+  // An audit row's field is a [name, value] pair: the name is AI-DLC's or a label already (lib-rows.ts), so a hidden
+  // name that equals it (a Unit called `Stage`) does not turn a field name into a label.
+  if (Array.isArray(value) && parent === "fields") {
+    return value.map((pair) => (Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" ? [pair[0], redactValue(pair[1], dict, opts, "")] : redactValue(pair, dict, opts, "")));
+  }
   if (Array.isArray(value)) return value.map((v) => redactValue(v, dict, opts, parent));
   if (value && typeof value === "object") {
     return Object.fromEntries(

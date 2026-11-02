@@ -3240,7 +3240,7 @@ All three are read-only — no stage advance, no audit emit — and source every
 
 ### Issue report — when something went wrong
 
-`/aidlc-issue-report` (Codex: `$aidlc-issue-report`) turns a run that went wrong into one redacted report to send to the AI-DLC team. It reads AI-DLC's records and your AI tool's own log for this project, writes the report and its facts (`safe.json`) into `aidlc/diagnostics/issue-reports/<time>/`, and checks them before it says they are ready; it never sends anything itself. See [Skills](17-skills.md).
+`/aidlc-issue-report` (Codex: `$aidlc-issue-report`) gathers what a run that went wrong left behind, with sensitive details removed, for you to send to the AI-DLC team. It reads AI-DLC's records and your AI tool's own log for this project, writes the data (`safe.json`) and a cover that says what it holds into `aidlc/diagnostics/issue-reports/<time>/`, and checks them before it says they are ready; it does not diagnose anything and never sends anything itself. See [Skills](17-skills.md).
 
 ---
 

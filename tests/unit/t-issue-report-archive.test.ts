@@ -50,7 +50,7 @@ const named = (out: string, value: string) =>
   writeFileSync(join(out, "local", "redaction-map.json"), JSON.stringify({ entries: [{ value, label: "<customer-1>", kind: "named" }], secretRulesFrom: RULES }));
 
 test("a folder with the report and safe.json, both clean, passes", () => {
-  expect(check(reportFolder())).toEqual({ status: 0, result: { ok: true, checked: ["safe.json", "aidlc-issue-report.md"], hits: [], allowedValues: 0 } });
+  expect(check(reportFolder())).toEqual({ status: 0, result: { ok: true, checked: ["safe.json", "aidlc-issue-report.md"], hits: [] } });
 });
 
 test("a folder with no report yet does not pass", () => {

@@ -165,7 +165,7 @@ function kiroIdeVersion(): ToolVersion {
 
 // Kiro CLI also reads ~/.kiro/settings/cli.json. Which of the two decides the engine has changed across
 // Kiro CLI versions (2.21.1: the project's; 2.33.1: only the home one, measured 2026-10-22), so both are
-// recorded and signals.md says which wins for which version.
+// recorded and references/data.md says which wins for which version.
 function kiroHomeEngine(): { file: boolean; agentEngine: string | null } {
   const path = join(homedir(), ".kiro", "settings", "cli.json");
   const engine = readJson<{ "chat.agentEngine"?: unknown }>(path)?.["chat.agentEngine"];

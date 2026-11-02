@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { type AuditRow, absenceSignals, readHooksHealth, timeWindow } from "../../core/skills/aidlc-issue-report/scripts/lib-audit.ts";
+import { type AuditRow, readHooksHealth, timeWindow } from "../../core/skills/aidlc-issue-report/scripts/lib-audit.ts";
 import { toolsUsed } from "../../core/skills/aidlc-issue-report/scripts/lib-project.ts";
 import { claude } from "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts";
 
@@ -32,11 +32,6 @@ test("hook drops after the window's end are left out", () => {
   writeFileSync(join(dir, "plan-approval-guard.drops"), [`${at(5)}\tlock busy: x`, `${at(50)}\tlock busy: y`].join("\n"));
   const h = readHooksHealth([dir], Date.parse(at(0)), Date.parse(at(30)));
   expect(h.drops.map((d) => d.ts)).toEqual([at(5)]);
-});
-
-test("an open approval gate is doctor's to say, not a signal of this skill's own", () => {
-  const rows = [row(at(1), "STAGE_AWAITING_APPROVAL", { Stage: "requirements-analysis" }), row(at(2), "STAGE_SKIPPED", { Stage: "requirements-analysis" })];
-  expect(absenceSignals(rows).filter((a) => a.kind === "gate-never-answered")).toEqual([]);
 });
 
 test("an MCP tool's name keeps no server name", () => {
@@ -395,19 +390,6 @@ claude(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, local);
 console.log(JSON.stringify(local.prompts.map((p) => p.engineAfter)));`;
   const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: "" } });
   expect(JSON.parse(r.stdout)).toEqual([true]);
-});
-
-test("two errors that differ only in a quoted name are the same error; an apostrophe in a word is not a quote", async () => {
-  const { readAudit } = await import("../../core/skills/aidlc-issue-report/scripts/lib-audit.ts");
-  const project = mkdtempSync(join(tmpdir(), "errgroup-"));
-  const dir = join(project, "aidlc", "spaces", "default", "intents", "261029-x");
-  mkdirSync(join(dir, "audit"), { recursive: true });
-  const block = (ts: string, error: string) => `## ERROR_LOGGED\n**Event**: ERROR_LOGGED\n**Timestamp**: ${ts}\n**Error**: ${error}\n`;
-  writeFileSync(join(dir, "audit", "a.md"), [block(at(1), "Cannot read “a.ts”"), block(at(2), "Cannot read “b.ts”"), block(at(3), "can't open 'x' here"), block(at(4), "can't open 'y' there")].join("\n---\n"));
-  const rows = readAudit(project, [{ space: "default", dir: "261029-x", path: dir }]);
-  const g = rows.map((r) => r.fields["Error Group"]);
-  expect(g[0]).toBe(g[1]);
-  expect(g[2]).not.toBe(g[3]);
 });
 
 test.skipIf(process.platform === "win32")("a dangling link among the intents or the hook health files stops nothing", async () => {
@@ -1069,4 +1051,43 @@ console.log(JSON.stringify({ found: !!s }));`;
   const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
   expect([r.status, r.stderr]).toEqual([0, ""]);
   expect(JSON.parse(r.stdout)).toEqual({ found: true });
+});
+
+test("the event stream holds the run's calls, AI-DLC commands and replies in order, and stops where this report began", async () => {
+  const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const home = mkdtempSync(join(tmpdir(), "codex-stream-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const day = join(home, "sessions", "2026", "10", "29");
+  mkdirSync(day, { recursive: true });
+  const user = (text: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
+  const call = (id: string, cmd: string, min: number) => ({ timestamp: at(min), type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: id, arguments: JSON.stringify({ cmd }) } });
+  const lines = [
+    { timestamp: at(0), type: "session_meta", payload: { id: "t-stream", cwd: project } },
+    user("approve the plan for ContosoPay", 1),
+    call("c1", "aidlc engine orchestrate next", 2),
+    call("c2", "aidlc engine orchestrate next", 3),
+    user("make an issue report", 10),
+    call("c3", "bun .codex/skills/aidlc-issue-report/scripts/collect.ts --project .", 11),
+  ];
+  writeFileSync(join(day, "rollout-2026-10-29T01-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    const s = codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
+    const events = s?.events ?? [];
+    expect(events.map((e) => [e.ts, e.kind])).toEqual([
+      [at(1), "person-turn"],
+      [at(2), "call"],
+      [at(2), "aidlc-command"],
+      [at(3), "call"],
+      [at(3), "aidlc-command"],
+    ]);
+    expect(new Set(events.map((e) => e.session))).toEqual(new Set(["t-stream"]));
+    // The same call twice is the same input; safe.json shows it as one label.
+    expect(events[1].input).toBe(events[3].input);
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+  }
 });

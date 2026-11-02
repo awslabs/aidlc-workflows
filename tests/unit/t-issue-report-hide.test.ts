@@ -113,7 +113,6 @@ test("every script that takes a report folder refuses a file or a missing --out 
   for (const [script, args] of [
     ["check.ts", []],
     ["check.ts", ["--out", file]],
-    ["allow.ts", ["--out", file, "--value", "two words"]],
     ["hide.ts", ["--out", file, "--name", "Contoso"]],
     ["set-version.ts", ["--out", file, "--tool", "claude", "--version", "1.2.3"]],
     ["finish.ts", ["--out", file, "--no-open"]],

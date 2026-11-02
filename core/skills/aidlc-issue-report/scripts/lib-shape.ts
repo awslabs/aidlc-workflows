@@ -3,7 +3,6 @@
 // for any other name; text someone wrote (a Bolt's name, an error message) is not sent at all. Redaction
 // (redact.ts) still runs over the result; this is what makes a name nobody listed unable to get through.
 
-import type { AuditRow } from "./lib-audit.ts";
 import { BUILTIN_AGENTS, OWN, type Summary } from "./lib-transcripts.ts";
 
 export { OWN };
@@ -98,6 +97,11 @@ export const HOST_TOOLS = new Set([
   "listDirectory", "fileSearch", "grepSearch", "getDiagnostics", "readCode", "invokeSubAgent",
   // Copilot CLI
   "bash", "view", "edit", "create", "str_replace", "str_replace_editor", "read_bash", "write_bash", "stop_bash",
+]);
+// The kinds of event a transcript stream holds (lib-transcripts.ts).
+const EVENT_KINDS = new Set([
+  "call", "aidlc-command", "person-turn", "tool-error", "tool-denied", "approval-prompt", "stop-hook-feedback",
+  "aidlc-hook-block", "other-hook-block", "hook-block",
 ]);
 // AI-DLC's harness rows.
 export const HARNESS_ROWS = new Set(["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]);
@@ -224,72 +228,6 @@ export class Shaper {
       if (key) out[key] = (out[key] ?? 0) + n;
     }
     return out;
-  }
-
-  auditFields(fields: Record<string, string>): Record<string, string | number> {
-    const out: Record<string, string | number> = {};
-    for (const [k, value] of Object.entries(fields)) {
-      let shaped: string | number | null;
-      switch (k) {
-        case "Stage":
-        case "Stage slug":
-        case "Current Stage":
-        case "Next Stage":
-        case "Target":
-          shaped = this.stage(value);
-          break;
-        // A stage on a move, or who switched a guard (`you`, `command`, `team`).
-        case "Source":
-          shaped = this.v.stages.has(value) ? value : this.word(value);
-          break;
-        case "Scope":
-          shaped = this.scope(value);
-          break;
-        case "Phase":
-        case "Lifecycle Phase":
-          shaped = this.phase(value);
-          break;
-        case "Unit":
-          shaped = this.unit(value);
-          break;
-        case "Tool":
-          shaped = this.tool(value);
-          break;
-        case "Guard":
-          shaped = this.guard(value);
-          break;
-        case "Sensor ID":
-          shaped = this.sensor(value);
-          break;
-        case "Exit Code":
-        case "Findings count":
-        case "Revision count":
-        case "Revision Count":
-          shaped = count(value);
-          break;
-        case "Error Fingerprint":
-        case "Error Group":
-          shaped = /^[0-9a-f]{6,64}$/i.test(value) ? value : null;
-          break;
-        case "Failed Bolt":
-          shaped = null; // a Bolt's name is prose the person wrote
-          break;
-        default:
-          shaped = this.word(value);
-      }
-      if (shaped !== null) out[k] = shaped;
-    }
-    return out;
-  }
-
-  problem(r: AuditRow): Record<string, string | number | null> {
-    return { ts: time(r.ts), event: this.event(r.event), intent: this.intent(r.intent), ...this.auditFields(r.fields) };
-  }
-
-  absence(a: { kind: string; ts: string; stage: string | null; intent: string }) {
-    const repeated = a.kind.match(/^(same-error-repeated x\d+) \((.*)\)$/);
-    const kind = repeated ? `${repeated[1]} (${repeated[2] === "?" ? "?" : this.tool(repeated[2])})` : a.kind;
-    return { kind, ts: time(a.ts), stage: a.stage ? this.stage(a.stage) : null, intent: this.intent(a.intent) };
   }
 
   state(st: Record<string, unknown> | null) {
@@ -466,6 +404,23 @@ export class Shaper {
       agents: agentMap(s.agents),
       approvalModes: this.keys(s.approvalModes, (k) => this.oneOf(APPROVAL_MODES, "mode", k)),
       handRunChecks: s.handRunChecks.map((c) => ({ ts: time(c.ts), check: this.check(c.check), pass: c.pass })),
+      // The stream in time order (a session's own order where times are equal); every raw value a label.
+      events: [...(s.events ?? [])]
+        .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+        .map((e, i) => ({
+          seq: i + 1,
+          ts: time(e.ts),
+          session: e.session ? this.labels.label("session", e.session) : null,
+          kind: EVENT_KINDS.has(e.kind) ? e.kind : "other",
+          ...(e.tool !== undefined ? { tool: this.tool(e.tool) } : {}),
+          ...(e.input !== undefined ? { input: this.labels.label("id", e.input) } : {}),
+          ...(e.verb !== undefined ? { verb: this.command(e.verb) } : {}),
+          ...(e.hook !== undefined ? { hook: this.hook(e.hook) } : {}),
+          ...(e.owner !== undefined ? { owner: ["aidlc", "other", "unknown"].includes(e.owner) ? e.owner : "unknown" } : {}),
+          ...(e.detail !== undefined ? { detail: this.oneOf(DENIALS, "denial", e.detail) } : {}),
+          ...(e.reply !== undefined ? { reply: this.labels.label("text", e.reply) } : {}),
+          ...(e.noTime ? { noTime: true } : {}),
+        })),
       reportModels: modelMap(s.reportModels),
     };
   }
