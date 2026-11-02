@@ -43,6 +43,24 @@ Read the decision even when the review check is green: it can still ask for
 changes. The [PR guidelines](CONTRIBUTING.md#submitting-your-pr) explain its
 labels and review criteria.
 
+### Command Center UI
+
+The Command Center (`aidlc dashboard`) ships its server and a prebuilt UI
+bundle from `core/command-center/`. The React sources, the app's tests, and
+its dev dependencies live in the separate `command-center/` package. After
+changing anything under `command-center/ui/src`, rebuild and commit the bundle:
+
+```sh
+cd command-center
+bun install --frozen-lockfile
+bun test && bun run typecheck
+bun run build:ui   # writes ../core/command-center/ui
+```
+
+The **Command Center** workflow runs the same steps on every pull request that
+touches these paths, and fails when the committed bundle differs from a fresh
+build.
+
 ### Dependency updates
 
 [Dependabot](.github/dependabot.yml) checks the root Bun dependencies

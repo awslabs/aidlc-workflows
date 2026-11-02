@@ -43,6 +43,7 @@ diagnostic and lifecycle routes.
 | `/aidlc space-create <name>` | Create a new space that starts from the default space's org rules and empty team and project practices |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
 | `/aidlc --status` | Display a read-only status summary |
+| `/aidlc dashboard` | Open the Command Center, a live, read-only local view of your AI-DLC work ([guide](19-command-center.md)) |
 | `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
@@ -96,8 +97,8 @@ that work, and prints no AI-DLC version.
 
 ## Terminal Color
 
-The six public terminal commands (`config`, `doctor`, `version`, `update`,
-`use`, and `uninstall`) use restrained color only on human output. JSON, quiet
+The seven public terminal commands (`config`, `doctor`, `dashboard`, `version`,
+`update`, `use`, and `uninstall`) use restrained color only on human output. JSON, quiet
 output, files, audit records, and non-TTY streams remain uncolored.
 
 Color selection uses this precedence:
@@ -620,6 +621,27 @@ state, cache, or audit. Explicit `--space` and `--intent` selectors bind the
 header, Unit DAG, claims, and merge journals to the same selected identity.
 The board ends with concrete next actions for claiming available or released
 work, recording a pinned merge gate, or resuming `aidlc unit land`.
+
+---
+
+### `/aidlc dashboard` — Open the Command Center
+
+Open a live, read-only view of the AI-DLC work on this machine in your browser.
+
+**Syntax:**
+
+```
+/aidlc dashboard [--port <n>] [--no-open] [--root <dir>]... [--pin <dir>]...
+aidlc dashboard [--port <n>] [--no-open] [--json] [--root <dir>]... [--pin <dir>]... [--config <file>]
+```
+
+**Behavior:** The agent runs `aidlc dashboard` in the background instead of
+passing the words to the workflow, and gives you the link it prints. The
+server listens on `127.0.0.1` only, the link carries a code that changes on
+every start, and the current project is added automatically. It reads AI-DLC
+records and writes only its settings file (`~/.aidlc/dashboard.json`). It
+serves until stopped with Ctrl-C or by stopping the background command. See
+[The Command Center](19-command-center.md).
 
 ---
 

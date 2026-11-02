@@ -20,7 +20,8 @@
       "!tests/logs/**",
       "!tests/fixtures/v05-mr9-sensor-fire/failing-linter/**",
       "!tests/fixtures/markdown-goldens/**",
-      "!dist/**"
+      "!dist/**",
+      "!core/command-center/ui/**"
     ]
   },
   "overrides": [
@@ -35,7 +36,7 @@
       }
     },
     {
-      "includes": ["core/tools/**", "harness/**", "scripts/**"],
+      "includes": ["core/tools/**", "core/command-center/**", "harness/**", "scripts/**"],
       "linter": {
         "rules": {
           "style": {

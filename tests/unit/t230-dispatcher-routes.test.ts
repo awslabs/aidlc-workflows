@@ -43,6 +43,7 @@ import {
   resolveHookPath,
   normalizeTopLevelConfigVerbs,
   routeOptions,
+  routeLifetime,
   routePolicyFor,
   routePositionals,
   SIMPLE_PUBLIC_GRAMMARS,
@@ -2130,6 +2131,7 @@ describe("t230 dispatcher global flag translation", () => {
 });
 
 const UNEXERCISED_DELEGATES: Partial<Record<string, string>> = {
+  "aidlc-dashboard.ts": "The only route is long-lived (a local server that runs until stopped); the native binary build below proves the compiled bundle resolves it.",
   "aidlc-doctor.ts": "The only route has networkPolicy 'interactive-bounded'.",
   "aidlc-init.ts": "The only route has networkPolicy 'explicit-only'.",
   "aidlc-workspace-sync.ts": "The only route has networkPolicy 'required'.",
@@ -2144,7 +2146,8 @@ function compiledParityCases(): Array<{ tool: string; routeId: string; argv: str
     for (const route of ROUTES) {
       if (
         (route.tool !== tool && route.kind !== "custom") ||
-        route.networkPolicy !== "forbidden"
+        route.networkPolicy !== "forbidden" ||
+        routeLifetime(route) === "long-lived"
       ) continue;
 
       const nsPrefix = route.namespace === "public" ? [] : [route.namespace];
@@ -2724,6 +2727,7 @@ describe("t230 dispatcher route completeness", () => {
       "top-update": { networkPolicy: "explicit-only", mutationScope: "machine" },
       "top-use": { networkPolicy: "explicit-only", mutationScope: "machine" },
       "top-uninstall": { networkPolicy: "forbidden", mutationScope: "machine" },
+      "top-dashboard": { networkPolicy: "forbidden", mutationScope: "machine" },
     }));
     expect(
       ROUTES.filter((route) => route.visibility === "public")
@@ -2735,6 +2739,7 @@ describe("t230 dispatcher route completeness", () => {
         .sort(),
     ).toEqual([
       "top-config",
+      "top-dashboard",
       "top-doctor",
       "top-uninstall",
       "top-update",
@@ -3114,7 +3119,7 @@ describe("t230 dispatcher help and errors", () => {
     }
   });
 
-  test("all six public commands have side-effect-free registry-derived help", () => {
+  test("all seven public commands have side-effect-free registry-derived help", () => {
     const projectDir = makeProject();
     const machineRoot = join(projectDir, "machine-help-probe");
     const env = {
@@ -3127,6 +3132,7 @@ describe("t230 dispatcher help and errors", () => {
     const usage: Record<(typeof PUBLIC_COMMANDS)[number], string> = {
       config: "config <section> [flags]",
       doctor: "doctor [options]",
+      dashboard: "dashboard [--port <n>]",
       version: "version [--json]",
       update: "update [options]",
       use: "use <version> [options]",
@@ -3240,6 +3246,7 @@ describe("t230 dispatcher help and errors", () => {
     };
     // Both parsers, so neither can gain a flag help does not name.
     expect(Object.keys(grammars).sort()).toEqual([
+      "dashboard",
       "doctor",
       "uninstall",
       "update",

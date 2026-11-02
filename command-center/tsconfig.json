@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
+    "strict": true, "noUncheckedIndexedAccess": true, "jsx": "react-jsx",
+    "types": ["bun-types"], "lib": ["ES2022", "DOM", "DOM.Iterable"], "skipLibCheck": true, "noEmit": true
+  },
+  "include": ["ui/src", "tests", "vite.config.ts", "../core/command-center/server"]
+}

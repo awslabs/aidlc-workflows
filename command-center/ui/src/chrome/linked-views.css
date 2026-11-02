@@ -1,0 +1,42 @@
+/* Only the optional linked-app header changes. Standalone Engineering is untouched. */
+.cc-linked-header{position:sticky;top:0;z-index:5;background:var(--surf);box-shadow:var(--shadow)}
+.cc-linked-header .top{position:relative;top:auto;min-height:68px;height:auto;box-shadow:none;padding:12px 28px}
+.cc-linked-header .brand{flex:none}
+.cc-linked-header .cc-page-nav{min-height:44px;display:flex;align-items:center;padding:4px 28px;background:var(--surf);border-bottom:1px solid var(--line)}
+.cc-linked-header .cc-page-nav .nav{margin:0;gap:4px;overflow:auto}
+.cc-linked-header .cc-page-nav .nav :is(a,.navbtn){padding:6px 13px;white-space:nowrap}
+.cc-linked-header .cc-view-switch{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--line);background:var(--surf2);border-radius:8px;flex:none;margin-left:8px}
+.cc-linked-header .cc-view-switch a{display:flex;align-items:center;justify-content:center;gap:7px;padding:7px 12px;border:1px solid transparent;border-radius:5px;color:var(--dim);font-size:12px;font-weight:500;line-height:1.5;white-space:nowrap}
+.cc-linked-header .cc-view-switch a[aria-current="page"]{background:var(--surf);color:var(--run);border-color:color-mix(in srgb,var(--run) 25%,var(--line));box-shadow:var(--shadow)}
+.cc-linked-header .cc-view-switch a:hover{text-decoration:none;color:var(--run)}
+.cc-linked-header .cc-view-switch svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.cc-linked-header .search{flex:0 1 300px;min-width:180px}
+.cc-linked-header :is(.needpill,.seg,.iconbtn){flex:none;white-space:nowrap}
+.cc-app:has(.cc-linked-header) .rail{top:calc(var(--topbar-h) + 18px)}
+@media(max-width:1400px){
+  .cc-linked-header .top{gap:16px}
+  .cc-linked-header .cc-view-switch{margin-left:0}
+  .cc-linked-header .search{width:270px;flex-basis:270px}
+}
+@media(max-width:1160px){
+  .cc-linked-header .top{flex-wrap:wrap;padding:12px 20px;gap:12px 16px}
+  .cc-linked-header .brand{margin-right:auto}
+  .cc-linked-header .grow{display:none}
+  .cc-linked-header .search{order:2;flex:1;min-width:220px}
+  .cc-linked-header :is(.needpill,.seg,.iconbtn){order:3}
+  .cc-linked-header .cc-page-nav{padding-inline:20px}
+}
+@media(max-width:700px){
+  .cc-linked-header .top{padding:12px 14px 10px;gap:10px}
+  .cc-linked-header .brand{flex-basis:100%}
+  .cc-linked-header .brand .nm1{font-size:15px}
+  .cc-linked-header .brand .nm2{font-size:10px}
+  .cc-linked-header .cc-view-switch{order:1;margin-right:auto}
+  .cc-linked-header .cc-view-switch a{padding:5px 10px}
+  .cc-linked-header .search{order:4;flex-basis:100%;min-width:0}
+  .cc-linked-header .top .needpill{font-size:12px;padding:5px 10px}
+  .cc-linked-header .seg{margin-left:auto}
+  .cc-linked-header .top .seg button{font-size:12px;padding:5px 10px}
+  .cc-linked-header .cc-page-nav{padding-inline:14px}
+  .cc-linked-header .cc-page-nav .nav :is(a,.navbtn){font-size:12px;padding:6px 10px}
+}

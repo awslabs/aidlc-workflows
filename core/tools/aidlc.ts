@@ -68,6 +68,9 @@ type RouteNamespace = RouteNamespaceName;
 type ProjectRequirement = "none" | "optional" | "required";
 type PinPolicy = "active" | "inspect" | "pinned";
 type NetworkPolicy = "forbidden" | "explicit-only" | "interactive-bounded" | "required";
+// A route either returns when its work is done ("bounded", the default) or
+// keeps running until the person stops it ("long-lived", a local server).
+type Lifetime = "bounded" | "long-lived";
 type MutationScope =
   | "none"
   | "project"
@@ -92,6 +95,7 @@ export type Route = {
   pinPolicy: PinPolicy;
   networkPolicy: NetworkPolicy;
   mutationScope: MutationScope;
+  lifetime?: Lifetime;
   outputModes: readonly ("human" | "quiet" | "json")[];
   human?: readonly HelpLine[];
   all?: readonly string[];
@@ -134,6 +138,7 @@ export const TOOLS = {
   audit: "aidlc-audit.ts",
   bolt: "aidlc-bolt.ts",
   graph: "aidlc-graph.ts",
+  dashboard: "aidlc-dashboard.ts",
   doctor: "aidlc-doctor.ts",
   init: "aidlc-init.ts",
   jump: "aidlc-jump.ts",
@@ -190,6 +195,7 @@ export const SLASH_FLAG_ALIASES: readonly Alias[] = [
 export const PUBLIC_COMMANDS = [
   "config",
   "doctor",
+  "dashboard",
   "version",
   "update",
   "use",
@@ -200,6 +206,7 @@ type PublicCommand = (typeof PUBLIC_COMMANDS)[number];
 
 const HUMAN_TOP_ROUTE_IDS = new Set([
   "top-doctor",
+  "top-dashboard",
   "top-version",
   "top-help",
   "top-config",
@@ -357,6 +364,26 @@ export const ROUTES: readonly Route[] = [
     all: [
       "doctor [--verbose] [--json] [--quiet] [--check-updates] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--export] [--output <dir>]",
     ],
+  },
+  {
+    id: "top-dashboard",
+    namespace: "public",
+    group: "top",
+    kind: "top-passthrough",
+    classification: "passthrough",
+    verbs: ["dashboard"],
+    tool: TOOLS.dashboard,
+    visibility: "public",
+    projectRequirement: "optional",
+    pinPolicy: "active",
+    // Serves on 127.0.0.1 only; the Command Center makes no outbound requests.
+    networkPolicy: "forbidden",
+    // Writes only its own settings file, ~/.aidlc/dashboard.json.
+    mutationScope: "machine",
+    lifetime: "long-lived",
+    outputModes: ["human", "json"],
+    human: [{ command: "dashboard", summary: "open the local Command Center for your AI-DLC workspaces" }],
+    all: ["dashboard [--port <n>] [--no-open] [--json] [--root <dir>] [--pin <dir>] [--config <file>]"],
   },
   {
     id: "top-version",
@@ -1368,6 +1395,10 @@ function routeForms(route: Route): string[] {
   return [...route.verbs];
 }
 
+export function routeLifetime(route: Route): Lifetime {
+  return route.lifetime ?? "bounded";
+}
+
 export function listRoutes(): readonly Route[] {
   return ROUTES;
 }
@@ -1442,7 +1473,7 @@ export function copyChannelToolScripts(): string[] {
 
 // The dispatcher's public commands, outside its engine namespace, that every
 // install pre-approves, each spelled exactly as AI-DLC runs it: the doctor,
-// status and version utilities in both spellings agents use (doctor with or
+// dashboard, status and version utilities in both spellings agents use (doctor with or
 // without `--verbose`), config's read-only forms (`--show`, with or without
 // `--json`, top level or per section, and `--help`), and
 // turning one recorded check back on
@@ -1458,6 +1489,9 @@ export function copyChannelDispatcherCommands(): string[] {
   return [
     "doctor",
     "doctor --verbose",
+    // `/aidlc dashboard` as the skills run it: a read-only loopback server
+    // whose only write is its own settings file. Forms with flags still prompt.
+    "dashboard",
     "version",
     "--doctor",
     "--doctor --verbose",
@@ -1492,6 +1526,9 @@ export function renderHumanHelp(): string {
     heading("SET UP A PROJECT", out),
     row("config", "Set up, refresh, or pin this project (run bare for the guided setup)"),
     row("doctor", "Check this machine and project, with fixes for anything wrong"),
+    "",
+    heading("WATCH YOUR WORK", out),
+    row("dashboard", "Open the local Command Center for your AI-DLC workspaces"),
     "",
     heading("MANAGE THE MACHINE INSTALL", out),
     row("update", "Install and switch to a newer release"),
@@ -1561,6 +1598,14 @@ const COMMAND_FLAG_SUMMARIES: Readonly<
   uninstall: {
     "--yes": "Required when there is no terminal; at a terminal uninstall says what it removes, then proceeds without asking",
   },
+  dashboard: {
+    "--config": "Settings file to use (default ~/.aidlc/dashboard.json, or AIDLC_DASHBOARD_CONFIG)",
+    "--json": "Print {\"url\",\"port\"} as one line, then keep serving",
+    "--no-open": "Do not open a browser; just print the URL",
+    "--pin": "Add one AI-DLC project, saved for next time (repeatable)",
+    "--port": "Port to listen on on 127.0.0.1 (default: any free port)",
+    "--root": "Add a folder to scan for AI-DLC projects, saved for next time (repeatable)",
+  },
 };
 
 function flagSummary(command: PublicCommand, flag: string): string {
@@ -1627,6 +1672,7 @@ function renderOptionGroups(
 const COMMAND_HELP_USAGE: Record<PublicCommand, string> = {
   config: "aidlc config [options]",
   doctor: "aidlc doctor [options]",
+  dashboard: "aidlc dashboard [--port <n>] [--no-open] [--json] [--root <dir>] [--pin <dir>] [--config <file>]",
   version: "aidlc version [--json]",
   update: "aidlc update [options]",
   use: "aidlc use <version> [options]",
@@ -1707,6 +1753,7 @@ export function renderCommandHelp(command: PublicCommand): string {
   }
   const descriptions: Record<Exclude<PublicCommand, "config">, string> = {
     doctor: "Check this machine and project and show a fix for every problem",
+    dashboard: "Open the AI-DLC Command Center, a read-only local view of your AI-DLC workspaces",
     version: "Print binary and selected runtime versions",
     update: "Install and switch to a newer aidlc release",
     use: "Switch this machine to an exact aidlc release",
@@ -1714,6 +1761,7 @@ export function renderCommandHelp(command: PublicCommand): string {
   };
   const examples: Partial<Record<Exclude<PublicCommand, "config">, string[]>> = {
     doctor: [`  ${invoke} doctor`, `  ${invoke} doctor --verbose`],
+    dashboard: [`  ${invoke} dashboard`, `  ${invoke} dashboard --root ~/code --no-open`],
     update: [
       `  ${invoke} update --check`,
       `  ${invoke} update --dry-run`,
@@ -2679,6 +2727,48 @@ function runDelegateDev(tool: string, args: string[]): number {
   }
 }
 
+// A long-lived tool (a local server) runs until the person stops it. A blocking
+// spawnSync would leave it orphaned when this dispatcher is stopped with
+// SIGTERM (an agent stopping a background command), so spawn it asynchronously
+// and forward SIGINT/SIGTERM to it.
+async function runLongLivedDelegateDev(tool: string, args: string[]): Promise<number> {
+  let child: ReturnType<typeof Bun.spawn>;
+  try {
+    child = Bun.spawn([bunExecutable(), toolPath(tool), ...args], {
+      cwd: process.cwd(),
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+      env: {
+        ...process.env,
+        ...(delegatedProjectDir(args)
+          ? { AIDLC_PROJECT_DIR: delegatedProjectDir(args) }
+          : {}),
+      },
+    });
+  } catch (error) {
+    text(2, `aidlc: failed to spawn ${tool}: ${String(error)}\n`);
+    return 1;
+  }
+  const forward = (signal: NodeJS.Signals) => (): void => {
+    child.kill(signal);
+  };
+  const onInt = forward("SIGINT");
+  const onTerm = forward("SIGTERM");
+  process.on("SIGINT", onInt);
+  process.on("SIGTERM", onTerm);
+  try {
+    return (await child.exited) ?? 1;
+  } finally {
+    process.off("SIGINT", onInt);
+    process.off("SIGTERM", onTerm);
+  }
+}
+
+function isLongLivedTool(tool: string): boolean {
+  return ROUTES.some((route) => route.tool === tool && routeLifetime(route) === "long-lived");
+}
+
 type ToolFile = (typeof TOOLS)[keyof typeof TOOLS];
 
 type DelegateModule = {
@@ -2696,6 +2786,7 @@ const DELEGATES: Record<ToolFile, () => Promise<DelegateModule>> = {
   "aidlc-audit.ts": () => import("./aidlc-audit.ts"),
   "aidlc-bolt.ts": () => import("./aidlc-bolt.ts"),
   "aidlc-completions.ts": () => import("./aidlc-completions.ts"),
+  "aidlc-dashboard.ts": () => import("./aidlc-dashboard.ts"),
   "aidlc-doctor.ts": () => import("./aidlc-doctor.ts"),
   "aidlc-graph.ts": () => import("./aidlc-graph.ts"),
   "aidlc-init.ts": () => import("./aidlc-init.ts"),
@@ -3254,8 +3345,9 @@ async function execute(action: Action): Promise<number> {
     }
     // Tool modules are imported lazily in compiled mode to keep dev-mode startup
     // fast and to avoid loading every tool for help/version calls.
-    return isCompiled
-      ? await runDelegateInProcess(action.tool, action.args)
+    if (isCompiled) return await runDelegateInProcess(action.tool, action.args);
+    return isLongLivedTool(action.tool)
+      ? await runLongLivedDelegateDev(action.tool, action.args)
       : runDelegateDev(action.tool, action.args);
   }
   if (action.type === "help") {
@@ -3736,6 +3828,8 @@ function basicPolicyError(route: Route, argv: readonly string[]): string | null 
 type SimplePublicGrammar = {
   values: ReadonlySet<string>;
   bare: ReadonlySet<string>;
+  // Value flags that may appear more than once (each occurrence adds one).
+  repeatable?: ReadonlySet<string>;
 };
 
 // Exported alongside PUBLIC_LIFECYCLE_GRAMMARS so t230 reads BOTH parsers when
@@ -3767,6 +3861,11 @@ export const SIMPLE_PUBLIC_GRAMMARS: Readonly<
     values: new Set(["--project-dir"]),
     bare: new Set(["--json", "--no-color"]),
   },
+  dashboard: {
+    values: new Set(["--config", "--pin", "--port", "--project-dir", "--root"]),
+    bare: new Set(["--json", "--no-color", "--no-open"]),
+    repeatable: new Set(["--pin", "--root"]),
+  },
 };
 
 function validateSimplePublicGrammar(
@@ -3782,7 +3881,9 @@ function validateSimplePublicGrammar(
       return `unexpected ${command} positional ${JSON.stringify(token)}`;
     }
     if (grammar.values.has(token)) {
-      if (seen.has(token)) return `${token} may be specified only once`;
+      if (seen.has(token) && !grammar.repeatable?.has(token)) {
+        return `${token} may be specified only once`;
+      }
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) return `${token} requires a value`;
       seen.add(token);
@@ -3795,6 +3896,13 @@ function validateSimplePublicGrammar(
   }
   if (argv.includes("--json") && argv.includes("--quiet")) {
     return "--json and --quiet are mutually exclusive";
+  }
+  const portIndex = argv.indexOf("--port");
+  if (command === "dashboard" && portIndex >= 0) {
+    const port = argv[portIndex + 1] ?? "";
+    if (!/^\d+$/.test(port) || Number(port) > 65535) {
+      return "--port must be an integer 0-65535";
+    }
   }
   if (
     command === "doctor" &&

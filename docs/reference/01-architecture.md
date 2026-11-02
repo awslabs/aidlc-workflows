@@ -405,7 +405,7 @@ does not ship and stops recording it.
 ### Model policy projection
 
 `aidlc config models` is a section under the existing public `config` command,
-not a seventh public command. Policy lives in the shared settings hierarchy,
+not an eighth public command. Policy lives in the shared settings hierarchy,
 not in harness metadata:
 
 - machine install root `aidlc.settings.json`

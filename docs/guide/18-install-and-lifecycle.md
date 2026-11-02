@@ -1789,9 +1789,9 @@ yes, and the file is kept beside it as `aidlc.bak-<time>`.
 
 ## Help and Completions
 
-`aidlc --help` prints exactly the six public commands. Each public command also
+`aidlc --help` prints exactly the seven public commands. Each public command also
 has side-effect-free command help: `aidlc <command> --help` (or `-h`) for
-`config`, `doctor`, `version`, `update`, `use`, and `uninstall`. Command help
+`config`, `doctor`, `dashboard`, `version`, `update`, `use`, and `uninstall`. Command help
 names every option that command accepts, with a one-line meaning for each,
 grouped so download and mirror options and the options that only shape output
 read separately from the rest; `use` also describes the version it takes. The

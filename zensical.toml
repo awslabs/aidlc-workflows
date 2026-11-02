@@ -26,6 +26,7 @@ nav = [
       "guide/10-state-and-audit.md",
       "guide/11-session-management.md",
       "guide/12-cli-commands.md",
+      "guide/19-command-center.md",
       "guide/14-artifacts-reference.md",
       "guide/17-skills.md",
     ] },

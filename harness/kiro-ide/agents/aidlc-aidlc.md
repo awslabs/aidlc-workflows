@@ -29,6 +29,7 @@ permissions:
         - "bun {{HARNESS_DIR}}/tools/aidlc*@(*"
         - "bun {{HARNESS_DIR}}/tools/aidlc*@{*"
         - "bun {{HARNESS_DIR}}/tools/aidlc*\n*"
+        - "*aidlc-dashboard.ts*"
         - "*aidlc-doctor.ts*"
         - "*aidlc-init.ts*"
         - "*aidlc-lifecycle.ts*"

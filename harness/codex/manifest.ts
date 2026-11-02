@@ -130,6 +130,7 @@ const manifest: HarnessManifest = {
     { src: "scopes", dst: "scopes" },
     { src: "agents", dst: "agents" },
     { src: "hooks", dst: "hooks" },
+    { src: "command-center", dst: "command-center" },
   ],
 
   // The one authored .codex/ surface: the stdin adapter shim. The orchestrator

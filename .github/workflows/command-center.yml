@@ -1,0 +1,58 @@
+name: Command Center
+
+# Dev package for the Command Center UI (command-center/): installs it frozen,
+# runs its tests and typecheck, rebuilds the UI, and fails when the committed
+# bundle in core/command-center/ui differs from a fresh build.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'command-center/**'
+      - 'core/command-center/**'
+      - 'core/tools/aidlc-dashboard.ts'
+      - '.github/workflows/command-center.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'command-center/**'
+      - 'core/command-center/**'
+      - 'core/tools/aidlc-dashboard.ts'
+      - '.github/workflows/command-center.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: command-center-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  command-center:
+    name: Command Center (test + typecheck + bundle freshness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: command-center
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.4'
+
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - run: bun run typecheck
+      - run: bun run build:ui
+      - name: Committed UI bundle matches a fresh build
+        run: |
+          if ! git diff --exit-code -- ../core/command-center/ui || [ -n "$(git status --porcelain -- ../core/command-center/ui)" ]; then
+            echo "::error::The committed UI bundle is stale. Run (cd command-center && bun run build:ui) and commit core/command-center/ui."
+            exit 1
+          fi

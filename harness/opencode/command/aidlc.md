@@ -1,7 +1,7 @@
 ---
 description: >
   AI-DLC. Start, resume, or manage an AI-driven
-  development lifecycle. Utilities: --status, --doctor, --stage, --phase,
+  development lifecycle. Utilities: --status, --doctor, dashboard, --stage, --phase,
   --scope, --depth, --test-strategy, --version, --help, plus the intent and
   space verbs. Or describe what you want to build and the agent proposes a
   plan for you to confirm.

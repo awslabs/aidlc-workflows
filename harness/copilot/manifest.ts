@@ -216,6 +216,7 @@ const manifest: HarnessManifest = {
     { src: "scopes", dst: "scopes" },
     { src: "agents", dst: "agents" },
     { src: "hooks", dst: "hooks" },
+    { src: "command-center", dst: "command-center" },
     // NO skills/ inside the engine dir: Copilot discovers project skills at
     // .github/skills/ only, so emit composes the whole skill set there
     // (orchestrator + runners + session skills) from core — the codex idiom.
