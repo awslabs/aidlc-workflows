@@ -5,6 +5,7 @@ import { homedir, platform, release, arch } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
+import { kiroHome } from "./lib-transcripts.ts";
 
 // The engine dirs AI-DLC's harness rows install into (AI-DLC's harness table in aidlc-lib.ts).
 export const ENGINE_DIRS = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
@@ -167,7 +168,7 @@ function kiroIdeVersion(): ToolVersion {
 // Kiro CLI versions (2.21.1: the project's; 2.33.1: only the home one, measured 2026-10-22), so both are
 // recorded and references/data.md says which wins for which version.
 function kiroHomeEngine(): { file: boolean; agentEngine: string | null } {
-  const path = join(homedir(), ".kiro", "settings", "cli.json");
+  const path = join(kiroHome(), "settings", "cli.json");
   const engine = readJson<{ "chat.agentEngine"?: unknown }>(path)?.["chat.agentEngine"];
   return { file: existsSync(path), agentEngine: typeof engine === "string" ? engine : null };
 }

@@ -40,3 +40,15 @@ test("a folder collect.ts did not make is refused", () => {
   expect(r.status).toBe(2);
   expect(JSON.parse(r.stdout).ok).toBe(false);
 });
+
+test("a tool the person names when no log was found becomes a tool the run used, once; with a log read, it does not", () => {
+  const read = folder();
+  const safe = JSON.parse(readFileSync(join(read, "safe.json"), "utf8"));
+  writeFileSync(join(read, "safe.json"), JSON.stringify({ ...safe, transcripts: [{ tool: "codex" }], environment: { ...safe.environment, toolsUsed: ["codex"] } }));
+  expect(run(read, "2.33.1").status).toBe(0);
+  expect(JSON.parse(readFileSync(join(read, "safe.json"), "utf8")).environment.toolsUsed).toEqual(["codex"]);
+  const out = folder();
+  expect(run(out, "2.33.1").status).toBe(0);
+  expect(run(out, "2.33.2").status).toBe(0);
+  expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.toolsUsed).toEqual(["kiro-cli"]);
+});

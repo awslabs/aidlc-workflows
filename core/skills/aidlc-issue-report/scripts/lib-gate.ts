@@ -17,7 +17,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, PUBLIC_URL, TOOL_DIRS } from "./redact.ts";
+import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, PUBLIC_URL, smallLabel, TOOL_DIRS } from "./redact.ts";
 import { isOsLine, isVersion, KERNEL_RELEASE, OWN, PUBLIC_MODEL } from "./lib-shape.ts";
 import { fieldNameOk, isRowLabel, type RowVocab, valueOk } from "./lib-rows.ts";
 
@@ -62,7 +62,7 @@ const PRIVATE_USE = /[\uE000-\uF8FF]/;
 // A label holds a small number (`<customer-12>`, a short `<id:…>`): a long one can carry an account in its name, and
 // stays as text, which the markup rule refuses.
 function labelMask(text: string): string {
-  return text.replace(LABEL, (m) => (/\d{5}|id:[0-9a-f]{17}/.test(m) ? m : MASK.repeat(m.length)));
+  return text.replace(LABEL, (m) => (smallLabel(m) ? MASK.repeat(m.length) : m));
 }
 
 // The folder and file names a path may hold: AI-DLC's and the AI tools' own.

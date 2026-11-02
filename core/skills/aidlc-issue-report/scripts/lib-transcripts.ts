@@ -173,7 +173,7 @@ type KiroV2Line = {
     results?: Record<string, { result?: unknown } | null>;
   };
 };
-type CopilotEvent = { type?: string; timestamp?: string; data?: { content?: unknown; arguments?: unknown; success?: boolean } };
+type CopilotEvent = { type?: string; timestamp?: string; data?: { content?: unknown; toolName?: string; arguments?: unknown; success?: boolean } };
 type SubagentStart = { subagentId?: unknown; modelId?: unknown; modelOverride?: unknown; effortLevel?: unknown; effortOverride?: unknown };
 
 function empty(tool: string): Summary {
@@ -297,6 +297,11 @@ function aidlcHookName(command: string): string | null {
 // An AI-DLC command as the agent typed it, native (`engine orchestrate next` after `aidlc`) or from a copied
 // tree (the same verbs after the tree's `aidlc.ts`, or after an `aidlc-<tool>.ts` such as `aidlc-log.ts`).
 const AIDLC_CMD = /\baidlc(?:-([a-z-]+))?(?:\.ts|\.cmd|\.exe)?["']?\s+(?:engine\s+)?([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/i;
+
+// The tools' own homes, where the person may have moved them (AI-DLC reads the same variables); an empty value is unset.
+export const kiroHome = () => process.env.KIRO_HOME || join(homedir(), ".kiro");
+export const copilotHome = () => process.env.COPILOT_HOME || join(homedir(), ".copilot");
+export const codexHome = () => process.env.CODEX_HOME || join(homedir(), ".codex");
 
 function inWindow(ts: string | undefined, since: number, until: number): ts is string {
   if (!ts) return false;
@@ -726,7 +731,7 @@ const CODEX_REVIEW_REJECTED = /Rejected\(\\?"This action was rejected/;
 const CODEX_HOOK_BLOCK = /^\s*Command blocked by PreToolUse hook: /;
 
 export function codex(project: string, since: number, until: number, local: Local): Summary | null {
-  const root = join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "sessions");
+  const root = join(codexHome(), "sessions");
   const s = empty("codex");
   const calls: Calls = new Map();
   // A forked session's file may begin with its parent's history: a call or output already read is not counted again.
@@ -891,7 +896,7 @@ function kiroFailure(t: Tally, tool: string, local: Local, ts: string, text: str
 }
 
 export function kiroV3(project: string, since: number, until: number, local: Local): Summary | null {
-  const root = join(homedir(), ".kiro", "sessions");
+  const root = join(kiroHome(), "sessions");
   if (!existsSync(root)) return null;
   const ws16 = createHash("sha256").update(resolve(project)).digest("hex").slice(0, 16);
   const s = empty("kiro (v3)");
@@ -1097,7 +1102,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
   s.tool = cliIds.length && ideCount ? "kiro (v3: Kiro CLI + Kiro IDE)" : cliIds.length ? "kiro (v3: Kiro CLI)" : "kiro (v3: Kiro IDE)";
   s.notes.push(`Kiro surface per session: ${cliIds.length} Kiro CLI, ${ideCount} Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`);
   // Model and effort per dispatched agent from the engine log.
-  const logs = join(homedir(), ".kiro", "logs");
+  const logs = join(kiroHome(), "logs");
   for (const run of existsSync(logs) ? readdirSync(logs) : []) {
     const file = join(logs, run, "kiro.log");
     if (!existsSync(file) || statSync(file).mtimeMs < since) continue;
@@ -1117,6 +1122,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
     }
   }
   finishRepeats(s, calls);
+  s.notes.push("Each dispatched agent's model and effort come from Kiro's engine log, whose lines this reader reads without a time: a dispatch of the same session outside the window counts too.");
   s.notes.push("Kiro records hook runs by name only and a hook's refusal as a denied call with no reason: such a call counts under denials as denied-after-aidlc-hooks when AI-DLC hooks ran right before it (which hook refused is not recorded), else denied-no-reason.");
   s.notes.push("Kiro writes no client version into its session store (measured 2026-10-22, CLI 2.33.1): its version is the one measured at collection time.");
   return s;
@@ -1124,7 +1130,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
 
 // ---------- Kiro CLI v2 engine ----------
 export function kiroV2(project: string, since: number, until: number, local: Local): Summary | null {
-  const dir = join(homedir(), ".kiro", "sessions", "cli");
+  const dir = join(kiroHome(), "sessions", "cli");
   if (!existsSync(dir)) return null;
   const s = empty("kiro-cli (v2)");
   s.engine = "v2";
@@ -1228,9 +1234,10 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
 
 // ---------- GitHub Copilot CLI (documented layout; not measured here) ----------
 export function copilotCli(project: string, since: number, until: number, local: Local): Summary | null {
-  const root = join(homedir(), ".copilot", "session-state");
+  const root = join(copilotHome(), "session-state");
   if (!existsSync(root)) return null;
   const s = empty("copilot-cli");
+  const calls: Calls = new Map();
   for (const id of readdirSync(root)) {
     const ws = join(root, id, "workspace.yaml");
     if (!existsSync(ws)) continue;
@@ -1255,6 +1262,7 @@ export function copilotCli(project: string, since: number, until: number, local:
         if (!reportFrom) lastPrompt = e.timestamp;
       } else if (e.type === "tool.execution_start") {
         t.add(e.timestamp, (x) => x.toolCalls++);
+        noteCall(t, e.data?.toolName, e.data?.arguments, e.timestamp);
         const args = JSON.stringify(e.data?.arguments ?? "");
         noteCommand(t, e.timestamp, args);
         if (ENGINE_CALL.test(args)) {
@@ -1271,7 +1279,7 @@ export function copilotCli(project: string, since: number, until: number, local:
       }
     }
     markReport(local.prompts.slice(firstPrompt), reportFrom, () => true);
-    t.commit(s, new Map(), { from: reportFrom });
+    t.commit(s, calls, { from: reportFrom });
     if (used) {
       s.sessions++;
       addSession(s, newFacts(), isReport);
@@ -1279,6 +1287,7 @@ export function copilotCli(project: string, since: number, until: number, local:
     }
   }
   if (!s.sessions) return null;
+  finishRepeats(s, calls);
   s.notes.push("Copilot CLI fields are from public docs, not measured; how it records a hook refusal is not measured either, so those show only as failed calls (toolErrors).");
   return s;
 }

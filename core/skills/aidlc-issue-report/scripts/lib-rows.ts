@@ -7,7 +7,7 @@
 // error, a command, a "phase > unit > stage > file" context) keep their fixed text and label what was filled in.
 
 import { HOST_TOOLS } from "./lib-shape.ts";
-import { LABEL } from "./redact.ts";
+import { LABEL, smallLabel } from "./redact.ts";
 
 export type RowVocab = {
   words: Set<string>;
@@ -32,10 +32,10 @@ export const ROW_KINDS = ["value", "text", "file", "hash", "id", "session", "fie
 export type RowKind = (typeof ROW_KINDS)[number];
 
 // A label as this skill and AI-DLC's redaction write it (redact.ts LABEL: `<custom-unit-3>`, `<unit-2>`, `<user>`,
-// `<project>`), whole, with a serial of six digits at most (a longer one could carry an account number).
+// `<project>`), whole and small (redact.ts smallLabel).
 const WHOLE_LABEL = new RegExp(`^(?:${LABEL.source})$`);
 export function isRowLabel(v: string): boolean {
-  return WHOLE_LABEL.test(v) && !/\d{7}/.test(v);
+  return WHOLE_LABEL.test(v) && smallLabel(v);
 }
 
 export type Shape = {
@@ -97,11 +97,11 @@ const POLICY: Record<string, Policy> = {
 };
 // A move's Source and Target are stages; any other Source is one of AI-DLC's words (who switched a guard, how a reply
 // came) and any other Target a file.
-export const STAGE_ENDPOINT_EVENTS: ReadonlySet<string> = new Set(["STAGE_JUMPED"]);
+const STAGE_ENDPOINT_EVENTS: ReadonlySet<string> = new Set(["STAGE_JUMPED"]);
 function policyOf(event: string, name: string): Policy {
   if (name === "Source") return STAGE_ENDPOINT_EVENTS.has(event) ? "stage" : "enum";
   if (name === "Target") return STAGE_ENDPOINT_EVENTS.has(event) ? "stage" : "path";
-  return POLICY[name] ?? "text";
+  return Object.hasOwn(POLICY, name) ? POLICY[name] : "text";
 }
 
 // A field's name: AI-DLC's (listed above, or a name its tools write) stays; anything else is labelled.
@@ -173,10 +173,10 @@ function layoutSegment(v: RowVocab, s: Shape, parts: string[], i: number, last: 
   if (/^[0-9a-f]{8,64}$/.test(part)) return s.label("hash", part);
   const review = part.match(/^(\d{1,6})\.([0-9a-f]{8,64}|<[^<>]+>)\.review\.md$/);
   if (review) return `${review[1]}.${s.label("hash", review[2])}.review.md`;
-  // A file AI-DLC names (`requirements.md`) stays; a folder at the end is a Unit's or the person's, whatever its word.
-  if (last && ((extensionOf(part) && v.words.has(part)) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part))) return part;
-  // The file is labelled by its whole path; a label already there is the rule's own.
-  if (last) return fileLabel(s, /^<[^<>/]+>(?:\.[a-z0-9]{1,12})?$/.test(part) ? part : parts.slice(0, i + 1).join("/"));
+  // A file AI-DLC names (`requirements.md`, `.aidlc-request-text`) stays; at the end, a Unit's name gets the Unit's
+  // label and anything else is a file, labelled by its whole path (a label already there is the rule's own).
+  if (last && (((extensionOf(part) || part.startsWith(".")) && v.words.has(part)) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part))) return part;
+  if (last) return s.known(part) ?? fileLabel(s, /^<[^<>/]+>(?:\.[a-z0-9]{1,12})?$/.test(part) ? part : parts.slice(0, i + 1).join("/"));
   return s.known(part) ?? s.label("unit", part);
 }
 const inLayout = (first: string) => first === "aidlc" || first === ".aidlc-engine" || TOOL_TOP.has(first);
@@ -230,8 +230,9 @@ function covered(v: RowVocab, value: string): [number, number][] | null {
   if (value.slice(0, kept[0][0]).replace(LABEL_TOKEN, "").length > 2 || fixed * 2 < text.length) return null;
   return kept;
 }
+// A filled-in stretch, one piece at a time; a label (`<id:…>` too) stays one piece.
 function gapPieces(gap: string): string[] {
-  return gap.split(/(\s+|["'`(),;:]+)/).filter((x) => x !== "");
+  return gap.match(/<[a-z][a-z0-9:-]{0,40}>(?:\.[a-z0-9]{1,12})?|\s+|["'`(),;:]+|[^\s"'`(),;:<]+|</g) ?? [];
 }
 function shapeGapPiece(v: RowVocab, s: Shape, piece: string): string {
   if (PUNCT.test(piece) || JOINERS.has(piece.toLowerCase()) || SHORT_NUMBER.test(piece) || typed(v, piece)) return piece;
@@ -412,10 +413,20 @@ function choices(v: RowVocab, piece: string): boolean {
 // The check: the value the rule writes when it reads this written value again, with every label standing for itself
 // and anything else refused. A label the rule wrote, or the redaction wrote over a kept value, comes back as it was; a
 // raw value (a Unit's name, a reply, a project path, an id) does not.
-const REFUSED = "\u0000";
-const asWritten: Shape = { label: (_kind, raw) => (isRowLabel(raw) ? raw : REFUSED), known: () => undefined };
+function asWritten(): Shape & { refused: boolean } {
+  const s = {
+    refused: false,
+    label: (_kind: RowKind, raw: string) => {
+      if (!isRowLabel(raw)) s.refused = true;
+      return raw;
+    },
+    known: () => undefined,
+  };
+  return s;
+}
 export function fieldNameOk(v: RowVocab, name: string): boolean {
-  return fieldName(v, asWritten, name) === name;
+  const s = asWritten();
+  return fieldName(v, s, name) === name && !s.refused;
 }
 export function valueOk(v: RowVocab, event: string, name: string, value: unknown): boolean {
   let raw: string;
@@ -425,6 +436,7 @@ export function valueOk(v: RowVocab, event: string, name: string, value: unknown
     const more = value.length > 0 && /^\(and \d{1,6} more\)$/.test(value[value.length - 1]);
     raw = more ? `${value.slice(0, -1).join(", ")} ${value[value.length - 1]}` : value.join(", ");
   } else return false;
-  const again = JSON.stringify(shapeValue(v, asWritten, event, name, raw));
-  return !again.includes(REFUSED) && again === JSON.stringify(value);
+  const s = asWritten();
+  const again = shapeValue(v, s, event, name, raw);
+  return !s.refused && JSON.stringify(again) === JSON.stringify(value);
 }

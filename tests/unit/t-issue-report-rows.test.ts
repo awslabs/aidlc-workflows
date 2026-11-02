@@ -92,7 +92,7 @@ describe("AI-DLC's own sentences keep their fixed text and label what was filled
 });
 
 describe("what the rule wrote reads back as it was", () => {
-  test("the cases where a second, separately written check once disagreed with the rule", () => {
+  test("a one-word path, an unknown flag and a sentence after a short piece read back unchanged", () => {
     const v = vocab();
     const s = shape();
     const cases: [string, string, string][] = [
@@ -114,6 +114,23 @@ describe("what the rule wrote reads back as it was", () => {
     expect(valueOk(v, "STAGE_STARTED", "Status", "<repo>")).toBe(true);
     expect(valueOk(v, "ARTIFACT_UPDATED", "File", "aidlc/spaces/<user>/intents/<custom-intent-1>/notes.md")).toBe(false);
   });
+  test("a label is small: a serial of four digits (six for this skill's own), an id of sixteen hex digits with no five-digit run", async () => {
+    const { smallLabel } = await import("../../core/skills/aidlc-issue-report/scripts/redact.ts");
+    for (const [label, small] of [
+      ["<customer-1234>", true], ["<customer-12345>", false], ["<custom-id-123456>", true], ["<custom-id-1234567>", false],
+      ["<id:a1b2c3d4>", true], ["<id:0123456789abcdef>", false], ["<id:123456789012>", false], ["<id:abcdef0123456789a>", false],
+      ["<user>", true], ["<project>", true],
+    ] as const) {
+      expect([label, smallLabel(label)]).toEqual([label, small]);
+    }
+  });
+  test("a control character, a long id label and an id label inside AI-DLC's sentence are read as they are", () => {
+    const v = vocab();
+    expect(valueOk(v, "HUMAN_TURN", "Person Reply", "\u0000")).toBe(false);
+    expect(valueOk(v, "HUMAN_TURN", "Person Reply", `<id:${"436f6e746f736f".repeat(3)}>`)).toBe(false);
+    expect(valueOk(v, "HUMAN_TURN", "Person Reply", "<id:a1b2c3d4>")).toBe(true);
+    expect(valueOk(v, "ERROR_LOGGED", "Error", 'Refusing to complete unit "<id:a1b2c3d4>"')).toBe(true);
+  });
   test("a long number filled into AI-DLC's sentence is a label; a short one stays", () => {
     const v = vocab();
     const s = shape();
@@ -121,7 +138,7 @@ describe("what the rule wrote reads back as it was", () => {
     expect(shapeValue(v, s, "ERROR_LOGGED", "Error", 'Refusing to complete unit "12"')).toBe('Refusing to complete unit "12"');
     expect(valueOk(v, "ERROR_LOGGED", "Error", 'Refusing to complete unit "481516"')).toBe(false);
   });
-  test("a folder at the end of AI-DLC's path is a label, whatever its word", () => {
+  test("a name at the end of AI-DLC's path is a label, whatever its word; a Unit's is the Unit's", () => {
     const v = vocab();
     const s = shape();
     expect(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/billing")).toBe(

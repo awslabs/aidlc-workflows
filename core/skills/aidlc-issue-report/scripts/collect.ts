@@ -87,7 +87,13 @@ const spacesRoot = join(project, "aidlc", "spaces");
 const spaces = (existsSync(spacesRoot) ? readdirSync(spacesRoot) : []).filter((s) => s !== "default" && !s.startsWith("."));
 // A native install outside the home folder (a custom XDG_DATA_HOME or LOCALAPPDATA) names its own path.
 const native = nativeInstall();
-const installPaths = [native?.dir, native?.exe].filter((v): v is string => !!v).map((value) => ({ value, label: "<aidlc-install>" }));
+const installPaths = [
+  ...[native?.dir, native?.exe].filter((v): v is string => !!v).map((value) => ({ value, label: "<aidlc-install>" })),
+  // An AI tool's home the person moved (a company volume in its path) is a folder to hide like the others.
+  ...[process.env.KIRO_HOME, process.env.COPILOT_HOME, process.env.CODEX_HOME, process.env.CLAUDE_CONFIG_DIR]
+    .filter((v): v is string => !!v)
+    .map((value) => ({ value, label: "<path>" })),
+];
 
 // ---- time window: the last AI-DLC activity back N days, unless given ----
 const { since, until, lastActivity, notes: windowNotes } = timeWindow({
@@ -252,8 +258,12 @@ if (flag("no-doctor")) {
         doctor.note ||= "the doctor export could not be unpacked";
       }
     }
-    // The export's own report.json (one per export); another file whose name ends the same is not doctor's list.
-    for (const f of (reportRoot ? walkFiles(reportRoot) : []).filter((x) => basename(x) === "report.json").slice(0, 1)) {
+    // The export's own report.json, the one nearest its top; another file whose name ends the same is not doctor's list.
+    const depth = (f: string) => f.split(/[\\/]/).length;
+    const top = (reportRoot ? walkFiles(reportRoot) : [])
+      .filter((x) => basename(x) === "report.json")
+      .reduce<string | null>((best, f) => (best === null || depth(f) < depth(best) ? f : best), null);
+    for (const f of top ? [top] : []) {
       try {
         const j = JSON.parse(readFileSync(f, "utf8")) as { findings?: { id?: unknown; severity?: unknown }[] };
         for (const x of j.findings ?? []) {

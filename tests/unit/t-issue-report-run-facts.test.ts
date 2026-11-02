@@ -1091,3 +1091,20 @@ test("the event stream holds the run's calls, AI-DLC commands and replies in ord
     else process.env.CODEX_HOME = before;
   }
 });
+
+test("Copilot CLI is read from COPILOT_HOME, and its calls reach the event stream and the repeats", () => {
+  const home = mkdtempSync(join(tmpdir(), "copilot-home-moved-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const moved = join(home, "elsewhere");
+  const sess = join(moved, "session-state", "s1");
+  mkdirSync(sess, { recursive: true });
+  writeFileSync(join(sess, "workspace.yaml"), `cwd: ${project}\n`);
+  const call = (min: number) => ({ type: "tool.execution_start", timestamp: at(min), data: { toolName: "bash", arguments: { command: "ls" } } });
+  writeFileSync(join(sess, "events.jsonl"), [call(1), call(2), call(3)].map((e) => JSON.stringify(e)).join("\n"));
+  const code = `const { copilotCli } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = copilotCli(${JSON.stringify(project)}, ${Date.parse(at(0)) - 3_600_000}, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ calls: s?.events.filter((e) => e.kind === "call").map((e) => e.tool), repeats: s?.repeats.map((r) => r.count) }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home, COPILOT_HOME: moved } });
+  expect(JSON.parse(r.stdout)).toEqual({ calls: ["bash", "bash", "bash"], repeats: [3] });
+});
