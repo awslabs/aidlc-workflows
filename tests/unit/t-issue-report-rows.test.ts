@@ -91,6 +91,48 @@ describe("AI-DLC's own sentences keep their fixed text and label what was filled
   });
 });
 
+describe("what the rule wrote reads back as it was", () => {
+  test("the cases where a second, separately written check once disagreed with the rule", () => {
+    const v = vocab();
+    const s = shape();
+    const cases: [string, string, string][] = [
+      ["ARTIFACT_UPDATED", "Path", "aidlc"],
+      ["ARTIFACT_UPDATED", "Destination", ".claude"],
+      ["ERROR_LOGGED", "Command", "aidlc-log engine next --foo=bar"],
+      ["ERROR_LOGGED", "Command", "aidlc-log engine next --foo bar"],
+      ["ERROR_LOGGED", "Error", 'x Refusing to complete unit "u2-cart-order"'],
+      ["ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/payments"],
+    ];
+    for (const [event, name, raw] of cases) {
+      const out = shapeValue(v, s, event, name, raw);
+      expect([raw, out, valueOk(v, event, name, out)]).toEqual([raw, out, true]);
+    }
+  });
+  test("a label the redaction wrote over a kept value passes", () => {
+    const v = vocab();
+    expect(valueOk(v, "ERROR_LOGGED", "Command", "aidlc-log engine log review --stage <user>")).toBe(true);
+    expect(valueOk(v, "STAGE_STARTED", "Status", "<repo>")).toBe(true);
+    expect(valueOk(v, "ARTIFACT_UPDATED", "File", "aidlc/spaces/<user>/intents/<custom-intent-1>/notes.md")).toBe(false);
+  });
+  test("a long number filled into AI-DLC's sentence is a label; a short one stays", () => {
+    const v = vocab();
+    const s = shape();
+    expect(shapeValue(v, s, "ERROR_LOGGED", "Error", 'Refusing to complete unit "481516"')).toBe('Refusing to complete unit "<custom-value-1>"');
+    expect(shapeValue(v, s, "ERROR_LOGGED", "Error", 'Refusing to complete unit "12"')).toBe('Refusing to complete unit "12"');
+    expect(valueOk(v, "ERROR_LOGGED", "Error", 'Refusing to complete unit "481516"')).toBe(false);
+  });
+  test("a folder at the end of AI-DLC's path is a label, whatever its word", () => {
+    const v = vocab();
+    const s = shape();
+    expect(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/construction/billing")).toBe(
+      "aidlc/spaces/default/intents/<custom-intent-1>/construction/<custom-file-1>",
+    );
+    expect(shapeValue(v, s, "ARTIFACT_UPDATED", "File", "aidlc/spaces/default/intents/i/inception/requirements-analysis/requirements.md")).toBe(
+      "aidlc/spaces/default/intents/<custom-intent-1>/inception/requirements-analysis/requirements.md",
+    );
+  });
+});
+
 describe("paths", () => {
   test("AI-DLC's layout stays, the person's names in it are labels", () => {
     const v = vocab();
@@ -151,7 +193,7 @@ describe("the check refuses a raw value in every kind of field", () => {
 describe("what the rule writes always passes the check, and carries no planted name", () => {
   const NAMES = ["Unit", "Stage", "Person Reply", "File", "Context", "Error", "Command", "Options", "Details", "Status", "Exit Code", "Source", "Target", "Session", "Mystery Field", "Changed"];
   const PLANTED = ["ContosoPay", "zorbleq", "acme-ledger", "kimjiwoo", "Project Falcon", "481516"];
-  const PIECES = [...PLANTED, "billing", "feature", "code-generation", "construction", "typed", "src/", "aidlc/spaces/default/intents/", "Refusing to complete unit \"", "\"", " > ", ", ", ".ts", "--unit ", "aidlc-log engine log review ", "Q1: A"];
+  const PIECES = [...PLANTED, "billing", "feature", "code-generation", "construction", "typed", "src/", "aidlc/spaces/default/intents/", "Refusing to complete unit \"", "\"", " > ", ", ", ".ts", "--unit ", "aidlc-log engine log review ", "Q1: A", "aidlc", ".claude", "--foo=", "x ", "<repo>", "<user>", " (and 3 more)"];
   let seed = 7;
   const rnd = (n: number) => {
     seed = (seed * 1103515245 + 12345) % 2147483648;
@@ -168,6 +210,8 @@ describe("what the rule writes always passes the check, and carries no planted n
       const shownName = fieldName(v, s, name);
       expect([name, raw, out, valueOk(v, event, shownName, out)]).toEqual([name, raw, out, true]);
       for (const p of PLANTED) expect([raw, flat(out).includes(p)]).toEqual([raw, false]);
+      // A raw value that is not what the rule writes is refused, unless it is what the rule writes.
+      expect([raw, valueOk(v, event, shownName, raw) && JSON.stringify(out) !== JSON.stringify(raw)]).toEqual([raw, false]);
     }
   });
 });

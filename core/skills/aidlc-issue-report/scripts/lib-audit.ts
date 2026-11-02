@@ -1,6 +1,5 @@
-// AI-DLC's own records: audit shards, workflow state, hook health, session folder.
-// Only names, times, counts and AI-DLC's own vocabulary are kept; every field
-// that can carry the person's words or the project's content is left out
+// AI-DLC's own records: audit shards, workflow state, hook health, session folder. Each row keeps every field
+// (rowEntries) for lib-rows.ts to shape; what reaches safe.json is decided there.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -24,10 +23,6 @@ export const AUDIT_FIELDS = new Set([
   "Status", "Verdict", "Result", "Harness", "Cap layer", "Fallback driver", "Failed Bolt", "Checkpoint", "Source", "Target",
   "Scope",
 ]);
-// Source/Target are stage slugs only for jumps; elsewhere Target is a file path. A guard switch's Source says who
-// switched it (`you`, `command`, `team`).
-const STAGE_ENDPOINT_EVENTS = new Set(["STAGE_JUMPED"]);
-const GUARD_SWITCH_EVENTS = new Set(["GUARD_DISABLED", "GUARD_RESTORED", "GUARD_POLICY_SET"]);
 
 // One field of a row, the first time it is written: AI-DLC's own auditBlockField when the install has it.
 type FieldReader = (block: string, name: string) => string | null;
@@ -55,8 +50,6 @@ function parseAuditBlocks(blocks: string[], intent: string, field: FieldReader):
     const safe: Record<string, string> = {};
     for (const [k, v] of Object.entries(fields)) {
       if (!AUDIT_FIELDS.has(k)) continue;
-      if (k === "Target" && !STAGE_ENDPOINT_EVENTS.has(event)) continue;
-      if (k === "Source" && !STAGE_ENDPOINT_EVENTS.has(event) && !GUARD_SWITCH_EVENTS.has(event)) continue;
       safe[k] = v.slice(0, 120);
     }
     const row: AuditRow = { ts, event, fields: safe, intent };

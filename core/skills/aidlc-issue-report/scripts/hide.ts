@@ -1,13 +1,12 @@
 // Add names no machine record holds — a company, a customer, a product, a
-// person — to the report's redaction map, then clean safe.json with it. The
-// model finds them in what it read and the person confirms them (SKILL.md
-// step 4); from then on check.ts catches them like any other dictionary value.
-// A one-word name that is also an ordinary word (`Will`) is not hidden
-// automatically, since that would refuse every sentence holding the word; it is
-// kept in the map's `skipped` list for the model to keep out of the report by
-// hand. One that is part of AI-DLC's own words (`Bolt` in `BOLT_FAILED`, `Acme`
-// in `acme-aidlc-plugins`) is refused in the report as a whole word, and safe.json
-// keeps AI-DLC's word as it is. The names themselves are never printed.
+// person — to the folder's redaction map, then clean safe.json with it. The
+// person names them (SKILL.md step 3); from then on check.ts catches them like
+// any other dictionary value. A one-word name that is also an ordinary word
+// (`Will`) is not hidden automatically, since that would refuse every line
+// holding the word; it is kept in the map's `skipped` list. One that is part of
+// AI-DLC's own words (`Bolt` in `BOLT_FAILED`, `Acme` in `acme-aidlc-plugins`)
+// is refused in the cover as a whole word, and safe.json keeps AI-DLC's word as
+// it is. The names themselves are never printed.
 //
 // Usage: hide.ts --out <dir> (--kind <org|customer|product|person|other> --name <value>)…
 

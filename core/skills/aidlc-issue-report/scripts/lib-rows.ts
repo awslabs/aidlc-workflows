@@ -1,12 +1,13 @@
-// Every audit row, every field, each value by its own field's rule. One owner for both sides: collect.ts shapes a
-// row with `shapeValue`, and the check (lib-gate.ts) reads what was written with `valueOk`, the same rule read
-// backwards. The rule is per field, never one rule for every value: AI-DLC's word list holds ordinary words
+// Every audit row, every field, each value by its own field's rule. One rule for both sides: collect.ts shapes a
+// row with `shapeValue`, and the check (lib-gate.ts) passes a written value only when the same `shapeValue`, run
+// again with labels standing for themselves, writes it back unchanged (`valueOk`). The rule is per field, never one rule for every value: AI-DLC's word list holds ordinary words
 // (`billing`, `user`, `table`), so a value is kept as it is only where its field can hold nothing but AI-DLC's own
 // words (an event, a stage, an agent), a number or a time; a name the person chose (a Unit, an intent, a file) and
 // any text someone wrote become a label, the same value the same label in one report. AI-DLC's own sentences (an
 // error, a command, a "phase > unit > stage > file" context) keep their fixed text and label what was filled in.
 
 import { HOST_TOOLS } from "./lib-shape.ts";
+import { LABEL } from "./redact.ts";
 
 export type RowVocab = {
   words: Set<string>;
@@ -30,11 +31,11 @@ export const VOCAB_KINDS = ["stages", "phases", "agents", "scopes", "sensors", "
 export const ROW_KINDS = ["value", "text", "file", "hash", "id", "session", "field", "unit", "intent", "space"] as const;
 export type RowKind = (typeof ROW_KINDS)[number];
 
-const CUSTOM = new RegExp(`^<custom-(?:${ROW_KINDS.join("|")}|stage|phase|scope|sensor|hook|agent|tool|event|guard|harness|mode|model|effort|check)-[1-9]\\d{0,5}>$`);
-// A Unit's, an intent's or a space's name from the redaction map (hide.ts writes these), and AI-DLC's own placeholders.
-const DICT_LABEL = /^<(?:(?:intent|space|unit|org|customer|product|person|name)-[1-9]\d{0,5}|project|project-dir|path|redacted)>$/;
+// A label as this skill and AI-DLC's redaction write it (redact.ts LABEL: `<custom-unit-3>`, `<unit-2>`, `<user>`,
+// `<project>`), whole, with a serial of six digits at most (a longer one could carry an account number).
+const WHOLE_LABEL = new RegExp(`^(?:${LABEL.source})$`);
 export function isRowLabel(v: string): boolean {
-  return CUSTOM.test(v) || DICT_LABEL.test(v);
+  return WHOLE_LABEL.test(v) && !/\d{7}/.test(v);
 }
 
 export type Shape = {
@@ -44,10 +45,10 @@ export type Shape = {
 };
 
 type Policy =
-  | "event" | "stage" | "stages" | "phase" | "scope" | "sensor" | "guard" | "agent" | "tool"
-  | "enum" | "titled" | "tech" | "count" | "time"
+  | "stage" | "stages" | "phase" | "scope" | "sensor" | "guard" | "agent" | "tool"
+  | "enum" | "titled" | "tech" | "count"
   | "hash" | "id" | "session" | "unit" | "intent"
-  | "path" | "paths" | "files" | "titles" | "context" | "command" | "engine" | "options" | "answers" | "floor"
+  | "path" | "paths" | "files" | "titles" | "context" | "command" | "engine" | "options" | "floor"
   | "sensor-state" | "plan-target" | "phase-move" | "answer-mode" | "agent-or-word" | "text";
 
 // Fields AI-DLC writes, by what they can hold. A field not listed is read as text (a label).
@@ -94,8 +95,9 @@ const POLICY: Record<string, Policy> = {
   "Run floor": "floor",
   "Sensor State": "sensor-state",
 };
-// A move's Source and Target are stages; any other Source is one of AI-DLC's words (who switched a guard, how a reply came) and any other Target a file.
-const STAGE_ENDPOINT_EVENTS = new Set(["STAGE_JUMPED"]);
+// A move's Source and Target are stages; any other Source is one of AI-DLC's words (who switched a guard, how a reply
+// came) and any other Target a file.
+export const STAGE_ENDPOINT_EVENTS: ReadonlySet<string> = new Set(["STAGE_JUMPED"]);
 function policyOf(event: string, name: string): Policy {
   if (name === "Source") return STAGE_ENDPOINT_EVENTS.has(event) ? "stage" : "enum";
   if (name === "Target") return STAGE_ENDPOINT_EVENTS.has(event) ? "stage" : "path";
@@ -105,14 +107,14 @@ function policyOf(event: string, name: string): Policy {
 // A field's name: AI-DLC's (listed above, or a name its tools write) stays; anything else is labelled.
 const FIELD_NAME = /^[A-Z][A-Za-z0-9]*(?:[ -][A-Za-z0-9]+){0,5}$/;
 export function fieldName(v: RowVocab, s: Shape, name: string): string {
-  return name in POLICY || name === "Source" || name === "Target" || (FIELD_NAME.test(name) && v.words.has(name)) ? name : s.label("field", name);
-}
-export function fieldNameOk(v: RowVocab, name: string): boolean {
-  return name in POLICY || name === "Source" || name === "Target" || (FIELD_NAME.test(name) && v.words.has(name)) || isRowLabel(name);
+  return Object.hasOwn(POLICY, name) || name === "Source" || name === "Target" || (FIELD_NAME.test(name) && v.words.has(name)) ? name : s.label("field", name);
 }
 
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const COUNT = /^-?\d{1,9}$/;
+// A number filled into one of AI-DLC's sentences (an iteration, a count): short, or it is a label (an order or an
+// employee number reads the same).
+const SHORT_NUMBER = /^\d{1,4}$/;
 const TOKEN = /^(?:[a-z][a-z0-9]*(?:[-_.:][a-z0-9]+){0,7}|[A-Z][A-Z0-9_]{1,59})$/;
 const TITLED = /^[A-Z][a-z]+(?: [A-Z][a-z]+){1,4}$/;
 const EVENT = /^[A-Z][A-Z0-9_]{1,59}$/;
@@ -149,6 +151,9 @@ function extensionOf(name: string): string | null {
 }
 
 function fileLabel(s: Shape, rel: string): string {
+  // What this rule wrote already (`<custom-file-3>.ts`) is written again the same way.
+  const own = rel.match(/^(<[^<>/]+>)(?:\.([a-z0-9]{1,12}))?$/);
+  if (own) return `${s.label("file", own[1])}${own[2] && EXTENSIONS.has(own[2]) ? `.${own[2]}` : ""}`;
   const base = rel.split("/").pop() ?? rel;
   const ext = extensionOf(base);
   return `${s.label("file", rel)}${ext ? `.${ext}` : ""}`;
@@ -166,20 +171,13 @@ function layoutSegment(v: RowVocab, s: Shape, parts: string[], i: number, last: 
   if (prev === "intents" && part !== "audit") return s.known(part) ?? s.label("intent", part);
   if (RECORD_DIRS.has(part) || TOOL_TOP.has(part) || TOOL_SUB.has(part) || v.stages.has(part) || v.phases.has(part)) return part;
   if (/^[0-9a-f]{8,64}$/.test(part)) return s.label("hash", part);
-  const review = part.match(/^(\d{1,6})\.([0-9a-f]{8,64})\.review\.md$/);
+  const review = part.match(/^(\d{1,6})\.([0-9a-f]{8,64}|<[^<>]+>)\.review\.md$/);
   if (review) return `${review[1]}.${s.label("hash", review[2])}.review.md`;
-  if (last && (v.words.has(part) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part))) return part;
-  if (last) return fileLabel(s, parts.slice(0, i + 1).join("/"));
+  // A file AI-DLC names (`requirements.md`) stays; a folder at the end is a Unit's or the person's, whatever its word.
+  if (last && ((extensionOf(part) && v.words.has(part)) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part))) return part;
+  // The file is labelled by its whole path; a label already there is the rule's own.
+  if (last) return fileLabel(s, /^<[^<>/]+>(?:\.[a-z0-9]{1,12})?$/.test(part) ? part : parts.slice(0, i + 1).join("/"));
   return s.known(part) ?? s.label("unit", part);
-}
-function layoutSegmentOk(v: RowVocab, part: string, last: boolean): boolean {
-  return RECORD_DIRS.has(part) || TOOL_TOP.has(part) || TOOL_SUB.has(part) || v.stages.has(part) || v.phases.has(part) ||
-    part === DEFAULT_SPACE || isRowLabel(part) || fileOk(part) || /^\d{1,6}\.<custom-hash-[1-9]\d{0,5}>\.review\.md$/.test(part) ||
-    (last && (v.words.has(part) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part)));
-}
-function fileOk(part: string): boolean {
-  const m = part.match(/^(<[^>]+>)(?:\.([a-z0-9]{1,12}))?$/);
-  return !!m && isRowLabel(m[1]) && (!m[2] || EXTENSIONS.has(m[2]));
 }
 const inLayout = (first: string) => first === "aidlc" || first === ".aidlc-engine" || TOOL_TOP.has(first);
 function shapePath(v: RowVocab, s: Shape, raw: string): string {
@@ -199,15 +197,6 @@ function shapePath(v: RowVocab, s: Shape, raw: string): string {
   if (!inLayout(parts[0])) return lead + fileLabel(s, p) + trailing;
   return lead + parts.map((_, i) => layoutSegment(v, s, parts, i, i === parts.length - 1 && !trailing)).join("/") + trailing;
 }
-function pathOk(v: RowVocab, value: string): boolean {
-  let p = value;
-  if (p.startsWith("<project>/")) p = p.slice("<project>/".length);
-  const trailing = p.endsWith("/");
-  const parts = p.replace(/\/+$/, "").split("/");
-  if (parts.length === 1) return fileOk(parts[0]) || (inLayout(parts[0]) && trailing);
-  if (!inLayout(parts[0])) return false;
-  return parts.every((part, i) => layoutSegmentOk(v, part, i === parts.length - 1 && !trailing));
-}
 // Small words AI-DLC's sentences join their fixed parts with; they name nothing.
 const JOINERS = new Set([
   "a", "an", "the", "for", "in", "of", "on", "to", "at", "by", "from", "with", "and", "or", "is", "are", "was", "be",
@@ -217,9 +206,11 @@ const PUNCT = /^[\s"'`.,;:!?()[\]{}<>=+*/|&#%@~^-]*$/;
 
 // AI-DLC's own sentence: its fixed text (a phrase from the installed tools) with what was filled in shaped one piece
 // at a time. null when the value is not one: less than half of it is fixed text, or it does not start with one.
-// On the check's side a label is what the rule wrote for a filled-in piece: it does not count as text to cover.
-const LABEL_TOKEN = /<[a-z][a-z0-9-]{0,40}>/g;
-function covered(v: RowVocab, value: string, labelsFree = false): [number, number][] | null {
+// A label is what the rule wrote for a filled-in piece: it counts neither as text to cover nor before the first fixed part,
+// so the value the rule wrote reads the same way again.
+const LABEL_TOKEN = /<[a-z][a-z0-9:-]{0,40}>/g;
+function covered(v: RowVocab, value: string): [number, number][] | null {
+  if (value.length < 16) return null;
   const spans: [number, number][] = [];
   for (const ph of v.phrases) {
     let at = value.indexOf(ph);
@@ -235,21 +226,17 @@ function covered(v: RowVocab, value: string, labelsFree = false): [number, numbe
   for (const sp of spans) if (!kept.some((k) => sp[0] < k[1] && k[0] < sp[1])) kept.push(sp);
   kept.sort((a, b) => a[0] - b[0]);
   const fixed = kept.reduce((n, [a, b]) => n + (b - a), 0);
-  const text = (labelsFree ? value.replace(LABEL_TOKEN, "") : value).replace(/\s+/g, "");
-  if (kept[0][0] > 2 || fixed * 2 < text.length) return null;
+  const text = value.replace(LABEL_TOKEN, "").replace(/\s+/g, "");
+  if (value.slice(0, kept[0][0]).replace(LABEL_TOKEN, "").length > 2 || fixed * 2 < text.length) return null;
   return kept;
 }
 function gapPieces(gap: string): string[] {
   return gap.split(/(\s+|["'`(),;:]+)/).filter((x) => x !== "");
 }
 function shapeGapPiece(v: RowVocab, s: Shape, piece: string): string {
-  if (PUNCT.test(piece) || JOINERS.has(piece.toLowerCase()) || COUNT.test(piece) || typed(v, piece)) return piece;
+  if (PUNCT.test(piece) || JOINERS.has(piece.toLowerCase()) || SHORT_NUMBER.test(piece) || typed(v, piece)) return piece;
   if (piece.includes("/") || extensionOf(piece)) return shapePath(v, s, piece);
   return s.known(piece) ?? s.label("value", piece);
-}
-function gapPieceOk(v: RowVocab, piece: string): boolean {
-  return PUNCT.test(piece) || JOINERS.has(piece.toLowerCase()) || COUNT.test(piece) || typed(v, piece) || isRowLabel(piece) ||
-    fileOk(piece) || (piece.includes("/") && pathOk(v, piece));
 }
 function splitAt(value: string, spans: [number, number][]): { gaps: string[]; fixed: string[] } {
   const gaps: string[] = [];
@@ -270,14 +257,6 @@ function shapeEngine(v: RowVocab, s: Shape, value: string): string {
   const { gaps, fixed } = splitAt(value, spans);
   return gaps.map((g, i) => gapPieces(g).map((p) => shapeGapPiece(v, s, p)).join("") + (fixed[i] ?? "")).join("");
 }
-// The check reads the shaped text the same way: fixed text, and between it only pieces that are AI-DLC's, a number,
-// a joining word or a label.
-function engineOk(v: RowVocab, value: string): boolean {
-  if (isRowLabel(value) || ANSWERS.test(value) || (value.includes(" ") && v.words.has(value))) return true;
-  const spans = covered(v, value, true);
-  return !!spans && splitAt(value, spans).gaps.every((g) => gapPieces(g).every((p) => gapPieceOk(v, p)));
-}
-
 // A question's answers as AI-DLC records them: `Q1: A; Q2: B,C`, `Q1, Q2, Q3`.
 const ANSWERS = /^Q\d{1,3}(?::\s?[A-Z](?:,[A-Z]){0,9})?(?:[;,]\s?Q\d{1,3}(?::\s?[A-Z](?:,[A-Z]){0,9})?){0,40}$/;
 // The few one-word choices AI-DLC's own gates offer; any other one-word option is the agent's text.
@@ -298,8 +277,6 @@ export function shapeValue(v: RowVocab, s: Shape, event: string, name: string, r
   const value = raw.trim();
   const pick = (ok: boolean, kind: RowKind = "value") => (ok ? value : s.label(kind, value));
   switch (policyOf(event, name)) {
-    case "event":
-      return pick(EVENT.test(value) && v.words.has(value));
     case "stage":
       return pick(v.stages.has(value));
     case "stages":
@@ -324,8 +301,6 @@ export function shapeValue(v: RowVocab, s: Shape, event: string, name: string, r
       return list(value).map((x) => (/^[A-Za-z][A-Za-z0-9.+#-]{0,30}$/.test(x) && v.words.has(x) ? x : s.label("value", x)));
     case "count":
       return COUNT.test(value) ? Number(value) : s.label("value", value);
-    case "time":
-      return pick(TIME.test(value));
     case "hash":
       return s.label("hash", value);
     case "id":
@@ -358,8 +333,6 @@ export function shapeValue(v: RowVocab, s: Shape, event: string, name: string, r
       return shapeEngine(v, s, value);
     case "options":
       return value.split(/\s*[,;]\s*/).filter(Boolean).map((o) => (ANSWERS.test(o) || /^[A-Z]$/.test(o) || optionOk(v, o) ? o : s.label("text", o)));
-    case "answers":
-      return pick(ANSWERS.test(value), "text");
     case "floor": {
       const m = value.match(/^([A-Z][A-Z0-9_]{1,59}):([0-9T:.\-Z+]{10,35})#(\d{1,6})$/);
       return m && v.words.has(m[1]) && TIME.test(m[2]) ? value : s.label("text", value);
@@ -409,12 +382,13 @@ function shapeCommand(v: RowVocab, s: Shape, value: string): string {
   for (const [i, piece] of pieces.entries()) {
     const flag = piece.match(/^--?([a-z][a-z0-9-]{0,40})(?:=(.*))?$/);
     if (flag) {
-      const name = v.words.has(flag[1]) || flag[1] in FLAG_KIND ? flag[0].slice(0, flag[0].length - (flag[2] !== undefined ? flag[2].length + 1 : 0)) : s.label("value", piece);
-      out.push(flag[2] !== undefined ? `${name}=${flagValue(v, s, flag[1], flag[2])}` : name);
+      const known = v.words.has(flag[1]) || Object.hasOwn(FLAG_KIND, flag[1]);
+      const name = piece.slice(0, piece.length - (flag[2] !== undefined ? flag[2].length + 1 : 0));
+      out.push(!known ? s.label("value", piece) : flag[2] !== undefined ? `${name}=${flagValue(v, s, flag[1], flag[2])}` : name);
       continue;
     }
     const before = pieces[i - 1]?.match(/^--?([a-z][a-z0-9-]{0,40})$/);
-    if (before && FLAG_KIND[before[1]]) out.push(flagValue(v, s, before[1], piece));
+    if (before && Object.hasOwn(FLAG_KIND, before[1])) out.push(flagValue(v, s, before[1], piece));
     else if (/^["']/.test(piece)) out.push(s.label("text", piece));
     else if (typed(v, piece) || (TOKEN.test(piece) && v.words.has(piece)) || choices(v, piece)) out.push(piece);
     else out.push(s.label("value", piece));
@@ -435,102 +409,22 @@ function choices(v: RowVocab, piece: string): boolean {
   const m = piece.match(/^<([a-z][a-z-]*(?:\|[a-z][a-z-]*)+)>$/);
   return !!m && m[1].split("|").every((w) => v.words.has(w));
 }
-function commandOk(v: RowVocab, value: string): boolean {
-  const pieces = commandPieces(value);
-  if (!aidlcCommand(v, pieces[0])) return false;
-  return pieces.every((piece) => {
-    const flag = piece.match(/^--?([a-z][a-z0-9-]{0,40})(?:=(.*))?$/);
-    const atom = (x: string) => typed(v, x) || (TOKEN.test(x) && v.words.has(x)) || choices(v, x) || isRowLabel(x) || fileOk(x) || (x.includes("/") && pathOk(v, x));
-    if (flag) return (v.words.has(flag[1]) || flag[1] in FLAG_KIND) && (flag[2] === undefined || atom(flag[2]));
-    return atom(piece);
-  });
+// The check: the value the rule writes when it reads this written value again, with every label standing for itself
+// and anything else refused. A label the rule wrote, or the redaction wrote over a kept value, comes back as it was; a
+// raw value (a Unit's name, a reply, a project path, an id) does not.
+const REFUSED = "\u0000";
+const asWritten: Shape = { label: (_kind, raw) => (isRowLabel(raw) ? raw : REFUSED), known: () => undefined };
+export function fieldNameOk(v: RowVocab, name: string): boolean {
+  return fieldName(v, asWritten, name) === name;
 }
-
-
-// The check: is this written value one the rule could have written for its field? Never a raw value.
 export function valueOk(v: RowVocab, event: string, name: string, value: unknown): boolean {
-  if (typeof value === "number") return Number.isInteger(value) && Math.abs(value) < 1e9 && policyOf(event, name) === "count";
-  if (Array.isArray(value)) return value.every((x) => typeof x === "string" && listItemOk(v, event, name, x));
-  if (typeof value !== "string") return false;
-  if (isRowLabel(value)) return true;
-  switch (policyOf(event, name)) {
-    case "event":
-      return EVENT.test(value) && v.words.has(value);
-    case "stage":
-      return v.stages.has(value);
-    case "stages":
-      return value === "none";
-    case "phase":
-      return v.phases.has(value);
-    case "scope":
-      return v.scopes.has(value) || enumOk(v, value);
-    case "sensor":
-      return v.sensors.has(value);
-    case "guard":
-      return v.guards.has(value) || v.hooks.has(value);
-    case "agent":
-      return v.agents.has(value);
-    case "tool":
-      return typed(v, value) || HOST_TOOLS.has(value);
-    case "enum":
-      return enumOk(v, value);
-    case "titled":
-      return (enumOk(v, value) || TITLED.test(value)) && v.words.has(value);
-    case "time":
-      return TIME.test(value);
-    case "path":
-      return pathOk(v, value);
-    case "context":
-      return value.split(" > ").every((part, i, all) =>
-        v.phases.has(part) || v.stages.has(part) || isRowLabel(part) || fileOk(part) || (i === all.length - 1 && !!extensionOf(part) && v.words.has(part)));
-    case "command":
-      return commandOk(v, value);
-    case "engine":
-      return engineOk(v, value);
-    case "answers":
-      return ANSWERS.test(value);
-    case "floor": {
-      const m = value.match(/^([A-Z][A-Z0-9_]{1,59}):([0-9T:.\-Z+]{10,35})#(\d{1,6})$/);
-      return !!m && v.words.has(m[1]) && TIME.test(m[2]);
-    }
-    case "sensor-state": {
-      const m = value.match(/^([a-z][a-z0-9-]{0,40})@(.*)$/);
-      return !!m && v.sensors.has(m[1]) && (m[2] === "" || pathOk(v, m[2]));
-    }
-    case "plan-target": {
-      const m = value.match(/^unit:(.+)$/);
-      return m ? isRowLabel(m[1]) : v.stages.has(value);
-    }
-    case "phase-move": {
-      const m = value.match(/^([a-z-]+) → ([a-z-]+)$/);
-      return !!m && v.phases.has(m[1]) && v.phases.has(m[2]);
-    }
-    case "answer-mode": {
-      const m = value.match(/^([a-z][a-z-]{0,30})(?: \(reused from ([a-z][a-z0-9-]{0,60})\))?$/);
-      return !!m && v.words.has(m[1]) && (!m[2] || v.stages.has(m[2]));
-    }
-    case "agent-or-word":
-      return v.agents.has(value) || (TOKEN.test(value) && v.words.has(value));
-    default:
-      return false;
-  }
-}
-function listItemOk(v: RowVocab, event: string, name: string, x: string): boolean {
-  if (isRowLabel(x)) return true;
-  switch (policyOf(event, name)) {
-    case "stages":
-      return v.stages.has(x);
-    case "tech":
-      return /^[A-Za-z][A-Za-z0-9.+#-]{0,30}$/.test(x) && v.words.has(x);
-    case "paths":
-      return pathOk(v, x) || /^\(and \d{1,6} more\)$/.test(x);
-    case "options":
-      return ANSWERS.test(x) || /^[A-Z]$/.test(x) || optionOk(v, x);
-    case "files":
-      return fileOk(x) || (v.words.has(x) && (!!extensionOf(x) || /^[a-z][a-z ]{2,40}$/.test(x)));
-    case "titles":
-      return (TITLED.test(x) || /^[A-Z][a-z]+(?: [a-z]+){1,4}$/.test(x)) && v.words.has(x);
-    default:
-      return false;
-  }
+  let raw: string;
+  if (typeof value === "number") raw = String(value);
+  else if (typeof value === "string") raw = value;
+  else if (Array.isArray(value) && value.every((x) => typeof x === "string")) {
+    const more = value.length > 0 && /^\(and \d{1,6} more\)$/.test(value[value.length - 1]);
+    raw = more ? `${value.slice(0, -1).join(", ")} ${value[value.length - 1]}` : value.join(", ");
+  } else return false;
+  const again = JSON.stringify(shapeValue(v, asWritten, event, name, raw));
+  return !again.includes(REFUSED) && again === JSON.stringify(value);
 }

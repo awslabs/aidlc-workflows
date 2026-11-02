@@ -17,7 +17,7 @@ import { basename, resolve } from "node:path";
 
 export type Entry = { value: string; label: string; kind: string };
 // `skipped`: one-word values left out because they are ordinary words or too short; kept in
-// the local redaction map so the model can keep them out of the report by hand.
+// the local redaction map (the rows label a Unit's or an intent's name whatever its word).
 // `secretRulesFrom`: the installed AI-DLC file the secret rules came from, so check.ts and hide.ts use the same.
 export type Dictionary = { entries: Entry[]; skipped?: Entry[]; secretRulesFrom?: string | null };
 

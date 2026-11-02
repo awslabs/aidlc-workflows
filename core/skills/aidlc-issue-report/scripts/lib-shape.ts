@@ -1,7 +1,7 @@
-// What each safe.json field may hold, in one place. A field holds AI-DLC's own word (lib-vocab.ts), a
-// number, a time, a version, a value this skill made itself, or an anonymous label (`<custom-stage-1>`)
-// for any other name; text someone wrote (a Bolt's name, an error message) is not sent at all. Redaction
-// (redact.ts) still runs over the result; this is what makes a name nobody listed unable to get through.
+// What each safe.json field outside the audit rows may hold (the rows are lib-rows.ts's): AI-DLC's own word
+// (lib-vocab.ts), a number, a time, a version, a value this skill made itself, or an anonymous label
+// (`<custom-stage-1>`) for any other name; a session, a call's input and a reply in the event streams are labels.
+// Redaction (redact.ts) still runs over the result; this is what makes a name nobody listed unable to get through.
 
 import { BUILTIN_AGENTS, OWN, type Summary } from "./lib-transcripts.ts";
 

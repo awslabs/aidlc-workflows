@@ -71,9 +71,10 @@ if (stack) lines.push("- The project's languages and frameworks as AI-DLC's work
 
 lines.push("", "## Replaced by labels", "");
 const kinds = new Map<string, Set<string>>();
-for (const m of text.matchAll(/<(?:custom-)?([a-z]+(?:-[a-z]+)*?)-(\d{1,6})>/g)) {
+// Each distinct label once: `<unit-1>` (the redaction map's) and `<custom-unit-1>` (a row's) are two Units.
+for (const m of text.matchAll(/<(?:custom-)?([a-z]+(?:-[a-z]+)*?)-\d{1,6}>/g)) {
   const set = kinds.get(m[1]) ?? new Set<string>();
-  set.add(m[2]);
+  set.add(m[0]);
   kinds.set(m[1], set);
 }
 if (kinds.size === 0) lines.push("- none");

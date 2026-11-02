@@ -41,7 +41,7 @@ file paths with their name in them, and project content. So the scripts write tw
   event, a stage, an agent, a status), a number, a time or a version; any name the person chose (a Unit, an intent, a
   file) and anything a person or an agent wrote is a label such as `<custom-text-12>`, the same value the same label.
   `references/data.md` says what each part holds.
-- `local/` — what the labels stand for and the raw snippets the scripts read. It is never sent and is deleted at the end.
+- `local/` — what the labels stand for, and what the check needs. It is never sent and is deleted at the end.
 
 Before anything is handed over, a check reads every file in the folder as written and refuses any value that is not
 what its field's rule writes, and any line of the cover that holds something which could identify a person, a company

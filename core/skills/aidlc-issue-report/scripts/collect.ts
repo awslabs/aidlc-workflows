@@ -1,8 +1,8 @@
 // Collect what AI-DLC and the AI tool left about a run, in two layers:
-//   <out>/safe.json   shareable facts only: every field shaped (lib-shape.ts), then redacted
-//   <out>/local/      raw snippets for the model to understand the run, the redaction map and
-//                     labels, and the raw doctor export. finish.ts deletes this folder; nothing in
-//                     it goes into the report, and the doctor export is not sent.
+//   <out>/safe.json   the data that is sent: every audit row and field by its own rule (lib-rows.ts), each tool's
+//                     event stream and the rest by lib-shape.ts, then redacted
+//   <out>/local/      what each label stands for, the redaction map, AI-DLC's words for the check, a reader's
+//                     failure, and the raw doctor export. finish.ts deletes this folder; nothing in it is sent.
 //
 // Usage: collect.ts [--project <dir>] [--out <dir>] [--days 7]
 //                   [--since <ISO>] [--until <ISO>] [--no-doctor]
@@ -10,7 +10,7 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { platform } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { extractArchive, walkFiles } from "./lib-archive.ts";
 import {
   hookHealthDirs, matchReplies, readAudit, readHooksHealth, readSessionsFolder, readState, rowEntries,
@@ -154,7 +154,7 @@ const rowShape: Shape = { label: (kind, raw) => shaper.labels.label(kind, raw), 
 
 // Versions of the tools this run used. A version the tool wrote into its own log (`toolVersions`) is the
 // one at the time of the run; the rest are measured now, and the ones not found at all are asked of the
-// person (SKILL.md step 4) and recorded with set-version.ts.
+// person (SKILL.md step 3) and recorded with set-version.ts.
 const usedTools = toolsUsed(transcripts);
 // Only the tools the run used are asked for their version: nothing else is started.
 const env = environment(project, usedTools);
@@ -252,8 +252,8 @@ if (flag("no-doctor")) {
         doctor.note ||= "the doctor export could not be unpacked";
       }
     }
-    for (const f of reportRoot ? walkFiles(reportRoot) : []) {
-      if (!f.endsWith("report.json")) continue;
+    // The export's own report.json (one per export); another file whose name ends the same is not doctor's list.
+    for (const f of (reportRoot ? walkFiles(reportRoot) : []).filter((x) => basename(x) === "report.json").slice(0, 1)) {
       try {
         const j = JSON.parse(readFileSync(f, "utf8")) as { findings?: { id?: unknown; severity?: unknown }[] };
         for (const x of j.findings ?? []) {
@@ -312,11 +312,9 @@ const safe = {
 const safeText = JSON.stringify(redactValue(safe, dict, { ids: true }), null, 2);
 writeFileSync(join(out, "safe.json"), safeText);
 writeFileSync(join(localDir, "labels.json"), JSON.stringify(shaper.labels, null, 2));
-writeFileSync(join(localDir, "prompts.jsonl"), local.prompts.map((p) => JSON.stringify(p)).join("\n"));
-writeFileSync(join(localDir, "refusals.jsonl"), local.refusals.map((p) => JSON.stringify(p)).join("\n"));
 writeFileSync(join(localDir, "errors.jsonl"), local.errors.map((p) => JSON.stringify(p)).join("\n"));
 
-// The check's own reading of safe.json: a hit is a field this collector shaped wrong, named for the model to
+// The check's own reading of safe.json: a hit is a field this collector shaped wrong, named for the agent to
 // replace with `<redacted>` before the check can pass.
 const safeJsonHits = safeHits(gateContext(out, dict), JSON.parse(safeText));
 console.log(

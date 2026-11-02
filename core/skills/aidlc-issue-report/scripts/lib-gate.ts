@@ -2,17 +2,17 @@
 // what collect.ts and hide.ts write as best it can, and this module refuses whatever is still not clearly safe,
 // so a value redaction did not understand is refused here rather than passed.
 //
-// The report (English the model wrote) is refused line by line wherever a shape that can carry identity
+// The cover (cover.ts writes it from safe.json) is refused line by line wherever a shape that can carry identity
 // appears: an address, an email, an IP, a path or a dotted name outside AI-DLC's and the AI tools' own, an
 // opaque token, a credential, an encoded spelling, markup, a letter outside ASCII, or a name in the redaction
-// map. A label (`<project>`) and the fixed text of one of AI-DLC's own
-// messages (lib-vocab.ts phrases) exempt only their own span: what a message filled in is read like any other word.
-// What it is for: a value the model copies by mistake from a log or a record, in the form such values are usually
-// written. It does not try to defeat text written to get past it (a name split by invisible characters or by a
-// reference link); the model writes the report, and SKILL.md tells it how.
-// safe.json is closed: each string, and each key that is data, is one of AI-DLC's words (local/vocab.json),
-// this skill's own words (the literals in its scripts), a label, a time, a version, a count, a public model id
-// or its field's own shape; the skill's own sentences (notes, knownGaps) get the report's rules.
+// map. A label (`<project>`) and the fixed text of one of AI-DLC's own messages (lib-vocab.ts phrases) exempt
+// only their own span: what a message filled in is read like any other word. What it is for: a value copied by
+// mistake from a log or a record, in the form such values are usually written; it does not try to defeat text
+// written to get past it (a name split by invisible characters or by a reference link).
+// safe.json's audit rows pass only as lib-rows.ts writes them (rowHits). The rest of safe.json: each string, and
+// each key that is data, is one of AI-DLC's words (local/vocab.json), this skill's own words (the literals in its
+// scripts), a label, a time, a version, a count, a public model id or its field's own shape; the skill's own
+// sentences (notes, knownGaps) get the cover's rules.
 // A refusal names the line or field and the reason, never the value.
 
 import { readdirSync, readFileSync } from "node:fs";
