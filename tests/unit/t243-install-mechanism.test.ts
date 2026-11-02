@@ -1078,6 +1078,13 @@ describe("t243 project initialization", () => {
     expect(edited.stdout).toContain(
       "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")",
     );
+    // So is one whose timeout a person changed.
+    expect(written).toContain('"timeout": 1800');
+    writeFileSync(registration, written.replace('"timeout": 1800', '"timeout": 60'));
+    const retimed = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(retimed.stdout).toContain(
+      "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")",
+    );
     // A Windows team clone checks the file out with CRLF line endings.
     writeFileSync(registration, written.replaceAll("\n", "\r\n"));
     const crlf = run(INIT, [...switchArgs, "--dry-run"], project);
@@ -1138,6 +1145,51 @@ describe("t243 project initialization", () => {
       expect(files.map((file) => readFileSync(file))).toEqual(written);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  test("a Kiro switch names a registration beside a plugin folder no build names as a hook AI-DLC does not own", () => {
+    const project = temp("aidlc-t243-kiro-switch-plugin-folder-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const projection = join(temp("aidlc-t243-plugin-folder-"), "kiro-ide");
+    const built = run(join(REPO_ROOT, "scripts", "package.ts"), ["plugin", "build", "test-pro", "kiro-ide", projection], REPO_ROOT);
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    cpSync(join(projection, ".kiro"), join(project, ".kiro"), { recursive: true });
+    const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+    const written = readFileSync(registration, "utf-8");
+    const switchArgs = [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", "--dry-run",
+    ];
+    let folder = "aidlc-test-pro";
+    // The plugin's folder renamed, and its registration rewritten as a build
+    // would write it for that folder.
+    const moveTo = (name: string): string => {
+      renameSync(join(project, ".kiro", "aidlc-plugins", folder), join(project, ".kiro", "aidlc-plugins", name));
+      folder = name;
+      const text = written.replaceAll("aidlc-plugins/aidlc-test-pro", `aidlc-plugins/${name}`);
+      expect(text === written).toBe(name === "aidlc-test-pro");
+      writeFileSync(registration, text);
+      return text;
+    };
+    const unowned =
+      "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")";
+
+    // A build of a plugin someone else makes names the folder after the plugin alone.
+    const ownName = moveTo("test-pro");
+    const owned = run(INIT, switchArgs, project);
+    expect(owned.status, owned.stdout + owned.stderr).toBe(0);
+    expect(owned.stdout).toContain("(switches .kiro in place from kiro to kiro-ide)");
+    expect(owned.stdout).not.toContain("AI-DLC does not own");
+    expect(readFileSync(registration, "utf-8")).toBe(ownName);
+    for (const name of ["test-pro-copy", "Aidlc-test-pro"]) {
+      const text = moveTo(name);
+      const preview = run(INIT, switchArgs, project);
+      expect(preview.stdout, name).toContain(unowned);
+      expect(readFileSync(registration, "utf-8")).toBe(text);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro switch that would let Kiro run unowned hook files applies only the approved set", () => {
     const project = temp("aidlc-t243-kiro-switch-hooks-");
