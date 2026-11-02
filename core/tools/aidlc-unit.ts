@@ -46,6 +46,7 @@ import {
   extractMarkdownSection,
   filterProducesByKind,
   getField,
+  loadStageGraph,
   humanPresenceGuardDisabled,
   idSuffix,
   invalidateLiveClaimPayloadCache,
@@ -104,6 +105,7 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
+import { beforePerUnitBlock } from "./aidlc-graph.ts";
 import { approvalDecidesOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
@@ -3939,6 +3941,17 @@ function claimUnit(args: string[], projectDir?: string): void {
     clearUnitScopeStamp(pd);
   }
   const integration = fetchIntegration(pd);
+  // Main back before the per-Unit block is changing the Unit plan: a Unit is
+  // claimed from the plan once its revision is approved, never from a draft.
+  const integrationStage = getField(stateAtOid(pd, integration.oid), "Current Stage")?.trim() ?? "";
+  if (beforePerUnitBlock(loadStageGraph(), integrationStage)) {
+    const stage = loadStageGraph().find((node) => node.slug === integrationStage);
+    const where = integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch;
+    fail(
+      `Main is changing the Unit plan (${stage?.name ?? integrationStage} is open again on ${where}), so a Unit is ` +
+        "claimed once the revised plan is approved and on main. Nothing was claimed.",
+    );
+  }
   const opening = openingStatus(pd, integration.oid);
   if (!opening.units.includes(unit)) fail(`Unit "${unit}" is not in the authoritative Unit DAG.`);
   if (opening.completed.has(unit)) {
