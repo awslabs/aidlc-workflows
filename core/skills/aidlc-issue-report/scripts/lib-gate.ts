@@ -262,7 +262,7 @@ const MASKS = new RegExp(`${MASK}+`, "g");
 const isMask = (v: string) => v.length > 0 && /^\uE000+$/.test(v);
 const PRIVATE_USE = /[\uE000-\uF8FF]/;
 
-// A label holds a small number (`<customer-12>`, a short `<id:…>`): a long one can carry an account in its name, and
+// A label holds a small number (`<customer-12>`, an eight-hex `<id:…>`): a long one can carry an account in its name, and
 // stays as text, which the markup rule refuses.
 function labelMask(text: string): string {
   return text.replace(LABEL, (m) => (smallLabel(m) ? MASK.repeat(m.length) : m));

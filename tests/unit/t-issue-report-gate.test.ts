@@ -163,7 +163,7 @@ describe("this skill's own code, read as code", () => {
     expect(fills("seenundefined", ["seen"], () => true)).toBe(false);
     expect(fills("a\nb done", ["", " done"], () => true)).toBe(false);
     // A slot before the last fixed part holds 400 characters, the last slot 2,000.
-    expect(fills(`x ${"a".repeat(400)} y`, ["x ", " y"], () => true)).toBe(true);
+    expect(fills(`x ${"a".repeat(400)} y z`, ["x ", " y", ""], () => true)).toBe(true);
     expect(fills(`x ${"a".repeat(401)} y z`, ["x ", " y", ""], () => true)).toBe(false);
     expect(fills(`x ${"a".repeat(2000)}`, ["x ", ""], () => true)).toBe(true);
     expect(fills(`x ${"a".repeat(2001)}`, ["x ", ""], () => true)).toBe(false);
@@ -215,7 +215,11 @@ describe("a prose field holds only this skill's own sentences", () => {
     // Labels side by side (the redaction writes `<user><host>` for a folder named after both) carry no value: they pass.
     expect(safeHits(c, { knownGaps: ["<user><host><project>"] })).toEqual([]);
     // Several small labels side by side pass; one that is not small does not.
-    expect(safeHits(c, { knownGaps: ["<user><host><project><custom-value-1>", "<user><id:deadbeef>"] })).toEqual([]);
+    expect(
+      safeHits(c, {
+        knownGaps: ["<user><host><project><custom-value-1>", "<user><id:deadbeef>", "<customer-1234><customer-5678><customer-9012>"],
+      }),
+    ).toEqual([]);
     expect(safeHits(c, { knownGaps: ["<user><customer-12345>"] }).length).toBe(1);
     const surface = (slot: string) => `Kiro surface per session: ${slot} Kiro CLI, 0 Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`;
     expect(safeHits(c, { transcripts: [{ notes: [surface("<custom-value-1>")] }] })).toEqual([]);
