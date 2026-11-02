@@ -321,9 +321,9 @@ Landing is ordered and resumable:
 
 1. **Git content first.** Re-fetch the integration branch and verify that the
    approved Unit's entry in the Unit DAG, its kind, the active stage columns,
-   and the evidence are still current, then merge the pinned OID. Contract
-   drift refuses before mutation and requires rebase, republish, re-pin, and a
-   new merge gate. Main's
+   and the evidence are still current and every Unit it depends on has landed,
+   then merge the pinned OID. Contract drift refuses before mutation and
+   requires rebase, republish, re-pin, and a new merge gate. Main's
    `aidlc-state.md`, runtime graph, cursors, and engine markers are retained; the team's new
    audit shard and per-Unit artifacts/source land. Real source conflicts abort
    back to a clean checkout and list the files. A clean automatic merge of a
