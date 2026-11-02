@@ -10,8 +10,9 @@
 //
 // This file checks what the move resets and what it keeps (landed Units' rows,
 // reviews, merge receipts and claim refs), that main's walk afterwards treats
-// the landed Units as landed, and that the intent then moves on to Build and
-// Test.
+// the landed Units as landed, that a Unit added by the new plan is claimed,
+// worked and landed like any other, and that the intent then moves on to Build
+// and Test.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -203,6 +204,28 @@ describe("t-team-unit-replan-no-claims: the Unit plan changes with no claim open
     expectPlainClaimRefused(remote, "skeleton");
   });
 
+  test("a Unit the new plan adds is claimed, worked and landed like any other, with main's walk untouched before it lands", () => {
+    const { seed, remote } = alphaLanded();
+    replan(seed, PLAN_WITH_GAMMA);
+
+    // gamma depends only on the landed alpha; it lands before any step of main's own walk.
+    workAfterReplan(remote, "gamma");
+    expect(status(seed).claimed).toEqual([{ unit: "gamma", owner: "gamma-team", generation: 1 }]);
+    gateAndLand(seed, "gamma");
+    git(seed, ["push", "origin", "main"]);
+
+    expect(cells(seed, "gamma")).toEqual(COMPLETE_ROW);
+    expect(cells(seed, "alpha")).toEqual(COMPLETE_ROW);
+    expect(cells(seed, "skeleton")).toEqual(COMPLETE_ROW);
+    expect(mergedUnits(seed)).toEqual(["alpha", "gamma"]);
+    const listed = status(seed);
+    expect(listed.claimable).toEqual(["beta"]);
+    expect(listed.claimed).toEqual([]);
+    // Landing gamma does not turn the earlier landings into open claims.
+    expectPlainClaimRefused(remote, "alpha");
+
+  });
+
   // main's first step in the walk after the plan change; the person commits and pushes what it wrote.
   function mainTakesItsFirstStep(seed: string): Record<string, unknown> {
     const step = nextDirective(seed);
@@ -233,6 +256,20 @@ describe("t-team-unit-replan-no-claims: the Unit plan changes with no claim open
     replan(seed, UNCHANGED_PLAN);
     mainTakesItsFirstStep(seed);
     expectLandedUnitsStayLanded(seed, remote, ["beta"]);
+  });
+
+  test("after every Unit has landed on a revised plan, main moves on to Build and Test", () => {
+    const { seed, remote } = alphaLanded();
+    replan(seed, PLAN_WITH_GAMMA);
+    landAfterReplan(seed, remote, "gamma");
+    landAfterReplan(seed, remote, "beta");
+    for (const unit of ["skeleton", "alpha", "beta", "gamma"]) expect(cells(seed, unit), unit).toEqual(COMPLETE_ROW);
+
+    for (const stage of CONSTRUCTION_STAGES.slice(0, 5)) {
+      expect(stageLine(seed, stage), `every Unit landed: ${stage}`).toContain("[x]");
+    }
+    expect(currentStage(seed)).toBe("build-and-test");
+    expect(nextDirective(seed)).toMatchObject({ kind: "run-stage", stage: "build-and-test" });
   });
 
   test("approving Units Generation with no change to the plan keeps the landed Units landed and the same Units claimable (before main takes a step)", () => {
