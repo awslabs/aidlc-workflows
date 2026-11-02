@@ -1,15 +1,18 @@
 // covers: subcommand:aidlc-unit:claim, subcommand:aidlc-unit:release, subcommand:aidlc-unit:status, subcommand:aidlc-log:review, subcommand:aidlc-orchestrate:next
 //
 // A revised Unit plan could drop, rename or split a Unit that had already landed
-// or was claimed, and the plan was approved all the same: the Unit's claim or
-// landed work then belonged to a name nobody could reach. This file checks the
-// shapes of a plan change in the middle of Construction on a team intent (back
-// to Units Generation on main, a revised Unit DAG, Units Generation and Delivery
-// Planning approved again). Units Generation's review request reads the revised
-// plan against what the team already did: a landed or claimed Unit keeps its
-// name. Each refusal names the Unit and the step that fixes the plan; after the
-// step, the plan goes through. Also checked: duplicate names, two checkouts
-// changing the plan at once, and the stage-artifact guard on.
+// or was claimed, name a Unit that git cannot hold as a claim, or add a root Unit
+// that took over the walking skeleton, and the plan was approved all the same:
+// the Unit's claim or landed work then belonged to a name nobody could reach.
+// This file checks the shapes of a plan change in the middle of Construction on
+// a team intent (back to Units Generation on main, a revised Unit DAG, Units
+// Generation and Delivery Planning approved again). Units Generation's review
+// request reads the revised plan against what the team already did: a landed
+// or claimed Unit keeps its name, every name can be a claim ref, and with the
+// walking skeleton on, the skeleton stays the Unit built first. Each refusal
+// names the Unit and the step that fixes the plan; after the step, the plan
+// goes through. Also checked: duplicate names, two checkouts changing the plan
+// at once, and the stage-artifact guard on.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -268,6 +271,34 @@ describe("t-team-unit-replan-plan-edits: shapes of a plan change", () => {
       expect(askReview(seed).out).toContain("duplicate unit name: alpha");
       writeUnitPlan(seed, [U("skeleton"), U("alpha", "skeleton"), U("Alpha", "skeleton")]);
       expect(askReview(seed).out).toContain("case-folding unit name collision");
+    });
+
+    test("a Unit name git cannot hold as a claim ref (x.lock) is refused at the review request; a name it can hold goes through", () => {
+      const { seed, remote } = seedWithParallelUnits();
+      reopenWithPlan(seed, [...BASE, U("x.lock", "skeleton")]);
+      const message = planRefusal(seed) ?? "";
+      expect(message).toContain('"x.lock" cannot name a Unit');
+      expect(message).toContain("Rename it in the units block");
+      writeUnitPlan(seed, [...BASE, U("x-lock", "skeleton")]);
+      approveWrittenPlan(seed);
+      const claim = runMergeTool(UNIT, ["claim", "x-lock", "--team", "lock-team"], clone(remote, "lock"));
+      expect(claim.status, claim.out).toBe(0);
+    });
+  });
+
+  describe("with the walking skeleton on", () => {
+    // Units wait on the first Unit of the DAG's first batch, which the skeleton is.
+    test("a new root Unit that sorts before the built skeleton is refused; with the skeleton in its depends_on the plan goes through", () => {
+      const { seed, remote } = makeReplanSeed(parallelDependencyBody(), "on");
+      reopenWithPlan(seed, [...BASE, U("api")]);
+      const message = planRefusal(seed) ?? "";
+      expect(message).toContain('Unit "api" depends on nothing and its name sorts before "skeleton"');
+      expect(message).toContain('Add "skeleton" to "api"\'s depends_on');
+      writeUnitPlan(seed, [...BASE, U("api", "skeleton")]);
+      approveWrittenPlan(seed);
+      expect([...statusOf(seed).claimable].sort()).toEqual(["alpha", "api", "beta"]);
+      const claim = runMergeTool(UNIT, ["claim", "alpha", "--team", "alpha-team"], clone(remote, "alpha-team"));
+      expect(claim.status, claim.out).toBe(0);
     });
   });
 

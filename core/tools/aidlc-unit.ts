@@ -3730,8 +3730,9 @@ function validateClaimRefUnit(intentId8: string, unit: string): void {
 
 // A team's revised Unit plan (Units Generation's units block) against what the
 // team already did: a Unit that landed or is claimed keeps its name, since its
-// receipts, row and claim are read by name. The first problem, as the step that
-// fixes the plan; null when the plan holds.
+// receipts, row and claim are read by name; every name can be a claim ref; and
+// with the walking skeleton on, the skeleton stays the Unit built first. The
+// first problem, as the step that fixes the plan; null when the plan holds.
 export function unitPlanRefusal(projectDir: string): string | null {
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
@@ -3740,6 +3741,12 @@ export function unitPlanRefusal(projectDir: string): string | null {
   if (!parsed.ok) return null;
   const planned = new Set(parsed.units.map((edge) => edge.name));
   const identity = activeIdentity(pd);
+  for (const unit of planned) {
+    if (spawnSync("git", ["check-ref-format", claimRef(identity.intentId8, unit)], { encoding: "utf-8" }).status !== 0) {
+      return `"${unit}" cannot name a Unit: a Unit's claim is a git ref, and git refuses this name ('..', a '.lock' ` +
+        "ending, a leading dot and other ref-reserved forms). Rename it in the units block.";
+    }
+  }
   const completed = completedUnits(state);
   const known = new Set(unitProgressTable(state)?.rows.map((cells) => cells[0]) ?? []);
   for (const unit of [...known].filter((name) => !planned.has(name)).sort()) {
@@ -3761,6 +3768,13 @@ export function unitPlanRefusal(projectDir: string): string | null {
         `it out. Keep "${unit}" in the units block under that name while it is claimed, or have the claim released ` +
         `first from main: \`aidlc unit release ${unit}\`.`;
     }
+  }
+  const roots = parsed.batches[0] ?? [];
+  const built = roots.find((name) => completed.has(name));
+  if (teamSkeletonOn(state) && built !== undefined && roots[0] !== built) {
+    return `Unit "${roots[0]}" depends on nothing and its name sorts before "${built}", so it would take over as the ` +
+      `walking skeleton, which "${built}" already is and has built. Add "${built}" to "${roots[0]}"'s depends_on: ` +
+      "every Unit waits on the walking skeleton anyway.";
   }
   return null;
 }
