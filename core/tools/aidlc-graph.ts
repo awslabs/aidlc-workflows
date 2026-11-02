@@ -94,6 +94,7 @@ import {
   type GuardPolicy,
   guardPolicyAtLeast,
   guardPolicyMemoryStrictRefusal,
+  isPerUnitStage,
   memoryGuardPolicyDeclarations,
   noteGuardPolicyRename,
   parseGuardPolicy,
@@ -1372,6 +1373,16 @@ export function loadGraph(): GraphStage[] {
     _graph = loadStageGraph() as GraphStage[];
   }
   return _graph;
+}
+
+// True when `slug` runs before the first per-Unit stage of `stages` (a graph in
+// run order): Inception and earlier, where the Unit plan itself is made. A team
+// that goes back there is changing its Unit plan, which leaves each Unit's own
+// work to its claim. False for a slug the graph does not know.
+export function beforePerUnitBlock(stages: readonly { slug: string; for_each?: string }[], slug: string): boolean {
+  const at = stages.findIndex((stage) => stage.slug === slug);
+  const firstPerUnit = stages.findIndex((stage) => isPerUnitStage(stage));
+  return at !== -1 && firstPerUnit !== -1 && at < firstPerUnit;
 }
 
 /** Stages that produce the given artifact. Empty array = orphan

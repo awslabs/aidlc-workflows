@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { beforePerUnitBlock } from "./aidlc-graph.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -734,11 +735,18 @@ function handleExecute(args: string[]): void {
   );
   const changedUpstreamArtifacts =
     direction === "backward" ? stageArtifactPaths(pd, targetStage) : [];
+  // Under team ownership each Unit's per-Unit work belongs to its claim: going
+  // back to a stage before the per-Unit block (the Unit plan changing) keeps
+  // it, and a Unit goes back to work only by its own reopen (`unit claim
+  // --reopen`, `jump reopen --units`). The row says so; stageJumpReaches reads it.
+  const keepsTeamUnitWork = direction === "backward" && isTeamUnitOwnership(content) &&
+    beforePerUnitBlock(graph, targetSlug);
   const downstreamStages = direction === "backward"
     ? stagesReset
       .filter((slug) => slug !== targetSlug)
       .map((slug) => findStageBySlug(slug))
       .filter((stage): stage is StageEntry => stage !== undefined)
+      .filter((stage) => !keepsTeamUnitWork || !isPerUnitStage(stage))
     : [];
   const invalidatedDownstreamArtifacts = [
     ...new Set(
@@ -809,6 +817,7 @@ function handleExecute(args: string[]): void {
               JSON.stringify(invalidatedDownstreamReviews),
           }
         : {}),
+      ...(keepsTeamUnitWork ? { "Unit Work": "kept" } : {}),
       ...jumpSourceBaseline,
     });
 

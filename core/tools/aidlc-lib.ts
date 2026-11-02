@@ -35224,13 +35224,18 @@ export function unitLifecycleRunFloorForProject(
 // a stage before the Target keeps its attempt: a jump back to Code Generation
 // leaves each Unit's Functional Design as it was. A row whose Target, or a
 // stage, the graph does not know, or a graph that cannot be read, reaches
-// every stage.
+// every stage. A team-owned jump back before the per-Unit block records `Unit
+// Work: kept` (aidlc-jump.ts): it reaches no per-Unit stage, whose work is
+// each Unit's claim's.
 export function stageJumpReaches(block: string, slug: string): boolean {
   const name = auditBlockField(block, "Target");
   if (!name || name === slug) return true;
   try {
     const target = stageIndex(name);
     const at = stageIndex(slug);
+    if (auditBlockField(block, "Unit Work") === "kept" && at !== -1 && isPerUnitStage(loadStageGraph()[at])) {
+      return false;
+    }
     return target === -1 || at === -1 || at >= target;
   } catch {
     return true;
@@ -35276,6 +35281,15 @@ function latestMainWorkflowStageRunFloorFromRows(
   const jumpOrdinals = new Map(
     rowsInput.filter((row) => row.event === "STAGE_JUMPED").sort(byTime).map((row, index) => [row, index + 1]),
   );
+  // Main entering this stage after a jump that kept the Units' work
+  // (stageJumpReaches) starts no new attempt for a Unit: its receipts keep
+  // their floor. Main's own floor for the stage still moves.
+  const forUnits = unit !== undefined || unitReceipts;
+  const keptAt = forUnits
+    ? rowsInput.filter((row) => row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept" &&
+      !stageJumpReaches(row.block, slug)).map((row) => row.timestamp)
+    : [];
+  const reentry = (row: AuditShardEvent): boolean => keptAt.some((at) => at <= row.timestamp);
   const rows = rowsInput
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
@@ -35284,7 +35298,7 @@ function latestMainWorkflowStageRunFloorFromRows(
       if (row.event === "GATE_REJECTED") {
         return gateRejectionMatchesAttempt(row.block, slug, unit);
       }
-      return stageStart(row) &&
+      return stageStart(row) && !reentry(row) &&
         (stageFloored === null || stageFloored.has(row)) &&
         (unitFloored === null || !unitFloored.has(row));
     });
