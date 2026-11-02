@@ -6,8 +6,10 @@ person, a company or a project replaced by labels. Nothing in it is a judgement:
 ## Labels
 
 A label stands for a value that was not AI-DLC's own word: `<custom-unit-3>`, `<custom-file-12>.ts`, `<custom-text-40>`.
-Within one folder the same value always gets the same label, so equal labels mean equal values (the same reply twice,
-the same file written nine times, the same call input again); labels from two folders are unrelated.
+Within one folder, the same value of one kind always gets the same label, so a repeat shows as the same label (the
+same reply twice, the same file written nine times); a call's `input` label stands for the tool and its input together,
+and a label from the redaction map can stand for a name's variants (an intent's folder and its short name). Labels from
+two folders are unrelated.
 
 | Kind | Stands for |
 |---|---|
@@ -72,7 +74,8 @@ the same file written nine times, the same call input again); labels from two fo
   where both name one): `checked`, `recorded`, `notRecorded` (time and how each reached the tool), `inRunningTurn`,
   `noTime`.
 - `otherStores`: chat stores on this machine that are not read (VS Code Copilot Chat, Cursor).
-- `doctor`: whether AI-DLC's doctor ran, its exit, every finding's id and severity, `checksFailed`; its export archive is
-  not in the folder.
+- `doctor`: whether AI-DLC's doctor ran, its exit, each finding of the export's own report (or of the lines doctor
+  printed when there is none) with its id (a label when the id is not AI-DLC's) and severity, `checksFailed`; its export
+  archive is not in the folder.
 - `secretRules`: which installed AI-DLC file the secret rules came from.
 - `knownGaps`: what the records cannot show.

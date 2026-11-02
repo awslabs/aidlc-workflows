@@ -30,12 +30,12 @@ export const PUBLIC_URL = /^https?:\/\/(?:github\.com\/awslabs\/aidlc-workflows|
 export const LABEL =
   /<(?:user|host|project|org|repo|email|url|ip|account|path|id|git-remote|aidlc-install|field|id:[0-9a-f]+|redacted(?:-(?:token|key|hex|jwt|aws-key|private-key))?|(?:intent|space|unit|org|customer|product|person|name)-\d+|custom-(?:stage|phase|scope|sensor|hook|agent|model|effort|tool|value|event|guard|harness|denial|mode|check|build|doctor-finding|unit|intent|text|file|hash|id|session|field|space)-\d+)>/g;
 
-// A label small enough to stand for a value and not carry one: an `<id:…>` of sixteen hex digits at most with no run
-// of five decimal digits, and a serial of four digits (a dictionary label, `<customer-12>`) or six (this skill's own
-// counter, `<custom-id-12345>`) at most, since a longer number could be an account. lib-gate.ts (the cover) and
-// lib-rows.ts (the rows) read labels by it.
+// A label small enough to stand for a value and not carry one: an `<id:…>` as AI-DLC's doctor writes it (eight hex
+// digits, aidlc-doctor-bundle.ts shortHash), and a serial of four digits (a dictionary label, `<customer-12>`) or six
+// (this skill's own counter, `<custom-id-12345>`) at most, since a longer number could be an account. lib-gate.ts (the
+// cover) and lib-rows.ts (the rows) read labels by it.
 export function smallLabel(label: string): boolean {
-  if (label.startsWith("<id:")) return !/[0-9a-f]{17}|\d{5}/.test(label);
+  if (label.startsWith("<id:")) return /^<id:[0-9a-f]{8}>$/.test(label);
   const serial = label.match(/-(\d+)>$/)?.[1];
   return !serial || serial.length <= (label.startsWith("<custom-") ? 6 : 4);
 }
@@ -462,7 +462,7 @@ const SAFE_FIELDS = new Set([
   "source", "sourceRef", "stage", "stages", "stampVersion", "status", "stopFeedback", "subagents", "testStrategy",
   "timeline", "tool", "toolCalls", "toolErrors", "toolVersions", "tools", "toolsUsed", "totalStages", "transcriptCursors",
   "transcripts", "trees", "ts", "unattributedHookBlocks", "unboundApprovals", "until", "version", "versionsMissing", "window",
-  "rows", "seq", "fields", "events", "session", "input", "verb", "owner", "reply",
+  "rows", "seq", "fields", "events", "session", "input", "verb", "owner", "reply", "toolsNamed",
 ]);
 
 // `parent`: the field the object sits under, "" below a data map's key. lib-check.ts reads safe.json by the

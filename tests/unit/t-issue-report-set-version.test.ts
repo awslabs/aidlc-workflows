@@ -52,3 +52,12 @@ test("a tool the person names when no log was found becomes a tool the run used,
   expect(run(out, "2.33.2").status).toBe(0);
   expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.toolsUsed).toEqual(["kiro-cli"]);
 });
+
+test("a tool found in a log keeps the person from adding another as used", () => {
+  const out = folder();
+  const safe = JSON.parse(readFileSync(join(out, "safe.json"), "utf8"));
+  writeFileSync(join(out, "safe.json"), JSON.stringify({ ...safe, environment: { ...safe.environment, toolsUsed: ["kiro-cli"] } }));
+  expect(run(out, "2.33.1").status).toBe(0);
+  expect(spawnSync(process.execPath, [SET, "--out", out, "--tool", "codex", "--version", "0.166.0"], { encoding: "utf8" }).status).toBe(0);
+  expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.toolsUsed).toEqual(["kiro-cli"]);
+});

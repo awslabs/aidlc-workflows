@@ -1108,3 +1108,25 @@ console.log(JSON.stringify({ calls: s?.events.filter((e) => e.kind === "call").m
   const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home, COPILOT_HOME: moved } });
   expect(JSON.parse(r.stdout)).toEqual({ calls: ["bash", "bash", "bash"], repeats: [3] });
 });
+
+test("Kiro CLI v2 is read from KIRO_HOME, and its calls reach the event stream with no time of their own", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-v2-moved-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const moved = join(home, "elsewhere");
+  const dir = join(moved, "sessions", "cli");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "s1.json"), JSON.stringify({ cwd: project, updated_at: at(30) }));
+  // The shape kiro-cli 2.34.0 writes (captured live; the repository's kiroCliToolUse fixture).
+  const use = (command: string) => ({ version: "v1", kind: "AssistantMessage", data: { message_id: "m", content: [{ kind: "toolUse", data: { toolUseId: "t", name: "shell", input: { command } } }] } });
+  writeFileSync(join(dir, "s1.jsonl"), [use("ls"), use("ls"), use("ls"), use("aidlc engine orchestrate next")].map((l) => JSON.stringify(l)).join("\n"));
+  const code = `const { kiroV2 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const s = kiroV2(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify({ events: s?.events.map((e) => [e.kind, e.tool ?? e.verb, e.noTime ?? false]), repeats: s?.repeats.map((r) => r.count) }));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home, KIRO_HOME: moved } });
+  const out = JSON.parse(r.stdout);
+  expect(out.repeats).toEqual([3]);
+  expect(out.events).toEqual([
+    ["call", "shell", true], ["call", "shell", true], ["call", "shell", true], ["call", "shell", true], ["aidlc-command", "aidlc orchestrate next", false],
+  ]);
+});

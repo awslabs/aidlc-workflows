@@ -26,10 +26,13 @@ const path = join(out, "safe.json");
 const safe = JSON.parse(readFileSync(path, "utf8"));
 safe.environment.tools[tool] = { version, source: "person" };
 safe.environment.versionsMissing = (safe.environment.versionsMissing ?? []).filter((k: string) => k !== tool);
-// When no chat log was read, the tool the person names is the tool the run used (in the order collect.ts writes).
-if ((safe.transcripts ?? []).length === 0) {
-  const used = new Set<string>([...(safe.environment.toolsUsed ?? []), tool]);
-  safe.environment.toolsUsed = TOOL_KEYS.filter((k) => used.has(k));
+// When no chat log showed which tool the run used (toolsUsed empty, or holding only tools the person named), the tool
+// the person names is one, recorded in toolsNamed and kept in the order collect.ts writes.
+const used: string[] = safe.environment.toolsUsed ?? [];
+const named: string[] = safe.environment.toolsNamed ?? [];
+if (used.every((k) => named.includes(k))) {
+  safe.environment.toolsNamed = TOOL_KEYS.filter((k) => k === tool || named.includes(k));
+  safe.environment.toolsUsed = TOOL_KEYS.filter((k) => k === tool || used.includes(k));
 }
 writeFileSync(path, JSON.stringify(safe, null, 2));
 console.log(JSON.stringify({ ok: true, tool, version, versionsMissing: safe.environment.versionsMissing }));

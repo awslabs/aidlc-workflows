@@ -426,7 +426,7 @@ function toolLabel(tool: string | undefined): string | undefined {
   return /^mcp[_-]|[/@.:]/.test(tool) ? "mcp" : tool.slice(0, 60);
 }
 
-function noteCall(t: Tally, rawTool: string | undefined, input: unknown, ts: string) {
+function noteCall(t: Tally, rawTool: string | undefined, input: unknown, ts: string, noTime = false) {
   const tool = toolLabel(rawTool);
   const k = callKey(rawTool, input);
   t.add(ts, (_, calls) => {
@@ -434,7 +434,7 @@ function noteCall(t: Tally, rawTool: string | undefined, input: unknown, ts: str
     if (call) call.ts.push(ts);
     else calls.set(k, { tool, ts: [ts] });
   });
-  ev(t, ts, { kind: "call", ...(tool ? { tool } : {}), input: k });
+  ev(t, ts, { kind: "call", ...(tool ? { tool } : {}), input: k, ...(noTime ? { noTime: true } : {}) });
 }
 
 function readJson<T>(path: string): T {
@@ -1134,6 +1134,7 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
   if (!existsSync(dir)) return null;
   const s = empty("kiro-cli (v2)");
   s.engine = "v2";
+  const calls: Calls = new Map();
   let timeless = false;
   for (const f of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
     // A session last written before the window holds nothing in it: its meta is not read.
@@ -1190,8 +1191,16 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
           reportFromPrompt = Math.max(firstPrompt, local.prompts.length - 1);
           reportAt = lastPromptAt ?? t.size;
         }
-        const parts = Array.isArray(content) ? (content as ({ kind?: string; toolUse?: unknown } | null)[]) : [];
-        for (const c of parts) if (c?.kind === "toolUse" || c?.toolUse) t.add(ts, (x) => x.toolCalls++);
+        // A call as kiro-cli 2.34.0 writes it: `{ kind: "toolUse", data: { toolUseId, name, input } }`.
+        const parts = Array.isArray(content) ? (content as ({ kind?: string; data?: unknown; toolUse?: unknown } | null)[]) : [];
+        for (const c of parts) {
+          if (c?.kind !== "toolUse" && !c?.toolUse) continue;
+          t.add(ts, (x) => x.toolCalls++);
+          const use = (c.data ?? c.toolUse ?? {}) as { name?: unknown; input?: { command?: unknown } | unknown };
+          noteCall(t, typeof use.name === "string" ? use.name : undefined, use.input, ts, !own);
+          const command = (use.input as { command?: unknown } | undefined)?.command;
+          if (typeof command === "string") noteCommand(t, ts, command);
+        }
       } else if (l.kind === "ToolResults") {
         for (const r of Object.values(l.data?.results ?? {})) {
           const text = JSON.stringify(r?.result ?? "");
@@ -1208,7 +1217,7 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
       }
     }
     if (reportFromPrompt !== null) for (const p of local.prompts.slice(reportFromPrompt)) p.report = true;
-    t.commit(s, new Map(), { before: reportAt });
+    t.commit(s, calls, { before: reportAt });
     if (used) {
       s.sessions++;
       const facts = newFacts();
@@ -1222,8 +1231,9 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
       }
     }
   }
+  finishRepeats(s, calls);
   if (s.sessions) {
-    s.notes.push("Kiro CLI v2 logs hold no commands: AI-DLC commands, repeated calls and checks run by hand are not known.");
+    s.notes.push("Kiro CLI v2 events with noTime keep the order the log holds them in, and the checks the agent ran by hand are not read.");
     if (s.unattributedHookBlocks) s.notes.push("Kiro CLI v2 records a hook's refusal without the hook's name: those count as unattributedHookBlocks.");
   }
   if (s.sessions && timeless) {

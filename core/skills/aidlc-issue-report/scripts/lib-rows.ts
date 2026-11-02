@@ -173,11 +173,15 @@ function layoutSegment(v: RowVocab, s: Shape, parts: string[], i: number, last: 
   if (/^[0-9a-f]{8,64}$/.test(part)) return s.label("hash", part);
   const review = part.match(/^(\d{1,6})\.([0-9a-f]{8,64}|<[^<>]+>)\.review\.md$/);
   if (review) return `${review[1]}.${s.label("hash", review[2])}.review.md`;
-  // A file AI-DLC names (`requirements.md`, `.aidlc-request-text`) stays; at the end, a Unit's name gets the Unit's
-  // label and anything else is a file, labelled by its whole path (a label already there is the rule's own).
+  // A file AI-DLC names (`requirements.md`, `.aidlc-request-text`) stays. A Unit's name gets the Unit's label wherever
+  // it stands; another name without a dot is a folder, labelled by its own text like a Unit (a file with no dot, such
+  // as a Makefile, reads as one too); a name with a dot is a file, labelled by its whole path with its common
+  // extension kept (a label already there is the rule's own).
   if (last && (((extensionOf(part) || part.startsWith(".")) && v.words.has(part)) || /^\d{1,6}\.json$/.test(part) || /^[0-9a-f]{12}-[0-9a-f]{12}\.md$/.test(part))) return part;
-  if (last) return s.known(part) ?? fileLabel(s, /^<[^<>/]+>(?:\.[a-z0-9]{1,12})?$/.test(part) ? part : parts.slice(0, i + 1).join("/"));
-  return s.known(part) ?? s.label("unit", part);
+  const known = s.known(part);
+  if (known) return known;
+  if (!part.includes(".")) return s.label("unit", part);
+  return fileLabel(s, /^<[^<>/]+>(?:\.[a-z0-9]{1,12})?$/.test(part) ? part : parts.slice(0, i + 1).join("/"));
 }
 const inLayout = (first: string) => first === "aidlc" || first === ".aidlc-engine" || TOOL_TOP.has(first);
 function shapePath(v: RowVocab, s: Shape, raw: string): string {
