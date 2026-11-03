@@ -214,6 +214,8 @@ describe("t231 config get/list/set handlers", () => {
       depth: "Minimal",
       "test-strategy": "Comprehensive",
       review: "advisory",
+      // Unset review-granularity reads as the raw empty field, like review.
+      "review-granularity": "",
       "guard-policy": "relaxed (set by you)",
       sensors: "off (set by a command)",
       learnings: "off (set by a command)",
@@ -296,6 +298,7 @@ describe("t231 config get/list/set handlers", () => {
     ["depth", "minimal", "Depth", "Minimal"],
     ["test-strategy", "comprehensive", "Test Strategy", "Comprehensive"],
     ["review", "advisory", "Review Override", "advisory"],
+    ["review-granularity", "phase", "Review Granularity", "phase"],
     // Nobody asked for any of these, so each is the command's.
     ["guard-policy", "relaxed", "Guard Policy", "relaxed (set by a command)"],
     ["guard-policy", "off", "Guard Policy", "off (set by a command)"],
