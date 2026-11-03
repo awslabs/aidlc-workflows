@@ -247,6 +247,13 @@ function gitBash(): string {
   throw new Error("Git for Windows is not installed: Claude Code runs hooks through its Git Bash");
 }
 
+export function bareAidlcProblem(shell: string, env: NodeJS.ProcessEnv, target: string, cwd: string, timeout: number): string | null {
+  const launcher = join(env.AIDLC_BIN_DIR ?? "", "aidlc");
+  return existsSync(launcher)
+    ? null
+    : `${launcher} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`;
+}
+
 async function main(argv: string[]): Promise<number> {
   const option = (flag: string) => { const at = argv.indexOf(flag); return at >= 0 ? argv[at + 1] : undefined; };
   const previous = option("--previous")?.replace(/^v/, "");
@@ -435,9 +442,8 @@ async function check(previous: string, candidate: string, target: string, root: 
     }
     const after = aidlc("version after the update", ["version"]);
     if (!after.output.includes(target)) fail(`after the update aidlc reports "${after.output}", not ${target}`);
-    if (WINDOWS && !existsSync(join(bin, "aidlc"))) {
-      fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
-    }
+    const bare = WINDOWS ? bareAidlcProblem(shell, env, target, root, within(HOOK_TIMEOUT_MS)) : null;
+    if (bare) fail(bare);
   }
 
   // 5. What the person does next, per project.
