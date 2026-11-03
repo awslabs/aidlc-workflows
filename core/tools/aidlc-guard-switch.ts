@@ -289,6 +289,20 @@ export function storedReviewOverride(value: ReviewOverride, scope?: string | nul
   return scope !== undefined && value === scopeReviewLevel(scope) ? "" : value;
 }
 
+// Insert a blank `- **<field>**:` line after the first anchor field present,
+// appending at the end when none is found. Shared by the Review Override and
+// Review Granularity setters so both fields land in the same state section.
+function insertStateFieldLine(content: string, field: string, anchors: readonly string[]): string {
+  for (const anchor of anchors) {
+    const updated = content.replace(
+      new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+      `$1\n- **${field}**:`,
+    );
+    if (updated !== content) return updated;
+  }
+  return `${content.trimEnd()}\n- **${field}**:\n`;
+}
+
 export function applyReviewOverride(
   content: string,
   value: ReviewOverride | undefined,
@@ -307,20 +321,7 @@ export function applyReviewOverride(
   const changed = storedReview !== (oldReview ?? "");
   if (!changed) return { content, oldReview, storedReview, changed };
   if (oldReview === null) {
-    const beforeInsert = content;
-    content = content.replace(
-      /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
-      "$1\n- **Review Override**:",
-    );
-    if (content === beforeInsert) {
-      content = content.replace(
-        /^(- \*\*Scope\*\*:[^\n]*)$/m,
-        "$1\n- **Review Override**:",
-      );
-    }
-    if (content === beforeInsert) {
-      content = `${content.trimEnd()}\n- **Review Override**:\n`;
-    }
+    content = insertStateFieldLine(content, "Review Override", ["Test Strategy", "Scope"]);
   }
   content = setField(content, "Review Override", storedReview);
   return { content, oldReview, storedReview, changed };
@@ -360,26 +361,7 @@ export function applyReviewGranularity(
   const changed = storedGranularity !== (oldGranularity ?? "");
   if (!changed) return { content, oldGranularity, storedGranularity, changed };
   if (oldGranularity === null) {
-    const beforeInsert = content;
-    content = content.replace(
-      /^(- \*\*Review Override\*\*:[^\n]*)$/m,
-      "$1\n- **Review Granularity**:",
-    );
-    if (content === beforeInsert) {
-      content = content.replace(
-        /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
-        "$1\n- **Review Granularity**:",
-      );
-    }
-    if (content === beforeInsert) {
-      content = content.replace(
-        /^(- \*\*Scope\*\*:[^\n]*)$/m,
-        "$1\n- **Review Granularity**:",
-      );
-    }
-    if (content === beforeInsert) {
-      content = `${content.trimEnd()}\n- **Review Granularity**:\n`;
-    }
+    content = insertStateFieldLine(content, "Review Granularity", ["Review Override", "Test Strategy", "Scope"]);
   }
   content = setField(content, "Review Granularity", storedGranularity);
   return { content, oldGranularity, storedGranularity, changed };
@@ -565,11 +547,8 @@ export function applyIntentSettings(
   if (rawReview !== undefined && review === undefined) {
     die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
   }
-  const rawReviewGranularity = requested["review-granularity"]?.value;
-  const reviewGranularity = parseReviewGranularity(rawReviewGranularity, die);
-  if (rawReviewGranularity !== undefined && reviewGranularity === undefined) {
-    die(`Unknown review granularity: "${rawReviewGranularity}". Valid: stage, phase.`);
-  }
+  // parseReviewGranularity refuses any invalid non-empty value itself.
+  const reviewGranularity = parseReviewGranularity(requested["review-granularity"]?.value, die);
   const changeControl = parseGuardPolicy(rawChangeControl);
   if (rawChangeControl !== undefined && changeControl === null) {
     die(`Unknown Guard Policy value: "${rawChangeControl}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`);
@@ -846,7 +825,7 @@ export function applyIntentSettings(
       ? resolveReviewGranularity(target, null)
       : (update.storedGranularity ?? reviewGranularity);
     const was = update.oldGranularity || resolveReviewGranularity(target, null);
-    const back = `say so or run \`aidlc config set review-granularity ${was}\``;
+    const back = `say so or type ${entrySkillInvocation()} config set review-granularity ${was}`;
     const where = (value: string): string =>
       value === "phase"
         ? "once at the end of each phase (ideation and inception; Construction stays per stage)"
@@ -1762,13 +1741,14 @@ export function withdrawFencesOffAtCreation(
 // test strategy and review are read back from it at creation when the command
 // carries none (levelsKeptForNextWork).
 
-const KEPT_LEVEL_KEYS = ["depth", "test-strategy", "review"] as const;
+const KEPT_LEVEL_KEYS = ["depth", "test-strategy", "review", "review-granularity"] as const;
 type KeptLevelKey = (typeof KEPT_LEVEL_KEYS)[number];
 
 const KEPT_SETTING_LABELS: Record<string, string> = {
   depth: "Depth",
   "test-strategy": "Test strategy",
   review: "Review",
+  "review-granularity": "Review granularity",
   sensors: "Sensors",
   learnings: "Learnings",
   "summary-confirmation": "Summary confirmation",

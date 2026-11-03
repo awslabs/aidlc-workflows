@@ -9298,18 +9298,19 @@ function buildRunStageDirective(
       if (role.role === "anchor") {
         // A covered stage that already holds a fresh terminal receipt (it was
         // reviewed per stage before the granularity changed) is not re-reviewed.
+        // Group membership is phaseReviewRole's alone; this filter only drops a
+        // covered stage that already holds a fresh terminal receipt. The full
+        // compiled node is fetched because the receipt scan reads its produces.
         const covers = role.covers.filter((covered) => {
           if (!codekbCtx) return true;
           try {
             const coveredNode = loadStageGraph().find((entry) => entry.slug === covered.slug);
             if (!coveredNode) return false;
-            const coveredClass = resolveReviewClass(coveredNode.review_class, scope, stateContent);
-            if (coveredClass === "none") return false;
             return freshReviewReceipts(
               codekbCtx.projectDir,
               stateContent ?? "",
               coveredNode,
-              { reviewClass: coveredClass },
+              { reviewClass: resolveReviewClass(covered.review_class, scope, stateContent) },
             ).stageVerdict === null;
           } catch {
             return true;

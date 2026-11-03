@@ -12,7 +12,11 @@
 // One owner: the directive emit (aidlc-orchestrate.ts), the gate precondition
 // (aidlc-state.ts verifyReviewerPrecondition), and the settings surfaces all
 // read phaseReviewRole / resolveReviewGranularity here, so they cannot
-// disagree about where a review is owed.
+// disagree about where a review is owed. Isolated `--single` runs are carved
+// out at directive emission only: an isolated attempt reviews as declared, its
+// receipts are tagged `single-stage:` and excluded from main-workflow receipt
+// scans, and no main-workflow gate runs for it, so the precondition never
+// reads a role for an isolated attempt.
 
 import { getField, parseCheckboxes } from "./aidlc-record-core.ts";
 import {

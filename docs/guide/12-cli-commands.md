@@ -74,7 +74,7 @@ diagnostic and lifecycle routes.
 | `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `collaborators`, `guard.<fence>`) |
 | `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; the agent runs it for a setting typed as a flag or asked for in plain words |
 | `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
-| `/aidlc config list` | List all thirteen active workflow settings (`--json` for structured output) |
+| `/aidlc config list` | List all fourteen active workflow settings (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
@@ -1347,7 +1347,7 @@ Updated` changes only when stored state changes. Repeating an already stored
 choice is a no-op, but changing a scope-sourced value to an explicit override
 records that provenance even if the value is the same.
 
-`config get` accepts every key in the table, and `config list` returns all thirteen
+`config get` accepts every key in the table, and `config list` returns all fourteen
 in that order. Guard Policy, fence, and ceremony reads include effective values
 and sources, just like status:
 

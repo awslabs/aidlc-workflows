@@ -5315,10 +5315,11 @@ function verifyReviewerPrecondition(
   // Phase granularity: a deferred ideation/inception stage owes its receipt at
   // its reviewer's anchor stage, whose gate re-enters this same precondition
   // for it (coveredFor), so the directive emit and this check read one rule.
-  if (coveredFor === undefined && !autonomousSwarm) {
-    const role = phaseReviewRole(stage, getField(content, "Scope") ?? "", content);
-    if (role.role === "deferred") return;
-  }
+  // Computed once; the anchor branch below reuses it.
+  const phaseRole = coveredFor === undefined && !autonomousSwarm
+    ? phaseReviewRole(stage, getField(content, "Scope") ?? "", content)
+    : { role: "stage" as const };
+  if (phaseRole.role === "deferred") return;
 
   const reviewer = stage.reviewer;
 
@@ -5581,17 +5582,14 @@ function verifyReviewerPrecondition(
     // Phase granularity: the anchor's gate also stands on each covered stage's
     // own receipt, through this same precondition, so a grouped review that was
     // skipped or went stale refuses here with that stage's exact next step.
-    if (coveredFor === undefined) {
-      const role = phaseReviewRole(stage, getField(content, "Scope") ?? "", content);
-      if (role.role === "anchor") {
-        for (const covered of role.covers) {
-          const coveredNode = findStageBySlug(covered.slug);
-          if (coveredNode) {
-            verifyReviewerPrecondition(
-              pd, content, coveredNode, action, requireReceiptExistence,
-              personCall, undefined, stage.slug,
-            );
-          }
+    if (phaseRole.role === "anchor") {
+      for (const covered of phaseRole.covers) {
+        const coveredNode = findStageBySlug(covered.slug);
+        if (coveredNode) {
+          verifyReviewerPrecondition(
+            pd, content, coveredNode, action, requireReceiptExistence,
+            personCall, undefined, stage.slug,
+          );
         }
       }
     }

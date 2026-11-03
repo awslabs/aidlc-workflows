@@ -23,7 +23,9 @@ in this module applies unchanged, with three additions:
    request for this stage as step 1 says, and then one more request per
    `review_covers` entry — the same command with `--stage "<entry.slug>"`.
    Each returns its own `reviewFile`. If a covered stage's request is refused
-   because a fresh review already covers it, skip that entry and say nothing.
+   because its review budget is already spent — a fresh review already covers
+   it — skip that entry and say nothing; any other refusal names its own next
+   step, so follow it as §12a step 1 says.
 2. **One dispatch, one review per stage.** Dispatch the reviewer ONCE, with
    every `reviewFile` path and every covered stage's artifacts beside this
    stage's own. The reviewer reads them together — cross-artifact consistency

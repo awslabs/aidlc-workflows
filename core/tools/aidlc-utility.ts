@@ -2043,10 +2043,13 @@ To get started:
     : reviewCap === undefined
     ? "default"
     : changeControlSourceLabel(shownSource(`scope ${scopeKey}`));
+  // Said whenever it is not the stock default: the effective value is phase,
+  // or a per-work override deviates from a scope that sets phase.
   const reviewGranularity = resolveReviewGranularity(scope, content);
+  const granularityOverride = asReviewGranularity(getField(content, "Review Granularity"));
   const reviewersLine = `Reviewers: ${reviewLevel === "none" ? "off" : reviewLevel} (${reviewSource})` +
-    (reviewGranularity === "phase"
-      ? `\nReview Granularity: phase (${asReviewGranularity(getField(content, "Review Granularity")) !== null ? "set for this piece of work" : changeControlSourceLabel(shownSource(`scope ${scopeKey}`))})`
+    (reviewGranularity === "phase" || granularityOverride !== null
+      ? `\nReview Granularity: ${reviewGranularity} (${granularityOverride !== null ? "set for this piece of work" : changeControlSourceLabel(shownSource(`scope ${scopeKey}`))})`
       : "");
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     if (key === "plan_approval") {
@@ -8030,6 +8033,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     if (flags.depth === undefined && kept.depth !== undefined) flags.depth = kept.depth;
     if (flags["test-strategy"] === undefined && kept["test-strategy"] !== undefined) flags["test-strategy"] = kept["test-strategy"];
     if (flags.review === undefined && kept.review !== undefined) flags.review = kept.review;
+    if (flags["review-granularity"] === undefined && kept["review-granularity"] !== undefined) {
+      flags["review-granularity"] = kept["review-granularity"];
+    }
   }
   // Creation mutates the registry and active cursor. Refuse an invocation that
   // carries no meaningful scope or description instead of minting a default

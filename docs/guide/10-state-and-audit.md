@@ -160,8 +160,9 @@ the owning commands and the read-only query contract.
 
 Beside the `.md` shards, the review command appends one JSON line per review
 request and per terminal verdict to `audit/review-metrics.jsonl` (timestamp,
-stage, reviewer, iteration, effective review granularity, verdict, findings
-counts). It is an advisory measurement file — nothing reads it back, a failed
+stage, reviewer, iteration, effective review granularity, verdict; a retried
+request is marked `retry: true`, and a verdict row carries findings counts
+when it built a review record). It is an advisory measurement file — nothing reads it back, a failed
 append never blocks a receipt, and shard readers ignore it — kept so
 stage- and phase-granularity runs can be compared
 ([Review granularity](13-customization.md#review-granularity)).

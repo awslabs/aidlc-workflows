@@ -4678,6 +4678,7 @@ function handleReview(args: string[]): void {
       ...(flags.unit ? { unit: flags.unit } : {}),
       reviewer: flags.reviewer,
       iteration,
+      ...(retried ? { retry: true } : {}),
     });
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",

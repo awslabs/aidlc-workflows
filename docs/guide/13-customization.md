@@ -158,8 +158,8 @@ Mix the settings in one command rather than chaining separate updates:
 ```
 
 The native equivalent is `aidlc engine config set <key> <value>` followed by
-the remaining `--key value` flags. `config get <key>` accepts all thirteen keys,
-and `config list` (optionally `--json`) returns all thirteen, including effective
+the remaining `--key value` flags. `config get <key>` accepts all fourteen keys,
+and `config list` (optionally `--json`) returns all fourteen, including effective
 values and sources for Guard Policy, the switchable fences, and the ceremonies
 (`guard.plan-approval` is another name for `plan-approval` and reads the same):
 
@@ -342,6 +342,12 @@ at the end of the phase instead of at that stage's gate, after later artifacts
 were built on it; the fix is the normal backward jump and forward replay, which
 reuses unaffected artifacts, but it costs more than catching it early. Keep
 `stage` for larger scopes or work whose requirements are still moving.
+
+One boundary to know: skipping the anchor stage, or switching back to `stage`
+before the anchor has run, drops that phase's deferred agent reviews — the
+stages' human-approved gates stand, exactly as skipping a reviewed stage does
+today, and you can still ask for a review of any stage in plain words at any
+time.
 
 Each review request and verdict is also logged to
 `audit/review-metrics.jsonl` in the intent's record (timestamp, stage,
