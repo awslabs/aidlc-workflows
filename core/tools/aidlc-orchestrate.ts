@@ -101,6 +101,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CONFIG_SECTIONS } from "./aidlc-command.ts";
+import { isGitRepo } from "./aidlc-git.ts";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -801,6 +802,55 @@ function broughtFilesGateLine(projectDir: string, node: { slug: string }, stateC
   if (unheard === null) return null;
   if (!isReadOnlyEngineProbe()) broughtFilesLines.push(unheard);
   return unheard.line;
+}
+
+// Without git AI-DLC keeps only fingerprints of the person's files, so the Code
+// Generation gate can only say a changed one has no committed copy to put back
+// (broughtFilesLine), after the build. This says it before, once for the
+// project, with the first gate the person is shown (every shipped scope gates
+// before Code Generation): a gate step is one the agent says, where the lines
+// of the step after creation went unsaid. The record is checked first, so a
+// project that heard it asks git nothing again, and one that turns git on stops
+// meeting it. Silent when the project folder, a repo of the work or a git
+// checkout in the workspace is in git (those files have their undo). `git init`
+// alone puts nothing back, so the line names the commit.
+export const NO_GIT_LINE =
+  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
+  "to get an undo, run `git init` and commit them.";
+const NO_GIT_SAID_FILE = "no-git-said";
+let noGitLineHanded: string | null = null;
+
+function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projectDir: string): void {
+  try {
+    if (existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE))) return;
+    const repos = [...intentRepos(projectDir), ...discoverSiblingRepos(projectDir)];
+    if (isGitRepo(projectDir) || repos.some((name) => isGitRepo(repoDir(projectDir, name)))) return;
+  } catch {
+    return;
+  }
+  reply.change_notices = [...(reply.change_notices ?? []).filter((said) => said !== NO_GIT_LINE), NO_GIT_LINE];
+  // An unattended run's gate waits for a person, who hears it when they take over.
+  if (!isReadOnlyEngineProbe() && process.env.AIDLC_UNATTENDED !== "1") noGitLineHanded = projectDir;
+}
+
+// Kept as said once the step that carries it is written (writePrepared). A
+// rules part carries it too, but it is said with the step after the parts,
+// which still carries it (the record waits), so it is recorded there.
+function recordNoGitLineSaid(written: { kind?: unknown; change_notices?: unknown }): void {
+  const projectDir = noGitLineHanded;
+  noGitLineHanded = null;
+  const notices = written.change_notices;
+  if (projectDir === null || written.kind === "load-steering" || !Array.isArray(notices) || !notices.includes(NO_GIT_LINE)) {
+    return;
+  }
+  try {
+    const dir = sessionsDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    mkdirSync(dir, { recursive: true });
+    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
+  } catch {
+    // Unrecorded: the next gate says it once more.
+  }
 }
 
 // " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
@@ -2162,6 +2212,7 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
   prepared.personLinesSaid?.();
+  recordNoGitLineSaid(prepared.transported as { kind?: unknown; change_notices?: unknown });
   const narration = (prepared.transported as { narration?: unknown }).narration;
   for (const { key, line } of broughtFilesLines.splice(0)) {
     if (engineProjectDir && engineSessionId && typeof narration === "string" && narration.includes(line)) {
@@ -13156,6 +13207,7 @@ function applyGateOnlyShape(
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
+    addNoGitLine(directive, projectDir);
     addReviewCheckOffer(directive, projectDir, gateNode, unit);
     addContextParkOffer(directive, projectDir);
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
@@ -20519,6 +20571,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const unitGate = withChangeNotices(unitReply, changeNotices);
       if (unitGate.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
+        addNoGitLine(unitGate, pd);
         addReviewCheckOffer(unitGate, pd, node, unit);
         addContextParkOffer(unitGate, pd);
         addRevisionCycle(unitGate, pd, slug, unit);
@@ -20845,6 +20898,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           })?.note
           : undefined;
         if (deepUnits) gateReply.narration = [gateReply.narration, deepUnits].filter(Boolean).join("\n");
+        addNoGitLine(gateReply, pd);
         addReviewCheckOffer(gateReply, pd, node, unit);
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);

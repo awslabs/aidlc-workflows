@@ -1,5 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
+import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -4463,32 +4464,6 @@ function isNonDocPath(p: string): boolean {
   if (rel.length === 0) return false;
   const firstSeg = rel.split("/")[0];
   return !HARNESS_DOC_DIRS.has(firstSeg);
-}
-
-// Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping. The person's
-// own git settings apply: this is their machine and their project, and git here
-// behaves as it does in their terminal. `outside` is a checkout outside the
-// project: --no-optional-locks keeps git from refreshing its index there, so
-// asking it writes nothing.
-function git(pd: string, args: string[], outside = false): string | null {
-  try {
-    const r = spawnSync("git", outside ? ["--no-optional-locks", ...args] : args, {
-      cwd: pd,
-      encoding: "utf-8",
-      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-    });
-    if (r.status !== 0 || typeof r.stdout !== "string") return null;
-    return r.stdout;
-  } catch {
-    return null;
-  }
-}
-
-// True when `pd` is inside a git work tree. (`--is-inside-work-tree` prints
-// "true"/"false"; a non-repo exits non-zero -> git() returns null -> false.)
-function isGitRepo(pd: string, outside = false): boolean {
-  return git(pd, ["rev-parse", "--is-inside-work-tree"], outside)?.trim() === "true";
 }
 
 // Git-aware "did this workspace get real source work?" signal (issue #366
