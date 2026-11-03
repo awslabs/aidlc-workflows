@@ -9,7 +9,10 @@
 // person is never recorded accepting a finding the gate did not show. A gate
 // with no open findings reads as before, and a per-stage team gate is unchanged.
 // An earlier stage whose review did not finish (its reviewer stopped twice) is
-// named in the brief, and the line after Approve names that stage.
+// named in the brief, and the line after Approve names that stage. A stage the
+// Unit skipped owes the gate nothing: no files, completion or review, so the
+// gate opens and Approve records it; a stage it did not skip still needs its
+// files there.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -18,7 +21,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
   artifactFilename,
@@ -279,18 +282,24 @@ function logStoppedReview(proj: string, stage: string, reviewer: string): void {
 }
 
 // Walks alpha's stages to its gate, each reviewed with the findings given for
-// it ("stopped": its reviewer stopped twice), and returns the gate's
-// directive. A NOT-READY review is reviewed again and stays NOT-READY: the
-// review's last pass, whose concerns go to the gate.
+// it ("stopped": its reviewer stopped twice; "skipped": the agent skips the
+// step it is handed), and returns the gate's directive. A NOT-READY review is
+// reviewed again and stays NOT-READY: the review's last pass, whose concerns
+// go to the gate.
 function walkToGate(
   proj: string,
-  reviews: Record<string, Finding[] | "stopped">,
+  reviews: Record<string, Finding[] | "stopped" | "skipped">,
   stages = BLOCK,
   beforeGate?: () => void,
 ): Directive {
   for (const stage of stages) {
     const directive = runNext(proj);
     expect(directive, JSON.stringify(directive)).toMatchObject({ stage, unit: "alpha" });
+    if (reviews[stage] === "skipped") {
+      expect(runReport(proj, ["--stage", stage, "--unit", "alpha", "--result", "skipped", "--reason", "nothing to provision"]).kind)
+        .toBe("done");
+      continue;
+    }
     expect(run(STATE, proj, ["unit", "start", "--stage", stage, "--unit", "alpha"]).rc).toBe(0);
     coverUnit(proj, stage);
     if (stage === "code-generation") {
@@ -301,7 +310,7 @@ function walkToGate(
     const said = reviews[stage] ?? [];
     if (directive.reviewer && said === "stopped") {
       logStoppedReview(proj, stage, directive.reviewer);
-    } else if (directive.reviewer && said !== "stopped") {
+    } else if (directive.reviewer && Array.isArray(said)) {
       logReview(proj, stage, directive.reviewer, said);
       if (said.some((finding) => finding.severity !== "Minor")) logReview(proj, stage, directive.reviewer, said, 2);
     }
@@ -492,6 +501,29 @@ describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its App
     );
     expect(gateReport(proj, "approved", ["--user-input", "Approve"]).kind).toBe("done");
     expect(recorded(proj)).toEqual([]);
+  });
+
+  test("a stage the Unit skipped owes the end-of-Unit gate nothing: no files, no review, and Approve records the gate", () => {
+    const proj = seedProject("unit-end");
+    const gate = walkToGate(proj, { "infrastructure-design": "skipped" });
+    expect(gate).toMatchObject({ stage: "code-generation", unit_gate: "unit-end" });
+    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    expect(brief(proj, "code-generation")).not.toContain("Infrastructure Design");
+    expect(gateReport(proj, "approved", ["--user-input", "Approve"]).kind).toBe("done");
+    const rows = readAuditShardEvents(proj).filter((row) =>
+      row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === "alpha"
+    );
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Gate Scope")).toBe("unit-end");
+  });
+
+  test("a stage the Unit did not skip still stops the end-of-Unit gate while its files are missing", () => {
+    const proj = seedProject("unit-end");
+    walkToGate(proj, {});
+    const stage = "infrastructure-design";
+    rmSync(join(stageDir(proj, stage), artifactFilename(findStageBySlug(stage)!.produces![0])));
+    expect(gateReport(proj, "awaiting-approval"))
+      .toMatchObject({ ask_type: "guard-recovery", stage, reason_codes: ["REQUIRED_ARTIFACTS_MISSING"] });
   });
 
   test("an earlier stage whose review did not finish is named at the gate and in the line after Approve", () => {
