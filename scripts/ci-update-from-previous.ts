@@ -32,7 +32,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { TYPED_NAMES_MARK, typedHarnessName } from "../core/tools/aidlc-runtime-paths.ts";
+import { runtimePathsReadTypedNames, typedHarnessName } from "../core/tools/aidlc-runtime-paths.ts";
 import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import kiro from "../harness/kiro/manifest.ts";
 import type { WorkResult } from "../tests/harness/work-open.ts";
@@ -293,7 +293,7 @@ function releaseReadsTypedNames(dir: string): boolean {
     return undefined;
   };
   const tool = find(dir);
-  return tool !== undefined && readFileSync(tool, "utf-8").includes(TYPED_NAMES_MARK);
+  return tool !== undefined && runtimePathsReadTypedNames(tool);
 }
 
 async function check(previous: string, candidate: string, target: string, root: string, copy: boolean): Promise<number> {

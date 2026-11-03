@@ -562,7 +562,7 @@ export function testPluginComposition(
   if (!validation.valid) {
     return {
       ...validation,
-      harness: options.harness ?? "",
+      harness: options.harness ? harnessIdFromTyped(options.harness) : "",
       composedFiles: [],
       changedFiles: [],
       drops: [],

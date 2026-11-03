@@ -190,6 +190,9 @@ import {
   hasControlCharacters,
   harnessArgsAsIds,
   harnessArgsAsTyped,
+  harnessArgsWith,
+  harnessNameFor,
+  toolReadsTypedNames,
   quoteCommandArgument,
   runtimeHarnessDir,
   typedHarnessName,
@@ -2861,7 +2864,7 @@ function emitResult(result: CommandResult, options: ReturnType<typeof globalOpti
 function configInvocationFor(projectDir = process.cwd()): string {
   const invocation = aidlcInvocation();
   if (invocation === "aidlc") return invocation;
-  const ran = process.env.AIDLC_CONFIG_HANDOFF || projectedDispatcher();
+  const ran = handingTool() ?? projectedDispatcher();
   // A tool's relative invocation names the harness directory it lives in,
   // whatever the environment says the harness is.
   const harnessDir = ran === null
@@ -2875,6 +2878,30 @@ function configInvocationFor(projectDir = process.cwd()): string {
   return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
 }
 
+// The copied tool that handed this config run over, if one did.
+function handingTool(): string | undefined {
+  return process.env.AIDLC_CONFIG_HANDOFF || undefined;
+}
+
+// A run another tool handed over prints its retries (the commands to run this
+// run again, printed when it stops) for that tool, so they name a harness the
+// way that tool reads it when the line is printed: a tool from before the typed
+// names reads ids, and once this run has rewritten it, this release's names.
+// What to do after the run is for the tree it wrote, and what the person reads
+// is this release's, both in this release's names. Read once per line.
+function retryNamer(): (id: string) => string {
+  const tool = aidlcInvocation() === "aidlc" ? undefined : handingTool();
+  return tool && !toolReadsTypedNames(tool) ? (id) => id : typedHarnessName;
+}
+
+function retryHarnessName(id: string): string {
+  return retryNamer()(id);
+}
+
+function retryHarnessArgs(args: readonly string[]): string[] {
+  return harnessArgsWith(args, retryNamer());
+}
+
 // The command the user ran, printed again with the flags that resolve it, so
 // it runs as shown from where they are.
 function configRerunWith(
@@ -2884,7 +2911,7 @@ function configRerunWith(
   dropValueFlags: readonly string[] = [],
 ): string | undefined {
   const invocation = configInvocationFor(projectDir);
-  const args = harnessArgsAsTyped(stripVerb([...input])).filter((arg, index, all) =>
+  const args = retryHarnessArgs(stripVerb([...input])).filter((arg, index, all) =>
     !dropValueFlags.includes(arg) && !dropValueFlags.includes(all[index - 1] ?? "")
   );
   if (args.some(hasControlCharacters) || hasControlCharacters(projectDir)) return undefined;
@@ -2902,7 +2929,7 @@ function configMutationRerun(
   section: "models" | "runtime" | "providers" | "trust" | "flags" | "project",
   argv: readonly string[],
 ): string {
-  const args = harnessArgsAsTyped(argv.filter((arg) => arg !== "--yes")).map(commandToken);
+  const args = retryHarnessArgs(argv.filter((arg) => arg !== "--yes")).map(commandToken);
   return configCommand([section, ...args, "--yes"].join(" "));
 }
 
@@ -4548,7 +4575,7 @@ function switchRefreshSteps(
   projectDir: string,
   remedy: { harness: string; moveAside?: string },
 ): string {
-  const refresh = `${configInvocationFor(projectDir)} config --harness ${typedHarnessName(remedy.harness)}${projectTarget(projectDir)}`;
+  const refresh = `${configInvocationFor(projectDir)} config --harness ${retryHarnessName(remedy.harness)}${projectTarget(projectDir)}`;
   return remedy.moveAside
     ? `move ${join(projectDir, remedy.moveAside)} aside, then run \`${refresh}\``
     : refresh;
@@ -8542,8 +8569,9 @@ function runConfigChild(
   // Setup writes the person's Kiro session itself, after every child: those
   // settings are outside the rollback snapshot.
   env.AIDLC_CONFIG_DEFER_KIRO_SESSION = "1";
-  // The child reads --harness as a person types it, as any config run does.
-  const typedArgs = harnessArgsAsTyped(args);
+  // The child reads --harness as a person types it, as any config run does,
+  // unless it carries the hand-off, when it reads ids.
+  const typedArgs = handingTool() === undefined ? harnessArgsAsTyped(args) : args;
   const commandArgs = isCompiledExecutable()
     ? ["config", ...typedArgs]
     : [fileURLToPath(import.meta.url), "config", ...typedArgs];
@@ -12370,14 +12398,12 @@ function treesLeftBehindLines(
     installed = [];
   }
   // A copied project runs the written tree's own tool: it is on that release,
-  // and an older tool may not read its files.
+  // and an older tool may not read its files. Its --harness names are that
+  // release's.
+  const writtenTool = join(projectDir, written.harnessDir, "tools", "aidlc.ts");
   const tool = source.copyChannel
     ? `bun ${
-      quoteCommandArgument(
-        ranFromProject(projectDir)
-          ? `${written.harnessDir}/tools/aidlc.ts`
-          : join(projectDir, written.harnessDir, "tools", "aidlc.ts"),
-      )
+      quoteCommandArgument(ranFromProject(projectDir) ? `${written.harnessDir}/tools/aidlc.ts` : writtenTool)
     }`
     : configInvocationFor(projectDir);
   const command = (args: string): string => `\`${tool} config ${args}${projectTarget(projectDir)}\``;
@@ -12388,7 +12414,9 @@ function treesLeftBehindLines(
       : predatesFrameworkVersion(tree.frameworkVersion, written.version)
       ? `is still on ${tree.frameworkVersion}`
       : `is on ${tree.frameworkVersion}`;
-    const harness = `--harness ${typedHarnessName(tree.distribution)}`;
+    const harness = `--harness ${
+      source.copyChannel ? harnessNameFor(tree.distribution, writtenTool) : typedHarnessName(tree.distribution)
+    }`;
     const plain = installed.filter((candidate) => candidate.stamp.distribution === tree.distribution);
     // A copied tree no config run has recorded the files of reads every file
     // as unowned against another release, so it first records them at its
@@ -12831,11 +12859,12 @@ export async function main(
   if (!internal.setupWalkChild) configTargetHarnessDir = null;
   if (!internal.setupWalkChild) refusalNote = null;
   // What the person typed after --harness reads as a harness id once, here.
-  // From here on `input` holds ids, and a command printed back writes them as
-  // typed names (harnessArgsAsTyped). A setup walk's sections run on the walk's
+  // From here on `input` holds ids. A retry printed back writes them as the
+  // tool it names reads them (retryHarnessArgs); every other line, the typed
+  // names (harnessArgsAsTyped). A setup walk's sections run on the walk's
   // ids, and a copied tool's hand-off carries ids, which every release reads
   // the same way.
-  const idsAlready = internal.setupWalkChild || process.env.AIDLC_CONFIG_HANDOFF !== undefined;
+  const idsAlready = internal.setupWalkChild || handingTool() !== undefined;
   const typedHarnesses = idsAlready ? [] : valuesAfter(input, "--harness");
   if (!idsAlready) input = harnessArgsAsIds(input);
   let argv = stripVerb(input);
@@ -14597,7 +14626,7 @@ export async function main(
       const offline = copyChannel
         ? takesSource
           ? `offline: get ${url} and its .sha256 into one folder, then add --from <that file>`
-          : `offline: get ${url} and its .sha256 into one folder, run ${configInvocationFor(projectDir)} config --harness ${typedHarnessName(release.distribution)} --from <that file>${projectTarget(projectDir)}, then rerun this command`
+          : `offline: get ${url} and its .sha256 into one folder, run ${configInvocationFor(projectDir)} config --harness ${retryHarnessName(release.distribution)} --from <that file>${projectTarget(projectDir)}, then rerun this command`
         : `offline: ${
           configCommand(`--pin ${release.version} --offline --from <release directory>${projectTarget(projectDir)}`)
         }, then rerun this command`;
@@ -14669,7 +14698,7 @@ export async function main(
           : error.remedy.kind === "refresh"
           ? switchRefreshSteps(projectDir, error.remedy)
           : `${configInvocationFor(projectDir)} config ${from ? `--from ${quoteCommandArgument(from)} ` : ""}--harness ${
-            typedHarnessName(error.remedy.harness)
+            retryHarnessName(error.remedy.harness)
           }${projectTarget(projectDir)}`
         : from
         ? `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/${requestedHarness ?? copiedHarness?.distribution ?? "claude"}/; or fetch them with ${

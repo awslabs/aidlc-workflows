@@ -64,6 +64,7 @@ import { _resetSettingsCacheForTests } from "../../core/tools/aidlc-settings.ts"
 import { transactionState } from "../../core/tools/aidlc-transaction.ts";
 import { releaseSupportsRootLifecycle, ROOT_LIFECYCLE_CAPABILITY } from "../../core/tools/aidlc-release.ts";
 import { assertSafeUninstallRoot } from "../../core/tools/aidlc-uninstall-plan.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   scanWindowsUninstallJournals,
@@ -2207,6 +2208,34 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     expect(existsSync(join(machine, "versions"))).toBe(false);
   });
 
+  test("version lists name each harness as typed after --harness, and their JSON keeps the ids", () => {
+    const older = fixture(AIDLC_VERSION, { binary: "executable" });
+    const next = fixture(NEXT_VERSION, { binary: "executable" });
+    const machine = temp("aidlc-t244-typed-lists-");
+    const project = temp("aidlc-t244-typed-lists-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    const typed = `[${RELEASE_HARNESSES.map(typedHarnessName).join(",")}]`;
+    const plan = run(LIFECYCLE, ["update", "--version", AIDLC_VERSION, "--from", older, "--dry-run", "--json"], project, env);
+    expect(plan.status, plan.stdout + plan.stderr).toBe(0);
+    const planned = JSON.parse(plan.stdout) as { message: string; data: { distributions: string[] } };
+    expect(planned.message).toContain(`-> ${AIDLC_VERSION} ${typed}`);
+    expect(planned.data.distributions).toEqual([...RELEASE_HARNESSES]);
+    for (const [version, from] of [[AIDLC_VERSION, older], [NEXT_VERSION, next]]) {
+      const installed = run(LIFECYCLE, ["update", "--version", version, "--from", from], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    }
+    const listed = run(LIFECYCLE, ["versions", "list"], project, env);
+    expect(listed.status, listed.stdout + listed.stderr).toBe(0);
+    expect(listed.stdout).toContain(`${NEXT_VERSION} active ${typed}`);
+    const targets = run(LIFECYCLE, ["rollback", "--list"], project, env);
+    expect(targets.status, targets.stdout + targets.stderr).toBe(0);
+    expect(targets.stdout).toContain(`${AIDLC_VERSION} ${typed}`);
+    const json = run(LIFECYCLE, ["versions", "list", "--json"], project, env);
+    const data = JSON.parse(json.stdout).data as { versions: Array<{ version: string; distributions: string[] }> };
+    expect(data.versions.find((item) => item.version === NEXT_VERSION)?.distributions).toEqual([...RELEASE_HARNESSES]);
+  });
+
   test("a rollback to a release without some harnesses names --allow-harness-loss, which rolls back anyway", () => {
     const fewer = fixture(AIDLC_VERSION, { binary: "executable", distributions: ["claude"] });
     const next = fixture(NEXT_VERSION, { binary: "executable" });
@@ -2218,7 +2247,7 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
       const installed = run(LIFECYCLE, ["update", "--version", version, "--from", from], project, env);
       expect(installed.status, installed.stdout + installed.stderr).toBe(0);
     }
-    const lost = RELEASE_HARNESSES.filter((name) => name !== "claude").join(", ");
+    const lost = RELEASE_HARNESSES.filter((name) => name !== "claude").map(typedHarnessName).join(", ");
     const refused = run(LIFECYCLE, ["rollback"], project, env);
     expect(refused.status, refused.stdout + refused.stderr).toBe(1);
     expect(refused.stdout).toContain(

@@ -1,4 +1,4 @@
-// covers: tool:aidlc-init, function:typedHarnessName, function:harnessIdFromTyped, function:harnessArgsAsIds
+// covers: tool:aidlc-init, function:typedHarnessName, function:harnessIdFromTyped, function:harnessArgsAsIds, function:harnessNameFor
 //
 // What a person types after --harness for the two Kiro harnesses: `kiro` is
 // Kiro (Kiro IDE and Kiro CLI v3, the `kiro-ide` tree) and `kiro-v2` is Kiro
@@ -12,11 +12,12 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { harnessArgsAsIds, harnessIdFromTyped, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
+import { harnessArgsAsIds, harnessIdFromTyped, harnessNameFor, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -51,6 +52,17 @@ function config(dir: string, args: string[], env: NodeJS.ProcessEnv = {}): { sta
   });
   if (result.error) throw result.error;
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+// A tool folder's copy made to read like a release from before the typed
+// names: no typed-name map and no mark, so it reads `kiro` and `kiro-ide` as ids.
+function olderToolCopy(tools: string, into: string): string {
+  if (into !== tools) cpSync(tools, into, { recursive: true });
+  const paths = join(into, "aidlc-runtime-paths.ts");
+  const older = readFileSync(paths, "utf-8").replace('  kiro: "kiro-v2",\n', "").replace('  "kiro-ide": "kiro",\n', "").replace(`'kiro: "kiro-v2"'`, '"none"');
+  expect(older).not.toContain('kiro: "kiro-v2"');
+  writeFileSync(paths, older);
+  return join(into, "aidlc.ts");
 }
 
 const stamp = (dir: string): string =>
@@ -255,6 +267,81 @@ describe("Kiro harness names a person types", () => {
     });
     expect(`${trust.stdout}${trust.stderr}`).toMatch(/for kiro(?!-)/);
     expect(`${trust.stdout}${trust.stderr}`).not.toContain("kiro-ide");
+  });
+
+  test("a command printed for another tool uses the names that tool reads", () => {
+    const scratch = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-kiro-typed-older-"));
+    temporary.push(scratch);
+    const older = olderToolCopy(join(REPO_ROOT, "dist-release", "kiro", ".kiro", "tools"), join(scratch, "tools"));
+    const current = join(REPO_ROOT, "dist-release", "kiro", ".kiro", "tools", "aidlc.ts");
+    expect(["kiro", "kiro-ide"].map((id) => harnessNameFor(id, older))).toEqual(["kiro", "kiro-ide"]);
+    expect(["kiro", "kiro-ide"].map((id) => harnessNameFor(id, current))).toEqual(["kiro-v2", "kiro"]);
+    expect(["kiro", "kiro-ide"].map((id) => harnessNameFor(id, undefined))).toEqual(["kiro-v2", "kiro"]);
+    // Read when the line is printed: once a run rewrites the older tool with this release, its names are typed.
+    cpSync(join(dirname(current), "aidlc-runtime-paths.ts"), join(dirname(older), "aidlc-runtime-paths.ts"));
+    expect(["kiro", "kiro-ide"].map((id) => harnessNameFor(id, older))).toEqual(["kiro-v2", "kiro"]);
+  });
+
+  test("a run an older copied tool handed over prints its commands in that tool's names, and they run there as printed", () => {
+    const dir = project();
+    expect(config(dir, ["--harness", "kiro-v2", "--yes"]).status).toBe(0);
+    writeFileSync(join(dir, ".kiro", "hooks", "team-check.json"), "{}\n");
+    // A copy of the project's tool whose files predate the typed names: it reads `kiro` and `kiro-ide` as ids.
+    const scratch = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-kiro-typed-handing-"));
+    temporary.push(scratch);
+    const tool = olderToolCopy(join(dir, ".kiro", "tools"), join(scratch, ".kiro", "tools"));
+    const handed = config(dir, ["--harness", "kiro-ide", "--yes"], { AIDLC_CONFIG_HANDOFF: tool });
+    expect(handed.status, handed.out).toBe(4);
+    // What the person reads keeps this release's names; only the command for the older tool uses its ids.
+    expect(handed.out).toContain("switching .kiro to kiro lets Kiro run hook files AI-DLC does not own");
+    const printed = handed.out.match(/bun (\S+) config (--project-dir \S+ --from \S+ --mcp none --harness kiro-ide --yes --dry-run)/);
+    expect(printed?.[1], handed.out).toBe(tool);
+    const planned = spawnSync(process.execPath, [tool, "config", ...printed![2].split(" ")], {
+      cwd: dir,
+      encoding: "utf-8",
+      timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: { ...process.env, AIDLC_TEST_NAME: "t-kiro-typed-harness-names", KIRO_HOME: `${dir}-kiro-home` },
+    });
+    expect(planned.status, `${planned.stdout}${planned.stderr}`).toBe(0);
+    expect(planned.stdout).toContain("--plan-token");
+    expect(stamp(dir)).toBe("kiro");
+  });
+
+  test("after a handed run writes the project's own tool, what to do next names the harness in this release's names", () => {
+    const dir = project();
+    expect(config(dir, ["--harness", "kiro", "--yes"]).status).toBe(0);
+    const harnessData = join(dir, ".kiro", "tools", "data", "harness.json");
+    const trust = () => JSON.parse(readFileSync(harnessData, "utf-8")).trust;
+    const acknowledged = spawnSync(process.execPath, [INIT, "config", "trust", "--acknowledge", "--yes", "--project-dir", dir], {
+      cwd: dir,
+      encoding: "utf-8",
+      timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: { ...process.env, AIDLC_TEST_NAME: "t-kiro-typed-harness-names", KIRO_HOME: `${dir}-kiro-home` },
+    });
+    expect(acknowledged.status, `${acknowledged.stdout}${acknowledged.stderr}`).toBe(0);
+    expect(trust()).toBeDefined();
+    // The project's own tool reads like a release from before the typed names,
+    // as when it hands its refresh to this one; this run rewrites it.
+    const tool = olderToolCopy(join(dir, ".kiro", "tools"), join(dir, ".kiro", "tools"));
+    // That release recorded its own files, so the edit is its, not the person's.
+    const manifest = join(dir, ".kiro", "tools", "data", "aidlc-manifest.json");
+    const recorded = JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> };
+    const paths = join(dir, ".kiro", "tools", "aidlc-runtime-paths.ts");
+    recorded.files[".kiro/tools/aidlc-runtime-paths.ts"] = `sha256:${createHash("sha256").update(readFileSync(paths)).digest("hex")}`;
+    writeFileSync(manifest, `${JSON.stringify(recorded, null, 2)}\n`);
+    const handed = config(dir, ["--harness", "kiro", "--yes"], { AIDLC_CONFIG_HANDOFF: tool });
+    expect(handed.status, handed.out).toBe(0);
+    expect(stamp(dir)).toBe("kiro");
+    const note = /once switched, review it again with `bun (\S+) config (trust --harness [^`]+)`/.exec(handed.out);
+    expect(note?.[2].split(" ").slice(0, 3), handed.out).toEqual(["trust", "--harness", "kiro-v2"]);
+    const reviewed = spawnSync(process.execPath, [note![1], "config", ...note![2].split(" "), "--acknowledge", "--yes"], {
+      cwd: dir,
+      encoding: "utf-8",
+      timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: { ...process.env, AIDLC_TEST_NAME: "t-kiro-typed-harness-names", KIRO_HOME: `${dir}-kiro-home` },
+    });
+    expect(reviewed.status, `${reviewed.stdout}${reviewed.stderr}`).toBe(0);
+    expect(trust()).toBeDefined();
   });
 
   test("a copied tool's hand-off is read in ids: --harness kiro there is Kiro CLI (V2)", () => {
