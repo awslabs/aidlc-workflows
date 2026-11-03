@@ -11,6 +11,36 @@ The directive's `review_class` field tells you HOW the review runs - the engine 
 - **`adversarial`** - the refute-and-repair loop below, up to `reviewer_max_iterations` passes with lead fixes between them. The default for Construction stages, where findings are machine-checkable and fix loops converge.
 - **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13 only when the `learnings` module is listed (otherwise directly to the approval gate), and print the engine's derived findings brief for the human to triage. The bounded stale-receipt recovery (the reviewer-repair module), and a review the person asks for, are the only exceptions. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
 
+### Phase review (`review_covers`)
+
+A directive whose reviewer block carries `review_covers` is running under phase
+review granularity: this stage is its reviewer's last in-plan stage of the
+phase, and the one §12a review here ALSO covers the listed earlier stages'
+completed artifacts, whose own stage runs carried no reviewer block. Everything
+in this module applies unchanged, with three additions:
+
+1. **One request per stage.** Before dispatching the reviewer, record the
+   request for this stage as step 1 says, and then one more request per
+   `review_covers` entry — the same command with `--stage "<entry.slug>"`.
+   Each returns its own `reviewFile`. If a covered stage's request is refused
+   because a fresh review already covers it, skip that entry and say nothing.
+2. **One dispatch, one review per stage.** Dispatch the reviewer ONCE, with
+   every `reviewFile` path and every covered stage's artifacts beside this
+   stage's own. The reviewer reads them together — cross-artifact consistency
+   is the point of the grouped pass — and writes one complete review per
+   `reviewFile`, each scoped to its own stage's artifacts, each finding naming
+   the artifact it is against and any later artifact it affects.
+3. **One verdict per stage.** Record this stage's verdict as step 3 says, and
+   then each covered stage's with its own `--stage`/`--review-file` pair. All
+   findings reach the human together at THIS stage's approval gate; the covered
+   stages' gates have already been answered and are never reopened by this
+   step. A `NOT-READY` on a covered stage follows this stage's class: advisory
+   verdicts are decision support at the gate, never a re-run.
+
+What the user hears stays exactly the §12a sentences: one "check this over"
+line for the whole grouped pass, never one per covered stage, and the words
+`review_covers`, "anchor", "deferred", or "granularity" are never said.
+
 ### What the user hears from this section
 
 A directive's `narration` value covers entering a stage; it cannot reach inside one, and this check happens inside. So three sentences are written for it here, and each is the whole of what the user hears at that moment. Only the double-quoted text is ever spoken; fill the `[bracketed]` slots and drop the brackets.

@@ -78,6 +78,7 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
+import { phaseReviewRole, type PhaseReviewRole } from "./aidlc-review-granularity.ts";
 import {
   createHash,
   randomBytes,
@@ -245,6 +246,7 @@ import {
   firstPlannedStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
+  loadStageGraph,
   changeAlreadyAccepted,
   reviewerGateGuardDisabled,
   getField,
@@ -9279,12 +9281,47 @@ function buildRunStageDirective(
       scope,
       stateContent
     );
-    if (reviewClass !== "none") {
+    // Under phase granularity (resolveReviewGranularity) an ideation/inception
+    // review is deferred to its reviewer's last in-plan stage of the phase: a
+    // deferred stage's directive omits the reviewer block exactly as a "none"
+    // resolution does, and the anchor's carries review_covers so one grouped
+    // pass records each covered stage's own receipt there (§12a, phase review).
+    const role: PhaseReviewRole = reviewClass === "none" || singleRun
+      ? { role: "stage" }
+      : phaseReviewRole(node, scope, stateContent);
+    if (reviewClass !== "none" && role.role !== "deferred") {
       directive.reviewer = node.reviewer;
       directive.review_artifact = node.review_artifact;
       directive.review_class = reviewClass;
       directive.reviewer_max_iterations =
         reviewClass === "advisory" ? 1 : node.reviewer_max_iterations ?? 2;
+      if (role.role === "anchor") {
+        // A covered stage that already holds a fresh terminal receipt (it was
+        // reviewed per stage before the granularity changed) is not re-reviewed.
+        const covers = role.covers.filter((covered) => {
+          if (!codekbCtx) return true;
+          try {
+            const coveredNode = loadStageGraph().find((entry) => entry.slug === covered.slug);
+            if (!coveredNode) return false;
+            const coveredClass = resolveReviewClass(coveredNode.review_class, scope, stateContent);
+            if (coveredClass === "none") return false;
+            return freshReviewReceipts(
+              codekbCtx.projectDir,
+              stateContent ?? "",
+              coveredNode,
+              { reviewClass: coveredClass },
+            ).stageVerdict === null;
+          } catch {
+            return true;
+          }
+        });
+        if (covers.length > 0) {
+          directive.review_covers = covers.map((covered) => ({
+            slug: covered.slug,
+            name: covered.name,
+          }));
+        }
+      }
     }
   }
   const protocolModules: ProtocolModule[] = [];

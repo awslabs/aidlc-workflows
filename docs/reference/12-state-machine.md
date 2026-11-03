@@ -790,7 +790,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**131 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 131 into 27 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**132 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 132 into 27 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -925,6 +925,7 @@ column.
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
 | `CONSTRUCTION_POLICY_SET` | `tools/aidlc-state.ts` | `set-construction-iteration`, `set-construction-checkpoints`, or `set-construction-execution` applied a changed value; fields `Field`, `Value`, `Previous Value`, and the `Construction Iteration` / `Construction Checkpoints` left in force, plus `Person Reply` (the words of the person's turn that asked for it, or the option they picked in a question box) when the change was theirs during Construction. During Construction the setter applies a change only when a person turn since the last decision is on record (or a current `CONSTRUCTION_POLICY_RECORDED` receipt), never on an unattended run. Unit receipt floors read it, so a stage start recorded under stage-major flooring stays a boundary after a switch to unit-major iteration or checkpoints, and one recorded under unit-major flooring stays out of a Unit receipt's floor after a switch back to stage-major with checkpoints off; each Unit's receipt floor keeps that Unit's own reopen (a Unit-tagged `GATE_REJECTED`) in every mode, and a stage's first start recorded after its Units finished in a unit-major walk (the late gate cascade) is not a restart |
 | `REVIEW_CLASS_CHANGED` | `tools/aidlc-guard-switch.ts`, `tools/aidlc-utility.ts` | `config set review <value>` / `config-change --review` / a combined `scope-change --review` set or cleared the per-run review override |
+| `REVIEW_GRANULARITY_CHANGED` | `tools/aidlc-guard-switch.ts`, `tools/aidlc-utility.ts` | `config set review-granularity <stage|phase>` / `config-change --review-granularity` set or cleared the per-run review-granularity override |
 | `RECOMPOSED` | `tools/aidlc-utility.ts` | `recompose` subcommand - the adaptive composer's in-flight plan re-shape (pending-stage suffix flips under the audit lock); `scope-change --skip` on finished work, for the stages it takes off the plan before its reopen |
 | `SCOPE_SAVED` | `tools/aidlc-utility.ts` | `scope-save` subcommand - the person kept a piece of work's current plan as a reusable scope |
 | `GUARD_POLICY_SET` | `tools/aidlc-guard-switch.ts`, `tools/aidlc-lib.ts` | The utility applier builds a row for `config-change --guard-policy <strict\|relaxed\|off>` or a changed scope-owned default in `scope-change`; lib's `appendGuardPolicySetRow` (through `governedGuardPolicy`) records an effective memory-layer change observed at a governed checkpoint. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`). Utility rows use the previously persisted intent value for `Old Value` (raw text if invalid; `strict` if absent), not the memory-effective value; checkpoint rows retain effective old/new values. |
@@ -933,14 +934,14 @@ column.
 | `GUARD_RESTORED` | `tools/aidlc-guard-switch.ts` | `config-change --guard.<fence> on` switched a fence back on for this piece of work after a per-work `off` or forced it on above a policy word that lowers it. Fields: `Guard` (the switchable fence), `Scope`, `Source` (`you`). The matching `off` writes `GUARD_DISABLED` |
 | `CEREMONY_SET` | `tools/aidlc-guard-switch.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `collaborators`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
 
-All nine intent settings share `config-change`: `depth`, `test-strategy`,
-`review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`,
-`plan-approval`, `collaborators`, in that order. Three per-fence keys, `guard.review-freeze`,
+All ten intent settings share `config-change`: `depth`, `test-strategy`,
+`review`, `review-granularity`, `guard-policy`, `sensors`, `learnings`,
+`summary-confirmation`, `plan-approval`, `collaborators`, in that order. Three per-fence keys, `guard.review-freeze`,
 `guard.state-transition`, and `guard.reviewer-scope`, use the same setter and
 take `on` or `off`; `guard.plan-approval` is an alias of `plan-approval` (one
 switch, no `Guards Off` entry). The matching slash flags and every
 `config set <key> <value>` route can combine settings in one transaction.
-`config get` and `config list` expose all thirteen keys; Guard Policy, fence, and
+`config get` and `config list` expose all fourteen keys; Guard Policy, fence, and
 ceremony values include effective sources, and the retired key `change-control`
 resolves to `guard-policy`. `config-change` accepts only those setting flags plus
 `--intent`, `--space`, and `--project-dir`, requires at least one setting, and

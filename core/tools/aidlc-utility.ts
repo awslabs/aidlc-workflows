@@ -1,5 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { hasStoredMessages, proveMessage, requestMessageStep, type StoredMessage } from "./aidlc-message-store.ts";
+import { asReviewGranularity, resolveReviewGranularity } from "./aidlc-review-granularity.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants as fsConstants,
@@ -45,6 +46,7 @@ import {
 } from "./aidlc-audit.ts";
 import {
   applyIntentSettings,
+  applyReviewGranularity,
   applyReviewOverride,
   CONFIG_KEYS,
   type ConfigKey,
@@ -63,6 +65,7 @@ import {
   keptForPickedWork,
   keptSettingsNotTheirs,
   levelsKeptForNextWork,
+  parseReviewGranularity,
   parseReviewOverride,
   planApprovalCreationAsked,
   planApprovalMemoryLockRefusal,
@@ -2040,7 +2043,11 @@ To get started:
     : reviewCap === undefined
     ? "default"
     : changeControlSourceLabel(shownSource(`scope ${scopeKey}`));
-  const reviewersLine = `Reviewers: ${reviewLevel === "none" ? "off" : reviewLevel} (${reviewSource})`;
+  const reviewGranularity = resolveReviewGranularity(scope, content);
+  const reviewersLine = `Reviewers: ${reviewLevel === "none" ? "off" : reviewLevel} (${reviewSource})` +
+    (reviewGranularity === "phase"
+      ? `\nReview Granularity: phase (${asReviewGranularity(getField(content, "Review Granularity")) !== null ? "set for this piece of work" : changeControlSourceLabel(shownSource(`scope ${scopeKey}`))})`
+      : "");
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     if (key === "plan_approval") {
       const setting = resolvePlanApprovalSetting(projectDir, content);
@@ -8059,6 +8066,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(`Unknown project type: "${flags["project-type"]}". Valid: greenfield (a new project), brownfield (existing code).`);
   }
   const reviewOverride = parseReviewOverride(flags.review, die);
+  const reviewGranularityOverride = parseReviewGranularity(flags["review-granularity"], die);
   if (flags["change-control"] !== undefined) {
     if (flags["guard-policy"] !== undefined && flags["guard-policy"] !== flags["change-control"]) {
       die("--change-control is the retired name of --guard-policy; pass one of them, not both.");
@@ -8577,6 +8585,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       ceremonySetByPerson,
       composedPlan ? plannedStages.stages : null,
     );
+    if (reviewGranularityOverride !== undefined) {
+      const createdState = readStateFile(projectDir, created.dirName, created.space);
+      const granularityUpdate = applyReviewGranularity(createdState, reviewGranularityOverride, scope);
+      if (granularityUpdate.changed) {
+        writeStateFile(projectDir, granularityUpdate.content, created.dirName, created.space);
+        appendAuditEvent(projectDir, "REVIEW_GRANULARITY_CHANGED", {
+          "Old Granularity": granularityUpdate.oldGranularity || "none set",
+          "New Granularity": granularityUpdate.storedGranularity || "cleared (scope default applies)",
+        }, created.dirName, created.space);
+      }
+    }
     // The checks the person turned off for this work start off, set by them;
     // one they typed on starts on.
     const requested: IntentSettingsRequest = {};
@@ -13126,6 +13145,7 @@ function configFieldForKey(key: string): string | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
   if (key === "review") return "Review Override";
+  if (key === "review-granularity") return "Review Granularity";
   if (key === "guard-policy") return GUARD_POLICY_FIELD;
   if (key in RETIRED_CONFIG_KEYS) {
     noteGuardPolicyRename();

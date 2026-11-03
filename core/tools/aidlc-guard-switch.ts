@@ -76,6 +76,11 @@ import {
   personsWordsText,
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import {
+  asReviewGranularity,
+  resolveReviewGranularity,
+  type ReviewGranularity,
+} from "./aidlc-review-granularity.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, type StoredMessage } from "./aidlc-message-store.ts";
 import { backOnLine, quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
@@ -320,6 +325,65 @@ export function applyReviewOverride(
   content = setField(content, "Review Override", storedReview);
   return { content, oldReview, storedReview, changed };
 }
+
+export function parseReviewGranularity(
+  raw: string | undefined,
+  die: (message: string) => never = throwSettingsError,
+): ReviewGranularity | undefined {
+  if (!raw) return undefined;
+  const value = asReviewGranularity(raw.toLowerCase());
+  if (value === null) {
+    die(`Unknown review granularity: "${raw}". Valid: stage, phase.`);
+  }
+  return value;
+}
+
+/** Mirror of applyReviewOverride for the `Review Granularity` field: a value
+ *  equal to the scope's own clears the override, so the scope's
+ *  review_granularity applies again and follows later scope changes. */
+export function applyReviewGranularity(
+  content: string,
+  value: ReviewGranularity | undefined,
+  scope: string | null = getField(content, "Scope"),
+): {
+  content: string;
+  oldGranularity: string | null;
+  storedGranularity: string | undefined;
+  changed: boolean;
+} {
+  const oldGranularity = getField(content, "Review Granularity");
+  if (value === undefined) {
+    return { content, oldGranularity, storedGranularity: undefined, changed: false };
+  }
+  const scopeDefault = resolveReviewGranularity(scope, null);
+  const storedGranularity = value === scopeDefault ? "" : value;
+  const changed = storedGranularity !== (oldGranularity ?? "");
+  if (!changed) return { content, oldGranularity, storedGranularity, changed };
+  if (oldGranularity === null) {
+    const beforeInsert = content;
+    content = content.replace(
+      /^(- \*\*Review Override\*\*:[^\n]*)$/m,
+      "$1\n- **Review Granularity**:",
+    );
+    if (content === beforeInsert) {
+      content = content.replace(
+        /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
+        "$1\n- **Review Granularity**:",
+      );
+    }
+    if (content === beforeInsert) {
+      content = content.replace(
+        /^(- \*\*Scope\*\*:[^\n]*)$/m,
+        "$1\n- **Review Granularity**:",
+      );
+    }
+    if (content === beforeInsert) {
+      content = `${content.trimEnd()}\n- **Review Granularity**:\n`;
+    }
+  }
+  content = setField(content, "Review Granularity", storedGranularity);
+  return { content, oldGranularity, storedGranularity, changed };
+}
 function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySetting, source: string): string {
   const field = CEREMONY_FIELDS[key];
   if (getField(content, field) === null) {
@@ -500,6 +564,11 @@ export function applyIntentSettings(
   const review = parseReviewOverride(rawReview, die);
   if (rawReview !== undefined && review === undefined) {
     die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
+  }
+  const rawReviewGranularity = requested["review-granularity"]?.value;
+  const reviewGranularity = parseReviewGranularity(rawReviewGranularity, die);
+  if (rawReviewGranularity !== undefined && reviewGranularity === undefined) {
+    die(`Unknown review granularity: "${rawReviewGranularity}". Valid: stage, phase.`);
   }
   const changeControl = parseGuardPolicy(rawChangeControl);
   if (rawChangeControl !== undefined && changeControl === null) {
@@ -759,6 +828,32 @@ export function applyIntentSettings(
       : level === "none"
         ? `Specialist reviews are off for the rest of this work. To turn them back on, ${back}.`
         : `Specialist reviews are ${level} for the rest of this work (they were ${word(was)}). To change it back, ${back}.`);
+  }
+  if (reviewGranularity !== undefined) {
+    const target = reviewScope ?? getField(content, "Scope");
+    const update = applyReviewGranularity(content, reviewGranularity, target);
+    content = update.content;
+    if (update.changed) {
+      audit.push({
+        eventType: "REVIEW_GRANULARITY_CHANGED",
+        fields: {
+          "Old Granularity": update.oldGranularity || "none set",
+          "New Granularity": update.storedGranularity || "cleared (scope default applies)",
+        },
+      });
+    }
+    const level = update.storedGranularity === ""
+      ? resolveReviewGranularity(target, null)
+      : (update.storedGranularity ?? reviewGranularity);
+    const was = update.oldGranularity || resolveReviewGranularity(target, null);
+    const back = `say so or run \`aidlc config set review-granularity ${was}\``;
+    const where = (value: string): string =>
+      value === "phase"
+        ? "once at the end of each phase (ideation and inception; Construction stays per stage)"
+        : "after every reviewed stage";
+    lines.push(!update.changed
+      ? `Specialist reviews already run ${where(level)} for this work.`
+      : `Specialist reviews now run ${where(level)} for the rest of this work. To change it back, ${back}.`);
   }
   // Persist scope-owned updates even while memory controls the effective value.
   // Explicit strict is also recordable; explicit relaxed was refused above.

@@ -474,6 +474,14 @@ export interface RunStageDirective {
   // conductor - the engine omits the whole reviewer block instead. Absent
   // when reviewer is absent.
   review_class?: "adversarial" | "advisory";
+  // review_covers — phase granularity only (resolveReviewGranularity "phase"):
+  // this stage is its reviewer's last in-plan stage of an ideation/inception
+  // phase, and the §12a review step also covers these earlier stages' completed
+  // artifacts, deferred to here. One reviewer dispatch; one request and one
+  // verdict receipt PER listed stage plus this stage's own, so freshness,
+  // freeze, and recovery stay per stage. Absent everywhere else, including on
+  // every deferred stage (which simply carries no reviewer block).
+  review_covers?: { slug: string; name: string }[];
   // protocol_modules — optional deterministic hints naming conditional
   // protocol files the conductor reads before the stage body. The prose
   // triggers remain the compatibility fallback when this field is absent.
@@ -1056,6 +1064,7 @@ const RUN_STAGE_FIELDS = [
   "review_artifact",
   "reviewer_max_iterations",
   "review_class",
+  "review_covers",
   "protocol_modules",
   "swarm_settled",
   "gate_only",
@@ -2416,6 +2425,27 @@ function checkRunStageShared(
     errors.push(`${kind}: review_artifact requires reviewer`);
   }
   if (kind === "run-stage") {
+    // review_covers — phase granularity's anchor only: a nonempty list of
+    // {slug, name} for the covered stages, and never without a reviewer.
+    if ("review_covers" in o) {
+      const covers = o.review_covers;
+      if (typeof o.reviewer !== "string") {
+        errors.push(`${kind}: review_covers requires reviewer`);
+      }
+      if (
+        !Array.isArray(covers) ||
+        covers.length === 0 ||
+        !covers.every(
+          (entry) =>
+            isPlainObject(entry) &&
+            typeof entry.slug === "string" &&
+            typeof entry.name === "string" &&
+            Object.keys(entry).length === 2,
+        )
+      ) {
+        errors.push(`${kind}: review_covers must be a nonempty array of {slug, name}`);
+      }
+    }
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
