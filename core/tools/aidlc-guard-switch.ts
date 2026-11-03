@@ -1812,6 +1812,7 @@ export function keepSettingsForNextWork(
     fail(`Unknown test strategy: "${strategy}". Valid: minimal, standard, comprehensive.`);
   }
   parseReviewOverride(value("review"), fail);
+  parseReviewGranularity(value("review-granularity"), fail);
   if (policy !== undefined && parseGuardPolicy(policy) === null) {
     fail(`Unknown Guard Policy value: "${policy}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`);
   }
