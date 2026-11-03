@@ -1363,6 +1363,11 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
       expect(text, surface).not.toContain("the order the scope loader reads it");
       expect(text, surface).not.toMatch(/from (its|that one scope) `\.md`/);
     }
+    // Settings asked for in the first write can only be guessed: the echo comes
+    // with that run (a Windows nightly, 11-03, wrote every setting on before it).
+    const persona = read("core/agents/aidlc-composer-agent.md");
+    expect(persona).toContain("the first run checks the grid alone");
+    expect(persona).not.toContain('For a front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings": <settings> }`');
   });
 });
 
