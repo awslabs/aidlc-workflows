@@ -12911,11 +12911,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
             return;
           }
           const gate = applyGateOnlyShape(directive, pd, stateContent);
-          emit(withChangeNotices(gate, [
+          const skippedNotices = units
+            .filter((u) => skipped.has(u))
+            .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? ""));
+          // The gate's own lines are on the step already. A copy is no longer
+          // the step its route (runStageRoutes) and rules are kept for.
+          emit(skippedNotices.length === 0 ? gate : withChangeNotices(gate, [
             ...((gate as Directive).change_notices ?? []),
-            ...units
-              .filter((u) => skipped.has(u))
-              .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? "")),
+            ...skippedNotices,
           ]));
           return;
         }

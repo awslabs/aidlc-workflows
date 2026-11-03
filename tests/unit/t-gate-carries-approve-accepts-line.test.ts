@@ -35,6 +35,8 @@ interface Directive {
   gate_only?: boolean;
   change_notices?: string[];
   change_notices_note?: string;
+  rules_content?: unknown[];
+  rules_held?: unknown;
 }
 
 async function run(proj: string, tool: string, args: string[]): Promise<{ status: number; out: string; directive: Directive | null }> {
@@ -99,7 +101,7 @@ describe("the gate carries the line that says what Approve accepts", () => {
     expect(readFileSync(kept, "utf-8")).toBe(`${shown}\n${LINE}\n`);
   });
 
-  test("next showing the open gate again says it again", async () => {
+  test("next showing the open gate again says it again, with the gate's rules as without the line", async () => {
     const proj = await reviewed([FINDING]);
     expect((await report(proj, "awaiting-approval")).directive?.kind).toBe("print");
     const shown = await next(proj, []);
@@ -107,6 +109,8 @@ describe("the gate carries the line that says what Approve accepts", () => {
     const again = shown.directive as Directive | null;
     expect(again?.change_notices, shown.out).toContain(LINE);
     expect(again?.change_notices_note, shown.out).toStartWith("Say each change_notices line to the person once, as written");
+    // The step stays the routed one: the person's rules come with it, as at a gate with no line to say.
+    expect(again?.rules_content ?? again?.rules_held, shown.out).toBeDefined();
   });
 
   test("the Review brief no longer carries it, so it is said once", async () => {
