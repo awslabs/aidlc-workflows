@@ -19325,6 +19325,21 @@ function checkboxForSlug(
   return parseCheckboxes(stateContent).find((c) => c.slug === slug);
 }
 
+// Work started before a plugin added a stage has no Stage Progress row for it.
+// A transition onto the stage writes the row (withStageProgressRow), but a
+// cursor an older engine already moved onto it has none, so its report had
+// nothing to commit. The row is written here first, through the state tool,
+// with the state the cursor gives it.
+function writeReportedStageRow(pd: string, reported: string | undefined): void {
+  const content = loadStateFileIfPresent(pd);
+  if (!content) return;
+  const current = getField(content, "Current Stage")?.trim() ?? "";
+  const slug = reported?.trim() || current;
+  if (!slug || checkboxForSlug(content, slug) || !nodeForSlug(slug)) return;
+  if (effectivePlanAction(slug, getField(content, "Scope"), content) !== "EXECUTE") return;
+  spawnState(pd, ["checkbox", `${slug}=${slug === current ? "in-progress" : "pending"}`]);
+}
+
 // The refusal for a skip report that does not name the step in progress. It
 // names the one step (and unit) a skip is accepted for right now and how to
 // continue, in the project's terms, so the conductor neither retries blind
@@ -19978,6 +19993,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   const pd = resolveProjectDir(projectDir);
+  writeReportedStageRow(pd, flags.stage);
   const stateContent = loadStateFileIfPresent(pd);
   if (!stateContent) {
     emit({

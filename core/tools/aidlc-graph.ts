@@ -115,6 +115,10 @@ import {
   withAuditLock,
   writeFileAtomic,
   writeRecordFileNoFollow,
+  effectivePlanAction,
+  escapeRegex,
+  getField,
+  parseCheckboxes,
 } from "./aidlc-lib.ts";
 import {
   parseRuleFrontmatter,
@@ -1372,6 +1376,35 @@ export function loadGraph(): GraphStage[] {
     _graph = loadStageGraph() as GraphStage[];
   }
   return _graph;
+}
+
+// A stage a plugin added after the work started has no row in the state file's
+// Stage Progress, so a transition onto it would write nothing and the stage
+// would never read as started or done. Its first transition writes the row
+// (not started, with the plan's action) after the rows of its phase that come
+// before it in the graph, or before the first one after it. A stage that has a
+// row, a slug the graph does not know, or a phase with no rows leaves the
+// content as it is.
+export function withStageProgressRow(content: string, slug: string): string {
+  if (parseCheckboxes(content).some((row) => row.slug === slug)) return content;
+  const graph = loadGraph();
+  const at = graph.findIndex((stage) => stage.slug === slug);
+  if (at === -1) return content;
+  const phase = graph[at].phase;
+  const lines = content.split("\n");
+  const rowsOf = (stages: GraphStage[]) =>
+    stages
+      .filter((stage) => stage.phase === phase)
+      .map((stage) => lines.findIndex((line) => new RegExp(`^- \\[[ xSR?-]\\] ${escapeRegex(stage.slug)} —`).test(line)))
+      .filter((row) => row !== -1);
+  const before = rowsOf(graph.slice(0, at));
+  const after = rowsOf(graph.slice(at + 1));
+  const insertAt = before.length > 0 ? Math.max(...before) + 1 : after.length > 0 ? Math.min(...after) : -1;
+  if (insertAt === -1) return content;
+  const eol = lines[before.length > 0 ? insertAt - 1 : insertAt].endsWith("\r") ? "\r" : "";
+  const action = effectivePlanAction(slug, getField(content, "Scope"), content) ?? "EXECUTE";
+  lines.splice(insertAt, 0, `- [ ] ${slug} — ${action}${eol}`);
+  return lines.join("\n");
 }
 
 /** Stages that produce the given artifact. Empty array = orphan

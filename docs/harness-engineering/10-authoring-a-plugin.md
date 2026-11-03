@@ -140,6 +140,10 @@ carries — but the absolute values never land in the graph, inserting a stage
 never renumbers core, and you claim no range (which is why two uncoordinated
 plugins can never collide on numbers).
 
+Work started before the plugin was installed has no Stage Progress row for its
+stages. The engine writes each row, after the rows of its phase that come
+before it, when the work first reaches the stage.
+
 Gate a stage onto a scope with `scopes:` (it is SKIP everywhere else), and
 optionally declare a `when:` predicate. `test-pro-full-suite` is *intended* to run
 only when its upstream producer is on the plan:

@@ -119,6 +119,7 @@ import {
   takeComposerScores,
   validateGrid,
   validateScope,
+  withStageProgressRow,
 } from "./aidlc-graph.ts";
 import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, addRootBlocks, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
@@ -13374,7 +13375,7 @@ export function setStatus(
   if (!preserveUnitMajorCursor) {
     content = setField(content, "Current Stage", stage);
     content = setField(content, "In Progress", stage);
-    content = setCheckbox(content, stage, "in-progress");
+    content = setCheckbox(withStageProgressRow(content, stage), stage, "in-progress");
   }
   writeStateFile(projectDir, content, flags.intent, flags.space);
   try {
