@@ -4278,11 +4278,27 @@ function startDispatcher(): void {
   }
 }
 
+// Copilot CLI's `.aidlc/bin/aidlc-engine` runs only the words AI-DLC's Copilot
+// hooks vouched for (aidlc-launcher-voucher.ts); anything else is refused with
+// the plain command, which Copilot then asks about. Loaded only from the launcher.
+async function launcherGate(args: string[]): Promise<boolean> {
+  const launcher = process.env.AIDLC_ENGINE_LAUNCHER;
+  if (launcher === undefined) return true;
+  delete process.env.AIDLC_ENGINE_LAUNCHER;
+  const voucher = await import("./aidlc-launcher-voucher.ts");
+  if (voucher.spendLauncherVoucher(launcher, args)) return true;
+  const { aidlcInvocation, quoteCommandArgument } = await import("./aidlc-runtime-paths.ts");
+  const words = args.map((word) => quoteCommandArgument(word, "posix"));
+  process.stderr.write(`${voucher.LAUNCHER_PATH} runs only the commands AI-DLC's Copilot hooks pass to it, so this did not run. Run \`${[aidlcInvocation(), ...words].join(" ")}\` instead.\n`);
+  process.exitCode = 1;
+  return false;
+}
+
 function run(args: string[]): void {
   // Keep pending stdin and async dispatch alive, while leaving this module
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);
-  void main(args).catch((error) => {
+  void launcherGate(args).then((go) => go ? main(args) : undefined).catch((error) => {
     // Recorded before the message is rendered, so a failing stderr write
     // still leaves the reason in the trace. Only hook routes are traced.
     if (tracedHookRoute(canonicalizeLegacyCopilotHookArgv(process.argv.slice(2))) !== undefined) {
