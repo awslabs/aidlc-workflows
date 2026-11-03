@@ -523,7 +523,11 @@ and the shell the chat's hook recorded) each tool entry also runs the tool as a
 child behind an `AI-DLC reply:` pointer line and keeps the reply under
 `aidlc/.aidlc-sessions/replies/`, and rejoins the single-quote pair cmd.exe left
 on the arguments, since the engine writes its reply straight to fd 1 and Kiro
-reads the terminal one second after sending the command.
+reads the terminal one second after sending the command. A Kiro terminal whose
+shell integration script did not run (its `VSCODE_NONCE` is still set) gets the
+same reply file when that terminal is both ends of the command (a hook, a pipe
+or a tool reading its child's output never is), and doctor run in that terminal
+warns; the chat's hooks run outside the terminal and cannot see it.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary

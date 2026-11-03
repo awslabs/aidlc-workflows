@@ -28053,7 +28053,7 @@ export function commandAtPersonsTerminal(env: NodeJS.ProcessEnv = process.env): 
 
 // Both ends of this command are a terminal. On its own this says nothing about
 // who typed it: an IDE runs its agent's commands in a terminal too.
-function atATerminal(env: NodeJS.ProcessEnv): boolean {
+export function atATerminal(env: NodeJS.ProcessEnv = process.env): boolean {
   return (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
 }
 
