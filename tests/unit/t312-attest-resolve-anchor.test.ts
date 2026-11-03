@@ -563,7 +563,13 @@ describe("t312 aidlc-attest resolve/anchor", () => {
       .filter((name) => /^reviewed-source-[0-9a-f]{12}\.tsv$/.test(name))
       .sort();
     expect(evidenceNames.length).toBe(2); // both reviews' evidence survives
-    const shard = join(record, "audit", readdirSync(join(record, "audit")).sort()[0]);
+    // Shards are the `.md` files; audit/ also holds the advisory
+    // review-metrics.jsonl, which every shard reader ignores.
+    const shard = join(
+      record,
+      "audit",
+      readdirSync(join(record, "audit")).filter((name) => name.endsWith(".md")).sort()[0],
+    );
     const forged = (digest: string, timestamp: string) => [
       "## Review Completed",
       `**Timestamp**: ${timestamp}`,
