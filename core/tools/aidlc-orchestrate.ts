@@ -16277,6 +16277,12 @@ function claimedCheckoutMove(
 // aside for the reopened Unit, and the person can pick it up again by name:
 // the same flags then resume it where it stopped. "route" when the walk is
 // already on the target for that Unit; null when this is no such jump.
+// The Unit the walk's step is for: the one a jump back reopens when the person
+// names none. Null once every Unit has done the block.
+function walkStepUnit(step: UnitMajorWalkStep): string | null {
+  return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+}
+
 function unitMajorReopen(
   projectDir: string,
   scope: string,
@@ -16290,7 +16296,7 @@ function unitMajorReopen(
   const targetIndex = blockSlugs.indexOf(targetSlug);
   if (targetIndex === -1) return null;
   const step = walk.step;
-  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  const inFlight = walkStepUnit(step);
   const liveStage = step.kind === "work" || step.kind === "summary"
     ? step.stage.slug
     : step.kind === "paused" ? step.stage : null;
@@ -16468,7 +16474,7 @@ function unitMajorForwardJump(
   const graph = loadGraph();
   const at = (slug: string): number => graph.findIndex((node) => node.slug === slug);
   const blockSlugs = walk.block.map((stage) => stage.slug);
-  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  const inFlight = walkStepUnit(step);
   if (
     inFlight !== null && liveStage !== null &&
     blockSlugs.indexOf(targetSlug) > blockSlugs.indexOf(liveStage) &&
@@ -19794,12 +19800,18 @@ function emitTypedResumeChoice(
     }
     // Back to a Unit's step, the person may want it run again or a change made
     // to it: the agent reads which, and `--change` keeps their words as the change.
-    // A checkout that claimed a Unit names that Unit when they named none: the
-    // form the plan-approval guard admits for the reopen it prints.
+    // When they named none, the Unit the reopen is for is named: a checkout's
+    // claimed Unit, or a solo walk's Unit in flight (the one unitMajorReopen
+    // reopens). That is the form the plan-approval guard admits for the reopen
+    // it prints.
     const claim = units === "" && isTeamUnitOwnership(stateContent)
       ? readApplicableTeamUnitScopeStamp(pd, stateContent)
       : null;
-    const changeUnits = claim !== null ? ` --unit ${claim.unit}` : units;
+    const walk = units === "" && !isTeamUnitOwnership(stateContent) && validScopes().has(scope)
+      ? unitJumpWalk(pd, scope, stateContent, false)
+      : null;
+    const inFlight = walk?.block.some((stage) => stage.slug === node.slug) ? walkStepUnit(walk.step) : null;
+    const changeUnits = claim !== null ? ` --unit ${claim.unit}` : inFlight !== null ? ` --unit ${inFlight}` : units;
     const change = changeUnits !== "" && isPerUnit(node)
       ? ` If what they asked for is a change to that stage's work, run \`next --stage ${node.slug}${changeUnits} --change\` ` +
         "instead, so the reopen keeps their words as the change."
