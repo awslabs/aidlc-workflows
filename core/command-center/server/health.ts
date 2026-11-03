@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import type { Found } from "./discovery";
 import {
   checkpointState, classifyDrop, classifyError, DROP_META, guardRefusalState, heartbeatStates, noteHint, parseDrops,
-  recoveryInvalid, refusalRemedies, remedyText, sensorNotRun, stopCounterStalled,
+  refusalRemedies, remedyText, sensorNotRun, stopCounterStalled,
 } from "./health-classify";
 import {
   COVERAGE_NOTE, countIssues, HEARTBEAT_HOOKS, hookPhaseOf, type HealthCounts, type HealthCoverage, type HealthPayload, type HookRow,
@@ -255,7 +255,7 @@ async function fromEvents(c: Collector, events: AuditEvent[], auditDir: string, 
         break;
       case "PRACTICES_AFFIRMED": for (const it of practices) if (!it.resolved) it.resolved = { by: "PRACTICES_AFFIRMED", at: e.ts }; break;
       case "SESSION_COMPACTED":
-        if ((f["State Validity"] ?? "").trim().toLowerCase() === "invalid") compactions.push(c.add({ group: "failure", resolved: null, at: e.ts, where, kind: "Invalid state at compaction", message: `State Validity: ${f["State Validity"]}${f["Current Stage"] ? ` (current stage ${f["Current Stage"]})` : ""}`, recoverable: "needs-you", fix: hint("The state file was invalid when the context was compacted; recovery on resume repairs it from the breadcrumb."), source: src(e), evidence: await ev0(e, [eng ? await c.support(join(eng, "recovery.md"), "the recovery breadcrumb validate-state wrote", "recovery") : null]) }));
+        if ((f["State Validity"] ?? "").trim().toLowerCase() === "invalid") compactions.push(c.add({ group: "failure", resolved: null, at: e.ts, where, kind: "Invalid state at compaction", message: `State Validity: ${f["State Validity"]}${f["Current Stage"] ? ` (current stage ${f["Current Stage"]})` : ""}`, recoverable: "needs-you", fix: hint("The state file was invalid when the context was compacted; resume the workflow so AI-DLC repairs it."), source: src(e), evidence: await ev0(e, []) }));
         break;
       case "RECOVERY_COMPLETED": for (const it of compactions) if (!it.resolved) it.resolved = { by: "RECOVERY_COMPLETED", at: e.ts }; break;
     }
@@ -382,14 +382,14 @@ async function fromHooks(c: Collector, base: string, eng: string, legacy: string
   }
   if (!dirExists && !progress) return [];
   const hooks = new Set<string>([...(progress ? HEARTBEAT_HOOKS : []), ...Object.keys(lasts), ...Object.keys(dropsBy)]);
-  const note = live ? undefined : !Object.keys(lasts).length ? "no heartbeats here — normal for a clone or another machine" : hb.record === "stale" ? "not the active intent: informational" : undefined;
+  const note = live ? undefined : !Object.keys(lasts).length ? "no heartbeats here - normal for a clone or another machine" : hb.record === "stale" ? "not the active intent: informational" : undefined;
   return [...hooks].sort().map((hook) => ({
     workspace: ws, intentKey, hook, phase: phasesLabel(hook), lastAt: lasts[hook] ?? null,
     state: lasts[hook] ? hb.hooks[hook] ?? "ok" : "never", drops: dropsBy[hook]?.real ?? 0, benignDrops: dropsBy[hook]?.benign ?? 0, ...(note ? { note } : {}),
   }));
 }
 
-/** Engine files of one record: guard refusals, recovery breadcrumb, Stop counter, checkpoints, active directive, dispatch marker. */
+/** Engine files of one record: guard refusals, Stop counter, checkpoints, active directive, dispatch marker. */
 async function fromEngine(c: Collector, base: string, rec: string, eng: string, events: AuditEvent[], now: number, stateMd: string | null) {
   for (const n of (await listIn(base, join(eng, "guard-refusals"))).filter((x) => x.endsWith(".json"))) {
     const r = await readIn(base, join(eng, "guard-refusals", n)); const d = json(r?.text) as Record<string, unknown> | null;
@@ -413,13 +413,6 @@ async function fromEngine(c: Collector, base: string, rec: string, eng: string, 
       detail: [typeof ref.blockedAction === "string" ? `Blocked: ${ref.blockedAction}` : null, Array.isArray(d.codes) && d.codes.length ? `codes ${d.codes.join(", ")}` : null, `refused ${d.count}×`, state === "terminal" ? "Terminal: past the cap with nothing the agent can run" : null, evidence].filter(Boolean).join(" · "),
       recoverable: state === "recoverable" ? "yes" : "needs-you", fix: remedies.length ? { text: remedyText(remedies), source: "aidlc" } : hint("No remedy is available to the agent: a person has to decide how to proceed."),
       source: { file: c.rel(join(eng, "guard-refusals", n)) }, count: typeof d.count === "number" ? d.count : undefined, cause: guardRecordCause(d), evidence: proof });
-  }
-  const rv = await readIn(base, join(eng, "recovery.md"));
-  const invalid = rv ? recoveryInvalid(rv.text) : null;
-  if (rv && invalid) {
-    const after = events.find((e) => e.event === "RECOVERY_COMPLETED" && Date.parse(e.ts) >= Math.floor(rv.mtime / 1000) * 1000);
-    c.add({ group: "failure", resolved: after ? { by: "RECOVERY_COMPLETED", at: after.ts } : null, at: isoOf(rv.mtime), where: {}, kind: "Invalid state (recovery breadcrumb)", message: invalid, recoverable: "needs-you", fix: hint("Resume the workflow: recovery repairs the state file from this breadcrumb."), source: { file: c.rel(join(eng, "recovery.md")) },
-      evidence: await c.fileEvidence(join(eng, "recovery.md"), { focus: /INVALID/ }) });
   }
   const sc = await readIn(base, join(eng, "stop-hook/block-count.json"));
   const autonomous = !!stateMd && parseState(stateMd).fields["Construction Autonomy Mode"] === "autonomous";
@@ -625,7 +618,7 @@ async function statFile(base: string, p: string, out: string[]): Promise<void> {
 }
 /**
  * Everything `buildHealth` reads that AIDLC changes, as stats only (no reads): audit shards, hooks-health, guard
- * refusals, the recovery breadcrumb, the Stop counter, verification checkpoints, the active directive and dispatch
+ * refusals, the Stop counter, verification checkpoints, the active directive and dispatch
  * marker, the registry and active-intent cursors, workspace markers, and — with the scan on — transcript pointers
  * and their targets.
  */
@@ -644,7 +637,7 @@ async function fingerprint(found: Found[], opts: HealthOpts): Promise<string> {
       const rec = recordDirOf(f.path, ref); const eng = join(rec, ".aidlc-engine");
       for (const d of ["audit", ".aidlc-engine/hooks-health", ".aidlc-hooks-health", ".aidlc-engine/guard-refusals"]) await statDir(base, join(rec, d), parts);
       await statDir(base, join(rec, ".aidlc-construction-checkpoints"), parts, 1);
-      for (const p of ["recovery.md", "stop-hook/block-count.json", "active-directive.json", "reviewer-dispatch.json"]) await statFile(base, join(eng, p), parts);
+      for (const p of ["stop-hook/block-count.json", "active-directive.json", "reviewer-dispatch.json"]) await statFile(base, join(eng, p), parts);
       await statFile(base, join(rec, "aidlc-state.md"), parts);
     }
     await statDir(base, base, parts); // plugin compose drops and stale markers at the top of aidlc/

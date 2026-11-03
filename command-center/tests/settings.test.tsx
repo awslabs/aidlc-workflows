@@ -112,7 +112,7 @@ test("Locate… replaces the pin and drops the old path from hidden", () => {
   expect(c.pins).toEqual(["/a", "/c"]); expect(c.hidden).toEqual(["/z"]);
 });
 test("the repo add field explains why a URL is refused", () => {
-  expect(repoUrlProblem("https://x:tok@github.com/e/a")).toBe("Remove credentials from the URL — tokens will live in the OS keychain (phase 2)");
+  expect(repoUrlProblem("https://x:tok@github.com/e/a")).toBe("Remove credentials from the URL - credentials are never saved in settings");
   expect(repoUrlProblem("ftp://x")).toBe("Use an https://, ssh:// or git@host:path URL");
   expect(repoUrlProblem("git@github.com:e/a")).toBeNull();
 });
@@ -198,7 +198,7 @@ test("adding is refused with a reason: bad shape, a duplicate, or a URL carrying
   expect(addProblem(cfg, "roots", "/srv/code/")).toBe("Already added");
   expect(addProblem(cfg, "pins", "/opt/pinned-app")).toBe("Already added");
   expect(addProblem(cfg, "pins", "/new/place")).toBeNull();
-  expect(addProblem(cfg, "repos", "https://tok@github.com/e/a")).toBe("Remove credentials from the URL — tokens will live in the OS keychain (phase 2)");
+  expect(addProblem(cfg, "repos", "https://tok@github.com/e/a")).toBe("Remove credentials from the URL - credentials are never saved in settings");
   expect(addProblem(cfg, "repos", "https://github.com/example/app")).toBe("Already added");
   // A trailing slash is the same repository, and removal normalises the same way.
   expect(addProblem(cfg, "repos", "https://github.com/example/app/")).toBe("Already added");

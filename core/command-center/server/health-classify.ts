@@ -110,7 +110,7 @@ export function classifyError(f: Record<string, string>): ErrorClass {
   return { kind: "Error (unclassified)", group: "failure", recoverable: "needs-you", fix: null };
 }
 
-// ─── Sensors, checkpoints, guard-refusal records, recovery breadcrumb, Stop counter ─────────────────────
+// ─── Sensors, checkpoints, guard-refusal records, Stop counter ─────────────────────
 
 /** A SENSOR_PASSED that carries a `Note` did not run (tool-unavailable, script-error, …): it is not a pass. */
 export const sensorNotRun = (f: Record<string, string>): string | null => (f.Note?.trim() ? f.Note.trim() : null);
@@ -159,12 +159,6 @@ export const refusalRemedies = (rec: unknown): Remedy[] => {
   return (Array.isArray(ref?.remedies) ? ref.remedies : []).map(remedyOf).filter((x): x is Remedy => x !== null);
 };
 export { remedyText };
-
-/** The validate-state breadcrumb is a failure only when it says the state file is INVALID. */
-export function recoveryInvalid(md: string): string | null {
-  const m = md.match(/INVALID\s+—\s+missing sections:[^\n]*/);
-  return m ? m[0].trim() : null;
-}
 
 const AUTONOMOUS_CAP = 8;
 /** `<eng>/stop-hook/block-count.json` at or over the autonomous cap is a stalled run; the interactive cap (2) hands back to a person. */

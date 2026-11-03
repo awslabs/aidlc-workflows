@@ -20,7 +20,7 @@ export async function deriveNeeds(recordDir: string, events: AuditEvent[], curre
       open = open.filter((o) => !targets.includes(stageOf(o)));
     }
   }
-  for (const e of open) needs.push({ kind: "gate", stage: stageOf(e), unit: e.fields.Unit ?? null, since: e.ts, detail: "Gate open — approval needed" });
+  for (const e of open) needs.push({ kind: "gate", stage: stageOf(e), unit: e.fields.Unit ?? null, since: e.ts, detail: "Gate open - approval needed" });
   if (current.stage) {
     const rel = current.unit ? join("construction", current.unit, current.stage) : join(phaseDirOf(current.stage), current.stage);
     // Contained in <root>/aidlc: a symlinked questions file escaping the workspace is treated as absent.
@@ -34,7 +34,7 @@ export async function deriveNeeds(recordDir: string, events: AuditEvent[], curre
   }
   const dk = directive?.kind === "ask" ? "question" : directive?.kind === "present-gate" ? "gate" : directive?.kind === "plan-approval" ? "plan" : null;
   if (directive && dk && directive.stage && !needs.some((n) => n.kind === dk && n.stage === directive.stage && n.unit === directive.unit)) {
-    needs.push({ kind: dk, stage: directive.stage, unit: directive.unit, since: directive.mtime, detail: dk === "question" ? "Agent is asking a question" : dk === "gate" ? "Gate presented — approval needed" : "Plan awaiting approval" });
+    needs.push({ kind: dk, stage: directive.stage, unit: directive.unit, since: directive.mtime, detail: dk === "question" ? "Agent is asking a question" : dk === "gate" ? "Gate presented - approval needed" : "Plan awaiting approval" });
   }
   return needs;
 }

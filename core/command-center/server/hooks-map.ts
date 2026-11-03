@@ -33,7 +33,7 @@ export const hookPhaseOf = (hook: string | null | undefined): HookPhase | null =
 };
 /** "PreToolUse" → "Pre", "PostToolUse" → "Post", others unchanged: the short label the tables show. */
 export const shortPhase = (p: string) => (p === "PreToolUse" ? "Pre" : p === "PostToolUse" ? "Post" : p);
-export const phasesLabel = (hook: string) => (HOOK_PHASES[hook] ?? []).map(shortPhase).join(" · ") || "—";
+export const phasesLabel = (hook: string) => (HOOK_PHASES[hook] ?? []).map(shortPhase).join(" · ") || "-";
 
 /** `accepted`: a non-blocking check that failed (or did not run) on a stage or unit that has since passed its gate. */
 export type IssueGroup = "hard-stop" | "failure" | "refused" | "bypass" | "accepted";

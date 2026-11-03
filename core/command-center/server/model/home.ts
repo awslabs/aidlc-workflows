@@ -31,7 +31,7 @@ export async function buildHome(found: Found[], now = new Date(), health: Health
     const intents: IntentSummary[] = []; let partial = false;
     for (const r of refs) { try { intents.push(summarize(await buildIntent(f.path, r, cat.stages, now))); } catch { partial = true; } }
     const rl = await rules(f.path, refs[0]!.space);
-    workspaces.push({ ...base, status: partial ? "partial" : "ok", problem: partial ? "Some intents could not be read" : cat.source ? null : "No stage graph found — phases unknown", intents, rulesLearned: rl.length, sampleRule: rl[0]?.text ?? null });
+    workspaces.push({ ...base, status: partial ? "partial" : "ok", problem: partial ? "Some intents could not be read" : cat.source ? null : "No stage graph found - phases unknown", intents, rulesLearned: rl.length, sampleRule: rl[0]?.text ?? null });
   }
   const needs = workspaces.flatMap((w) => w.intents.flatMap((i) => i.needs.map((n) => ({ ...n, intent: `${w.path}::${i.key}`, intentName: i.name })))).sort((a, b) => (a.since ?? "").localeCompare(b.since ?? ""));
   let counts: HomePayload["health"];

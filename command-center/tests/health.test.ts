@@ -151,7 +151,7 @@ describe("audit events", () => {
 });
 
 describe("engine files", () => {
-  test("terminal guard-refusal record, crashed checkpoint, stalled autonomous Stop counter, invalid recovery breadcrumb, out-of-date directive", async () => {
+  test("terminal guard-refusal record, crashed checkpoint, stalled autonomous Stop counter, out-of-date directive", async () => {
     const ws = await makeWorkspace({ engineDirective: { kind: "error", code: "out_of_date", message: "The active step is out of date", stage: "code-generation" } });
     await put(join(ENG(ws), "hooks-health/write-audit-log.last"), "2026-08-12T22:22:00Z");
     await put(join(ENG(ws), "guard-refusals/abc.json"), JSON.stringify({ version: 1, stateSignature: "s", signature: "g", count: 3, codes: ["REVIEW_BUDGET_SPENT"], resetToken: "", updatedAt: "2026-08-13T10:00:00Z",
@@ -159,7 +159,6 @@ describe("engine files", () => {
     await put(join(REC(ws), ".aidlc-construction-checkpoints/alpha/unit.json"), JSON.stringify({ version: 4, kind: "unit", unit: "alpha", command_label: "smoke", started_at: "2026-08-13T09:00:00Z", finished_at: null, exit_code: null, signal: null, error: null, verified: false, stdout_tail: "", stderr_tail: "" }));
     await put(join(REC(ws), ".aidlc-construction-checkpoints/beta/unit.json"), JSON.stringify({ version: 4, unit: "beta", command_label: "smoke", started_at: "a", finished_at: "2026-08-13T09:05:00Z", exit_code: 0, verified: true }));
     await put(join(ENG(ws), "stop-hook/block-count.json"), JSON.stringify({ signature: "s", count: 8 }));
-    await put(join(ENG(ws), "recovery.md"), "# AIDLC Recovery Breadcrumb\n**State file**: INVALID — missing sections: Stage Progress\n");
     // Interactive state: the Stop counter at 8 is not a stalled run.
     let h = await health(ws);
     expect(h.issues.some((i) => i.kind === "Stalled run")).toBe(false);
@@ -171,7 +170,6 @@ describe("engine files", () => {
     expect(k("Checkpoint crashed")).toMatchObject({ group: "failure", where: { unit: "alpha" }, message: "smoke started 2026-08-13T09:00:00Z and never finished" });
     expect(h.issues.some((i) => i.where.unit === "beta" && i.kind.startsWith("Checkpoint"))).toBe(false);
     expect(k("Stalled run")).toMatchObject({ where: { hook: "continue-workflow", hookPhase: "Stop" } });
-    expect(k("Invalid state (recovery breadcrumb)").message).toBe("INVALID — missing sections: Stage Progress");
     expect(k("Active step out of date").message).toBe("The active step is out of date");
   });
 });

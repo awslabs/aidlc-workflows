@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   checkpointState, classifyDrop, classifyError, guardRefusalState, heartbeatStates, parseDrops, parseGuardAsk,
-  recoveryInvalid, sensorNotRun, stopCounterStalled,
+  sensorNotRun, stopCounterStalled,
 } from "../../core/command-center/server/health-classify";
 
 describe("hook drop categories", () => {
@@ -128,10 +128,6 @@ describe("sensors, checkpoints, refusals, recovery, stop counter", () => {
     expect(guardRefusalState(rec(1, [{ action: "Ask", requiresHuman: true, executableNow: false }]))).toBe("needs-human");
     expect(guardRefusalState(rec(1, [{ action: "Run", requiresHuman: false, executableNow: true }]))).toBe("recoverable");
     expect(guardRefusalState({ count: "x" })).toBeNull();
-  });
-  test("recovery.md: only the INVALID line is a failure", () => {
-    expect(recoveryInvalid("# AIDLC Recovery\n**State file**: valid (all sections present)\n")).toBeNull();
-    expect(recoveryInvalid("# AIDLC Recovery\n**State file**: INVALID — missing sections: Stage Progress, Current Status\n")).toBe("INVALID — missing sections: Stage Progress, Current Status");
   });
   test("stop counter: at or over the autonomous cap is a stalled run; interactive never is", () => {
     expect(stopCounterStalled({ signature: "s", count: 8 }, true)).toEqual({ count: 8, cap: 8 });

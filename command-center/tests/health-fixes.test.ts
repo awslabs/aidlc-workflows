@@ -43,7 +43,7 @@ describe("hooks hard stop: the active intent only", () => {
     const h = await health(ws);
     expect(h.issues.some((i) => i.kind === "Hook not running")).toBe(false);
     expect(h.hooks.length).toBeGreaterThan(0);
-    expect(h.hooks.every((r) => r.state === "never" && r.note === "no heartbeats here — normal for a clone or another machine")).toBe(true);
+    expect(h.hooks.every((r) => r.state === "never" && r.note === "no heartbeats here - normal for a clone or another machine")).toBe(true);
   });
   test("the active intent with no heartbeats is a hard stop; stale too", async () => {
     const ws = await makeWorkspace(); await active(ws);

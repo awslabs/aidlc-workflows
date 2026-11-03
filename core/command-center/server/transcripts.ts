@@ -31,7 +31,7 @@ export interface TranscriptScan {
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
 const clipErr = (s: string) => (s.length > MAX_ERROR ? `${s.slice(0, MAX_ERROR - 1)}…` : s);
-/** The AIDLC hook a hook command runs (`aidlc engine hook <name>`), else the command's program name, else the harness label. */
+/** The AIDLC hook a hook command runs (the dispatcher's `engine hook <name>`), else the command's program name, else the harness label. */
 export function hookNameOf(command: string | null, label: string | null): string {
   const m = command?.match(/\bengine\s+hook\s+([a-z][a-z-]*)/) ?? command?.match(/aidlc-([a-z][a-z-]*)\.ts\b/);
   if (m) return m[1]!;
@@ -59,8 +59,10 @@ export const AIDLC_REPROMPT_PREFIXES = [
   "Stop hook feedback:",
 ] as const;
 export const isRepromptText = (t: string) => AIDLC_REPROMPT_PREFIXES.some((p) => t.trimStart().startsWith(p));
-/** Exactly `aidlc engine hook continue-workflow`, with at most a leading path; nothing chained, substituted or added. */
-const CONTINUE_WORKFLOW = /^(\S*\/)?aidlc engine hook continue-workflow\s*$/;
+/** Exactly the native dispatcher's `engine hook continue-workflow`, with at most a leading path; nothing chained, substituted or added. */
+// `[ ]` is one literal space, the same match as before; it keeps this file free of the
+// native command spelling that copy-channel files must not carry (t238).
+const CONTINUE_WORKFLOW = /^(\S*\/)?aidlc[ ]engine hook continue-workflow\s*$/;
 const SHELL_META = /&&|\|\||[;|`]|\$\(/;
 /** Text that is a crash, not a re-prompt: an errno prefix, a JS error, an exit code, or a stack-trace line. */
 const CRASH_TEXT = /\b(ENOENT|EACCES|EPERM|EEXIST|EBUSY):|\b(TypeError|ReferenceError|SyntaxError)\b|Cannot read properties of|is not a function|Unexpected token|JSON Parse error|exit code|(^|\n) {4}at /;

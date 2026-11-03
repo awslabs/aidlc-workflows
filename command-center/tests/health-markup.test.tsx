@@ -68,10 +68,10 @@ test("hooks table: problem rows only by default, every state as glyph + label", 
 });
 
 test("informational hook rows (not the active intent) are folded away unless they recorded drops", () => {
-  const info = (hook: string, drops = 0): HookRow => ({ workspace: "/w", intentKey: "default/old", hook, phase: "Post", lastAt: null, state: "never", drops, benignDrops: 0, note: "no heartbeats here — normal for a clone or another machine" });
+  const info = (hook: string, drops = 0): HookRow => ({ workspace: "/w", intentKey: "default/old", hook, phase: "Post", lastAt: null, state: "never", drops, benignDrops: 0, note: "no heartbeats here - normal for a clone or another machine" });
   expect(renderToStaticMarkup(<HooksTable hooks={[info("a"), info("b")]} all={false} now={NOW} />)).toContain("✓ Every hook");
   const all = renderToStaticMarkup(<HooksTable hooks={[info("a"), info("b", 1)]} all now={NOW} />);
-  expect(all).toContain("· no heartbeats here — normal for a clone or another machine");
+  expect(all).toContain("· no heartbeats here - normal for a clone or another machine");
   expect(renderToStaticMarkup(<HooksTable hooks={[info("a"), info("b", 1)]} all={false} now={NOW} />)).toContain(">b<");
 });
 

@@ -17,7 +17,7 @@ export const isRepoUrl = (s: string) => shapeOk(s) && !repoCredentials(s);
 /** Why a URL cannot be saved (shown under the add field), or null when it can. */
 export function repoUrlProblem(s: string): string | null {
   if (!shapeOk(s)) return "Use an https://, ssh:// or git@host:path URL";
-  if (repoCredentials(s)) return "Remove credentials from the URL — tokens will live in the OS keychain (phase 2)";
+  if (repoCredentials(s)) return "Remove credentials from the URL - credentials are never saved in settings";
   return null;
 }
 
