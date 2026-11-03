@@ -346,12 +346,28 @@ function namedMessageTurn(
   const speaking = before.findLast((earlier) => earlier.event === "HUMAN_TURN");
   const chat = speaking === undefined ? null : auditBlockField(speaking.block, "Session");
   if (chat !== null && message.session !== chat) return -1;
-  // A form's Submit is its picks joined by "; " (tui-drive); the hook keeps a
-  // box's picks one per line in the message's words, and only the first in its text.
+  // A form's Submit is its picks joined by "; " (tui-drive), and a question
+  // box's answer is its answers object (sdk-drive); the hook keeps a box's
+  // picks one per line in the message's words, and only the first in its text.
   const picks = message.words === null ? null : audit().personsWordsText(message.words).trim();
   return turns.findLastIndex((turn, which) => which >= born && (turn.cursor.get(key) ?? 0) <= index && !isCommand(turn.words) &&
     (turn.words.trim() === audit().personsWordsText(message.text).trim() ||
-      (turn.selections !== undefined && turn.words.trim() !== "" && turn.words.split("; ").join("\n").trim() === picks)));
+      (turn.selections !== undefined && turn.words.trim() !== "" && menuPicks(turn.words) === picks)));
+}
+
+// A menu turn's picks one per line, as the hook keeps them: an SDK drive's
+// answers object gives its answers in question order, a TUI form's Submit its
+// "; "-joined picks.
+function menuPicks(words: string): string {
+  try {
+    const answers: unknown = JSON.parse(words);
+    if (answers !== null && typeof answers === "object" && !Array.isArray(answers)) {
+      return Object.values(answers).map((answer) => String(answer)).join("\n").trim();
+    }
+  } catch {
+    // Not an answers object: a TUI form's Submit.
+  }
+  return words.split("; ").join("\n").trim();
 }
 
 // The questions open when a turn arrived `at` this point of a shard: each one
