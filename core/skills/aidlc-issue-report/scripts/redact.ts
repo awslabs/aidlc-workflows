@@ -20,6 +20,8 @@ export type Entry = { value: string; label: string; kind: string };
 // the local redaction map (the rows label a Unit's or an intent's name whatever its word).
 // `secretRulesFrom`: the installed AI-DLC file the secret rules came from, so check.ts and hide.ts use the same.
 export type Dictionary = { entries: Entry[]; skipped?: Entry[]; secretRulesFrom?: string | null };
+// The kinds of the names the person gave (hide.ts): hidden, or left in AI-DLC's words at their choice.
+export const PERSON_KINDS: ReadonlySet<string> = new Set(["named", "report-only"]);
 
 // AI-DLC's own public locations stay readable: they are the same for everyone. The host (or repository)
 // must end there, and a query or fragment, which can carry a tenant or a ticket, is dropped.
@@ -248,6 +250,37 @@ function entryRe(e: Entry): RegExp {
   return re;
 }
 
+// The cover's own words: a word that holds a name in the map (one the person hid or left in AI-DLC's words, a Unit's,
+// an intent's) becomes that name's label, whole, since the check refuses the name in the cover wherever it stands
+// (`Hook drops` -> `<product-1> drops`, `safe.json` -> `<product-1>`, `run data` -> `<product-1>`). cover.ts runs it
+// over what it writes, whose values are labels already.
+export function hideInWords(text: string, dict: Dictionary): string {
+  const t = text.normalize("NFC");
+  const spans = namesAt(t, dict)
+    .map(({ entry, at, length }) => {
+      let a = at;
+      let b = at + length;
+      while (a > 0 && !/\s/.test(t[a - 1])) a--;
+      while (b < t.length && !/\s/.test(t[b])) b++;
+      return { a, b, label: entry.label };
+    })
+    .sort((x, y) => x.a - y.a || y.b - x.b);
+  let out = "";
+  let at = 0;
+  for (let i = 0; i < spans.length; ) {
+    const { a } = spans[i];
+    let { b } = spans[i];
+    const labels = new Set<string>();
+    for (; i < spans.length && spans[i].a < b; i++) {
+      b = Math.max(b, spans[i].b);
+      labels.add(spans[i].label);
+    }
+    out += t.slice(at, a) + [...labels].join("");
+    at = b;
+  }
+  return out + t.slice(at);
+}
+
 // Apply `fn` to the parts of `text` outside the labels.
 function outsideLabels(text: string, fn: (part: string) => string): string {
   let out = "";
@@ -471,7 +504,7 @@ const SAFE_FIELDS = new Set([
   "source", "sourceRef", "stage", "stages", "stampVersion", "status", "stopFeedback", "subagents", "testStrategy",
   "timeline", "tool", "toolCalls", "toolErrors", "toolVersions", "tools", "toolsUsed", "totalStages", "transcriptCursors",
   "transcripts", "trees", "ts", "unattributedHookBlocks", "unboundApprovals", "until", "version", "versionsMissing", "window",
-  "rows", "seq", "fields", "events", "session", "input", "verb", "owner", "reply", "toolsNamed",
+  "rows", "seq", "fields", "events", "session", "input", "verb", "owner", "reply", "toolsNamed", "engineAfter",
 ]);
 
 // `parent`: the field the object sits under, "" below a data map's key. lib-check.ts reads safe.json by the

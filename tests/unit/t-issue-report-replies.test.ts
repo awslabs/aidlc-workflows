@@ -29,15 +29,16 @@ test("without a session on either side, the time alone decides", () => {
   expect(matchReplies([typed(30)], [turn(0), turn(32, "s2")]).recorded).toBe(1);
 });
 
-test("a reply that was not about the AI-DLC work is not expected in its record", () => {
-  const offTopic: Prompt = { ...typed(30, "s1"), engineAfter: false };
-  expect(matchReplies([offTopic], [turn(0, "s1")]).checked).toBe(0);
+test("a reply no AI-DLC command followed is checked too, and says so beside it", () => {
+  const r = matchReplies([{ ...typed(30, "s1"), engineAfter: false }], [turn(0, "s1")]);
+  expect(r.checked).toBe(1);
+  expect(r.notRecorded).toEqual([{ ts: at(30), tool: "codex", engineAfter: false }]);
 });
 
-test("with no HUMAN_TURN at all, every reply an AI-DLC command followed is listed as not recorded", () => {
-  const r = matchReplies([{ ...typed(10), engineAfter: true }, { ...typed(20), engineAfter: true }, typed(30)], []);
-  expect(r.checked).toBe(2);
-  expect(r.notRecorded.length).toBe(2);
+test("with no HUMAN_TURN at all, every reply is listed as not recorded, with what the log showed after it", () => {
+  const r = matchReplies([{ ...typed(10), engineAfter: true }, { ...typed(20), engineAfter: false }, typed(30)], []);
+  expect(r.checked).toBe(3);
+  expect(r.notRecorded.map((n) => (n as { engineAfter?: boolean }).engineAfter)).toEqual([true, false, undefined]);
 });
 
 test("the HUMAN_TURN of the report's own request is not the run's", async () => {
@@ -47,6 +48,14 @@ test("the HUMAN_TURN of the report's own request is not the run's", async () => 
   expect(rows).toEqual([]);
   const r = matchReplies([{ ...typed(10), engineAfter: true }, report], rows);
   expect(r.notRecorded.length).toBe(1);
+});
+
+test("another session's turn beside the report's own message stays the run's", async () => {
+  const { withoutReportTurns } = await import("../../core/skills/aidlc-issue-report/scripts/lib-audit.ts");
+  const report: Prompt = { ...typed(40, "s-report"), report: true };
+  const other = turn(41, "s-run");
+  const own = turn(42, "s-report");
+  expect(withoutReportTurns([other, own], [report])).toEqual([other]);
 });
 
 test("a reply the log gave no time of its own is not checked, and is counted apart", () => {

@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { flagValue, refuse, reportFolder } from "./lib-cli.ts";
+import { hideInWords, loadDictionary } from "./redact.ts";
 
 type Safe = {
   window?: { since?: string; until?: string; lastAidlcActivity?: string | null; notes?: string[] };
@@ -100,5 +101,6 @@ if (notes.length) {
 }
 lines.push("", "Each part of `safe.json` is described in the data guide among this skill's references.", "");
 
-writeFileSync(join(out, "aidlc-issue-report.md"), lines.join("\n"));
+// A name the person hid is kept out of the cover's own words too.
+writeFileSync(join(out, "aidlc-issue-report.md"), hideInWords(lines.join("\n"), loadDictionary(join(out, "local", "redaction-map.json"))));
 console.log(JSON.stringify({ ok: true, cover: join(out, "aidlc-issue-report.md") }));

@@ -2,13 +2,44 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, platform, release, arch } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { kiroHome } from "./lib-transcripts.ts";
 
 // The engine dirs AI-DLC's harness rows install into (AI-DLC's harness table in aidlc-lib.ts).
 export const ENGINE_DIRS = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
+
+// A tool the person named (set-version.ts), with the version they read or null, written into safe.json's environment.
+// A version already found or given is not dropped by a later "I don't know". When no chat log showed which tool the
+// run used (toolsUsed empty, or holding only tools the person named), the tool is one, recorded in toolsNamed, in the
+// order collect.ts writes.
+export type PersonTools = { tool: ToolKey; version: string | null }[];
+export type SafeTools = {
+  environment: { tools: Record<string, { version: string | null; source: string } | undefined>; versionsMissing?: string[]; toolsUsed?: string[]; toolsNamed?: string[] };
+};
+export function recordPersonTool(safe: SafeTools, tool: ToolKey, version: string | null): void {
+  const env = safe.environment;
+  if (version || !env.tools[tool]?.version) env.tools[tool] = { version, source: "person" };
+  env.versionsMissing = (env.versionsMissing ?? []).filter((k) => k !== tool);
+  const used = env.toolsUsed ?? [];
+  const named = env.toolsNamed ?? [];
+  if (used.every((k) => named.includes(k))) {
+    env.toolsNamed = TOOL_KEYS.filter((k) => k === tool || named.includes(k));
+    env.toolsUsed = TOOL_KEYS.filter((k) => k === tool || used.includes(k));
+  }
+}
+
+// The harness tree this skill runs from: the folder its scripts sit in (`<project>/.kiro/skills/…`). Codex reads its
+// skills from `.agents/skills/` and Copilot from `.github/skills/` (harness/<name>/manifest.ts), with their trees in
+// `.codex` and `.aidlc`. A skill run from elsewhere takes the first tree.
+const SKILL_HOMES: Record<string, string> = { ".agents": ".codex", ".github": ".aidlc" };
+export function ownTree<T extends { dir: string }>(trees: T[], project: string, scriptDir: string): T | undefined {
+  const rel = relative(resolve(project), resolve(scriptDir));
+  const top = rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel.split(/[\\/]/)[0] : "";
+  const dir = SKILL_HOMES[top] ?? top;
+  return trees.find((t) => t.dir === dir) ?? trees[0];
+}
 
 export type Tree = {
   dir: string; // ".kiro"
@@ -248,8 +279,12 @@ export function listIntents(project: string): Intent[] {
 // the aidlc executable itself.
 // The project doctor checks is the one on its command line: a project folder the AI tool set for its own session
 // (CLAUDE_PROJECT_DIR, AIDLC_PROJECT_DIR, maybe a parent folder) is not passed on.
-export function doctorEnv(cmd: string[], execPath: string, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const { BUN_BE_BUN: _inherited, CLAUDE_PROJECT_DIR: _claude, AIDLC_PROJECT_DIR: _aidlc, ...env } = base;
+// `harnessDir`: the tree doctor checks. AI-DLC reads it from AIDLC_HARNESS_DIR before anything else (aidlc-runtime-paths.ts
+// runtimeHarnessDir); without it a native `aidlc` takes the first harness it finds and a tree's own aidlc.ts its own
+// tree. The AI tool's own pin is never passed on: its name would not match the tree given here.
+export function doctorEnv(cmd: string[], execPath: string, base: NodeJS.ProcessEnv, harnessDir?: string): NodeJS.ProcessEnv {
+  const { BUN_BE_BUN: _inherited, CLAUDE_PROJECT_DIR: _claude, AIDLC_PROJECT_DIR: _aidlc, AIDLC_HARNESS_NAME: _name, AIDLC_HARNESS_DIR: _dir, ...env } = base;
+  if (harnessDir) env.AIDLC_HARNESS_DIR = harnessDir;
   const isBun = /(^|[\\/])bun(\.exe)?$/i.test(execPath);
   if (cmd[0] === execPath && cmd.length > 1 && !isBun) env.BUN_BE_BUN = "1";
   return env;

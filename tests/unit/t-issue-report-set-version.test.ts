@@ -16,7 +16,23 @@ function folder(): string {
   writeFileSync(join(out, "safe.json"), JSON.stringify({ environment: { tools: {}, versionsMissing: ["kiro-cli"] } }));
   return out;
 }
-const run = (out: string, version: string) => spawnSync(process.execPath, [SET, "--out", out, "--tool", "kiro-cli", "--version", version], { encoding: "utf8" });
+const run = (out: string, version?: string) =>
+  spawnSync(process.execPath, [SET, "--out", out, "--tool", "kiro-cli", ...(version === undefined ? [] : ["--version", version])], { encoding: "utf8" });
+
+test("a tool the person names without its version is recorded, its version unknown, and keeps a version given before", () => {
+  const out = folder();
+  expect(run(out).status).toBe(0);
+  const env = JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment;
+  expect({ tool: env.tools["kiro-cli"], used: env.toolsUsed, named: env.toolsNamed, missing: env.versionsMissing }).toEqual({
+    tool: { version: null, source: "person" },
+    used: ["kiro-cli"],
+    named: ["kiro-cli"],
+    missing: [],
+  });
+  expect(run(out, "2.33.1").status).toBe(0);
+  expect(run(out).status).toBe(0);
+  expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.tools["kiro-cli"]).toEqual({ version: "2.33.1", source: "person" });
+});
 
 test("a release, preview or pre-release number is written", () => {
   for (const [given, kept] of [["v2.33.1", "2.33.1"], ["2.33.1-preview.20261029.1", "2.33.1-preview.20261029.1"], ["3.0.0-rc.2", "3.0.0-rc.2"], ["1.4.13.2", "1.4.13"]]) {

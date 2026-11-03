@@ -101,12 +101,40 @@ Record each answer with
 ```
 
 It accepts only a version-shaped value; when it refuses, or the person does not know, move on — do not ask twice.
+When they name the tool but not its version, run it without `--version`: the tool is recorded, its version unknown.
 
 When the person names a company, customer, product or person they want kept out, hide it:
 
 ```bash
 <run> <skill>/scripts/hide.ts --out <out> --kind customer --name '<name>' [--kind org|product|person|other --name '<name>']…
 ```
+
+When it lists `notHidden`, those names (by their place among the `--name` values) were not hidden: `aidlc-word`, the name
+is part of AI-DLC's own words (`Bolt` in `BOLT_FAILED`) or of an AI-DLC message's fixed text, or
+`ordinary-word`, it is an everyday word (`Will`). Tell the person in one line each, and ask once whether to hide them
+anyway: each of AI-DLC's words or messages holding the name, or each value holding that word, then becomes a label, and
+the team reads less of the run. If they say yes, run `hide.ts` again
+with `--everywhere` and only those names, then collect a new report from this one (the folder it prints in `from`):
+
+```bash
+<run> <skill>/scripts/collect.ts --from <from>
+```
+
+It makes a new folder with the same window, the names already hidden, the versions the person gave and doctor's result
+(doctor is not run twice), with the words holding those names no longer read as AI-DLC's. Read its result as in step 2,
+and from then on use its `out`. If it says `project-not-found`, the project moved: add `--project <its folder now>`.
+Then remove the earlier folder, which is not sent:
+
+```bash
+<run> <skill>/scripts/finish.ts --discard --out <the earlier out>
+```
+
+`emptyFolderLeft`: only the empty folder could not be removed (a window or shell has it open); tell the person they can
+delete it. `folder-in-use`: close what has it open (a window, a shell in it) and run it again; when its hint says the
+folder holds no report any more, tell the person they can delete it.
+
+The report's own field names, the same in every report, stay as they are. If they say no, leave them, and do not ask
+again.
 
 ### 4. Cover, check, hand over
 
@@ -134,5 +162,5 @@ Then:
 It runs the same check once more, then deletes `local/` and opens the folder. Pass the same `<out>` collect printed: it
 refuses (`ok: false`) a folder collect did not make, or one whose check finds anything, and deletes nothing; fix what
 it names and rerun it, never delete `local/` by hand. Tell the person, briefly: what the folder holds (in one line, from
-the cover), that names, paths and anything they typed were replaced by labels, and "Please send the files in this
-folder to your AI-DLC contact", with the folder path.
+the cover), that names, paths and anything they typed were replaced by labels (and, if they chose to leave a name in
+step 3, that it was left), and "Please send the files in this folder to your AI-DLC contact", with the folder path.

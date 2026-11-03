@@ -7,6 +7,7 @@ import { BUILTIN_AGENTS, OWN, type Summary } from "./lib-transcripts.ts";
 
 export { OWN };
 import type { Vocab } from "./lib-vocab.ts";
+import { type Shape, shapeValue } from "./lib-rows.ts";
 
 // The same name gets the same label everywhere in one report; the map stays in local/.
 export class Labels {
@@ -139,6 +140,8 @@ export class Shaper {
     readonly labels: Labels,
     private readonly known: Map<string, string> = new Map(),
   ) {}
+  // How a row value's raw pieces become labels (lib-rows.ts); collect.ts shapes the audit rows with it.
+  readonly rowShape: Shape = { label: (kind, raw) => this.labels.label(kind, raw), known: (raw) => this.known.get(raw) };
 
   private pick(set: Set<string>, kind: string, value: unknown): string | null {
     if (typeof value !== "string" || !value) return null;
@@ -419,6 +422,9 @@ export class Shaper {
           ...(e.owner !== undefined ? { owner: ["aidlc", "other", "unknown"].includes(e.owner) ? e.owner : "unknown" } : {}),
           ...(e.detail !== undefined ? { detail: this.oneOf(DENIALS, "denial", e.detail) } : {}),
           ...(e.reply !== undefined ? { reply: this.labels.label("text", e.reply) } : {}),
+          // A refusal's text by the rule of an audit row's `Reason` (lib-rows.ts): AI-DLC's own phrases kept, the rest
+          // labels. lib-gate.ts reads it back by the same rule.
+          ...(e.reason !== undefined ? { reason: shapeValue(this.v, this.rowShape, "", "Reason", e.reason) } : {}),
           ...(e.noTime ? { noTime: true } : {}),
         })),
       reportModels: modelMap(s.reportModels),

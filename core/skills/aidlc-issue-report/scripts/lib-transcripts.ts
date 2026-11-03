@@ -62,6 +62,8 @@ export type TurnEvent = {
   owner?: string;
   detail?: string;
   reply?: string;
+  // A refusal's or a Stop hook's text as the tool logged it; safe.json keeps AI-DLC's own words of it (lib-shape.ts).
+  reason?: string;
   noTime?: boolean;
 };
 // A reply the person typed, as the tool logged it. Codex adds how it reached the tool.
@@ -73,8 +75,8 @@ export type Prompt = {
   session?: string;
   // Typed while this skill made its report (from the person's message that asked for it): not part of the run.
   report?: boolean;
-  // An AI-DLC command ran after it, before the next reply: the reply was about the AI-DLC work, so AI-DLC's
-  // prompt hook should have recorded it. Undefined where the reader cannot tell.
+  // An AI-DLC command ran after it, before the next reply, as the log shows it; kept beside a reply AI-DLC did not
+  // record (lib-audit.ts matchReplies). Undefined where the reader cannot tell.
   engineAfter?: boolean;
   turn?: string;
   inRunningTurn?: boolean;
@@ -351,7 +353,7 @@ function noteHookBlock(t: Tally, tool: string, local: Local, ts: string, command
     s.timeline.push({ ts, kind, detail: hook ?? "" });
   });
   t.add(ts, () => local.refusals.push({ tool, ts, hook, owner, text: text.slice(0, 1500) }));
-  ev(t, ts, { kind, owner, ...(hook ? { hook } : {}) });
+  ev(t, ts, { kind, owner, ...(hook ? { hook } : {}), ...(text ? { reason: text.slice(0, 1500) } : {}) });
 }
 
 // A Stop hook that kept the turn going, with the hook's command when the record names one.
@@ -363,7 +365,7 @@ function noteStop(t: Tally, tool: string, local: Local, ts: string, command: str
     s.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
   });
   t.add(ts, () => local.refusals.push({ tool, ts, hook, owner, text: text.slice(0, 1500) }));
-  ev(t, ts, { kind: "stop-hook-feedback", owner, ...(hook ? { hook } : {}) });
+  ev(t, ts, { kind: "stop-hook-feedback", owner, ...(hook ? { hook } : {}), ...(text ? { reason: text.slice(0, 1500) } : {}) });
 }
 
 function noteError(t: Tally, tool: string, local: Local, ts: string, text: string) {
@@ -798,7 +800,7 @@ export function codex(project: string, since: number, until: number, local: Loca
             x.timeline.push({ ts, kind: "stop-hook-feedback", detail: "" });
             local.refusals.push({ tool: x.tool, ts, hook: null, owner: "unknown", text: reason });
           });
-          ev(t, ts, { kind: "stop-hook-feedback", owner: "unknown" });
+          ev(t, ts, { kind: "stop-hook-feedback", owner: "unknown", ...(reason ? { reason } : {}) });
         }
         if (text.trim() && !injected) {
           // A subagent's or reviewer's task message is the agent's, not a reply the person typed.

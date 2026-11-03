@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { type GateContext, type GateHit, safeHits, skillWords, textHits } from "./lib-gate.ts";
 import { importSecretRules } from "./lib-project.ts";
 import { type RowVocab, VOCAB_KINDS } from "./lib-rows.ts";
-import { type Dictionary, findSecrets, loadDictionary, useSecretRules } from "./redact.ts";
+import { type Dictionary, type Entry, findSecrets, loadDictionary, namesAt, useSecretRules } from "./redact.ts";
 import { emptyVocab, type Vocab } from "./lib-vocab.ts";
 
 export const REPORT = "aidlc-issue-report.md";
@@ -35,6 +35,38 @@ const KEPT = ["words", "phrases", ...VOCAB_KINDS] as const;
 export function keepVocab(out: string, v: Vocab): void {
   writeFileSync(join(out, "local", "vocab.json"), JSON.stringify(Object.fromEntries(KEPT.map((k) => [k, [...v[k]].sort()]))));
 }
+// The names the person hid anyway (hide.ts --everywhere, local/hide-anyway.json), and AI-DLC's words without the ones
+// that hold one: collect.ts shapes by this list and the check reads by it, in the folder they were hidden in and in a
+// new report collected from it.
+export function hiddenAnyway(out: string): Entry[] {
+  try {
+    const list = JSON.parse(readFileSync(join(out, "local", "hide-anyway.json"), "utf8"));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+// Every list of AI-DLC's words the check reads (and a name hidden anyway is taken out of).
+export function checkedLists(v: Vocab): Set<string>[] {
+  return [v.words, v.phrases, ...VOCAB_KINDS.map((k) => v[k])];
+}
+export function withoutHidden(v: Vocab, names: Entry[]): Vocab {
+  if (!names.length) return v;
+  for (const set of checkedLists(v)) {
+    for (const w of [...set]) if (namesAt(w, { entries: names }).length) set.delete(w);
+  }
+  return v;
+}
+
+// Whether local/vocab.json holds AI-DLC's words by kind (an older collect.ts kept a plain list of words only).
+export function keptByKind(out: string): boolean {
+  try {
+    const kept = JSON.parse(readFileSync(join(out, "local", "vocab.json"), "utf8"));
+    return !!kept && typeof kept === "object" && !Array.isArray(kept) && Array.isArray(kept.stages);
+  } catch {
+    return false;
+  }
+}
 export function keptVocab(out: string): Vocab {
   const v = emptyVocab();
   let kept: unknown;
@@ -53,9 +85,16 @@ export function keptVocab(out: string): Vocab {
   return v;
 }
 
+// The names the person hid, as the row rule reads them (lib-rows.ts RowVocab.hidden); collect.ts shapes with the same.
+export function hiddenIn(dict: Dictionary): ((s: string) => boolean) | undefined {
+  const named: Dictionary = { entries: dict.entries.filter((e) => e.kind === "named") };
+  return named.entries.length ? (s) => namesAt(s, named).length > 0 : undefined;
+}
+
 export function gateContext(vocab: Vocab, dict: Dictionary): GateContext {
   // A row's values are read against AI-DLC's words only, never this skill's own.
   const rows: RowVocab = { words: vocab.words, phrases: vocab.phrases, ...Object.fromEntries(VOCAB_KINDS.map((k) => [k, vocab[k]])) } as RowVocab;
+  rows.hidden = hiddenIn(dict);
   return { words: new Set([...vocab.words, ...skillWords()]), dict, phrases: [...vocab.phrases], rows };
 }
 
@@ -65,7 +104,7 @@ export async function checkFolder(out: string): Promise<CheckResult | null> {
   const dict: Dictionary = loadDictionary(join(out, "local", "redaction-map.json"));
   if (dict.entries.length === 0) return null;
   useSecretRules(await importSecretRules(dict.secretRulesFrom));
-  const ctx = gateContext(keptVocab(out), dict);
+  const ctx = gateContext(withoutHidden(keptVocab(out), hiddenAnyway(out)), dict);
   const hasVocab = existsSync(join(out, "local", "vocab.json"));
 
   const hits: Hit[] = [];

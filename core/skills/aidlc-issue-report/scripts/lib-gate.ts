@@ -262,8 +262,8 @@ const MASKS = new RegExp(`${MASK}+`, "g");
 const isMask = (v: string) => v.length > 0 && /^\uE000+$/.test(v);
 const PRIVATE_USE = /[\uE000-\uF8FF]/;
 
-// A label holds a small number (`<customer-12>`, an eight-hex `<id:…>`): a long one can carry an account in its name, and
-// stays as text, which the markup rule refuses.
+// A label `smallLabel` takes is masked; any other stays as text, which the markup rule refuses (a long number in a
+// label's name can carry an account).
 function labelMask(text: string): string {
   return text.replace(LABEL, (m) => (smallLabel(m) ? MASK.repeat(m.length) : m));
 }
@@ -651,6 +651,7 @@ function rowHits(ctx: GateContext, rows: unknown, hits: GateHit[], start: number
     if (typeof r.event !== "string" || !(onlyLabels(r.event) || (/^[A-Z][A-Z0-9_]{1,59}$/.test(r.event) && v.words.has(r.event)))) refuse(`${at}.event`);
     if (r.intent !== null && !(typeof r.intent === "string" && (r.intent === "(space)" || onlyLabels(r.intent)))) refuse(`${at}.intent`);
     const event = typeof r.event === "string" ? r.event : "";
+    for (const reason of names(event)) refuse(`${at}.event`, reason);
     if (!Array.isArray(r.fields)) {
       refuse(`${at}.fields`, "not a list of fields");
       continue;
@@ -713,8 +714,10 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
     // A count holds up to nine digits; a longer number can be an account or a phone number.
     if (typeof v === "number" && Math.abs(v) >= 1e9) hits.push({ line: n, field: path, reason: "a long number (replace it with <redacted>)" });
     if (typeof v !== "string") return;
-    // A prose field passes only as one of this skill's own sentences.
-    if (PROSE_FIELDS.has(field)) {
+    // A tool event's refusal text passes only as an audit row's `Reason` is written (lib-rows.ts).
+    if (field === "reason" && /^safe\.transcripts\[\d+\]\.events\[\d+\]\.reason$/.test(path)) {
+      if (!valueOk(ctx.rows ?? NO_ROW_WORDS, "", "Reason", v)) hits.push({ line: n, field: path, reason: "not what this field's rule writes (replace it with <redacted>)" });
+    } else if (PROSE_FIELDS.has(field)) {
       if (!ownSentence(ctx, v)) hits.push({ line: n, field: path, reason: "not one of this skill's own sentences (replace it with <redacted>)" });
     } else if (!atomOk(ctx, v, field)) {
       hits.push({ line: n, field: path, reason: "not one of AI-DLC's words, a label or a known shape (replace it with <redacted>)" });

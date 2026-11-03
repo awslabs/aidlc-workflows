@@ -1,5 +1,8 @@
 // Last step: run the check, then delete the local-only layer and open the folder to send.
 // Usage: finish.ts --out <dir> [--no-open]
+//        finish.ts --discard --out <dir>   remove a report folder that will not be sent (one a newer report replaced:
+//                                          collect.ts --from); safe.json and the redaction map go last, so a stop
+//                                          part way leaves a folder the scripts still know
 //
 // It deletes only a `local/` that collect.ts made: the folder must hold
 // collect's `safe.json` and `local/redaction-map.json`. Without --out, or in
@@ -18,6 +21,47 @@ import { checkFolder, OS_FILES } from "./lib-check.ts";
 
 const given = flagValue("out") ?? refuse("--out <report folder> is required; nothing was deleted");
 const out = reportFolder(given) ?? refuse(`${resolve(given)} is not a report folder made by collect.ts; nothing was deleted`);
+if (process.argv.includes("--discard")) {
+  // Only collect's and cover's own files: a folder holding anything else is left as it is.
+  const own = new Set(["safe.json", "aidlc-issue-report.md", "local", ...OS_FILES]);
+  const other = readdirSync(out).filter((f) => !own.has(f));
+  if (other.length) {
+    console.log(JSON.stringify({ ok: false, reason: "folder-holds-other-files", hint: "Move the other files out, then run it again; nothing was deleted." }));
+    process.exit(1);
+  }
+  // safe.json and the redaction map go last, the map (which holds the names themselves) before safe.json (which holds
+  // only labels): a stop before them leaves a folder these scripts still know and can remove, a stop between them a
+  // folder with safe.json alone, which the person can delete.
+  const map = join(out, "local", "redaction-map.json");
+  try {
+    for (const f of readdirSync(join(out, "local"))) if (f !== "redaction-map.json") rmSync(join(out, "local", f), { recursive: true, force: true });
+    for (const f of readdirSync(out)) if (f !== "local" && f !== "safe.json") rmSync(join(out, f), { recursive: true, force: true });
+    rmSync(map, { force: true });
+    rmSync(join(out, "safe.json"), { recursive: true, force: true });
+  } catch {
+    // Once the map is gone the folder is no report folder any more, so it is deleted by hand, not by running this again.
+    const hint = existsSync(map) ? "Close what has the folder open, then run it again." : "Close what has the folder open, then delete it by hand: it holds no names any more.";
+    console.log(JSON.stringify({ ok: false, reason: "folder-in-use", hint, folder: out }));
+    process.exit(1);
+  }
+  // What is left is an empty folder (one held open as a shell's folder): nothing in it, so it is said, not refused.
+  try {
+    rmSync(out, { recursive: true, force: true });
+  } catch {
+    // Gone by now is empty; unreadable is not known to be. Either way the names went with the map.
+    let empty = false;
+    try {
+      empty = readdirSync(out).length === 0;
+    } catch (e) {
+      empty = (e as NodeJS.ErrnoException).code === "ENOENT";
+    }
+    const hint = "Close what has the folder open, then delete it by hand: it holds no names any more.";
+    console.log(JSON.stringify(empty ? { ok: true, discarded: out, emptyFolderLeft: out } : { ok: false, reason: "folder-in-use", hint, folder: out }));
+    process.exit(empty ? 0 : 1);
+  }
+  console.log(JSON.stringify({ ok: true, discarded: out }));
+  process.exit(0);
+}
 const check = await checkFolder(out);
 if (!check?.ok) {
   console.log(JSON.stringify({ ok: false, reason: "the check did not pass; nothing was deleted", check }, null, 2));

@@ -3,7 +3,7 @@
 // `aidlc doctor` starts Bun instead of AI-DLC and the doctor findings are lost.
 
 import { expect, test } from "bun:test";
-import { doctorEnv } from "../../core/skills/aidlc-issue-report/scripts/lib-project.ts";
+import { doctorEnv, ownTree } from "../../core/skills/aidlc-issue-report/scripts/lib-project.ts";
 
 const AIDLC_EXE = "/home/u/.local/share/aidlc/versions/2.11.2/aidlc";
 
@@ -47,4 +47,20 @@ test("a tool's version is asked without BUN_BE_BUN", async () => {
     if (before === undefined) delete process.env.BUN_BE_BUN;
     else process.env.BUN_BE_BUN = before;
   }
+});
+
+test("doctor is told the harness tree to check, and no harness name of the AI tool's own reaches it", () => {
+  const env = doctorEnv(["/home/u/.local/bin/aidlc"], AIDLC_EXE, { AIDLC_HARNESS_DIR: ".claude", AIDLC_HARNESS_NAME: "claude" }, ".kiro");
+  expect([env.AIDLC_HARNESS_DIR, env.AIDLC_HARNESS_NAME]).toEqual([".kiro", undefined]);
+  expect(doctorEnv(["/home/u/.local/bin/aidlc"], AIDLC_EXE, { AIDLC_HARNESS_DIR: ".claude" }).AIDLC_HARNESS_DIR).toBeUndefined();
+});
+
+test("doctor checks the harness tree the skill runs from; elsewhere, the first", () => {
+  const trees = [{ dir: ".claude" }, { dir: ".codex" }, { dir: ".kiro" }, { dir: ".aidlc" }];
+  const at = (rel: string) => ownTree(trees, "/p", `/p/${rel}`)?.dir;
+  expect(at(".kiro/skills/aidlc-issue-report/scripts")).toBe(".kiro");
+  expect(at(".agents/skills/aidlc-issue-report/scripts")).toBe(".codex");
+  expect(at(".github/skills/aidlc-issue-report/scripts")).toBe(".aidlc");
+  expect(ownTree(trees, "/p", "/home/u/skills/aidlc-issue-report/scripts")?.dir).toBe(".claude");
+  expect(at(".cursor/skills/aidlc-issue-report/scripts")).toBe(".claude");
 });

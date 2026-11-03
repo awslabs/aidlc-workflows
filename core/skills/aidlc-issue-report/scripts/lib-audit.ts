@@ -283,11 +283,18 @@ export function timeWindow(o: { since?: string; until?: string; days?: string; r
 }
 
 // The HUMAN_TURN rows AI-DLC's prompt hook wrote for this report's own messages are the report's, not the run's: they
-// would stand in for the replies the run did not record.
+// would stand in for the replies the run did not record. A row a few seconds around a report message is its, from the
+// same session when both name one, as matchReplies reads them (another chat's turn at that time stays the run's).
+// Kiro's and Copilot's messages carry no session here (their ids are not yet compared with AI-DLC's), so they are
+// matched by time alone.
 export function withoutReportTurns(rows: AuditRow[], prompts: Prompt[]): AuditRow[] {
   // A reply with no time of its own (Kiro CLI v2) carries its session's last write, which says nothing about its turn.
-  const reportTimes = prompts.filter((p) => p.report && !p.noTime).map((p) => Date.parse(p.ts));
-  return rows.filter((r) => r.event !== "HUMAN_TURN" || !reportTimes.some((t) => Math.abs(Date.parse(r.ts) - t) <= 10_000));
+  const report = prompts.filter((p) => p.report && !p.noTime).map((p) => ({ t: Date.parse(p.ts), session: p.session }));
+  return rows.filter((r) => {
+    if (r.event !== "HUMAN_TURN") return true;
+    const session = rowSession.get(r);
+    return !report.some((p) => Math.abs(Date.parse(r.ts) - p.t) <= 10_000 && (!session || !p.session || session === p.session));
+  });
 }
 
 // Did each reply the person typed reach AI-DLC's record? Each one typed after the first HUMAN_TURN should
@@ -300,18 +307,10 @@ export function matchReplies(prompts: Prompt[], rows: AuditRow[]) {
     .map((r) => ({ t: Date.parse(r.ts), session: rowSession.get(r) }))
     .sort((a, b) => a.t - b.t);
   const typed = prompts
-    // A reply after which no AI-DLC command ran was not about the work, and AI-DLC's prompt hook records
-    // only those that were; where the reader cannot tell (engineAfter undefined), the reply is checked.
-    // Replies are checked from the first HUMAN_TURN on (before it the prompt hook may not have been set up); with
-    // none at all in the window, every reply an AI-DLC command followed is checked, since the hook then recorded none.
-    .filter(
-      (p) =>
-        !p.inherited &&
-        !p.report &&
-        !p.noTime &&
-        p.engineAfter !== false &&
-        (turns.length ? Date.parse(p.ts) >= turns[0].t - 10_000 : p.engineAfter === true),
-    )
+    // Every reply is checked, whatever ran after it: whether an AI-DLC command followed (engineAfter) is kept beside
+    // a reply not recorded, as the log showed it, for the reader to weigh. Replies are checked from the first
+    // HUMAN_TURN on (before it the prompt hook may not have been set up); with none in the window, every reply is.
+    .filter((p) => !p.inherited && !p.report && !p.noTime && (!turns.length || Date.parse(p.ts) >= turns[0].t - 10_000))
     .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
   const used = new Set<number>();
   const notRecorded: object[] = [];
@@ -321,9 +320,15 @@ export function matchReplies(prompts: Prompt[], rows: AuditRow[]) {
       (h, i) => !used.has(i) && Math.abs(h.t - t) <= 10_000 && (!h.session || !p.session || h.session === p.session),
     );
     if (k >= 0) used.add(k);
-    else notRecorded.push({ ts: p.ts, tool: p.tool, ...(p.turn ? { inRunningTurn: p.inRunningTurn, sameAsBeforeInTurn: p.sameAsBeforeInTurn } : {}) });
+    else
+      notRecorded.push({
+        ts: p.ts,
+        tool: p.tool,
+        ...(p.engineAfter !== undefined ? { engineAfter: p.engineAfter } : {}),
+        ...(p.turn ? { inRunningTurn: p.inRunningTurn, sameAsBeforeInTurn: p.sameAsBeforeInTurn } : {}),
+      });
   }
-  const noTime = prompts.filter((p) => p.noTime && !p.inherited && !p.report && p.engineAfter !== false).length;
+  const noTime = prompts.filter((p) => p.noTime && !p.inherited && !p.report).length;
   return {
     checked: typed.length,
     recorded: typed.length - notRecorded.length,

@@ -11,6 +11,8 @@ import { dirname, join } from "node:path";
 import { shapeValue } from "../../core/skills/aidlc-issue-report/scripts/lib-rows.ts";
 import { Labels, Shaper } from "../../core/skills/aidlc-issue-report/scripts/lib-shape.ts";
 import { loadVocab } from "../../core/skills/aidlc-issue-report/scripts/lib-vocab.ts";
+import { gateContext } from "../../core/skills/aidlc-issue-report/scripts/lib-check.ts";
+import { safeHits } from "../../core/skills/aidlc-issue-report/scripts/lib-gate.ts";
 import { importAidlcTools } from "../../core/skills/aidlc-issue-report/scripts/lib-project.ts";
 
 // The AI-DLC install whose own file-match rule the vocabulary borrows.
@@ -23,7 +25,7 @@ function install(): string {
     ".kiro/tools/aidlc-guard-fences.ts": `export const GUARD_FENCES = [\n  "plan-approval",\n  "review-freeze",\n] as const;`,
     ".kiro/scopes/aidlc-bugfix.md": "---\nname: bugfix\ndepth: Minimal\n---\n",
     ".kiro/agents/aidlc-architect-agent.md": "",
-    ".kiro/hooks/aidlc-plan-approval-guard.ts": `const H = 'plan-approval-guard';`,
+    ".kiro/hooks/aidlc-plan-approval-guard.ts": `const H = 'plan-approval-guard'; const M = "Code generation cannot run until the plan is approved:";`,
     ".kiro/sensors/aidlc-traceability.md": "",
     ".kiro/scopes/feature.md": "",
     ".kiro/aidlc-common/stages/inception/requirements-analysis.md": "# Requirements Analysis",
@@ -154,6 +156,24 @@ describe("other fields", () => {
       { seq: 4, ts: "2026-10-29T01:04:00.000Z", session: "<custom-session-1>", kind: "other", reply: "<custom-text-1>" },
     ]);
     expect(JSON.stringify(t.events)).not.toMatch(/acme|Contoso/i);
+  });
+  test("a refusal's text keeps AI-DLC's own words and labels the rest, and the check reads it back by the same rule", () => {
+    const v = loadVocab(install(), [".kiro"]);
+    const t = new Shaper(v, new Labels()).transcript({
+      tool: "claude", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 0, toolErrors: 0, denials: {}, aidlcHookBlocks: {},
+      otherHookBlocks: 0, unattributedHookBlocks: 1, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {},
+      repeats: [], timeline: [], subagents: {}, engine: null, toolVersions: {}, models: {}, efforts: {}, agents: {},
+      approvalModes: {}, handRunChecks: [], reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [],
+      events: [{ ts: "2026-10-29T01:00:00Z", session: "s1", kind: "hook-block", owner: "unknown", reason: "Code generation cannot run until the plan is approved: /srv/acme/plan.md" }],
+    }) as { events: Record<string, unknown>[] };
+    const reason = t.events[0].reason as string;
+    expect(reason.startsWith("Code generation cannot run until the plan is approved: ")).toBe(true);
+    expect(reason).not.toMatch(/acme/i);
+    const c = gateContext(v, { entries: [] });
+    expect(safeHits(c, { transcripts: [t] })).toEqual([]);
+    expect(safeHits(c, { transcripts: [{ events: [{ ...t.events[0], reason: "Code generation cannot run until the plan is approved: /srv/acme/plan.md" }] }] }).map((h) => h.field)).toEqual([
+      "safe.transcripts[0].events[0].reason",
+    ]);
   });
   test("a command keeps only AI-DLC's words; a doctor finding not AI-DLC's is a label", () => {
     const s = shaper();

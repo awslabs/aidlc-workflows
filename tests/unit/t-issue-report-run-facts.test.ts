@@ -691,6 +691,8 @@ test("a Codex Stop hook's block counts once, and its words are not taken as a na
     const local = { prompts: [], refusals: [] as { hook?: string | null }[], errors: [] };
     const s = codex(project, 0, Date.parse(at(59)), local as never);
     expect({ stop: s?.stopFeedback, hooks: local.refusals.map((r) => r.hook) }).toEqual({ stop: 1, hooks: [null] });
+    // The block's text goes with its event, for safe.json to keep by AI-DLC's words (lib-shape.ts).
+    expect(s?.events.filter((e) => e.kind === "stop-hook-feedback").map((e) => e.reason)).toEqual(["Keep going: the stage is not done."]);
   } finally {
     if (before === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = before;

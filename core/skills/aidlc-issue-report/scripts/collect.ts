@@ -2,31 +2,39 @@
 //   <out>/safe.json   the data that is sent: every audit row and field by its own rule (lib-rows.ts), each tool's
 //                     event stream and the rest by lib-shape.ts, then redacted
 //   <out>/local/      what each label stands for, the redaction map, AI-DLC's words for the check, a reader's
-//                     failure, and the raw doctor export. finish.ts deletes this folder; nothing in it is sent.
+//                     failure, the raw doctor export, and what --from reuses: run.json (project and window),
+//                     doctor.json, person.json (set-version.ts), hide-anyway.json (hide.ts), vocab.json and the
+//                     redaction map. finish.ts deletes this
+//                     folder; nothing in it is sent.
 //
 // Usage: collect.ts [--project <dir>] [--out <dir>] [--days 7]
 //                   [--since <ISO>] [--until <ISO>] [--no-doctor]
+//        collect.ts --from <out> [--project <dir>]   a new report collected from an earlier one, for hide.ts
+//                                   --everywhere: the same project (or the one given, when it moved), window, doctor
+//                                   result, versions the person gave and AI-DLC's words, with the names the person hid
+//                                   kept and the words that hold one they hid anyway (local/hide-anyway.json) taken out.
+//                                   The earlier folder is left as it is (finish.ts --discard removes it).
 
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { platform } from "node:os";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { extractArchive, walkFiles } from "./lib-archive.ts";
 import {
   hookHealthDirs, matchReplies, readAudit, readHooksHealth, readSessionsFolder, readState, rowEntries,
   timeWindow, withoutReportTurns,
 } from "./lib-audit.ts";
 import {
-  doctorEnv, environment, findProjectRoot, importAidlcTools, listIntents, nativeInstall, readTrees, secretRulesFile, toolsUsed, type Tree,
+  doctorEnv, environment, findProjectRoot, importAidlcTools, listIntents, nativeInstall, ownTree, type PersonTools, readTrees, recordPersonTool, type SafeTools, secretRulesFile, toolsUsed, type Tree,
 } from "./lib-project.ts";
 import { HOST_TOOLS, Labels, Shaper, time, version } from "./lib-shape.ts";
 import { claude, codex, copilotCli, editorStores, kiroV2, kiroV3, type Local, type Summary } from "./lib-transcripts.ts";
-import { fieldName, type Shape, shapeValue } from "./lib-rows.ts";
+import { fieldName, shapeValue } from "./lib-rows.ts";
 import { loadVocab } from "./lib-vocab.ts";
-import { gateContext, keepVocab } from "./lib-check.ts";
-import { flagValue } from "./lib-cli.ts";
+import { gateContext, hiddenAnyway, hiddenIn, keepVocab, keptByKind, keptVocab, withoutHidden } from "./lib-check.ts";
 import { safeHits } from "./lib-gate.ts";
-import { buildDictionary, type Dictionary, redactValue, useSecretRules } from "./redact.ts";
+import { buildDictionary, type Dictionary, type Entry, PERSON_KINDS, redactValue, useSecretRules } from "./redact.ts";
+import { flagValue, reportFolder } from "./lib-cli.ts";
 
 const arg = (name: string) => flagValue(name);
 const flag = (name: string) => process.argv.includes(`--${name}`);
@@ -35,7 +43,33 @@ function stamp(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
 }
 
-const project = findProjectRoot(arg("project") ?? process.cwd());
+type Doctor = { ran: boolean; exit: number | null; findings: { id: string; severity: string }[]; checksFailed: number; note: string; dir?: string };
+// --from: what an earlier collection settled (local/run.json, local/doctor.json, local/person.json, the redaction map,
+// AI-DLC's words as read then), for a new report folder made from it. The earlier folder is only read.
+type Run = { project: string; since: number; until: number; lastActivity: string | null; notes: string[] };
+const fromDir = arg("from") ? reportFolder(arg("from")) : null;
+if (arg("from") && (!fromDir || !existsSync(join(fromDir, "local", "run.json")))) {
+  console.log(JSON.stringify({ ok: false, reason: "not-a-report-folder", hint: "Pass the folder collect.ts made." }));
+  process.exit(2);
+}
+const readLocal = <T>(name: string, fallback: T): T => {
+  const f = fromDir ? join(fromDir, "local", name) : "";
+  return f && existsSync(f) ? (JSON.parse(readFileSync(f, "utf8")) as T) : fallback;
+};
+const run0 = readLocal<Run | null>("run.json", null);
+const map0 = readLocal<Dictionary>("redaction-map.json", { entries: [] });
+const anyway = fromDir ? hiddenAnyway(fromDir) : [];
+const doctor0 = readLocal<Doctor | null>("doctor.json", null);
+const person0 = readLocal<PersonTools>("person.json", []);
+
+// The project the earlier report was collected from, exactly (a folder above it that is a project too is not it), or
+// the one --project names when it moved.
+const fromProject = run0 && (arg("project") ? resolve(arg("project") as string) : run0.project);
+if (run0 && findProjectRoot(fromProject as string) !== fromProject) {
+  console.log(JSON.stringify({ ok: false, reason: "project-not-found", hint: "The project moved since that report: pass its folder now with --project." }));
+  process.exit(2);
+}
+const project = run0 ? (fromProject as string) : findProjectRoot(arg("project") ?? process.cwd());
 if (!project) {
   console.log(JSON.stringify({ ok: false, reason: "no-aidlc-project", hint: "Run this from the project folder where AI-DLC was used." }));
   process.exit(2);
@@ -54,13 +88,22 @@ function freshDefault(): string {
   for (let n = 2; existsSync(dir); n++) dir = `${base}-${n}`;
   return dir;
 }
-const out = resolve(arg("out") ?? freshDefault());
+const out = fromDir ? freshDefault() : resolve(arg("out") ?? freshDefault());
+// A new folder never inside the earlier one, or the earlier one inside it.
+const inside = (a: string, b: string) => {
+  const rel = relative(a, b);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+};
+if (fromDir && (inside(fromDir, out) || inside(out, fromDir))) {
+  console.log(JSON.stringify({ ok: false, reason: "folders-overlap", hint: "Collect a new report from the project with collect.ts and hide the names in it again." }));
+  process.exit(2);
+}
 if (existsSync(out) && !statSync(out).isDirectory()) {
   console.log(JSON.stringify({ ok: false, reason: "out-not-a-folder", hint: "Leave out --out, or name a new or empty folder." }));
   process.exit(2);
 }
 // finish.ts deletes local/ at the end: a folder that already holds anything is not this run's to fill.
-if (existsSync(out) && readdirSync(out).length > 0) {
+if (!fromDir && existsSync(out) && readdirSync(out).length > 0) {
   console.log(JSON.stringify({ ok: false, reason: "out-not-empty", hint: "Leave out --out, or name a new or empty folder." }));
   process.exit(2);
 }
@@ -77,7 +120,12 @@ const secretFrom = secretRulesFile(project);
 const aidlcTools = await importAidlcTools(secretFrom);
 const secretRules = aidlcTools.secretRules;
 useSecretRules(secretRules);
-const vocab = loadVocab(project, trees.map((t) => t.dir), aidlcTools.findingId, aidlcTools.holdsRecordedWrite);
+// From an earlier report, AI-DLC's words are the ones read for it (local/vocab.json): an update in between changes
+// nothing for this folder.
+const vocab = fromDir && keptByKind(fromDir) ? keptVocab(fromDir) : loadVocab(project, trees.map((t) => t.dir), aidlcTools.findingId, aidlcTools.holdsRecordedWrite);
+// A name the person hid anyway is not left inside AI-DLC's words: a word that holds it is not one of them for this
+// folder, so each field's own rule labels it, and the check reads the folder by the same list (lib-check.ts).
+withoutHidden(vocab, anyway);
 const intents = listIntents(project);
 const rows = readAudit(project, intents, aidlcTools);
 const units = [...new Set(rows.map((r) => r.fields.Unit).filter(Boolean))] as string[];
@@ -90,7 +138,7 @@ const native = nativeInstall();
 const installPaths = [native?.dir, native?.exe].filter((v): v is string => !!v).map((value) => ({ value, label: "<aidlc-install>" }));
 
 // ---- time window: the last AI-DLC activity back N days, unless given ----
-const { since, until, lastActivity, notes: windowNotes } = timeWindow({
+const { since, until, lastActivity, notes: windowNotes } = run0 ?? timeWindow({
   since: arg("since"),
   until: arg("until"),
   days: arg("days"),
@@ -139,7 +187,17 @@ const aidlcNames = new Set([
 ]);
 const dict: Dictionary = buildDictionary(project, { intents: intentDirs, spaces, units, paths: installPaths, ordinary: aidlcNames });
 dict.secretRulesFrom = secretRules ? secretFrom : null;
+// From an earlier report: the names the person gave keep their labels; one hidden anyway is hidden like any other.
+const person = PERSON_KINDS;
+const isHiddenAnyway = (e: Entry) => anyway.some((a) => a.value.toLowerCase() === e.value.toLowerCase());
+dict.entries.push(...map0.entries.filter((e) => person.has(e.kind) && !isHiddenAnyway(e)), ...anyway);
+// What the earlier map hid that this one does not know (a moved project's old path and folder name) stays hidden.
+const knownValues = new Set(dict.entries.map((e) => e.value.toLowerCase()));
+dict.entries.push(...map0.entries.filter((e) => !person.has(e.kind) && !knownValues.has(e.value.toLowerCase())));
+dict.skipped = [...(dict.skipped ?? []), ...(map0.skipped ?? []).filter((e) => person.has(e.kind) && !isHiddenAnyway(e))];
+dict.entries.sort((a, b) => b.value.length - a.value.length);
 writeFileSync(join(localDir, "redaction-map.json"), JSON.stringify(dict, null, 2));
+writeFileSync(join(localDir, "run.json"), JSON.stringify({ project, since, until, lastActivity, notes: windowNotes } satisfies Run));
 // AI-DLC's words as read now, for the check and hide.ts on this folder (lib-check.ts keptVocab).
 keepVocab(out, vocab);
 // A Unit's and an intent's label in safe.json is the dictionary's, so it is the same one the report uses.
@@ -147,7 +205,9 @@ keepVocab(out, vocab);
 const known = new Map([...dict.entries, ...(dict.skipped ?? [])].filter((e) => e.kind === "unit" || e.kind === "intent").map((e) => [e.value, e.label]));
 for (const it of intents) if (!known.has(it.dir)) known.set(it.dir, `<intent-${intents.indexOf(it) + 1}>`);
 const shaper = new Shaper(vocab, new Labels(), known);
-const rowShape: Shape = { label: (kind, raw) => shaper.labels.label(kind, raw), known: (raw) => known.get(raw) };
+const rowShape = shaper.rowShape;
+// The row rule as the check reads it: with the names the person hid (lib-check.ts hiddenIn).
+const rowVocab = { ...vocab, hidden: hiddenIn(dict) };
 
 // Versions of the tools this run used. A version the tool wrote into its own log (`toolVersions`) is the
 // one at the time of the run; the rest are measured now, and the ones not found at all are asked of the
@@ -184,12 +244,15 @@ function aidlcCommand(t: Tree | undefined): string[] | null {
   return null;
 }
 
-type Doctor = { ran: boolean; exit: number | null; findings: { id: string; severity: string }[]; checksFailed: number; note: string };
-const doctor: Doctor = { ran: false, exit: null, findings: [], checksFailed: 0, note: "" };
-if (flag("no-doctor")) {
+const doctor: Doctor = doctor0 ?? { ran: false, exit: null, findings: [], checksFailed: 0, note: "" };
+if (doctor0) {
+  // From an earlier report: doctor's result is that report's; it is not run twice.
+} else if (flag("no-doctor")) {
   doctor.note = "skipped (--no-doctor)";
 } else {
-  const cmd = aidlcCommand(trees[0]);
+  // The tree the report was asked from: in a project with several, doctor checks the harness the person used.
+  const own = ownTree(trees, project, import.meta.dir);
+  const cmd = aidlcCommand(own);
   if (!cmd) {
     doctor.note = "AI-DLC command not found";
   } else {
@@ -207,7 +270,7 @@ if (flag("no-doctor")) {
     const r = spawnSync(shim ? `"${cmd[0]}"` : cmd[0], shim ? args.map((a) => `"${a}"`) : args, {
       shell: shim,
       cwd: project,
-      env: doctorEnv(cmd, process.execPath, process.env),
+      env: doctorEnv(cmd, process.execPath, process.env, own?.dir),
       encoding: "utf8",
       timeout: 180_000,
     });
@@ -218,6 +281,7 @@ if (flag("no-doctor")) {
     // A doctor that could not start or was stopped at the time limit did not run, whatever it left behind. Exit 2
     // with no export is said as such: doctor refused an option, or finished but could not read its update setting.
     doctor.ran = !r.error && r.status !== null;
+    if (doctor.ran && own) doctor.dir = own.dir;
     if (doctor.ran && r.status === 2 && readdirSync(rawDir).length === 0) {
       doctor.note = "doctor exited 2 and made no export (an option it refused, or an update setting it could not read)";
     }
@@ -269,6 +333,8 @@ if (flag("no-doctor")) {
   }
 }
 
+writeFileSync(join(localDir, "doctor.json"), JSON.stringify(doctor, null, 2));
+
 // ---- write ----
 const safe = {
   schema: 2,
@@ -281,15 +347,22 @@ const safe = {
     rowsTotal: rows.length,
     rowsInWindow: winRows.length,
     // Every row of the run in time order, every field by its own rule (lib-rows.ts).
-    rows: runRows.map((r, i) => ({
-      seq: i + 1,
-      ts: time(r.ts),
-      event: shaper.event(r.event),
-      intent: shaper.intent(r.intent),
-      fields: (rowEntries.get(r) ?? [])
-        .filter(([name]) => name !== "Timestamp" && name !== "Event")
-        .map(([name, value]) => [fieldName(vocab, rowShape, name), shapeValue(vocab, rowShape, r.event, name, value)]),
-    })),
+    // A value is shaped by its event and field name as safe.json holds them, which is how the check reads it again.
+    rows: runRows.map((r, i) => {
+      const event = shaper.event(r.event);
+      return {
+        seq: i + 1,
+        ts: time(r.ts),
+        event,
+        intent: shaper.intent(r.intent),
+        fields: (rowEntries.get(r) ?? [])
+          .filter(([name]) => name !== "Timestamp" && name !== "Event")
+          .map(([name, value]) => {
+            const n = fieldName(rowVocab, rowShape, name);
+            return [n, shapeValue(rowVocab, rowShape, event ?? "", n, value)];
+          }),
+      };
+    }),
     counts: shaper.keys(counts, (k) => shaper.event(k)),
   },
   hooks: shaper.hooks(health),
@@ -305,13 +378,23 @@ const safe = {
     "When the audit lock is busy a blocked row can be dropped; only a line in the hook's drops file remains.",
     "Files written by shell commands get no audit row.",
     "Hooks that never ran leave nothing but missing heartbeat files.",
-    "Kiro keeps hook names but not the refusal text.",
+    "Kiro CLI v3 and Kiro IDE keep hook names but not the refusal text.",
     "VS Code Copilot Chat and Cursor chat stores are not read by this version.",
     "Names that are not AI-DLC's own (a plugin's or the team's stage, agent, sensor, hook) are anonymous labels.",
   ],
 };
+// The tools and versions the person gave (set-version.ts), given again to a report collected from an earlier one.
+for (const p of person0) recordPersonTool(safe as unknown as SafeTools, p.tool, p.version);
 const safeText = JSON.stringify(redactValue(safe, dict, { ids: true }), null, 2);
 writeFileSync(join(out, "safe.json"), safeText);
+// From an earlier report: what it kept and is not made twice goes along, once this folder is a report folder.
+if (fromDir) {
+  // Doctor's own files only with the result they came with (doctor.json): a doctor run now has its own.
+  for (const f of [...(doctor0 ? ["doctor-raw", "doctor-stdout.txt"] : []), "hide-anyway.json", "person.json"]) {
+    if (existsSync(join(fromDir, "local", f))) cpSync(join(fromDir, "local", f), join(localDir, f), { recursive: true });
+  }
+}
+
 writeFileSync(join(localDir, "labels.json"), JSON.stringify(shaper.labels, null, 2));
 writeFileSync(join(localDir, "errors.jsonl"), local.errors.map((p) => JSON.stringify(p)).join("\n"));
 
@@ -337,6 +420,7 @@ console.log(
         doctorFindings: doctor.findings.length,
       },
       safeJsonHits: safeJsonHits.map((h) => ({ field: h.field, reason: h.reason })),
+      ...(fromDir ? { from: fromDir } : {}),
     },
     null,
     2,

@@ -20,6 +20,9 @@ export type RowVocab = {
   tools: Set<string>;
   guards: Set<string>;
   phrases: Set<string>;
+  // A name the person hid (the redaction map's `named` entries, lib-check.ts hiddenIn) stands in it: an AI-DLC field
+  // name holding one is a label too.
+  hidden?: (s: string) => boolean;
 };
 
 export type RowValue = string | number | string[];
@@ -101,6 +104,7 @@ function policyOf(event: string, name: string): Policy {
 // A field's name: AI-DLC's (listed above, or a name its tools write) stays; anything else is labelled.
 const FIELD_NAME = /^[A-Z][A-Za-z0-9]*(?:[ -][A-Za-z0-9]+){0,5}$/;
 export function fieldName(v: RowVocab, s: Shape, name: string): string {
+  if (v.hidden?.(name)) return s.label("field", name);
   return Object.hasOwn(POLICY, name) || name === "Source" || name === "Target" || (FIELD_NAME.test(name) && v.words.has(name)) ? name : s.label("field", name);
 }
 

@@ -59,8 +59,10 @@ two folders are unrelated.
 - `transcripts`: one entry per AI tool whose log names this project.
   - `events`: what happened, in time order: `seq`, `ts`, `session`, `kind`, and by kind `tool`, `input` (the call's
     input as a label: equal labels are the same input), `verb` (an AI-DLC command, AI-DLC's words only), `hook` and
-    `owner` (`aidlc`, `other`, `unknown`) of a refusal, `detail` of a denial, `reply` (what the person typed, as a
-    label). Kinds: `person-turn`, `call`, `aidlc-command`, `tool-error`, `tool-denied`, `approval-prompt`,
+    `owner` (`aidlc`, `other`, `unknown`) of a refusal, `reason` of a refusal or a Stop hook's feedback (its text, kept
+    by the rule of an audit row's `Reason`: AI-DLC's own phrases as written, the rest labels; Kiro CLI v3 and Kiro IDE
+    log none),
+    `detail` of a denial, `reply` (what the person typed, as a label). Kinds: `person-turn`, `call`, `aidlc-command`, `tool-error`, `tool-denied`, `approval-prompt`,
     `stop-hook-feedback`, `aidlc-hook-block`, `other-hook-block`, `hook-block` (a refusal whose record does not say
     whose). `noTime`: the tool logged no time of its own for it (Kiro CLI v2), so `ts` is its session's; Kiro CLI v2's
     `repeats` carry its session's time the same way.
@@ -73,11 +75,12 @@ two folders are unrelated.
     the run's counts and events.
   - `notes`: what a reader could not tell from the records.
 - `replies`: the typed replies checked against AI-DLC's `HUMAN_TURN` rows (by time, within ten seconds, and by session
-  where both name one): `checked`, `recorded`, `notRecorded` (time and how each reached the tool), `inRunningTurn`,
-  `noTime`.
+  where both name one), every reply from the first `HUMAN_TURN` on (every reply when the window has none): `checked`, `recorded`, `notRecorded` (time, how
+  each reached the tool, and `engineAfter`: whether an AI-DLC command ran after it before the next reply, where the log
+  shows it), `inRunningTurn`, `noTime`.
 - `otherStores`: chat stores on this machine that are not read (VS Code Copilot Chat, Cursor).
-- `doctor`: whether AI-DLC's doctor ran, its exit, each finding of the export's own report (or of the lines doctor
-  printed when there is none) with its id (a label when the id is not AI-DLC's) and severity, `checksFailed`; its export
-  archive is not in the folder.
+- `doctor`: whether AI-DLC's doctor ran, `dir` (the harness folder it was run for: the one this skill ran from), its
+  exit, each finding of the export's own report (or of the lines doctor printed when there is none) with its id (a label
+  when the id is not AI-DLC's) and severity, `checksFailed`; its export archive is not in the folder.
 - `secretRules`: which installed AI-DLC file the secret rules came from.
 - `knownGaps`: what the records cannot show.
