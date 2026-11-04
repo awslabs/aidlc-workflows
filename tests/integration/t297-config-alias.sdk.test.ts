@@ -41,7 +41,7 @@ function askedOnce(result: Pick<DriveResult, "turns" | "askedQuestions">, judgeD
   const turn1 = result.turns?.[0];
   if (turn1 === undefined) return "turn 1 never ended";
   if (turn1.askedQuestions > 1 || result.askedQuestions.length !== turn1.askedQuestions) {
-    return `the box was shown ${result.askedQuestions.length} times`;
+    return `the box was shown ${result.askedQuestions.length} times, ${result.askedQuestions.length - turn1.askedQuestions} after the answer`;
   }
   if (turn1.askedQuestions === 1) return undefined;
   const verdict = judgeShownQuestion(ASKED, turn1.assistantText, judgeDir);
@@ -65,7 +65,7 @@ describe("t297 /aidlc --config trust (SDK live)", () => {
           answerScript: {
             kind: "pick",
             pick: (question) => {
-              const at = question.options.findIndex((o) => /acknowledg/i.test(o.label));
+              const at = question.options.findIndex((o) => /^acknowledge\b/i.test(o.label));
               return at < 0 ? { text: REPLY } : { optionIndex: at };
             },
           },
@@ -105,10 +105,11 @@ describe("t297 /aidlc --config trust (SDK live)", () => {
         const landedAt = result.toolResults.findIndex((item) =>
           item.toolName === "Bash" && /\bconfig\b.*\s--yes\b/.test(String(item.input.command ?? ""))
         );
-        expect(landedAt).toBeGreaterThanOrEqual(answeredAt);
+        expect(landedAt, "no config --yes command landed the answer after it was given").toBeGreaterThanOrEqual(answeredAt);
         const shown = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc.ts"), "config", "trust", "--show", "--json"], {
           cwd: project, encoding: "utf-8",
         });
+        expect(shown.status, shown.stderr).toBe(0);
         expect(JSON.parse(shown.stdout).data.record, shown.stdout).toMatchObject({ reviewed: true });
 
         const intents = join(
