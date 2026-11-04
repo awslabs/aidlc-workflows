@@ -140,6 +140,16 @@ carries — but the absolute values never land in the graph, inserting a stage
 never renumbers core, and you claim no range (which is why two uncoordinated
 plugins can never collide on numbers).
 
+A stage that runs once per Unit (`for_each: unit-of-work`) runs with its Unit
+whatever number it gets. A Construction stage that `requires_stage:
+[code-generation]` is numbered after `ci-pipeline` (`3.8`), yet each Unit runs
+it right after its own Code Generation, its approvals come before Build and
+Test, and the team's last Unit moves the work on to Build and Test, as for the
+core per-Unit stages
+([Stage Definition](../reference/15-stage-definition.md#for_each)). Such a stage
+cannot require a stage that runs once per intent after the Units (`build-and-test`,
+for example); compile refuses that edge.
+
 Work started before the plugin was installed has no Stage Progress row for its
 stages. The engine writes each row, after the rows of its phase that come
 before it, when the work first reaches the stage.

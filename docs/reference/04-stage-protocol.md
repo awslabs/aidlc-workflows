@@ -160,7 +160,10 @@ AskUserQuestion({
 name of the next in-scope stage) on the reply that opened the gate (`report
 --result awaiting-approval` or `revised`, computed when the gate opens, so a
 plan change made during the stage is in it), else the run-stage directive's
-(computed at emit time), or `Complete workflow` when `next_stage` is null. The
+(computed at emit time), or `Complete workflow` when `next_stage` is null. In
+the checkout that claimed a team Unit, a Unit step's `next_stage` is that
+Unit's next step, and after its last one `landing Unit <unit>`: Build and Test
+runs once every Unit lands. The
 conductor never guesses the next stage.
 
 The conductor reads the person's reply, in any words, against what it showed
@@ -1330,14 +1333,18 @@ change. See
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
    review artifact(s), the engine-owned findings list, decision effects, and
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
-   is 1, engine-enforced). At a stage's gate, one line after the findings names
+   is 1, engine-enforced). At a stage's gate, one line names
    the open findings Approve records as `Accepted risk`, each with the start of
    its text (and its Unit when they span Units), and says, in plain words, that
    the person can instead approve and ask for one to be fixed (`--fix-finding`)
    or reject one as not applying, with their reason (`--reject-finding` on a
    Request Changes, whose gate comes back with the review as it stands when
    nothing else changed); the Approve option then does not say it again. The ids come from the builder
-   `GATE_APPROVED` writes through. A Unit's Construction checkpoint, a
+   `GATE_APPROVED` writes through. The step that shows the gate (the
+   `awaiting-approval` or `revised` report's reply, or `next` showing it again)
+   carries that line in its `change_notices`, said just before the approval
+   question, so the brief does not print it; the brief kept for the gate holds
+   it after the brief. A Unit's Construction checkpoint, a
    per-stage team Unit gate, and a gate whose one approval also covers later
    stages with open findings of their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction

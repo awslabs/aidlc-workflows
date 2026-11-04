@@ -254,7 +254,10 @@ glossary-capture
 
 It lands at the end of Inception, not right after Requirements Analysis: a new
 stage takes the next free number in its phase, after the stages already there,
-and no existing stage is renumbered. An edge from an earlier stage to the new
+and no existing stage is renumbered. A new stage that runs once per Unit
+(`for_each: unit-of-work`) still runs with the other per-Unit stages of its
+phase, whatever its number
+([Stage Definition](../reference/15-stage-definition.md#for_each)). An edge from an earlier stage to the new
 one is refused at compile; with `glossary-capture` added to User Stories'
 `requires_stage`, the same tree prints (its long dash shown as `-`):
 

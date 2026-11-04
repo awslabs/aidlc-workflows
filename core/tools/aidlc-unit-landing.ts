@@ -57,8 +57,10 @@ export function scopeStampLanded(
 // unitMajorConstructionStageSlugs(Scope, state, true), the block its walk
 // takes the Unit through; both readers pass exactly that. Any other stage is
 // the whole project's, and another Unit's are its claimant's. The recovery
-// question's reopen (evaluateGuardRefusal) and `next --stage` (routeNext's
-// claimedCheckoutMove) both read this, so what is offered there is taken.
+// question's reopen (evaluateGuardRefusal), `next --stage` (routeNext's
+// claimedCheckoutMove) and the plan-approval hook's admission of the picked
+// reopen (isSelectedGuardRestartContinuation) all read this, so what is
+// offered there is taken.
 export function claimedCheckoutReopens(
   claimedUnit: string,
   unitStages: readonly string[],
