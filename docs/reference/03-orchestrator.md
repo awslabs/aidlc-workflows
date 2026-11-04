@@ -1313,6 +1313,19 @@ AskUserQuestion({
 
 The pick runs `next --add <stage>`, whose step names the `recompose --add` and then the report that records the approval, so the added stage runs next. When the agent records the approval first, the approval has already moved the work past the skipped stage and started the next one; while nothing of that stage is in the work's record yet (and nothing else after the skipped stage has started), `recompose` still takes the add, the step carries on, and `next` names `aidlc-jump execute --target <stage> --direction backward`, which resets only the stage the work had just entered and says nothing, so the added stage runs next either way and the state is the one the add-first order leaves. Once anything after it has started, an add behind the current stage is refused with the isolated run, as any is.
 
+### No git: said once, at the first gate
+
+In a project with no git (neither the folder, a repo of the work nor a git
+checkout in the workspace is inside a git work tree, `isGitRepo` in
+`aidlc-git.ts`), the first gate the project shows carries "This project has no
+git, so AI-DLC can't undo the changes it makes to your files; to get an undo,
+run `git init` and commit them." in its `change_notices`: the reply that opens a stage gate or a team
+Unit's gate, or `next` showing an open gate again. Every shipped scope shows a
+gate before Code Generation. Once that step is written the engine records it in
+`aidlc/.aidlc-sessions/no-git-said` and no later gate in the project says it;
+an unattended run (`AIDLC_UNATTENDED=1`) says it without the record, so the
+person who takes over hears it at the gate shown again.
+
 ### Revision Loop Escape Hatch
 
 The reply that shows the gate (`report --result awaiting-approval` or
