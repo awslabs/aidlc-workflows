@@ -313,7 +313,19 @@ export interface ScopeValidation {
   // run that is not --matched so the composer copies them before it routes.
   // Absent when the classic scope is not enabled here.
   custom_start?: { guard_policy: GuardPolicy; scope_settings: ScopeSettings };
+  // The depth, Guard Policy and settings of the stock scope a matched plan
+  // carries (the one --matched names, else nearest_stock[0]), echoed on every
+  // run so the composer copies them, and checks the depth, instead of finding
+  // that scope's file: no other echo carries a stock scope's depth or settings.
+  matched_start?: MatchedPlanStart;
 }
+
+export type MatchedPlanStart = {
+  scope: string;
+  depth?: "minimal" | "standard" | "comprehensive";
+  guard_policy: GuardPolicy;
+  scope_settings: ScopeSettings;
+};
 
 // The scope-file settings a composer proposal carries beside its grid. The keys
 // are the scope frontmatter spellings, so the approved values are copied into
@@ -1939,6 +1951,21 @@ export function customPlanStart(): { guard_policy: GuardPolicy; scope_settings: 
   const settings = scopeSettingsOf("classic");
   if (settings === null) return null;
   return { guard_policy: scopeGuardPolicyDefault("classic"), scope_settings: settings };
+}
+
+/** What a matched plan starts from: its stock scope's own depth, Guard Policy
+ *  and settings, read by the same resolvers the matched check and the
+ *  creation diff use. Null for a scope that is not enabled here. */
+export function matchedPlanStart(scope: string): MatchedPlanStart | null {
+  const settings = scopeSettingsOf(scope);
+  if (settings === null) return null;
+  const depth = (loadScopeMapping()[scope]?.depth ?? "").toLowerCase();
+  return {
+    scope,
+    ...(depth === "minimal" || depth === "standard" || depth === "comprehensive" ? { depth } : {}),
+    guard_policy: scopeGuardPolicyDefault(scope),
+    scope_settings: settings,
+  };
 }
 
 /** The errors for a front/report proposal that names its routing. Either route
@@ -4219,6 +4246,9 @@ const COMMANDS: Record<string, Handler> = {
       const start = customPlanStart();
       if (start !== null) r.custom_start = start;
     }
+    const startScope = matched ?? r.nearest_stock?.[0]?.scope;
+    const stockStart = startScope === undefined ? null : matchedPlanStart(startScope);
+    if (stockStart !== null) r.matched_start = stockStart;
     if (matched !== undefined || custom) {
       const routeErrors = composerProposalErrors(
         matched ?? null,
