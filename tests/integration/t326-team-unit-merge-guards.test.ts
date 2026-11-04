@@ -291,6 +291,8 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(refusedPin.out).toContain(trackedMixedCasePath!);
     expect(refusedPin.out).toContain("outside claimed Unit record tree");
+    expect(refusedPin.out).toContain("git rm a file main does not have");
+    expect(refusedPin.out).toContain("git checkout origin/main -- <path>");
 
     const landFixture = makeSeed(parallelDependencyBody());
     const landCandidate = prepareCandidate(
@@ -377,6 +379,9 @@ describe("t326 pinned team Unit merge", () => {
       "construction/beta/nfr-design/forged.md",
     );
     expect(refusedLand.out).toContain("violates claimed Unit ownership");
+    expect(refusedLand.out).toContain("git rm a file main does not have");
+    expect(refusedLand.out).toContain("git checkout origin/main -- <path>");
+    expect(refusedLand.out).toContain("publish again");
   });
 
   test("candidate-exact policy aborts a clean auto-merge overlap before commit", () => {

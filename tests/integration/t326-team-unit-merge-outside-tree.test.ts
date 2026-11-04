@@ -60,6 +60,13 @@ describe("t326 pinned team Unit merge: a record outside the Unit's tree", () => 
     const refusedPin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(refusedPin.status).not.toBe(0);
     expect(refusedPin.out).toContain("outside claimed Unit record tree");
+    // Pin says the same next step as publish's note, in the same words.
+    const nextStep = reply.records_outside_unit_tree_note!.replace(
+      "Pin will refuse this candidate: ",
+      "",
+    );
+    expect(nextStep).toContain("git checkout origin/main -- <path>");
+    expect(refusedPin.out).toContain(`${nextStep[0].toUpperCase()}${nextStep.slice(1)}`);
 
     git(candidate.checkout, ["rm", "-q", "--", summary]);
     git(candidate.checkout, ["commit", "-m", "leave the contract summary to main"]);

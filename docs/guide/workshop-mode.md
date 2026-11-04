@@ -245,7 +245,7 @@ checkout's own history, and publish says how many rows. A change to any other
 record outside the Unit's `construction/<unit>/` folder (an Inception artifact
 such as `contract-summary.md`) is published too, but pin will refuse it, so
 publish names the file: take it out of the branch, make the change on main,
-and publish again.
+and publish again. Pin and land refuse it too, with the same words.
 
 ---
 

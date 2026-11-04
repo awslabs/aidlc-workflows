@@ -712,7 +712,8 @@ uncommitted, and any other change still stops both.
 A change to a record outside the Unit's `construction/<unit>/` folder (an Inception
 artifact such as `contract-summary.md`, say) is still published, but pin will refuse
 that candidate, so publish names the file and says to take it out of the branch,
-change it on main instead, and publish again.
+change it on main instead, and publish again. Pin and land refuse it too and
+say the same.
 A claimed checkout keeps its own audit rows (sessions, turns, answers) in a
 local record under the intent record's `.aidlc-engine/audit/`, which AI-DLC's
 `.gitignore` keeps out of commits, and the claim's tracked shard takes only the
