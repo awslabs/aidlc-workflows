@@ -611,6 +611,7 @@ import {
   shippedInlineContextEntries,
 } from "./aidlc-inline-context.ts";
 import {
+  codekbStageDir,
   detectWorkspace,
   documentInputLooksSecret,
   GREENFIELD_RE_SKIP_LABEL,
@@ -8121,7 +8122,7 @@ export function prepareRecordFolders(projectDir: string, directive: Directive): 
     if (directive.kind === "run-stage" && directive.stage === "reverse-engineering") {
       for (const repo of codekbStageRepos(projectDir)) {
         for (const handoff of developerHandoffPaths(projectDir, repo)) folders.add(dirname(handoff));
-        folders.add(join(engineDir(projectDir), `codekb-stage-${repo}`));
+        folders.add(codekbStageDir(projectDir, repo));
       }
     }
   }
