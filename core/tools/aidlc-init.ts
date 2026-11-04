@@ -1261,7 +1261,7 @@ function modelStateData(
 // harness when the project has more than one, since config would otherwise
 // ask which.
 function namedHarness(projectDir: string, harness: string | undefined): string {
-  return harness && discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${typedHarnessName(harness)}` : "";
+  return harness && discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${invokedHarnessName(harness)}` : "";
 }
 
 // A `config models` command about one harness of the project, run as shown
@@ -2044,7 +2044,7 @@ function checkDiagnosticSection(
     ? `providers needs no answer for ${typedHarnessName(selected.harness)}; ` +
       sessionProvidersDetail(
         selected.harness,
-        `'${configInvocationFor(projectDir)} config providers --harness ${typedHarnessName(selected.harness)}${projectTarget(projectDir)}'`,
+        `'${configInvocationFor(projectDir)} config providers --harness ${invokedHarnessName(selected.harness)}${projectTarget(projectDir)}'`,
       )
     : providersUnrecorded
     ? `providers has no recorded answer for ${typedHarnessName(selected.harness)}; the shipped fallback is in use. ` +
@@ -2425,7 +2425,7 @@ function statusLineSwitch(argv: readonly string[]): CommandResult {
   const installed = discoverProjectHarnesses(projectDir);
   const named = requested ? installed.filter((harness) => harness.distribution === requested) : installed;
   if (requested && named.length === 0) {
-    return usage(`this project is not set up for ${typedHarnessName(requested)}`, configCommand(`--harness ${typedHarnessName(requested)}${projectTarget(projectDir)}`));
+    return usage(`this project is not set up for ${typedHarnessName(requested)}`, configCommand(`--harness ${invokedHarnessName(requested)}${projectTarget(projectDir)}`));
   }
   const targets = [...new Set(
     named.map((harness) => statusLineHarness(harness.distribution)).filter((harness): harness is StatusLineHarness => harness !== null),
@@ -2888,23 +2888,31 @@ function handingTool(): string | undefined {
   return process.env.AIDLC_CONFIG_HANDOFF || undefined;
 }
 
-// A run another tool handed over prints its retries (the commands to run this
-// run again, printed when it stops) for that tool, so they name a harness the
-// way that tool reads it when the line is printed: a tool from before the typed
-// names reads ids, and once this run has rewritten it, this release's names.
-// What to do after the run is for the tree it wrote, and what the person reads
-// is this release's, both in this release's names. Read once per line.
-function retryNamer(): (id: string) => string {
+// A command configInvocationFor starts runs the tool that ran, which in a run
+// another tool handed over is the handing tool, so it names a harness the way
+// that tool reads it when the line is built: a tool from before the typed names
+// reads ids, and once this run has rewritten it, this release's names. What
+// the person reads is in this release's names. Read once per line.
+function invokedToolNamer(): (id: string) => string {
   const tool = aidlcInvocation() === "aidlc" ? undefined : handingTool();
   return tool && !toolReadsTypedNames(tool) ? (id) => id : typedHarnessName;
 }
 
-function retryHarnessName(id: string): string {
-  return retryNamer()(id);
+function invokedHarnessName(id: string): string {
+  return invokedToolNamer()(id);
 }
 
-function retryHarnessArgs(args: readonly string[]): string[] {
-  return harnessArgsWith(args, retryNamer());
+function invokedHarnessArgs(args: readonly string[]): string[] {
+  return harnessArgsWith(args, invokedToolNamer());
+}
+
+// The same for a line built before this run writes and run after it: the
+// handing tool is then this release when it is the tool of the tree this run
+// writes, and unchanged otherwise.
+function afterRunNamer(projectDir: string, harnessDir: string): (id: string) => string {
+  const tool = aidlcInvocation() === "aidlc" ? undefined : handingTool();
+  if (tool === undefined || sameFile(tool, join(projectDir, harnessDir, "tools", "aidlc.ts"))) return typedHarnessName;
+  return invokedToolNamer();
 }
 
 // The command the user ran, printed again with the flags that resolve it, so
@@ -2916,7 +2924,7 @@ function configRerunWith(
   dropValueFlags: readonly string[] = [],
 ): string | undefined {
   const invocation = configInvocationFor(projectDir);
-  const args = retryHarnessArgs(stripVerb([...input])).filter((arg, index, all) =>
+  const args = invokedHarnessArgs(stripVerb([...input])).filter((arg, index, all) =>
     !dropValueFlags.includes(arg) && !dropValueFlags.includes(all[index - 1] ?? "")
   );
   if (args.some(hasControlCharacters) || hasControlCharacters(projectDir)) return undefined;
@@ -2934,7 +2942,7 @@ function configMutationRerun(
   section: "models" | "runtime" | "providers" | "trust" | "flags" | "project",
   argv: readonly string[],
 ): string {
-  const args = retryHarnessArgs(argv.filter((arg) => arg !== "--yes")).map(commandToken);
+  const args = invokedHarnessArgs(argv.filter((arg) => arg !== "--yes")).map(commandToken);
   return configCommand([section, ...args, "--yes"].join(" "));
 }
 
@@ -4580,7 +4588,7 @@ function switchRefreshSteps(
   projectDir: string,
   remedy: { harness: string; moveAside?: string },
 ): string {
-  const refresh = `${configInvocationFor(projectDir)} config --harness ${retryHarnessName(remedy.harness)}${projectTarget(projectDir)}`;
+  const refresh = `${configInvocationFor(projectDir)} config --harness ${invokedHarnessName(remedy.harness)}${projectTarget(projectDir)}`;
   return remedy.moveAside
     ? `move ${join(projectDir, remedy.moveAside)} aside, then run \`${refresh}\``
     : refresh;
@@ -6912,7 +6920,7 @@ function prepareRefreshSource(
     if (rowChanged && current.trust !== undefined && prior) {
       notes.push(
         `The trust review recorded for ${typedHarnessName(prior.distribution)} does not carry to ${typedHarnessName(descriptor.distribution)}; once switched, review it again with ` +
-          `\`${configInvocationFor(projectDir)} config trust --harness ${typedHarnessName(descriptor.distribution)}${projectTarget(projectDir)}\`.`,
+          `\`${configInvocationFor(projectDir)} config trust --harness ${afterRunNamer(projectDir, descriptor.harnessDir)(descriptor.distribution)}${projectTarget(projectDir)}\`.`,
       );
     }
   }
@@ -7534,7 +7542,7 @@ function kiroAgentPinsNote(
   if (runs.length === 0) return null;
   return `Kiro ${dryRun ? "will run" : "now runs"} ${runs.join(", and ")}, as set for ${
     runs.length === 1 ? "that agent" : "those agents"
-  } with config models (an agent's effort is shared with your other tools); \`${configInvocationFor(projectDir)} config models --show --harness ${typedHarnessName("kiro-ide")}${projectTarget(projectDir)}\` shows where each is set.`;
+  } with config models (an agent's effort is shared with your other tools); \`${configInvocationFor(projectDir)} config models --show --harness ${afterRunNamer(projectDir, harnessDir)("kiro-ide")}${projectTarget(projectDir)}\` shows where each is set.`;
 }
 
 // The agent values a `config models` run changes: those that differ between
@@ -12030,7 +12038,7 @@ function settingsCommand(
   harness?: string,
 ): string {
   return `${configInvocationFor(projectDir)} config ${section} ${
-    harnessArgsAsTyped(args).map((arg) => quoteCommandArgument(arg)).join(" ")
+    invokedHarnessArgs(args).map((arg) => quoteCommandArgument(arg)).join(" ")
   }${target === null ? "" : ` --${target}`} --yes${args.includes("--harness") ? "" : namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
 }
 
@@ -12402,7 +12410,7 @@ function treesLeftBehindLines(
       ? `is still on ${tree.frameworkVersion}`
       : `is on ${tree.frameworkVersion}`;
     const harness = `--harness ${
-      source.copyChannel ? harnessNameFor(tree.distribution, writtenTool) : typedHarnessName(tree.distribution)
+      source.copyChannel ? harnessNameFor(tree.distribution, writtenTool) : invokedHarnessName(tree.distribution)
     }`;
     const plain = installed.filter((candidate) => candidate.stamp.distribution === tree.distribution);
     // A copied tree no config run has recorded the files of reads every file
@@ -12846,11 +12854,11 @@ export async function main(
   if (!internal.setupWalkChild) configTargetHarnessDir = null;
   if (!internal.setupWalkChild) refusalNote = null;
   // What the person typed after --harness reads as a harness id once, here.
-  // From here on `input` holds ids. A retry printed back writes them as the
-  // tool it names reads them (retryHarnessArgs); every other line, the typed
-  // names (harnessArgsAsTyped). A setup walk's sections run on the walk's
-  // ids, and a copied tool's hand-off carries ids, which every release reads
-  // the same way.
+  // From here on `input` holds ids. A command printed back writes them as the
+  // tool it names reads them (invokedToolNamer, and afterRunNamer for a line
+  // built before the write and run after it); what the person reads, the typed
+  // names. A setup walk's sections run on the walk's ids, and a copied tool's
+  // hand-off carries ids, which every release reads the same way.
   const idsAlready = internal.setupWalkChild || handingTool() !== undefined;
   const typedHarnesses = idsAlready ? [] : valuesAfter(input, "--harness");
   if (!idsAlready) input = harnessArgsAsIds(input);
@@ -13065,7 +13073,7 @@ export async function main(
       refreshCommands: (dir) => {
         const harnesses = discoverProjectHarnesses(dir).map((harness) => harness.distribution).sort();
         return harnesses.length > 1
-          ? harnesses.map((name) => `${configInvocationFor(dir)} config --harness ${typedHarnessName(name)}${projectTarget(dir)}`)
+          ? harnesses.map((name) => `${configInvocationFor(dir)} config --harness ${invokedHarnessName(name)}${projectTarget(dir)}`)
           : [`${configInvocationFor(dir)} config${projectTarget(dir)}`];
       },
     }), options);
@@ -13203,7 +13211,7 @@ export async function main(
     // words true whatever happens next; under --json in the result (its notes
     // on success, emitResult on any refusal).
     if (switchOccupant?.distribution === "kiro" && !section && typedHarnesses.includes(typedHarnessName("kiro-ide"))) {
-      const stay = configCommand(`--harness ${typedHarnessName("kiro")}${projectTarget(projectDir)}`);
+      const stay = configCommand(`--harness ${invokedHarnessName("kiro")}${projectTarget(projectDir)}`);
       const unapproved = !options.yes && !dryRun && !argv.includes("--plan-token");
       const asking = configInputIsTty() && options.mode === "human" && unapproved;
       if (asking) {
@@ -14613,7 +14621,7 @@ export async function main(
       const offline = copyChannel
         ? takesSource
           ? `offline: get ${url} and its .sha256 into one folder, then add --from <that file>`
-          : `offline: get ${url} and its .sha256 into one folder, run ${configInvocationFor(projectDir)} config --harness ${retryHarnessName(release.distribution)} --from <that file>${projectTarget(projectDir)}, then rerun this command`
+          : `offline: get ${url} and its .sha256 into one folder, run ${configInvocationFor(projectDir)} config --harness ${invokedHarnessName(release.distribution)} --from <that file>${projectTarget(projectDir)}, then rerun this command`
         : `offline: ${
           configCommand(`--pin ${release.version} --offline --from <release directory>${projectTarget(projectDir)}`)
         }, then rerun this command`;
@@ -14685,7 +14693,7 @@ export async function main(
           : error.remedy.kind === "refresh"
           ? switchRefreshSteps(projectDir, error.remedy)
           : `${configInvocationFor(projectDir)} config ${from ? `--from ${quoteCommandArgument(from)} ` : ""}--harness ${
-            retryHarnessName(error.remedy.harness)
+            invokedHarnessName(error.remedy.harness)
           }${projectTarget(projectDir)}`
         : from
         ? `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/${requestedHarness ?? copiedHarness?.distribution ?? "claude"}/; or fetch them with ${

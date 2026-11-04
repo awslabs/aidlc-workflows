@@ -13,7 +13,7 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -342,6 +342,52 @@ describe("Kiro harness names a person types", () => {
     });
     expect(reviewed.status, `${reviewed.stdout}${reviewed.stderr}`).toBe(0);
     expect(trust()).toBeDefined();
+  });
+
+  test("a refresh another harness's older tool handed over says how to go back in that tool's names", () => {
+    const dir = project();
+    const env = { ...process.env, AIDLC_TEST_NAME: "t-kiro-typed-harness-names", KIRO_HOME: `${dir}-kiro-home` };
+    const init = (args: string[], extra: NodeJS.ProcessEnv = {}) =>
+      spawnSync(process.execPath, [INIT, "config", "--project-dir", dir, "--mcp", "none", ...args], {
+        cwd: dir,
+        encoding: "utf-8",
+        timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: { ...env, ...extra },
+      });
+    const claude = init(["--from", join(REPO_ROOT, "dist-release", "claude"), "--harness", "claude"]);
+    expect(claude.status, `${claude.stdout}${claude.stderr}`).toBe(0);
+    expect(config(dir, ["--harness", "kiro-v2", "--yes"]).status).toBe(0);
+    // Open work, so the refresh says how to go back to the release it was on.
+    const intents = join(dir, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, "open-work"), { recursive: true });
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify([{
+      uuid: "deadbeef-0000-4000-8000-000000000002",
+      slug: "open-work",
+      dirName: "open-work",
+      scope: "feature",
+      status: "in-flight",
+    }], null, 2)}\n`);
+    writeFileSync(join(intents, "open-work", "aidlc-state.md"), "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+    // Kiro CLI (V2) files from a later release.
+    const later = join(mkdtempSync(join(realpathSync(tmpdir()), "aidlc-kiro-typed-later-")), "kiro");
+    temporary.push(dirname(later));
+    cpSync(join(REPO_ROOT, "dist-release", "kiro"), later, { recursive: true });
+    const laterStamp = join(later, ".kiro", "tools", "data", "aidlc-stamp.json");
+    const stamped = JSON.parse(readFileSync(laterStamp, "utf-8")) as { frameworkVersion: string };
+    const [major, minor, patch] = stamped.frameworkVersion.split(/[.-]/).map(Number);
+    writeFileSync(laterStamp, `${JSON.stringify({ ...stamped, frameworkVersion: `${major}.${minor}.${patch + 1}` }, null, 2)}\n`);
+    // The project's Claude Code tool reads like a release from before the typed names; this run does not rewrite it.
+    const tool = olderToolCopy(join(dir, ".claude", "tools"), join(dir, ".claude", "tools"));
+    const manifest = join(dir, ".claude", "tools", "data", "aidlc-manifest.json");
+    const recorded = JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> };
+    recorded.files[".claude/tools/aidlc-runtime-paths.ts"] =
+      `sha256:${createHash("sha256").update(readFileSync(join(dir, ".claude", "tools", "aidlc-runtime-paths.ts"))).digest("hex")}`;
+    writeFileSync(manifest, `${JSON.stringify(recorded, null, 2)}\n`);
+    const handed = init(["--from", later, "--harness", "kiro", "--force", "--yes"], { AIDLC_CONFIG_HANDOFF: tool });
+    expect(handed.status, `${handed.stdout}${handed.stderr}`).toBe(0);
+    expect(stamp(dir)).toBe("kiro");
+    expect(handed.stdout).toContain("To go back: get ");
+    expect(handed.stdout).toContain("then run `bun .claude/tools/aidlc.ts config --from <that file> --yes --harness kiro`.");
   });
 
   test("a copied tool's hand-off is read in ids: --harness kiro there is Kiro CLI (V2)", () => {
