@@ -104,6 +104,7 @@ import {
   freshReviewReceipts,
   unchangedChangeRequest,
   REVIEW_KEPT_FIELD,
+  GATE_SKIPPED_STAGES_FIELD,
   getField,
   guardRecoveryAnswerAdmits,
   readActiveDirectiveMarker,
@@ -6609,6 +6610,7 @@ interface TeamGateContext {
   unit: string;
   scope: UnitGateScope;
   stages: NonNullable<ReturnType<typeof findStageBySlug>>[];
+  skipped?: string[];
 }
 
 function teamGateContext(
@@ -6659,13 +6661,14 @@ function teamGateContext(
   // The gate covers the stages this Unit ran: one skipped for it (UNIT_SKIPPED
   // in the current attempt) owes no artifacts and no review, and Request
   // Changes must not reopen it, as a construction checkpoint's gate leaves out
-  // a stage skipped for every Unit.
+  // a stage skipped for every Unit. The final stage, where the gate sits,
+  // stays in its stages and is named skipped (GATE_SKIPPED_STAGES_FIELD).
+  const skipped = stages.filter((entry) => unitSkippedUnits(pd, entry.slug, undefined, content).has(unit));
   return {
     unit,
     scope: "unit-end",
-    stages: stages.filter(
-      (entry) => entry === final || !unitSkippedUnits(pd, entry.slug, undefined, content).has(unit),
-    ),
+    stages: stages.filter((entry) => entry === final || !skipped.includes(entry)),
+    skipped: skipped.filter((entry) => entry === final).map((entry) => entry.slug),
   };
 }
 
@@ -7423,6 +7426,7 @@ function teamGateFields(
     Unit: context.unit,
     "Gate Scope": context.scope,
     "Gate Stages": context.stages.map((entry) => entry.slug).join(","),
+    ...(context.skipped?.length ? { [GATE_SKIPPED_STAGES_FIELD]: context.skipped.join(",") } : {}),
     ...claimAttemptFields(resolveProjectDir(projectDir), context.unit),
   };
 }

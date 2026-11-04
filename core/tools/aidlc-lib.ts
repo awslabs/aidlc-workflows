@@ -119,6 +119,8 @@ import {
   attemptEventDefinitelyBefore,
   AUDIT_SHARD_FILE_RE,
   auditBlockField,
+  gateStagesFromBlock,
+  gateStagesReopened,
   auditFilePath,
   type AuditMark,
   auditShardBlocks,
@@ -225,6 +227,9 @@ export {
   ARCHIVED_INTENT_STATUS,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  GATE_SKIPPED_STAGES_FIELD,
+  gateStagesFromBlock,
+  gateStagesReopened,
   auditFilePath,
   type AuditMark,
   auditShardBlocks,
@@ -19217,14 +19222,7 @@ export function reviewAttemptAccounting(
     }
     if (kept.has(entry)) continue;
     if (entry.event === "GATE_REJECTED" || sensorFixes.has(entry)) {
-      const gateStages = (
-        auditBlockField(entry.block, "Gate Stages") ??
-          auditBlockField(entry.block, "Stage") ??
-          ""
-      )
-        .split(",")
-        .map((value) => value.trim());
-      if (!gateStages.includes(stage.slug)) continue;
+      if (!gateStagesReopened(entry.block).includes(stage.slug)) continue;
       const rejectedUnits = rejectionUnits(entry, sensorFixes);
       // A rejection that names no Unit is a stage-wide Request Changes: outside
       // team or checkpoint ownership it starts a new attempt for every Unit.
@@ -34878,18 +34876,6 @@ export type UnitGateStatus =
   | "revising"
   | "approved";
 
-export function gateStagesFromBlock(block: string): string[] {
-  const explicit = auditBlockField(block, "Gate Stages");
-  if (explicit) {
-    return explicit
-      .split(",")
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0);
-  }
-  const stage = auditBlockField(block, "Stage");
-  return stage ? [stage] : [];
-}
-
 export function gateEventMatchesUnit(
   block: string,
   slug: string,
@@ -34905,7 +34891,7 @@ function gateRejectionMatchesAttempt(
   slug: string,
   unit: string | undefined,
 ): boolean {
-  if (!gateStagesFromBlock(block).includes(slug)) return false;
+  if (!gateStagesReopened(block).includes(slug)) return false;
   const eventUnit = auditBlockField(block, "Unit");
   if (eventUnit === null) return true;
   return unit !== undefined && eventUnit === unit;
@@ -35161,7 +35147,7 @@ export function unitLifecycleRunFloorForProject(
     rows.some((row) =>
       row.event === "GATE_REJECTED" &&
       auditBlockField(row.block, "Unit") === name &&
-      gateStagesFromBlock(row.block).includes(slug));
+      gateStagesReopened(row.block).includes(slug));
   const floored = unit !== undefined && (unitScoped || ownReopen(unit)) ? unit : undefined;
   return latestMainWorkflowStageRunFloorFromRows(rows, slug, unitMajor, floored, true);
 }
