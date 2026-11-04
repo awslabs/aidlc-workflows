@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { kiroHome } from "./lib-transcripts.ts";
+import { TOOL_KEYS, type ToolKey } from "./lib-tools.ts";
 
 // The engine dirs AI-DLC's harness rows install into (AI-DLC's harness table in aidlc-lib.ts).
 export const ENGINE_DIRS = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
@@ -131,8 +132,7 @@ export function nativeInstall(): { dir: string; version: string | null; sourceRe
 // A tool's version and where it came from: `path` (the command on PATH), `known-location` (a usual
 // install folder the skill's shell PATH missed), `app` (the IDE's package.json), `person` (read off the
 // screen by the person, recorded by set-version.ts). `version: null` = not found on this machine.
-export const TOOL_KEYS = ["kiro-ide", "kiro-cli", "claude", "codex", "copilot"] as const;
-export type ToolKey = (typeof TOOL_KEYS)[number];
+export { TOOL_KEYS, type ToolKey, toolsUsed } from "./lib-tools.ts";
 export type ToolVersion = { version: string | null; source: "path" | "known-location" | "app" | "person" | null };
 
 const WIN = platform() === "win32";
@@ -223,25 +223,6 @@ export function environment(project: string, used: readonly ToolKey[] = TOOL_KEY
     tools,
     kiroHomeEngine: kiroHomeEngine(),
   };
-}
-
-// Transcript `tool` labels (lib-transcripts.ts) -> the tool whose version matters for this run.
-const USED_BY_LABEL: [RegExp, ToolKey][] = [
-  [/^claude-code$/, "claude"],
-  [/^codex$/, "codex"],
-  [/Kiro IDE/, "kiro-ide"],
-  [/Kiro CLI|^kiro-cli/, "kiro-cli"],
-  [/^copilot-cli$/, "copilot"],
-];
-
-// A tool whose only sessions made this report is not a tool the run used.
-export function toolsUsed(transcripts: { tool?: string; sessions?: number; reportSessions?: number; mixedSessions?: number }[]): ToolKey[] {
-  const used = new Set<ToolKey>();
-  for (const t of transcripts) {
-    if (!t.tool || (t.sessions ?? 0) - (t.reportSessions ?? 0) + (t.mixedSessions ?? 0) <= 0) continue;
-    for (const [re, key] of USED_BY_LABEL) if (re.test(t.tool)) used.add(key);
-  }
-  return TOOL_KEYS.filter((k) => used.has(k));
 }
 
 // Intent record dirs: aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/

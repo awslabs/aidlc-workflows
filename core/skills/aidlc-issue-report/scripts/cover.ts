@@ -51,7 +51,9 @@ for (const t of safe.trees ?? []) lines.push(`- AI-DLC in ${or(t.dir)}: ${or(t.s
 for (const tool of safe.environment?.toolsUsed ?? []) {
   const v = safe.environment?.tools?.[tool];
   const from = v?.source === "person" ? " (from the person)" : v?.source && v.source !== "log" ? " (at collection)" : "";
-  const named = (safe.environment?.toolsNamed ?? []).includes(tool) ? " (named by the person; no chat log of it was read)" : "";
+  // toolsNamed holds a tool only when no chat log showed the run in it (set-version.ts); the logs read are listed under
+  // "What is in safe.json", and safe.json's transcripts say which sessions made this report.
+  const named = (safe.environment?.toolsNamed ?? []).includes(tool) ? " (named by the person; no chat log showed the run in it)" : "";
   lines.push(`- ${tool}: ${or(v?.version, "not found")}${v?.version ? from : ""}${named}`);
 }
 lines.push(`- OS: ${or(safe.environment?.os)}`);

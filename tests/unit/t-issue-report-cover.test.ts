@@ -41,9 +41,29 @@ test("the cover names a tool the person named, counts each label once, and passe
   });
   expect(run("cover.ts", out).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
-  expect(cover).toContain("- kiro-ide: 1.4.13 (from the person) (named by the person; no chat log of it was read)");
+  expect(cover).toContain("- kiro-ide: 1.4.13 (from the person) (named by the person; no chat log showed the run in it)");
   // `<unit-1>` (the redaction map's) and `<custom-unit-1>` (a row's) are two Units.
   expect(cover).toContain("- unit: 3");
+  const check = run("check.ts", out);
+  expect([check.status, JSON.parse(check.stdout).hits]).toEqual([0, []]);
+});
+
+test("a tool the person named whose chat log held only this report is not said to have no chat log read, and passes the check", () => {
+  const out = folder({
+    window: { since: "2026-10-29T00:00:00.000Z", until: "2026-10-30T00:00:00.000Z", lastAidlcActivity: null, notes: [] },
+    environment: { os: "darwin 25.6.0 arm64", tools: { "kiro-ide": { version: null, source: "person" } }, toolsUsed: ["kiro-ide"], toolsNamed: ["kiro-ide"], versionsMissing: [] },
+    trees: [],
+    intents: [],
+    audit: { rows: [] },
+    transcripts: [{ tool: "kiro (v3: Kiro IDE)", sessions: 1, reportSessions: 1, mixedSessions: 0, events: [] }],
+    doctor: { ran: false, findings: [], note: "skipped (--no-doctor)" },
+    hooks: { drops: [] },
+    knownGaps: [],
+  });
+  expect(run("cover.ts", out).status).toBe(0);
+  const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
+  expect(cover).toContain("- kiro-ide: not found (named by the person; no chat log showed the run in it)");
+  expect(cover).not.toContain("no chat log of it was read");
   const check = run("check.ts", out);
   expect([check.status, JSON.parse(check.stdout).hits]).toEqual([0, []]);
 });

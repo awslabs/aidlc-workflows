@@ -1143,7 +1143,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
   finishRepeats(s, calls);
   if (untimedDispatches) s.notes.push(`${untimedDispatches} dispatch line(s) in Kiro's engine log had no readable time: counted with the run.`);
   s.notes.push("Kiro records hook runs by name only and a hook's refusal as a denied call with no reason: such a call counts under denials as denied-after-aidlc-hooks when AI-DLC hooks ran right before it (which hook refused is not recorded), else denied-no-reason.");
-  s.notes.push("Kiro writes no client version into its session store (measured 2026-10-22, CLI 2.33.1): its version is the one measured at collection time.");
+  s.notes.push("Kiro writes no client version into its session store (measured 2026-10-22, CLI 2.33.1): a Kiro version in this report comes from this machine at collection time or from the person, never from the log.");
   return s;
 }
 

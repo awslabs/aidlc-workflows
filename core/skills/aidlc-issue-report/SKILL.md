@@ -93,7 +93,7 @@ default window was used: tell the person in one line. If it says `no-aidlc-proje
 the tool's own chat log nor on this machine now. For each one, ask the person once to read it off their screen — never
 ask them to run a command. Tell them where it is: Kiro IDE in the Kiro menu → About Kiro (Windows and Linux: Help →
 About); a CLI tool in the banner it shows when it starts (Claude Code also in `/status`). Always offer "I don't know".
-If `environment.toolsUsed` is empty, no chat log was read, so ask which AI tool they used together with its version.
+If `environment.toolsUsed` is empty, no chat log showed which tool the run used (one may have held only this report), so ask which AI tool they used together with its version.
 Record each answer with
 
 ```bash
