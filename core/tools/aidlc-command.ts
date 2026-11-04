@@ -164,6 +164,7 @@ export const NEXT_VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--continue",
   "--change",
   "--every-unit",
+  "--unit-plan",
   // Retired, still taken so the token never becomes task text.
   "--init",
   "--force",

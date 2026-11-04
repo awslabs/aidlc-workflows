@@ -5044,6 +5044,12 @@ function projectTypeAskDirective(
   };
 }
 
+// A clone that took part or holds a claim is a team's, not the lead's.
+function teamsClone(projectDir: string, stateContent: string): boolean {
+  return existsSync(unitParticipantPath(projectDir)) ||
+    readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
+}
+
 // Who builds a plan of two or more Units is the person's to say, once, as
 // Inception ends: at the first step into a per-Unit Construction stage, while
 // nothing is built (a jump there meets the same rule). A pick records Unit
@@ -5065,13 +5071,7 @@ function constructionStaffingAsk(
   const ownership = (getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim();
   const teams = ownership === "team";
   if (ownership !== "" && !teams) return null;
-  // A clone that took part or holds a claim is a team's, not the lead's.
-  if (
-    teams && (
-      existsSync(unitParticipantPath(projectDir)) ||
-      readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null
-    )
-  ) return null;
+  if (teams && teamsClone(projectDir, stateContent)) return null;
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const dag = resolveBoltBatches(projectDir, evidence);
   if (dag.state !== "ok" || dag.units.length < 2) return null;
@@ -6154,6 +6154,7 @@ export interface ParsedFlags {
   knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
   unitCommand?: string[]; // leading `unit <verb>` (unitCommandArgv): the person's Unit command, for the agent to run
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
+  unitPlan?: boolean; // --unit-plan: a compose the agent read as adding, splitting or dropping a Unit
   orchestratorVerb?: "park" | "team-board"; // leading orchestrator verb: terminal print naming that command
   orchestratorVerbArgs?: string[]; // allowlisted trailing args for team-board (--space <s>, --intent <i>, --snapshot)
   configCommand?: string[]; // leading `config set|get|list ...`: execute the terminal config route, never freeform intent text
@@ -6452,6 +6453,9 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       flags.everyUnit = true;
     } else if (a === "--change") {
       flags.change = true;
+    } else if (a === "--unit-plan") {
+      flags.unitPlan = true;
+      flags.compose = true;
     } else if (a === "--propose") {
       // The agent's plan for a proposal step. A word outside the plan table is
       // the value reading step (readNextLine, before this loop); a missing
@@ -7668,6 +7672,39 @@ function finishedWorkComposeStep(stateContent: string): PrintDirective {
       `\`${aidlcToolInvocation("orchestrate")} next --scope <plan>\` (their words beside it would ` +
       `start new work) and follow what it returns. When none of them runs it, tell them that in one line,${newWork}`,
   );
+}
+
+// A compose the agent read as adding, splitting or dropping a Unit, once the
+// work is past Units Generation: the composer reshapes only the stages still
+// ahead, so it cannot make a Unit. The person is offered what they asked for
+// first, the go-back to Units Generation (the jump `next --stage` makes), with
+// separate work beside it. Which way the jump goes is the jump tool's own
+// resolve. A team's clone keeps the composer: the Unit plan is main's. Null
+// when the composer runs as before.
+function unitPlanChangeAsk(flags: ParsedFlags, pd: string, scope: string, stateContent: string): AskDirective | null {
+  if (!flags.unitPlan || flags.newScope || flags.report || teamsClone(pd, stateContent)) return null;
+  const resolved = resolveJumpTarget(scope, pd, { stage: "units-generation" });
+  if ("kind" in resolved || resolved.direction !== "backward" || resolved.targetSkipped) return null;
+  const next = `${aidlcToolInvocation("orchestrate")} next`;
+  const words = flags.intent?.trim() ? flags.intent : null;
+  return {
+    kind: "ask",
+    ask_type: "unit-plan-change",
+    response_route: "command",
+    question: "Changing the Units means changing the Unit plan that Units Generation made. How would you like to do it?",
+    choices: [
+      {
+        label: "Go back to Units Generation",
+        detail: "Units Generation runs again with your change, then the stages after it.",
+        command: `${next} --stage units-generation`,
+      },
+      {
+        label: "Run it as separate work",
+        detail: "Set it up as its own piece of work; this work's Unit plan stays as it is.",
+        ...(words === null ? {} : { command: `${next} --new-intent${wordsForNextStep(pd, "unit-plan", words)}` }),
+      },
+    ],
+  };
 }
 
 function composeDispatchDirective(
@@ -11957,13 +11994,18 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(printDirective(
         `Run \`${configSetCommand(reshapeSettings, unnamed)}\` to apply the settings typed with this request to the work being reshaped` +
           `${unnamed ? messageFill(pd, reshapeSettings) : ""}, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${reshapeReplyArgument(pd)}\` and follow what it returns.`,
+          `then run \`${aidlcToolInvocation("orchestrate")} next compose${flags.unitPlan ? " --unit-plan" : ""} --request ${question.id}${reshapeReplyArgument(pd)}\` and follow what it returns.`,
       ));
       return;
     }
     if (stateContent !== null && inFlight && !flags.newScope && !flags.report &&
         (getField(stateContent, "Status") ?? "").trim() === "Completed") {
       emit(finishedWorkComposeStep(stateContent));
+      return;
+    }
+    const unitPlanChange = stateContent !== null && inFlight ? unitPlanChangeAsk(flags, pd, scope, stateContent) : null;
+    if (unitPlanChange !== null) {
+      emit(unitPlanChange);
       return;
     }
     // Only a front composition continues into creation, which needs the
