@@ -461,6 +461,16 @@ export function memoryDirFor(projectDir: string, space?: string): string {
   return join(projectDir, ...memorySegmentsForSpace(resolvedSpace));
 }
 
+/** The file a rule the person keeps is written to, relative to the project in
+ *  posix form: the space's `project.md` or `team.md`, the learning loop's two
+ *  scopes (practiceFilePath, aidlc-learnings.ts, writes the same files). A
+ *  claimed Unit's candidate carries it like the Unit's source
+ *  (candidateBoundary, aidlc-unit.ts). */
+export const KEPT_RULE_SCOPES = ["project", "team"] as const;
+export function keptRuleFile(space: string, scope: (typeof KEPT_RULE_SCOPES)[number]): string {
+  return [...memorySegmentsForSpace(space), `${scope}.md`].join("/");
+}
+
 /** The TPL template-override source-of-truth dir for a workspace:
  *  `<projectDir>/aidlc/spaces/<space>/memory/templates` — where SEED ships the
  *  `templates/` floor and a team drops `<artifact>.md` overrides. Used by the

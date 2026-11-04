@@ -26,6 +26,7 @@ import {
   rootIntegrationTarget,
 } from "./aidlc-distribution.ts";
 import { aidlcRootParts } from "./aidlc-includes.ts";
+import { KEPT_RULE_SCOPES, keptRuleFile } from "./aidlc-graph.ts";
 import {
   activeIntentUuid,
   activeSpace,
@@ -1558,6 +1559,11 @@ function candidateBoundary(
   const unitRootKey = unitRoot.toLowerCase();
   const constructionRootKey = constructionRoot.toLowerCase();
   const recordPrefixKey = `${recordPrefix}/`.toLowerCase();
+  // A rule the person kept while working the Unit is written to the space's
+  // project.md or team.md, not the Unit's folder; it travels with the Unit as
+  // its source does, named at the merge gate.
+  const space = activeSpace(projectDir);
+  const keptRules = new Set(KEPT_RULE_SCOPES.map((scope) => keptRuleFile(space, scope)));
   const outsideUnitRecordPaths: string[] = [];
   for (const path of changedPaths) {
     if (isEngineMergeMetadata(projectDir, path, recordPrefix)) continue;
@@ -1573,6 +1579,10 @@ function candidateBoundary(
     }
     if (pathKey.startsWith(unitRootKey)) continue;
     if (changedAudit.includes(path)) continue;
+    if (keptRules.has(path)) {
+      outsideUnitRecordPaths.push(path);
+      continue;
+    }
     if (
       pathKey.startsWith(constructionRootKey) ||
       pathKey.startsWith(recordPrefixKey) ||
