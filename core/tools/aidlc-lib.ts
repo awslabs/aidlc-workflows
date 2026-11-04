@@ -32405,27 +32405,6 @@ function lifecycleResetRemedies(
     ];
   }
   if (state === "revising") {
-    // The gate still needs this Unit's UNIT_COMPLETED receipt after Request
-    // Changes: finishing the revision asks for it again, and a stage restart is
-    // refused in a Unit-scoped checkout, so recording it is offered here too
-    // (#1289).
-    const completionFirst: GuardRemedy[] = [];
-    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit) {
-      const operation = guardOperation({
-        kind: "record-unit-completion",
-        stage: input.stage,
-        unit: input.unit,
-      });
-      completionFirst.push({
-        op: "record-unit-completion",
-        action:
-          `Record Unit "${input.unit}"'s completion for "${input.stage}" from the artifacts ` +
-          `already on disk by running \`${operation.command}\`, then finish the revision.`,
-        ...operation,
-        requiresHuman: true,
-        executableNow: true,
-      });
-    }
     const finishRevisionCommand = renderEngineInvocation({
       route: "orchestrate",
       args: [
@@ -32440,7 +32419,6 @@ function lifecycleResetRemedies(
       ],
     }, { harnessDir: harnessDir() });
     return [
-      ...completionFirst,
       {
         op: "finish-revision",
         action:
@@ -32597,7 +32575,7 @@ export function evaluateGuardRefusal(
     // receipt is missing: its artifacts are already on disk (the gate checks them
     // first). Recording it is the way forward; restarting the stage or asking for
     // changes cannot produce it (#1289).
-    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForWork) {
+    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForReview) {
       const operation = guardOperation({
         kind: "record-unit-completion",
         stage: input.stage,
@@ -32607,7 +32585,8 @@ export function evaluateGuardRefusal(
         op: "record-unit-completion",
         action:
           `Record Unit "${input.unit}"'s completion for "${input.stage}" from the artifacts ` +
-          `already on disk by running \`${operation.command}\`, then present its gate again.`,
+          `already on disk by running \`${operation.command}\`, then ` +
+          (state === "revising" ? "finish the revision." : "present its gate again."),
         ...operation,
         // `unit complete` records it only once the person picked it.
         requiresHuman: true,

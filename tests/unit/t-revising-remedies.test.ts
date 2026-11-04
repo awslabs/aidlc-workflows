@@ -49,6 +49,7 @@ describe("a revising Unit stays finishable from its own checkout", () => {
       executableNow: true,
       operation: { kind: "record-unit-completion", stage: SLUG, unit: "alpha" },
     });
+    expect(refusal.remedies[0].action).toEndWith("then finish the revision.");
     const ask = guardRecoveryAskForRefusal(refusal);
     expect(ask).not.toBeNull();
     const checked = validateDirective(ask);
