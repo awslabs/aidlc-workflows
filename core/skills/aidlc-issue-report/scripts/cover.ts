@@ -75,15 +75,8 @@ const stack = (safe.audit?.rows ?? []).some((r) => (r.fields ?? []).some(([name]
 if (stack) lines.push("- The project's languages and frameworks as AI-DLC's workspace scan recorded them.");
 
 lines.push("", "## Replaced by labels", "");
-const kinds = new Map<string, Set<string>>();
-// Each distinct label once: `<unit-1>` (the redaction map's) and `<custom-unit-1>` (a row's) are two Units.
-for (const m of text.matchAll(/<(?:custom-)?([a-z]+(?:-[a-z]+)*?)-\d{1,6}>/g)) {
-  const set = kinds.get(m[1]) ?? new Set<string>();
-  set.add(m[0]);
-  kinds.set(m[1], set);
-}
-if (kinds.size === 0) lines.push("- none");
-for (const [kind, set] of [...kinds].sort()) lines.push(`- ${kind}: ${set.size}`);
+// Filled in below, once the cover's own words have had the hidden names replaced (they may add labels).
+const inventoryAt = lines.length;
 
 lines.push("", "## Not in this folder", "");
 lines.push(
@@ -104,5 +97,27 @@ if (notes.length) {
 lines.push("", "Each part of `safe.json` is described in the data guide among this skill's references.", "");
 
 // A name the person hid is kept out of the cover's own words too.
-writeFileSync(join(out, "aidlc-issue-report.md"), hideInWords(lines.join("\n"), loadDictionary(join(out, "local", "redaction-map.json"))));
+const dict = loadDictionary(join(out, "local", "redaction-map.json"));
+const written = lines.map((l) => hideInWords(l, dict));
+// Each distinct label once, in safe.json and on the cover: `<unit-1>` (the redaction map's) and `<custom-unit-1>` (a
+// row's) are two Units. The count lines are hidden too; a label hiding puts in them joins the count, which only grows,
+// so it settles.
+const LABEL_N = /<(?:custom-)?([a-z]+(?:-[a-z]+)*?)-\d{1,6}>/g;
+const seen = new Map<string, Set<string>>();
+const add = (all: string) => {
+  let grew = false;
+  for (const m of all.matchAll(LABEL_N)) {
+    const set = seen.get(m[1]) ?? new Set<string>();
+    if (!set.has(m[0])) grew = true;
+    set.add(m[0]);
+    seen.set(m[1], set);
+  }
+  return grew;
+};
+add(`${text}\n${written.join("\n")}`);
+const countLines = () => (seen.size === 0 ? ["- none"] : [...seen].sort().map(([kind, set]) => `- ${kind}: ${set.size}`)).map((l) => hideInWords(l, dict));
+let inventory = countLines();
+while (add(inventory.join("\n"))) inventory = countLines();
+written.splice(inventoryAt, 0, ...inventory);
+writeFileSync(join(out, "aidlc-issue-report.md"), written.join("\n"));
 console.log(JSON.stringify({ ok: true, cover: join(out, "aidlc-issue-report.md") }));

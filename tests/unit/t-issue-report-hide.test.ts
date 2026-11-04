@@ -189,6 +189,19 @@ test("a report whose project moved is collected from only with the project's fol
   expect(map.some((e) => e.value === dir)).toBe(true);
 });
 
+test("a hidden name that is also a label kind is kept out of the cover's label counts too", () => {
+  const out = reportFolder();
+  useWords(out, []);
+  writeFileSync(join(out, "safe.json"), JSON.stringify({ environment: { tools: {} }, trees: [{ row: "<custom-mode-1>" }] }, null, 2));
+  bun("hide.ts", ["--out", out, "--kind", "product", "--name", "Product", "--kind", "org", "--name", "Mode"]);
+  expect(bun("cover.ts", ["--out", out]).status).toBe(0);
+  const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
+  expect(cover.replace(/<[^>]+>/g, "")).not.toMatch(/\bproduct\b|\bmode\b/i);
+  // A label that hiding put into a count line is counted too.
+  expect(cover).toMatch(/^- org: 1$/m);
+  expect(JSON.parse(bun("check.ts", ["--out", out]).stdout).hits.filter((h: { file: string }) => h.file === "aidlc-issue-report.md")).toEqual([]);
+});
+
 test("a name inside the fixed text of an AI-DLC message is said not hidden, asked about, and the text kept", () => {
   const out = reportFolder();
   const phrase = "Run the Atlas checks again before the stage";
@@ -210,6 +223,8 @@ test("the cover's own words never carry a hidden name, so the check never refuse
   expect(bun("cover.ts", ["--out", out]).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
   expect(cover).not.toMatch(/\bhook\b|safe\.json|run data/i);
+  // The labels the cover's own words got are counted too.
+  expect(cover).toContain("- product: 3");
   const hits = JSON.parse(bun("check.ts", ["--out", out]).stdout).hits.filter((h: { file: string }) => h.file === "aidlc-issue-report.md");
   expect(hits).toEqual([]);
 });

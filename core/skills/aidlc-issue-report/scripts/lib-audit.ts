@@ -285,8 +285,9 @@ export function timeWindow(o: { since?: string; until?: string; days?: string; r
 // The HUMAN_TURN rows AI-DLC's prompt hook wrote for this report's own messages are the report's, not the run's: they
 // would stand in for the replies the run did not record. A row a few seconds around a report message is its, from the
 // same session when both name one, as matchReplies reads them (another chat's turn at that time stays the run's).
-// Kiro's and Copilot's messages carry no session here (their ids are not yet compared with AI-DLC's), so they are
-// matched by time alone.
+// Kiro's and Copilot's replies carry no session: Kiro's folder id often equals the row's Session, but the Kiro IDE
+// adapter can record a remembered or derived id instead (aidlc-kiro-adapter.ts terminalSessionId), so a strict compare
+// could mark recorded replies as not. They are matched by time alone.
 export function withoutReportTurns(rows: AuditRow[], prompts: Prompt[]): AuditRow[] {
   // A reply with no time of its own (Kiro CLI v2) carries its session's last write, which says nothing about its turn.
   const report = prompts.filter((p) => p.report && !p.noTime).map((p) => ({ t: Date.parse(p.ts), session: p.session }));
