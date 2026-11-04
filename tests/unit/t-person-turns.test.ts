@@ -886,6 +886,33 @@ describe("an answer that names the person's message", () => {
     expect(problems[1][0]).toContain('recorded words "Q5: B; Q6: A"');
   });
 
+  // A multi-select answer comes from the drive as an array; the hook keeps it
+  // as its picks joined with ", ", and leaves a blank answer out.
+  test("a question box's multi-select answer backs a later choice left to the agent", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    recent(dir, "DECISION_RECORDED", question("Q1-Q3"));
+    drive.sent(JSON.stringify({ "Q1?": "Follow docs/spec.md exactly", "Q2?": ["No coupon", "No gift card"], "Q3?": "" }), 3);
+    const message = saveMessage(dir, {
+      session: "chat-a", at: stamp(), source: "picker", text: "Follow docs/spec.md exactly",
+      picker: [
+        { question: "Q1?", reply: "Follow docs/spec.md exactly" },
+        { question: "Q2?", reply: "No coupon, No gift card" },
+        { question: "Q3?", reply: null },
+      ],
+      words: "Follow docs/spec.md exactly\nNo coupon, No gift card", settings: [],
+      route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    });
+    recent(dir, "HUMAN_TURN", { Session: "chat-a", Origin: "person", Source: "picker", "Message Id": message.id });
+    recent(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: spec; Q2: no coupon, no gift card", "Message Id": message.id });
+    recent(dir, "DECISION_RECORDED", question("Q4"));
+    recent(dir, "QUESTION_ANSWERED", {
+      Stage: "requirements-analysis", Details: "Q4: B",
+      "Answer Source": "chosen by the agent, reading their message", "Message Id": message.id,
+    });
+    expect(drive.unbacked()).toEqual([]);
+  });
+
   test("a message an approval spent does not back it", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);

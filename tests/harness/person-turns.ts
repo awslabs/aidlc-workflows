@@ -356,13 +356,19 @@ function namedMessageTurn(
 }
 
 // A menu turn's picks one per line, as the hook keeps them: an SDK drive's
-// answers object gives its answers in question order, a TUI form's Submit its
-// "; "-joined picks.
+// answers object gives its answers in question order (a multi-select's picks
+// joined with ", ", a blank answer left out, as the hook's replyOf does), a TUI
+// form's Submit its "; "-joined picks.
 function menuPicks(words: string): string {
   try {
     const answers: unknown = JSON.parse(words);
     if (answers !== null && typeof answers === "object" && !Array.isArray(answers)) {
-      return Object.values(answers).map((answer) => String(answer)).join("\n").trim();
+      return Object.values(answers).flatMap((answer) => {
+        const reply = (Array.isArray(answer) ? answer : [answer])
+          .filter((pick): pick is string => typeof pick === "string" && pick.trim() !== "")
+          .join(", ");
+        return reply === "" ? [] : [reply];
+      }).join("\n").trim();
     }
   } catch {
     // Not an answers object: a TUI form's Submit.
