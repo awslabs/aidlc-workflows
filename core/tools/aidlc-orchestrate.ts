@@ -101,6 +101,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CONFIG_SECTIONS } from "./aidlc-command.ts";
+import { isGitRepo } from "./aidlc-git.ts";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -286,6 +287,7 @@ import {
   splitSlugList,
   cachedClaimFanoutActive,
   hasAnyUnitClaimRefs,
+  teamSkeletonOn,
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
@@ -643,6 +645,7 @@ import {
   SESSION_EVENT_TYPES,
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
+import { teamUnitMemoryPath, unitMemoryPath } from "./aidlc-stage-diary.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import { withAuditLock } from "./aidlc-locks.ts";
@@ -717,6 +720,7 @@ import {
   guardPreflight as stateGuardPreflight,
   leftOutNotice,
   parkWorkflow,
+  practicesRulesToAdd,
 } from "./aidlc-state.ts";
 import {
   inspectStageValidity, stageDefinitionChangedFields, stageDefinitionChangedLine, stageLabel, staleStageNote,
@@ -734,6 +738,7 @@ import {
 } from "./aidlc-steering.ts";
 import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
 import { refreshActiveMemory } from "./aidlc-includes.ts";
+import { gateApproveAcceptsLine } from "./aidlc-review-brief.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -799,6 +804,55 @@ function broughtFilesGateLine(projectDir: string, node: { slug: string }, stateC
   if (unheard === null) return null;
   if (!isReadOnlyEngineProbe()) broughtFilesLines.push(unheard);
   return unheard.line;
+}
+
+// Without git AI-DLC keeps only fingerprints of the person's files, so the Code
+// Generation gate can only say a changed one has no committed copy to put back
+// (broughtFilesLine), after the build. This says it before, once for the
+// project, with the first gate the person is shown (every shipped scope gates
+// before Code Generation): a gate step is one the agent says, where the lines
+// of the step after creation went unsaid. The record is checked first, so a
+// project that heard it asks git nothing again, and one that turns git on stops
+// meeting it. Silent when the project folder, a repo of the work or a git
+// checkout in the workspace is in git (those files have their undo). `git init`
+// alone puts nothing back, so the line names the commit.
+export const NO_GIT_LINE =
+  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
+  "to get an undo, run `git init` and commit them.";
+const NO_GIT_SAID_FILE = "no-git-said";
+let noGitLineHanded: string | null = null;
+
+function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projectDir: string): void {
+  try {
+    if (existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE))) return;
+    const repos = [...intentRepos(projectDir), ...discoverSiblingRepos(projectDir)];
+    if (isGitRepo(projectDir) || repos.some((name) => isGitRepo(repoDir(projectDir, name)))) return;
+  } catch {
+    return;
+  }
+  reply.change_notices = [...(reply.change_notices ?? []).filter((said) => said !== NO_GIT_LINE), NO_GIT_LINE];
+  // An unattended run's gate waits for a person, who hears it when they take over.
+  if (!isReadOnlyEngineProbe() && process.env.AIDLC_UNATTENDED !== "1") noGitLineHanded = projectDir;
+}
+
+// Kept as said once the step that carries it is written (writePrepared). A
+// rules part carries it too, but it is said with the step after the parts,
+// which still carries it (the record waits), so it is recorded there.
+function recordNoGitLineSaid(written: { kind?: unknown; change_notices?: unknown }): void {
+  const projectDir = noGitLineHanded;
+  noGitLineHanded = null;
+  const notices = written.change_notices;
+  if (projectDir === null || written.kind === "load-steering" || !Array.isArray(notices) || !notices.includes(NO_GIT_LINE)) {
+    return;
+  }
+  try {
+    const dir = sessionsDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    mkdirSync(dir, { recursive: true });
+    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
+  } catch {
+    // Unrecorded: the next gate says it once more.
+  }
 }
 
 // " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
@@ -2160,6 +2214,7 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
   prepared.personLinesSaid?.();
+  recordNoGitLineSaid(prepared.transported as { kind?: unknown; change_notices?: unknown });
   const narration = (prepared.transported as { narration?: unknown }).narration;
   for (const { key, line } of broughtFilesLines.splice(0)) {
     if (engineProjectDir && engineSessionId && typeof narration === "string" && narration.includes(line)) {
@@ -4992,8 +5047,8 @@ function projectTypeAskDirective(
 // the question was shown and the person spoke without a pick, this session
 // builds the Units and the step says so; work with recorded repos gets that
 // line instead of a choice the setter refuses, and teams hear how their
-// approvals go. Each line holds until a Unit's work starts. Null when the
-// step goes on.
+// approvals go and, while no team has taken a Unit, how one does. Each line
+// holds until a Unit's work starts. Null when the step goes on.
 function constructionStaffingAsk(
   projectDir: string,
   stateContent: string | null,
@@ -5004,8 +5059,15 @@ function constructionStaffingAsk(
   if (stateContent === null || !node || node.phase !== "construction" || !isPerUnit(node)) return null;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
   const ownership = (getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim();
-  const teams = ownership === "team" && getField(stateContent, "Unit Gate Rhythm") === null;
+  const teams = ownership === "team";
   if (ownership !== "" && !teams) return null;
+  // A clone that took part or holds a claim is a team's, not the lead's.
+  if (
+    teams && (
+      existsSync(unitParticipantPath(projectDir)) ||
+      readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null
+    )
+  ) return null;
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const dag = resolveBoltBatches(projectDir, evidence);
   if (dag.state !== "ok" || dag.units.length < 2) return null;
@@ -5015,16 +5077,16 @@ function constructionStaffingAsk(
   // through without speaking: a line waits for the step after it.
   const speaks = !(isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null);
   if (teams) {
-    if (
-      speaks && readApplicableTeamUnitScopeStamp(projectDir, stateContent) === null &&
-      !existsSync(unitParticipantPath(projectDir))
-    ) {
+    if (!speaks) return null;
+    if (getField(stateContent, "Unit Gate Rhythm") === null) {
       sayWithStepOnce(
         projectDir,
         "Each team will approve its Unit after every stage. Do you want them to approve once at the end of each " +
           "Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.",
       );
     }
+    const handout = teamHandoutLine(projectDir, stateContent, dag.batches.flat()[0]);
+    if (handout !== null) sayWithStepOnce(projectDir, handout);
     return null;
   }
   const order = readConstructionIteration(stateContent) === "unit-major" ? "one after another" : "stage by stage";
@@ -5063,6 +5125,35 @@ function constructionStaffingAsk(
       },
     ],
   };
+}
+
+// No team has taken a Unit in this checkout's view: no participant marker,
+// no claim ref and no merge journal. Team routing then keeps the
+// single-checkout walk, and the lead hears how a team takes a Unit.
+function claimlessTeamCheckout(projectDir: string): boolean {
+  const journal = unitMergeTransactions(projectDir);
+  return !existsSync(unitParticipantPath(projectDir)) && !hasAnyUnitClaimRefs(projectDir) && journal.length === 0;
+}
+
+// How the Units reach the teams, said on the lead's checkout while none has
+// been taken (#3363): until then this session builds them, from the first
+// DAG Unit, which with a walking skeleton on is built here before any claim
+// opens. A record that cannot be read says nothing.
+function teamHandoutLine(projectDir: string, stateContent: string, first: string | undefined): string | null {
+  if (first === undefined) return null;
+  try {
+    if (!claimlessTeamCheckout(projectDir)) return null;
+  } catch {
+    return null;
+  }
+  const take = `then each team runs \`${aidlcInvocation()} unit participate\` in its own clone and ` +
+    `\`${entrySkillInvocation()}\` to take one.`;
+  const building = `No team has taken a Unit yet, so this session builds them here, starting with the ` +
+    `${unitPlainName(first)} Unit`;
+  return teamSkeletonOn(stateContent)
+    ? `${building}, the walking skeleton the others build on. To hand the others to teams, share this work ` +
+      `through git once it is built and approved; ${take}`
+    : `${building}. To hand Units to teams instead, share this work through git; ${take}`;
 }
 
 // What reading a large repo set costs, said once with the step that starts
@@ -6022,7 +6113,7 @@ export interface ParsedFlags {
   phase?: string;
   jumpUnit?: string; // --unit <name> with --stage: reopen that per-unit stage for this Unit (unit-major)
   everyUnit?: boolean; // --every-unit with --stage: reopen that per-unit stage for every Unit (unit-major)
-  change?: boolean; // --change with --stage and --unit or --every-unit: the reopen is the person's change at the open gate
+  change?: boolean; // --change with --stage and --unit or --every-unit: the reopen is the person's change
   depth?: string;
   testStrategy?: string;
   projectType?: "greenfield" | "brownfield"; // --project-type: the person's word on new project vs existing code
@@ -7678,7 +7769,7 @@ function composeDispatchDirective(
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and no proposal writes a scope file; if the human edits a matched stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as a SHORT offer before the approve/edit/reject gate (first read composer.md, beside the aidlc skill's SKILL.md, and follow it): (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by one line with the plan and the validator's numbers in plain words, "Plan: <scopeName>, <shown> stages, <gates> approval questions" (${modeContract})${inFlight ? "" : ', then, when the summary carries skipped_inputs (each a stage this plan skips and the stages it keeps that use what it makes), one plain line saying so, once, for all of them together, naming those stages, for example "This plan skips Units Generation, which Contract Design, Functional Design and Code Generation use"'}, then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (when they ask to raise or lower it, run " + aidlcDispatcherInvocation("config set guard-policy <value>") + " yourself, before any scope change they also asked for; a scope change the person asked for carries the new scope's own default, and any other scope change keeps the running policy and says so in one line)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked at or below that value; pass \`--guard-policy <value>\` for \`strict\` or \`relaxed\`, never for \`off\`, so creation records the scope's own default or raises a lower one; if the human flips a matched plan's value below its stock default at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards; a flip above the default keeps the plan matched and rides that flag)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, collaborators <collaborators>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and a plan_approval in creationSettings becomes --plan-approval like the others (a custom plan raises it on a base that builds without asking), but only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) one line saying they can ask to see why each stage is in or out and the scores behind the sizing. ${inFlight ? "Keep" : "Apart from the skipped_inputs line, keep"} the composer's stage-decision table (with any fold advisories) and its ARS score table off screen until the person asks; then show them as returned, the score table under a "Scoring detail (advisory)" heading with its method line and arsRationale, never recomputed, collapsed into prose, or trimmed. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as a SHORT offer before the approve/edit/reject gate (first read composer.md, beside the aidlc skill's SKILL.md, and follow it): (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by one line with the plan and the validator's numbers in plain words, "Plan: <scopeName>, <shown> stages, <gates> approval questions" (${modeContract})${inFlight ? "" : ', then, when the summary carries skipped_inputs (each a stage this plan skips, with the stages it keeps that use what it makes, if any), one plain line saying so, once, for all of them together, naming every one of those stages, for example "This plan skips Units Generation, which Contract Design, Functional Design and Code Generation use, and Deployment Execution"'}, then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (when they ask to raise or lower it, run " + aidlcDispatcherInvocation("config set guard-policy <value>") + " yourself, before any scope change they also asked for; a scope change the person asked for carries the new scope's own default, and any other scope change keeps the running policy and says so in one line)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked at or below that value; pass \`--guard-policy <value>\` for \`strict\` or \`relaxed\`, never for \`off\`, so creation records the scope's own default or raises a lower one; if the human flips a matched plan's value below its stock default at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards; a flip above the default keeps the plan matched and rides that flag)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, collaborators <collaborators>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and a plan_approval in creationSettings becomes --plan-approval like the others (a custom plan raises it on a base that builds without asking), but only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) one line saying they can ask to see why each stage is in or out and the scores behind the sizing. ${inFlight ? "Keep" : "Apart from the skipped_inputs line, keep"} the composer's stage-decision table (with any fold advisories) and its ARS score table off screen until the person asks; then show them as returned, the score table under a "Scoring detail (advisory)" heading with its method line and arsRationale, never recomputed, collapsed into prose, or trimmed. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   if (!inFlight) {
     parts.push(
@@ -7929,20 +8020,33 @@ function resolveScope(
 // the workspace root; the engine only joins them to projectDir for deterministic
 // diary bootstrap. Re-rooting remains a pure prefix swap, not a route through
 // the absolute projectDir-keyed state helpers.
-// Per-unit Construction stages embed a {unit-name} segment that a later engine
-// change resolves; until then the bare phase/slug form is the faithful derivation.
+// A per-Unit stage keeps the one stage-level diary, its notes tagged by Unit,
+// except a team-owned Unit's, which keeps its own (teamUnitMemoryPath).
 function memoryPathFor(phase: string, slug: string, recordPrefix: string | null): string {
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
-function unitMemoryPathFor(
-  slug: string,
-  unit: string,
+// Under team ownership a per-Unit stage's diary is the named Unit's own. A
+// directive that names no Unit (the skeleton-stance ask, the walk after a change
+// reopen) takes the claimed checkout's Unit, so the checkout never makes a
+// stage-level diary it cannot land; on main, which lands its own, it stays
+// stage-level.
+function stageMemoryPath(
+  node: GraphStage,
+  unit: string | null,
+  stateContent: string | null,
   recordPrefix: string | null,
+  projectDir: string | undefined,
 ): string {
-  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
-  return `${prefix}/construction/${unit}/${slug}/memory.md`;
+  const named = unit === UNIT_NAME_PLACEHOLDER ? null : unit;
+  const own = teamUnitMemoryPath(node, named, stateContent, recordPrefix);
+  if (own) return own;
+  if (!isTeamUnitOwnership(stateContent) || !isPerUnitStage(node)) {
+    return memoryPathFor(node.phase, node.slug, recordPrefix);
+  }
+  const claimed = projectDir ? readApplicableTeamUnitScopeStamp(projectDir, stateContent ?? undefined)?.unit : undefined;
+  return claimed ? unitMemoryPath(node.slug, claimed, recordPrefix) : memoryPathFor(node.phase, node.slug, recordPrefix);
 }
 
 // Callers create the stage diary at the deterministic directive-emission boundary
@@ -9144,7 +9248,7 @@ function buildRunStageDirective(
     mode: node.mode as RunStageDirective["mode"],
     inline_context_paths: inlineContext.paths,
     gate: computeGate(node, scope, stateContent),
-    memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
+    memory_path: stageMemoryPath(node, unit, stateContent, recordPrefix, codekbCtx?.projectDir),
     consumes: present,
     produces: resolveProduces(
       node,
@@ -12682,12 +12786,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     } else {
       try {
         const participant = existsSync(unitParticipantPath(pd));
-        const mergeTransactions = unitMergeTransactions(pd);
-        if (
-          !participant &&
-          !hasAnyUnitClaimRefs(pd) &&
-          mergeTransactions.length === 0
-        ) {
+        if (claimlessTeamCheckout(pd)) {
           // Exact claim-less team mode remains the increment-1 single-checkout
           // walk: no registry access and no fan-out directive.
           throw new Error("claimless-team-mode");
@@ -12910,11 +13009,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
             return;
           }
           const gate = applyGateOnlyShape(directive, pd, stateContent);
-          emit(withChangeNotices(gate, [
+          const skippedNotices = units
+            .filter((u) => skipped.has(u))
+            .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? ""));
+          // The gate's own lines are on the step already. A copy is no longer
+          // the step its route (runStageRoutes) and rules are kept for.
+          emit(skippedNotices.length === 0 ? gate : withChangeNotices(gate, [
             ...((gate as Directive).change_notices ?? []),
-            ...units
-              .filter((u) => skipped.has(u))
-              .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? "")),
+            ...skippedNotices,
           ]));
           return;
         }
@@ -13140,19 +13242,23 @@ function applyGateOnlyShape(
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
     const unit = directive.unit ?? null;
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
-    // What the person left out of the build, the files of theirs it changed,
-    // and a check that still fails on a declared output, are said with the
-    // gate, each on its own line after what the stage produced: the narration
-    // is the person's line, and the produced sentence stays whole.
+    // The rules Approve adds to the project's rules, what the person left out
+    // of the build, the files of theirs it changed, and a check that still
+    // fails on a declared output, are said with the gate, each on its own line
+    // after what the stage produced: the narration is the person's line, and
+    // the produced sentence stays whole.
     const narration = [
-      line, leftOutNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
+      line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
+      broughtFilesGateLine(projectDir, gateNode, stateContent),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
+    addNoGitLine(directive, projectDir);
     addReviewCheckOffer(directive, projectDir, gateNode, unit);
     addContextParkOffer(directive, projectDir);
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
     addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
+    addApproveAcceptsLine(directive, projectDir, gateNode, directive.unit_gate ? unit : null);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -14309,7 +14415,7 @@ function waveEntry(
     completion_required: completionRequired,
     review_state: reviewState,
     review_iteration: reviewIteration,
-    unit_memory_path: unitMemoryPathFor(node.slug, unit, recordPrefix),
+    unit_memory_path: unitMemoryPath(node.slug, unit, recordPrefix),
     consumes: present,
     consumes_absent: absent,
     produces: resolveProduces(
@@ -15498,6 +15604,15 @@ function emitTeamUnitMajorRunStage(
     );
     directive.gate = step.kind === "gate";
     directive.unit = unit;
+    // In the checkout that claimed the Unit, what follows its step is its next
+    // one, and after its last its landing; Build and Test, next in plan order,
+    // runs once every Unit lands.
+    if (scopeStamp) {
+      const later = block.slice(block.indexOf(stage) + 1).find((entry) =>
+        teamUnitStageApplies(entry, unitKind) && !ledgers.get(entry.slug)?.skipped.has(unit)
+      );
+      directive.next_stage = later?.name ?? `landing Unit ${unit}`;
+    }
     if (step.kind === "work") {
       // A Unit whose work is done is named the step it still owes, as on the
       // solo routes, never its stage body again.
@@ -16277,6 +16392,12 @@ function claimedCheckoutMove(
 // aside for the reopened Unit, and the person can pick it up again by name:
 // the same flags then resume it where it stopped. "route" when the walk is
 // already on the target for that Unit; null when this is no such jump.
+// The Unit the walk's step is for: the one a jump back reopens when the person
+// names none. Null once every Unit has done the block.
+function walkStepUnit(step: UnitMajorWalkStep): string | null {
+  return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+}
+
 function unitMajorReopen(
   projectDir: string,
   scope: string,
@@ -16290,7 +16411,7 @@ function unitMajorReopen(
   const targetIndex = blockSlugs.indexOf(targetSlug);
   if (targetIndex === -1) return null;
   const step = walk.step;
-  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  const inFlight = walkStepUnit(step);
   const liveStage = step.kind === "work" || step.kind === "summary"
     ? step.stage.slug
     : step.kind === "paused" ? step.stage : null;
@@ -16468,7 +16589,7 @@ function unitMajorForwardJump(
   const graph = loadGraph();
   const at = (slug: string): number => graph.findIndex((node) => node.slug === slug);
   const blockSlugs = walk.block.map((stage) => stage.slug);
-  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  const inFlight = walkStepUnit(step);
   if (
     inFlight !== null && liveStage !== null &&
     blockSlugs.indexOf(targetSlug) > blockSlugs.indexOf(liveStage) &&
@@ -18381,6 +18502,27 @@ function addReviewCheckOffer(
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
+// What Approve accepts at a reviewed gate with open findings, and the other
+// ways to decide one, said as the gate's last line for the person: inside the
+// Review brief it was lost whenever the agent retold the brief in its own
+// words. A line, never a check: a record that cannot be read says nothing.
+function addApproveAcceptsLine(
+  reply: { kind: string; change_notices?: string[] },
+  projectDir: string,
+  node: GraphStage,
+  unit: string | null,
+): void {
+  let line: string | null;
+  try {
+    const stage = findStageBySlug(node.slug);
+    line = stage === undefined ? null : gateApproveAcceptsLine(projectDir, stage, unit ?? undefined);
+  } catch {
+    return;
+  }
+  if (line === null) return;
+  reply.change_notices = [...(reply.change_notices ?? []).filter((said) => said !== line), line];
+}
+
 // The offer to carry on in a new chat when Kiro's own record shows this chat
 // nearly full (#2574), said once per chat beside a question the person is
 // asked anyway: a stage's approval, or a Unit's checkpoint. The person's answer
@@ -18979,6 +19121,31 @@ function practicesDraftPostureProblem(pd: string): string | null {
     return null;
   }
   return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
+}
+
+// The rules Approve at Practices Discovery adds to the project's rules, said
+// with the gate from the reading practices-promote writes them from; said too
+// when it adds none, so a summary that counts rules the draft does not hold as
+// list items never stands alone. Null when there is no draft to read.
+function practicesRulesGateLine(pd: string, node: { slug: string }): string | null {
+  if (node.slug !== "practices-discovery") return null;
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  const projectRules = join(memoryDirFor(pd), "project.md");
+  let rules: { mandated: string[]; forbidden: string[] };
+  try {
+    const draft = readFileSync(join(pd, prefix, "inception", "practices-discovery", "discovered-rules.md"), "utf-8");
+    rules = practicesRulesToAdd(draft, existsSync(projectRules) ? readFileSync(projectRules, "utf-8") : "");
+  } catch {
+    return null;
+  }
+  const where = toPosix(relative(pd, projectRules));
+  if (rules.mandated.length + rules.forbidden.length === 0) return `Approve adds no rules to ${where}.`;
+  return [
+    `Approve adds these rules to ${where}, which every later stage follows:`,
+    ...rules.mandated.map((rule) => `- Mandated: ${rule}`),
+    ...rules.forbidden.map((rule) => `- Forbidden: ${rule}`),
+  ].join("\n");
 }
 
 // The report that opens a stage's gate, or shows it again after a revision.
@@ -19792,8 +19959,26 @@ function emitTypedResumeChoice(
       emit(unknownUnit);
       return;
     }
+    // Back to a Unit's step, the person may want it run again or a change made
+    // to it: the agent reads which, and `--change` keeps their words as the change.
+    // When they named none, the Unit the reopen is for is named: a checkout's
+    // claimed Unit, or a solo walk's Unit in flight (the one unitMajorReopen
+    // reopens). That is the form the plan-approval guard admits for the reopen
+    // it prints.
+    const claim = units === "" && isTeamUnitOwnership(stateContent)
+      ? readApplicableTeamUnitScopeStamp(pd, stateContent)
+      : null;
+    const walk = units === "" && !isTeamUnitOwnership(stateContent) && validScopes().has(scope)
+      ? unitJumpWalk(pd, scope, stateContent, false)
+      : null;
+    const inFlight = walk?.block.some((stage) => stage.slug === node.slug) ? walkStepUnit(walk.step) : null;
+    const changeUnits = claim !== null ? ` --unit ${claim.unit}` : inFlight !== null ? ` --unit ${inFlight}` : units;
+    const change = changeUnits !== "" && isPerUnit(node)
+      ? ` If what they asked for is a change to that stage's work, run \`next --stage ${node.slug}${changeUnits} --change\` ` +
+        "instead, so the reopen keeps their words as the change."
+      : "";
     emit(move(printDirective(
-      `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.`,
+      `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.${change}`,
     )));
     return;
   }
@@ -20465,9 +20650,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const unitGate = withChangeNotices(unitReply, changeNotices);
       if (unitGate.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
+        addNoGitLine(unitGate, pd);
         addReviewCheckOffer(unitGate, pd, node, unit);
         addContextParkOffer(unitGate, pd);
         addRevisionCycle(unitGate, pd, slug, unit);
+        addApproveAcceptsLine(unitGate, pd, node, unit);
       }
       emit(unitGate);
       return;
@@ -20767,13 +20954,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const gateState = loadStateFileIfPresent(pd);
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
         const line = producedLine(node, unit, unitFolders, pd);
-        // What the person left out of the build, the files of theirs it
-        // changed, and a check that still fails on a declared output, are said
-        // with the gate, each on its own line after what the stage produced:
+        // The rules Approve adds to the project's rules, what the person left
+        // out of the build, the files of theirs it changed, and a check that
+        // still fails on a declared output, are said with the gate, each on its
+        // own line after what the stage produced:
         // the narration is the person's line (the produced sentence stays
         // whole), and the change lines stay what changed.
         const narration = [
-          line, leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, gateState),
+          line, practicesRulesGateLine(pd, node), leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, gateState),
           failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
@@ -20789,9 +20977,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           })?.note
           : undefined;
         if (deepUnits) gateReply.narration = [gateReply.narration, deepUnits].filter(Boolean).join("\n");
+        addNoGitLine(gateReply, pd);
         addReviewCheckOffer(gateReply, pd, node, unit);
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
+        addApproveAcceptsLine(gateReply, pd, node, unit);
       }
     }
     emit(gateReply);

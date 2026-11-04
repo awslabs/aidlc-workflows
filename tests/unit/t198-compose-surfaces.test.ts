@@ -139,8 +139,8 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(d.message)).toContain("pass `--guard-policy <value>` for `strict` or `relaxed`, never for `off`");
     expect(String(d.message)).toContain("flips a matched plan's value below its stock default");
     expect(String(d.message)).toContain("a flip above the default keeps the plan matched");
-    // The stages a custom plan's own skips leave unmade reach the offer in one
-    // line, once; the tables stay on request.
+    // Every stage a custom plan skips reaches the offer in one line, once; the
+    // tables stay on request.
     expect(String(d.message).split("when the summary carries skipped_inputs").length).toBe(2);
     expect(String(d.message)).toContain("one plain line saying so, once, for all of them together");
     expect(String(d.message)).toContain("Apart from the skipped_inputs line, keep the composer's stage-decision table");
