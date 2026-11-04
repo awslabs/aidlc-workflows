@@ -359,7 +359,7 @@ describe("t282 a v7 record is brought up in place and resumes", () => {
     // The route after Units Generation runs through Contract Design now, and status reads this field.
     expect(now).toMatch(/^- \*\*Next Stage\*\*: contract-design$/m);
     // Contract Design has no row until the work moves onto it, as for any stage a newer release adds.
-    expect(now).not.toMatch(/contract-design/);
+    expect(now).not.toMatch(/^- \[.\] contract-design/m);
     // The approved design is where Units Generation reads it.
     expect(existsSync(join(record, "inception", "domain-design", "components.md"))).toBe(true);
     expect(existsSync(join(record, "inception", "application-design"))).toBe(false);
