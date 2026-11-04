@@ -46,6 +46,7 @@ import {
   type StageValidityNode,
 } from "../../core/tools/aidlc-validity.ts";
 import {
+  readAllAuditShards,
   subagentInflightMarkerPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -123,6 +124,14 @@ type HookRewrite = {
     updatedInput?: Record<string, unknown>;
   };
 };
+
+type HookContext = {
+  hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+};
+
+function dispatchedRows(proj: string): string[] {
+  return readAllAuditShards(proj).split("\n---\n").filter((block) => block.includes("**Event**: SUBAGENT_DISPATCHED"));
+}
 
 const projects: string[] = [];
 
@@ -343,11 +352,14 @@ function expectSteeringPayload(payload: Record<string, unknown> | undefined): vo
   }
 }
 
+// harness names a tree the dispatch rewrite ships on (Codex, opencode,
+// Copilot); unset, the hook reads the Claude tree it runs from.
 function runDispatchHook(
   proj: string,
   toolName: string,
   toolInput: Record<string, unknown>,
   sessionId?: string,
+  harness?: string,
 ): { code: number; stdout: string; stderr: string } {
   const result = spawnSync(
     BUN,
@@ -360,6 +372,35 @@ function runDispatchHook(
         ...(sessionId ? { session_id: sessionId } : {}),
         tool_name: toolName,
         tool_input: toolInput,
+        cwd: proj,
+      }),
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...(harness ? { AIDLC_HARNESS_NAME: harness } : {}) },
+    },
+  );
+  return {
+    code: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+// Claude Code starting an agent: the SubagentStart payload carries the agent
+// type, never its brief.
+function runSubagentStart(
+  proj: string,
+  agentType: string,
+): { code: number; stdout: string; stderr: string } {
+  const result = spawnSync(
+    BUN,
+    [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "SubagentStart",
+        agent_id: "agent-1",
+        agent_type: agentType,
         cwd: proj,
       }),
       encoding: "utf-8",
@@ -1725,7 +1766,7 @@ describe("t248 deterministic steering delivery", () => {
     const result = runDispatchHook(proj, "Task", {
       subagent_type: "aidlc-product-agent",
       prompt: "Run .claude/aidlc-common/stages/inception/user-stories.md.",
-    });
+    }, undefined, "codex");
     expect(result.code, result.stderr).toBe(0);
     const prompt = String(
       (JSON.parse(result.stdout) as HookRewrite).hookSpecificOutput?.updatedInput?.prompt ?? "",
@@ -2069,14 +2110,14 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.final.context_warnings?.join("\n")).not.toContain("inline_context_paths");
   });
 
-  test("Claude dispatch rewrites carry exact rules once", () => {
+  test("a dispatch rewrite carries exact rules once (Codex, opencode, Copilot)", () => {
     const proj = project();
     const original = {
       subagent_type: "aidlc-product-agent",
       prompt:
         "Run .claude/aidlc-common/stages/inception/user-stories.md and write the requested contribution.",
     };
-    const first = runDispatchHook(proj, "Task", original);
+    const first = runDispatchHook(proj, "Task", original, undefined, "codex");
     expect(first.code, first.stderr).toBe(0);
 
     const output = JSON.parse(first.stdout) as HookRewrite;
@@ -2107,9 +2148,53 @@ describe("t248 deterministic steering delivery", () => {
     expect(prompt).toContain("Given/When/Then");
     expect(prompt.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
 
-    const second = runDispatchHook(proj, "Task", updated ?? {});
+    const second = runDispatchHook(proj, "Task", updated ?? {}, undefined, "codex");
     expect(second.code, second.stderr).toBe(0);
     expect(second.stdout).toBe("");
+  });
+
+  // Claude Code auto mode reviews the Agent call the model wrote and refuses one
+  // a hook changed after that review (#3456), so on Claude Code the call goes
+  // as written and the rules reach the agent as it starts.
+  test("on Claude Code a dispatch runs as the agent wrote it, and is recorded once", () => {
+    const proj = statefulProject(ONE_MESSAGE_STATE);
+    const result = runDispatchHook(proj, "Agent", {
+      subagent_type: "aidlc-product-lead-agent",
+      prompt: "Review the Requirements Analysis output for this stage.",
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(dispatchedRows(proj)).toHaveLength(1);
+  });
+
+  test("on Claude Code the agent gets the stage's exact rules as it starts, and nothing is recorded twice", () => {
+    const proj = statefulProject(ONE_MESSAGE_STATE);
+    const result = runSubagentStart(proj, "aidlc-product-lead-agent");
+    expect(result.code, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout) as HookContext;
+    expect(output.hookSpecificOutput?.hookEventName).toBe("SubagentStart");
+    const context = String(output.hookSpecificOutput?.additionalContext ?? "");
+    const memory = join(proj, "aidlc", "spaces", "default", "memory");
+    expect(context).toContain(readFileSync(join(memory, "org.md"), "utf-8"));
+    expect(context).toContain(readFileSync(join(memory, "phases", "inception.md"), "utf-8"));
+    expect(context).toContain("stage:requirements-analysis");
+    expect(context.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
+    // Over 10,000 characters Claude Code shows the agent the first 2,000 and
+    // the file it saved the whole text to, so the way to the rest comes first.
+    const read = context.indexOf("read that whole file");
+    expect(read).toBeGreaterThanOrEqual(0);
+    expect(read).toBeLessThan(2000);
+    expect(dispatchedRows(proj)).toHaveLength(0);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+  });
+
+  test("on Claude Code an agent that is not one of AI-DLC's starts with nothing added", () => {
+    const proj = statefulProject(ONE_MESSAGE_STATE);
+    for (const agent of ["Explore", "general-purpose", "aidlc-composer-agent"]) {
+      const result = runSubagentStart(proj, agent);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout, agent).toBe("");
+    }
   });
 
   test("rule text under adversarial framing does not replace the authoritative bundle", () => {
@@ -2137,7 +2222,7 @@ describe("t248 deterministic steering delivery", () => {
     const result = runDispatchHook(proj, "Task", {
       subagent_type: "aidlc-product-agent",
       prompt: originalPrompt,
-    });
+    }, undefined, "codex");
 
     expect(result.code, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as HookRewrite;
@@ -2168,7 +2253,7 @@ describe("t248 deterministic steering delivery", () => {
 
     expect(result.code).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("attaching them to a subagent");
+    expect(result.stderr).toContain("handing them to a subagent");
     expect(result.stderr).toContain("output limit");
     expect(result.stderr).toContain("nothing partial was written");
     expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
@@ -2188,7 +2273,7 @@ describe("t248 deterministic steering delivery", () => {
       prompt:
         "Assess platform fit for the draft. The user-stories elaboration " +
         "will consume this later; write your contribution file now.",
-    });
+    }, undefined, "codex");
     expect(result.code, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as HookRewrite;
     const prompt = String(output.hookSpecificOutput?.updatedInput?.prompt ?? "");
@@ -2211,7 +2296,7 @@ describe("t248 deterministic steering delivery", () => {
       prompt:
         "Inspect .claude/aidlc-common/stages/inception/not-a-real-stage.md " +
         "as background, then complete the active contribution.",
-    });
+    }, undefined, "codex");
 
     expect(result.code, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as HookRewrite;
@@ -2236,7 +2321,7 @@ describe("t248 deterministic steering delivery", () => {
       subagent_type: "test-pro-metrics-agent",
       prompt:
         "Run .claude/aidlc-common/stages/inception/user-stories.md and record metrics.",
-    });
+    }, undefined, "codex");
 
     expect(result.code, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as HookRewrite;
@@ -2257,7 +2342,7 @@ describe("t248 deterministic steering delivery", () => {
         },
       ],
     };
-    const result = runDispatchHook(proj, "spawn_agent", original);
+    const result = runDispatchHook(proj, "spawn_agent", original, undefined, "codex");
     expect(result.code, result.stderr).toBe(0);
 
     const output = JSON.parse(result.stdout) as HookRewrite;
