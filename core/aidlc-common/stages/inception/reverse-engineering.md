@@ -371,7 +371,8 @@ shared CodeKB. The staging directory contains exactly the nine filenames above
 and no other entries. It is temporary transaction input, not a durable stage
 artifact. `{{INVOKE}} engine workspace codekb --repo <repo> --json` prints that
 directory as `stage`, the files already in it as `staged`, and the active
-record and its intent's slug as `record` and `intent`.
+record and its intent's slug as `record` and `intent`. Once the candidate is
+written, run it again: `staged` must list exactly the nine names.
 
 For the block's `fingerprint:` line, run the mint command with the final
 `analyzed.paths` from the merged or replaced block (comma-separated) and paste
