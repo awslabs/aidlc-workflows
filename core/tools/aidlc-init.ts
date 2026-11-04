@@ -7062,6 +7062,7 @@ function prepareRefreshSource(
       if (
         existsSync(staged) ||
         (prior?.shippedOnly && prior.files[rel]) ||
+        (prior === null && copyEraOwnFile(descriptor, rel, join(projectDir, rel))) ||
         rel === `${descriptor.harnessDir}/tools/data/aidlc-manifest.json` ||
         !generatedOverlayCandidate(rel, descriptor.harnessDir)
       ) continue;
@@ -10140,6 +10141,27 @@ function planManagedFiles(
     operations.push({ kind: "remove", path: rel, expected: expected(target) });
     actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
   }
+  // A copied tree no `aidlc config` recorded: a file a copy-era release shipped
+  // that this one no longer ships, unchanged, goes the way a recorded one does.
+  if (prior === null) {
+    for (const rel of Object.keys(descriptor.retiredCopyFileHashes ?? {})) {
+      if (shipped.has(rel) || workspaceState(rel) || hostToolPath(rel)) continue;
+      const target = join(projectDir, rel);
+      if (!pathPresent(target) || !copyEraOwnFile(descriptor, rel, target)) continue;
+      operations.push({ kind: "remove", path: rel, expected: expected(target) });
+      actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
+    }
+  }
+}
+
+// A file a release shipped at this path for copying, unchanged (this
+// release's own copy tree and the copy-era releases', scripts/copy-era-files.ts;
+// a path this release no longer ships has its own list). In a project no
+// `aidlc config` recorded it is AI-DLC's own; a file that matches none stays
+// the person's.
+function copyEraOwnFile(descriptor: ProjectionDescriptor, rel: string, path: string): boolean {
+  const known = descriptor.legacyManagedFileHashes?.[rel] ?? descriptor.retiredCopyFileHashes?.[rel];
+  return known !== undefined && regularFile(path) && known.includes(ownedFileHash(path, known).hash);
 }
 
 // A refresh names every file it removes because the release no longer ships

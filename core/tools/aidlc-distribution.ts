@@ -65,6 +65,9 @@ export type ProjectionDescriptor = {
   onboarding?: string;
   managedDirectories: string[];
   legacyManagedFileHashes?: Record<string, string[]>;
+  // Files a copy-era release shipped for copying that this release no longer
+  // ships, and the bytes each was shipped with (scripts/copy-era-files.ts).
+  retiredCopyFileHashes?: Record<string, string[]>;
   rootIntegrations: RootIntegration[];
 };
 
@@ -465,6 +468,19 @@ export function validateProjectionDescriptor(
         throw new Error(`${root}: legacy managed file is missing or invalid: ${safe}`);
       }
       validateHashes(hashes, `${root}: ${safe} legacy managed-file signatures`);
+    }
+  }
+  if (descriptor.retiredCopyFileHashes !== undefined) {
+    const retired = descriptor.retiredCopyFileHashes;
+    if (!retired || typeof retired !== "object" || Array.isArray(retired)) {
+      throw new Error(`${root}: retired copy-file signatures are invalid`);
+    }
+    for (const [file, hashes] of Object.entries(retired)) {
+      const safe = safeRelativePath(file, "retired copy file");
+      if (!descriptor.managedDirectories.some((directory) => safe.startsWith(`${directory}/`))) {
+        throw new Error(`${root}: retired copy file is outside managed directories: ${safe}`);
+      }
+      validateHashes(hashes, `${root}: ${safe} retired copy-file signatures`);
     }
   }
   for (const integration of descriptor.rootIntegrations) {
