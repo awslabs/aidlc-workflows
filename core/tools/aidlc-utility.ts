@@ -86,13 +86,11 @@ import {
   stateShowsCompletion,
 } from "./aidlc-doctor-bundle.ts";
 import {
-  claudeLocalSettingsPath,
   managedSettingsFiles,
   resolveManagedSettingsCandidates,
 } from "./aidlc-statusline-choice.ts";
 import {
   AIDLC_HOOK_ENTRY_PREFIX,
-  aidlcDispatcherTarget,
   aidlcHookRegistrationHashes,
   readJsonFile,
   sha256Bytes,
@@ -124,7 +122,6 @@ import {
 import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, addRootBlocks, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   codexHookTrustHash,
-  hookGroupMemberNames,
   PRE_TOOL_USE_GROUP_TARGET,
   HUMAN_PRESENCE_NO_SWITCH,
   TRUSTED_COMMAND_PREFIX,
@@ -471,6 +468,8 @@ import {
   fillHookActivationText,
   hookActivation,
   hookExecutionRecoveryText,
+  claudeSettingsHookFiles,
+  registrationFaultLine,
   startedInsideProjectStep,
   projectSettingsRepair,
   hookLiveness,
@@ -4361,43 +4360,7 @@ export async function collectDoctorReport(
       const parsed = JSON.parse(withoutBom(raw)) as unknown;
       const parsedSettings = isPlainObject(parsed) ? parsed : {};
       settingsHooks = parsedSettings.hooks;
-      const commands: string[] = [];
-      const collectCommands = (value: unknown): void => {
-        if (Array.isArray(value)) return void value.forEach(collectCommands);
-        if (!value || typeof value !== "object") return;
-        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-          if (key === "command" && typeof item === "string") commands.push(item);
-          else collectCommands(item);
-        }
-      };
-      collectCommands(parsed);
-      // AI-DLC's status line lives in the person's own settings.local.json when
-      // they chose it, so the file it runs is checked from there too.
-      try {
-        const local = JSON.parse(withoutBom(readFileSync(claudeLocalSettingsPath(projectDir), "utf-8"))) as unknown;
-        const localStatusLine = isPlainObject(local) ? local.statusLine : undefined;
-        if (isPlainObject(localStatusLine) && typeof localStatusLine.command === "string") {
-          commands.push(localStatusLine.command);
-        }
-      } catch {
-        // No personal file, or one Claude Code itself reports.
-      }
-      const refs = new Set<string>();
-      for (const command of commands) {
-        const target = aidlcDispatcherTarget(command, true, projectDir);
-        if (target === "statusline") refs.add("aidlc-statusline.ts");
-        else if (target === null) continue;
-        else {
-          // One registration can run several hooks in one process
-          // (aidlc-command.ts HOOK_GROUPS): the files it stands for are its
-          // members', so the roster below checks those and no shipped guard
-          // reads as unwired.
-          const members = hookGroupMemberNames(target);
-          if (members.length > 0) for (const hook of members) refs.add(`aidlc-${hook}.ts`);
-          else refs.add(`aidlc-${target}.ts`);
-        }
-      }
-      expectedHooks = [...refs].sort();
+      expectedHooks = claudeSettingsHookFiles(projectDir, parsed);
     } catch {
       settingsReadable = false;
     }
@@ -5319,7 +5282,8 @@ export async function collectDoctorReport(
   const declaredNotRunYet = hookActivation()?.notRunYet;
   const hooksNotRunYet = declaredNotRunYet === undefined
     ? undefined
-    : startedInsideProjectStep(projectDir) ?? fillHookActivationText(declaredNotRunYet, projectDir);
+    : startedInsideProjectStep(projectDir) ??
+      fillHookActivationText(registrationFaultLine(projectDir) ?? declaredNotRunYet, projectDir);
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,

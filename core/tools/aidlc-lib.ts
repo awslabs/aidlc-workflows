@@ -32,7 +32,7 @@ import {
   repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
-import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
+import { hookGroupMemberNames, NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -480,7 +480,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
-import { readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
+import { aidlcDispatcherTarget, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -763,10 +763,10 @@ function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
 }
 
 function registrationLines(value: unknown): Pick<HookActivation, "registration"> {
-  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown } | null | undefined;
+  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown; unwired?: unknown } | null | undefined;
   return typeof lines?.file === "string" && lines.file !== "" && typeof lines.missing === "string" &&
-      typeof lines.invalid === "string"
-    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid } }
+      typeof lines.invalid === "string" && typeof lines.unwired === "string"
+    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid, unwired: lines.unwired } }
     : {};
 }
 
@@ -794,7 +794,7 @@ export interface HookActivation {
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
-  registration?: { file: string; missing: string; invalid: string };
+  registration?: { file: string; missing: string; invalid: string; unwired: string };
   startedInsideProject?: string;
 }
 
@@ -27854,28 +27854,93 @@ export function projectSettingsRepair(distribution: string): string {
   return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
 }
 
-// Missing, or there and not valid JSON (read as doctor reads it); null for a
-// valid file and for one that cannot be opened for another reason, which the
-// lines would not describe. Never throws: both callers run it outside a try.
-function registrationFault(path: string): "missing" | "invalid" | null {
+/**
+ * The aidlc-*.ts hook files a parsed .claude/settings.json runs, with AI-DLC's
+ * status line in the person's own settings.local.json; empty when it runs none.
+ * Doctor's hook contract and the hooks-off step both read the file through it.
+ */
+export function claudeSettingsHookFiles(projectDir: string, settings: unknown): string[] {
+  const commands: string[] = [];
+  const collectCommands = (value: unknown): void => {
+    if (Array.isArray(value)) return void value.forEach(collectCommands);
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "command" && typeof item === "string") commands.push(item);
+      else collectCommands(item);
+    }
+  };
+  collectCommands(settings);
+  // AI-DLC's status line lives in the person's own settings.local.json when
+  // they chose it, so the file it runs is checked from there too.
+  try {
+    const local = JSON.parse(withoutBom(readFileSync(join(projectDir, ".claude", "settings.local.json"), "utf-8")));
+    const localStatusLine = isPlainObject(local) ? local.statusLine : undefined;
+    if (isPlainObject(localStatusLine) && typeof localStatusLine.command === "string") {
+      commands.push(localStatusLine.command);
+    }
+  } catch {
+    // No personal file, or one Claude Code itself reports.
+  }
+  const refs = new Set<string>();
+  for (const command of commands) {
+    const target = aidlcDispatcherTarget(command, true, projectDir);
+    if (target === "statusline") refs.add("aidlc-statusline.ts");
+    else if (target === null) continue;
+    else {
+      // One registration can run several hooks in one process
+      // (aidlc-command.ts HOOK_GROUPS): the files it stands for are its
+      // members', so no shipped guard reads as unwired.
+      const members = hookGroupMemberNames(target);
+      if (members.length > 0) for (const hook of members) refs.add(`aidlc-${hook}.ts`);
+      else refs.add(`aidlc-${target}.ts`);
+    }
+  }
+  return [...refs].sort();
+}
+
+// Missing, there and not valid JSON, or valid and running none of AI-DLC's
+// hooks (read as doctor reads it); null for a file that runs them, whatever
+// else switches them off, and for one that cannot be opened for another
+// reason, which the lines would not describe. Never throws: its callers run it
+// outside a try. Only Claude Code declares a registration file.
+function registrationFault(project: string, path: string): "missing" | "invalid" | "unwired" | null {
   let text: string;
   try {
     text = readFileSync(path, "utf-8");
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : null;
   }
+  let parsed: unknown;
   try {
-    JSON.parse(withoutBom(text));
-    return null;
+    parsed = JSON.parse(withoutBom(text));
   } catch {
     return "invalid";
   }
+  return claudeSettingsHookFiles(project, parsed).length === 0 ? "unwired" : null;
+}
+
+/**
+ * The harness's line for a hook registration file that is missing, not valid
+ * JSON or runs none of AI-DLC's hooks, with doctor's repair in it and
+ * `<entry>` left for the caller; null when the file runs them or the harness
+ * declares none. No setting brings those hooks back, so this line comes first.
+ */
+export function registrationFaultLine(projectDir?: string): string | null {
+  const registration = hookActivation()?.registration;
+  if (!registration) return null;
+  const project = resolveProjectDir(projectDir);
+  const fault = registrationFault(project, join(project, registration.file));
+  return fault === null
+    ? null
+    : registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
 }
 
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(projectDir?: string): string {
   const startedInside = startedInsideProjectStep(projectDir);
   if (startedInside !== null) return startedInside;
+  const faultLine = registrationFaultLine(projectDir);
+  if (faultLine !== null) return fillHookActivationText(faultLine, projectDir);
   const declared = hookActivation()?.recovery;
   if (declared) return fillHookActivationText(declared, projectDir);
   return HOOK_EXECUTION_RECOVERY_OTHER;
@@ -27940,14 +28005,12 @@ export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () 
   // Started in a folder inside the project, no file or setting brings the
   // hooks back: the one step is to start the tool in the project folder.
   const startedInside = startedInsideProjectLine(project);
-  const registration = activation.registration;
-  const fault = startedInside === null && registration ? registrationFault(join(project, registration.file)) : null;
+  const faultLine = startedInside === null ? registrationFaultLine(project) : null;
   let step: string;
   if (startedInside !== null) {
     step = `Show the person this line and end your turn: "${startedInside}"`;
-  } else if (registration && fault) {
-    const line = registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
-    step = `Show the person this line and end your turn: "${line}"`;
+  } else if (faultLine !== null) {
+    step = `Show the person this line and end your turn: "${faultLine}"`;
   } else {
     // Through a link the agent would change a file outside the project.
     const edits = activation.agentStepEdits;
