@@ -1385,8 +1385,8 @@ export function claimAuditRules(
 
 // The record's shared files as `baseOid` has them: every audit shard but the
 // claim's own, and the stages' shared diaries (`<phase>/<stage>/memory.md`,
-// written at each stage start outside any Unit's folder). Pin refuses a change
-// to either (candidateBoundary), and `git add -A` commits both: a checkout
+// outside any Unit's folder). Pin refuses a change to either
+// (candidateBoundary), and `git add -A` commits both: a checkout
 // whose own shard was on main before the claim still recorded its pre-claim
 // rows there. They stay in the clone's history and working copy, as the
 // projected rows do.

@@ -2,15 +2,17 @@
 //
 // Under Unit Ownership: team a Unit's per-Unit stage runs in that Unit's own
 // claimed checkout, which commits only the Unit's record tree
-// (`construction/<unit>/`; pin refuses anything else). The run-stage directive
-// still named the stage-level `construction/<stage>/memory.md` as the diary, so
+// (`construction/<unit>/`; publish leaves the record's shared files out). The
+// run-stage directive still named the stage-level
+// `construction/<stage>/memory.md` as the diary, so
 // the agent was told to keep its notes in a file its checkout cannot land, and
 // the learnings step at the Unit's gate counted that same file's entries. The diary is now
 // the Unit's own `construction/<unit>/<stage>/memory.md`, the path a per-Unit
 // wave entry already uses, and the learnings step counts it there. A directive
 // that names no Unit (the skeleton-stance ask before the Unit's first stage)
 // takes the claimed checkout's Unit too, and never creates the stage-level
-// diary, which pin would refuse.
+// diary, which publish would leave out. On main working the Units unclaimed it
+// stays main's own stage-level diary.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -73,6 +75,20 @@ describe("t-team-unit-stage-diary a team Unit keeps its stage diary in its own r
     const prefix = relativeRecordDir(checkout);
     expect(directive.memory_path).toBe(`${prefix}/construction/alpha/functional-design/memory.md`);
     expect(existsSync(join(checkout, prefix!, "construction", "functional-design", "memory.md"))).toBe(false);
+  });
+
+  test("on main working the Units unclaimed, a directive that names no Unit keeps main's own stage diary", () => {
+    const { remote } = makeSeed(parallelDependencyBody());
+    const checkout = clone(remote, "main-no-stance");
+    const shared = join(checkout, ".claude", "knowledge", "aidlc-shared");
+    mkdirSync(shared, { recursive: true });
+    copyFileSync(join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md"), join(shared, "memory-template.md"));
+    const directive = nextDirective(checkout);
+    expect(directive).toMatchObject({ kind: "run-stage", stage: "functional-design" });
+    expect(directive.unit).toBeUndefined();
+    const prefix = relativeRecordDir(checkout);
+    expect(directive.memory_path).toBe(`${prefix}/construction/functional-design/memory.md`);
+    expect(existsSync(join(checkout, prefix!, "construction", "functional-design", "memory.md"))).toBe(true);
   });
 
   test("on main working the Units unclaimed, the directive and the learnings step use the same Unit diary", () => {

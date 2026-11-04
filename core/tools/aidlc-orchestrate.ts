@@ -7937,11 +7937,11 @@ function memoryPathFor(phase: string, slug: string, recordPrefix: string | null)
   return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
-// Under team ownership a per-Unit stage's diary is always a Unit's own. A
+// Under team ownership a per-Unit stage's diary is the named Unit's own. A
 // directive that names no Unit (the skeleton-stance ask, the walk after a change
-// reopen) takes the claimed checkout's Unit, and elsewhere the {unit-name}
-// placeholder, which is never bootstrapped: the stage-level diary is a file a
-// claimed checkout cannot land (pin refuses it).
+// reopen) takes the claimed checkout's Unit, so the checkout never makes a
+// stage-level diary it cannot land; on main, which lands its own, it stays
+// stage-level.
 function stageMemoryPath(
   node: GraphStage,
   unit: string | null,
@@ -7956,7 +7956,7 @@ function stageMemoryPath(
     return memoryPathFor(node.phase, node.slug, recordPrefix);
   }
   const claimed = projectDir ? readApplicableTeamUnitScopeStamp(projectDir, stateContent ?? undefined)?.unit : undefined;
-  return unitMemoryPath(node.slug, claimed ?? UNIT_NAME_PLACEHOLDER, recordPrefix);
+  return claimed ? unitMemoryPath(node.slug, claimed, recordPrefix) : memoryPathFor(node.phase, node.slug, recordPrefix);
 }
 
 // Callers create the stage diary at the deterministic directive-emission boundary
