@@ -549,6 +549,8 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         const result = await driveAidlc("/aidlc", {
           projectDir,
           env: { CLAUDE_CONFIG_DIR: claudeConfigDir },
+          // The agents' transcripts, where their start context is read.
+          persistSession: true,
           answerScript: APPROVE_ALL,
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
