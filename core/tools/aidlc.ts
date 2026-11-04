@@ -3899,15 +3899,20 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "aidlc",
   ].some((entry) => existsSync(join(projectDir, entry))) ||
     discoverProjectHarnesses(projectDir).length > 0;
-  // Config there would set up a new project, so the line names the steps that
-  // reach the person's project. Our options are read only before the person's
-  // own words, so the flag goes right after the tool.
-  return recognized
-    ? null
-    : `${route.id} requires an installed project harness or recognized project directory; ` +
-      `run it from the project folder, or add --project-dir <path> right after ${
-        aidlcInvocation() === "aidlc" ? "aidlc" : "aidlc.ts"
-      }`;
+  if (recognized) return null;
+  // Config there sets that folder up as a new project: the step when it is the
+  // person's project before setup, the wrong one when they meant another. So
+  // the line names config for that exact folder, then the steps that reach
+  // another one, and whether it is their project stays their call. Claude Code
+  // cuts a tool call's hook line at about 200 characters, so the step comes
+  // before the folder, whose path can be long. The copy channel has no aidlc
+  // command, and its hooks run only where its own tool is. Our options are
+  // read only before the person's own words, so the flag goes right after the
+  // tool.
+  const native = aidlcInvocation() === "aidlc";
+  return `${route.id} requires an installed project harness or recognized project directory; ` +
+    (native ? `run aidlc config in ${projectDir} if that folder is your project; otherwise ` : "") +
+    `run it from the project folder, or add --project-dir <path> right after ${native ? "aidlc" : "aidlc.ts"}`;
 }
 
 // A project inside a machine root is never acceptable. The reverse (a machine
