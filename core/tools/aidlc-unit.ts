@@ -3479,6 +3479,24 @@ function landGit(
   }
 }
 
+// Why main has no Unit stages left to record a landed Unit in, or null while
+// it has: a forward jump on main skips every Unit stage (functional-design to
+// code-generation, say) for every Unit at once.
+function unitStagesSkippedOnMain(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+): string | null {
+  const state = readStateFile(projectDir);
+  if (unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).length > 0) {
+    return null;
+  }
+  const stages = transaction.evidence.stages_expected;
+  const span = stages.length > 1 ? `${stages[0]} to ${stages[stages.length - 1]}` : stages.join("");
+  const at = getField(state, "Current Stage")?.trim();
+  return `main skipped the Unit stages (${span})${at ? ` when it moved on to ${at}` : ""}, ` +
+    "so there is nothing on main to record the Unit in";
+}
+
 function runStateFold(
   projectDir: string,
   transaction: UnitMergeTransaction,
@@ -3694,6 +3712,17 @@ function landUnit(args: string[], projectDir?: string): void {
     fail(`Unit "${unit}" state step has not folded.`);
   }
   if (runGitStep && transaction.status === "approved") {
+    // The state step records the Unit in main's Unit stages; with none left
+    // (a forward jump on main skipped them), merging would leave a merge on
+    // main that nothing records, so nothing is merged.
+    const skipped = unitStagesSkippedOnMain(pd, transaction);
+    if (skipped) {
+      fail(
+        `Unit "${unit}" was not merged: ${skipped}. Its pin and your merge approval stay as they are; ` +
+          `main takes Units in again once it is back on ${transaction.evidence.stages_expected[0]}, ` +
+          "and going back starts the Unit stages again on main.",
+      );
+    }
     if (!claimCheck) {
       fail(`Unit "${unit}" git landing has no current pinned-claim evidence.`);
     }
@@ -3747,16 +3776,19 @@ function landUnit(args: string[], projectDir?: string): void {
       transaction.git_commit_oid,
       target,
     );
+    const skipped = unitStagesSkippedOnMain(pd, transaction);
+    if (skipped) {
+      fail(
+        `Unit "${unit}" is merged into main at ${transaction.git_commit_oid}, but not recorded yet: ${skipped}. ` +
+          `Run aidlc unit land ${unit} again once main is back on ${transaction.evidence.stages_expected[0]}.`,
+      );
+    }
     const liveState = readStateFile(pd);
-    const liveScope = getField(liveState, "Scope") ?? "";
     const liveStageColumns = unitMajorConstructionStageSlugs(
-      liveScope,
+      getField(liveState, "Scope") ?? "",
       liveState,
       true,
     );
-    if (liveStageColumns.length === 0) {
-      fail(`Unit "${unit}" live main state has no active per-unit Construction columns.`);
-    }
     transaction = {
       ...transaction,
       live_stage_columns: liveStageColumns,
