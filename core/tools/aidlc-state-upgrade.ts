@@ -52,7 +52,7 @@ export function hasStateUpgrade(version: string): boolean {
 function upgradedText(content: string, step: StateUpgrade): string {
   let text = content.replace(/^(- \*\*State Version\*\*:)[ \t]*\S+[ \t]*$/m, `$1 ${step.to}`);
   for (const r of step.renamed) {
-    text = text.replace(new RegExp(`^(- \\[[ xSR?-]\\] )${r.from}( \u2014)`, "gm"), `$1${r.to}$2`);
+    text = text.replace(new RegExp(`^(- \\[[ xSR?-]\\] )${r.from}( \\u2014)`, "gm"), `$1${r.to}$2`);
     for (const field of STAGE_FIELDS) {
       if (getField(text, field) === r.from) text = setField(text, field, r.to);
     }
@@ -110,7 +110,7 @@ export function bringStateUpToDate(
     }
     withAuditLock(projectDir, () => {
       writeStateFile(projectDir, text, intent, space);
-      appendAuditEntryUnlocked(STATE_UPGRADED_EVENT, {
+      appendAuditEntryUnlocked("STATE_UPGRADED", {
         From: verdict.version,
         To: version,
         Renamed: renamed.map((r) => `${r.from} to ${r.to}`).join(", "),
