@@ -286,6 +286,7 @@ import {
   splitSlugList,
   cachedClaimFanoutActive,
   hasAnyUnitClaimRefs,
+  teamSkeletonOn,
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
@@ -4994,8 +4995,8 @@ function projectTypeAskDirective(
 // the question was shown and the person spoke without a pick, this session
 // builds the Units and the step says so; work with recorded repos gets that
 // line instead of a choice the setter refuses, and teams hear how their
-// approvals go. Each line holds until a Unit's work starts. Null when the
-// step goes on.
+// approvals go and, while no team has taken a Unit, how one does. Each line
+// holds until a Unit's work starts. Null when the step goes on.
 function constructionStaffingAsk(
   projectDir: string,
   stateContent: string | null,
@@ -5006,8 +5007,15 @@ function constructionStaffingAsk(
   if (stateContent === null || !node || node.phase !== "construction" || !isPerUnit(node)) return null;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
   const ownership = (getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim();
-  const teams = ownership === "team" && getField(stateContent, "Unit Gate Rhythm") === null;
+  const teams = ownership === "team";
   if (ownership !== "" && !teams) return null;
+  // A clone that took part or holds a claim is a team's, not the lead's.
+  if (
+    teams && (
+      existsSync(unitParticipantPath(projectDir)) ||
+      readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null
+    )
+  ) return null;
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const dag = resolveBoltBatches(projectDir, evidence);
   if (dag.state !== "ok" || dag.units.length < 2) return null;
@@ -5017,16 +5025,16 @@ function constructionStaffingAsk(
   // through without speaking: a line waits for the step after it.
   const speaks = !(isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null);
   if (teams) {
-    if (
-      speaks && readApplicableTeamUnitScopeStamp(projectDir, stateContent) === null &&
-      !existsSync(unitParticipantPath(projectDir))
-    ) {
+    if (!speaks) return null;
+    if (getField(stateContent, "Unit Gate Rhythm") === null) {
       sayWithStepOnce(
         projectDir,
         "Each team will approve its Unit after every stage. Do you want them to approve once at the end of each " +
           "Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.",
       );
     }
+    const handout = teamHandoutLine(projectDir, stateContent, dag.batches.flat()[0]);
+    if (handout !== null) sayWithStepOnce(projectDir, handout);
     return null;
   }
   const order = readConstructionIteration(stateContent) === "unit-major" ? "one after another" : "stage by stage";
@@ -5065,6 +5073,35 @@ function constructionStaffingAsk(
       },
     ],
   };
+}
+
+// No team has taken a Unit in this checkout's view: no participant marker,
+// no claim ref and no merge journal. Team routing then keeps the
+// single-checkout walk, and the lead hears how a team takes a Unit.
+function claimlessTeamCheckout(projectDir: string): boolean {
+  const journal = unitMergeTransactions(projectDir);
+  return !existsSync(unitParticipantPath(projectDir)) && !hasAnyUnitClaimRefs(projectDir) && journal.length === 0;
+}
+
+// How the Units reach the teams, said on the lead's checkout while none has
+// been taken (#3363): until then this session builds them, from the first
+// DAG Unit, which with a walking skeleton on is built here before any claim
+// opens. A record that cannot be read says nothing.
+function teamHandoutLine(projectDir: string, stateContent: string, first: string | undefined): string | null {
+  if (first === undefined) return null;
+  try {
+    if (!claimlessTeamCheckout(projectDir)) return null;
+  } catch {
+    return null;
+  }
+  const take = `then each team runs \`${aidlcInvocation()} unit participate\` in its own clone and ` +
+    `\`${entrySkillInvocation()}\` to take one.`;
+  const building = `No team has taken a Unit yet, so this session builds them here, starting with the ` +
+    `${unitPlainName(first)} Unit`;
+  return teamSkeletonOn(stateContent)
+    ? `${building}, the walking skeleton the others build on. To hand the others to teams, share this work ` +
+      `through git once it is built and approved; ${take}`
+    : `${building}. To hand Units to teams instead, share this work through git; ${take}`;
 }
 
 // What reading a large repo set costs, said once with the step that starts
@@ -12684,12 +12721,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     } else {
       try {
         const participant = existsSync(unitParticipantPath(pd));
-        const mergeTransactions = unitMergeTransactions(pd);
-        if (
-          !participant &&
-          !hasAnyUnitClaimRefs(pd) &&
-          mergeTransactions.length === 0
-        ) {
+        if (claimlessTeamCheckout(pd)) {
           // Exact claim-less team mode remains the increment-1 single-checkout
           // walk: no registry access and no fan-out directive.
           throw new Error("claimless-team-mode");

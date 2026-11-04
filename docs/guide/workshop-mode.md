@@ -147,7 +147,11 @@ leaves this session building, and the first step says to ask for teams before
 the first Unit is built. Team approvals come after every stage (`per-stage`)
 unless the lead asks for one approval at the end of each Unit
 (`set-unit-gate-rhythm unit-end`) before the first team approval question;
-the first team step offers it.
+the first team step offers it. While no team has taken a Unit, that step also
+says once that this session builds the Units here, starting with the first
+DAG Unit (the walking skeleton, when the scope runs one), and how a team takes
+one instead: share the work through git, then run `aidlc unit participate` and
+`/aidlc` in the team's own clone (see Claim, build, and publish below).
 
 When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back
