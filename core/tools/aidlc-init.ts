@@ -5347,6 +5347,7 @@ function preserveClaudeProviderFields(
   prior: Baseline | null,
   notes: string[],
   providersAnswered: boolean,
+  descriptor?: ProjectionDescriptor,
 ): Set<string> {
   const retiredManagedFiles = new Set<string>();
   const relative = `${harnessDir}/settings.json`;
@@ -5380,7 +5381,9 @@ function preserveClaudeProviderFields(
     const hookPath = join(projectDir, hookRelative);
     if (!regularFile(hookPath)) return false;
     const released = RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target];
-    return released?.has(sha256FileMatching(hookPath, [...(released ?? [])])) ?? false;
+    if (released?.has(sha256FileMatching(hookPath, [...released]))) return true;
+    // A registration a copy-era release wrote for its own hook file, unchanged.
+    return descriptor !== undefined && copyEraOwnFile(descriptor, hookRelative, hookPath);
   });
   const ownedHookTargets = new Set([
     ...Object.keys(incomingHookHashes),
@@ -6663,6 +6666,7 @@ function preserveUserProviderFields(
   retiredManagedFiles: Set<string>,
   unproven: Set<string>,
   providersAnswered: boolean,
+  descriptor?: ProjectionDescriptor,
 ): boolean {
   if (harness === "claude") {
     // Claude settings merge per entry, so the refreshed file always applies.
@@ -6676,6 +6680,7 @@ function preserveUserProviderFields(
       prior,
       notes,
       providersAnswered,
+      descriptor,
     )) retiredManagedFiles.add(rel);
     return true;
   } else if (harness === "codex") {
@@ -6975,6 +6980,7 @@ function prepareRefreshSource(
     retiredManagedFiles,
     unproven,
     diagnosticsOverride !== undefined && Object.hasOwn(diagnosticsOverride, "providers"),
+    descriptor,
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
