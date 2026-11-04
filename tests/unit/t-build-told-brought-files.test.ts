@@ -36,7 +36,7 @@ afterEach(() => {
 const CHAT = "01995000-7a11-7000-8000-0000000c0001";
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const README = "# React Todo App\n\nA simple todo application.\n";
-const LEAVE = "Leave them as they are unless this work's plan changes one of them.";
+const LEAVE = "Leave them as they are: change one only when the person asks for it or the work cannot be built without it.";
 
 function next(proj: string, args: string[] = []): Record<string, unknown> {
   const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), proj, args, {
@@ -242,6 +242,14 @@ describe("the note's words", () => {
     expect(note).toContain("`docs/page-09.md`, and 3 more that were here before this work started.");
     expect(note).not.toContain("page-10");
     expect(note.replace(/`[^`]*`/g, " ")).not.toMatch(/[a-z]+_[a-z_]+/);
+  });
+
+  // With Plan Approval off the plan is the agent's own, so an exception for the
+  // work's plan let the build rewrite the person's README (t51).
+  test("gives the stage rule's two reasons to change one, and none for the work's own plan", () => {
+    const note = broughtFilesNote(["README.md"]);
+    expect(note).toEndWith(` ${LEAVE}`);
+    expect(note).not.toContain("plan");
   });
 
   test("a dispatched step's brief carries it after the other work's sentence; an inline step has no brief", () => {

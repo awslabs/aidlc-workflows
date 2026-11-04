@@ -425,14 +425,15 @@ describe("t190 validate-grid --keywords - collision check", () => {
 });
 
 // ===========================================================================
-// The plan offer's one risk line. A stock scope leaves some required inputs
-// unmade by design (t66 pins those edges), so the composer's final --custom run
-// names only what the plan's own changes leave unmade against the stock scope
-// it runs on, as summary.skipped_inputs: each skipped stage with every kept
+// The plan offer's one skip line. The composer's final --custom run names, as
+// summary.skipped_inputs, every stage the plan drops from the stock scope it
+// runs on (the stages creation records as skipped) and every stage a kept stage
+// needs that only the plan's own changes leave out (a stock scope leaves some
+// required inputs unmade by design: t66 pins those edges), each with every kept
 // stage that uses what it makes, in the names the person reads. The composer
 // copies summary verbatim, and the conductor says it once on the offer.
 // ===========================================================================
-describe("t190 validate-grid --custom names the stages a plan skips that a stage it keeps uses", () => {
+describe("t190 validate-grid --custom names every stage a plan skips, with the stages it keeps that use it", () => {
   const SETTINGS = {
     sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off", review_cap: "adversarial",
   };
@@ -441,6 +442,7 @@ describe("t190 validate-grid --custom names the stages a plan skips that a stage
     advisories: string[];
     routing?: string;
     base_scope?: string;
+    plan_changes?: { skip: string[]; add: string[] };
     summary: { skipped_inputs?: Array<{ stage: string; used_by: string[] }> };
   };
   function stock(scope: string, edits: Record<string, "EXECUTE" | "SKIP"> = {}): Record<string, string> {
@@ -467,15 +469,26 @@ describe("t190 validate-grid --custom names the stages a plan skips that a stage
   const SKIP = "SKIP" as const;
   const EXECUTE = "EXECUTE" as const;
   const UNITS = { stage: "Units Generation", used_by: ["Contract Design", "Functional Design", "Code Generation"] };
+  const DELIVERY = { stage: "Delivery Planning", used_by: [] };
+  const named = (body: Body): string[] => (body.summary.skipped_inputs ?? []).map((entry) => entry.stage);
 
-  test("the live run's plan on a new project names Units Generation and the three stages that use it", () => {
+  test("the live run's plan on a new project names what it drops, Units Generation with the three stages that use it", () => {
     const body = finalRun(stock("classic", {
       "reverse-engineering": SKIP, "user-stories": SKIP, "refined-mockups": SKIP, "units-generation": SKIP,
       "delivery-planning": SKIP, "intent-capture": EXECUTE, feasibility: EXECUTE, "scope-definition": EXECUTE,
       "approval-handoff": EXECUTE,
     }), ["--custom"]);
     expect(body).toMatchObject({ valid: true, routing: "custom", base_scope: "classic" });
-    expect(body.summary.skipped_inputs).toEqual([UNITS]);
+    // Reverse Engineering is not named: creation skips it on a new project.
+    expect(body.summary.skipped_inputs).toEqual([
+      { stage: "User Stories", used_by: [] },
+      { stage: "Refined Mockups", used_by: [] },
+      UNITS,
+      DELIVERY,
+    ]);
+    expect(body.plan_changes?.skip).toEqual([
+      "reverse-engineering", "user-stories", "refined-mockups", "units-generation", "delivery-planning",
+    ]);
     // The validator's own words stay in the advisories, beside the stage table.
     expect(body.advisories.filter((a) => a.includes("[units-generation]")).length).toBe(4);
   });
@@ -487,10 +500,16 @@ describe("t190 validate-grid --custom names the stages a plan skips that a stage
     expect(body.summary).not.toHaveProperty("skipped_inputs");
   });
 
-  test("a custom plan that leaves unmade only what its base already does says nothing", () => {
+  test("a custom plan that leaves unmade only what its base already does names only the stage it drops", () => {
     const body = finalRun(stock("classic", { "user-stories": SKIP }), ["--custom"]);
     expect(body.base_scope).toBe("classic");
     expect(body.advisories.some((a) => a.includes('"refined-mockups"'))).toBe(true);
+    expect(body.summary.skipped_inputs).toEqual([{ stage: "User Stories", used_by: [] }]);
+  });
+
+  test("a custom plan that only adds stages its base makes the inputs for says nothing", () => {
+    const body = finalRun(stock("classic", { "intent-capture": EXECUTE }), ["--custom"]);
+    expect(body).toMatchObject({ base_scope: "classic", plan_changes: { skip: [], add: ["intent-capture"] } });
     expect(body.summary).not.toHaveProperty("skipped_inputs");
   });
 
@@ -512,7 +531,27 @@ describe("t190 validate-grid --custom names the stages a plan skips that a stage
       { projectType: "brownfield" },
     );
     expect(body.base_scope).toBe("classic");
-    expect(body.summary.skipped_inputs).toEqual([UNITS]);
+    expect(body.summary.skipped_inputs).toEqual([UNITS, DELIVERY]);
+  });
+
+  // A live run: a plan for hardening a deployment pipeline dropped Deployment
+  // Execution from express, the offer never said so, and the record then said
+  // "Stages skipped: deployment-execution" under the person's approval.
+  test("a plan that drops a stage no kept stage uses names it, with no users", () => {
+    const body = finalRun(stock("express", { "deployment-execution": SKIP }), ["--custom"], {
+      projectType: "brownfield", depth: "minimal",
+    });
+    expect(body).toMatchObject({ valid: true, base_scope: "express", plan_changes: { skip: ["deployment-execution"] } });
+    expect(body.summary.skipped_inputs).toEqual([{ stage: "Deployment Execution", used_by: [] }]);
+  });
+
+  test("existing code names a dropped Reverse Engineering; a new project, where creation skips it, does not", () => {
+    const plan = stock("express", { "reverse-engineering": SKIP });
+    const existing = finalRun(plan, ["--custom"], { projectType: "brownfield", depth: "minimal" });
+    expect(existing.summary.skipped_inputs).toEqual([{ stage: "Reverse Engineering", used_by: [] }]);
+    const fresh = finalRun(plan, ["--custom"], { projectType: "greenfield", depth: "minimal" });
+    expect(fresh.base_scope).toBe("express");
+    expect(fresh.summary).not.toHaveProperty("skipped_inputs");
   });
 
   test("two skipped stages are named in the plan's order, each with the stages that use it", () => {
@@ -523,7 +562,34 @@ describe("t190 validate-grid --custom names the stages a plan skips that a stage
     expect(body.base_scope).toBe("classic");
     expect(body.summary.skipped_inputs).toEqual([
       UNITS,
+      DELIVERY,
       { stage: "NFR Design", used_by: ["Infrastructure Design"] },
     ]);
+  });
+
+  // The record says "Stages skipped: <plan_changes.skip>" under the person's
+  // approval, so every one of them is on the line the approval answered; the
+  // one exception is Reverse Engineering on a new project, which creation skips
+  // there whatever the plan says.
+  test("every stage creation will record as skipped is on the line", () => {
+    const graph = require("../../dist/claude/.claude/tools/data/stage-graph.json") as Array<{ slug: string; name: string }>;
+    const display = new Map(graph.map((stage) => [stage.slug, stage.name]));
+    for (const [scope, edits, projectType] of [
+      ["express", { "deployment-execution": SKIP, "requirements-analysis": SKIP }, "brownfield"],
+      ["feature", { "deployment-execution": SKIP, "observability-setup": SKIP, "user-stories": SKIP }, "brownfield"],
+      ["express", { "reverse-engineering": SKIP, "deployment-execution": SKIP }, "brownfield"],
+    ] as const) {
+      const body = finalRun(stock(scope, edits), ["--custom"], { projectType, depth: "minimal" });
+      expect(body.plan_changes?.skip.length, JSON.stringify(body)).toBeGreaterThan(0);
+      for (const slug of body.plan_changes?.skip ?? []) expect(named(body)).toContain(display.get(slug) ?? slug);
+    }
+    const fresh = finalRun(
+      stock("express", { "reverse-engineering": SKIP, "deployment-execution": SKIP }),
+      ["--custom"],
+      { projectType: "greenfield", depth: "minimal" },
+    );
+    expect(fresh.plan_changes?.skip).toEqual(["reverse-engineering", "deployment-execution"]);
+    expect((fresh.plan_changes?.skip ?? []).filter((slug) => !named(fresh).includes(display.get(slug) ?? slug)))
+      .toEqual(["reverse-engineering"]);
   });
 });

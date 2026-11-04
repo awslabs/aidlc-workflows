@@ -92,7 +92,7 @@ function createClassicWork(proj: string): void {
   const directive = JSON.parse(engine(proj, ["orchestrate", "next", "--scope", "classic", "Build what vision.md describes"])) as { message: string };
   const create = /engine intent create (.*?)`/.exec(directive.message)?.[1];
   if (!create) throw new Error(`no creation command in: ${directive.message}`);
-  const args = (create.match(/"[^"]*"|\S+/g) ?? []).map((arg) => arg.replace(/^"|"$/g, ""))
+  const args = (create.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((arg) => arg.replace(/^["']|["']$/g, ""))
     .map((arg) => arg.startsWith("<") ? "lunch-poll" : arg);
   engine(proj, ["intent", "create", ...args]);
 }

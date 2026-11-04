@@ -17,6 +17,7 @@ import {
   getWindowsProcessChildren,
   getWindowsProcessDetailsWithBun,
   parseWindowsProcessDetailsReply,
+  readWindowsNativeProcessIdentity,
   readWindowsProcessDetails,
   windowsFileTimeToISOString,
   type WindowsProcessDetailsApi,
@@ -28,7 +29,7 @@ const CREATION = 134029728000000123n;
 const COMMAND = '"C:\\Program Files\\node.exe" --session native-proof --owner-token fixture-only "☃ 日本語 & %LITERAL%"';
 
 function fakeApi(options: {
-  openError?: number; ntError?: number; badPid?: boolean; badPointer?: boolean;
+  access?: number; openError?: number; ntError?: number; badPid?: boolean; badPointer?: boolean;
   badLength?: boolean; exitAfterRead?: boolean; closeError?: boolean; creation?: bigint;
 } = {}) {
   const handle = {};
@@ -37,7 +38,8 @@ function fakeApi(options: {
   const address = 0x100000n;
   const api: WindowsProcessDetailsApi<object> = {
     OpenProcess(access, inherit, pid) {
-      expect(access).toBe(0x100400); // QUERY_INFORMATION | SYNCHRONIZE only.
+      // Details: QUERY_INFORMATION | SYNCHRONIZE; identity: QUERY_LIMITED_INFORMATION | SYNCHRONIZE.
+      expect(access).toBe(options.access ?? 0x100400);
       expect(access & (0x1 | 0x10 | 0x20 | 0x8 | 0x40)).toBe(0);
       expect(inherit).toBe(0);
       expect(pid).toBe(42);
@@ -112,6 +114,16 @@ describe("native Windows process details", () => {
     expect(exiting.calls.at(-1)).toBe("close");
     expect(() => readWindowsProcessDetails(42, fakeApi({ exitAfterRead: true, closeError: true }).api))
       .toThrow("CloseHandle");
+  });
+
+  test("a reused PID the runner cannot open reads as a process that is not the recorded one", () => {
+    // The runner always opens its own processes, so ACCESS_DENIED means another account's process holds the PID now.
+    const denied = fakeApi({ openError: 5, access: 0x101000 });
+    const identity = readWindowsNativeProcessIdentity(42, denied.api);
+    expect(identity).not.toBeNull();
+    expect(identity).toMatch(/^win32:42:\d+$/); // The shape getNativeProcessIdentityWithBun accepts from Bun.
+    expect(identity).not.toBe(readWindowsNativeProcessIdentity(42, fakeApi({ access: 0x101000 }).api));
+    expect(denied.calls).toEqual(["open"]);
   });
 
   test("NT failures and malformed local buffers fail closed and close the handle", () => {

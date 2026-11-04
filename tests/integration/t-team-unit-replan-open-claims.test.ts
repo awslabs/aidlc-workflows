@@ -10,8 +10,9 @@
 // step; that main's next steps are Units Generation, then Delivery Planning,
 // and the board is back once the revised plan is approved; that Units that
 // landed stay landed and done on the board; and that a claim opened before
-// the jump lands while Units Generation is still open. Claiming while the plan
-// is changed is in t-team-unit-replan-claim-waits.test.ts.
+// the jump lands while Units Generation is still open; a teammate's
+// participant clone that pulls main mid-replan keeps the board. Claiming
+// while the plan is changed is in t-team-unit-replan-claim-warns.test.ts.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -20,6 +21,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
   cleanupTempDirs,
+  clone,
   gateAndLand,
   git,
   nextDirective,
@@ -140,7 +142,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
     const line = notices.find((notice) => notice.startsWith("Still claimed:"));
     expect(line, jump.out).toContain("Still claimed: beta (beta-team).");
     expect(line, jump.out).toContain("carries on and lands as it is");
-    expect(line, jump.out).toContain("No new Unit is claimed until the revised plan is approved.");
+    expect(line, jump.out).not.toContain("No new Unit is claimed");
   });
 
   test("the jump with nothing claimed carries no Still claimed line", () => {
@@ -176,6 +178,24 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
       expect(board.text).toContain("## Claimable Units");
     });
   }
+
+  test("a teammate's participant clone that pulls main back at Units Generation keeps the board", () => {
+    const { seed, remote } = world();
+    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    pull(seed);
+    expect(reopenUnitsGeneration(seed).status).toBe(0);
+    git(seed, ["add", "-A"]);
+    git(seed, ["commit", "-m", "back to Units Generation"]);
+    git(seed, ["push", "origin", "main"]);
+
+    const carol = clone(remote, "carol");
+    const joined = runMergeTool(UNIT, ["participate"], carol);
+    expect(joined.status, joined.out).toBe(0);
+    expect(currentStage(carol)).toBe("units-generation");
+    const step = nextDirective(carol);
+    expect(step.kind, String(step.message ?? step.kind)).not.toBe("run-stage");
+    expect(String(step.message ?? "")).toContain("**Claimed:** beta (beta-team).");
+  });
 
   test("after the revised plan is approved and pushed, unit status and the board name the same claimable Units", () => {
     const { seed, remote } = world();

@@ -257,7 +257,7 @@ export interface GraphStage extends StageEntry {
   summary_confirmation?: "required" | "if-present";
 }
 
-/** A stage a custom plan skips and the stages it keeps that use what it makes. */
+/** A stage a custom plan skips and the stages it keeps that use what it makes (none when no kept stage does). */
 export interface SkippedInput {
   stage: string;
   used_by: string[];
@@ -270,8 +270,9 @@ export interface ScopeValidation {
   // The deterministic ceremony count of the validated grid (stage/gate/per-unit
   // counts). The composer copies this into its proposal verbatim so the gate the
   // human sees leads with numbers the validator computed, not an LLM recount.
-  // A passing --custom run adds skipped_inputs when the plan's own skips leave a
-  // kept stage without what it uses: the offer says it once, in one line.
+  // A passing --custom run adds skipped_inputs when the plan drops a stage from
+  // its base or leaves a kept stage without what it uses: the offer says it
+  // once, in one line.
   summary?: ScopeCostSummary & { skipped_inputs?: SkippedInput[] };
   // Graph/plugin-authored stock scopes ranked by grid distance from the
   // validated proposal; composer-authored entries are excluded. A front/report
@@ -1798,13 +1799,10 @@ export function validateGrid(
   // The ceremony count travels with the validation so the composer relays the
   // validator's numbers, not a hand recount. Computed over the raw proposal
   // entries; unknown slugs already produced errors above and contribute only to
-  // total/execute per gridCostSummary's graph-lookup guard. Creation skips
-  // reverse-engineering on a greenfield project, so a greenfield count leaves
-  // it out too and the offer's numbers are the ones creation prints.
+  // total/execute per gridCostSummary's graph-lookup guard. Counted as
+  // creation runs the grid, so the offer's numbers are the ones creation prints.
   const summary = gridCostSummary(
-    (opts?.projectType === "greenfield" && grid["reverse-engineering"] === "EXECUTE"
-      ? { ...grid, "reverse-engineering": "SKIP" }
-      : grid) as Record<string, "EXECUTE" | "SKIP">,
+    asCreated(grid, opts?.projectType) as Record<string, "EXECUTE" | "SKIP">,
   );
   // Distance to each stock scope travels with the validation for the same
   // reason as summary: the match decision must ride the validator's numbers.
@@ -1814,6 +1812,17 @@ export function validateGrid(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
   return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
+}
+
+/** `grid` as creation runs it: a new project skips Reverse Engineering, so
+ *  the plan offer's counts and its skip line leave it out there too. */
+function asCreated(
+  grid: Record<string, string>,
+  projectType?: "brownfield" | "greenfield",
+): Record<string, string> {
+  return projectType === "greenfield" && grid["reverse-engineering"] === "EXECUTE"
+    ? { ...grid, "reverse-engineering": "SKIP" }
+    : grid;
 }
 
 /** Each required input `grid` leaves unmade: a stage it runs whose required
@@ -1843,22 +1852,30 @@ function unmadeInputs(
   return unmade;
 }
 
-/** The stages a custom plan skips that a stage it keeps uses, where the plan's
- *  own changes cause it. A stock scope leaves some inputs unmade by design
- *  (t66 pins those edges), so a skipped producer is named only when one of the
- *  plan's unmade inputs it would make is not one `base`, the stock scope the
- *  plan runs on, leaves unmade too (the plan skipped it, or added a stage that
- *  needs it); it is then named with every kept stage that uses what it makes,
- *  so the offer's one line is whole. Display names, in stage order. */
+/** The stages a custom plan skips, for the offer's one line: every stage it
+ *  drops from `base`, the stock scope it runs on (planChangesBetween, the list
+ *  creation records as Stages skipped), and every skipped producer of an input
+ *  a kept stage needs that `base` does not leave unmade too (the plan added a
+ *  stage that needs it). A stock scope leaves some inputs unmade by design (t66
+ *  pins those edges), so those name nothing. Each is named with every kept stage
+ *  that uses what it makes, none when no kept stage does, so the line is whole.
+ *  Display names, in stage order. */
 function skippedInputs(
   plan: Record<string, string>,
-  base: Record<string, string>,
+  base: Record<string, "EXECUTE" | "SKIP">,
   projectType?: "brownfield" | "greenfield",
 ): SkippedInput[] {
   const key = (gap: { stage: GraphStage; artifact: string }): string => `${gap.stage.slug} ${gap.artifact}`;
   const onBase = new Set(unmadeInputs(base, projectType).map(key));
   const gaps = unmadeInputs(plan, projectType).filter((gap) => gap.producers.length > 0);
-  const named = new Set(gaps.filter((gap) => !onBase.has(key(gap))).flatMap((gap) => gap.producers.map((p) => p.slug)));
+  const dropped = planChangesBetween(
+    asCreated(base, projectType) as Record<string, "EXECUTE" | "SKIP">,
+    asCreated(plan, projectType),
+  ).skip;
+  const named = new Set([
+    ...dropped,
+    ...gaps.filter((gap) => !onBase.has(key(gap))).flatMap((gap) => gap.producers.map((p) => p.slug)),
+  ]);
   return loadGraph()
     .filter((s) => named.has(s.slug))
     .sort((a, b) => numericStageOrder(a.number, b.number))
