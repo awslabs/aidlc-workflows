@@ -389,11 +389,11 @@ export function commandPromptChildCommand(
 }
 
 // Kiro reads the terminal one second after sending the command. The child's
-// output is held for a little longer than that, then relayed as it comes: the
-// agent's result keeps the shape the live run proved (the pointer alone, or the
-// pointer and the whole reply when the command finished within the second),
-// while a question a command asks on the terminal shows a moment later instead
-// of never, and a person at Kiro's own terminal panel can answer it.
+// output is held for a little longer than that, then relayed as it comes, so a
+// question a command asks on the terminal shows a moment later instead of
+// never, and a person at Kiro's own terminal panel can answer it. The hold does
+// not decide what the agent's result shows: a long reply can still be cut off
+// after the pointer.
 const KIRO_RELAY_HOLD_MS = 1500;
 
 /**
@@ -439,10 +439,10 @@ export async function relayCommandPromptChild(
  * process (the engine writes its reply straight to fd 1, so nothing in-process
  * can copy it), relays the child's output and writes it to the file the pointer
  * names under `aidlc/.aidlc-sessions/` (gitignored, per-user scratch, the newest
- * twenty kept) when the child exits. The agent reads the file when its result
- * ends at the pointer, instead of running the command again. Resolves false,
- * having done nothing, everywhere else and in the child; otherwise it exits
- * with the child's code.
+ * twenty kept) when the child exits. When the result ends at the pointer or the
+ * reply after it is cut off, the agent goes on from the file instead of running
+ * the command again. Resolves false, having done nothing, everywhere else and
+ * in the child; otherwise it exits with the child's code.
  */
 export async function commandPromptReplyTee(
   env: NodeJS.ProcessEnv = process.env,
@@ -480,8 +480,8 @@ export async function commandPromptReplyTee(
       "second and every result ends with exit code -1";
   writeSync(
     1,
-    `AI-DLC reply: ${file} (${terminal}; when this result ends here, ` +
-      "the command is still running: read that file, which appears when it finishes)\n",
+    `AI-DLC reply: ${file} (${terminal}; when this result ends here or its reply is cut off, go on from that file, ` +
+      "which holds the whole reply once the command finishes; until it appears, the command is still running)\n",
   );
   const started = performance.now();
   const result = await relayCommandPromptChild(child);

@@ -521,9 +521,11 @@ it to PowerShell on the same kinds of answer (`--kiro-terminal powershell`) and
 keeps it in the `kiro-ide-terminal` marker. In that terminal (TERM_PROGRAM=kiro
 and the shell the chat's hook recorded) each tool entry also runs the tool as a
 child behind an `AI-DLC reply:` pointer line and keeps the reply under
-`aidlc/.aidlc-sessions/replies/`, and rejoins the single-quote pair cmd.exe left
-on the arguments, since the engine writes its reply straight to fd 1 and Kiro
-reads the terminal one second after sending the command. A Kiro terminal whose
+`aidlc/.aidlc-sessions/replies/` (the agent goes on from that file when the
+result stops at the pointer or is cut off after it), and rejoins the
+single-quote pair cmd.exe left on the arguments, since the engine writes its
+reply straight to fd 1 and Kiro reads the terminal one second after sending the
+command. A Kiro terminal whose
 shell integration script did not run (its `VSCODE_NONCE` is still set) gets the
 same reply file when that terminal is both ends of the command (a hook, a pipe
 or a tool reading its child's output never is), and doctor run in that terminal

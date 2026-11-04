@@ -668,12 +668,14 @@ Kiro reads the result one second after sending the command and shows exit code
 -1 for every run). Most AI-DLC steps take longer. So in Command Prompt every
 AI-DLC command prints one line first, `AI-DLC reply: aidlc/.aidlc-sessions/replies/<id>.txt`,
 and writes its reply to that file as well as to the terminal; when Kiro cuts
-the result off at that line, the agent reads the reply from the file instead
-of running the command again (the newest twenty replies are kept, in a folder
-git ignores). A value the agent wrote in single quotes, the PowerShell way,
-arrives from Command Prompt as several words with the quotes still on them;
-AI-DLC joins them back into the one value. Steps still take extra turns, so
-Kiro itself recommends PowerShell.
+the result off at that line or later in the reply, the agent goes on from the
+file instead of running the command again (the newest twenty replies are kept,
+in a folder git ignores). When a long command has not finished, the agent says
+so, and that it may be waiting for your answer in Kiro's terminal panel. A
+value the agent wrote in single quotes, the PowerShell way, arrives from
+Command Prompt as several words with the quotes still on them; AI-DLC joins
+them back into the one value. Steps still take extra turns, so Kiro itself
+recommends PowerShell.
 
 When Kiro's terminal is Command Prompt and you have not answered before on this
 computer, AI-DLC asks you once whether to set it to PowerShell: during
@@ -712,7 +714,8 @@ the same effect.
 AI-DLC notices this from its own commands. In such a terminal, in a project
 that has its `aidlc/` folder, every AI-DLC command the agent runs prints the
 `AI-DLC reply:` line first and keeps its reply in that file, as in Command
-Prompt (output sent to a pipe gets no such line), so the agent reads the reply
+Prompt (output sent to a pipe gets no such line), and when the result stops
+at that line or the reply after it is cut off, the agent goes on from that file
 instead of running the command again. The first time in a chat the agent runs `aidlc doctor` in that
 terminal and tells you what its `Kiro terminal` row says to check. (`/aidlc
 --doctor` typed in the chat runs outside the terminal, so it cannot see this.)

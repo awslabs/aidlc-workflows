@@ -49,7 +49,7 @@ This is the orchestrator's whole control structure. Run it from the moment `/aid
 
 **When a command comes back with `Command timed out`**, run one short read-only command next (`bun --version` is one) to see whether the terminal answers. Never run the timed-out command again to find out: its outcome is unknown, so check the state it was meant to change, or tell the person in one line. When the short command answers, the terminal is fine: carry on with the step, and treat the timeout as that one command's.
 
-**When a result ends at an `AI-DLC reply:` line**, the command is still running in Kiro's terminal: read the file that line names; its content is the reply. Do not run the command again.
+**When a result ends at an `AI-DLC reply:` line, or the reply after that line is cut off (a JSON that does not close, a list or a sentence that stops mid-way)**, take the next step from the file that line names, not from the result: once the command finishes it holds the whole reply, below its first line (the command itself). While the file is not there, the command is still running in Kiro's terminal: read it again in a few seconds. If it is still not there after a few reads, tell the person in one line that it is still running and may be waiting for their answer in Kiro's terminal panel, and end your turn; on your next turn read it again, and if it is still not there and they did not answer a question there, tell them its reply was lost and check what the command was meant to change. Do not run the command again.
 
 ```
 Loop:
