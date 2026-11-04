@@ -10100,10 +10100,11 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
   const dir = relativeCodekbDir(projectDir, repo, space);
   if (asJson) {
     const record = relativeRecordDirForSelection(selection);
-    const stageDir = record === null ? null : codekbStageDir(projectDir, repo, selection.intent ?? undefined, space);
+    // With no work selected a stage run on its own stages in the space's engine folder, as the dispatch makes it.
+    const stageDir = codekbStageDir(projectDir, repo, selection.intent ?? undefined, space);
     let staged: string[] = [];
     try {
-      if (stageDir !== null) staged = readdirSync(stageDir).sort();
+      staged = readdirSync(stageDir).sort();
     } catch {
       // Not made yet: nothing is staged.
     }
@@ -10113,7 +10114,7 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
       dir,
       record,
       intent: record === null ? null : listIntents(projectDir, space).find((entry) => entry.dirName === selection.intent)?.slug ?? null,
-      stage: stageDir === null ? null : `${relative(projectDir, stageDir).split(sep).join("/")}/`,
+      stage: `${relative(projectDir, stageDir).split(sep).join("/")}/`,
       staged,
     })}\n`);
     return;
