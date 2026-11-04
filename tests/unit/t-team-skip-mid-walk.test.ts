@@ -220,7 +220,7 @@ describe("a skip the person asks for on a team main that works every Unit itself
         'while that Unit is working on it; the alpha Unit is on Code Generation now." and stop.',
     );
     // A jump that names one Unit is refused on a team main: it is never offered as the way back.
-    expect(message).not.toContain("--stage code-generation --unit alpha");
+    expect(message).not.toContain("/aidlc --stage code-generation --unit alpha");
     const skipped = runNamed(proj, report("code-generation", "alpha"));
     expect(skipped.status, skipped.out).toBe(0);
     expect(unitSkips(proj, "code-generation")).toEqual(["alpha"]);
@@ -255,7 +255,7 @@ describe("a skip the person asks for on a team main that works every Unit itself
     expect(named(segment(message, ONLY, EVERY_FROM)), message).toEqual([report("functional-design", "alpha")]);
     expect(named(segment(message, EVERY_FROM)), message).toEqual([report("functional-design")]);
     expect(message).toContain('"Skipped Functional Design for the alpha Unit; the other Units still get it."');
-    expect(message).not.toContain("--stage functional-design --unit alpha");
+    expect(message).not.toContain("/aidlc --stage functional-design --unit alpha");
     const skipped = runNamed(proj, report("functional-design", "alpha"));
     expect(skipped.status, skipped.out).toBe(0);
     expect(unitSkips(proj, "functional-design")).toEqual(["alpha"]);
@@ -273,6 +273,21 @@ describe("a skip the person asks for on a team main that works every Unit itself
     const skipped = runNamed(proj, report("functional-design"));
     expect(skipped.status, skipped.out).toBe(0);
     expect(unitSkips(proj, "functional-design").sort()).toEqual(["alpha", "beta"]);
+    // The way back the line names runs on a team main.
+    says(proj, "actually, run functional design on its own after all");
+    const single = next(proj, ["--stage", "functional-design", "--single"]);
+    expect(`${single.kind} ${single.stage}`, JSON.stringify(single)).toBe("run-stage functional-design");
+  });
+
+  test("with no other Unit to take it, one command skips it for that Unit and the line names no way back", () => {
+    const proj = walk(["alpha"]);
+    const step = next(proj, ["--skip", "code-generation"]);
+    const message = String(step.message);
+    expect(named(step), message).toEqual([report("code-generation", "alpha")]);
+    expect(message).toContain('tell the person in one line: "Skipped Code Generation for the alpha Unit." Then re-run `next`');
+    const skipped = runNamed(proj, report("code-generation", "alpha"));
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(unitSkips(proj, "code-generation")).toEqual(["alpha"]);
   });
 
   test("Code Generation named while alpha is on Functional Design: one Unit is answered, the plan change covers every Unit", () => {
@@ -293,7 +308,7 @@ describe("a skip the person asks for on a team main that works every Unit itself
     const message = String(step.message);
     expect(named(step), message).toEqual([recompose("nfr-requirements")]);
     expect(message).toContain(
-      '"NFR Requirements can be skipped for one Unit while that Unit is working on it; the alpha Unit is waiting for its approval now."',
+      '"NFR Requirements can be skipped for one Unit while that Unit is working on it; the alpha Unit is waiting for its Functional Design approval now."',
     );
   });
 });

@@ -15760,6 +15760,22 @@ function teamUnitMajorWorkBeat(
   stateContent: string,
   currentSlug: string,
 ): { stage: GraphStage; unit: string; context: UnitWorkContext } | null {
+  const walk = teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  return walk?.step.kind === "work"
+    ? { stage: walk.step.stage, unit: walk.step.unit, context: walk.context }
+    : null;
+}
+
+// Where the team walk stands for the Current Stage: its step, the block it
+// walks, and the Unit DAG context, or null when the work is not team-owned
+// Units on the per-unit block. The skip report reads its work beat and the plan
+// change all of it, the same walk routing hands out.
+function teamUnitMajorWalkBeat(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): { step: TeamUnitWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
   if (readConstructionIteration(stateContent) !== "unit-major" || !isTeamUnitOwnership(stateContent)) return null;
   const resolution = resolveBoltBatches(projectDir);
   if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
@@ -15784,9 +15800,7 @@ function teamUnitMajorWorkBeat(
     projectDir, stateContent, block, units, resolution.unitKinds, model.ledgers, model.mergedUnits,
     effectiveUnitGateRhythm(projectDir, stateContent), auditRows, recordPrefix, codekbCtx,
   );
-  return step.kind === "work"
-    ? { stage: step.stage, unit: step.unit, context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx } }
-    : null;
+  return { step, block, context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx } };
 }
 
 // The first stop of the solo unit-major walk, without emitting it. Units walk
@@ -15995,31 +16009,60 @@ function unitMajorFinishedWalk(
 // whether another Unit still owes the step (so "this Unit" and "every Unit
 // from here" differ), whether another Unit already did the step, and whether
 // the walk has no other Unit at all. Null when the walk is not on a Unit.
+// A team's main checkout that works every Unit itself walks them one at a time
+// too; there a Unit can also wait at its team approval (`gate`), and a jump
+// naming one Unit is not taken (unitMajorReopen reads the solo walk), so
+// `unitJump` says whether `--stage <step> --unit <unit>` runs a step again for
+// that Unit alone.
 type PlanChangeWalk = {
   stage: string;
   unit: string;
-  at: "work" | "summary" | "paused" | "checkpoint";
+  at: "work" | "summary" | "paused" | "checkpoint" | "gate";
   steps: string[];
   others: boolean;
   worked: boolean;
   alone: boolean;
+  unitJump: boolean;
 };
 function planChangeWalk(projectDir: string, scope: string, stateContent: string): PlanChangeWalk | null {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
-  const walk = current === "" ? null : unitMajorWalkBeat(projectDir, scope, stateContent, current);
+  if (current === "") return null;
+  const solo = unitMajorWalkBeat(projectDir, scope, stateContent, current);
+  const team = solo === null && teamMainWorksItsUnits(projectDir, stateContent)
+    ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, current)
+    : null;
+  const walk = solo ?? team;
   if (walk === null || walk.step.kind === "covered") return null;
   const steps = walk.block.map((step) => step.slug);
   const alone = walk.context.units.length === 1;
+  const unitJump = solo !== null;
   if (walk.step.kind === "checkpoint") {
-    return { stage: "", unit: walk.step.unit, at: "checkpoint", steps, others: true, worked: false, alone };
+    return { stage: "", unit: walk.step.unit, at: "checkpoint", steps, others: true, worked: false, alone, unitJump };
   }
   if (walk.step.kind === "paused") {
-    return { stage: walk.step.stage, unit: walk.step.checkpoint.unit, at: "paused", steps, others: true, worked: false, alone };
+    return {
+      stage: walk.step.stage, unit: walk.step.checkpoint.unit, at: "paused", steps, others: true, worked: false, alone, unitJump,
+    };
+  }
+  if (walk.step.kind === "gate") {
+    return { stage: walk.step.stage.slug, unit: walk.step.unit, at: "gate", steps, others: true, worked: false, alone, unitJump };
   }
   const { stage, unit } = walk.step;
   const others = unitsOwingStage(projectDir, stage, walk.context, stateContent).some((u) => u !== unit);
   const worked = unitsWithStageWork(projectDir, stage, walk.context).some((u) => u !== unit);
-  return { stage: stage.slug, unit, at: walk.step.kind, steps, others, worked, alone };
+  return { stage: stage.slug, unit, at: walk.step.kind, steps, others, worked, alone, unitJump };
+}
+
+// Whether this checkout is a team's main that works the Units itself: no Unit
+// claim of its own (a claimed clone walks its one Unit) and no team holding a
+// claim (then no Unit's work runs here). validateLiveUnitScope owns both.
+function teamMainWorksItsUnits(projectDir: string, stateContent: string): boolean {
+  if (!isTeamUnitOwnership(stateContent)) return false;
+  try {
+    return validateLiveUnitScope(projectDir) === null;
+  } catch {
+    return false;
+  }
 }
 
 // The Units that still owe a step of the walk: not done with it, not skipped
@@ -17404,6 +17447,7 @@ function planChangeDirective(
     : walk.at === "summary" ? `done with ${name(walk.stage)} and at its summary`
     : walk.at === "paused" ? `paused on ${name(walk.stage)}`
     : walk.at === "checkpoint" ? "at its checkpoint"
+    : walk.at === "gate" ? `waiting for its ${name(walk.stage)} approval`
     : `on ${name(walk.stage)}`;
   // The skips the scope change carries out itself: the stage it reopens is the
   // one after them, so they are behind the work, as a stage skipped where it
@@ -17452,7 +17496,7 @@ function planChangeDirective(
   const unitSkip = unitStep === null ? null
     : `${aidlcToolInvocation("orchestrate")} report --stage ${unitStep.stage} --unit ${unitStep.unit} --result skipped ` +
       `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`;
-  const forTheUnit = unitStep === null ? ""
+  const forTheUnit = unitStep === null || !unitStep.unitJump ? ""
     : `It can still be run for that Unit with \`${entrySkillInvocation()} --stage ${unitStep.stage} --unit ${unitStep.unit}\`.`;
   // How long the opposite flip holds: recompose takes it only while the work
   // runs and only for stages ahead of where it stands. So a skip's undo holds
@@ -17545,17 +17589,18 @@ function planChangeDirective(
     const stillGet = unitStep.others
       ? `; the other Units still get ${rest.length > 0 || add.length > 0 ? step : "it"}`
       : "";
-    const onlyLine = `Skipped ${listed([`${step} for the ${unitName} Unit`, ...restOther.map(name)])}${added}${stillGet}. ` +
-      `${forTheUnit}${restOther.length > 0 || add.length > 0 ? ` ${undoHolds(restOther, add, "the rest")}` : ""}` +
-      (restWalk.length > 0
-        ? ` ${oneUnitOnly(restWalk)}.`
-        : "");
+    const onlyLine = [
+      `Skipped ${listed([`${step} for the ${unitName} Unit`, ...restOther.map(name)])}${added}${stillGet}.`,
+      forTheUnit,
+      restOther.length > 0 || add.length > 0 ? undoHolds(restOther, add, "the rest") : "",
+      restWalk.length > 0 ? `${oneUnitOnly(restWalk)}.` : "",
+    ].filter(Boolean).join(" ");
     const walkNamed = [...(firstSkip === null ? [] : [firstStep!]), ...planSkip.filter((slug) => walk!.steps.includes(slug))];
     const otherNamed = planSkip.filter((slug) => !walk!.steps.includes(slug));
     // With no Unit's work for it the stage is skipped where it stands and is
     // run on its own, as below; otherwise it stays for that work's approval,
     // and each Unit skipped from here is reopened for that Unit.
-    const firstBack = firstSkip === null ? ""
+    const firstBack = firstSkip === null || (unitStep.worked && !unitStep.unitJump) ? ""
       : unitStep.worked
         ? `It can still be run for the ${unitName} Unit with \`${entrySkillInvocation()} --stage ${firstStep} --unit ` +
           `${unitStep.unit}\`, and for each Unit after it the same way.`
@@ -17564,12 +17609,14 @@ function planChangeDirective(
     // The first step run on its own beside stages its skip moved the work past:
     // one way back names them all.
     const together = firstSkip !== null && !unitStep.worked && restBack === ownForm(planSkip);
-    const everyLine = `Skipped ${unitStep.others ? "" : `${step} for the ${unitName} Unit, and `}` +
-      `${listed(walkNamed.map(name))} for every Unit from here` +
-      `${otherNamed.length > 0 ? `, and ${listed(otherNamed.map(name))}` : ""}${added}. ` +
-      (unitStep.others
-        ? (together ? ownForm([firstStep!, ...planSkip]) : [firstBack, restBack].filter(Boolean).join(" "))
-        : `${forTheUnit} ${undoHolds(planSkip, add, "the rest")}`);
+    const everyLine = [
+      `Skipped ${unitStep.others ? "" : `${step} for the ${unitName} Unit, and `}` +
+        `${listed(walkNamed.map(name))} for every Unit from here` +
+        `${otherNamed.length > 0 ? `, and ${listed(otherNamed.map(name))}` : ""}${added}.`,
+      ...(unitStep.others
+        ? (together ? [ownForm([firstStep!, ...planSkip])] : [firstBack, restBack])
+        : [forTheUnit, undoHolds(planSkip, add, "the rest")]),
+    ].filter(Boolean).join(" ");
     return kept(turnEndingPrint(
       `${before === null ? "" : `Run \`${before}\`${filled} and print its output verbatim. `}` +
         `The person asked to skip ${listed(skip.map(name))}, and the ${unitName} Unit is on ${step} now. ` +
@@ -17623,7 +17670,7 @@ function planChangeDirective(
     : started === null && skippedFirst.length === 0
       ? undoHolds()
       : ownForm(skip);
-  const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
+  const line = `"${[`${summary.charAt(0).toUpperCase()}${summary.slice(1)}.`, wayBack, noted].filter(Boolean).join(" ")}${parkedTail}"`;
   const undo = planSkip.length === 0 && add.length === 0 ? "" : ` If they later ask to undo it, run \`${undone}\`.`;
   // The question named the stages after the skipped one too, and the same
   // reply can approve them: "skip Functional Design and approve the rest".
