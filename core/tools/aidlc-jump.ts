@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
-import { beforePerUnitBlock } from "./aidlc-graph.ts";
+import { beforePerUnitBlock, withStageProgressRow } from "./aidlc-graph.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -581,8 +581,9 @@ function movedState(
     stagesReset.push(targetSlug);
   }
 
-  // Mark target [-] so state and checkbox agree.
-  content = setCheckbox(content, targetSlug, "in-progress");
+  // Mark target [-] so state and checkbox agree, writing its row when the
+  // record has none (a stage a newer release added).
+  content = setCheckbox(withStageProgressRow(content, targetSlug), targetSlug, "in-progress");
 
   // Detect phase-boundary crossing. Like advance, a forward jump records the
   // phase it leaves as completed; any other crossing only starts the target's
@@ -733,8 +734,9 @@ function handleExecute(args: string[]): void {
     ? unitStage
     : shownStage !== targetSlug && graph.some((node) => node.slug === shownStage) ? shownStage : currentSlug;
   // Back to a stage the plan added after the work had just passed over it: the
-  // person never stood at the stage the work had just entered, and the add's
-  // own line said what changed, so the move says nothing.
+  // person never stood at the stage the work had just entered, and either the
+  // add's own line said what changed or an update added it (the person sees it
+  // start), so the move says nothing.
   const addedBack = direction === "backward" && addedStagesPassedOver(content, pd).includes(targetSlug);
   const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
   content = moved.content;
