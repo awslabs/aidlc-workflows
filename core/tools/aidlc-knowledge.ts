@@ -2570,12 +2570,8 @@ function fenced(text: string): string {
 
 /** The card's Markdown, or null when no document this work may read has current text. */
 export function documentsCard(projectDir: string, space: string, intentUuid: string | null): string | null {
-  let rows: DocumentRow[];
-  try {
-    rows = readIndex(projectDir, space).documents;
-  } catch {
-    return null;
-  }
+  // A redirected knowledge root is refused here as every reader refuses it; the engine goes on without the card.
+  const rows = readIndex(projectDir, space).documents;
   const mine = (row: DocumentRow): boolean => intentUuid !== null && (row.related_intent_ids ?? []).includes(intentUuid);
   const listed = rows
     .filter((row) => !isTombstoned(row) && (row.related_intent_ids === undefined || mine(row)))
