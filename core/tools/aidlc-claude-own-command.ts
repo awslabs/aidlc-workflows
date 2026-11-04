@@ -8,8 +8,8 @@
 // The check group before a tool call answers "allow" for exactly those once every check passed
 // (aidlc.ts runGroupMembers). The host applies every deny and ask rule over a hook's allow, but a
 // rule written for AI-DLC's own spelling never meets the absolute one, so any deny or ask rule that
-// names aidlc in a settings file this process can read means no allow. MDM, registry and
-// server-delivered policy cannot be read here.
+// names aidlc, bun or the harness folder in a settings file this process can read means no allow.
+// MDM, registry and server-delivered policy cannot be read here.
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
@@ -43,10 +43,12 @@ function claudeSettingsFiles(projectDir: string, harness: string): string[] {
   ];
 }
 
-// Null when a deny or ask rule names AI-DLC, or a settings file cannot be read: the host decides alone.
+// Null when a deny or ask rule names aidlc, bun or the harness folder, or a settings file cannot be
+// read: the host decides alone.
 function claudeOwnCommandRules(projectDir: string, harness: string): { engineAllowed: boolean } | null {
+  const own = new RegExp(`aidlc|\\bbun\\b|${harness.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i");
   const namesAidlc = (rules: unknown): boolean =>
-    Array.isArray(rules) && rules.some((rule) => typeof rule === "string" && /aidlc/i.test(rule));
+    Array.isArray(rules) && rules.some((rule) => typeof rule === "string" && own.test(rule));
   let engineAllowed = false;
   for (const [index, file] of claudeSettingsFiles(projectDir, harness).entries()) {
     if (!existsSync(file)) continue;
@@ -83,8 +85,8 @@ function pathInside(root: string, path: string): boolean {
   }
 }
 
-// `bun <this project>/<harness>/tools/aidlc.ts engine ...`, that file as written and through every
-// link, and the words exactly as the shipped rule starts:
+// `bun <this project>/<harness>/tools/aidlc.ts engine ...`, that file as written, and the words
+// exactly as the shipped rule starts:
 // no assignment or wrapper in front (`AIDLC_PROJECT_DIR=...` would aim the engine elsewhere), no
 // `cd` first, and any --project-dir naming this project.
 function ownEngineCommand(
@@ -96,7 +98,7 @@ function ownEngineCommand(
   const path = words.argv[1] ?? "";
   const engine = join(projectDir, harness, "tools", "aidlc.ts");
   const asWritten = (file: string): string => process.platform === "win32" ? resolvePath(file).toLowerCase() : resolvePath(file);
-  if (!rootedPath(path) || asWritten(path) !== asWritten(engine) || !sameDirectory(path, engine)) return false;
+  if (!rootedPath(path) || asWritten(path) !== asWritten(engine)) return false;
   const invocation = engineInvocationFromWords(words.argv, words.rawWords);
   if (invocation === null || typeof invocation === "string") return false;
   return invocation.projectDir === null ||
@@ -151,9 +153,10 @@ function ownRecordRead(command: string, projectDir: string): boolean {
 /** Whether Claude Code may run this Bash command without asking, as AI-DLC's own (see above). */
 export function claudeAllowsOwnCommand(command: string, projectDir: string): boolean {
   const harness = harnessDir();
-  const rules = claudeOwnCommandRules(projectDir, harness);
-  if (rules === null) return false;
+  // The shape first, so the settings are read only for a command that could get the answer.
   const words = parseLiteralShellInvocation(command);
-  if (words?.rawWords[0] === "bun") return rules.engineAllowed && ownEngineCommand(words, projectDir, harness);
-  return ownRecordRead(command, projectDir);
+  if (words?.rawWords[0] === "bun") {
+    return ownEngineCommand(words, projectDir, harness) && claudeOwnCommandRules(projectDir, harness)?.engineAllowed === true;
+  }
+  return ownRecordRead(command, projectDir) && claudeOwnCommandRules(projectDir, harness) !== null;
 }

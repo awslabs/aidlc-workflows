@@ -3101,10 +3101,16 @@ async function claudeOwnCommandAllow(input: string): Promise<string> {
     return "";
   }
   const command = payload.tool_input?.command;
-  if (payload.hook_event_name !== "PreToolUse" || typeof command !== "string" || runtimeHarnessName() !== "claude") return "";
-  const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
-  const { claudeAllowsOwnCommand } = await import("./aidlc-claude-own-command.ts");
-  if (!claudeAllowsOwnCommand(command, resolveProjectDirFromHook(import.meta.url))) return "";
+  if (payload.hook_event_name !== "PreToolUse" || typeof command !== "string") return "";
+  try {
+    if (runtimeHarnessName() !== "claude") return "";
+    const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
+    const { claudeAllowsOwnCommand } = await import("./aidlc-claude-own-command.ts");
+    if (!claudeAllowsOwnCommand(command, resolveProjectDirFromHook(import.meta.url))) return "";
+  } catch {
+    // Nothing to name or read: the host decides, as it did before.
+    return "";
+  }
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } })}\n`;
 }
 

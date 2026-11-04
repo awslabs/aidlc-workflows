@@ -239,6 +239,15 @@ describe("the team's and the person's own rules about AI-DLC keep the host's pro
     });
   });
 
+  test("a rule for the harness folder rather than AI-DLC by name", () => {
+    withProjects((project) => {
+      editSettings(join(project, ".claude", "settings.local.json"), (permissions) => {
+        permissions.deny = ["Bash(bun .claude/tools/*)"];
+      });
+      expect(decide(project, command(project)).decision).toBeNull();
+    });
+  });
+
   test("a deny rule for AI-DLC in the person's user settings", () => {
     withProjects((project) => {
       const configDir = mkdtempSync(join(tmpdir(), "own-command-user-"));

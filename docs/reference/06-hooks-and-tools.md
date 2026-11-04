@@ -95,7 +95,7 @@ project's engine, an assignment or wrapper in front of `bun`, a `cd` first, a
 `--project-dir` naming another folder, a pipe, a redirect that writes, or any
 other part. Claude Code applies deny and ask rules over a hook's allow, but a
 rule written for AI-DLC's own spelling never meets the absolute one, so any
-deny or ask rule naming `aidlc` in the project's `settings.json` or
+deny or ask rule naming `aidlc`, `bun` or `.claude` in the project's `settings.json` or
 `settings.local.json`, the user's `settings.json`, or a managed settings file
 also means no answer, and so does a team taking the shipped rule out. Policy
 that arrives by MDM, the Windows registry or the server cannot be read by a
