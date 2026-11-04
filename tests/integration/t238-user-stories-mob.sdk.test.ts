@@ -24,12 +24,10 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
   cleanupTestProject,
@@ -65,38 +63,22 @@ const RULE_MARKERS = [
   { marker: "first-class" },
   { marker: "Given/When/Then" },
 ] as const;
-// What Claude Code handed each agent as it started (the SubagentStart hook's
-// context), from the agents' own transcripts: the hook's whole output is kept
-// there even when Claude Code shows the agent only a saved file and a preview.
-function startContexts(claudeConfigDir: string): { found: Map<string, string>; seen: string } {
+// What Claude Code handed each agent as it started: the SubagentStart hooks'
+// output, as the SDK reports it (`SubagentStart:<agent>`).
+function startContexts(hooks: DriveResult["subagentStartHooks"]): Map<string, string> {
   const found = new Map<string, string>();
-  const transcripts: string[] = [];
-  const hooks = new Set<string>();
-  const visit = (dir: string): void => {
-    for (const entry of existsSync(dir) ? readdirSync(dir, { withFileTypes: true }) : []) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) visit(path);
-      else if (entry.name.endsWith(".jsonl")) {
-        transcripts.push(relative(claudeConfigDir, path));
-        for (const line of readFileSync(path, "utf-8").split("\n")) {
-          if (!line.includes("\"hook_success\"")) continue;
-          try {
-            const hook = (JSON.parse(line) as { attachment?: { hookName?: string; stdout?: string } }).attachment;
-            hooks.add(`${hook?.hookName ?? "?"} (${hook?.stdout?.length ?? 0} chars)`);
-            const agent = /^SubagentStart:(.+)$/.exec(hook?.hookName ?? "")?.[1];
-            if (!agent || !hook?.stdout) continue;
-            const context = (JSON.parse(hook.stdout) as { hookSpecificOutput?: { additionalContext?: string } })
-              .hookSpecificOutput?.additionalContext ?? "";
-            found.set(agent, (found.get(agent) ?? "") + context);
-          } catch {
-            // A line the drive's stop cut off holds no hook output.
-          }
-        }
-      }
+  for (const { hookName, stdout } of hooks ?? []) {
+    const agent = /^SubagentStart:(.+)$/.exec(hookName)?.[1];
+    if (!agent) continue;
+    try {
+      const context = (JSON.parse(stdout) as { hookSpecificOutput?: { additionalContext?: string } })
+        .hookSpecificOutput?.additionalContext ?? "";
+      found.set(agent, (found.get(agent) ?? "") + context);
+    } catch {
+      // A hook that printed no JSON handed nothing over.
     }
-  };
-  visit(join(claudeConfigDir, "projects"));
-  return { found, seen: `transcripts: ${transcripts.join(", ") || "none"}; hook output: ${[...hooks].join(", ") || "none"}` };
+  }
+  return found;
 }
 
 const LIVE_KNOWLEDGE_REL =
@@ -534,7 +516,6 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
     async () => {
       const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const projectDir = setupIntegrationProject({ withAudit: true });
-      const claudeConfigDir = mkdtempSync(join(tmpdir(), "t238-claude-"));
       try {
         seedUserStoriesProject(projectDir);
 
@@ -552,9 +533,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         let evidenceCompleteAtApproval = false;
         const result = await driveAidlc("/aidlc", {
           projectDir,
-          env: { CLAUDE_CONFIG_DIR: claudeConfigDir },
-          // The agents' transcripts, where their start context is read.
-          persistSession: true,
+          captureSubagentStartHooks: true,
           answerScript: APPROVE_ALL,
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
@@ -662,7 +641,8 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         // participant as content: pasted into its brief, or handed to it as it
         // starts (Claude Code's SubagentStart context); a path alone is not
         // accepted.
-        const { found: started, seen } = startContexts(claudeConfigDir);
+        const started = startContexts(result.subagentStartHooks);
+        const seen = (result.subagentStartHooks ?? []).map(({ hookName, stdout }) => `${hookName} (${stdout.length} chars)`).join(", ") || "no SubagentStart hook output";
         const roundOne = new Map<string, CapturedToolResult>();
         for (const agent of SUPPORT_AGENTS) {
           const dispatch = result.toolResults.find(
@@ -757,7 +737,6 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         expect(result.stateFile).toMatch(/- \[x\] user-stories — EXECUTE/);
       } finally {
         cleanupTestProject(projectDir);
-        cleanupTestProject(claudeConfigDir);
       }
     },
     TEST_TIMEOUT_MS,
