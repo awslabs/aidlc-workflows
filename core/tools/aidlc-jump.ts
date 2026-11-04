@@ -737,8 +737,8 @@ function handleExecute(args: string[]): void {
     direction === "backward" ? stageArtifactPaths(pd, targetStage) : [];
   // Under team ownership each Unit's per-Unit work belongs to its claim: going
   // back to a stage before the per-Unit block (the Unit plan changing) keeps
-  // it, and a Unit goes back to work only by its own reopen (`unit claim
-  // --reopen`, `jump reopen --units`). The row says so; stageJumpReaches reads it.
+  // it, and a Unit goes back to work only by its own reopen (`jump reopen
+  // --units`). The row says so; stageJumpReaches reads it.
   const keepsTeamUnitWork = direction === "backward" && isTeamUnitOwnership(content) &&
     beforePerUnitBlock(graph, targetSlug);
   const downstreamStages = direction === "backward"

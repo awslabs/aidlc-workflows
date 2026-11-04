@@ -75,12 +75,6 @@ function world(): { seed: string; remote: string } {
 }
 
 /**
- * The Unit's work rebased onto main, as its owner does it when a pin says the
- * base is stale. A conflict can only be in aidlc-state.md: main's copy is
- * taken, because the candidate's state is engine metadata that landing
- * discards and re-derives from the Unit's receipts.
- */
-/**
  * Rebases a Unit's checkout onto main. A conflict in the state file is resolved
  * as the Unit's person resolves it: main's state, with the Unit's own Unit
  * Progress row as the checkout had it.
