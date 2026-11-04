@@ -394,6 +394,7 @@ import {
   openDecisionMenu,
   hasPendingDecision,
   decisionWaitsOnPerson,
+  ownShardRows,
   type PluginCommand,
   parsePluginCommand,
   PHASE_NUMBERS,
@@ -10224,10 +10225,14 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
 // Main is redoing a stage that comes before the per-Unit block (Units
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
-// A participant clone (`unit participate`) came for a Unit, so it keeps the
-// board even when it pulls main mid-replan.
-function beforeTeamUnitWork(stateContent: string): boolean {
-  return beforePerUnitBlock(loadGraph(), getField(stateContent, "Current Stage")?.trim() ?? "");
+// Only the checkout that went back runs it, the one whose own audit shard
+// holds that jump (`Unit Work: kept`, aidlc-jump.ts): a teammate's clone that
+// pulls main mid-replan came for a Unit, so it keeps the board.
+function beforeTeamUnitWork(projectDir: string, stateContent: string): boolean {
+  return beforePerUnitBlock(loadGraph(), getField(stateContent, "Current Stage")?.trim() ?? "") &&
+    ownShardRows(projectDir).mine.some((row) =>
+      row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept"
+    );
 }
 
 // A read-only routing pass shares checkpoint evidence; mutation tools always
@@ -12707,7 +12712,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         emit(errorDirective(errorMessage(e)));
         return;
       }
-    } else if (!beforeTeamUnitWork(stateContent) || existsSync(unitParticipantPath(pd))) {
+    } else if (!beforeTeamUnitWork(pd, stateContent)) {
       try {
         const participant = existsSync(unitParticipantPath(pd));
         const mergeTransactions = unitMergeTransactions(pd);

@@ -10,9 +10,10 @@
 // step; that main's next steps are Units Generation, then Delivery Planning,
 // and the board is back once the revised plan is approved; that Units that
 // landed stay landed and done on the board; and that a claim opened before
-// the jump lands while Units Generation is still open; a teammate's
-// participant clone that pulls main mid-replan keeps the board. Claiming
-// while the plan is changed is in t-team-unit-replan-claim-warns.test.ts.
+// the jump lands while Units Generation is still open; a teammate's clone,
+// fresh or a participant, that pulls main mid-replan keeps the board, since
+// only the checkout that went back runs Units Generation. Claiming while the
+// plan is changed is in t-team-unit-replan-claim-warns.test.ts.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -178,6 +179,24 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
       expect(board.text).toContain("## Claimable Units");
     });
   }
+
+  test("a teammate's fresh clone of main pushed back at Units Generation gets the board, not the lead's step", () => {
+    const { seed, remote } = world();
+    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    pull(seed);
+    expect(reopenUnitsGeneration(seed).status).toBe(0);
+    git(seed, ["add", "-A"]);
+    git(seed, ["commit", "-m", "back to Units Generation"]);
+    git(seed, ["push", "origin", "main"]);
+
+    const dana = clone(remote, "dana");
+    expect(currentStage(dana)).toBe("units-generation");
+    const step = nextDirective(dana);
+    expect(step.kind, String(step.message ?? step.kind)).not.toBe("run-stage");
+    expect(String(step.message ?? "")).toContain("**Claimed:** beta (beta-team).");
+    // The checkout that went back still runs Units Generation itself.
+    expect(nextDirective(seed).stage).toBe("units-generation");
+  });
 
   test("a teammate's participant clone that pulls main back at Units Generation keeps the board", () => {
     const { seed, remote } = world();
