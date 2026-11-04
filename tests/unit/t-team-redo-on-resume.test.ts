@@ -256,6 +256,30 @@ describe("a Redo on re-entry for the Unit a team main is walking", () => {
     ]);
   });
 
+  test("with approvals after every stage, alpha waiting at its NFR Requirements approval: the step named is redone", () => {
+    const proj = walk(1, "per-stage");
+    expect(next(proj).gate).toBe(true);
+    says(proj, "Approve");
+    const approved = run(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", "functional-design", "--unit", "alpha", "--result", "approved", "--user-input", "Approve",
+    ]);
+    expect(approved.status, approved.out).toBe(0);
+    expect(next(proj).stage).toBe("nfr-requirements");
+    design(proj, "alpha", "nfr-requirements");
+    const gate = next(proj);
+    expect(`${gate.stage}/${gate.unit} ${gate.gate}`, JSON.stringify(gate)).toBe("nfr-requirements/alpha true");
+    const message = redo(proj, "redo alpha's NFR Requirements", ["--target", "nfr-requirements", "--unit", "alpha"]);
+    follow(proj, message);
+    const back = next(proj);
+    expect(`${back.kind} ${back.stage}/${back.unit} ${back.gate ?? false}`, JSON.stringify(back)).toBe("run-stage nfr-requirements/alpha false");
+    expect(back.artifact_reuse, `${message}\n${JSON.stringify(back)}`).toEqual({ decision: "redo", unit: "alpha" });
+    expect(redoAnswers(proj)).toEqual(["nfr-requirements/alpha Redo on re-entry"]);
+    expect(commands(message), message).toEqual([
+      "aidlc-jump.ts reopen --target nfr-requirements " +
+        "--stages nfr-requirements,nfr-design,infrastructure-design,code-generation --units alpha --via redo --scope feature",
+    ]);
+  });
+
   // A Redo for a Unit the walk is not on is the jump that names it, as on the
   // solo walk; t-team-skip-mid-walk pins where that jump goes.
   test("a Redo naming beta, while alpha is on its step, is the jump that names beta", () => {
