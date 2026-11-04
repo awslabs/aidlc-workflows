@@ -4,7 +4,10 @@
 // Markdown tables (Obsidian's table editor, Prettier). Under Guard Policy
 // strict every later step then said "... changed after Practices Discovery
 // finished. Do you want me to redo ...?". Lining up a table is no change; a
-// changed cell, a changed alignment, or padding in a code block still is.
+// changed cell, a changed alignment, padding in a code block, spacing in pipe
+// lines that are no table, or a non-breaking space at a cell's edge still is.
+// A receipt a release before this one wrote over a padded table still matches,
+// on a CRLF checkout too.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -14,9 +17,9 @@ import {
   AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, runOrchestrateNext,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { artifactFilename, rawFingerprintForm } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
-import { stageValidationAuditFields } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
+import { stageValidationAuditFields, VALIDATION_BASIS_FIELD } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -50,9 +53,25 @@ const PADDED = [
   "",
 ].join("\n");
 
+// Pipe lines with no delimiter row: no table, so their spacing is kept.
+const NOT_A_TABLE = ["Notes:", "", "| keep this |", "| as written |", ""].join("\n");
+
+// The receipt an earlier release wrote over the same text: each document's
+// digest as its bytes were read then, the form this process keeps beside the
+// current one.
+function recordedBefore(fields: Record<string, string>): Record<string, string> {
+  const basis = JSON.parse(fields[VALIDATION_BASIS_FIELD]) as Record<"inputs" | "outputs", { contentHash: string }[]>;
+  for (const item of [...basis.inputs, ...basis.outputs]) item.contentHash = rawFingerprintForm(item.contentHash) ?? item.contentHash;
+  return { ...fields, [VALIDATION_BASIS_FIELD]: JSON.stringify(basis) };
+}
+
 // Classic work under strict, with Practices Discovery finished and its
-// completion record taken over a compact team-practices.md.
-function finishedPractices(): { proj: string; doc: string } {
+// completion record taken over team-practices.md as `written` (compact by
+// default).
+function finishedPractices(
+  written = COMPACT,
+  recorded: (fields: Record<string, string>) => Record<string, string> = (fields) => fields,
+): { proj: string; doc: string } {
   const proj = createOrchestrationTestProject();
   projects.push(proj);
   const made = spawnSync(process.execPath, [UTIL, "intent-create", "--scope", "classic", "--arguments", "show the asset description on hover", "--project-dir", proj], {
@@ -66,7 +85,7 @@ function finishedPractices(): { proj: string; doc: string } {
   mkdirSync(dir, { recursive: true });
   for (const name of stage.produces ?? []) writeFileSync(join(dir, artifactFilename(name)), `# ${name}\n`);
   const doc = join(dir, artifactFilename("team-practices"));
-  writeFileSync(doc, COMPACT);
+  writeFileSync(doc, written);
   const statePath = join(record, "aidlc-state.md");
   const state = readFileSync(statePath, "utf-8")
     .replace(new RegExp(`^- \\[.\\] practices-discovery ${SEP}`, "m"), `- [x] practices-discovery ${SEP}`)
@@ -74,7 +93,7 @@ function finishedPractices(): { proj: string; doc: string } {
     .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: requirements-analysis")
     .replace(/^- \*\*Guard Policy\*\*: .*$/m, "- **Guard Policy**: strict (set by you)");
   writeFileSync(statePath, state);
-  appendAuditEntry("STAGE_COMPLETED", { Stage: "practices-discovery", ...stageValidationAuditFields(proj, stage, state) }, proj);
+  appendAuditEntry("STAGE_COMPLETED", { Stage: "practices-discovery", ...recorded(stageValidationAuditFields(proj, stage, state)) }, proj);
   return { proj, doc };
 }
 
@@ -95,6 +114,7 @@ describe("t-table-padding-keeps-stage: a finished stage's table lined up by an e
     ["a changed cell", PADDED.replace("Every change", "Every commit")],
     ["a changed alignment", PADDED.replace(":----------:", "------------")],
     ["padding in a code block", PADDED.replace("| kept | as is |", "| kept |  as is |")],
+    ["a non-breaking space at a cell's edge", PADDED.replace("| Review   |", "| Review\u00a0  |")],
   ]) {
     test(`${name} is still a change`, () => {
       const { proj, doc } = finishedPractices();
@@ -102,4 +122,16 @@ describe("t-table-padding-keeps-stage: a finished stage's table lined up by an e
       expect(directlyStale(proj)).toEqual(["practices-discovery"]);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  test("spacing in pipe lines that are no table is still a change", () => {
+    const { proj, doc } = finishedPractices(NOT_A_TABLE);
+    writeFileSync(doc, NOT_A_TABLE.replace("| keep this |", "|  keep this   |"));
+    expect(directlyStale(proj)).toEqual(["practices-discovery"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a CRLF checkout of a padded table an earlier release recorded is no change", () => {
+    const { proj, doc } = finishedPractices(PADDED, recordedBefore);
+    writeFileSync(doc, PADDED.replace(/\n/g, "\r\n"));
+    expect(directlyStale(proj)).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
