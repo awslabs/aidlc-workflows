@@ -15616,6 +15616,12 @@ function emitTeamUnitMajorRunStage(
       directive.next_stage = later?.name ?? `landing Unit ${unit}`;
     }
     if (step.kind === "work") {
+      // The person's Redo on re-entry answered the re-use question for this
+      // Unit's step, as on the solo walk.
+      if (redoChosenForUnitStep(projectDir, stage.slug, unit)) {
+        directive.artifact_reuse = { decision: "redo", unit };
+        delete directive.questions_answered;
+      }
       // A Unit whose work is done is named the step it still owes, as on the
       // solo routes, never its stage body again.
       emitUnitStepOrStage(
@@ -16219,7 +16225,10 @@ const OTHER_UNITS_KEPT =
 // paused at, the summary's step, or at a checkpoint the last step the Unit did.
 // A step the Unit has not started has nothing to reset, so next routes it.
 // `named` is a Redo that names a Unit and step: only that Unit on that step is
-// redone here, null otherwise.
+// redone here, null otherwise. A named Redo is read on the walk of a team's
+// main that works every Unit itself too, as a jump that names a Unit is
+// (unitJumpWalk); there a Unit waiting at its team approval redoes the stage
+// that approval is for.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
@@ -16227,7 +16236,11 @@ function unitMajorRedo(
   currentSlug: string,
   named?: { unit: string; stage: string },
 ): { message: string; jump?: readonly string[] } | null {
-  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  const walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext } | null =
+    unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
+      (named && teamMainWorksItsUnits(projectDir, stateContent)
+        ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug)
+        : null);
   if (!walk || walk.step.kind === "covered") return null;
   if (!walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0)) {
     return null;
