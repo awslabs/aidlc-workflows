@@ -1677,7 +1677,7 @@ function predatesCurrentHelper(version: string): boolean {
   }
 }
 
-function windowsShimHelperFor(version: string): string {
+export function windowsShimHelperFor(version: string): string {
   if (!predatesCurrentHelper(version)) return windowsShimHelper();
   try {
     if (compareVersions(version, FIRST_RELEASE_WITH_SHARED_MARKER_HELPER) < 0) {

@@ -71,6 +71,7 @@ import {
   activate,
   reserveDispatchedVersion,
   resolvePinnedDispatch,
+  windowsShimHelperFor,
 } from "../../core/tools/aidlc-lifecycle.ts";
 import {
   TRUSTED_COMMAND_TOKENS,
@@ -8559,6 +8560,75 @@ describe("t243 release lifecycle", () => {
         join(machine, "versions", AIDLC_VERSION, INSTALLED_EXECUTABLE),
       );
       expect(existsSync(join(machine, "rollback-version"))).toBe(false);
+    } finally {
+      if (priorInstallRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = priorInstallRoot;
+      if (priorBinDir === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = priorBinDir;
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Windows PowerShell 5.1 reads a .ps1 without a BOM in the ANSI code page,
+  // so a non-ASCII letter in the install path reached aidlc-shim.ps1 garbled.
+  test("the launcher helper has a BOM only for a non-ASCII install path, and an older release keeps the text it accepts", () => {
+    const saved = process.env.AIDLC_INSTALL_ROOT;
+    const ascii = join(temp("aidlc-t243-helper-bom-"), "aidlc");
+    const accented = join(temp("aidlc-t243-helper-bom-"), "Jos\u00e9", "aidlc");
+    // Older than this binary and than the first release with the BOM helper.
+    const older = "2.11.2";
+    try {
+      process.env.AIDLC_INSTALL_ROOT = ascii;
+      const plain = windowsShimHelperFor(AIDLC_VERSION);
+      expect(plain.startsWith("\uFEFF")).toBe(false);
+      expect(windowsShimHelperFor(NEXT_VERSION)).toBe(plain);
+      expect(windowsShimHelperFor(older)).toBe(plain);
+
+      process.env.AIDLC_INSTALL_ROOT = accented;
+      const own = windowsShimHelperFor(AIDLC_VERSION);
+      expect(own.startsWith("\uFEFF")).toBe(true);
+      // `aidlc update` runs in the binary it replaces.
+      expect(windowsShimHelperFor(NEXT_VERSION)).toBe(own);
+      expect(windowsShimHelperFor(older)).toBe(own.slice(1));
+    } finally {
+      if (saved === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved;
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("an install under a folder with a non-ASCII letter starts aidlc through aidlc.cmd", () => {
+    const machine = join(temp("aidlc-t243-accented-machine-"), "Jos\u00e9", "aidlc");
+    const bin = join(machine, "bin");
+    const project = temp("aidlc-t243-accented-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: bin };
+    // The update's version probe runs bin\aidlc.cmd, which starts the helper.
+    const installed = run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", fixtureRelease(),
+    ], project, env);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    expect([...readFileSync(join(machine, "aidlc-shim.ps1")).subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+
+    const older = "2.11.2";
+    expect(run(LIFECYCLE, [
+      "versions", "install", older, "--from", fixtureRelease(older),
+    ], project, env).status).toBe(0);
+    const acp = /ACP\s+REG_SZ\s+(\d+)/.exec(spawnSync("reg", [
+      "query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage", "/v", "ACP",
+    ], { encoding: "utf-8" }).stdout)?.[1];
+    const priorInstallRoot = process.env.AIDLC_INSTALL_ROOT;
+    const priorBinDir = process.env.AIDLC_BIN_DIR;
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = bin;
+    try {
+      if (acp === "65001") {
+        activate(older);
+        expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(older);
+      } else {
+        // That release's own helper has no BOM, so the switch stops at the
+        // probe with the helper's reason, and the machine stays as it was.
+        expect(() => activate(older)).toThrow(`version probe returned 4 "": aidlc: `);
+        expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(AIDLC_VERSION);
+      }
     } finally {
       if (priorInstallRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = priorInstallRoot;
