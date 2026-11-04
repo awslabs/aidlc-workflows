@@ -734,7 +734,12 @@ import {
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
-import { documentsCard } from "./aidlc-knowledge.ts";
+import {
+  documentsCard,
+  markUnreadDocumentsSaid,
+  type UnreadDocumentsNotice,
+  unreadDocumentsNotice,
+} from "./aidlc-knowledge.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   readRuleBundle,
@@ -980,6 +985,24 @@ let activeKiroHooksOffNotices: string[] | null = null;
 function kiroHooksOffNoticesOnce(projectDir: string): string[] {
   activeKiroHooksOffNotices ??= kiroHooksOffNotices(projectDir, harnessDir());
   return activeKiroHooksOffNotices;
+}
+
+// Documents the agents cannot read yet, named once per work. A chat that has
+// not joined the work keeps no mark in it, so it says nothing either.
+let activeUnreadDocuments: UnreadDocumentsNotice | null | undefined;
+function unreadDocumentsOnce(projectDir: string): UnreadDocumentsNotice | null {
+  if (activeUnreadDocuments === undefined) {
+    activeUnreadDocuments = engineUnjoined || isReadOnlyEngineProbe()
+      ? null
+      : (() => {
+        try {
+          return unreadDocumentsNotice(projectDir, engineSelections.get(projectDir));
+        } catch {
+          return null;
+        }
+      })();
+  }
+  return activeUnreadDocuments;
 }
 
 function redefinedStagesNotice(
@@ -1735,6 +1758,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   if (hooksOff.length > 0) {
     directive = withChangeNotices(directive, [...hooksOff, ...(directive.change_notices ?? [])]);
   }
+  const unread = engineProjectDir ? unreadDocumentsOnce(engineProjectDir) : null;
+  if (unread !== null) directive = withChangeNotices(directive, [...(directive.change_notices ?? []), unread.line]);
   if (restartUnmarkedNotice) {
     directive = withChangeNotices(directive, [RESTART_UNMARKED_LINE, ...(directive.change_notices ?? [])]);
     restartUnmarkedNotice = false;
@@ -2315,6 +2340,10 @@ function writePrepared(prepared: PreparedEmission): void {
     !isReadOnlyEngineProbe() && !isHookPreDispatch()
   ) {
     markPersonLinesHeard(engineProjectDir, engineSessionId, [validity.warning]);
+  }
+  if (engineProjectDir && activeUnreadDocuments && kind !== "load-steering" && !isReadOnlyEngineProbe()) {
+    markUnreadDocumentsSaid(engineProjectDir, activeUnreadDocuments);
+    activeUnreadDocuments = null;
   }
 }
 
