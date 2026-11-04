@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:checkbox, function:withStageProgressRow
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:checkbox, function:withStageProgressRow, subcommand:aidlc-utility:recompose
 //
 // A stage a plugin adds after the work started has no row in the state file's
 // Stage Progress. The work reaches it (the next stage walks the graph), but a
@@ -230,6 +230,23 @@ describe("a stage a plugin adds after the work started", () => {
     expect(report(install, ["--stage", "probe-intent-check", "--result", "approved", "--user-input", "Approve"]).kind)
       .toBe("done");
     expect(state(install)).toContain(`- [x] probe-intent-check ${SEP} EXECUTE`);
+  });
+
+  test("a skip asked for before the work reaches it is recorded, and the work does not run it", () => {
+    const install = probeProject(["alpha"]);
+    const recomposed = run(install, "aidlc-utility", [
+      "recompose", "--skip", "probe-intent-check", "--reason", "the person asked to skip it",
+    ]);
+    expect(recomposed.rc, recomposed.out).toBe(0);
+    expect(recomposed.out).toContain("Recomposed: 1 skipped (probe-intent-check)");
+    expect(rowsFrom(install, "ci-pipeline")).toEqual([
+      `- [-] ci-pipeline ${SEP} EXECUTE`,
+      `- [ ] probe-intent-check ${SEP} SKIP`,
+    ]);
+
+    const skipped = report(install, ["--stage", "ci-pipeline", "--result", "skipped", "--reason", "no pipeline for this test"]);
+    expect(skipped.kind, JSON.stringify(skipped)).toBe("done");
+    expect(state(install)).not.toContain("- **Current Stage**: probe-intent-check");
   });
 
   test("a cursor an older engine already moved onto it commits its gate", () => {
