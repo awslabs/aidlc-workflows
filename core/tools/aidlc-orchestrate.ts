@@ -650,6 +650,7 @@ import {
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { teamUnitMemoryPath, unitMemoryPath } from "./aidlc-stage-diary.ts";
+import { bringStateUpToDate } from "./aidlc-state-upgrade.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import { withAuditLock } from "./aidlc-locks.ts";
@@ -884,10 +885,13 @@ function questionsCount(path: string): string {
   return ` (${total} ${noun}, ${done})`;
 }
 
+// Every step reads the state through here, so a record an earlier State
+// Version wrote is brought up to the current one before any routing.
 function loadStateFileIfPresent(projectDir: string): string | null {
   const path = engineStateFilePath(projectDir);
   if (!existsSync(path)) return null;
-  return readFileSync(path, "utf-8");
+  const selection = engineSelection(projectDir);
+  return bringStateUpToDate(projectDir, path, readFileSync(path, "utf-8"), selection.intent ?? undefined, selection.space);
 }
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
@@ -5774,7 +5778,8 @@ function errorDirective(message: string): ErrorDirective {
 // unparseable / past / future / ok. staleStateVersionError() is the runtime
 // adapter: it returns the classifier's message on any incompatible verdict and
 // null on `ok`, so next/report can emit the message as an errorDirective
-// before any workflow-cursor read/advance.
+// before any workflow-cursor read/advance. A version a step brings up never
+// reaches it: loadStateFileIfPresent brings it up first (aidlc-state-upgrade.ts).
 function staleStateVersionError(stateContent: string): string | null {
   const verdict = classifyStateVersion(stateContent);
   return verdict.kind === "ok" ? null : verdict.message;
@@ -11501,9 +11506,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (settledPolicy?.line) settledNotices.push(settledPolicy.line);
   const stateContent = loadStateFileIfPresent(pd);
   activeRetiredGuardPolicyNotice = stateContent === null ? null : retiredGuardPolicyNotice(pd, stateContent);
-  // Runtime state-version guard (see staleStateVersionError): refuse to advance
-  // a pre-v8 state up front rather than silently routing until it hits the
-  // renamed/missing Inception rows. Fires after the workspace/plugin/compose
+  // Runtime state-version guard (see staleStateVersionError): refuse a state
+  // this build cannot read (newer, unparseable, or older than any step brings
+  // up; the read above brought a supported older one up). Fires after the workspace/plugin/compose
   // branches above (those are version-independent) and before any branch that
   // reads or advances the workflow cursor.
   // `!== null` (not truthiness): a PRESENT but zero-byte aidlc-state.md returns
@@ -12922,9 +12927,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     return;
   }
   // A stage the plan added after the work had just passed over it (the
-  // approval came before the add): go back to it now with a backward jump,
-  // which resets only the stage the work had just entered, so it runs next as
-  // it would have had the add come first. The add's own line said so.
+  // approval came before the add, or an update added it to an older record):
+  // go back to it now with a backward jump, which resets only the stage the
+  // work had just entered, so it runs next as it would have had the add come
+  // first. A person's add said so in its own line; an update's says nothing.
   if (owed !== null) {
     emit(printDirective(
       `${nodeForSlug(owed.target)?.name || owed.target} is on the plan and has not run. Run ` +
@@ -20200,8 +20206,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   // Runtime state-version guard (see staleStateVersionError): `report` commits a
-  // lifecycle transition, so a pre-v8 state must be refused here too — before any
-  // report sub-branch mutates it. Covers every report path (result, skeleton
+  // lifecycle transition, so a state this build cannot read is refused here too,
+  // before any report sub-branch mutates it. Covers every report path (result, skeleton
   // stance, single) via one early check.
   {
     const pd = resolveProjectDir(projectDir);
