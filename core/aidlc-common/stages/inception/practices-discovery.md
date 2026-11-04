@@ -188,7 +188,8 @@ four declared artifacts:
    they do not replace the two structured fields.
 2. **discovered-rules.md** - `## Mandated` rules in `ALWAYS ...` form and
    `## Forbidden` rules in `NEVER ...` form, only for human-stated hard
-   constraints.
+   constraints. Each rule is one list item (`- ALWAYS ...`); a heading with no
+   rule holds no list item, only `None.`
 3. **evidence.md** - what each participant inspected or inferred, the
    interview decisions, and any unresolved uncertainty.
 4. **practices-discovery-timestamp.md** - one line:

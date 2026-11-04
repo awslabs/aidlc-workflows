@@ -1878,14 +1878,18 @@ The declared coverage is:
   involved. Its release journey (`tests/e2e/t-exec-copilot-release-journey.serial.test.ts`)
   is what a person does on day one: set up through the copy channel, doctor, the
   documented first step, the plan question, and Reverse Engineering approved, with a
-  message record for every line typed; a second case leaves the folder untrusted
+  message record for every line typed, each line typed at the prompt of Copilot's own
+  interactive terminal (`tests/harness/copilot-tui.ts` on the native terminal driver;
+  a `copilot -p` session tells the model not to stop for questions, which no person in
+  the terminal meets); a second case leaves the folder untrusted, runs `copilot -p`,
   and requires doctor to name the trust fix. Codex's golden journey
   (`tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts`, Linux and
   Windows) fixes the same greeter from the first line to Code Generation approved,
   with the plan question left for the day and approved in a new session; Copilot's
   (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
   on Windows it runs past the 25 minutes a retry allows) does the same on the
-  copy-channel install of its release journey.
+  copy-channel install of its release journey, in Copilot's own terminal, with the
+  new session a fresh `copilot` in the same home.
   opencode's (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`,
   Linux and Windows) takes the
   same request to Reverse Engineering, where the person asks for one change in
@@ -1929,10 +1933,12 @@ every prompt yes. A prompt for AI-DLC's own command or record (one that names
 every other prompt is listed in its log (`tests/harness/stock-permissions.ts`).
 The other Claude SDK drives keep `bypassPermissions`. The Codex `--json`
 journeys run the shipped `workspace-write` sandbox, and a command naming
-`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI runs
-with `--allow-all-tools` (AI-DLC ships no Copilot CLI allow rules, so the
-person's own `--allow-tool` rules decide), the Claude terminal journeys skip
-permission prompts, and opencode already runs without `--auto`.
+`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI's
+terminal journeys answer each of its permission dialogs with the preselected
+"Yes" and count them by what drew them (AI-DLC ships no Copilot CLI allow rules);
+its `-p` case runs with `--allow-all-tools`, so the person's own `--allow-tool`
+rules decide. The Claude terminal journeys skip permission prompts, and opencode
+already runs without `--auto`.
 
 `--file-retries 1` retries only a short failed file after confirmed cleanup, in
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.

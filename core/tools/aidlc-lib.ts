@@ -164,6 +164,7 @@ import {
   type ProcessIdentity,
   processIdentityReader,
   processIsAlive,
+  readActiveIntentCursor,
   readAuditShardEvents,
   readAuditShardTexts,
   readIntentRegistry,
@@ -367,10 +368,13 @@ import {
   activeDirectiveLockBudgetMs,
   activeSpace,
   assertNoSymlinkInChainOrThrow,
+  boundedGitMetadataText,
   DEFAULT_SPACE,
   ENGINE_DIR,
   engineDirFor,
   errorMessage,
+  gitCommonDirectory,
+  gitMetadataDirectory,
   intentsDir,
   isPlainObject,
   isReadOnlyEngineProbe,
@@ -384,6 +388,7 @@ import {
   refuseEngineObserverWrite,
   releaseAuditLock,
   releaseCanonicalOwnerStampedLock,
+  singleGitMetadataLine,
   spaceRecordRoot,
   withAuditLock,
   workspaceRoot,
@@ -2482,6 +2487,17 @@ export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
     name: "claude session message",
     pattern: /^<cross-session-message(?: [^\r\n]*)?>\r?\n[\s\S]*\r?\n<\/cross-session-message>$/,
   },
+  // The Claude desktop app's other turns (2.1.31x, captured live): its events
+  // are one element each, its note after a quit is one sentence, and a session
+  // started from another one opens with that session's brief.
+  { name: "claude side sessions event", pattern: /^<side-sessions-event>[\s\S]*<\/side-sessions-event>$/ },
+  { name: "claude ci monitor event", pattern: /^<ci-monitor-event>[\s\S]*<\/ci-monitor-event>$/ },
+  { name: "claude app resume", pattern: /^The app was quit while you were working\. Please continue from where you left off\.$/ },
+  // The app puts its own `<system-reminder>` blocks ahead of the brief.
+  {
+    name: "claude session brief",
+    pattern: /^\s*(?:<system-reminder>(?:(?!<\/system-reminder>)[\s\S])*<\/system-reminder>\s*)*(?:Background|Task) \(from the session that started this one\):\r?\n/,
+  },
 ];
 
 // The whole prompt is one of the host's fixed sentences. Null otherwise.
@@ -2821,8 +2837,10 @@ export function kiroTurnOrigin(options: {
 // row for this `prompt_id` with exactly this text. Claude Code names the turn's
 // origin on it (measured 2.1.280: `turnOrigin: "task_notification"`,
 // `promptSource: "system"`, `origin.kind: "task-notification"` for a
-// background task's notice; `human`/`typed` for a typed turn, `sdk` for one
-// sent through the SDK). A message the person sends while a turn runs has no
+// background task's notice; `human`/`typed` for a typed turn). A row with
+// neither mark decides nothing: the desktop app sends the person's messages and
+// its own notes alike as `sdk`, so its words decide (claudeHostTemplateOrigin
+// in the human-turn hook). A message the person sends while a turn runs has no
 // row of its own (it rides the running turn's prompt id), so no row means
 // nothing is known.
 const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification"]);
@@ -2842,7 +2860,8 @@ export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknow
   ) {
     return { kind: "host", reason: turnOrigin ?? (typeof origin === "string" ? origin : "system"), source: "record" };
   }
-  return { kind: "person", source: "record" };
+  if (origin === "human" || turnOrigin === "human" || entry.promptSource === "typed") return { kind: "person", source: "record" };
+  return null;
 }
 
 // Who wrote a message Claude Code fed into a running turn. The transcript keeps
@@ -5291,43 +5310,58 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
 // Remove a space's active-intent cursor so no record resolves implicitly until
 // the human picks one (`intent <name>`) or creates new work. Best-effort and
 // idempotent, like the writer: an absent cursor is already the desired state.
+// A git worktree with no cursor of its own reads its main checkout's, so when
+// that one still names the record, the worktree gets an empty cursor of its own,
+// which names none; the main checkout's cursor is that checkout's and stays.
 export function clearActiveIntentCursor(
   projectDir: string,
   space?: string,
   expectedIntent?: string,
 ): void {
   const path = join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER);
-  if (expectedIntent !== undefined) {
-    const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
-    try {
-      renameSync(path, staged);
-    } catch {
+  try {
+    if (expectedIntent !== undefined) {
+      const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
+      try {
+        renameSync(path, staged);
+      } catch {
+        return;
+      }
+      try {
+        const captured = readFileSync(staged, "utf-8").trim();
+        if (captured !== expectedIntent && !existsSync(path)) {
+          try {
+            renameSync(staged, path);
+            return;
+          } catch {
+            // A concurrent switch won the destination. Keep its newer cursor.
+          }
+        }
+      } catch {
+        // An unreadable captured cursor is stale runtime state.
+      }
+      try {
+        unlinkSync(staged);
+      } catch {
+        /* already moved or removed */
+      }
       return;
     }
     try {
-      const captured = readFileSync(staged, "utf-8").trim();
-      if (captured !== expectedIntent && !existsSync(path)) {
-        try {
-          renameSync(staged, path);
-          return;
-        } catch {
-          // A concurrent switch won the destination. Keep its newer cursor.
-        }
+      unlinkSync(path);
+    } catch {
+      /* absent cursor, or per-user state is unwritable: nothing to clear */
+    }
+  } finally {
+    // Whichever way the clear went: a cursor a switch wrote meanwhile is kept.
+    const still = readActiveIntentCursor(projectDir, space);
+    if (still !== null && (expectedIntent === undefined || still === expectedIntent)) {
+      try {
+        writeFileSync(path, "", { flag: "wx" });
+      } catch {
+        /* per-user cursor; best-effort */
       }
-    } catch {
-      // An unreadable captured cursor is stale runtime state.
     }
-    try {
-      unlinkSync(staged);
-    } catch {
-      /* already moved or removed */
-    }
-    return;
-  }
-  try {
-    unlinkSync(path);
-  } catch {
-    /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
 }
 
@@ -19760,8 +19794,9 @@ function candidateAttemptEventMatches(
 // verified review is READY on the candidate's documents, "approved" when it is
 // NOT-READY on them and the person's approval of the stage (the GATE_APPROVED
 // the stage gate writes) comes after it and decided its open findings, null
-// otherwise. A change to the
-// documents, a rejection or a revision after either undoes it.
+// otherwise; with the latest approval of the stage since that review, whose
+// recorded findings pin's evidence names. A change to the documents, a
+// rejection or a revision after either undoes it.
 export function candidateReviewCoverageProjection(
   rows: ReadonlyArray<AuditShardEvent>,
   options: {
@@ -19776,7 +19811,7 @@ export function candidateReviewCoverageProjection(
     // approval that asked for one to be fixed accepted no concern.
     approvalAccepts?: (block: string) => boolean;
   },
-): "ready" | "approved" | null {
+): { coverage: "ready" | "approved"; approval: string | null } | null {
   const events = sortAttemptEvents(rows);
   const relevantByTimestamp = new Map<string, Set<string>>();
   for (const event of events) {
@@ -19810,6 +19845,7 @@ export function candidateReviewCoverageProjection(
   // A NOT-READY verdict on the candidate's documents: the stage gate takes the
   // person's approval over it, and their approval after it is what covers it.
   let concernOpen = false;
+  let approval: string | null = null;
   for (const event of events) {
     if (
       event.event === "ARTIFACT_CREATED" ||
@@ -19819,6 +19855,7 @@ export function candidateReviewCoverageProjection(
       if (file.includes(options.artifactPrefix)) {
         coverage = null;
         concernOpen = false;
+        approval = null;
       }
       continue;
     }
@@ -19839,6 +19876,7 @@ export function candidateReviewCoverageProjection(
       pending.clear();
       coverage = null;
       concernOpen = false;
+      approval = null;
       continue;
     }
     if (event.event === "GATE_APPROVED") {
@@ -19846,6 +19884,9 @@ export function candidateReviewCoverageProjection(
         coverage = "approved";
         concernOpen = false;
       }
+      // An approval that left the concern open (a fix asked for) covers
+      // nothing, so it is not the stage's approval either.
+      if (coverage !== null) approval = event.block;
       continue;
     }
     if (
@@ -19879,8 +19920,9 @@ export function candidateReviewCoverageProjection(
         options.expectedFingerprint;
     coverage = verdict === "READY" && current ? "ready" : null;
     concernOpen = verdict === "NOT-READY" && current;
+    approval = null;
   }
-  return coverage;
+  return coverage === null ? null : { coverage, approval };
 }
 
 // A person's Request Changes that changed nothing of the stage: the stage is
@@ -23221,114 +23263,6 @@ interface FilesystemSourceIdentity {
 }
 
 type SourceSymlinkTargetMode = "follow" | "tree-only";
-
-function boundedGitMetadataText(path: string, maxBytes: number): string | null {
-  let fd: number | undefined;
-  try {
-    const pathStat = lstatSync(path);
-    if (!pathStat.isFile() || pathStat.size > maxBytes) return null;
-    fd = openSync(path, "r");
-    const before = fstatSync(fd);
-    if (!before.isFile() || before.size > maxBytes) return null;
-    const bytes = Buffer.alloc(before.size);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const count = readSync(
-        fd,
-        bytes,
-        offset,
-        bytes.length - offset,
-        offset,
-      );
-      if (count === 0) return null;
-      offset += count;
-    }
-    const after = fstatSync(fd);
-    if (
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    ) {
-      return null;
-    }
-    return bytes.toString("utf-8");
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // The metadata read already fails closed on any earlier error.
-      }
-    }
-  }
-}
-
-function singleGitMetadataLine(raw: string): string | null {
-  const line = raw.replace(/\r?\n$/, "");
-  if (line.length === 0 || line.includes("\n") || line.includes("\r")) {
-    return null;
-  }
-  return line;
-}
-
-function gitMetadataDirectory(worktreeDir: string): string | null {
-  const marker = join(worktreeDir, ".git");
-  try {
-    const markerStat = lstatSync(marker);
-    if (markerStat.isDirectory()) return realpathSync(marker);
-    if (!markerStat.isFile()) return null;
-  } catch {
-    return null;
-  }
-  const pointerRaw = boundedGitMetadataText(marker, 8192);
-  const pointerLine =
-    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
-  if (pointerLine === null || !pointerLine.startsWith("gitdir: ")) {
-    return null;
-  }
-  const pointer = pointerLine.slice("gitdir: ".length);
-  if (pointer.length === 0 || pointer.includes("\0")) return null;
-  const target = isAbsolute(pointer)
-    ? pointer
-    : resolvePath(worktreeDir, pointer);
-  try {
-    if (!lstatSync(target).isDirectory()) return null;
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
-
-function gitCommonDirectory(gitDir: string): string | null {
-  const marker = join(gitDir, "commondir");
-  try {
-    if (!lstatSync(marker).isFile()) return null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return gitDir;
-    return null;
-  }
-  const pointerRaw = boundedGitMetadataText(marker, 8192);
-  const pointerLine =
-    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
-  if (
-    pointerLine === null ||
-    pointerLine.length === 0 ||
-    pointerLine.includes("\0")
-  ) {
-    return null;
-  }
-  const target = isAbsolute(pointerLine)
-    ? pointerLine
-    : resolvePath(gitDir, pointerLine);
-  try {
-    if (!lstatSync(target).isDirectory()) return null;
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
 
 type GitObjectType = "commit" | "other";
 
@@ -29604,9 +29538,14 @@ export interface UnitMergeEvidence {
   gates_approved: string[];
   reviewers_expected: string[];
   reviewers_ready: string[];
-  // Reviewed stages the person approved after a NOT-READY review; written only
-  // when there is one, so evidence pinned before it compares the same.
-  reviewers_approved_over_concerns?: string[];
+  // Reviewed stages the person approved with a finding open, or after a
+  // NOT-READY review, each with the findings that approval recorded on its
+  // documents; written only when there is one, so evidence pinned before it
+  // compares the same.
+  reviewers_approved_over_concerns?: Array<{
+    stage: string;
+    findings: Array<{ id: string; severity?: string; status: string }>;
+  }>;
   plan_fingerprint: string | null;
   artifact_paths: string[];
   audit_shards: string[];
@@ -32575,7 +32514,7 @@ export function evaluateGuardRefusal(
     // receipt is missing: its artifacts are already on disk (the gate checks them
     // first). Recording it is the way forward; restarting the stage or asking for
     // changes cannot produce it (#1289).
-    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForWork) {
+    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForReview) {
       const operation = guardOperation({
         kind: "record-unit-completion",
         stage: input.stage,
@@ -32585,7 +32524,8 @@ export function evaluateGuardRefusal(
         op: "record-unit-completion",
         action:
           `Record Unit "${input.unit}"'s completion for "${input.stage}" from the artifacts ` +
-          `already on disk by running \`${operation.command}\`, then present its gate again.`,
+          `already on disk by running \`${operation.command}\`, then ` +
+          (state === "revising" ? "finish the revision." : "present its gate again."),
         ...operation,
         // `unit complete` records it only once the person picked it.
         requiresHuman: true,

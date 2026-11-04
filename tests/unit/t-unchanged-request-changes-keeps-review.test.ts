@@ -49,6 +49,7 @@ interface Directive {
   agent_work?: boolean;
   reason_codes?: string[];
   remedies?: Array<{ op: string }>;
+  change_notices?: string[];
 }
 
 type Policy = "strict" | "relaxed" | "off";
@@ -147,9 +148,11 @@ describe("a Request Changes that changed nothing brings the gate back with its r
       expect(sinceLastRejection(proj)).not.toContain("REVIEW_REQUESTED");
       expect(auditBlockField(lastRow(proj, "STAGE_AWAITING_APPROVAL")?.block ?? "", "Review Kept")).toBe(rejection?.timestamp ?? null);
 
+      // The gate shown again says what Approve accepts now; the brief beside it does not repeat it.
+      expect(back.directive?.change_notices?.filter((line) => line.startsWith("Approve accepts")), back.out).toEqual([LINE]);
       const shown = await brief(proj);
       expect(shown).toContain(`Rejected: ${REASON}`);
-      expect(shown.split("\n").filter((line) => line.startsWith("Approve accepts"))).toEqual([LINE]);
+      expect(shown).not.toContain("Approve accepts");
 
       expect((await say(proj, "Approve", "claude")).status).toBe(0);
       const approved = await report(proj, "approved", ["--user-input", "Approve"]);
