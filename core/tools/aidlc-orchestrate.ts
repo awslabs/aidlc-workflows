@@ -734,6 +734,7 @@ import {
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
+import { documentsCard } from "./aidlc-knowledge.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   readRuleBundle,
@@ -9121,6 +9122,8 @@ function inlineContextEntries(
         ).map((f) => ({ ...f, agent })),
       );
     }
+    const card = node.phase === "inception" ? documentsCardEntry(codekbCtx) : null;
+    if (card !== null) entries.push(card);
   }
   entries.push(...shipped.slice(personas));
 
@@ -9131,6 +9134,32 @@ function inlineContextEntries(
     seen.add(e.rel);
     return true;
   });
+}
+
+// The team's documents, from the knowledge base's index, for an Inception
+// stage's reading list: written to the work's engine folder when its text
+// changed (never by a read-only probe or a chat that has not joined the work),
+// and listed only while the file is there.
+const DOCUMENTS_CARD_FILE = "documents.md";
+function documentsCardEntry(ctx: CodekbCtx): InlineContextEntry | null {
+  try {
+    const work = engineSelections.get(ctx.projectDir) ?? resolveWorkflowSelection(ctx.projectDir);
+    if (work.intent === null) return null;
+    const abs = join(engineDir(ctx.projectDir, work.intent, work.space), DOCUMENTS_CARD_FILE);
+    if (!isReadOnlyEngineProbe() && !engineUnjoined) {
+      const card = documentsCard(ctx.projectDir, work.space, intentUuidForSelection(ctx.projectDir, work));
+      const held = readBoundedRegularFile(abs, 1024 * 1024);
+      if (card === null && held !== null) writeEngineFileNoFollow(ctx.projectDir, DOCUMENTS_CARD_FILE, "", work.intent, work.space);
+      else if (card !== null && card !== held) {
+        writeEngineFileNoFollow(ctx.projectDir, DOCUMENTS_CARD_FILE, card, work.intent, work.space);
+      }
+    }
+    const text = readBoundedRegularFile(abs, 1024 * 1024);
+    return text ? { abs, rel: toPosix(relative(ctx.projectDir, abs)), agent: null } : null;
+  } catch {
+    // The reading list goes on without it.
+    return null;
+  }
 }
 
 function inlineContextRoster(
