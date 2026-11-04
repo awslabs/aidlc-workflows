@@ -136,6 +136,16 @@ catalog row and state, and `show <id>` returns one citable record plus current
 extracted text when available. The `/aidlc-knowledge` skill guides the same
 workflow.
 
+Inception's stages read these documents. Each stage's reading list carries the
+documents in the knowledge base that have text (this piece of work's first,
+then the ones for the whole space), with each one's summary or the opening of
+its text. Before asking a question, the agent checks it against them: the
+questions your documents already answer come together in one first question,
+each with its answer and the document it came from, for you to confirm or
+change; what no document says, or what two documents disagree on, is still
+asked. A document you name when you start the work is filed for that work;
+`knowledge dissociate <id> --intent` makes it the whole space's again.
+
 A document can also carry a short **summary and tags**, so an agent can cite its
 gist without re-reading the whole file. The agent writes the summary itself and
 persists it with `summarize <id>`, bound to the revision it describes. After the
