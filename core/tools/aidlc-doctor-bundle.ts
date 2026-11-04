@@ -1191,8 +1191,8 @@ export function runDoctorAnalysis(projectDir: string): DoctorAnalysis {
   const runtimeGraphExists = existsSync(rgPath) && !isSymlink(rgPath);
   const graphStages = runtimeGraphExists ? readGraphStages(rgPath) : [];
 
-  // Core allowlists from the SHIPPED graph (always present) — the stale/missing
-  // runtime graph is the very thing we diagnose, so never seed core ids from it.
+  // Core allowlists come from the SHIPPED graph (always present), never from
+  // the runtime graph, which is the very thing doctor diagnoses.
   const shippedStages = readShippedStageGraph(projectDir);
   const coreSlugs = new Set(shippedStages.map((s) => s.slug));
   const coreAgents = new Set<string>();
