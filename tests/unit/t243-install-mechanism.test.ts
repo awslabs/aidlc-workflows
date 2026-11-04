@@ -4540,6 +4540,49 @@ describe("t243 project initialization", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A settings.json that is not valid JSON names its fix with the person's own
+  // config command; a mirror URL can carry its credential, so that command
+  // asks for it back and never prints it.
+  test("a not-valid-JSON settings.json's fix asks for the mirror back and never prints it", () => {
+    const machine = temp("aidlc-t243-settings-mirror-machine-");
+    const launcher = join(temp("aidlc-t243-settings-mirror-launcher-"), INSTALLED_EXECUTABLE);
+    try {
+      linkSync(BUN, launcher);
+    } catch {
+      cpSync(BUN, launcher);
+    }
+    const MIRROR = "https://user:tok@mirror.example/releases";
+    const project = temp("aidlc-t243-settings-mirror-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      ...process.env,
+      AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const config = (args: string[]) =>
+      spawnSync(launcher, [INIT, "config", ...args], {
+        cwd: project,
+        env,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+    const source = ["--download", "--release-base-url", MIRROR];
+    const installed = config(["--project-dir", project, ...source, "--harness", "claude", "--mcp", "none", "--yes"]);
+    expect(installed.status, `${installed.stdout}${installed.stderr}`).toBe(0);
+    writeFileSync(join(project, ".claude", "settings.json"), '{ "hooks": { broken\n');
+    const human = config([...source, "--yes"]);
+    const json = config([...source, "--yes", "--json"]);
+    for (const refused of [human, json]) {
+      expect(refused.status, `${refused.stdout}${refused.stderr}`).toBe(4);
+      expect(refused.stdout + refused.stderr).toContain(".claude/settings.json is not valid JSON");
+      expect(refused.stdout + refused.stderr).not.toContain("tok@");
+    }
+    expect((human.stdout + human.stderr).replace(/\s+/g, " ")).toContain(
+      "fix: correct .claude/settings.json, then run `aidlc config --download --yes` with the same --release-base-url again",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // A first install's conflict names no other harness's tool: a first Codex
   // install never points at .claude.
   test("a first install's conflict names no other harness's command", () => {

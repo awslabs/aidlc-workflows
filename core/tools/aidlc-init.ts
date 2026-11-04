@@ -14546,11 +14546,13 @@ export async function main(
       return;
     }
     if (error instanceof ProjectSettingsError) {
-      const rerun = configRerunWith(input, projectDir, []);
+      // A mirror URL can carry its credential: the line asks for it back.
+      const rerun = configRerunWith(input, projectDir, [], ["--release-base-url"]);
+      const mirror = input.includes("--release-base-url") ? " with the same --release-base-url" : "";
       emitResult(failure(
         rawMessage,
         EXIT.integrity,
-        `correct ${shownValue(error.path)}, then run ${rerun ? `\`${rerun}\`` : "the same command"} again`,
+        `correct ${shownValue(error.path)}, then run ${rerun ? `\`${rerun}\`` : "the same command"}${mirror} again`,
       ), options);
       return;
     }
