@@ -396,6 +396,7 @@ import {
   openDecisionMenu,
   hasPendingDecision,
   decisionWaitsOnPerson,
+  ownShardRows,
   type PluginCommand,
   parsePluginCommand,
   PHASE_NUMBERS,
@@ -585,6 +586,7 @@ import {
 import {
   type ApprovedComposerPlan,
   approvedComposerPlan,
+  beforePerUnitBlock,
   type Consume,
   type GraphStage,
   keptComposerPlans,
@@ -10308,6 +10310,35 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
+// Going back to change a team's Unit plan while Units are claimed: one line
+// naming them and what the change asks of them. null when nothing is claimed.
+function claimsOpenAtPlanChange(projectDir: string, stateContent: string, targetSlug: string): string | null {
+  if (!isTeamUnitOwnership(stateContent) || !beforePerUnitBlock(loadGraph(), targetSlug)) return null;
+  let claimed: UnitClaimOverview["claimed"];
+  try {
+    claimed = cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed;
+  } catch {
+    return null;
+  }
+  if (claimed.length === 0) return null;
+  return `Still claimed: ${claimed.map((claim) => `${claim.unit} (${claim.owner})`).join(", ")}. Their work carries ` +
+    "on and lands as it is; one whose own entry the revised plan changes brings in the new main and publishes " +
+    "again first.";
+}
+
+// Main is redoing a stage that comes before the per-Unit block (Units
+// Generation reopened to change the Unit plan): its own step runs, whatever
+// the team's claims; the dispatcher board holds main again from the block on.
+// Only the checkout that went back runs it, the one whose own audit shard
+// holds that jump (`Unit Work: kept`, aidlc-jump.ts): a teammate's clone that
+// pulls main mid-replan came for a Unit, so it keeps the board.
+function beforeTeamUnitWork(projectDir: string, stateContent: string): boolean {
+  return beforePerUnitBlock(loadGraph(), getField(stateContent, "Current Stage")?.trim() ?? "") &&
+    ownShardRows(projectDir).mine.some((row) =>
+      row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept"
+    );
+}
+
 // A read-only routing pass shares checkpoint evidence; mutation tools always
 // load fresh. Never retain this snapshot for report or steering continuation.
 let routingEvidence: ConstructionEvidence | null = null;
@@ -12785,7 +12816,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         emit(errorDirective(errorMessage(e)));
         return;
       }
-    } else {
+    } else if (!beforeTeamUnitWork(pd, stateContent)) {
       try {
         const participant = existsSync(unitParticipantPath(pd));
         if (claimlessTeamCheckout(pd)) {
@@ -17982,6 +18013,8 @@ function emitJumpDirective(
       }
       const notice = jumpNotice(jumped.stdout);
       if (notice) settledNotices.push(notice);
+      const claimsLine = claimsOpenAtPlanChange(projectDir, unitMajorState, targetSlug);
+      if (claimsLine) settledNotices.push(claimsLine);
       if (everyUnitSaid) settledNotices.push(everyUnitSaid);
       const after = loadStateFileIfPresent(projectDir);
       if (after !== null) ownJumpMove = { from: stateDigest(unitMajorState), to: stateDigest(after) };

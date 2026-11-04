@@ -137,6 +137,7 @@ describe("t-team-unit-replan-no-claims: the Unit plan changes with no claim open
 
     const reopened = reopenUnitsGeneration(seed);
     expect(reopened.status, reopened.out).toBe(0);
+    expect(JSON.parse(reopened.stdout)).toMatchObject({ kind: "load-steering", stage: "units-generation" });
 
     expect(stageLine(seed, "units-generation")).toContain("[-]");
     expect(stageLine(seed, "delivery-planning")).toContain("[ ]");

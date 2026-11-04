@@ -533,6 +533,8 @@ export function prepareCandidate(
     /** Runs after the Unit's commit, right before publish: what a session
      *  writes into the checkout between the two. */
     beforePublish?: (checkout: string) => void;
+    /** Leave the work committed in the checkout and do not publish it. */
+    publish?: boolean;
     /** Runs once the stage documents and receipts are written, before the
      *  Unit's work is committed and published: a case drives the engine on
      *  the worked checkout there (a skip of the step it hands out, say). */
@@ -782,6 +784,7 @@ export function prepareCandidate(
   git(checkout, ["add", "-A"]);
   git(checkout, ["commit", "-m", `complete ${unit}`]);
   options.beforePublish?.(checkout);
+  if (options.publish === false) return { checkout, candidateOid: "", generation, auditShard };
   const published = runMergeTool(UNIT, ["publish", unit], checkout);
   expect(published.status, published.out).toBe(0);
   return {
