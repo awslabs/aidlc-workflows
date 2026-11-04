@@ -324,14 +324,15 @@ Landing is ordered and resumable:
 
 1. **Git content first.** Re-fetch the integration branch and verify that the
    approved Unit's entry in the Unit DAG, its kind, the active stage columns,
-   and the evidence are still current and every Unit it depends on has landed,
-   then merge the pinned OID. Contract drift refuses before mutation and
-   requires rebase, republish, re-pin, and a new merge gate. Main's
+   and the evidence are still current, then merge the pinned OID. Contract
+   drift refuses before mutation and requires rebase, republish, re-pin, and a
+   new merge gate. Main's
    `aidlc-state.md`, runtime graph, cursors, and engine markers are retained; the team's new
    audit shard and per-Unit artifacts/source land. Real source conflicts abort
    back to a clean checkout and list the files. A clean automatic merge of a
    shared file is also refused when its result differs from the pinned candidate;
-   rebase and republish. No Unit row has been folded.
+   rebase and republish. No Unit row has been folded. A Unit lands only after
+   every Unit it depends on has landed.
 2. **State fold.** Under the per-intent lock, derive the candidate's transported
    receipts, write the merged Unit row while preserving main's singletons and
    other rows, then emit `UNIT_MERGED`.
