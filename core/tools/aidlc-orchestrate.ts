@@ -9084,7 +9084,7 @@ function inlineContextEntries(
         ).map((f) => ({ ...f, agent })),
       );
     }
-    const card = node.phase === "inception" ? documentsCardEntry(codekbCtx) : null;
+    const card = node.phase === "inception" || node.phase === "ideation" ? documentsCardEntry(codekbCtx) : null;
     if (card !== null) entries.push(card);
   }
   entries.push(...shipped.slice(personas));
