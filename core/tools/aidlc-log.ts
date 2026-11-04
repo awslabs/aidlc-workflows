@@ -238,8 +238,6 @@ import {
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
   optionsList,
-  optionsText,
-  recommendedChoices,
   isLearningsNoteDecision,
   boxPicksAddANote,
   picksAddANote,
@@ -319,6 +317,7 @@ import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, qu
 import { chatTookStepHere } from "./aidlc-record-core.ts";
 import {
   APPROVAL_GATE_CHOICES,
+  recommendedChoices,
   SUMMARY_CONFIRMATION_CHOICES,
 } from "./aidlc-reply-reader.ts";
 
@@ -1126,6 +1125,12 @@ function keptMessageRefusal(pd: string): string | null {
   return `Cannot record this answer: the person's message ${latest.id} (sent ${latest.at}) came before this chat ` +
     "was on this work, so it is on record as no reply. If it answers the question, run the same command with " +
     `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
+}
+
+// Choices written in the grammar optionsList reads: the `|` form when one holds
+// a comma, else commas. The one writer of that list form here.
+function optionsText(choices: readonly string[]): string {
+  return choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
 }
 
 // A question's choices given one --option each, so a choice may hold a comma

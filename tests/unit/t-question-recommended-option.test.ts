@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-log:decision, subcommand:aidlc-log:answers, audit:DECISION_RECORDED, audit:QUESTION_REPLIED
-// covers: function:recommendedChoices, function:optionsText, hook:aidlc-record-human-turn
+// covers: function:recommendedChoices, hook:aidlc-record-human-turn
 //
 // A question records which of its choices the agent recommended, beside its
 // choices and the answer, so a report can say whether the person followed it.
