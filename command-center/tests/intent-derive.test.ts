@@ -95,7 +95,7 @@ test("liveness decays on the client: active → idle after 121 s without events;
   expect(liveNow("ended", last, t0 + 5_000)).toBe("ended");
   expect(liveNow("active", null, t0)).toBe("idle");
   expect(restLabel("active", last, t0)).toBeNull();
-  expect(restLabel("ended", last, t0 + 3 * 3_600_000)).toBe("■ ENDED · last event 3h 0m ago");
+  expect(restLabel("ended", last, t0 + 3 * 3_600_000)).toBe("■ A CHAT ENDED · last event 3h 0m ago");
   expect(restLabel("idle", last, t0 + 5 * 60_000)).toBe("◌ IDLE · last event 5m ago");
 });
 
@@ -131,4 +131,10 @@ test("attribution: STAGE_COMPLETED clears the running stage; inherited units are
   expect(a[3]).toMatchObject({ aUnit: "alpha", unitInferred: false });
   expect(a[4]).toMatchObject({ aStage: "functional-design", aUnit: "alpha", unitInferred: true });
   expect(a[5]).toMatchObject({ aStage: "functional-design", aUnit: "alpha", how: "timing", unitInferred: true });
+});
+
+test("unitState is done at the graph's finish stage, not always code generation", () => {
+  const row = (cells: Record<string, string>) => ({ name: "a", batch: null, kind: null, cells } as Parameters<typeof unitState>[0]);
+  expect(unitState(row({ "code-generation": "done", "security-review": "todo" }), "security-review")).toBe("todo");
+  expect(unitState(row({ "code-generation": "done", "security-review": "done" }), "security-review")).toBe("done");
 });

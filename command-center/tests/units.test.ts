@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildUnits, CONSTRUCTION, unitStagesOf } from "../../core/command-center/server/model/units";
+import { buildUnits, CONSTRUCTION, unitFinishOf, unitStagesOf } from "../../core/command-center/server/model/units";
 import { loadCatalog } from "../../core/command-center/server/parse/stage-graph";
 import type { AuditEvent, CatalogStage } from "../../core/command-center/server/types";
 
@@ -22,10 +22,17 @@ test("without a graph, or with one that predates for_each, the core per-unit sta
   expect(unitStagesOf([st("code-generation", false, 1)], [])).toEqual(CONSTRUCTION);
 });
 
-test("a graph without code generation counts a unit done at its last per-unit stage", () => {
-  const stages = ["design", "deliver"];
-  const u = buildUnits([ev("UNIT_COMPLETED", "design", "a", 1), ev("UNIT_COMPLETED", "deliver", "a", 2), ev("UNIT_COMPLETED", "design", "b", 3)], { stage: null, unit: null }, stages);
-  expect(u.done).toBe(1);
+test("a unit is done at the last per-unit stage in graph order, even one after code generation", () => {
+  const catalog = [st("functional-design", true, 1), st("code-generation", true, 2), st("security-review", true, 3), st("build-and-test", false, 4)];
+  expect(unitFinishOf(catalog)).toBe("security-review");
+  const stages = unitStagesOf(catalog, []);
+  const events = [ev("UNIT_COMPLETED", "code-generation", "a", 1), ev("UNIT_COMPLETED", "code-generation", "b", 2), ev("UNIT_COMPLETED", "security-review", "b", 3)];
+  expect(buildUnits(events, { stage: null, unit: null }, stages, unitFinishOf(catalog)).done).toBe(1);
+});
+
+test("without per-unit stages in the graph, code generation finishes a unit", () => {
+  expect(unitFinishOf([])).toBe("code-generation");
+  expect(unitFinishOf([st("build-and-test", false, 1)])).toBe("code-generation");
 });
 
 test("loadCatalog keeps for_each as perUnit", async () => {

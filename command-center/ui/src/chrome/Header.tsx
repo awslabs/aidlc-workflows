@@ -87,7 +87,7 @@ function Search() {
   return (
     <div className="search cc-search" onClick={() => input.current?.focus()}>
       ⌕
-      <input ref={input} value={qv} placeholder="Search intents, stages, units…" aria-label="Search intents and stages"
+      <input ref={input} value={qv} placeholder="Search intents, stages, units…" aria-label="Search intents, stages, and units"
         onChange={(e) => { setQ(e.target.value); setSel(0); setOpen(true); }}
         onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 120)}
         onKeyDown={(e) => {

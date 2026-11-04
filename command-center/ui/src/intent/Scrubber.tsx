@@ -26,7 +26,7 @@ export function Scrubber({ model: m, events, replayAt, connected, onReplay }: Pr
   const live = liveNow(m.liveness, m.lastEventTs, now);
   const rest = restLabel(live, m.lastEventTs, now);
   const label = replayAt ? null
-    : rest ? { t: rest, c: "var(--dim)", title: live === "ended" ? "The last session ended" : m.lastEventTs ? `No events since ${fmtTime(m.lastEventTs)}` : "No events recorded" }
+    : rest ? { t: rest, c: "var(--dim)", title: live === "ended" ? "The latest event is a chat ending. The audit does not say which chat, so another chat may still be working on this intent; its next event shows it active again." : m.lastEventTs ? `No events since ${fmtTime(m.lastEventTs)}` : "No events recorded" }
     : !connected ? { t: "OFFLINE ◌", c: "var(--faint)", title: "Live stream disconnected — showing the last loaded data" }
     : { t: "LIVE ▸", c: "var(--run)", title: "Events arrived in the last 2 minutes" };
 

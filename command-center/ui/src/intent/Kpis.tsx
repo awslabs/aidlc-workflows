@@ -35,7 +35,7 @@ export function Kpis({ model: m, wsLabel }: { model: IntentModel; wsLabel: strin
           <span className="s">Progress</span><span className="v">{m.doneCount} of {m.plannedCount}</span>
           <span className="s">planned stages · {m.skippedCount} skipped by scope</span>
         </div>
-        <div className="kpi" title={m.unitsPlanned === null ? "No planned-unit count: inception/units-generation/unit-of-work.md is missing or lists no units." : "A unit is complete when its code-generation step is done (or inferred done)."}>
+        <div className="kpi" title={m.unitsPlanned === null ? "No planned-unit count: inception/units-generation/unit-of-work.md is missing or lists no units." : `A unit is complete when its ${m.unitFinish ?? "code-generation"} step is done (or inferred done).`}>
           <span className="s">Units</span><span className="v">{m.unitsDone} / {m.unitsPlanned ?? "—"}</span>
           <span className="s">{m.unitsPlanned === null ? "planned units not recorded" : "construction units complete"}</span>
         </div>

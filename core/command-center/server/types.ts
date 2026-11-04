@@ -18,6 +18,7 @@ export interface StageView {
 export type CellState = "done" | "inferred" | "running" | "waiting" | "paused" | "na" | "todo";
 export interface UnitRow { name: string; batch: number | null; kind: string | null; cells: Record<string, CellState> }
 export interface NeedItem { kind: "gate" | "question" | "plan"; stage: string; unit: string | null; since: Iso | null; detail: string }
+/** `ended`: the newest event is a chat ending. The audit does not name the chat, so it never means the intent is over. */
 export type Liveness = "active" | "idle" | "ended";
 export interface Tokens { input: number; output: number; cacheRead: number; cacheWrite: number }
 export type Recorded<T> = { recorded: true; value: T } | { recorded: false; reason: string };
@@ -28,7 +29,9 @@ export interface IntentModel {
   status: string; stages: StageView[]; plannedCount: number; doneCount: number; skippedCount: number;
   current: { stage: string | null; unit: string | null; phase: PhaseKey };
   /** The unit matrix columns, in stage order: the graph's per-unit stages plus any stage with recorded unit events. */
-  unitStages: string[]; units: UnitRow[]; unitsPlanned: number | null; unitsDone: number;
+  unitStages: string[];
+  /** The stage whose completion completes a unit (the last per-unit stage in graph order, else code-generation). */
+  unitFinish: string; units: UnitRow[]; unitsPlanned: number | null; unitsDone: number;
   needs: NeedItem[]; liveness: Liveness; lastEventTs: Iso | null;
   tokens: Recorded<Tokens>; reviews: { ready: number; notReady: number };
   events: StoryEvent[]; notes: string[]; unparsed: number;

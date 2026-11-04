@@ -15,7 +15,15 @@ export function unitStagesOf(catalog: CatalogStage[], events: AuditEvent[]): str
   return [...base, ...seen.sort((a, b) => pos(a) - pos(b))];
 }
 
-export function buildUnits(events: AuditEvent[], current: { stage: string | null; unit: string | null }, stages: string[] = CONSTRUCTION): { units: UnitRow[]; planned: number | null; done: number } {
+/**
+ * The stage that finishes a unit: the last per-unit stage in graph order, so a configured or plugin stage after code
+ * generation has to finish too; code generation when no graph marks per-unit stages.
+ */
+export function unitFinishOf(catalog: CatalogStage[]): string {
+  return catalog.filter((c) => c.perUnit).at(-1)?.slug ?? "code-generation";
+}
+
+export function buildUnits(events: AuditEvent[], current: { stage: string | null; unit: string | null }, stages: string[] = CONSTRUCTION, finish = "code-generation"): { units: UnitRow[]; planned: number | null; done: number } {
   const rows = new Map<string, UnitRow>();
   const row = (n: string) => { let r = rows.get(n); if (!r) { r = { name: n, batch: null, kind: null, cells: Object.fromEntries(stages.map((s) => [s, "todo" as CellState])) }; rows.set(n, r); } return r; };
   for (const e of events) {
@@ -28,8 +36,6 @@ export function buildUnits(events: AuditEvent[], current: { stage: string | null
   }
   if (current.unit && current.stage && stages.includes(current.stage)) { const r = row(current.unit); if (r.cells[current.stage] !== "done") r.cells[current.stage] = "running"; }
   const units = [...rows.values()];
-  // A unit is done when code generation is, or, in a graph without it, when its last per-unit stage is.
-  const finish = stages.includes("code-generation") ? "code-generation" : stages.at(-1);
-  const done = finish ? units.filter((u) => u.cells[finish] === "done" || u.cells[finish] === "inferred").length : 0;
+  const done = units.filter((u) => u.cells[finish] === "done" || u.cells[finish] === "inferred").length;
   return { units, planned: null, done };
 }

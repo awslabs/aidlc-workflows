@@ -91,7 +91,7 @@ const PROBLEM = { missing: "⚠ folder not found", partial: "⚠ partial", empty
 /** "workspace-a · 6 intents · 1 waiting · 2 active" — only the statuses present, in urgency order. */
 function GroupSummary({ g }: { g: ViewGroup }) {
   const shown = g.rows.length + g.completed.length;
-  const label = { waiting: "waiting", active: "active", idle: "idle", ended: "ended", done: "done" } as const;
+  const label = { waiting: "waiting", active: "active", idle: "idle", ended: "chat ended", done: "done" } as const;
   const cls = { waiting: "wait", active: "run", idle: "dim", ended: "dim", done: "ok" } as const;
   return (
     <>

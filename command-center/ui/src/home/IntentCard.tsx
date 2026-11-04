@@ -20,7 +20,7 @@ export function IntentStatus({ i, now, frozen = false }: { i: IntentSummary; now
   }
   if (/park/.test(st)) return <span className="dim">⏸ parked</span>;
   if (isDoneStatus(st)) return <span className="ok">{st === "archived" ? "✓ archived" : "✓ done"}</span>;
-  if (live === "ended") return <span className="dim" title="The last session ended">■ ended</span>;
+  if (live === "ended") return <span className="dim" title="The latest event is a chat ending. The audit does not say which chat, so another chat may still be working on this intent; its next event shows it active again.">■ chat ended</span>;
   return <span className="dim">◌ idle</span>;
 }
 

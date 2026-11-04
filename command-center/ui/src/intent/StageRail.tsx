@@ -15,20 +15,25 @@ export function StageRail(p: Props) {
   return p.phase === "construction" && p.model.units.length ? <UnitRail {...p} /> : <PhaseRail {...p} />;
 }
 
+/** One stage-level station: skipped, or selectable with its state glyph and redo count. */
+function StageRow({ s, m, stage, onSelect }: { s: IntentModel["stages"][number]; m: IntentModel; stage: string | null; onSelect: Props["onSelect"] }) {
+  return s.state === "skip"
+    ? <div className="st skip" title={`Skipped by scope ${m.scope ?? "(scope not recorded)"}`}><span className="g">–</span>{s.slug}<span className="meta">skip</span></div>
+    : (
+      <div className={`st${stage === s.slug ? " cur" : ""}`} role="button" tabIndex={0} title={`${s.name} · lead: ${s.lead}`}
+        onClick={() => onSelect(s.slug, null)} onKeyDown={(e) => { if (e.key === "Enter") onSelect(s.slug, null); }}>
+        <span className={`g ${SG[s.state][1]}`} aria-label={s.state}>{SG[s.state][0]}</span>{s.slug}
+        <span className="meta" title={s.redos ? `${s.redos} backward STAGE_JUMPED to this stage` : undefined}>{s.redos ? `${s.redos} redo` : ""}</span>
+      </div>
+    );
+}
+
 function PhaseRail({ model: m, phase, stage, onSelect }: Props) {
   const rows = m.stages.filter((s) => s.phase === phase);
   return (
     <>
       <div className="lbl">{phaseName(phase)}</div>
-      {rows.map((s) => s.state === "skip"
-        ? <div key={s.slug} className="st skip" title={`Skipped by scope ${m.scope ?? "(scope not recorded)"}`}><span className="g">–</span>{s.slug}<span className="meta">skip</span></div>
-        : (
-          <div key={s.slug} className={`st${stage === s.slug ? " cur" : ""}`} role="button" tabIndex={0} title={`${s.name} · lead: ${s.lead}`}
-            onClick={() => onSelect(s.slug, null)} onKeyDown={(e) => { if (e.key === "Enter") onSelect(s.slug, null); }}>
-            <span className={`g ${SG[s.state][1]}`} aria-label={s.state}>{SG[s.state][0]}</span>{s.slug}
-            <span className="meta" title={s.redos ? `${s.redos} backward STAGE_JUMPED to this stage` : undefined}>{s.redos ? `${s.redos} redo` : ""}</span>
-          </div>
-        ))}
+      {rows.map((s) => <StageRow key={s.slug} s={s} m={m} stage={stage} onSelect={onSelect} />)}
       {!rows.length && <div className="dim" style={{ fontSize: ".88rem" }}>No stages of this phase in the plan.</div>}
       {phase === "construction" && <div className="dim" style={{ fontSize: ".85rem", marginTop: 6 }}>No construction units recorded yet.</div>}
     </>
@@ -43,12 +48,14 @@ function UnitRail({ model: m, stage, unit, onSelect }: Props) {
       ?? [...order].reverse().find((s) => (u.cells[s] ?? "todo") !== "todo" && u.cells[s] !== "na") ?? order[0]!;
   };
   const more = m.unitsPlanned !== null ? m.unitsPlanned - m.units.length : 0;
+  // Construction stages that run once, not per unit (stock Build and Test, CI Pipeline): their own stations.
+  const levels = m.stages.filter((s) => s.phase === "construction" && !order.includes(s.slug));
   return (
     <>
       <div className="lbl">Construction · by unit</div>
       {sortUnits(m.units).map((u) => {
         const waits = (st: string) => m.needs.some((n) => n.unit === u.name && n.stage === st);
-        const us = m.needs.some((n) => n.unit === u.name) ? "waiting" : unitState(u);
+        const us = m.needs.some((n) => n.unit === u.name) ? "waiting" : unitState(u, m.unitFinish ?? "code-generation");
         const [g, cls] = UG[us];
         return (
           <div key={u.name}>
@@ -76,6 +83,8 @@ function UnitRail({ model: m, stage, unit, onSelect }: Props) {
         );
       })}
       {more > 0 && <div className="st" style={{ cursor: "default" }} title="Planned in units-generation/unit-of-work.md; no audit events yet"><span className="g faint">○</span><span className="dim">{more} more planned unit{more === 1 ? "" : "s"} — not started</span></div>}
+      {levels.length > 0 && <div className="lbl" style={{ marginTop: 8 }}>Construction · stage level</div>}
+      {levels.map((s) => <StageRow key={s.slug} s={s} m={m} stage={stage} onSelect={onSelect} />)}
     </>
   );
 }

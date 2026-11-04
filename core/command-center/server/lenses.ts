@@ -85,12 +85,12 @@ const QPIECE = /^(?:Question|Q)\s*(\d+)\s*[:.)—–-]\s*(.+)$/i;
 const QRANGE = /^Questions?\b[^:]*\d[^:]*:\s*(.+)$/i;
 const pieces = (s: string) => s.split(";").map((p) => p.trim()).filter(Boolean);
 /**
- * Lowercase, punctuation and brackets to spaces, whitespace collapsed — the only ground on which a recorded answer may
- * match an option, and the same ground for both, so `Coarse (6-8)` and `Coarse 6-8` are the one answer they look like.
+ * Case and spacing only: punctuation carries meaning ("C" is not "C++", "Coarse (6-8)" is not "Coarse 6-8"), so a
+ * recorded answer matches an option only when it is that option's text.
  */
-const normText = (s: string) => s.toLowerCase().replace(/[+,.\-–—()]/g, " ").replace(/\s+/g, " ").trim();
+const normText = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 /**
- * The single option a recorded token is, or null: the same text (case, punctuation and spacing aside), and only when
+ * The single option a recorded token is, or null: the same text (case and spacing aside), and only when
  * exactly one option is. A shorthand or a cut-short answer is never read as a choice; it is shown verbatim instead,
  * because the dashboard does not decide what a person meant.
  */

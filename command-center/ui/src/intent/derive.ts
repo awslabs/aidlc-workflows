@@ -104,13 +104,13 @@ export function phaseCounts(stages: StageView[], p: PhaseKey): { done: number; p
 }
 
 export type UnitGlyph = "waiting" | "running" | "paused" | "done" | "todo";
-/** A unit's rail state; done matches the server's unitsDone rule (code-generation done or inferred). */
-export function unitState(u: UnitRow): UnitGlyph {
+/** A unit's rail state; done matches the server's unitsDone rule (its `finish` stage done or inferred). */
+export function unitState(u: UnitRow, finish = "code-generation"): UnitGlyph {
   const c = Object.values(u.cells);
   if (c.includes("waiting")) return "waiting";
   if (c.includes("running")) return "running";
   if (c.includes("paused")) return "paused";
-  if (u.cells["code-generation"] === "done" || u.cells["code-generation"] === "inferred") return "done";
+  if (u.cells[finish] === "done" || u.cells[finish] === "inferred") return "done";
   return "todo";
 }
 export const sortUnits = (us: UnitRow[]) => [...us].sort((a, b) => (a.batch ?? 1e9) - (b.batch ?? 1e9));
@@ -139,17 +139,17 @@ export function fold(evs: AEvent[], dir: string): Row[] {
   return out;
 }
 
-/** Liveness as of `now`: the server's value decays on the client — active only within 2 min of the newest event; ended stays ended. */
+/** Liveness as of `now`: the server's value decays on the client — active only within 2 min of the newest event; "ended" (the newest event is a chat ending) stays until another event. */
 export const ACTIVE_MS = 120_000;
 export function liveNow(liveness: Liveness, lastEventTs: string | null, now: number): Liveness {
   if (liveness === "ended") return "ended";
   const last = lastEventTs ? t(lastEventTs) : NaN;
   return Number.isFinite(last) && now - last <= ACTIVE_MS ? "active" : "idle";
 }
-/** "■ ENDED · last event 3h 2m ago" / "◌ IDLE · last event …" (null when active). */
+/** "■ A CHAT ENDED · last event 3h 2m ago" / "◌ IDLE · last event …" (null when active). */
 export function restLabel(l: Liveness, lastEventTs: string | null, now: number): string | null {
   if (l === "active") return null;
-  return `${l === "ended" ? "■ ENDED" : "◌ IDLE"} · last event ${lastEventTs ? fmtAgo(lastEventTs, now) : "not recorded"}`;
+  return `${l === "ended" ? "■ A CHAT ENDED" : "◌ IDLE"} · last event ${lastEventTs ? fmtAgo(lastEventTs, now) : "not recorded"}`;
 }
 
 export type Group = "Artifacts" | "Decisions" | "Review" | "Errors" | "Other";

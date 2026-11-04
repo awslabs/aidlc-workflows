@@ -84,12 +84,14 @@ test("an unlabelled ask is one question titled by the decision, its answer match
   expect(d.questions).toEqual([{ id: "", title: "How would you like to answer the questions?", options: ["Guide me", "I'll edit the file", "Chat"], answer: ["Guide me"], answerRaw: "Guide me" }]);
 });
 
-test("a packed ask splits into per-question options; labels come from the decision; multi-select marks each", async () => {
+test("a packed ask splits into per-question options; labels come from the decision; an exact multi-select marks each", async () => {
   const { agentDecisions } = await lens();
   const d = agentDecisions.find((x) => x.decision.startsWith("Questions 1-2"))!;
   expect(d.questions.map((q) => [q.id, q.title])).toEqual([["Q1", "branching"], ["Q2", "hard rules"]]);
   expect(d.questions[0]!.options).toEqual(["Short-lived branches squash", "Keep every commit", "Straight to main"]);
-  expect(d.questions[0]!.answer).toEqual(["Short-lived branches squash"]);
+  // "Short-lived branches, squash" is not the option's text (the comma), so it is shown as recorded.
+  expect(d.questions[0]!.answer).toBeNull();
+  expect(d.questions[0]!.answerRaw).toBe("Short-lived branches, squash");
   expect(d.questions[1]!.answer).toEqual(["Encrypt at rest", "Least-privilege roles"]);
   expect(d.questions[1]!.answerRaw).toBe("Encrypt at rest, Least-privilege roles");
 });
@@ -217,10 +219,10 @@ test("an answer recorded with no text at all takes no slot and raises no doubt",
   expect(d[0]!.strayAnswers).toEqual([]);
 });
 
-test("an answer whose own text is one option is matched whole, commas and all", async () => {
+test("an answer that differs from an option only by a comma is not that option", async () => {
   const d = await decisions(block("2026-08-14T09:00:00Z", "DECISION_RECORDED", { Stage: STAGE, Decision: "Question 1: branching", Options: "Q1: Trunk-based squash / Trunk-based keep commits / Direct to main / GitFlow" })
     + block("2026-08-14T09:01:00Z", "QUESTION_ANSWERED", { Stage: STAGE, Details: "Q1: Trunk-based, squash" }));
-  expect(d[0]!.questions[0]!.answer).toEqual(["Trunk-based squash"]);
+  expect(d[0]!.questions[0]!.answer).toBeNull();
   expect(d[0]!.questions[0]!.answerRaw).toBe("Trunk-based, squash");
 });
 
@@ -262,17 +264,30 @@ test("an exact multi-select still marks every option it names", async () => {
   expect(d[0]!.questions[0]!.answer).toEqual(["Least-privilege roles", "Never deploy to production"]);
 });
 
-test("brackets round a qualifier do not hide the option it names", async () => {
+test("C is not C++: punctuation is part of the option, so a near miss is shown verbatim", async () => {
+  const d = await decisions(block("2026-08-14T09:00:00Z", "DECISION_RECORDED", { Stage: STAGE, Decision: "Question 4: language", Options: "Q4: C++ / Rust / Go" })
+    + block("2026-08-14T09:01:00Z", "QUESTION_ANSWERED", { Stage: STAGE, Details: "Q4: C" }));
+  expect(d[0]!.questions[0]!.answer).toBeNull();
+  expect(d[0]!.questions[0]!.answerRaw).toBe("C");
+});
+
+test("case and spacing aside, the option's own text is still a choice", async () => {
+  const d = await decisions(block("2026-08-14T09:00:00Z", "DECISION_RECORDED", { Stage: STAGE, Decision: "Question 4: language", Options: "Q4: C++ / Rust / Go" })
+    + block("2026-08-14T09:01:00Z", "QUESTION_ANSWERED", { Stage: STAGE, Details: "Q4:   c++ " }));
+  expect(d[0]!.questions[0]!.answer).toEqual(["C++"]);
+});
+
+test("a bracketed qualifier is not the option's text, so it is shown verbatim", async () => {
   const d = await decisions(block("2026-08-14T09:00:00Z", "DECISION_RECORDED", { Stage: STAGE, Decision: "Question 3: how big should the slices be?", Options: "Q3: Standard 10-14 / Coarse 6-8 / Fine 18+" })
     + block("2026-08-14T09:01:00Z", "QUESTION_ANSWERED", { Stage: STAGE, Details: "Q3: Coarse (6-8)" }));
-  expect(d[0]!.questions[0]!.answer).toEqual(["Coarse 6-8"]);
+  expect(d[0]!.questions[0]!.answer).toBeNull();
   expect(d[0]!.questions[0]!.answerRaw).toBe("Coarse (6-8)");
 });
 
-test("if dropping the brackets makes the answer fit two options, neither is marked", async () => {
+test("brackets are part of the text: an answer matches only the option written exactly that way", async () => {
   const d = await decisions(block("2026-08-14T09:00:00Z", "DECISION_RECORDED", { Stage: STAGE, Decision: "Question 1: file size", Options: "Q1: Large (100 MB) / Large 100 MB / Small" })
     + block("2026-08-14T09:01:00Z", "QUESTION_ANSWERED", { Stage: STAGE, Details: "Q1: Large 100 MB" }));
-  expect(d[0]!.questions[0]!.answer).toBeNull();
+  expect(d[0]!.questions[0]!.answer).toEqual(["Large 100 MB"]);
   expect(d[0]!.questions[0]!.answerRaw).toBe("Large 100 MB");
 });
 

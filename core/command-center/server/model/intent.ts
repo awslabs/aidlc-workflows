@@ -6,7 +6,7 @@ import { parseState } from "../parse/state";
 import type { IntentRef } from "../parse/registry";
 import { readLedgerTokens } from "../parse/ledger";
 import { phaseOf } from "../parse/stage-graph";
-import { buildUnits, unitStagesOf } from "./units";
+import { buildUnits, unitFinishOf, unitStagesOf } from "./units";
 import { deriveNeeds } from "./needs";
 import { contain } from "../paths";
 import { HIDDEN_EVENTS, storyEvents, tokenCount, tokenEvents } from "./story";
@@ -88,7 +88,8 @@ export async function buildIntent(root: string, ref: IntentRef, catalog: Catalog
   const phaseDirOf = (s: string) => phaseOf(catalog, s);
   const needs = await deriveNeeds(rec, events, current, phaseDirOf, dir, base);
   const unitStages = unitStagesOf(catalog, events);
-  const unitInfo = buildUnits(events, current, unitStages);
+  const unitFinish = unitFinishOf(catalog);
+  const unitInfo = buildUnits(events, current, unitStages, unitFinish);
   const stages: StageView[] = planSlugs.map((slug) => {
     const p = state.plan.find((x) => x.slug === slug); const c = catalog.find((x) => x.slug === slug);
     const skip = p?.disposition === "SKIP"; const isDone = p?.mark === "x" || completed.has(slug);
@@ -101,7 +102,8 @@ export async function buildIntent(root: string, ref: IntentRef, catalog: Catalog
 
   const last = events.at(-1)?.ts ?? null;
   const lastSession = [...events].reverse().find((e) => e.event?.startsWith("SESSION_"));
-  // A session whose last event is its own SESSION_ENDED is over, however recent; only then does freshness mean active.
+  // The newest event is a chat ending: that chat is over, however recent. SESSION_ENDED does not name the chat, so
+  // this is shown as "a chat ended", never as the intent ending; another chat's next event makes it active again.
   const ended = lastSession?.event === "SESSION_ENDED" && lastSession === events.at(-1);
   const liveness: Liveness = ended ? "ended" : last && now.getTime() - Date.parse(last) <= 120_000 ? "active" : "idle";
 
@@ -127,7 +129,7 @@ export async function buildIntent(root: string, ref: IntentRef, catalog: Catalog
     name: ref.slug, title: state.fields.Project && !/^\[.*\]$/.test(state.fields.Project) ? state.fields.Project.slice(0, 140) : null,
     scope: ref.scope ?? state.fields.Scope ?? null, depth: state.fields.Depth ?? null, started: state.fields["Start Date"] ?? firstStart.values().next().value ?? null,
     status: ref.status, stages, plannedCount: planned.length, doneCount, skippedCount: stages.length - planned.length,
-    current: { ...current, phase: curPhase }, unitStages, units: unitInfo.units, unitsPlanned: (await plannedUnits(rec, base)) ?? unitInfo.planned, unitsDone: unitInfo.done,
+    current: { ...current, phase: curPhase }, unitStages, unitFinish, units: unitInfo.units, unitsPlanned: (await plannedUnits(rec, base)) ?? unitInfo.planned, unitsDone: unitInfo.done,
     needs, liveness, lastEventTs: last, tokens, reviews: { ready: reviews.filter((e) => e.fields.Verdict === "READY").length, notReady: reviews.filter((e) => e.fields.Verdict === "NOT-READY").length },
     events: story, notes, unparsed, hiddenCounts,
   };

@@ -147,7 +147,7 @@ export function Story({ model: m, ws, scope, replayAt }: LensProps) {
     ? <div className="e h live"><span className="t mono">now</span><span className="wait">? waiting on you · </span>{need.detail} <span className="faint" title={frozen ? "Live stream disconnected — timer paused" : need.since ?? "start not recorded"}>· {fmtWaitLive(need.since, now, frozen)}</span></div>
     : isCurrent && live === "active"
       ? <div className="e r live"><span className="t mono">now</span><span className="run"><span className="live-dot" />{connected ? "agent working…" : "agent was working when the live stream dropped"}</span></div>
-      : isCurrent ? <div className="e p"><span className="t mono">now</span><span className="dim">{live === "ended" ? `■ the session ended · last event ${fmtAgo(m.lastEventTs, now)}` : `◌ idle — no events since ${fmtAgo(m.lastEventTs, now)}`}</span></div> : null;
+      : isCurrent ? <div className="e p"><span className="t mono">now</span><span className="dim">{live === "ended" ? `■ a chat ended · last event ${fmtAgo(m.lastEventTs, now)}` : `◌ idle — no events since ${fmtAgo(m.lastEventTs, now)}`}</span></div> : null;
 
   return (
     <>
