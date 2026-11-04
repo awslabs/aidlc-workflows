@@ -307,4 +307,29 @@ describe("t-own-document-changed-line: under strict, the line is said once in a 
     expect(validity(await step(proj))?.warning).toBe(LINE);
     expect(validity(await step(proj))).toBeUndefined();
   });
+
+  // Kiro CLI's prompt hook runs an exact `/aidlc --resume` ahead of the agent and hands the step over only when it fits
+  // the hook's reply; a Code Generation step does not, so the agent runs the same `next` itself.
+  test("on Kiro CLI, a step the prompt hook runs ahead and does not hand over leaves the line for the agent's own next", async () => {
+    const { proj, requirements } = await gateUnderStrict();
+    await personSays(proj, APPROVING);
+    await reportApproved(proj);
+    await personSays(proj, "looks good, carry on");
+    expect(validity(await step(proj))).toBeUndefined();
+    agentEdits(proj, requirements, "- FR-2: an empty title is refused.\n");
+    const hook = await say(proj, "/aidlc --resume", "kiro");
+    expect(hook.status, hook.stdout + hook.stderr).toBe(0);
+    expect(hook.stdout).not.toContain("--- DIRECTIVE ---");
+    const agentNext = async () => {
+      const own = await exec(
+        [process.execPath, join(proj, ".kiro", "tools", "aidlc-orchestrate.ts"), "next", "--resume", "--project-dir", proj],
+        { cwd: proj, env: { ...env(proj), CLAUDE_PROJECT_DIR: undefined } },
+      );
+      return { out: own.stdout.slice(0, 400), directive: JSON.parse(own.stdout.trim()) as Record<string, unknown> };
+    };
+    const first = await agentNext();
+    expect(validity(first.directive)?.warning, first.out).toBe(LINE);
+    const again = await agentNext();
+    expect(validity(again.directive), again.out).toBeUndefined();
+  });
 });

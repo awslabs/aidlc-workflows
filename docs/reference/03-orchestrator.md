@@ -1407,11 +1407,13 @@ engine keeps the normal directive kind and attaches a machine-readable
 (which finished stage is behind and what to say to redo it, or that a check
 could not run); the conductor says it the first time it appears in a
 conversation, then continues routing. The step that tells the conductor to say
-it counts that warning as heard in the chat (a rules part carries the advisory
-without that instruction, and a read-only probe is shown to nobody), so the
-later steps there leave the advisory off; another chat on the work hears it
-once, and `/aidlc --status` keeps naming the stage until it is redone. An
-inspection that fails outright still says it could not check on each step.
+it counts that warning as heard in the chat, so the later steps there leave the
+advisory off; another chat on the work hears it once, and `/aidlc --status`
+keeps naming the stage until it is redone. A rules part carries the advisory
+without that instruction, a read-only probe is shown to nobody, and a step Kiro
+CLI's prompt hook runs ahead of the agent may never reach the chat, so none of
+them counts. An inspection that fails outright still says it could not check on
+each step.
 When the only change is an edit to the stage's own documents, still there, the
 line names them, says the work carries on with them, and asks whether to redo
 the stage: "requirements.md changed after Requirements Analysis finished. I'm
