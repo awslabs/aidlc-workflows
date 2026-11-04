@@ -10218,12 +10218,14 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
   if (claimed.length === 0) return null;
   return `Still claimed: ${claimed.map((claim) => `${claim.unit} (${claim.owner})`).join(", ")}. Their work carries ` +
     "on and lands as it is; one whose own entry the revised plan changes brings in the new main and publishes " +
-    "again first. No new Unit is claimed until the revised plan is approved.";
+    "again first.";
 }
 
 // Main is redoing a stage that comes before the per-Unit block (Units
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
+// A participant clone (`unit participate`) came for a Unit, so it keeps the
+// board even when it pulls main mid-replan.
 function beforeTeamUnitWork(stateContent: string): boolean {
   return beforePerUnitBlock(loadGraph(), getField(stateContent, "Current Stage")?.trim() ?? "");
 }
@@ -12705,7 +12707,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         emit(errorDirective(errorMessage(e)));
         return;
       }
-    } else if (!beforeTeamUnitWork(stateContent)) {
+    } else if (!beforeTeamUnitWork(stateContent) || existsSync(unitParticipantPath(pd))) {
       try {
         const participant = existsSync(unitParticipantPath(pd));
         const mergeTransactions = unitMergeTransactions(pd);
