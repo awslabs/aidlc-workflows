@@ -263,7 +263,7 @@ export type HarnessManifest = {
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor" | "antigravity";
   /**
    * Kiro rows only: which tree layout this row ships. `agent-v1` is the Kiro CLI
    * agent-JSON layout (JSON agents with hooks embedded in them); `kas` is the
@@ -414,7 +414,8 @@ export type HarnessManifest = {
    * no host plugin store uses a folder-drop projection: Kiro CLI sets kind
    * "kiro" and relies on the explicit composer, while Kiro IDE sets kind
    * "kiro-ide" for its v2 SessionStart registration. Cursor sets kind "cursor"
-   * for its flat camelCase hook schema.
+   * for its flat camelCase hook schema, and Antigravity kind "antigravity" for
+   * its named-hook hooks.json at the plugin root.
    */
   plugin?: {
     /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
@@ -431,7 +432,7 @@ export type HarnessManifest = {
      */
     hostCatalogue?: boolean;
     /** Host-specific plugin hook projection shape. */
-    kind: "store" | "kiro" | "kiro-ide" | "cursor";
+    kind: "store" | "kiro" | "kiro-ide" | "cursor" | "antigravity";
     /**
      * Additional project-root surfaces emitted outside harnessDir that compose
      * must copy into a disposable plugin-test candidate.

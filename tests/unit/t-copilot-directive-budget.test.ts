@@ -387,9 +387,10 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     // budget plus the trailing newline stays under the character cut.
     expect(budget + 1).toBeLessThan(VSCODE_TERMINAL_RESULT_MAX_CHARS);
     for (const harness of HARNESS_MATRIX) {
-      if (harness.name === "copilot") continue;
+      if (harness.name === "copilot" || harness.name === "antigravity") continue;
       expect(Object.hasOwn(shippedHarnessData(harness.engineRoot), "directiveMaxBytes"), harness.name).toBe(false);
     }
+    expect(shippedHarnessData(join(REPO_ROOT, "dist", "antigravity", ".agents")).directiveMaxBytes).toBe(7500);
   });
 
   test("the state fixture places every shipped stage", () => {

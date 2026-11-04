@@ -1,0 +1,235 @@
+{
+  "_comment": "Field-verbatim Antigravity hook payloads captured off agy cli-2026.10.13 on macOS (2026-10-14 probe; the IDE and CLI share the hooks.json contract). Keys are camelCase protojson. A hook runs with cwd = the directory holding hooks.json (.agents/). {{PROJECT}} is the workspace root; {{TRANSCRIPT}} the main chat's transcript; {{SUB_TRANSCRIPT}} the delegate's. conversationId values are the live ones: the delegate's own conversation (sub*) differs from the main chat's and carries no identity or parent field. PreToolUse answered with `{}` was a deny (live-verified), so every allow path must say {\"decision\":\"allow\"}.",
+  "sessionStart": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "modelName": "gemini-4-argon-high",
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "preInvocationFirst": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "initialNumSteps": 1,
+    "invocationNum": 0,
+    "modelName": "gemini-4-argon-high",
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "preInvocationWokenByDelegate": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "initialNumSteps": 4,
+    "invocationNum": 0,
+    "modelName": "gemini-4-argon-high",
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "preToolUseRunCommand": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "modelName": "gemini-4-argon-high",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "CommandLine": "pwd && echo hello > probe.txt",
+        "Cwd": "{{PROJECT}}",
+        "WaitMsBeforeAsync": 5000,
+        "toolAction": "Running shell command",
+        "toolSummary": "Run pwd and create probe.txt"
+      },
+      "name": "run_command"
+    },
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "preToolUseWriteToFile": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "modelName": "gemini-4-argon-high",
+    "stepIdx": 3,
+    "toolCall": {
+      "args": {
+        "CodeContent": "alpha\n",
+        "Description": "Create notes.md containing one line alpha",
+        "Overwrite": true,
+        "TargetFile": "{{PROJECT}}/notes.md",
+        "toolAction": "Creating notes.md",
+        "toolSummary": "Create notes.md with alpha"
+      },
+      "name": "write_to_file"
+    },
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "preToolUseReplaceFileContent": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "modelName": "gemini-4-argon-high",
+    "stepIdx": 8,
+    "toolCall": {
+      "args": {
+        "AllowMultiple": false,
+        "Description": "Replace alpha with beta in notes.md",
+        "EndLine": 1,
+        "Instruction": "Replace alpha with beta",
+        "ReplacementContent": "beta",
+        "StartLine": 1,
+        "TargetContent": "alpha",
+        "TargetFile": "{{PROJECT}}/notes.md",
+        "toolAction": "Editing notes.md",
+        "toolSummary": "Edit notes.md"
+      },
+      "name": "replace_file_content"
+    },
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "preToolUseInvokeSubagent": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "modelName": "gemini-4-argon-high",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "Subagents": [
+          {
+            "Model": "inherit",
+            "Prompt": "Review the functional design of unit-a against the approved requirements and report READY or NOT-READY.",
+            "Role": "Architecture Reviewer",
+            "TypeName": "aidlc-architecture-reviewer-agent"
+          }
+        ],
+        "toolAction": "Invoking the architecture reviewer",
+        "toolSummary": "Start the design review"
+      },
+      "name": "invoke_subagent"
+    },
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "postToolUseRunCommand": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "error": "",
+    "modelName": "gemini-4-argon-high",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "CommandLine": "pwd && echo hello > probe.txt",
+        "Cwd": "{{PROJECT}}",
+        "WaitMsBeforeAsync": 5000,
+        "toolAction": "Running shell command",
+        "toolSummary": "Run pwd and create probe.txt"
+      },
+      "name": "run_command"
+    },
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "postToolUseWriteToFile": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "error": "",
+    "modelName": "gemini-4-argon-high",
+    "stepIdx": 3,
+    "toolCall": {
+      "args": {
+        "CodeContent": "# design\n",
+        "Description": "Write the design",
+        "Overwrite": true,
+        "TargetFile": "{{PROJECT}}/notes.md",
+        "toolAction": "Writing the design",
+        "toolSummary": "Write the design"
+      },
+      "name": "write_to_file"
+    },
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "subSessionStart": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/f1259fbe-4078-4524-b901-62a5bea745b2",
+    "conversationId": "f1259fbe-4078-4524-b901-62a5bea745b2",
+    "modelName": "gemini-4-argon-high",
+    "transcriptPath": "{{SUB_TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "subPreInvocationFirst": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/f1259fbe-4078-4524-b901-62a5bea745b2",
+    "conversationId": "f1259fbe-4078-4524-b901-62a5bea745b2",
+    "initialNumSteps": 0,
+    "invocationNum": 0,
+    "modelName": "gemini-4-argon-high",
+    "transcriptPath": "{{SUB_TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "subPreToolUseViewFile": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/f1259fbe-4078-4524-b901-62a5bea745b2",
+    "conversationId": "f1259fbe-4078-4524-b901-62a5bea745b2",
+    "modelName": "gemini-4-argon-high",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "AbsolutePath": "{{PROJECT}}/README.md",
+        "EndLine": 5,
+        "StartLine": 1,
+        "toolAction": "Reading README.md",
+        "toolSummary": "Read README.md"
+      },
+      "name": "view_file"
+    },
+    "transcriptPath": "{{SUB_TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "subPreToolUseInvokeSubagent": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/f1259fbe-4078-4524-b901-62a5bea745b2",
+    "conversationId": "f1259fbe-4078-4524-b901-62a5bea745b2",
+    "modelName": "gemini-4-argon-high",
+    "stepIdx": 3,
+    "toolCall": {
+      "args": {
+        "Subagents": [
+          { "Model": "inherit", "Prompt": "nested", "Role": "Helper", "TypeName": "aidlc-developer-agent" }
+        ],
+        "toolAction": "Invoking a helper",
+        "toolSummary": "Start a helper"
+      },
+      "name": "invoke_subagent"
+    },
+    "transcriptPath": "{{SUB_TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "subStop": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/f1259fbe-4078-4524-b901-62a5bea745b2",
+    "conversationId": "f1259fbe-4078-4524-b901-62a5bea745b2",
+    "error": "",
+    "executionNum": 0,
+    "fullyIdle": true,
+    "modelName": "gemini-4-argon-high",
+    "terminationReason": "NO_TOOL_CALL",
+    "transcriptPath": "{{SUB_TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "stopWhileDelegateRuns": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "error": "",
+    "executionNum": 0,
+    "fullyIdle": false,
+    "modelName": "gemini-4-argon-high",
+    "terminationReason": "NO_TOOL_CALL",
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  },
+  "stop": {
+    "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "conversationId": "08601a90-8bbc-469c-9b81-de6d7fed3161",
+    "error": "",
+    "executionNum": 0,
+    "fullyIdle": true,
+    "modelName": "gemini-4-argon-high",
+    "terminationReason": "NO_TOOL_CALL",
+    "transcriptPath": "{{TRANSCRIPT}}",
+    "workspacePaths": ["{{PROJECT}}"]
+  }
+}

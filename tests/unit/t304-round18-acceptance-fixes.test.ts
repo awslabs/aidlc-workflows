@@ -256,6 +256,7 @@ function runWizard(
   const hasCredentials = options.hasCredentials ?? true;
   const detection = JSON.stringify({
     harnesses: {
+      antigravity: { found: false, probed: true },
       claude: { found: false, probed: true },
       codex: { found: false, probed: true },
       copilot: { found: false, probed: true },
@@ -1529,7 +1530,7 @@ describe("t304 first-run prompt and detection safety", () => {
   });
 
   test("EOF mid-customize cancels with bounded output", () => {
-    const result = runWizard("1\n2");
+    const result = runWizard("2\n2");
     expect(result.status).not.toBe(0);
     expect(result.stdout).toContain("Nothing written: this needs an answer, and the input is closed.");
     expect(result.stdout.length).toBeLessThan(20_000);
@@ -1567,7 +1568,7 @@ describe("t304 first-run prompt and detection safety", () => {
 
   test("recommended defaults preserve the current provider without credentials", () => {
     // Claude Code, the recommended defaults, then the status line question (#1407).
-    const result = runWizard("1\n\n\n", { hasCredentials: false });
+    const result = runWizard("2\n\n\n", { hasCredentials: false });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("current model provider preserved");
     expect(result.stdout).not.toContain("Choose and configure a model provider");
@@ -1582,7 +1583,7 @@ describe("t304 first-run prompt and detection safety", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro recommended defaults record no provider answer", () => {
-    const result = runWizard("5\n\n");
+    const result = runWizard("6\n\n");
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(
       "no provider settings; model access comes with Kiro CLI",
@@ -1598,9 +1599,9 @@ describe("t304 first-run prompt and detection safety", () => {
   // harness's answer was applied: Kiro recorded a provider and chased model
   // access it never needed.
   test("changing the harness at the summary re-derives the provider answer", () => {
-    // Claude Code first (1), customize (2), accept every step, then edit step 1
-    // to Kiro CLI (5) and apply.
-    const toKiro = runWizard("1\n2\n\n\n\n\n\n\n1\n5\n\n");
+    // Claude Code first (2), customize (2), accept every step, then edit step 1
+    // to Kiro CLI (6) and apply.
+    const toKiro = runWizard("2\n2\n\n\n\n\n\n\n1\n6\n\n");
     expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
     expect(toKiro.stdout).toContain("2. Provider     keep current");
     // On Kiro CLI the row is the session model (personal Kiro settings); Kiro
@@ -1614,11 +1615,11 @@ describe("t304 first-run prompt and detection safety", () => {
     );
     expect(kiro.providers).toBeUndefined();
 
-    // Kiro CLI first (5), customize (2), accept every step (step 2 asks nothing
-    // when Kiro's settings cannot be read), then edit step 1 to Claude Code (1)
+    // Kiro CLI first (6), customize (2), accept every step (step 2 asks nothing
+    // when Kiro's settings cannot be read), then edit step 1 to Claude Code (2)
     // and apply.
     // Ending on Claude Code, setup then asks the status line question (#1407).
-    const toClaude = runWizard("5\n2\n\n\n\n\n\n1\n1\n\n\n");
+    const toClaude = runWizard("6\n2\n\n\n\n\n\n1\n2\n\n\n");
     expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
     expect(toClaude.stdout).not.toContain("Claude Code provides its own model access");
     expect(toClaude.stdout).toContain("2. Provider     keep current");
@@ -1636,20 +1637,20 @@ describe("t304 first-run prompt and detection safety", () => {
       const path = join(project, "aidlc.settings.json");
       return existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")).models : undefined;
     };
-    // Claude Code first (1), customize (2), accept every step, then edit step 1
-    // to Cursor (4) and apply.
-    const toCursor = runWizard("1\n2\n\n\n\n\n\n\n1\n4\n\n");
+    // Claude Code first (2), customize (2), accept every step, then edit step 1
+    // to Cursor (5) and apply.
+    const toCursor = runWizard("2\n2\n\n\n\n\n\n\n1\n5\n\n");
     expect(toCursor.status, toCursor.stdout + toCursor.stderr).toBe(0);
     expect(toCursor.stdout).toContain("1. Harness      Cursor");
     expect(toCursor.stdout).toContain("3. Preset       none (unchanged)");
     expect(toCursor.stdout).toContain("6. Preset in    n/a (no preset recorded)");
     expect(recordedModels(toCursor.project)).toBeUndefined();
 
-    // Cursor first (4), customize (2), accept every step (step 3 defaults to
+    // Cursor first (5), customize (2), accept every step (step 3 defaults to
     // unchanged there, so step 6 asks nothing), then edit step 1 to Claude Code
-    // (1) and apply.
+    // (2) and apply.
     // Ending on Claude Code, setup then asks the status line question (#1407).
-    const toClaude = runWizard("4\n2\n\n\n\n\n\n1\n1\n\n\n");
+    const toClaude = runWizard("5\n2\n\n\n\n\n\n1\n2\n\n\n");
     expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
     expect(toClaude.stdout).toContain("4. unchanged   records no preset (recommended, default)");
     expect(toClaude.stdout).toContain("3. Preset       balanced");
@@ -1659,9 +1660,9 @@ describe("t304 first-run prompt and detection safety", () => {
   // "unchanged" is the person's models answer: it records no preset, and the
   // next refresh does not ask about models again.
   test("unchanged at the preset step records the models answer and no preset", () => {
-    // Claude Code (1), customize (2), keep steps 1 and 2, unchanged (4) at step
+    // Claude Code (2), customize (2), keep steps 1 and 2, unchanged (4) at step
     // 3, keep steps 4 and 5 (step 6 asks nothing), apply, then the status line.
-    const wizard = runWizard("1\n2\n\n\n4\n\n\n\n\n");
+    const wizard = runWizard("2\n2\n\n\n4\n\n\n\n\n");
     expect(wizard.status, wizard.stdout + wizard.stderr).toBe(0);
     expect(wizard.stdout).toContain("3. Preset       none (unchanged)");
     expect(existsSync(join(wizard.project, "aidlc.settings.json"))).toBe(false);

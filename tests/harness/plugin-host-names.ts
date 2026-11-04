@@ -19,6 +19,7 @@ const MANIFEST = JSON.parse(
 ) as { author: unknown; version: string; description: string };
 
 const HOST_NAMED_FILES = new Set([
+  ".antigravity-plugin/plugin.json",
   ".claude-plugin/plugin.json",
   ".codex-plugin/plugin.json",
   ".plugin/plugin.json",

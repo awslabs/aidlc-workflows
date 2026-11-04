@@ -40,7 +40,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 
 // REPO_ROOT = <repo> (tests/harness/../..). The authored source trees sit
 // directly beneath it: core/ (harness-neutral) and harness/<h>/.
-const HARNESSES = ["claude", "codex", "kiro", "kiro-ide", "opencode", "cursor"] as const;
+const HARNESSES = ["antigravity", "claude", "codex", "kiro", "kiro-ide", "opencode", "cursor"] as const;
 
 function annexPath(harness: string): string {
   return join(

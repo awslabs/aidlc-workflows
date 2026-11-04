@@ -110,13 +110,15 @@ export type RuntimeRecord = {
 // answers use `current`, `amazon-bedrock`, or `other`.
 export type ProviderKind = "current" | "amazon-bedrock" | "builtin" | "other";
 
-// Kiro CLI and Kiro IDE provide their own model access. AI-DLC has no provider
-// decision to ask, write, or check for them, even when a legacy answer exists.
-export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide">;
+// Kiro CLI, Kiro IDE and Antigravity provide their own model access. AI-DLC
+// has no provider decision to ask, write, or check for them, even when a legacy
+// answer exists.
+export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide" | "antigravity">;
 
 const HARNESS_OWNED_MODEL_ACCESS: ReadonlySet<ModelHarness> = new Set<ModelHarness>([
   "kiro",
   "kiro-ide",
+  "antigravity",
 ]);
 
 export function harnessOwnsModelAccess(
@@ -574,6 +576,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
   }
   const distribution = value.distribution;
   if (
+    distribution !== "antigravity" &&
     distribution !== "claude" &&
     distribution !== "codex" &&
     distribution !== "copilot" &&
@@ -918,6 +921,12 @@ const HARNESS_CLI: Record<
     command: "cursor",
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
+  },
+  // The Antigravity CLI; the IDE and CLI read the same .agents/ tree.
+  antigravity: {
+    command: "agy",
+    required: false,
+    install: "Install the Antigravity CLI and ensure `agy --version` works; IDE-only installs may omit it.",
   },
   // The 2.x line is where the hooks, skills and workspace default agent this
   // distribution relies on shipped; the guide asks for 2.6 or later.
@@ -2975,6 +2984,7 @@ export function trustFilesForHarness(
       join(projectDir, harnessDir, "cli.json"),
     );
   }
+  if (harness === "antigravity") files.push(join(projectDir, harnessDir, "hooks.json"));
   if (harness === "copilot") {
     files.push(join(projectDir, ".github", "hooks", "aidlc.json"), copilotConfigPath());
   }

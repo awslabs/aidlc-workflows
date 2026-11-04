@@ -1278,9 +1278,10 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "antigravity" | "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
+  antigravity: ".agents",
   codex: ".codex",
   copilot: ".aidlc",
   cursor: ".cursor",
@@ -1293,6 +1294,7 @@ function isAdapterHarness(value: string): value is AdapterHarness {
 }
 
 function adapterFile(harness: AdapterHarness): string {
+  if (harness === "antigravity") return "aidlc-antigravity-adapter.ts";
   if (harness === "codex") return "aidlc-codex-adapter.ts";
   if (harness === "copilot") return "aidlc-copilot-adapter.ts";
   if (harness === "cursor") return "aidlc-cursor-adapter.ts";
@@ -1349,6 +1351,7 @@ export function resolveHookPath(
         ".kiro",
         ".codex",
         ".cursor",
+        ".agents",
       ].filter((value, index, values): value is string =>
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
@@ -3951,7 +3954,8 @@ function machineRootStep(argv: readonly string[]): string {
 // AI-DLC, and the person's other work in that folder is never stopped. The
 // step line is said when the person asks for AI-DLC itself (the engine
 // routes). Copilot's tool guard gives no decision, so its own permission
-// rules apply; Cursor's failClosed guard needs an explicit allow.
+// rules apply; Cursor's failClosed guard and Antigravity's PreToolUse (where
+// no answer is a deny) need an explicit allow.
 async function standAsideInMachineRoot(argv: readonly string[]): Promise<number> {
   let action: Action | null = null;
   try {
@@ -3962,12 +3966,14 @@ async function standAsideInMachineRoot(argv: readonly string[]): Promise<number>
   if (
     action?.type === "adapter" &&
     ((action.harness === "copilot" && action.target === "guard-tool-call") ||
-      (action.harness === "cursor" && action.target === "guards"))
+      (action.harness === "cursor" && action.target === "guards") ||
+      (action.harness === "antigravity" && action.target === "guards"))
   ) {
     // Take the payload the host is still writing, so the answer does not meet
     // a closed pipe.
     await readStdin();
     if (action.harness === "cursor") text(1, `${JSON.stringify({ permission: "allow" })}\n`);
+    if (action.harness === "antigravity") text(1, `${JSON.stringify({ decision: "allow" })}\n`);
   }
   return 0;
 }

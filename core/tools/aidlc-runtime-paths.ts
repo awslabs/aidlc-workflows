@@ -57,7 +57,7 @@ export const BUN_DOTENV_FILES = [
 const DOTENV_ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
 // Names the engine reads as its own, or that the host tools use to tell it
 // where the project, the person's settings, a plugin or a git configuration is.
-const DOTENV_GUARDED = /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|XDG_|GIT_CONFIG)/i;
+const DOTENV_GUARDED = /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|ANTIGRAVITY_|XDG_|GIT_CONFIG)/i;
 // Declarations only the host makes: kept even when a file names them.
 const DOTENV_HOST_ONLY = /^AIDLC_(?:UNATTENDED$|INTERNAL_)/i;
 
@@ -129,7 +129,7 @@ export interface ProjectHarness {
   frameworkVersion?: string;
 }
 
-const HARNESS_PRECEDENCE = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
+const HARNESS_PRECEDENCE = [".claude", ".kiro", ".codex", ".cursor", ".agents", ".aidlc"] as const;
 
 function markerRecord(path: string): Record<string, unknown> {
   let value: unknown;
@@ -675,6 +675,7 @@ export function runtimeHarnessName(
   if (harnessDir === ".codex") return "codex";
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
+  if (harnessDir === ".agents") return "antigravity";
   return "claude";
 }
 
@@ -771,6 +772,7 @@ const HOST_LABELS: Readonly<Record<string, string>> = {
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
   cursor: "Cursor",
+  antigravity: "Google Antigravity",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro",
   opencode: "opencode",

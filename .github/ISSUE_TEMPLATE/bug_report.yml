@@ -92,6 +92,7 @@ body:
         - Cursor
         - opencode
         - GitHub Copilot
+        - Google Antigravity
         - Other
     validations:
       required: true

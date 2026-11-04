@@ -125,12 +125,14 @@ const RETIRED_FRESH_SESSION_TEXT: readonly string[] = [
   "exit or restart OpenCode and start a new session",
   "start a new Copilot CLI session or open a new VS Code agent chat",
 ];
-const CURSOR_SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
+// Cursor and Antigravity ship the same three slash-expanded shortcut skills.
+const SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
+const SHORTCUT_SKILL_HARNESSES = new Set(["cursor", "antigravity"]);
 
 function expectedSkills(harnessName: string): string[] {
   return [
     ...COMMON_EXPECTED_SKILLS,
-    ...(harnessName === "cursor" ? CURSOR_SHORTCUT_SKILLS : []),
+    ...(SHORTCUT_SKILL_HARNESSES.has(harnessName) ? SHORTCUT_SKILLS : []),
   ].sort();
 }
 

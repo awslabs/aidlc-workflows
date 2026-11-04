@@ -7,6 +7,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HARNESS_ROOT = join(REPO_ROOT, "harness");
 
 type ReviewerScopeRegistration =
+  | "antigravity-hooks"
   | "claude-settings"
   | "codex-hooks"
   | "copilot-hooks"
@@ -26,12 +27,13 @@ type HarnessCapabilities = {
   rootFiles: readonly string[];
   skillsRoot: string;
   plugin: {
-    kind: "store" | "kiro" | "kiro-ide" | "cursor";
+    kind: "store" | "kiro" | "kiro-ide" | "cursor" | "antigravity";
     manifestDir: string;
     marketplaceDir: string;
     wiringFile: string | null;
   };
   memoryInclude:
+    | "antigravity-rule"
     | "claude-import"
     | "codex-engine"
     | "copilot-agents-md"
@@ -48,6 +50,27 @@ type HarnessCapabilities = {
 // explicit makes harness-specific test selection reviewable and prevents a new
 // manifest from inheriting an accidental default.
 const HARNESS_CAPABILITIES = {
+  antigravity: {
+    harnessDir: ".agents",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+      harnessDist: ".agents/rules/aidlc-onboarding.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".agents/skills",
+    plugin: {
+      kind: "antigravity",
+      manifestDir: ".antigravity-plugin",
+      marketplaceDir: ".antigravity-plugin",
+      wiringFile: "hooks.json",
+    },
+    memoryInclude: "antigravity-rule",
+    kiroAgentJson: false,
+    ideAgentTools: true,
+    reviewerScopeRegistration: "antigravity-hooks",
+  },
   claude: {
     harnessDir: ".claude",
     onboarding: {
@@ -293,9 +316,14 @@ function validateManifest(
         (file) => file.dst === "steering/aidlc-active-memory.md",
       ) ||
     (capabilities.memoryInclude === "claude-import") !==
-      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
+      (manifest.harnessDir === ".claude" &&
+        manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md")) ||
+    (capabilities.memoryInclude === "antigravity-rule") !==
+      (manifest.harnessDir === ".agents" &&
+        manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md")) ||
     (capabilities.memoryInclude === "codex-engine") !==
-      (manifest.orchestratorSkillPath === ".agents/skills/aidlc/SKILL.md") ||
+      (manifest.harnessDir === ".codex" &&
+        manifest.orchestratorSkillPath === ".agents/skills/aidlc/SKILL.md") ||
     (capabilities.memoryInclude === "opencode-instructions") !==
       manifest.harnessFiles.some((file) => file.dst === "opencode.json") ||
     (capabilities.memoryInclude === "copilot-agents-md") !==

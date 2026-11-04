@@ -36,7 +36,7 @@ function shippedSkillFiles(): string[] {
 describe("the skill names itself AI-DLC, not a role", () => {
   const files = shippedSkillFiles();
   test("every harness ships the orchestrator skill", () => {
-    expect(files.filter((f) => f.endsWith("SKILL.md")).length).toBe(7);
+    expect(files.filter((f) => f.endsWith("SKILL.md")).length).toBe(8);
   });
   for (const file of files) {
     test(`${file.slice(DIST.length + 1)} carries no role word`, () => {

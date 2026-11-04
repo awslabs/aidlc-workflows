@@ -41,7 +41,7 @@ const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-a
 // Windows spellings classify like POSIX ones.
 const AUDIT_TRAIL_PATH =
   /(?:^|[\\/])aidlc[\\/]spaces[\\/][^\\/]+[\\/]intents[\\/](?:[^\\/]+[\\/])?(?:\.aidlc-engine[\\/])?audit(?:[\\/]|$)/i;
-const HOOK_FILE = /(?:^|[\\/])hooks[\\/]aidlc-[a-z-]+\.ts$|(?:^|[\\/])aidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts$/;
+const HOOK_FILE = /(?:^|[\\/])hooks[\\/]aidlc-[a-z-]+\.ts$|(?:^|[\\/])aidlc-(?:kiro|codex|copilot|cursor|antigravity)-adapter\.ts$/;
 const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?$/;
 // The variables that carry AI-DLC's authority or turn a guard off: the session
 // and presence overrides (Codex's thread id is one), the direct state and audit authorities, the
@@ -1342,7 +1342,7 @@ function isAuthoredDevelopmentPath(path: string, cwd: string): boolean {
 
 function harnessInstallRoots(cwd: string): string[] {
   return [...new Set(integrityProjectRoots(cwd).flatMap((projectDir) => {
-    const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc"]
+    const conventional = [".claude", ".codex", ".kiro", ".cursor", ".agents", ".aidlc"]
       .map((dir) => resolve(projectDir, dir));
     try {
       const harnessDir = runtimeHarnessDir(projectDir);

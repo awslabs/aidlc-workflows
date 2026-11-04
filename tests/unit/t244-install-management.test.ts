@@ -109,6 +109,7 @@ const V1_RELEASE_DISPATCH_WORKFLOW = join(
 const RELEASE_VERIFIER = join(REPO_ROOT, "scripts", "verify-release.ts");
 const UTILITY = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
 const RELEASE_HARNESSES = [
+  "antigravity",
   "claude",
   "codex",
   "copilot",
@@ -3852,7 +3853,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(windows).toContain("offline installer did not verify release provenance");
     expect(windows).toContain("offline installer did not bind the trusted source digest");
     expect(windows).toContain(
-      "$harnesses = @('claude', 'codex', 'copilot', 'cursor', 'kiro', 'kiro-ide', 'opencode')",
+      "$harnesses = @('antigravity', 'claude', 'codex', 'copilot', 'cursor', 'kiro', 'kiro-ide', 'opencode')",
     );
     expect(windows).toContain(
       "$env:COPILOT_HOME = Join-Path $env:RUNNER_TEMP 'aidlc-copilot-home'",
@@ -3908,7 +3909,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(unix).toContain('test -s "$gh_marker"');
     expect(unix).toContain("grep -qx 'verified-11' \"$gh_marker\"");
     expect(unix).toContain(
-      "for harness in claude codex copilot cursor kiro kiro-ide opencode; do",
+      "for harness in antigravity claude codex copilot cursor kiro kiro-ide opencode; do",
     );
     expect(unix).toContain(
       'export COPILOT_HOME="$RUNNER_TEMP/aidlc-copilot-home"',

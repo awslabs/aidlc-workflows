@@ -1726,6 +1726,51 @@ function cursorAdapterGate(artifact: string): GateResult {
   }
 }
 
+// The Antigravity adapter's guards target answers the host's PreToolUse with
+// an explicit allow (an empty answer is a deny there), through the compiled
+// dispatcher and with no Bun on PATH.
+function antigravityAdapterGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-antigravity-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist", "antigravity", ".agents"), join(project, ".agents"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      conversationId: `binary-gate-${Date.now()}`,
+      workspacePaths: [project],
+      stepIdx: 1,
+      toolCall: { name: "run_command", args: { CommandLine: "ls", Cwd: project } },
+    });
+    // hooks.json steps up to the project root before the adapter runs.
+    const result = run(artifact, ["engine", "adapter", "antigravity", "guards"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    let allowed = false;
+    try {
+      allowed = (JSON.parse(result.stdout.trim()) as { decision?: string }).decision === "allow";
+    } catch {
+      allowed = false;
+    }
+    return commandGate(
+      "adapter-antigravity-guards",
+      result,
+      result.status === 0 &&
+        allowed &&
+        !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
+      {
+        expected: 'Antigravity adapter answers {"decision":"allow"}',
+        actual: result.stdout.trim() || result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function copilotAdapterGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-copilot-"));
   try {
@@ -2522,6 +2567,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     ));
     result.gates.push(harnessRuntimeGate(actual.artifact, "codex", ".codex"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "cursor", ".cursor"));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "antigravity", ".agents"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
@@ -2587,6 +2633,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(planApprovalAdapterGate(actual.artifact, "codex"));
     result.gates.push(planApprovalAdapterGate(actual.artifact, "kiro"));
     result.gates.push(cursorAdapterGate(actual.artifact));
+    result.gates.push(antigravityAdapterGate(actual.artifact));
     result.gates.push(copilotAdapterGate(actual.artifact));
     result.gates.push(copilotLegacyProjectGate(actual.artifact));
     result.gates.push(projectCopyIgnoredGate(
