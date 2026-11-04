@@ -146,6 +146,15 @@ change; what no document says, or what two documents disagree on, is still
 asked. A document you name when you start the work is filed for that work;
 `knowledge dissociate <id> --intent` makes it the whole space's again.
 
+A file in `documents/` that is not in the knowledge base yet, or is in it with
+no text it can read (a spreadsheet, a Word file, a PDF on a computer without
+`pdftotext`, a scanned page), is named by AI-DLC in one line when work starts
+or goes on, with what to do for each kind: add it with `sync`, or save a text
+copy (`.md`, `.txt` or `.csv`) beside it with the same name, then `sync`. Each
+file is named once in a piece of work, and the work goes on: carrying on
+without it is your call. `aidlc doctor` lists the same files each time you run
+it, as a warning.
+
 A document can also carry a short **summary and tags**, so an agent can cite its
 gist without re-reading the whole file. The agent writes the summary itself and
 persists it with `summarize <id>`, bound to the revision it describes. After the
