@@ -172,8 +172,9 @@ describe("config's lines that name the command again never print the release mir
     ).exec(stopped.stdout)?.[1];
     expect(named, stopped.stdout).toBe("aidlc config --download --mcp none");
 
-    // Run again where the person can answer: the harness is the first choice.
-    const answered = config(dir, withMirror(named ?? ""), { tty: true, input: "1\n" });
+    // Run again where the person can answer: the first harness, and not now to
+    // the setup map that follows.
+    const answered = config(dir, withMirror(named ?? ""), { tty: true, input: "1\nn\n" });
     expect(answered.status, answered.stdout + answered.stderr).toBe(0);
     expectNoMirror(answered);
     expect(answered.stdout).toMatch(/Using .+\./);

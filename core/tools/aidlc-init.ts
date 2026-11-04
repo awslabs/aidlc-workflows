@@ -2856,8 +2856,19 @@ function configInvocationFor(projectDir = process.cwd()): string {
   return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
 }
 
+// A release mirror's path can be its credential, so a command printed again
+// leaves --release-base-url and its URL out, and its line asks for the same
+// one back with sameMirror.
+function withoutReleaseMirror(args: readonly string[]): string[] {
+  return args.filter((arg, index) => arg !== "--release-base-url" && args[index - 1] !== "--release-base-url");
+}
+
+function sameMirror(argv: readonly string[]): string {
+  return argv.includes("--release-base-url") ? " with the same --release-base-url" : "";
+}
+
 // The command the user ran, printed again with the flags that resolve it, so
-// it runs as shown from where they are.
+// it runs from where they are; a mirror it named is asked for, not printed.
 function configRerunWith(
   input: readonly string[],
   projectDir: string,
@@ -2865,7 +2876,7 @@ function configRerunWith(
   dropValueFlags: readonly string[] = [],
 ): string | undefined {
   const invocation = configInvocationFor(projectDir);
-  const args = stripVerb([...input]).filter((arg, index, all) =>
+  const args = withoutReleaseMirror(stripVerb([...input])).filter((arg, index, all) =>
     !dropValueFlags.includes(arg) && !dropValueFlags.includes(all[index - 1] ?? "")
   );
   if (args.some(hasControlCharacters) || hasControlCharacters(projectDir)) return undefined;
@@ -2879,12 +2890,23 @@ function configRerunWith(
   ].join(" ") + target;
 }
 
+// The same, with the ask, for a line that prints the command on its own.
+function configRerunAsking(
+  input: readonly string[],
+  projectDir: string,
+  extra: readonly string[],
+  dropValueFlags: readonly string[] = [],
+): string | undefined {
+  const rerun = configRerunWith(input, projectDir, extra, dropValueFlags);
+  return rerun === undefined ? undefined : `${rerun}${sameMirror(input)}`;
+}
+
 function configMutationRerun(
   section: "models" | "runtime" | "providers" | "trust" | "flags" | "project",
   argv: readonly string[],
 ): string {
-  const args = argv.filter((arg) => arg !== "--yes").map(commandToken);
-  return configCommand([section, ...args, "--yes"].join(" "));
+  const args = withoutReleaseMirror(argv).filter((arg) => arg !== "--yes").map(commandToken);
+  return `${configCommand([section, ...args, "--yes"].join(" "))}${sameMirror(argv)}`;
 }
 
 function configCommandForHarness(harnessDir: string, args = ""): string {
@@ -13744,7 +13766,7 @@ export async function main(
       const force = section
         ? `run \`${
           configRerunWith(["config", ...sourceArgs], projectDir, ["--force"]) ?? configCommand("--force")
-        }\`${argv.includes("--release-base-url") ? " with the same --release-base-url" : ""}, then the same command again`
+        }\`${sameMirror(argv)}, then the same command again`
         : `run it again with --force${downloaded ? " --download" : ""}`;
       // A dry run stops on the same conflict, so the line names none.
       const forward = broken.length === 0
@@ -14054,7 +14076,7 @@ export async function main(
         emitResult(failure(
           `switching ${descriptor.harnessDir} to ${stamp.distribution} lets Kiro run hook files AI-DLC does not own ${framedHooks}; review them, then apply this plan with the --plan-token its dry run prints`,
           EXIT.integrity,
-          configRerunWith(input, projectDir, ["--dry-run"]),
+          configRerunAsking(input, projectDir, ["--dry-run"]),
         ), options);
         return;
       }
@@ -14440,7 +14462,7 @@ export async function main(
   } catch (error) {
     // A question with no answer is not a failure to report as one.
     if (error instanceof FirstRunCancelled) {
-      process.stdout.write(noAnswerLines(error, configRerunWith(input, projectDir, []) ?? configCommand(projectTarget(projectDir))));
+      process.stdout.write(noAnswerLines(error, configRerunAsking(input, projectDir, []) ?? configCommand(projectTarget(projectDir))));
       process.exitCode = EXIT.usage;
       return;
     }
@@ -14502,7 +14524,7 @@ export async function main(
         downloadFailed ? EXIT.unavailable : EXIT.integrity,
         downloadFailed
           ? undefined
-          : configRerunWith(
+          : configRerunAsking(
             input,
             projectDir,
             ["--download"],
@@ -14524,7 +14546,7 @@ export async function main(
         rawMessage,
         EXIT.integrity,
         `put the file itself at ${shownValue(error.path)}, then run ${
-          rerun ? `\`${rerun}\`` : "the same command"
+          rerun ? `\`${rerun}\`${sameMirror(input)}` : "the same command"
         } again`,
       ), options);
       return;
@@ -14569,7 +14591,7 @@ export async function main(
           }${projectTarget(projectDir)}`
         : from
         ? `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/${requestedHarness ?? copiedHarness?.distribution ?? "claude"}/; or fetch them with ${
-          configRerunWith(input, projectDir, ["--download"], ["--from"]) ?? configCommand(`--download${projectTarget(projectDir)}`)
+          configRerunAsking(input, projectDir, ["--download"], ["--from"]) ?? configCommand(`--download${projectTarget(projectDir)}`)
         }`
         : selected?.projectProjection && copiedHarness
         ? `re-copy the complete runtime/${copiedHarness.distribution}/ root from aidlc-copy-runtime-X.Y.Z.tar.gz (or a checkout's dist/${copiedHarness.distribution}/ tree) over the project, or install the native aidlc command`
