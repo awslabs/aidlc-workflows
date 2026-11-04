@@ -6,7 +6,7 @@ import { parseState } from "../parse/state";
 import type { IntentRef } from "../parse/registry";
 import { readLedgerTokens } from "../parse/ledger";
 import { phaseOf } from "../parse/stage-graph";
-import { buildUnits, CONSTRUCTION } from "./units";
+import { buildUnits, unitStagesOf } from "./units";
 import { deriveNeeds } from "./needs";
 import { contain } from "../paths";
 import { HIDDEN_EVENTS, storyEvents, tokenCount, tokenEvents } from "./story";
@@ -20,15 +20,16 @@ async function readInside(base: string, p: string): Promise<string> {
   return Bun.file(q).text();
 }
 
-async function readDirective(rec: string, base: string): Promise<{ stage: string | null; unit: string | null; kind: string | null; mtime: string | null }> {
+/** `askType`: an `ask` directive's `ask_type` (Plan Approval is `kind: "ask"`, `ask_type: "plan-approval"`). */
+async function readDirective(rec: string, base: string): Promise<{ stage: string | null; unit: string | null; kind: string | null; askType: string | null; mtime: string | null }> {
   for (const p of [".aidlc-engine/active-directive.json", ".aidlc-active-directive.json"]) {
     try {
       const q = await contain(base, join(rec, p)); if (!q) continue;
       const f = Bun.file(q); const d = JSON.parse(await f.text());
-      return { stage: d.stage ?? null, unit: d.unit ?? (Array.isArray(d.units) ? d.units[0] ?? null : null), kind: typeof d.kind === "string" ? d.kind : null, mtime: new Date(f.lastModified).toISOString().replace(/\.\d+Z$/, "Z") };
+      return { stage: d.stage ?? null, unit: d.unit ?? (Array.isArray(d.units) ? d.units[0] ?? null : null), kind: typeof d.kind === "string" ? d.kind : null, askType: typeof d.ask_type === "string" ? d.ask_type : null, mtime: new Date(f.lastModified).toISOString().replace(/\.\d+Z$/, "Z") };
     } catch { /* next */ }
   }
-  return { stage: null, unit: null, kind: null, mtime: null };
+  return { stage: null, unit: null, kind: null, askType: null, mtime: null };
 }
 
 const UNIT_HEAD = /^#{2,3}\s+(?:\d+\.\s+)?`?([a-z0-9][a-z0-9-]*)`?\s+—\s+kind\b/gm;
@@ -86,11 +87,12 @@ export async function buildIntent(root: string, ref: IntentRef, catalog: Catalog
   const planSlugs = state.plan.length ? state.plan.map((p) => p.slug) : catalog.map((c) => c.slug);
   const phaseDirOf = (s: string) => phaseOf(catalog, s);
   const needs = await deriveNeeds(rec, events, current, phaseDirOf, dir, base);
-  const unitInfo = buildUnits(events, current);
+  const unitStages = unitStagesOf(catalog, events);
+  const unitInfo = buildUnits(events, current, unitStages);
   const stages: StageView[] = planSlugs.map((slug) => {
     const p = state.plan.find((x) => x.slug === slug); const c = catalog.find((x) => x.slug === slug);
     const skip = p?.disposition === "SKIP"; const isDone = p?.mark === "x" || completed.has(slug);
-    const unitActive = CONSTRUCTION.includes(slug) && unitInfo.units.some((u) => ["running", "done", "inferred", "paused"].includes(u.cells[slug] ?? ""));
+    const unitActive = unitStages.includes(slug) && unitInfo.units.some((u) => ["running", "done", "inferred", "paused"].includes(u.cells[slug] ?? ""));
     let st: StageView["state"] = skip ? "skip" : isDone ? "done" : current.stage === slug || unitActive ? "running" : "todo";
     if (st === "running" && needs.some((n) => n.stage === slug)) st = "waiting";
     return { slug, name: c?.name ?? slug, phase: c?.phase ?? "unknown", lead: c?.lead ?? "orchestrator", state: st, firstStart: firstStart.get(slug) ?? null, completed: done.get(slug) ?? null, redos: redos.get(slug) ?? 0, planned: !skip };
@@ -99,7 +101,9 @@ export async function buildIntent(root: string, ref: IntentRef, catalog: Catalog
 
   const last = events.at(-1)?.ts ?? null;
   const lastSession = [...events].reverse().find((e) => e.event?.startsWith("SESSION_"));
-  const liveness: Liveness = last && now.getTime() - Date.parse(last) <= 120_000 ? "active" : lastSession?.event === "SESSION_ENDED" && lastSession === events.at(-1) ? "ended" : "idle";
+  // A session whose last event is its own SESSION_ENDED is over, however recent; only then does freshness mean active.
+  const ended = lastSession?.event === "SESSION_ENDED" && lastSession === events.at(-1);
+  const liveness: Liveness = ended ? "ended" : last && now.getTime() - Date.parse(last) <= 120_000 ? "active" : "idle";
 
   const ledger = await readContainedLedger(root, ref.uuid);
   let tokens: Recorded<Tokens>;
@@ -123,7 +127,7 @@ export async function buildIntent(root: string, ref: IntentRef, catalog: Catalog
     name: ref.slug, title: state.fields.Project && !/^\[.*\]$/.test(state.fields.Project) ? state.fields.Project.slice(0, 140) : null,
     scope: ref.scope ?? state.fields.Scope ?? null, depth: state.fields.Depth ?? null, started: state.fields["Start Date"] ?? firstStart.values().next().value ?? null,
     status: ref.status, stages, plannedCount: planned.length, doneCount, skippedCount: stages.length - planned.length,
-    current: { ...current, phase: curPhase }, units: unitInfo.units, unitsPlanned: (await plannedUnits(rec, base)) ?? unitInfo.planned, unitsDone: unitInfo.done,
+    current: { ...current, phase: curPhase }, unitStages, units: unitInfo.units, unitsPlanned: (await plannedUnits(rec, base)) ?? unitInfo.planned, unitsDone: unitInfo.done,
     needs, liveness, lastEventTs: last, tokens, reviews: { ready: reviews.filter((e) => e.fields.Verdict === "READY").length, notReady: reviews.filter((e) => e.fields.Verdict === "NOT-READY").length },
     events: story, notes, unparsed, hiddenCounts,
   };

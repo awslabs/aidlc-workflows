@@ -242,11 +242,24 @@ test("an option is only matched on whole words: SQL chooses neither SQLite nor a
   expect(d[0]!.questions[0]!.answerRaw).toBe("SQL");
 });
 
-test("a long truncation of one option counts, inside a multi-select too", async () => {
+test("a cut-short or shorthand answer is shown verbatim, never marked as a choice", async () => {
   const d = await decisions(block("2026-08-14T09:00:00Z", "DECISION_RECORDED", { Stage: STAGE, Decision: "Question 9: hard rules", Options: "Q9: No hardcoded secrets / Private encrypted documents / Least-privilege roles / Never deploy to production / None" })
     + block("2026-08-14T09:01:00Z", "QUESTION_ANSWERED", { Stage: STAGE, Details: "Q9: Least-privilege roles, Never deploy to prod" }));
-  expect(d[0]!.questions[0]!.answer).toEqual(["Least-privilege roles", "Never deploy to production"]);
+  expect(d[0]!.questions[0]!.answer).toBeNull();
   expect(d[0]!.questions[0]!.answerRaw).toBe("Least-privilege roles, Never deploy to prod");
+});
+
+test("free text found inside one longer option is not promoted to that option", async () => {
+  const d = await decisions(block("2026-08-14T09:00:00Z", "DECISION_RECORDED", { Stage: STAGE, Decision: "Question 2: database", Options: "Q2: Managed PostgreSQL with read replicas / DynamoDB on demand" })
+    + block("2026-08-14T09:01:00Z", "QUESTION_ANSWERED", { Stage: STAGE, Details: "Q2: PostgreSQL" }));
+  expect(d[0]!.questions[0]!.answer).toBeNull();
+  expect(d[0]!.questions[0]!.answerRaw).toBe("PostgreSQL");
+});
+
+test("an exact multi-select still marks every option it names", async () => {
+  const d = await decisions(block("2026-08-14T09:00:00Z", "DECISION_RECORDED", { Stage: STAGE, Decision: "Question 9: hard rules", Options: "Q9: No hardcoded secrets / Least-privilege roles / Never deploy to production" })
+    + block("2026-08-14T09:01:00Z", "QUESTION_ANSWERED", { Stage: STAGE, Details: "Q9: Least-privilege roles, Never deploy to production" }));
+  expect(d[0]!.questions[0]!.answer).toEqual(["Least-privilege roles", "Never deploy to production"]);
 });
 
 test("brackets round a qualifier do not hide the option it names", async () => {

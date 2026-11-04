@@ -24,7 +24,7 @@ function splitAnswer(raw: string): { answer: string | null; answers: string[]; a
   return { answer: k, answers: [k], answerText: (m[2] ?? "").trim() || null };
 }
 export function parseQuestions(md: string): { context: string[]; questions: Question[] } {
-  const lines = md.split("\n"); const context: string[] = []; const questions: Question[] = [];
+  const lines = md.split(/\r?\n/); const context: string[] = []; const questions: Question[] = [];
   let mode: "none" | "context" | "q" = "none"; let cur: Question | null = null;
   /** The heading depth of the open question: only a heading at that level or shallower closes it. */
   let depth = 0;

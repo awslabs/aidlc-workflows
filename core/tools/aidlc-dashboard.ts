@@ -6,7 +6,7 @@
 // separate bun is needed) and listens on 127.0.0.1 only; there is no option to
 // widen that. The prebuilt UI ships beside the tools as command-center/ui.
 // The only write is the settings file (~/.aidlc/dashboard.json by default).
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { CONFIG_PATH, type Config, loadConfig, saveConfig } from "../command-center/server/config.ts";
 import { startServer } from "../command-center/server/index.ts";
@@ -80,11 +80,21 @@ export function parseArgs(argv: string[]): LaunchArgs {
   return o;
 }
 
+export function isAidlcProject(dir: string): boolean {
+  try {
+    return statSync(join(dir, "aidlc", "spaces")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 const covers = (root: string, p: string): boolean =>
   p === root || p.startsWith(root.endsWith(sep) ? root : root + sep);
 
 // Folds --root/--pin into cfg and auto-pins cwd when it is an AI-DLC project
-// that no saved root or pin covers. Returns whether cfg changed.
+// that no saved root or pin covers. Returns whether cfg changed. A project is
+// recognised by its committed aidlc/spaces/ folder, not the per-user
+// active-space cursor, which a fresh clone does not have yet.
 export async function applyLaunch(cfg: Config, a: LaunchArgs, cwd: string): Promise<boolean> {
   let changed = false;
   for (const r of a.roots) {
@@ -101,7 +111,7 @@ export async function applyLaunch(cfg: Config, a: LaunchArgs, cwd: string): Prom
   }
   const here = resolve(cwd);
   if (
-    existsSync(join(here, "aidlc", "active-space")) &&
+    isAidlcProject(here) &&
     !cfg.pins.includes(here) &&
     !cfg.roots.some((r) => covers(resolve(r), here))
   ) {

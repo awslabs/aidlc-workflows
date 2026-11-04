@@ -89,48 +89,30 @@ const pieces = (s: string) => s.split(";").map((p) => p.trim()).filter(Boolean);
  * match an option, and the same ground for both, so `Coarse (6-8)` and `Coarse 6-8` are the one answer they look like.
  */
 const normText = (s: string) => s.toLowerCase().replace(/[+,.\-–—()]/g, " ").replace(/\s+/g, " ").trim();
-const MIN_LOOSE = 3; // shorter than this, only an exact match counts
-const MIN_PREFIX = 8; // a cut-short option has to be at least this long…
-const PREFIX_SHARE = 0.6; // …and this much of the option it cuts short
-
 /**
- * The single option a recorded token names, or null. Three rules, each only when exactly one option satisfies it:
- * the same text; the option contains the token in whole words (the shorthand a person types for a longer option, so
- * "SQL" is not a shorthand for "NoSQL store"); or the token cuts the option short near its end ("Never deploy to prod"
- * for "Never deploy to production") — long enough and most of the option, so "SQL" never stands for "SQLite". The other
- * direction, an answer that merely mentions an option as in "Not Postgres, use DynamoDB", never counts.
+ * The single option a recorded token is, or null: the same text (case, punctuation and spacing aside), and only when
+ * exactly one option is. A shorthand or a cut-short answer is never read as a choice; it is shown verbatim instead,
+ * because the dashboard does not decide what a person meant.
  */
 function matchOne(options: string[], token: string): string | null {
   const n = normText(token); if (!n) return null;
   const eq = options.filter((o) => normText(o) === n);
-  if (eq.length) return eq.length === 1 ? eq[0]! : null;
-  if (n.length < MIN_LOOSE) return null;
-  const loose = options.filter((o) => ` ${normText(o)} `.includes(` ${n} `));
-  if (loose.length) return loose.length === 1 ? loose[0]! : null;
-  if (n.length < MIN_PREFIX) return null;
-  const cut = options.filter((o) => { const no = normText(o); return no.startsWith(n) && n.length >= no.length * PREFIX_SHARE; });
-  return cut.length === 1 ? cut[0]! : null;
+  return eq.length === 1 ? eq[0]! : null;
 }
 /**
- * Which options a recorded answer chose, in three passes. The whole text as one option, but only word for word, so an
- * option that itself contains a comma ("Trunk-based, squash") is read as one answer without a longer option swallowing a
- * two-part one. Then commas as a multi-select, where every part has to land on exactly one option: a part that matches
- * nothing (a caveat, an extra rule of their own) drops the whole answer back. Only then the whole text again, this time
- * as a shorthand or a truncation. Nothing certain, nothing marked — the answer is shown verbatim instead.
+ * Which options a recorded answer chose: the whole text as one option, else a comma-separated multi-select in which
+ * every part is exactly one option. Anything else (a part that is a caveat, a shorthand, or free text) marks nothing,
+ * and the answer is shown verbatim instead.
  */
 function matchAnswer(options: string[], raw: string): string[] | null {
-  const n = normText(raw);
-  const same = options.filter((o) => normText(o) === n);
-  if (same.length) return same.length === 1 ? [same[0]!] : null;
-  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
-  if (parts.length > 1) {
-    const hit = new Set<string>(); let every = true;
-    for (const p of parts) { const m = matchOne(options, p); if (!m) { every = false; break; } hit.add(m); }
-    const picked = options.filter((o) => hit.has(o));
-    if (every && picked.length) return picked;
-  }
   const whole = matchOne(options, raw);
-  return whole ? [whole] : null;
+  if (whole) return [whole];
+  if (options.some((o) => normText(o) === normText(raw))) return null; // ambiguous: two options read the same
+  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const hit = new Set<string>();
+  for (const p of parts) { const m = matchOne(options, p); if (!m) return null; hit.add(m); }
+  return options.filter((o) => hit.has(o));
 }
 /** `Q1: a / b; Q2: c / d` → one question per piece; anything else is one question titled by the decision itself. */
 function packedQuestions(decision: string, options: string): DecisionQuestion[] {

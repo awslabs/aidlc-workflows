@@ -82,12 +82,21 @@ test("needs: directive kind present-gate yields a gate need; no kind changes not
   expect(g).toEqual([expect.objectContaining({ stage: "feasibility" })]);
   expect(g[0]!.since).toMatch(/Z$/);
   expect((await model({ directive: { stage: "code-generation", unit: "beta", kind: "ask" } })).m.needs).toEqual([expect.objectContaining({ kind: "question", unit: "beta" })]);
-  expect((await model({ directive: { stage: "code-generation", unit: "beta", kind: "plan-approval" } })).m.needs[0]!.kind).toBe("plan");
+  // The engine's real shape: Plan Approval is an ask with ask_type "plan-approval".
+  const plan = (await model({ directive: { stage: "code-generation", unit: "beta", kind: "ask", ask_type: "plan-approval" } })).m.needs[0]!;
+  expect(plan).toMatchObject({ kind: "plan", detail: "Plan awaiting approval" });
+  const ask = (await model({ directive: { stage: "code-generation", unit: "beta", kind: "ask", ask_type: "stage-questions" } })).m.needs[0]!;
+  expect(ask).toMatchObject({ kind: "question", detail: "Agent is asking a question" });
   expect((await model()).m.needs).toEqual([]);
 });
 test("liveness idle and ended", async () => {
   expect((await model({ audit: A(block("2026-08-13T20:00:00Z", "STAGE_STARTED", { Stage: "feasibility" })) })).m.liveness).toBe("idle");
   expect((await model({ audit: A(block("2026-08-13T20:00:00Z", "SESSION_ENDED", {})) })).m.liveness).toBe("ended");
+});
+test("a session that ended seconds ago is ended, not active; activity after it is active again", async () => {
+  expect((await model({ audit: A(block("2026-08-13T23:20:30Z", "SESSION_ENDED", {})) })).m.liveness).toBe("ended");
+  const resumed = A(block("2026-08-13T23:20:00Z", "SESSION_ENDED", {}) + block("2026-08-13T23:20:40Z", "SESSION_STARTED", {}));
+  expect((await model({ audit: resumed })).m.liveness).toBe("active");
 });
 test("directive sources: engine path wins, legacy used alone, none falls back to audit", async () => {
   expect((await model({ engineDirective: { stage: "feasibility", unit: null } })).m.current.stage).toBe("feasibility");

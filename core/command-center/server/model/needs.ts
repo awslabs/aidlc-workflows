@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { contain } from "../paths";
 import type { AuditEvent, NeedItem } from "../types";
 import { parseQuestions } from "../parse/questions";
-export async function deriveNeeds(recordDir: string, events: AuditEvent[], current: { stage: string | null; unit: string | null }, phaseDirOf: (stage: string) => string, directive?: { stage: string | null; unit: string | null; kind: string | null; mtime: string | null }, aidlcRoot = resolve(recordDir, "../../../..")): Promise<NeedItem[]> {
+export async function deriveNeeds(recordDir: string, events: AuditEvent[], current: { stage: string | null; unit: string | null }, phaseDirOf: (stage: string) => string, directive?: { stage: string | null; unit: string | null; kind: string | null; askType?: string | null; mtime: string | null }, aidlcRoot = resolve(recordDir, "../../../..")): Promise<NeedItem[]> {
   const needs: NeedItem[] = [];
   // open gates: STAGE_AWAITING_APPROVAL closed by a later GATE_* (unit-tolerant) or stage progression
   let open: AuditEvent[] = [];
@@ -32,7 +32,8 @@ export async function deriveNeeds(recordDir: string, events: AuditEvent[], curre
       if (blank.length) needs.push({ kind: "question", stage: current.stage, unit: current.unit, since: new Date((await stat(qf)).mtimeMs).toISOString().replace(/\.\d+Z$/, "Z"), detail: `${blank.length} question${blank.length > 1 ? "s" : ""} waiting` });
     }
   }
-  const dk = directive?.kind === "ask" ? "question" : directive?.kind === "present-gate" ? "gate" : directive?.kind === "plan-approval" ? "plan" : null;
+  // Plan Approval is an ask whose ask_type says so; classify it before generic asks.
+  const dk = directive?.kind === "ask" && directive.askType === "plan-approval" ? "plan" : directive?.kind === "ask" ? "question" : directive?.kind === "present-gate" ? "gate" : null;
   if (directive && dk && directive.stage && !needs.some((n) => n.kind === dk && n.stage === directive.stage && n.unit === directive.unit)) {
     needs.push({ kind: dk, stage: directive.stage, unit: directive.unit, since: directive.mtime, detail: dk === "question" ? "Agent is asking a question" : dk === "gate" ? "Gate presented - approval needed" : "Plan awaiting approval" });
   }

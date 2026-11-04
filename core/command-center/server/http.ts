@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { Stats } from "node:fs";
 import { stat } from "node:fs/promises";
 import { extname, isAbsolute, join } from "node:path";
-import { ConfigUnreadableError, saveConfig, validateConfig, type Config } from "./config";
+import { CONFIG_PATH, ConfigUnreadableError, saveConfig, validateConfig, type Config } from "./config";
 import { discover, type Found } from "./discovery";
 import { FolderError, listFolder, pickFolder, type PickResult } from "./folders";
 import type { LiveHub } from "./live";
@@ -109,6 +109,8 @@ export async function handle(req: Request, ctx: ServerCtx): Promise<Response> {
       ctx.hub.rewatch(); await ctx.hub.pushHome();
       return json(cfg);
     }
+    // The settings file this run reads and writes (the launcher's --config, else the default).
+    if (path === "/api/meta") return req.method === "GET" ? json({ configPath: ctx.configPath ?? CONFIG_PATH }) : text(405, "Method not allowed");
     if (path === "/api/folders/pick") {
       if (req.method !== "POST") return text(405, "Method not allowed");
       // One chooser at a time: a second click must not stack native dialogs.

@@ -77,3 +77,32 @@ test("readAuditIncremental holds a non-ASCII tail and completes it byte-correctl
   expect(done.events.map((e) => e.fields.Note)).toEqual(["caf\u00e9 \u2014 \u2192 done"]);
   expect(done.cursor.offset).toBe((await Bun.file(p).arrayBuffer()).byteLength);
 });
+
+describe("CRLF shards (a Windows checkout)", () => {
+  const crlf = (s: string) => s.replace(/\n/g, "\r\n");
+  const lf = AUDIT_HEADER + block("2026-08-12T17:13:18Z", "GATE_APPROVED", { Stage: "x", "User Input": "Approve" })
+    + block("2026-08-12T17:14:00Z", "STAGE_STARTED", { Stage: "y" });
+
+  test("parse the same events, fields and line numbers as LF", () => {
+    const a = parseAuditText(lf, "s1"); const b = parseAuditText(crlf(lf), "s1");
+    expect(b.events).toEqual(a.events);
+    expect(b.events.map((e) => e.event)).toEqual(["GATE_APPROVED", "STAGE_STARTED"]);
+    expect(b.events[0]!.fields["User Input"]).toBe("Approve");
+    expect(b.tailHeld).toBe(0);
+  });
+
+  test("an incremental read of a CRLF shard advances to the end and returns only the new block", async () => {
+    const ws = await makeWorkspace();
+    const p = join(ws, "aidlc/spaces/default/intents/260811-demo/audit/hosta-aaaaaaaaaaaa.md");
+    await Bun.write(p, crlf(lf));
+    const first = await readAuditIncremental(p, null);
+    expect(first.events.map((e) => e.event)).toEqual(["GATE_APPROVED", "STAGE_STARTED"]);
+    expect(first.cursor.offset).toBe(Bun.file(p).size);
+    await appendFile(p, crlf(block("2026-08-12T17:15:00Z", "HUMAN_TURN")));
+    const second = await readAuditIncremental(p, first.cursor);
+    expect(second.events.map((e) => e.event)).toEqual(["HUMAN_TURN"]);
+    const whole = parseAuditText(crlf(lf + block("2026-08-12T17:15:00Z", "HUMAN_TURN")), "hosta-aaaaaaaaaaaa.md");
+    expect(second.events[0]!.line).toBe(whole.events[2]!.line);
+    expect(second.cursor.offset).toBe(Bun.file(p).size);
+  });
+});

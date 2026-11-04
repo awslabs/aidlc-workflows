@@ -39,8 +39,8 @@ export function Kpis({ model: m, wsLabel }: { model: IntentModel; wsLabel: strin
           <span className="s">Units</span><span className="v">{m.unitsDone} / {m.unitsPlanned ?? "—"}</span>
           <span className="s">{m.unitsPlanned === null ? "planned units not recorded" : "construction units complete"}</span>
         </div>
-        <div className="kpi" title="Per stage: first STAGE_STARTED → STAGE_COMPLETED, minus time the workflow was parked. Includes time spent waiting on you at gates and questions.">
-          <span className="s">Agent time</span><span className="v">{at ? fmtDur(at.ms) : "—"}</span>
+        <div className="kpi" title="Per stage: first STAGE_STARTED → STAGE_COMPLETED, minus time the workflow was parked. It includes time spent waiting on you at gates and questions, so it is elapsed time, not agent working time.">
+          <span className="s">Stage time (unparked)</span><span className="v">{at ? fmtDur(at.ms) : "—"}</span>
           <span className="s">{at ? `across ${at.stages} timed stage${at.stages === 1 ? "" : "s"}` : "no stage has both a start and a completion event"}</span>
         </div>
         <div className="kpi" title="REVIEW_COMPLETED verdicts in the audit">

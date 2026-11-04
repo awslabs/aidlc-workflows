@@ -40,6 +40,7 @@ export function App() {
   const live = useLive();
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
   const [config, setConfig] = useState<Config | null>(null);
+  const [configPath, setConfigPath] = useState<string | null>(null);
   const [setup, setSetup] = useState<{ open: boolean; first: boolean }>({ open: false, first: false });
   const [rail, setRail] = useState(() => localStorage.getItem("cc-rail") !== "0");
   const [toast, setToast] = useState<string | null>(null);
@@ -53,6 +54,9 @@ export function App() {
   useEffect(() => {
     const f = () => { setRoute(parseHash(location.hash)); if (wantsSettings(location.hash)) setSetup((s) => (s.open ? s : { open: true, first: false })); };
     addEventListener("hashchange", f); return () => removeEventListener("hashchange", f);
+  }, []);
+  useEffect(() => {
+    get<{ configPath: string }>("/api/meta").then((m) => setConfigPath(m.configPath), () => setConfigPath(null));
   }, []);
   useEffect(() => {
     get<Config>("/api/config").then((c) => {
@@ -99,7 +103,7 @@ export function App() {
         </div>
         <div className={`rail${rail ? "" : " hide"}`}><LiveRail route={route} focused={focused} /></div>
       </div>
-      {setup.open && config && <SetupDialog first={setup.first} config={config} saveConfig={saveConfig} onClose={() => setSetup({ open: false, first: false })} />}
+      {setup.open && config && <SetupDialog first={setup.first} config={config} configPath={configPath} saveConfig={saveConfig} onClose={() => setSetup({ open: false, first: false })} />}
       <div className={`toast${toast ? " show" : ""}`} role="status">{toast}</div>
       </div>
     </LiveContext.Provider>

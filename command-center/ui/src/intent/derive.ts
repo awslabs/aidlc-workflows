@@ -8,7 +8,12 @@ export const LENSES: LensName[] = ["Story", "Decisions", "Artifacts", "Reviews",
 export const lensFromSlug = (s: string | null): LensName => LENSES.find((l) => l.toLowerCase() === (s ?? "").toLowerCase()) ?? "Story";
 export const FIVE: Exclude<PhaseKey, "unknown">[] = ["initialization", "ideation", "inception", "construction", "operation"];
 export const CONSTRUCTION = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test", "ci-pipeline"];
+/** Short column labels for the core per-unit stages; any other stage falls back to `unitLabel`. */
 export const CSHORT: Record<string, string> = { "functional-design": "FD", "nfr-requirements": "NFR-req", "nfr-design": "NFR-design", "infrastructure-design": "Infra", "code-generation": "Code-gen", "build-and-test": "Build & test", "ci-pipeline": "CI" };
+
+/** A unit-matrix column label: the short core label, else the stage's catalog name, else its slug. */
+export const unitLabel = (slug: string, stages: readonly { slug: string; name: string }[]) =>
+  CSHORT[slug] ?? stages.find((s) => s.slug === slug)?.name ?? slug;
 
 const HOUR = 3_600_000;
 export const GAP_MS = 2 * HOUR;
@@ -39,8 +44,9 @@ export interface AEvent extends StoryEvent { idx: number; aStage: string | null;
  * artifacts → the record path (`<phase>/<stage>/…`, `construction/<unit>/<stage>/…`); STAGE_JUMPED → its Target;
  * WORKFLOW_UNPARKED → the stage that parked; anything else → the stage (and unit) running at that moment ("timing").
  */
-export function attribute(m: Pick<IntentModel, "events" | "stages" | "dir">): AEvent[] {
+export function attribute(m: Pick<IntentModel, "events" | "stages" | "dir"> & { unitStages?: string[] }): AEvent[] {
   const slugs = new Set(m.stages.map((s) => s.slug));
+  const perUnit = m.unitStages ?? CONSTRUCTION;
   let cur: { stage: string | null; unit: string | null } = { stage: null, unit: null };
   let parked: { stage: string | null; unit: string | null } | null = null;
   return m.events.map((e, idx) => {
@@ -53,7 +59,7 @@ export function attribute(m: Pick<IntentModel, "events" | "stages" | "dir">): AE
     if (!aStage && e.kind === "STAGE_JUMPED" && e.raw?.fields?.Target) { aStage = e.raw.fields.Target; how = "jump"; }
     if (!aStage && e.kind === "WORKFLOW_UNPARKED" && parked?.stage) { aStage = parked.stage; aUnit = parked.unit; how = "park"; }
     if (!aStage && cur.stage) { aStage = cur.stage; aUnit = cur.unit; how = "timing"; unitInferred = !!cur.unit; }
-    else if (aStage && !aUnit && cur.unit && aStage === cur.stage && CONSTRUCTION.includes(aStage) && e.kind !== "STAGE_STARTED") { aUnit = cur.unit; unitInferred = true; }
+    else if (aStage && !aUnit && cur.unit && aStage === cur.stage && perUnit.includes(aStage) && e.kind !== "STAGE_STARTED") { aUnit = cur.unit; unitInferred = true; }
     if (e.kind === "STAGE_STARTED" && e.stage) cur = { stage: e.stage, unit: null };
     if ((e.kind === "UNIT_STARTED" || e.kind === "UNIT_RESUMED") && e.stage) cur = { stage: e.stage, unit: e.unit };
     if (e.kind === "STAGE_COMPLETED" && e.stage && e.stage === cur.stage) cur = { stage: null, unit: null };
@@ -81,7 +87,7 @@ export function timeSpan(start: string | null, end: string | null, spans: [numbe
   const parkedMs = overlap(a, b, spans);
   return { calendarMs: b - a, parkedMs, agentMs: b - a - parkedMs };
 }
-/** Header "Agent time": the sum over stages with both a first start and a completion, minus parked spans. */
+/** Header "Stage time (unparked)": elapsed, not agent working time; the sum over stages with both a first start and a completion, minus parked spans. */
 export function agentTime(m: Pick<IntentModel, "stages" | "events">, now = Date.now()): { ms: number; stages: number } | null {
   const spans = parkedSpans(m.events, now); let ms = 0; let n = 0;
   for (const s of m.stages) { const x = timeSpan(s.firstStart, s.completed, spans); if (x) { ms += x.agentMs; n++; } }

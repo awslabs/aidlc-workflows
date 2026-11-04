@@ -16,14 +16,15 @@ import {
   samePath, type StatusCell, type TableKey, UNDO_MS,
 } from "./settingsView";
 
-interface Props { first: boolean; config: Config; saveConfig: (c: Config) => Promise<boolean>; onClose: () => void }
+/** `configPath`: the settings file this run saves to, or null while unknown (then no path is named). */
+interface Props { first: boolean; config: Config; configPath: string | null; saveConfig: (c: Config) => Promise<boolean>; onClose: () => void }
 const SAVE_FAILED = "Could not save — the message at the bottom of the window says why";
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 /** The tables an Undo can come from, plus the Add a project folder panel. */
 type UndoKey = TableKey | "add";
 const ms = (iso: string | null) => { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) ? t : null; };
 
-export function SetupDialog({ first, config, saveConfig, onClose }: Props) {
+export function SetupDialog({ first, config, configPath, saveConfig, onClose }: Props) {
   const { home } = useLiveCtx();
   const { now, frozen } = useLiveClock();
   const loaded = !!home;
@@ -214,7 +215,9 @@ export function SetupDialog({ first, config, saveConfig, onClose }: Props) {
           <h3 id="cc-setup-h">{first ? "Welcome — where do your AIDLC projects live?" : "Workspaces & settings"}</h3>
           <div className="dim st-note">
             {first ? "Add the folder where your projects are. You only do this once — it is remembered every time you open the dashboard."
-              : <>Saved automatically to <span className="mono">~/.aidlc/dashboard.json</span>. Nothing is written inside your projects.</>}
+              : configPath
+                ? <>Saved automatically to <span className="mono" title={configPath}>{tilde(configPath)}</span>. Nothing is written inside your projects.</>
+                : <>Saved automatically. Nothing is written inside your projects.</>}
           </div>
           {picking && <div className="dim st-note" role="status">A folder chooser is open — it may be behind this window.</div>}
         </div>

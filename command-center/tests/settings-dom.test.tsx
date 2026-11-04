@@ -51,7 +51,7 @@ async function mount(initial: Config, workspaces: WorkspaceSummary[] = []) {
     };
     return (
       <LiveContext.Provider value={{ home: { workspaces, needs: [], generatedAt: "2026-08-13T00:00:00Z" } as HomePayload } as unknown as Live}>
-        <SetupDialog first={false} config={c} saveConfig={save} onClose={() => {}} />
+        <SetupDialog first={false} config={c} configPath={null} saveConfig={save} onClose={() => {}} />
       </LiveContext.Provider>
     );
   }

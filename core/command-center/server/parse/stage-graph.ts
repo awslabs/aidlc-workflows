@@ -9,8 +9,8 @@ export async function loadCatalog(projectRoot: string): Promise<{ stages: Catalo
     const real = await contain(projectRoot, p); if (!real) continue; // absent, or resolves outside the workspace
     const f = Bun.file(real);
     try {
-      const raw = JSON.parse(await f.text()) as { slug: string; name?: string; phase?: string; lead_agent?: string; number?: number }[];
-      return { source: p, stages: raw.map((s, i) => ({ slug: s.slug, name: s.name ?? s.slug, phase: (PHASES as string[]).includes(s.phase ?? "") ? (s.phase as PhaseKey) : "unknown", lead: (s.lead_agent ?? "orchestrator").replace(/^aidlc-|-agent$/g, ""), order: s.number ?? i })) };
+      const raw = JSON.parse(await f.text()) as { slug: string; name?: string; phase?: string; lead_agent?: string; number?: number; for_each?: unknown }[];
+      return { source: p, stages: raw.map((s, i) => ({ slug: s.slug, name: s.name ?? s.slug, phase: (PHASES as string[]).includes(s.phase ?? "") ? (s.phase as PhaseKey) : "unknown", lead: (s.lead_agent ?? "orchestrator").replace(/^aidlc-|-agent$/g, ""), order: s.number ?? i, perUnit: typeof s.for_each === "string" && s.for_each !== "" })) };
     } catch { /* malformed: try next */ }
   }
   return { stages: [], source: null };

@@ -1,6 +1,6 @@
 import { lstat, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { Found } from "./discovery";
+import { discover, type Found } from "./discovery";
 import type { Config } from "./config";
 import { healthOptsOf } from "./health";
 import { buildHome } from "./model/home";
@@ -17,6 +17,8 @@ type Watcher = { close: () => void; readonly mode: "watch" | "poll" };
 const DEBOUNCE_MS = 250;
 const MAX_WAIT_MS = 1_000; // a steady stream of changes still flushes at least this often
 const PING_MS = 15_000;
+/** How often configured roots (and pins not yet initialised) are rescanned for workspaces created since. */
+const RESCAN_MS = 15_000;
 
 interface WsState {
   watcher: Watcher; cursors: Map<string, AuditCursor>;
@@ -35,6 +37,8 @@ export class LiveHub {
   private clients = new Set<Ctrl>();
   private ws = new Map<string, WsState>();
   private ping: ReturnType<typeof setInterval> | null = null;
+  private rescan: ReturnType<typeof setInterval> | null = null;
+  private rescanning = false;
   private enc = new TextEncoder();
   constructor(private ctx: Ctx, private makeSource: (root: string) => LocalFolderSource = (root) => new LocalFolderSource(root)) {}
 
@@ -43,11 +47,39 @@ export class LiveHub {
     this.rewatch();
     if (this.ping) clearInterval(this.ping);
     this.ping = setInterval(() => this.broadcast({ type: "ping", at: new Date().toISOString() }), PING_MS);
+    if (this.rescan) clearInterval(this.rescan);
+    this.rescan = setInterval(() => { void this.rediscover(); }, RESCAN_MS);
+  }
+
+  /**
+   * Rescans the configured roots and pins. When the set of workspaces (or whether a pin now holds
+   * AI-DLC records) changed, replaces `ctx.found`, re-syncs watchers and pushes Home. Returns whether
+   * it changed. A scan that overlaps a settings save, or another scan, is dropped.
+   */
+  async rediscover(): Promise<boolean> {
+    const cfg = this.ctx.config;
+    if (!cfg || this.rescanning) return false;
+    this.rescanning = true;
+    try {
+      const next = await discover(cfg);
+      if (this.ctx.config !== cfg) return false; // settings changed meanwhile; that save rediscovered
+      const key = (list: Found[]) => list.map((f) => `${f.path}\0${f.exists}`).join("\n");
+      if (key(next) === key(this.ctx.found)) return false;
+      this.ctx.found = next;
+      this.rewatch();
+      await this.pushHome();
+      return true;
+    } catch {
+      return false; // an unreadable root is reported by Home on the next change; keep the last good set
+    } finally {
+      this.rescanning = false;
+    }
   }
 
   stop(): void {
     this.closeAll();
     if (this.ping) clearInterval(this.ping); this.ping = null;
+    if (this.rescan) clearInterval(this.rescan); this.rescan = null;
     for (const c of this.clients) { try { c.close(); } catch { /* already closed */ } }
     this.clients.clear();
   }

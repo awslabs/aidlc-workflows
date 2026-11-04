@@ -1,6 +1,6 @@
 import type { CellState, IntentModel, PhaseKey, StageState, UnitRow } from "../../../../core/command-center/server/types";
 import { phaseName } from "../format";
-import { CONSTRUCTION, CSHORT, sortUnits, unitState, type UnitGlyph } from "./derive";
+import { CONSTRUCTION, sortUnits, unitLabel, unitState, type UnitGlyph } from "./derive";
 
 const SG: Record<StageState, [string, string]> = { done: ["✓", "ok"], running: ["▶", "run"], waiting: ["?", "wait"], todo: ["○", "faint"], skip: ["–", "faint"] };
 const UG: Record<UnitGlyph, [string, string]> = { done: ["✓", "ok"], running: ["▶", "run"], waiting: ["?", "wait"], paused: ["⏸", "dim"], todo: ["○", "faint"] };
@@ -36,8 +36,7 @@ function PhaseRail({ model: m, phase, stage, onSelect }: Props) {
 }
 
 function UnitRail({ model: m, stage, unit, onSelect }: Props) {
-  const cons = m.stages.filter((s) => s.phase === "construction");
-  const order = cons.length ? cons.map((s) => s.slug) : CONSTRUCTION;
+  const order = m.unitStages?.length ? m.unitStages : CONSTRUCTION;
   const pick = (u: UnitRow) => {
     if (u.name === m.current.unit && m.current.stage && order.includes(m.current.stage)) return m.current.stage;
     return order.find((s) => ["running", "waiting", "paused"].includes(u.cells[s] ?? ""))
@@ -60,13 +59,13 @@ function UnitRail({ model: m, stage, unit, onSelect }: Props) {
             {unit === u.name && (
               <div className="sub">
                 {order.map((s) => {
-                  const sv = cons.find((x) => x.slug === s);
-                  if (sv?.state === "skip") return <div key={s} className="st skip" style={{ padding: "2px 6px" }} title={`Skipped by scope ${m.scope ?? ""}`}><span className="g">–</span>{CSHORT[s] ?? s}</div>;
+                  const sv = m.stages.find((x) => x.slug === s);
+                  if (sv?.state === "skip") return <div key={s} className="st skip" style={{ padding: "2px 6px" }} title={`Skipped by scope ${m.scope ?? ""}`}><span className="g">–</span>{unitLabel(s, m.stages)}</div>;
                   const c = (waits(s) ? "waiting" : u.cells[s] ?? "todo") as CellState; const [cg, ccls, word] = CG[c];
                   return (
                     <div key={s} className={`st${stage === s ? " cur" : ""}`} style={{ padding: "2px 6px" }} role="button" tabIndex={0} title={`${s} · ${word}`}
                       onClick={(e) => { e.stopPropagation(); onSelect(s, u.name); }} onKeyDown={(e) => { if (e.key === "Enter") onSelect(s, u.name); }}>
-                      <span className={`g ${ccls}`} aria-label={word}>{cg}</span>{CSHORT[s] ?? s}
+                      <span className={`g ${ccls}`} aria-label={word}>{cg}</span>{unitLabel(s, m.stages)}
                       {c === "inferred" && <> <span className="faint inf" title="Inferred: artifacts + READY review exist, but no UNIT_COMPLETED event">inferred</span></>}
                     </div>
                   );

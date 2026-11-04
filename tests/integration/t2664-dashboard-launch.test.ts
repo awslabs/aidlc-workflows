@@ -4,7 +4,7 @@
 // an install runs it, against a synthetic AI-DLC project, and checks the
 // loopback posture, the token gate, discovery, live updates and shutdown.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +37,6 @@ function getWithHost(path: string, host: string): Promise<number> {
 beforeAll(async () => {
   scratch = mkdtempSync(join(tmpdir(), "aidlc-dash-it-"));
   project = await makeWorkspace();
-  writeFileSync(join(project, "aidlc", "active-space"), "default\n");
   const child = Bun.spawn(
     [process.execPath, DISPATCHER, "dashboard", "--json", "--no-open", "--port", "0", "--config", join(scratch, "dash.json")],
     { cwd: project, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: scratch } },

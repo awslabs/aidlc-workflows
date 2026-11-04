@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { intentRegistryFromText } from "../../../tools/aidlc-record-core.ts";
 import { contain } from "../paths";
 export interface IntentRef { space: string; dir: string; uuid: string | null; slug: string; scope: string | null; status: string; registered: boolean }
 /** A record dir name must be a single path segment: no separators, no `..`, not empty, no NUL. */
@@ -18,7 +19,8 @@ export async function listIntents(projectRoot: string): Promise<IntentRef[]> {
     const idir = await contain(base, join(spacesDir, space, "intents")); if (!idir) continue;
     let reg: { uuid?: string; slug?: string; dirName?: string; scope?: string; status?: string }[] = [];
     const regFile = await contain(base, join(idir, "intents.json"));
-    try { const parsed = regFile ? JSON.parse(await Bun.file(regFile).text()) : []; reg = Array.isArray(parsed) ? parsed : []; } catch { reg = []; }
+    // The canonical reader: BOM, comments, trailing commas and both sides of a git conflict.
+    try { reg = regFile ? (intentRegistryFromText(await Bun.file(regFile).text()) as typeof reg) : []; } catch { reg = []; }
     const seen = new Set<string>();
     for (const r of reg) {
       if (!r || typeof r !== "object") continue;

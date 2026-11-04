@@ -4,7 +4,7 @@
 // AI-DLC project, and the start/print/exit contract around the in-process
 // Command Center server.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../../core/command-center/server/config.ts";
@@ -16,10 +16,10 @@ const temp = (): string => {
   dirs.push(d);
   return d;
 };
+// A fresh clone: committed spaces and records, but no per-user cursors.
 const workspace = (): string => {
   const d = temp();
-  mkdirSync(join(d, "aidlc"));
-  writeFileSync(join(d, "aidlc", "active-space"), "default\n");
+  mkdirSync(join(d, "aidlc", "spaces", "default", "intents"), { recursive: true });
   return d;
 };
 const cfg = (): Config => ({ version: 1, roots: [], pins: [], hidden: [], repos: [], theme: "auto" });
@@ -62,6 +62,25 @@ describe("applyLaunch", () => {
     const c = cfg();
     expect(await applyLaunch(c, parseArgs([]), here)).toBe(true);
     expect(c.pins).toEqual([here]);
+  });
+
+  test("auto-pins a fresh clone that has no active-space cursor", async () => {
+    const here = workspace();
+    expect(existsSync(join(here, "aidlc", "active-space"))).toBe(false);
+    const c = cfg();
+    expect(await applyLaunch(c, parseArgs([]), here)).toBe(true);
+    expect(c.pins).toEqual([here]);
+  });
+
+  test("a stray aidlc file or a cursor without spaces is not a project", async () => {
+    const file = temp();
+    writeFileSync(join(file, "aidlc"), "");
+    const cursorOnly = temp();
+    mkdirSync(join(cursorOnly, "aidlc"));
+    writeFileSync(join(cursorOnly, "aidlc", "active-space"), "default\n");
+    const c = cfg();
+    expect(await applyLaunch(c, parseArgs([]), file)).toBe(false);
+    expect(await applyLaunch(c, parseArgs([]), cursorOnly)).toBe(false);
   });
 
   test("leaves a plain folder alone", async () => {

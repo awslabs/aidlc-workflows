@@ -61,13 +61,13 @@ export function Home({ config, saveConfig }: Props) {
       )}
       {(roots.size > 0 || pinned > 0) && (
         <div className="wsroots dim">
-          {[...roots.entries()].map(([r, n]) => <span key={r}>Discovered under <span className="mono" title={r}>{tilde(r)}</span> · {n} workspace{n === 1 ? "" : "s"} · watching for new ones</span>)}
+          {[...roots.entries()].map(([r, n]) => <span key={r}>Discovered under <span className="mono" title={r}>{tilde(r)}</span> · {n} workspace{n === 1 ? "" : "s"} · new projects show up within 15 s</span>)}
           {pinned > 0 && <span>Pinned · {pinned} workspace{pinned === 1 ? "" : "s"}</span>}
         </div>
       )}
       {emptyRoots.map((r) => (
         <div className="ws" key={`e:${r}`}>
-          <div className="wshead"><div><span className="lbl" style={{ display: "inline" }}>Discovered under</span> <span className="mono" title={r}>{tilde(r)}</span></div><span className="dim" style={{ fontSize: ".85rem" }}>0 workspaces · watching for new ones</span></div>
+          <div className="wshead"><div><span className="lbl" style={{ display: "inline" }}>Discovered under</span> <span className="mono" title={r}>{tilde(r)}</span></div><span className="dim" style={{ fontSize: ".85rem" }}>0 workspaces · new projects show up within 15 s</span></div>
           <div className="dim" style={{ fontSize: ".9rem" }}>No <span className="mono">aidlc/</span> projects found under this folder yet.</div>
         </div>
       ))}

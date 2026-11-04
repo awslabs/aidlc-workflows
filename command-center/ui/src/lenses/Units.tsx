@@ -1,6 +1,6 @@
 import type { CellState, UnitRow } from "../../../../core/command-center/server/types";
 import { phaseName } from "../format";
-import { CONSTRUCTION, CSHORT, sortUnits } from "../intent/derive";
+import { CONSTRUCTION, sortUnits, unitLabel } from "../intent/derive";
 import type { XLensProps } from "./common";
 
 const INFERRED = "Inferred from artifacts plus a READY review for this unit; no UNIT_COMPLETED event was recorded";
@@ -16,27 +16,28 @@ function Cell({ c }: { c: CellState | undefined }) {
   }
 }
 /** Where a unit row opens in the Story: its live cell, else its furthest started cell, else functional-design. */
-function focusStage(u: UnitRow): string {
-  const live = CONSTRUCTION.find((s) => u.cells[s] === "waiting" || u.cells[s] === "running" || u.cells[s] === "paused");
+function focusStage(u: UnitRow, cols: string[]): string {
+  const live = cols.find((s) => u.cells[s] === "waiting" || u.cells[s] === "running" || u.cells[s] === "paused");
   if (live) return live;
-  return [...CONSTRUCTION].reverse().find((s) => u.cells[s] === "done" || u.cells[s] === "inferred") ?? CONSTRUCTION[0]!;
+  return [...cols].reverse().find((s) => u.cells[s] === "done" || u.cells[s] === "inferred") ?? cols[0]!;
 }
 
 /** Unit × construction-stage matrix. */
 export function Units({ model: m, filter, selUnit, onSelect }: XLensProps) {
   const units = sortUnits(m.units);
+  const cols = m.unitStages?.length ? m.unitStages : CONSTRUCTION;
   const more = m.unitsPlanned !== null ? m.unitsPlanned - units.length : null;
   return (
     <div data-loaded="">
       {filter.phase && filter.phase !== "construction" && <div className="dim" style={{ fontSize: ".86rem", marginBottom: 8 }}>Units run in Construction, so {phaseName(filter.phase)} has none — the matrix below is the whole intent's.</div>}
       <table>
-        <thead><tr><th>Unit</th>{CONSTRUCTION.map((s) => <th key={s} title={s}>{CSHORT[s]}</th>)}</tr></thead>
+        <thead><tr><th>Unit</th>{cols.map((s) => <th key={s} title={s}>{unitLabel(s, m.stages)}</th>)}</tr></thead>
         <tbody>
           {units.map((u) => (
-            <tr key={u.name} className="clk" title="Open this unit's Story" onClick={() => onSelect(focusStage(u), u.name)}
+            <tr key={u.name} className="clk" title="Open this unit's Story" onClick={() => onSelect(focusStage(u, cols), u.name)}
               style={u.name === selUnit ? { outline: "1px solid var(--run)", outlineOffset: -1 } : undefined}>
               <td><b>{u.name}</b><br /><span className="faint mono" title={u.batch === null ? "No batch recorded for this unit" : undefined}>{u.batch !== null ? `batch ${u.batch}` : "batch —"}{u.kind ? ` · ${u.kind}` : ""}</span></td>
-              {CONSTRUCTION.map((s) => <td key={s}><Cell c={u.cells[s]} /></td>)}
+              {cols.map((s) => <td key={s}><Cell c={u.cells[s]} /></td>)}
             </tr>
           ))}
           {!units.length && <tr><td colSpan={8} className="dim">No unit has started yet.</td></tr>}

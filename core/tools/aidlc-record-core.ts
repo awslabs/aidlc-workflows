@@ -292,6 +292,14 @@ export function readIntentRegistry(projectDir: string, space?: string): IntentRe
   } catch {
     return [];
   }
+  return intentRegistryFromText(text);
+}
+
+// The rows of an intents.json text, read exactly as readIntentRegistry reads
+// the file (BOM, comments, trailing commas, both sides of a git conflict).
+// Exported for readers that load the file themselves, such as the Command
+// Center, which reads only inside a realpath-contained workspace.
+export function intentRegistryFromText(text: string): IntentRegistryEntry[] {
   const whole = registryList(text);
   if (whole !== null) return whole;
   if (!CONFLICT_START.test(text)) return [];

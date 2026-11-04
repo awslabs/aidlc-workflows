@@ -13,13 +13,15 @@ export interface ParseResult { events: AuditEvent[]; unparsed: number; tailHeld:
  * carries `line`/`endLine`, the shard lines of its block from its first to its last non-blank line (the header excluded).
  */
 export function parseAuditText(text: string, shard: string, seqStart = 0, lineStart: number | null = 1): ParseResult {
-  const parts = text.split("\n---\n");
+  // LF or CRLF: a Windows checkout of a committed shard has CRLF line ends.
+  const parts = text.split(/\r?\n---\r?\n/);
   const tail = parts.pop() ?? "";
   const events: AuditEvent[] = [];
   let unparsed = 0;
   let seq = seqStart;
   let at = lineStart ?? 1; // the shard line each part starts on (null: unknown, so no line numbers are given)
-  for (const raw of parts) {
+  for (const part of parts) {
+    const raw = part.replace(/\r\n/g, "\n");
     const partStart = at; const rawLines = raw.split("\n");
     at += rawLines.length + 1; // the part's own lines, then the `---` separator line
     const body = raw.trim();

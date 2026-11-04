@@ -12,7 +12,7 @@ export function parseEmbeddedReview(md: string): { verdict: string; reviewer: st
   const get = (k: string) => sec.match(new RegExp(`\\*\\*${k}:?\\*\\*:?\\s*(.+)`))?.[1]?.trim() ?? null;
   const verdict = get("Verdict"); if (!verdict) return null;
   const findings: Finding[] = [];
-  for (const row of sec.split("\n").filter((l) => /^\|\s*\d+\s*\|/.test(l))) {
+  for (const row of sec.split(/\r?\n/).filter((l) => /^\|\s*\d+\s*\|/.test(l))) {
     const c = row.split("|").slice(1, -1).map((s) => s.trim());
     if (/^(NOT-)?RESOLVED$/i.test(c[2] ?? "")) findings.push({ severity: c[1] ?? "", location: "", finding: c[3] ?? "", status: c[2]!.toUpperCase() });
     else if (/^(Critical|Major|Minor)$/i.test(c[1] ?? "")) findings.push({ severity: c[1]!, location: c[2] ?? "", finding: c[3] ?? "", status: null });

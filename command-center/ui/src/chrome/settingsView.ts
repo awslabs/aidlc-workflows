@@ -166,7 +166,8 @@ export function projectsUnder(ws: WorkspaceSummary[], roots: string[]): string[]
   return ws.filter((w) => w.origin === "root" && roots.some((r) => samePath(w.root, r))).map((w) => w.path);
 }
 
-const ABS = /^(\/|[A-Za-z]:[\\/])/;
+/** Absolute: Unix `/…`, a Windows drive `C:\…` or `C:/…`, or a UNC share `\\server\share\…`. */
+const ABS = /^(\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
 /** Why `value` cannot be added, or null. Shape and duplicates only — whether a folder exists needs the server. */
 export function addProblem(c: Config, k: TableKey, value: string): string | null {
   const v = value.trim();
@@ -177,7 +178,7 @@ export function addProblem(c: Config, k: TableKey, value: string): string | null
     // Normalised the same way removal is, so a URL that differs only by a trailing slash is the same repository.
     return c.repos.some((x) => norm(x) === norm(v)) ? "Already added" : null;
   }
-  if (!ABS.test(v)) return "Use a full path starting with / (~ is not expanded), or Browse…";
+  if (!ABS.test(v)) return "Use a full path (/…, C:\\… or \\\\server\\share), not ~ or a relative path, or Browse…";
   return c[k].some((x) => samePath(x, v)) ? "Already added" : null;
 }
 /** Appends to one list; the caller has already checked `addProblem`. */
@@ -257,7 +258,7 @@ export function placementFor(l: { entries: { name: string; isAidlc: boolean }[] 
 export function addFolderProblem(c: Config, value: string): string | null {
   const v = value.trim();
   if (!v) return null;
-  if (!ABS.test(v)) return "Use a full path starting with / (~ is not expanded), or Choose a folder…";
+  if (!ABS.test(v)) return "Use a full path (/…, C:\\… or \\\\server\\share), not ~ or a relative path, or Choose a folder…";
   if (c.roots.some((x) => samePath(x, v)) || c.pins.some((x) => samePath(x, v))) return "Already added";
   const root = c.roots.find((r) => isUnder(v, r));
   return root ? `Already watched — it is inside ${tilde(root)}` : null;

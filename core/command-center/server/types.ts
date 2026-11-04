@@ -8,7 +8,8 @@ export interface AuditEvent {
 }
 export type StageState = "done" | "running" | "waiting" | "todo" | "skip";
 export type PhaseKey = "initialization" | "ideation" | "inception" | "construction" | "operation" | "unknown";
-export interface CatalogStage { slug: string; name: string; phase: PhaseKey; lead: string; order: number }
+/** `perUnit`: the compiled graph runs this stage once per unit of work (`for_each`). */
+export interface CatalogStage { slug: string; name: string; phase: PhaseKey; lead: string; order: number; perUnit: boolean }
 export interface PlanRow { slug: string; mark: string; disposition: "EXECUTE" | "SKIP" }
 export interface StageView {
   slug: string; name: string; phase: PhaseKey; lead: string; state: StageState;
@@ -26,7 +27,8 @@ export interface IntentModel {
   name: string; title: string | null; scope: string | null; depth: string | null; started: Iso | null;
   status: string; stages: StageView[]; plannedCount: number; doneCount: number; skippedCount: number;
   current: { stage: string | null; unit: string | null; phase: PhaseKey };
-  units: UnitRow[]; unitsPlanned: number | null; unitsDone: number;
+  /** The unit matrix columns, in stage order: the graph's per-unit stages plus any stage with recorded unit events. */
+  unitStages: string[]; units: UnitRow[]; unitsPlanned: number | null; unitsDone: number;
   needs: NeedItem[]; liveness: Liveness; lastEventTs: Iso | null;
   tokens: Recorded<Tokens>; reviews: { ready: number; notReady: number };
   events: StoryEvent[]; notes: string[]; unparsed: number;

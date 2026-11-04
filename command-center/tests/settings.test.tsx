@@ -17,10 +17,10 @@ const intent = (name: string) => ({ name } as IntentSummary);
 const wsum = (o: Partial<WorkspaceSummary> & { path: string }): WorkspaceSummary =>
   ({ label: o.path.split("/").pop()!, origin: "root", root: null, status: "ok", problem: null, intents: [], rulesLearned: 0, sampleRule: null, ...o });
 
-function render(config: Config, workspaces: WorkspaceSummary[]): string {
+function render(config: Config, workspaces: WorkspaceSummary[], configPath: string | null = "/Users/x/.aidlc/dashboard.json"): string {
   const home: HomePayload = { workspaces, needs: [], generatedAt: "2026-08-13T00:00:00Z" };
   const live = { home } as unknown as Live;
-  return renderToStaticMarkup(<LiveContext.Provider value={live}><SetupDialog first={false} config={config} saveConfig={async () => true} onClose={() => {}} /></LiveContext.Provider>);
+  return renderToStaticMarkup(<LiveContext.Provider value={live}><SetupDialog first={false} config={config} configPath={configPath} saveConfig={async () => true} onClose={() => {}} /></LiveContext.Provider>);
 }
 
 const cfg: Config = { version: 1, roots: ["/srv/code"], pins: ["/opt/pinned-app", "/opt/gone"], hidden: ["/srv/code/old-thing"],
@@ -194,7 +194,11 @@ test("hidden rows say which root or pin the path was under", () => {
   expect(hiddenOrigin("/srv/code/a/b", { ...cfg, pins: ["/srv/code/a"] })).toEqual({ kind: "pin", path: "/srv/code/a" });
 });
 test("adding is refused with a reason: bad shape, a duplicate, or a URL carrying credentials", () => {
-  expect(addProblem(cfg, "roots", "relative/path")).toBe("Use a full path starting with / (~ is not expanded), or Browse…");
+  expect(addProblem(cfg, "roots", "relative/path")).toBe("Use a full path (/…, C:\\… or \\\\server\\share), not ~ or a relative path, or Browse…");
+  // Windows: drive letters and UNC shares are absolute; a bare \\server is not a share.
+  expect(addProblem(cfg, "roots", "C:\\code")).toBeNull();
+  expect(addProblem(cfg, "roots", "\\\\fileserver\\team\\projects")).toBeNull();
+  expect(addProblem(cfg, "roots", "\\\\fileserver")).not.toBeNull();
   expect(addProblem(cfg, "roots", "/srv/code/")).toBe("Already added");
   expect(addProblem(cfg, "pins", "/opt/pinned-app")).toBe("Already added");
   expect(addProblem(cfg, "pins", "/new/place")).toBeNull();
@@ -314,4 +318,12 @@ test("folder browser summary says what the open folder is", () => {
   expect(folderSummary(l([{ name: "aidlc", isAidlc: false }])).text).toContain("is an AIDLC project");
   expect(folderSummary(l([{ name: "a", isAidlc: true }, { name: "b", isAidlc: true }])).text).toContain("2 AIDLC projects inside");
   expect(folderSummary(l([{ name: "a", isAidlc: false }])).cls).toBe("dim");
+});
+
+test("the settings note names the file this run actually saves to", () => {
+  expect(render(cfg, ws, "/srv/custom/cc.json")).toContain('title="/srv/custom/cc.json">/srv/custom/cc.json</span>');
+  expect(render(cfg, ws, "/Users/x/.aidlc/dashboard.json")).toContain(">~/.aidlc/dashboard.json</span>");
+  const unknown = render(cfg, ws, null);
+  expect(unknown).toContain("Saved automatically. Nothing is written inside your projects.");
+  expect(unknown).not.toContain("dashboard.json");
 });

@@ -211,7 +211,7 @@ function Outcome({ model: m, all, stage, unit, tok, replayAt }: { model: IntentM
     <>
     {replayAt && <div className="faint" style={{ fontSize: ".8rem", marginBottom: 4 }}>Stage outcome as finally recorded — not cut by the replay</div>}
     <div className="kpis" title={replayAt ? "Outcome as finally recorded (not cut by replay)" : undefined}>
-      <div className="kpi" title="First start → completion, minus parked time. Includes time waiting on you."><span className="s">Agent time</span><span className="v">{span ? fmtDur(span.agentMs) : "—"}</span><span className="s">{span ? "excludes parked time" : "start or completion not recorded"}</span></div>
+      <div className="kpi" title="First start → completion, minus parked time. Includes time waiting on you, so it is elapsed time, not agent working time."><span className="s">Stage time (unparked)</span><span className="v">{span ? fmtDur(span.agentMs) : "—"}</span><span className="s">{span ? "excludes parked time" : "start or completion not recorded"}</span></div>
       <div className="kpi" title={start && end ? `${start} → ${end}` : undefined}><span className="s">Calendar</span><span className="v">{span ? fmtDur(span.calendarMs) : "—"}</span><span className="s">{span ? (span.parkedMs ? `parked ${fmtDur(span.parkedMs)}` : "never parked") : "start or completion not recorded"}</span></div>
       <div className="kpi" title={unit ? "Number of UNIT_STARTED events for this unit step" : "1 + backward STAGE_JUMPED (redo) count"}><span className="s">Iterations</span><span className="v">{iters}</span><span className="s">{iterNote}</span></div>
       <div className="kpi"><span className="s">Review</span>

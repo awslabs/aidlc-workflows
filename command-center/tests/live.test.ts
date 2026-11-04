@@ -226,3 +226,18 @@ test("a continuous stream of changes still flushes within about a second", async
   expect(sawWhileAppending).toBe(true);
   await c.close(); s.stop();
 }, 10_000);
+
+test("a project created under a configured root after start is discovered on the next rescan", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cc-root-"));
+  const init = (name: string) => mkdir(join(root, name, "aidlc", "spaces", "default", "intents"), { recursive: true });
+  await init("alpha");
+  const s = await startServer({ port: 0, config: { version: 1, roots: [root], pins: [], hidden: [], repos: [], theme: "auto" }, configPath: join(await mkdtemp(join(tmpdir(), "cc-")), "c.json") });
+  try {
+    const paths = async () => ((await (await fetch(`http://127.0.0.1:${s.port}/api/home?t=${s.token}`)).json()) as { workspaces: { path: string }[] }).workspaces.map((w) => w.path).sort();
+    expect(await paths()).toEqual([join(root, "alpha")]);
+    expect(await s.hub.rediscover()).toBe(false); // nothing new: no push, no watcher churn
+    await init("beta");
+    expect(await s.hub.rediscover()).toBe(true);
+    expect(await paths()).toEqual([join(root, "alpha"), join(root, "beta")]);
+  } finally { s.stop(); }
+});

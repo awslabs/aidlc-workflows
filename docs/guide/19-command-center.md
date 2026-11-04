@@ -29,8 +29,10 @@ On a copy-channel install, run `bun .claude/tools/aidlc.ts dashboard` (with your
 harness directory in place of `.claude`).
 
 When you open it from inside an AI-DLC project, that project is added
-automatically. The link includes a one-time code that changes every time you
-start it, so bookmark the page itself, not the link.
+automatically, including a fresh clone. The link includes a one-time code, and
+usually a new port, every time it starts, so a bookmark stops working after a
+restart. To come back to it, run `/aidlc dashboard` again and use the link it
+prints.
 
 ## What you see
 
@@ -61,7 +63,8 @@ aidlc dashboard --root ~/code          # scan this folder for AI-DLC projects
 aidlc dashboard --pin ~/code/my-app    # add one project
 ```
 
-Folders you add are remembered in `~/.aidlc/dashboard.json`. Set
+A project you create later under a folder you added shows up within about 15
+seconds. Folders you add are remembered in `~/.aidlc/dashboard.json`. Set
 `AIDLC_DASHBOARD_CONFIG` to keep that file somewhere else.
 
 Reading Claude Code transcripts to find hook failures is off by default. Turn
@@ -102,7 +105,7 @@ does not stop it.
 |---|---|
 | `the Command Center UI bundle is missing from this install` | Reinstall or update AI-DLC (`aidlc update`), then try again. |
 | `Could not start the Command Center: ...` with a port in use | Leave out `--port` to use any free port, or pick another one. |
-| `401 Unauthorized` in the browser | The link is from an earlier run. Use the link printed by the current run. |
+| `401 Unauthorized`, or the page does not load | The link is from an earlier run. Run `/aidlc dashboard` again and use the link it prints. |
 | A project is missing | Add its folder in **Workspaces & settings**, or start the Command Center from inside the project. |
 
 ---

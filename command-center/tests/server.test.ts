@@ -5,17 +5,22 @@ import { join } from "node:path";
 import { startServer } from "../../core/command-center/server/index";
 import { makeWorkspace } from "./fixtures/make";
 
-let s: Awaited<ReturnType<typeof startServer>>; let ws: string;
+let s: Awaited<ReturnType<typeof startServer>>; let ws: string; let cfgPath: string;
 const get = (p: string, init?: RequestInit) => fetch(`http://127.0.0.1:${s.port}${p}${p.includes("?") ? "&" : "?"}t=${s.token}`, init);
 beforeAll(async () => {
   ws = await makeWorkspace({ questions: { "ideation/feasibility/feasibility-questions.md": "## Q1. Build?\n- A. Yes\n- B. No\n\n[Answer]: A\n" } });
-  s = await startServer({ port: 0, config: { version: 1, roots: [], pins: [ws], hidden: [], repos: [], theme: "auto" }, configPath: join(await mkdtemp(join(tmpdir(), "cc-")), "c.json"), now: () => new Date("2026-08-13T23:21:00Z") });
+  s = await startServer({ port: 0, config: { version: 1, roots: [], pins: [ws], hidden: [], repos: [], theme: "auto" }, configPath: (cfgPath = join(await mkdtemp(join(tmpdir(), "cc-")), "c.json")), now: () => new Date("2026-08-13T23:21:00Z") });
 });
 afterAll(() => s.stop());
 
 test("home lists the workspace", async () => {
   const h = await (await get("/api/home")).json();
   expect(h.workspaces[0].intents[0].name).toBe("demo");
+});
+test("meta names the settings file this run saves to", async () => {
+  expect(await (await get("/api/meta")).json()).toEqual({ configPath: cfgPath });
+  expect((await get("/api/meta", { method: "POST" })).status).toBe(405);
+  expect((await fetch(`http://127.0.0.1:${s.port}/api/meta`)).status).toBe(401);
 });
 test("token required", async () => {
   expect((await fetch(`http://127.0.0.1:${s.port}/api/home`)).status).toBe(401);
