@@ -12938,7 +12938,9 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     }
 
     // --- Apply the suffix flips ---------------------------------------------
-    for (const slug of skipList) content = setStageSuffix(content, slug, "SKIP");
+    // A stage a plugin added after the work started has no row yet, and the
+    // flip edits only a row that is there, so its row is written first.
+    for (const slug of skipList) content = setStageSuffix(withStageProgressRow(content, slug), slug, "SKIP");
     for (const slug of addList) content = stageAddedBack(content, slug);
 
     // --- Rebuild the derived fields against the EFFECTIVE plan --------------
