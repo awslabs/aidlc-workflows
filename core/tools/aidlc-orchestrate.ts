@@ -2303,6 +2303,13 @@ function writePrepared(prepared: PreparedEmission): void {
     markKiroHooksOffSaid(engineProjectDir, harnessDir());
     activeKiroHooksOffNotices = [];
   }
+  // A finished stage that is behind is said once a chat: the step that tells
+  // the agent to say it (its note rides every kind but a rules part) counts it
+  // heard, and projectStageValidityAdvisory leaves it off the steps after.
+  const { stage_validity: validity, stage_validity_note: note } = prepared.transported;
+  if (engineProjectDir && engineSessionId && validity && note !== undefined && !isReadOnlyEngineProbe()) {
+    markPersonLinesHeard(engineProjectDir, engineSessionId, [validity.warning]);
+  }
 }
 
 function legacyPlanApprovalRecoveryDirective(): AskDirective {
