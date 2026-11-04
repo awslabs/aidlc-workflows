@@ -350,9 +350,16 @@ describe("a jump that names one Unit on a team main that works every Unit itself
     says(proj, `actually, do ${stage} for ${unit} after all`);
     return next(proj, ["--stage", stage, "--unit", unit]);
   };
-  // alpha's team approval, given as the person gives it.
+  // alpha's team approval, given as the person gives it. After a reopen the
+  // approval comes back through the step that records the revision first.
   const approveAlpha = (proj: string, stage: string): void => {
-    const gate = next(proj);
+    let gate = next(proj);
+    const revised = /`(bun [^`]*--result revised)`/.exec(String(gate.message ?? ""))?.[1];
+    if (revised !== undefined) {
+      const shown = runNamed(proj, revised);
+      expect(shown.status, shown.out).toBe(0);
+      gate = next(proj);
+    }
     expect(`${gate.stage}/${gate.unit} ${gate.gate}`, JSON.stringify(gate)).toBe(`${stage}/alpha true`);
     says(proj, "Approve");
     const approved = run(proj, "aidlc-orchestrate.ts", [
@@ -444,5 +451,39 @@ describe("a jump that names one Unit on a team main that works every Unit itself
     const proj = walk(["alpha", "beta"]);
     const back = backTo(proj, "nfr-design", "gamma");
     expect(`${back.kind} ${back.message}`, JSON.stringify(back)).toContain("gamma is not one of this work's units (alpha, beta).");
+  });
+
+  test("with approvals after every stage, a Unit at its approval of the step it names reopens it, not the approval again", () => {
+    const proj = walk(["alpha", "beta"], 1, "per-stage");
+    const back = backTo(proj, "functional-design", "alpha");
+    expect(commands(back)[0], String(back.message)).toBe(
+      "bun .claude/tools/aidlc-jump.ts reopen --target functional-design " +
+        "--stages functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation --units alpha --scope feature",
+    );
+    expect(String(back.message)).toContain('"Reopened Functional Design for unit alpha."');
+    expect(runNamed(proj, commands(back)[0]).status).toBe(0);
+    const at = next(proj);
+    expect(`${at.kind} ${at.stage}/${at.unit} ${at.gate ?? false}`, JSON.stringify(at)).toBe("run-stage functional-design/alpha false");
+  });
+
+  // A jump that names no Unit, or asks for every Unit, is not read on the team walk.
+  test("a jump naming no Unit, or every Unit, goes as it does without a Unit named", () => {
+    for (const args of [["--stage", "nfr-design"], ["--stage", "nfr-design", "--every-unit"]]) {
+      const proj = walk(["alpha", "beta"]);
+      const step = next(proj, args);
+      expect(String(step.message), JSON.stringify(step)).not.toContain("aidlc-jump.ts reopen");
+      expect(commands(step)[0], JSON.stringify(step)).toBe(
+        "bun .claude/tools/aidlc-jump.ts execute --target nfr-design --direction forward --scope feature",
+      );
+    }
+  });
+
+  test("the re-entry report's jump for a Unit that is not one of this work's asks which one", () => {
+    const proj = walk(["alpha", "beta"]);
+    const res = run(proj, "aidlc-orchestrate.ts", [
+      "report", "--result", "resumed", "--choice", "jump", "--target", "nfr-design", "--unit", "gamma",
+    ]);
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).toContain("gamma is not one of this work's units (alpha, beta). Which one did you mean?");
   });
 });
