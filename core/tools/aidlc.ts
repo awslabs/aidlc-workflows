@@ -3091,7 +3091,7 @@ async function runGroupMembers(
 }
 
 // Claude Code runs AI-DLC's own command without a prompt however a helper spells this project's
-// path (aidlc-lib.ts claudeAllowsOwnCommand); its deny and ask rules still apply over this answer.
+// path (aidlc-claude-own-command.ts); its deny and ask rules still apply over this answer.
 // No reason text, so the person reads nothing new.
 async function claudeOwnCommandAllow(input: string): Promise<string> {
   let payload: { hook_event_name?: unknown; tool_input?: { command?: unknown } };
@@ -3102,8 +3102,9 @@ async function claudeOwnCommandAllow(input: string): Promise<string> {
   }
   const command = payload.tool_input?.command;
   if (payload.hook_event_name !== "PreToolUse" || typeof command !== "string" || runtimeHarnessName() !== "claude") return "";
-  const lib = await import("./aidlc-lib.ts");
-  if (!lib.claudeAllowsOwnCommand(command, lib.resolveProjectDirFromHook(import.meta.url))) return "";
+  const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
+  const { claudeAllowsOwnCommand } = await import("./aidlc-claude-own-command.ts");
+  if (!claudeAllowsOwnCommand(command, resolveProjectDirFromHook(import.meta.url))) return "";
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } })}\n`;
 }
 

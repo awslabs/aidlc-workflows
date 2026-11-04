@@ -1,7 +1,7 @@
 // t-claude-own-command-any-path: on Claude Code, AI-DLC's own engine command runs without a permission prompt
 // however a helper spells this project's path, and nothing else gets through that way.
 //
-// covers: file:harness/claude/settings.json, file:tools/aidlc.ts, function:claudeAllowsOwnCommand
+// covers: file:harness/claude/settings.json, file:tools/aidlc.ts, file:tools/aidlc-claude-own-command.ts, function:claudeAllowsOwnCommand
 //
 // WHAT. The copy channel's settings ship `Bash(bun .claude/tools/aidlc.ts engine *)`, and Claude Code matches a Bash
 // rule against the command text as written. In live golden-bugfix runs the Reverse Engineering helper ran the same

@@ -99,7 +99,7 @@ deny or ask rule naming `aidlc` in the project's `settings.json` or
 `settings.local.json`, the user's `settings.json`, or a managed settings file
 also means no answer, and so does a team taking the shipped rule out. Policy
 that arrives by MDM, the Windows registry or the server cannot be read by a
-hook. The rule is `claudeAllowsOwnCommand` in `core/tools/aidlc-lib.ts`.
+hook. The rule is `claudeAllowsOwnCommand` in `core/tools/aidlc-claude-own-command.ts`.
 
 Before probing `next` in a shared engine session, the Stop hook preserves a
 current guard-recovery question while the person selects a remedy or supplies
