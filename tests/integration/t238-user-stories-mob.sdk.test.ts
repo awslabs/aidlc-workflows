@@ -24,10 +24,12 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
   cleanupTestProject,
@@ -63,6 +65,36 @@ const RULE_MARKERS = [
   { marker: "first-class" },
   { marker: "Given/When/Then" },
 ] as const;
+// What Claude Code handed each agent as it started (the SubagentStart hook's
+// context), from the agents' own transcripts: the hook's whole output is kept
+// there even when Claude Code shows the agent only a saved file and a preview.
+function startContexts(claudeConfigDir: string): Map<string, string> {
+  const found = new Map<string, string>();
+  const visit = (dir: string): void => {
+    for (const entry of existsSync(dir) ? readdirSync(dir, { withFileTypes: true }) : []) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.name.endsWith(".jsonl")) {
+        for (const line of readFileSync(path, "utf-8").split("\n")) {
+          if (!line.includes("\"hook_success\"")) continue;
+          try {
+            const hook = (JSON.parse(line) as { attachment?: { hookName?: string; stdout?: string } }).attachment;
+            const agent = /^SubagentStart:(.+)$/.exec(hook?.hookName ?? "")?.[1];
+            if (!agent || !hook?.stdout) continue;
+            const context = (JSON.parse(hook.stdout) as { hookSpecificOutput?: { additionalContext?: string } })
+              .hookSpecificOutput?.additionalContext ?? "";
+            found.set(agent, (found.get(agent) ?? "") + context);
+          } catch {
+            // A line the drive's stop cut off holds no hook output.
+          }
+        }
+      }
+    }
+  };
+  visit(join(claudeConfigDir, "projects"));
+  return found;
+}
+
 const LIVE_KNOWLEDGE_REL =
   "aidlc/spaces/default/knowledge/aidlc-product-agent/issue-495-live.md";
 const LIVE_KNOWLEDGE_MARKER = "ISSUE_495_LIVE_KNOWLEDGE_DELIVERY_EVIDENCE";
@@ -498,6 +530,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
     async () => {
       const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const projectDir = setupIntegrationProject({ withAudit: true });
+      const claudeConfigDir = mkdtempSync(join(tmpdir(), "t238-claude-"));
       try {
         seedUserStoriesProject(projectDir);
 
@@ -515,6 +548,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         let evidenceCompleteAtApproval = false;
         const result = await driveAidlc("/aidlc", {
           projectDir,
+          env: { CLAUDE_CONFIG_DIR: claudeConfigDir },
           answerScript: APPROVE_ALL,
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
@@ -617,10 +651,12 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         }
 
         // Round 1 dispatched every declared support. Each brief names the
-        // shared draft/input, carries the active-space rules delivered by the
-        // preceding load-steering sequence (content pasted into the brief;
-        // path-only briefs are not accepted), plus only that participant's
-        // contribution filename, never a sibling's contribution.
+        // shared draft/input and only that participant's contribution
+        // filename, never a sibling's. The active-space rules reach each
+        // participant as content: pasted into its brief, or handed to it as it
+        // starts (Claude Code's SubagentStart context); a path alone is not
+        // accepted.
+        const started = startContexts(claudeConfigDir);
         const roundOne = new Map<string, CapturedToolResult>();
         for (const agent of SUPPORT_AGENTS) {
           const dispatch = result.toolResults.find(
@@ -634,13 +670,11 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           expect(prompt).toContain("personas.md");
           expect(prompt).toContain("requirements.md");
           expect(prompt).toContain(`${agent}.md`);
-          // Rule steering reached the brief as content: each distinctive
-          // marker must survive the transfer. A path alone
-          // does not satisfy this assertion.
+          const given = prompt + (started.get(agent) ?? "");
           for (const { marker } of RULE_MARKERS) {
             expect(
-              prompt.includes(marker),
-              `brief for ${agent} does not carry the "${marker}" rule content`,
+              given.includes(marker),
+              `neither the brief for ${agent} nor its start context carries the "${marker}" rule content`,
             ).toBe(true);
           }
           for (const sibling of SUPPORT_AGENTS) {
@@ -717,6 +751,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         expect(result.stateFile).toMatch(/- \[x\] user-stories — EXECUTE/);
       } finally {
         cleanupTestProject(projectDir);
+        cleanupTestProject(claudeConfigDir);
       }
     },
     TEST_TIMEOUT_MS,
