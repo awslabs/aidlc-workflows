@@ -6,10 +6,12 @@
 // Code Generation off the plan for every Unit, beta included, and "skip
 // functional design for alpha" was sent to recompose, which refuses the current
 // stage. The step now offers the solo walk's reading on that main too: that
-// Unit only, or every Unit from here, as the person's words say. A jump that
-// names one Unit is not taken on a team main, so the one-Unit line names no way
-// back there. The solo walk's lines are pinned by t-skip-mid-walk, and a claimed
-// clone's skip by t-team-unit-skip-handed-out-step.
+// Unit only, or every Unit from here, as the person's words say. The way back
+// the one-Unit line names, a jump that names the Unit, was refused there ("was
+// approved for every unit at its stage approval"); it now reopens the step for
+// that Unit alone, and another Unit's open step is set aside for it and picked
+// up after, as on the solo walk. The solo walk's lines are pinned by
+// t-skip-mid-walk, and a claimed clone's skip by t-team-unit-skip-handed-out-step.
 //
 // Mechanism: cli - spawns the shipped tools against temp projects created via
 // intent-create, walked to a Unit's step through the tools; the person's words
@@ -173,7 +175,7 @@ function named(step: Step): string[] {
 
 function runNamed(proj: string, command: string): { status: number; out: string } {
   const words = command.split(" ");
-  const at = words.findIndex((word) => word.endsWith("aidlc.ts") || word.endsWith("aidlc-orchestrate.ts"));
+  const at = words.findIndex((word) => /^\.claude\/tools\/aidlc[a-z-]*\.ts$/.test(word));
   const args: string[] = [];
   let quoted: string | null = null;
   for (const word of words.slice(at + 1)) {
@@ -186,7 +188,7 @@ function runNamed(proj: string, command: string): { status: number; out: string 
     } else if (word.startsWith("'") && !word.endsWith("'")) quoted = word;
     else args.push(word.replace(/^'(.*)'$/, "$1"));
   }
-  return run(proj, words[at].endsWith("aidlc.ts") ? "aidlc.ts" : "aidlc-orchestrate.ts", args);
+  return run(proj, words[at].slice(".claude/tools/".length), args);
 }
 
 const segment = (message: string, from: string, to?: string): Step =>
@@ -199,6 +201,11 @@ function unitSkips(proj: string, stage: string): string[] {
     .map((row) => String(auditBlockField(row.block, "Unit")));
 }
 
+// The commands a step names for the agent to run, in order.
+function commands(step: Step): string[] {
+  return [...String(step.message).matchAll(/`(bun \.claude\/tools\/aidlc[a-z-]*\.ts [^`]*)`/g)].map((match) => match[1]);
+}
+
 const report = (stage: string, unit?: string): string =>
   `bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage}${unit ? ` --unit ${unit}` : ""} --result skipped --reason '${PERSON}'`;
 const recompose = (stage: string): string => `bun .claude/tools/aidlc.ts engine recompose --skip ${stage} --reason '${PERSON}'`;
@@ -206,7 +213,7 @@ const ONLY = "If their words mean the alpha Unit only";
 const EVERY_FROM = "If they name no Unit, they mean every Unit from here";
 
 describe("a skip the person asks for on a team main that works every Unit itself", () => {
-  test("Code Generation for the alpha Unit only: alpha skips it, beta still owes it, and no refused way back is named", () => {
+  test("Code Generation for the alpha Unit only: alpha skips it, beta still owes it, and the line names the way back", () => {
     const proj = walk(["alpha", "beta"]);
     says(proj, "skip code generation for alpha, I'll write that code myself");
     const step = next(proj, ["--skip", "code-generation"]);
@@ -214,13 +221,14 @@ describe("a skip the person asks for on a team main that works every Unit itself
     const message = String(step.message);
     expect(named(segment(message, ONLY, EVERY_FROM)), message).toEqual([report("code-generation", "alpha")]);
     expect(named(segment(message, EVERY_FROM)), message).toEqual([recompose("code-generation")]);
-    expect(message).toContain('"Skipped Code Generation for the alpha Unit; the other Units still get it." and re-run `next`');
+    expect(message).toContain(
+      '"Skipped Code Generation for the alpha Unit; the other Units still get it. It can still be run for that Unit with ' +
+        '`/aidlc --stage code-generation --unit alpha`." and re-run `next`',
+    );
     expect(message).toContain(
       'If they name another Unit, run nothing and tell them in one line: "Code Generation can be skipped for one Unit ' +
         'while that Unit is working on it; the alpha Unit is on Code Generation now." and stop.',
     );
-    // A jump that names one Unit is refused on a team main: it is never offered as the way back.
-    expect(message).not.toContain("/aidlc --stage code-generation --unit alpha");
     const skipped = runNamed(proj, report("code-generation", "alpha"));
     expect(skipped.status, skipped.out).toBe(0);
     expect(unitSkips(proj, "code-generation")).toEqual(["alpha"]);
@@ -229,6 +237,24 @@ describe("a skip the person asks for on a team main that works every Unit itself
     const after = next(proj);
     expect(after.unit, JSON.stringify(after)).toBe("alpha");
     expect(after.kind === "run-stage" && after.stage === "code-generation" && after.gate !== true, JSON.stringify(after)).toBe(false);
+  });
+
+  // Team approvals once at the end of each Unit: a step the Unit skipped owes
+  // that approval nothing, so it is asked, not a recovery question for the
+  // skipped step's files.
+  test("with approvals at the end of each Unit, alpha's skip leads to alpha's approval", () => {
+    const proj = walk(["alpha", "beta"]);
+    expect(runNamed(proj, report("code-generation", "alpha")).status).toBe(0);
+    const gate = next(proj);
+    expect(gate.kind === "ask" && JSON.stringify(gate).includes("guard-recovery"), JSON.stringify(gate)).toBe(false);
+    expect(`${gate.stage}/${gate.unit} ${gate.gate}`, JSON.stringify(gate)).toBe("code-generation/alpha true");
+    says(proj, "Approve");
+    const approved = run(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", "code-generation", "--unit", "alpha", "--result", "approved", "--user-input", "Approve",
+    ]);
+    expect(approved.status, approved.out).toBe(0);
+    const beta = next(proj);
+    expect(`${beta.kind} ${beta.stage}/${beta.unit}`, JSON.stringify(beta)).toBe("run-stage functional-design/beta");
   });
 
   test("Code Generation for every Unit from here: the plan stops running it, with the walk's undo window", () => {
@@ -254,8 +280,10 @@ describe("a skip the person asks for on a team main that works every Unit itself
     expect(message).not.toContain("engine recompose --skip functional-design");
     expect(named(segment(message, ONLY, EVERY_FROM)), message).toEqual([report("functional-design", "alpha")]);
     expect(named(segment(message, EVERY_FROM)), message).toEqual([report("functional-design")]);
-    expect(message).toContain('"Skipped Functional Design for the alpha Unit; the other Units still get it."');
-    expect(message).not.toContain("/aidlc --stage functional-design --unit alpha");
+    expect(message).toContain(
+      '"Skipped Functional Design for the alpha Unit; the other Units still get it. It can still be run for that Unit with ' +
+        '`/aidlc --stage functional-design --unit alpha`."',
+    );
     const skipped = runNamed(proj, report("functional-design", "alpha"));
     expect(skipped.status, skipped.out).toBe(0);
     expect(unitSkips(proj, "functional-design")).toEqual(["alpha"]);
@@ -279,12 +307,15 @@ describe("a skip the person asks for on a team main that works every Unit itself
     expect(`${single.kind} ${single.stage}`, JSON.stringify(single)).toBe("run-stage functional-design");
   });
 
-  test("with no other Unit to take it, one command skips it for that Unit and the line names no way back", () => {
+  test("with no other Unit to take it, one command skips it for that Unit", () => {
     const proj = walk(["alpha"]);
     const step = next(proj, ["--skip", "code-generation"]);
     const message = String(step.message);
     expect(named(step), message).toEqual([report("code-generation", "alpha")]);
-    expect(message).toContain('tell the person in one line: "Skipped Code Generation for the alpha Unit." Then re-run `next`');
+    expect(message).toContain(
+      'tell the person in one line: "Skipped Code Generation for the alpha Unit. It can still be run for that Unit with ' +
+        '`/aidlc --stage code-generation --unit alpha`." Then re-run `next`',
+    );
     const skipped = runNamed(proj, report("code-generation", "alpha"));
     expect(skipped.status, skipped.out).toBe(0);
     expect(unitSkips(proj, "code-generation")).toEqual(["alpha"]);
@@ -310,5 +341,108 @@ describe("a skip the person asks for on a team main that works every Unit itself
     expect(message).toContain(
       '"NFR Requirements can be skipped for one Unit while that Unit is working on it; the alpha Unit is waiting for its Functional Design approval now."',
     );
+  });
+});
+
+// The person's way back after a one-Unit skip: a jump that names the Unit.
+describe("a jump that names one Unit on a team main that works every Unit itself", () => {
+  const backTo = (proj: string, stage: string, unit: string): Step => {
+    says(proj, `actually, do ${stage} for ${unit} after all`);
+    return next(proj, ["--stage", stage, "--unit", unit]);
+  };
+  // alpha's team approval, given as the person gives it.
+  const approveAlpha = (proj: string, stage: string): void => {
+    const gate = next(proj);
+    expect(`${gate.stage}/${gate.unit} ${gate.gate}`, JSON.stringify(gate)).toBe(`${stage}/alpha true`);
+    says(proj, "Approve");
+    const approved = run(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", stage, "--unit", "alpha", "--result", "approved", "--user-input", "Approve",
+    ]);
+    expect(approved.status, approved.out).toBe(0);
+  };
+
+  test("the skip's way back reopens Code Generation for alpha alone, and the walk hands it out again", () => {
+    const proj = walk(["alpha", "beta"]);
+    expect(runNamed(proj, report("code-generation", "alpha")).status).toBe(0);
+    const back = backTo(proj, "code-generation", "alpha");
+    expect(back.kind, JSON.stringify(back)).toBe("print");
+    const message = String(back.message);
+    expect(message).not.toContain("can only be reopened for every unit");
+    expect(commands(back)[0], message).toBe(
+      "bun .claude/tools/aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --scope feature",
+    );
+    expect(message).toContain('tell the person in one line: "Reopened Code Generation for unit alpha."');
+    const reopened = runNamed(proj, commands(back)[0]);
+    expect(reopened.status, reopened.out).toBe(0);
+    const at = next(proj);
+    expect(`${at.kind} ${at.stage}/${at.unit} ${at.gate ?? false}`, JSON.stringify(at)).toBe("run-stage code-generation/alpha false");
+  });
+
+  test("beta's open step is set aside for alpha, alpha goes first, and the walk stops at beta to pick it up", () => {
+    const proj = walk(["alpha", "beta"]);
+    expect(runNamed(proj, report("code-generation", "alpha")).status).toBe(0);
+    approveAlpha(proj, "code-generation");
+    const beta = next(proj);
+    expect(`${beta.kind} ${beta.stage}/${beta.unit}`, JSON.stringify(beta)).toBe("run-stage functional-design/beta");
+    expect(run(proj, "aidlc-state.ts", ["unit", "start", "--stage", "functional-design", "--unit", "beta"]).status).toBe(0);
+    const back = backTo(proj, "code-generation", "alpha");
+    const message = String(back.message);
+    const [pause, reopen] = commands(back);
+    expect(pause, message).toStartWith("bun .claude/tools/aidlc-state.ts unit pause --stage functional-design --unit beta ");
+    expect(pause).toEndWith("--set-aside-for alpha");
+    expect(reopen).toBe(
+      "bun .claude/tools/aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --scope feature",
+    );
+    expect(message).toContain(
+      '"Paused unit beta at Functional Design and reopened Code Generation for unit alpha. You can pick beta up again any time."',
+    );
+    for (const command of [pause, reopen]) {
+      const ran = runNamed(proj, command);
+      expect(ran.status, ran.out).toBe(0);
+    }
+    // beta's pause, set aside for alpha, does not stop the walk while alpha has work.
+    const alpha = next(proj);
+    expect(`${alpha.kind} ${alpha.stage}/${alpha.unit} ${alpha.gate ?? false}`, JSON.stringify(alpha)).toBe(
+      "run-stage code-generation/alpha false",
+    );
+    // alpha done again (the person skips it once more) and approved: the walk stops at beta to pick it up.
+    expect(runNamed(proj, report("code-generation", "alpha")).status).toBe(0);
+    approveAlpha(proj, "code-generation");
+    const pickUp = next(proj);
+    expect(pickUp.unit ?? "", JSON.stringify(pickUp)).toBe("beta");
+    expect(pickUp.kind === "run-stage", JSON.stringify(pickUp)).toBe(false);
+    expect(run(proj, "aidlc-state.ts", ["unit", "resume", "--stage", "functional-design", "--unit", "beta"]).status).toBe(0);
+    const resumed = next(proj);
+    expect(`${resumed.kind} ${resumed.stage}/${resumed.unit}`, JSON.stringify(resumed)).toBe("run-stage functional-design/beta");
+  });
+
+  test("past the Unit steps, at Build and Test, the named Unit's step is reopened and the work moves back", () => {
+    const proj = walk(["alpha"]);
+    expect(runNamed(proj, report("code-generation", "alpha")).status).toBe(0);
+    approveAlpha(proj, "code-generation");
+    const after = next(proj);
+    expect(after.stage, JSON.stringify(after)).toBe("build-and-test");
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- **Current Stage**: build-and-test");
+    const back = backTo(proj, "code-generation", "alpha");
+    const reopen = commands(back).find((command) => command.includes("aidlc-jump.ts reopen"));
+    expect(reopen, String(back.message)).toContain("--target code-generation --stages code-generation --units alpha");
+    const ran = runNamed(proj, String(reopen));
+    expect(ran.status, ran.out).toBe(0);
+    const at = next(proj);
+    expect(`${at.kind} ${at.stage}/${at.unit} ${at.gate ?? false}`, JSON.stringify(at)).toBe("run-stage code-generation/alpha false");
+  });
+
+  test("a Unit that has not reached the step: nothing to reopen, said plainly", () => {
+    const proj = walk(["alpha", "beta"]);
+    const back = backTo(proj, "nfr-design", "beta");
+    expect(String(back.message), JSON.stringify(back)).toContain(
+      '"unit beta has not reached NFR Design yet, so there is nothing to reopen."',
+    );
+  });
+
+  test("a Unit that is not one of this work's: the work's Units are named", () => {
+    const proj = walk(["alpha", "beta"]);
+    const back = backTo(proj, "nfr-design", "gamma");
+    expect(`${back.kind} ${back.message}`, JSON.stringify(back)).toContain("gamma is not one of this work's units (alpha, beta).");
   });
 });
