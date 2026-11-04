@@ -12,6 +12,8 @@ description: >
   --summary-confirmation on|off, --version,
   --help, plus the intent and space verbs.
   Or describe what you want to build and AI-DLC proposes a plan for it.
+allowed-tools:
+  - write(aidlc/spaces/*/intents/**)
 ---
 
 # AI-DLC (Copilot harness)

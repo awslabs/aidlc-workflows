@@ -106,7 +106,7 @@ import {
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock } from "./aidlc-graph.ts";
-import { approvalDecidesOpenFindings } from "./aidlc-review-brief.ts";
+import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
   aidlcInvocation,
@@ -1160,7 +1160,7 @@ function candidateReviewCoverage(
     produces_kinds?: Record<string, string[]>;
   },
   unitKind: string | null,
-): ReturnType<typeof candidateReviewCoverageProjection> {
+): { coverage: "ready" | "approved"; findings: ReturnType<typeof approvalOpenFindings> } | null {
   const expectedFingerprint = candidateReviewFingerprint(
     projectDir,
     oid,
@@ -1178,7 +1178,7 @@ function candidateReviewCoverage(
       return parseReviewRecordBytes(bytes);
     });
   const artifactPrefix = `construction/${unit}/${stage.slug}/`;
-  return candidateReviewCoverageProjection(events, {
+  const covered = candidateReviewCoverageProjection(events, {
     unit,
     generation,
     stage: stage.slug,
@@ -1188,6 +1188,10 @@ function candidateReviewCoverage(
     completionRecord,
     approvalAccepts: (block) => approvalDecidesOpenFindings(block, artifactPrefix),
   });
+  return covered && {
+    coverage: covered.coverage,
+    findings: covered.approval ? approvalOpenFindings(covered.approval, artifactPrefix) : [],
+  };
 }
 
 function namesInProse(names: string[]): string {
@@ -1766,7 +1770,7 @@ function candidateEvidence(
   );
   const reviewersExpected: string[] = [];
   const reviewersReady: string[] = [];
-  const reviewersApprovedOverConcerns: string[] = [];
+  const reviewersApprovedOverConcerns: NonNullable<UnitMergeEvidence["reviewers_approved_over_concerns"]> = [];
   const unreviewed: string[] = [];
   const artifactPaths: string[] = [];
   for (const stageSlug of stages) {
@@ -1803,9 +1807,10 @@ function candidateEvidence(
           stage,
           unitKind,
         );
-        if (coverage === "ready") reviewersReady.push(stageSlug);
-        else if (coverage === "approved") reviewersApprovedOverConcerns.push(stageSlug);
-        else unreviewed.push(stage.name ?? stageSlug);
+        // A stage reads as clean only when its approval left no finding open.
+        if (coverage === null) unreviewed.push(stage.name ?? stageSlug);
+        else if (coverage.coverage === "ready" && coverage.findings.length === 0) reviewersReady.push(stageSlug);
+        else reviewersApprovedOverConcerns.push({ stage: stageSlug, findings: coverage.findings });
       }
     }
   }
@@ -3941,17 +3946,16 @@ function claimUnit(args: string[], projectDir?: string): void {
     clearUnitScopeStamp(pd);
   }
   const integration = fetchIntegration(pd);
-  // Main back before the per-Unit block is changing the Unit plan: a Unit is
-  // claimed from the plan once its revision is approved, never from a draft.
+  // Main back before the per-Unit block is changing the Unit plan: the claim
+  // goes ahead on the plan as it stands there, and its result says the risk once.
   const integrationStage = getField(stateAtOid(pd, integration.oid), "Current Stage")?.trim() ?? "";
-  if (beforePerUnitBlock(loadStageGraph(), integrationStage)) {
-    const stage = loadStageGraph().find((node) => node.slug === integrationStage);
-    const where = integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch;
-    fail(
-      `Main is changing the Unit plan (${stage?.name ?? integrationStage} is open again on ${where}), so a Unit is ` +
-        "claimed once the revised plan is approved and on main. Nothing was claimed.",
-    );
-  }
+  const graph = loadStageGraph();
+  const planWarning = beforePerUnitBlock(graph, integrationStage)
+    ? `Main is changing the Unit plan (${graph.find((node) => node.slug === integrationStage)?.name ?? integrationStage} ` +
+      `is open again on ${integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch}), ` +
+      `so "${unit}" is claimed on the plan as it stands there: if the approved plan changes "${unit}"'s own entry, ` +
+      "pin asks this checkout to rebase onto main and publish again."
+    : null;
   const opening = openingStatus(pd, integration.oid);
   if (!opening.units.includes(unit)) fail(`Unit "${unit}" is not in the authoritative Unit DAG.`);
   if (opening.completed.has(unit)) {
@@ -4049,7 +4053,7 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
-  console.log(JSON.stringify({ claimed: true, ...stamp }));
+  console.log(JSON.stringify({ claimed: true, ...stamp, ...(planWarning ? { warning: planWarning } : {}) }));
 }
 
 // A checkout whose own shard main already holds claims into a shard of the

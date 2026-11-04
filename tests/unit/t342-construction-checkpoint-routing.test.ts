@@ -2178,6 +2178,26 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a re-entry change that names no Unit is offered for the Unit in flight, and kept in their words", () => {
+    const p = betaBuilding();
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    const words = "I want to change NFR Design: keep the greeting in one place.";
+    const id = policyHuman(p, words);
+    // The agent reads a change: the jump print names the form for one, for beta.
+    expect(resumedReport(p, ["--choice", "jump", "--target", "nfr-design"]).message)
+      .toContain("`next --stage nfr-design --unit beta --change`");
+    const printed = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "beta", "--change"]).stdout);
+    const reopen = /aidlc-jump\.ts (reopen [^`]*--via change)`/.exec(printed.message ?? "")?.[1];
+    expect(reopen, printed.message).toBeDefined();
+    const ran = tool(p, "jump", reopen!.split(" "), { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-policy" });
+    expect(ran.status, ran.out).toBe(0);
+    const row = readAuditShardEvents(p).findLast((event) => event.event === "GATE_REJECTED")?.block ?? "";
+    expect(row).toContain("**Reopen**: change");
+    expect(row).toContain("**Unit**: beta");
+    expect(row).toContain(`**Feedback**: ${words}`);
+    expect(row).toContain(`**Message Id**: ${id}`);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("past the per-unit steps, a re-entry jump naming a Unit this work does not have asks the same way", () => {
     const p = gatesApprovedUntil("code-generation");
     for (const result of ["awaiting-approval", "approved"]) {
