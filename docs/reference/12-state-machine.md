@@ -292,7 +292,8 @@ transition writes only the Unit's `UNIT_SKIPPED` receipt (with its claim's
 so it is never marked or routed in the claimed checkout. The walk asks no
 summary, review or gate for that step (a Unit claimed with the unit-end rhythm
 leaves it out of its one gate's checks, and out of `Gate Stages` unless it is
-Code Generation, where that gate sits), the Unit's row shows it `[x]` like a
+Code Generation, where that gate sits, which its rows name in `Skipped Stages`
+so a Request Changes there leaves it skipped), the Unit's row shows it `[x]` like a
 stage its kind writes nothing for, the receipt travels with the published
 work, and pin takes the stage as one the Unit owes nothing: no documents,
 review, receipt or per-stage gate (for Code Generation, no plan or Plan
@@ -840,7 +841,8 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 Under `Unit Ownership: team`, these rows additionally carry `Unit`, `Gate
 Scope`, and `Gate Stages`. Per-stage approval settles only that `(stage, Unit)`;
 unit-end approval settles the Unit chain. A Unit-tagged rejection floors
-lifecycle and review receipts only for that Unit (all Gate Stages for unit-end);
+lifecycle and review receipts only for that Unit (all Gate Stages for unit-end,
+except a stage the row names in `Skipped Stages`);
 legacy Unit-less rows retain stage-global behavior.
 
 ### User interaction

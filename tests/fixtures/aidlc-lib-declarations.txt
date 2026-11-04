@@ -889,7 +889,6 @@ gateEventMatchesUnit
 gateOutputWriting
 gatePresentationStart
 gateRejectionMatchesAttempt
-gateStagesFromBlock
 gateWordsDir
 gateWordsPath
 gateWordsSinceUnitReview
