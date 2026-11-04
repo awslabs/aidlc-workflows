@@ -16629,8 +16629,12 @@ function unitMajorReopen(
       `to reopen "${targetSlug}" and the steps after it for ${list(reopened.map((unit) => `unit "${unit}"`))} only, then tell the person ` +
       `in one line: "${line}" and re-run \`next\` to continue.` +
       (first ? backTo(first.unit, first.aside.stage) : "") +
-      ` If they then ask for every unit, run \`next --stage ${targetSlug} --every-unit\`; if they name a unit, ` +
-      `\`next --stage ${targetSlug} --unit <name>\`.`,
+      // On a team's main `--every-unit` is not read on the team walk (it is the
+      // plain jump), so it is not named as the way to reopen every Unit there.
+      (isTeamUnitOwnership(stateContent)
+        ? ` If they then name a unit, run \`next --stage ${targetSlug} --unit <name>\`.`
+        : ` If they then ask for every unit, run \`next --stage ${targetSlug} --every-unit\`; if they name a unit, ` +
+          `\`next --stage ${targetSlug} --unit <name>\`.`),
   };
 }
 

@@ -379,6 +379,10 @@ describe("a jump that names one Unit on a team main that works every Unit itself
       "bun .claude/tools/aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --scope feature",
     );
     expect(message).toContain('tell the person in one line: "Reopened Code Generation for unit alpha."');
+    // On a team main a jump for every Unit is not a reopen (it is the plain
+    // jump), so the step never names it as the way to reopen every Unit.
+    expect(message).not.toContain("--every-unit");
+    expect(message).toContain("If they then name a unit, run `next --stage code-generation --unit <name>`.");
     const reopened = runNamed(proj, commands(back)[0]);
     expect(reopened.status, reopened.out).toBe(0);
     const at = next(proj);
