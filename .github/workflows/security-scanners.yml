@@ -69,7 +69,7 @@ jobs:
       security-events: write
     runs-on: ubuntu-latest
     env:
-      SEMGREP_VERSION: "1.157.0"
+      SEMGREP_VERSION: "1.183.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -139,8 +139,15 @@ jobs:
       - name: Check for ERROR severity findings
         id: semgrep
         run: |
-          # Fail only if ERROR severity findings exist (level=error in SARIF)
-          HIGH_COUNT=$(jq '[.runs[0].results[] | select(.level == "error")] | length' semgrep-report_sarif.json 2>/dev/null || echo 0)
+          # SARIF results can inherit their level from the rule's default configuration.
+          HIGH_COUNT=$(jq '[
+            .runs[] |
+            ((.tool.driver.rules // []) |
+              map({key: .id, value: (.defaultConfiguration.level // "warning")}) |
+              from_entries) as $levels |
+            .results[] |
+            select((.level // $levels[.ruleId] // "warning") == "error")
+          ] | length' semgrep-report_sarif.json)
           if [ "$HIGH_COUNT" -gt 0 ]; then
             echo "exit_code=1" >> "$GITHUB_OUTPUT"
           else
