@@ -872,9 +872,11 @@ export function resolvePinnedDispatch(
       remediation,
     };
   }
+  // Only the dispatcher's own call registers a worktree: config makes this
+  // call as a read-only probe before it asks, without `reserve`.
   if (
     registry.pins[project] !== version &&
-    !inheritWorktreePin(projectDir, version, registry.pins)
+    !(options.reserve === true && inheritWorktreePin(projectDir, version, registry.pins))
   ) {
     return {
       kind: "failure",

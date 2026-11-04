@@ -7154,7 +7154,18 @@ describe("t243 release lifecycle", () => {
     };
     process.env.AIDLC_INSTALL_ROOT = machine;
     process.env.AIDLC_BIN_DIR = join(machine, "bin");
-    const dispatch = (dir: string) => resolvePinnedDispatch(["engine", "status", "--project-dir", dir]);
+    // The dispatcher's own call, which every pinned command and hook makes.
+    const dispatch = (dir: string) => {
+      const result = resolvePinnedDispatch(
+        ["engine", "status", "--project-dir", dir],
+        undefined,
+        { reserve: true },
+      );
+      if (result.kind !== "execute") return result;
+      result.release?.();
+      const { release: _release, ...rest } = result;
+      return rest;
+    };
     const runsNext = {
       kind: "execute",
       executable: join(machine, "versions", NEXT_VERSION, INSTALLED_EXECUTABLE),
@@ -7176,6 +7187,13 @@ describe("t243 release lifecycle", () => {
       // it is the same project, registered on first use.
       const worktree = join(temp("aidlc-t243-pin-worktree-"), "wt");
       git(project, "worktree", "add", "-q", worktree, "-b", "feature");
+      // config's read-only probe makes the same call without reserving: it
+      // registers nothing before config's question is answered.
+      const registry = readFileSync(join(machine, "pins.json"), "utf-8");
+      expect(resolvePinnedDispatch(["engine", "status", "--project-dir", worktree]))
+        .toEqual(notRegistered(NEXT_VERSION));
+      expect(readFileSync(join(machine, "pins.json"), "utf-8")).toBe(registry);
+      expect(existsSync(projectPinTargetPath(worktree))).toBe(false);
       expect(dispatch(worktree)).toEqual(runsNext);
       expect(registeredFor(worktree)).toBe(NEXT_VERSION);
       expect(existsSync(projectPinTargetPath(worktree))).toBe(true);
