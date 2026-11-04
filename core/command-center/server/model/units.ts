@@ -1,6 +1,9 @@
 import type { AuditEvent, CatalogStage, CellState, UnitRow } from "../types";
-/** Used only when no compiled stage graph says which stages run per unit (absent, or older than `for_each`). */
-export const CONSTRUCTION = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test", "ci-pipeline"];
+/**
+ * The canonical per-unit stages, used only when no compiled stage graph says which stages run per unit (absent, or
+ * older than `for_each`). Build and Test and CI Pipeline run once per intent, so they are not here.
+ */
+export const CONSTRUCTION = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
 
 /**
  * The unit matrix columns: the graph's per-unit (`for_each`) stages in graph order, then any other stage that
@@ -15,15 +18,23 @@ export function unitStagesOf(catalog: CatalogStage[], events: AuditEvent[]): str
   return [...base, ...seen.sort((a, b) => pos(a) - pos(b))];
 }
 
-/**
- * The stage that finishes a unit: the last per-unit stage in graph order, so a configured or plugin stage after code
- * generation has to finish too; code generation when no graph marks per-unit stages.
- */
-export function unitFinishOf(catalog: CatalogStage[]): string {
-  return catalog.filter((c) => c.perUnit).at(-1)?.slug ?? "code-generation";
+/** The per-unit stages every unit owes: the unit columns minus the stages the active plan skips, in order. */
+export function unitOwedOf(unitStages: string[], planSkips: ReadonlySet<string>): string[] {
+  return unitStages.filter((s) => !planSkips.has(s));
 }
 
-export function buildUnits(events: AuditEvent[], current: { stage: string | null; unit: string | null }, stages: string[] = CONSTRUCTION, finish = "code-generation"): { units: UnitRow[]; planned: number | null; done: number } {
+/**
+ * Whether a unit is finished: its last owed stage that was not skipped for it (`na`, from UNIT_SKIPPED) is done or
+ * inferred done. A unit that skipped every owed stage is settled. Shared with the UI so both say the same.
+ */
+export function unitIsDone(cells: Record<string, string | undefined>, owed: readonly string[]): boolean {
+  if (!owed.length) return false;
+  const left = owed.filter((s) => cells[s] !== "na");
+  const last = left.at(-1);
+  return last === undefined || cells[last] === "done" || cells[last] === "inferred";
+}
+
+export function buildUnits(events: AuditEvent[], current: { stage: string | null; unit: string | null }, stages: string[] = CONSTRUCTION, owed: string[] = stages): { units: UnitRow[]; planned: number | null; done: number } {
   const rows = new Map<string, UnitRow>();
   const row = (n: string) => { let r = rows.get(n); if (!r) { r = { name: n, batch: null, kind: null, cells: Object.fromEntries(stages.map((s) => [s, "todo" as CellState])) }; rows.set(n, r); } return r; };
   for (const e of events) {
@@ -31,11 +42,12 @@ export function buildUnits(events: AuditEvent[], current: { stage: string | null
     const r = row(u); const c = r.cells[s];
     if (e.event === "UNIT_STARTED" || e.event === "UNIT_RESUMED") r.cells[s] = c === "done" ? c : "running";
     else if (e.event === "UNIT_PAUSED") r.cells[s] = "paused";
+    else if (e.event === "UNIT_SKIPPED") r.cells[s] = "na"; // this unit owes this stage nothing (a later start reopens it)
     else if (e.event === "UNIT_COMPLETED") r.cells[s] = "done";
     else if (e.event === "REVIEW_COMPLETED" && e.fields.Verdict === "READY" && c !== "done" && c !== "running" && c !== "paused") r.cells[s] = "inferred";
   }
   if (current.unit && current.stage && stages.includes(current.stage)) { const r = row(current.unit); if (r.cells[current.stage] !== "done") r.cells[current.stage] = "running"; }
   const units = [...rows.values()];
-  const done = units.filter((u) => u.cells[finish] === "done" || u.cells[finish] === "inferred").length;
+  const done = units.filter((u) => unitIsDone(u.cells, owed)).length;
   return { units, planned: null, done };
 }

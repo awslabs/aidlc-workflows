@@ -133,8 +133,10 @@ test("attribution: STAGE_COMPLETED clears the running stage; inherited units are
   expect(a[5]).toMatchObject({ aStage: "functional-design", aUnit: "alpha", how: "timing", unitInferred: true });
 });
 
-test("unitState is done at the graph's finish stage, not always code generation", () => {
+test("unitState uses the server's rule: the last owed stage not skipped for the unit", () => {
   const row = (cells: Record<string, string>) => ({ name: "a", batch: null, kind: null, cells } as Parameters<typeof unitState>[0]);
-  expect(unitState(row({ "code-generation": "done", "security-review": "todo" }), "security-review")).toBe("todo");
-  expect(unitState(row({ "code-generation": "done", "security-review": "done" }), "security-review")).toBe("done");
+  const owed = ["code-generation", "security-review"];
+  expect(unitState(row({ "code-generation": "done", "security-review": "todo" }), owed)).toBe("todo");
+  expect(unitState(row({ "code-generation": "done", "security-review": "done" }), owed)).toBe("done");
+  expect(unitState(row({ "code-generation": "done", "security-review": "na" }), owed)).toBe("done");
 });

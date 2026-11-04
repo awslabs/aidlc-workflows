@@ -30,8 +30,8 @@ export interface IntentModel {
   current: { stage: string | null; unit: string | null; phase: PhaseKey };
   /** The unit matrix columns, in stage order: the graph's per-unit stages plus any stage with recorded unit events. */
   unitStages: string[];
-  /** The stage whose completion completes a unit (the last per-unit stage in graph order, else code-generation). */
-  unitFinish: string; units: UnitRow[]; unitsPlanned: number | null; unitsDone: number;
+  /** The per-unit stages each unit owes: `unitStages` minus those the active plan skips; see `unitIsDone`. */
+  unitOwed: string[]; units: UnitRow[]; unitsPlanned: number | null; unitsDone: number;
   needs: NeedItem[]; liveness: Liveness; lastEventTs: Iso | null;
   tokens: Recorded<Tokens>; reviews: { ready: number; notReady: number };
   events: StoryEvent[]; notes: string[]; unparsed: number;

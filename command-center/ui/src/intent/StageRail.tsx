@@ -55,7 +55,7 @@ function UnitRail({ model: m, stage, unit, onSelect }: Props) {
       <div className="lbl">Construction · by unit</div>
       {sortUnits(m.units).map((u) => {
         const waits = (st: string) => m.needs.some((n) => n.unit === u.name && n.stage === st);
-        const us = m.needs.some((n) => n.unit === u.name) ? "waiting" : unitState(u, m.unitFinish ?? "code-generation");
+        const us = m.needs.some((n) => n.unit === u.name) ? "waiting" : unitState(u, m.unitOwed ?? order);
         const [g, cls] = UG[us];
         return (
           <div key={u.name}>

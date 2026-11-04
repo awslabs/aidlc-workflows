@@ -16,7 +16,7 @@ function intent(name: string, o: Partial<IntentSummary> = {}): IntentSummary {
   return {
     key: `default/${name}`, workspace: "/ws/a", space: "default", dir: name, uuid: null, name, title: null, scope: null, depth: null, started: null,
     status: "in-flight", plannedCount: 10, doneCount: 0, skippedCount: 0, current: { stage: "functional-design", unit: null, phase: "construction" },
-    unitStages: [], unitFinish: "code-generation", units: [], unitsPlanned: null, unitsDone: 0, needs: [], liveness: "idle", lastEventTs: ago(60), tokens: { recorded: false, reason: "no ledger" },
+    unitStages: [], unitOwed: [], units: [], unitsPlanned: null, unitsDone: 0, needs: [], liveness: "idle", lastEventTs: ago(60), tokens: { recorded: false, reason: "no ledger" },
     reviews: { ready: 0, notReady: 0 }, notes: [], unparsed: 0, phases: [], ...o,
   };
 }

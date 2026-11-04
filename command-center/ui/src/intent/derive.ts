@@ -1,5 +1,6 @@
 // Pure, client-side derivations for the focused-intent view (no React, no fetch) — unit-tested in tests/intent-derive.test.ts.
 import type { IntentModel, Liveness, PhaseKey, StageView, StoryEvent, UnitRow } from "../../../../core/command-center/server/types";
+import { CONSTRUCTION, unitIsDone } from "../../../../core/command-center/server/model/units";
 import { fmtAgo } from "../format";
 
 export type LensName = "Story" | "Decisions" | "Artifacts" | "Reviews" | "Issues" | "Units" | "Learnings" | "Timeline" | "Tokens";
@@ -7,7 +8,8 @@ export const LENSES: LensName[] = ["Story", "Decisions", "Artifacts", "Reviews",
 /** `#/i/…/<slug>` ↔ lens; the slug is the lower-cased name ("learnings"). */
 export const lensFromSlug = (s: string | null): LensName => LENSES.find((l) => l.toLowerCase() === (s ?? "").toLowerCase()) ?? "Story";
 export const FIVE: Exclude<PhaseKey, "unknown">[] = ["initialization", "ideation", "inception", "construction", "operation"];
-export const CONSTRUCTION = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test", "ci-pipeline"];
+/** Fallback unit columns when the payload has none; the same canonical per-unit stages the server falls back to. */
+export { CONSTRUCTION };
 /** Short column labels for the core per-unit stages; any other stage falls back to `unitLabel`. */
 export const CSHORT: Record<string, string> = { "functional-design": "FD", "nfr-requirements": "NFR-req", "nfr-design": "NFR-design", "infrastructure-design": "Infra", "code-generation": "Code-gen", "build-and-test": "Build & test", "ci-pipeline": "CI" };
 
@@ -104,13 +106,13 @@ export function phaseCounts(stages: StageView[], p: PhaseKey): { done: number; p
 }
 
 export type UnitGlyph = "waiting" | "running" | "paused" | "done" | "todo";
-/** A unit's rail state; done matches the server's unitsDone rule (its `finish` stage done or inferred). */
-export function unitState(u: UnitRow, finish = "code-generation"): UnitGlyph {
+/** A unit's rail state; done is the server's own rule (`unitIsDone` over the stages the unit owes). */
+export function unitState(u: UnitRow, owed: readonly string[] = CONSTRUCTION): UnitGlyph {
   const c = Object.values(u.cells);
   if (c.includes("waiting")) return "waiting";
   if (c.includes("running")) return "running";
   if (c.includes("paused")) return "paused";
-  if (u.cells[finish] === "done" || u.cells[finish] === "inferred") return "done";
+  if (unitIsDone(u.cells, owed)) return "done";
   return "todo";
 }
 export const sortUnits = (us: UnitRow[]) => [...us].sort((a, b) => (a.batch ?? 1e9) - (b.batch ?? 1e9));
