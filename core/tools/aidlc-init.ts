@@ -13628,7 +13628,8 @@ export async function main(
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);
-      if (!pathPresent(target)) continue;
+      // A copy-era file planManagedFiles already removes is that one removal.
+      if (!pathPresent(target) || operations.some((operation) => operation.path === rel)) continue;
       operations.push({ kind: "remove", path: rel, expected: expected(target) });
       actions.push({
         path: rel,
