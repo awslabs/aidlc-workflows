@@ -732,7 +732,8 @@ and other workflow-record paths are refused. Pin also compares the candidate
 base's Unit DAG, Unit kinds, and active per-Unit stage columns with live main;
 a changed Construction contract requires rebase and republish. Product-source
 paths outside the Unit record tree are listed in the evidence for the human
-merge gate.
+merge gate, as is a rule kept in the claimed checkout (the space's
+`memory/project.md` or `memory/team.md`).
 
 ### `/aidlc unit gate <unit>` — Decide the pinned merge
 

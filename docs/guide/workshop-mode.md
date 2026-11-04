@@ -281,7 +281,9 @@ only the rows pin accepts to the claim's shard; everything else it records
 landing keeps every row. Pin and land also refuse
 workflow-record changes outside the claimed Unit subtree. Product-source paths
 outside the Unit's record tree remain visible in the gate evidence for human
-overlap judgment.
+overlap judgment, and so does a rule the team kept while working the Unit (the
+space's `memory/project.md` or `memory/team.md`), which lands on main with the
+Unit.
 
 If the claim is released/re-claimed, or the ref moves after pinning, the gate
 and landing commands refuse. Run `pin` again and review the new OID explicitly.
