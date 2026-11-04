@@ -126,8 +126,10 @@ import {
   personAskedSinceGate,
   plansNamePath,
   readActiveDirectiveMarker,
+  readApplicableTeamUnitScopeStamp,
   readIssuedDirectiveMarker,
   spacesRoot,
+  unitMajorConstructionStageSlugs,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
   releaseAuditLock,
@@ -164,6 +166,7 @@ import {
 import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
   AS_ITS_OWN_COMMAND,
@@ -1658,6 +1661,19 @@ function isSelectedGuardRestartContinuation(
     (parseStateStageSuffixes(state).get(target) ?? scope.stages[target]) !== "EXECUTE"
   ) return false;
 
+  // A checkout scoped to a team Unit restarts the Unit's step with the Unit's
+  // own reopen, the one jump it makes: for the Unit the question was about,
+  // which is this checkout's, over the stage and every later per-Unit stage.
+  if (continuation.direction === "reopen") {
+    const block = unitMajorConstructionStageSlugs(continuation.scope, state, true);
+    const claimed = readApplicableTeamUnitScopeStamp(projectDir, state)?.unit;
+    return marker.unit !== undefined &&
+      continuation.unit === marker.unit &&
+      claimed !== undefined &&
+      claimedCheckoutReopens(claimed, block, target, marker.unit) &&
+      continuation.stages?.join(",") === block.slice(block.indexOf(target)).join(",");
+  }
+
   // Match aidlc-jump resolve's graph-order calculation, not the caller's
   // claimed direction. A selection cannot turn a forward move into a reset.
   return continuation.direction === (targetIndex === currentIndex ? "redo" : "backward");
@@ -1699,8 +1715,9 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 // step with no settled claim (a compaction, a status sync) fall to the wait.
 // At its Code Generation recovery question, a restart the question offers runs
 // only as the person's pick of it (isSelectedGuardRestartContinuation), bound
-// to the state it was picked at; a Unit reopen it offers has no pick path
-// (that check reads `jump execute` only), so it stays refused while this
+// to the state it was picked at (its `jump execute`, or in a checkout that
+// claimed a Unit that Unit's own `jump reopen`); the solo walk's Unit reopen
+// it offers (reopen-unit-step) has no pick path, so it stays refused while this
 // question is the published step, picked or not; and right after they
 // picked one of its choices exactly (the hook's record on the current step)
 // another jump goes against that pick. Any other jump is their own move. The

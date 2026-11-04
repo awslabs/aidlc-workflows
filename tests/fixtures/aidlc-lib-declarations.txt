@@ -652,7 +652,6 @@ boltDagMatches
 boltEventUnits
 boltWorktreeBaseCommit
 boundDirectiveMessage
-boundedGitMetadataText
 boxPicksAddANote
 cachedClaimFanoutActive
 candidateAttemptEventMatches
@@ -899,9 +898,7 @@ gcSessionPidEntries
 generatedRunnerSkill
 gitAlternateEntry
 gitCommitSourceListing
-gitCommonDirectory
 gitHeadOid
-gitMetadataDirectory
 gitObjectDirectories
 gitObjectTypeByOid
 gitOidFromRef
@@ -1661,7 +1658,6 @@ shellCommandText
 shellToolResponseText
 shippedRulesSubdir
 shownLastWrittenAt
-singleGitMetadataLine
 singleRunRequest
 singleRunRequestDigest
 singleStageAttemptField

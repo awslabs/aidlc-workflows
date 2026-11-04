@@ -86,18 +86,16 @@ gate and none of them touches human presence. The conductor still asks every
 approval question; the value also decides which fences stop undirected work,
 and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
-- A matched stock scope carries its own default (`guard_policy:` in the
-  scope file; the core defaults are strict on enterprise and off on the
-  rest; a plugin scope uses its own value, read in the order the scope loader reads it:
-  `guard_policy:`, then the retired `change_control:`, then strict when
-  neither line is present). Adopt it and say so, and keep a stricter value
-  the human asked for on every re-dispatch.
+- A matched stock scope carries its own default, which the validator echoes
+  as `matched_start.guard_policy` (the core defaults are strict on enterprise
+  and off on the rest; a plugin scope has its own). Adopt it and say so, and
+  keep a stricter value the human asked for on every re-dispatch.
 - For a custom grid, copy the validator's `custom_start.guard_policy`, the
   classic scope's default (`off` in core), and keep it: a custom plan runs
   with the guards a person gets without composing, and the human raises it on
   the gate row if they want more (keep their value on every re-dispatch).
   Under a memory layer that declares strict, propose strict. Without a
-  `custom_start` echo, start from `nearest_stock[0]`'s default.
+  `custom_start` echo, start from `matched_start.guard_policy`.
   `validate-grid --custom` picks a `base_scope` whose default is that value
   or lower (any stock scope serves strict), so creation carries it.
 - In-flight, the running intent's value stays as it is; the human flips it
@@ -134,10 +132,9 @@ ceremony runs inside them. Every front/report proposal names all six in its
 | `collaborators` | `on`, `off` | The support agents (collaborators) a stage dispatches; off has the lead of every stage work alone: no blind spokes, no mob round, and a pipeline's lead becomes its only link |
 | `review_cap` | `adversarial`, `advisory`, `none` | `advisory`: each stage review becomes one pass whose findings the human reads at the gate; `none`: no stage reviewer is dispatched in the gated flow |
 
-- A matched proposal starts from its stock scope's values (from its `.md`; a
-  missing ceremony line means `on`, a missing `review_cap` means
-  `adversarial`). A value you or the human change applies to this piece of
-  work only, since no scope file is written: the final validate-grid run
+- A matched proposal starts from its stock scope's values, which the
+  validator echoes as `matched_start.scope_settings`. A value you or the
+  human change applies to this piece of work only, since no scope file is written: the final validate-grid run
   echoes the values that differ from the stock scope the plan runs on as
   `creation_settings`, typed values the conductor turns into creation flags.
   Any value can change, reviews included: a review level set for the piece of
@@ -150,7 +147,7 @@ ceremony runs inside them. Every front/report proposal names all six in its
   the classic scope's values (in core, summary confirmation and collaborators
   off, reviews advisory, the rest on), whichever stock scope the plan runs on. The plan
   picks its own stages; only the ceremony starts from classic. Without a
-  `custom_start` echo, start from the validator's nearest stock scope. A
+  `custom_start` echo, start from `matched_start.scope_settings`. A
   matched proposal that the human's edit turns custom keeps the Guard Policy
   and settings the gate showed, with their change applied. Either
   way, move a setting only when the entropy profile gives a reason, the same

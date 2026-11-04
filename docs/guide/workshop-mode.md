@@ -147,7 +147,11 @@ leaves this session building, and the first step says to ask for teams before
 the first Unit is built. Team approvals come after every stage (`per-stage`)
 unless the lead asks for one approval at the end of each Unit
 (`set-unit-gate-rhythm unit-end`) before the first team approval question;
-the first team step offers it.
+the first team step offers it. While no team has taken a Unit, that step also
+says once that this session builds the Units here, starting with the first
+DAG Unit (the walking skeleton, when the scope runs one), and how a team takes
+one instead: share the work through git, then run `aidlc unit participate` and
+`/aidlc` in the team's own clone (see Claim, build, and publish below).
 
 When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back
@@ -237,7 +241,11 @@ CAS-updates the claim ref. Publication is not integration. The candidate carries
 the claim's audit shard with the rows pin accepts and the review records its
 receipts name (AI-DLC keeps those out of commits), and every other audit shard
 and the stages' shared diaries as main has them; what is left out stays in the
-checkout's own history, and publish says how many rows.
+checkout's own history, and publish says how many rows. A change to any other
+record outside the Unit's `construction/<unit>/` folder (an Inception artifact
+such as `contract-summary.md`) is published too, but pin will refuse it, so
+publish names the file: take it out of the branch, make the change on main,
+and publish again.
 
 ---
 
@@ -260,8 +268,11 @@ with git object plumbing, not by merging or creating a worktree:
 - team gate approvals at the claim rhythm;
 - each required review's `READY` verdict, or the team's approval of the stage
   after a review that stayed `NOT-READY`, accepting its open findings (an
-  approval that asked for a finding to be fixed waits for the next review; the
-  evidence lists the approved stages in `reviewers_approved_over_concerns`);
+  approval that asked for a finding to be fixed waits for the next review). The
+  evidence's `reviewers_ready` holds only stages approved with nothing open;
+  `reviewers_approved_over_concerns` names every stage approved with a finding
+  open, under either verdict, with each finding's id, severity and what the
+  approval recorded for it;
 - Plan Approval fingerprint and explicit approval;
 - the candidate state row;
 - the transportable team audit shard.
@@ -278,7 +289,11 @@ only the rows pin accepts to the claim's shard; everything else it records
 landing keeps every row. Pin and land also refuse
 workflow-record changes outside the claimed Unit subtree. Product-source paths
 outside the Unit's record tree remain visible in the gate evidence for human
-overlap judgment.
+overlap judgment, and so does a rule the team kept while working the Unit (the
+space's `memory/project.md` or `memory/team.md`), which lands on main with the
+Unit. Like any shared file, a rules file main changed since the claim (another
+Unit's kept rule landed first) stops the land: rebase onto main, publish again,
+and pin again.
 
 If the claim is released/re-claimed, or the ref moves after pinning, the gate
 and landing commands refuse. Run `pin` again and review the new OID explicitly.
