@@ -21332,6 +21332,24 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     approvedNames.push(followerNode.name);
   }
   if (approvedNames.length > 1) changeNotices.push(approvedLine());
+  // A team's Unit plan approved again: main's Unit Progress gets a row for
+  // each Unit the plan adds now, since a landing's fold keeps only the rows the
+  // table already has and refuses a Unit the table lacks.
+  if (flags.result === "approved" && approvedTogether.includes("units-generation")) {
+    const live = loadStateFileIfPresent(pd);
+    if (live && isTeamUnitOwnership(live) && getField(live, "Construction Iteration")?.trim() === "unit-major") {
+      try {
+        const rows = readAuditShardEvents(pd).sort((a, b) => {
+          if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+          if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+          return a.pos - b.pos;
+        });
+        refreshTeamUnitProgress(pd, deriveTeamUnitProgressModel(pd, live, rows));
+      } catch (e) {
+        changeNotices.push(`Main's Unit Progress table could not take the new Unit plan: ${errorMessage(e)}`);
+      }
+    }
+  }
   const lastApproved = approvedTogether[approvedTogether.length - 1];
   // A note the person gave with their approval is kept through the learnings
   // step, under the stage they approved, which `surface` still takes after the
