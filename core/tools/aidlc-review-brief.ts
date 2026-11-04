@@ -1681,6 +1681,48 @@ function approveAcceptsLine(
   return `Approve accepts the open review finding${one ? "" : "s"} ${list} as risk; you can also ${also}.`;
 }
 
+// Whose reviews a gate shows. A Unit's own approval shows only that Unit's
+// review (`contextUnit`); the stage's final gate shows every Unit's, the
+// findings its approval accepts. A team Unit's end-of-Unit Approve decides
+// every stage of the Unit's walk (`endOfUnit`), so its gate shows each earlier
+// stage's review with an open finding, or that did not finish (`earlier`),
+// ahead of this stage's own, read as the approval reads them.
+function gateReviewScope(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit: string | undefined,
+): { contextUnit: string | undefined; endOfUnit: StageEntry[] | null; earlier: ReviewedContext[] } {
+  const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
+    ? undefined
+    : unit;
+  const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage);
+  const earlier = endOfUnit === null
+    ? []
+    : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true)
+      .filter(({ context }) => context.incompleteReview === true || context.findings.some(findingIsOpen));
+  return { contextUnit, endOfUnit, earlier };
+}
+
+// The #2099 line for the gate the brief with the same `unit` opens: a stage's
+// final gate, or a team Unit's end-of-Unit gate, labelled by stage when that
+// gate shows open findings on more than one. The step that shows the gate
+// carries it to the person as a line they must hear (change_notices), so an
+// agent retelling the brief never loses it; null where the brief's Approve
+// option says what it records.
+export function gateApproveAcceptsLine(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+): string | null {
+  const { contextUnit, endOfUnit, earlier } = gateReviewScope(projectDir, stage, unit);
+  if (contextUnit === undefined) return approveAcceptsLine(projectDir, stage);
+  if (endOfUnit === null) return null;
+  const ownOpen = readReviewArtifactContexts(projectDir, stage, contextUnit, true)
+    .some((context) => context.incompleteReview === true || context.findings.some(findingIsOpen));
+  const openStages = new Set([...earlier.map(({ stage: of }) => of.slug), ...(ownOpen ? [stage.slug] : [])]);
+  return approveAcceptsLine(projectDir, stage, { stages: endOfUnit, unit: contextUnit, labelStages: openStages.size > 1 });
+}
+
 // The flags that name a gate's findings. A fix asked for carries no reason:
 // the person's words are already on the approval row.
 const FINDING_FLAGS = {
@@ -2468,20 +2510,7 @@ export function renderReviewBrief(
   unit?: string,
   fallbackFinding?: string,
 ): string {
-  // A Unit's own approval shows only that Unit's review; the stage's final gate
-  // shows every Unit's, the findings its approval accepts.
-  const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
-    ? undefined
-    : unit;
-  // A team Unit's end-of-Unit Approve decides every stage of the Unit's walk,
-  // so its brief shows each earlier stage's review with an open finding, or
-  // that did not finish, ahead of this stage's own, read as the approval reads
-  // them.
-  const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage);
-  const earlier = endOfUnit === null
-    ? []
-    : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true)
-      .filter(({ context }) => context.incompleteReview === true || context.findings.some(findingIsOpen));
+  const { contextUnit, earlier } = gateReviewScope(projectDir, stage, unit);
   // An open finding on work kept after its review (relaxed or off) shows as
   // Approve records it. The change itself was said once, as change_notices,
   // when it was recorded, so the brief does not say it again. Marked before the
@@ -2603,19 +2632,12 @@ export function renderReviewBrief(
   }
   // Approve says what it records: the open findings accepted, and those on
   // work changed after its review as that change. At the stage's gate and at a
-  // team Unit's end-of-Unit gate the line after the findings names the ones it
-  // accepts, so the option does not say it again. A Unit's Construction
-  // checkpoint (its command takes no finding flag) and a per-stage team Unit
-  // gate keep the option as it was.
-  const openStages = new Set([
-    ...earlier.filter((_, at) => earlierContexts[at].findings.some(findingIsOpen)).map(({ stage: of }) => of.slug),
-    ...(contexts.some((context) => context.findings.some(findingIsOpen)) ? [stage.slug] : []),
-  ]);
-  const acceptsLine = contextUnit === undefined
-    ? approveAcceptsLine(projectDir, stage)
-    : endOfUnit === null
-      ? null
-      : approveAcceptsLine(projectDir, stage, { stages: endOfUnit, unit: contextUnit, labelStages: openStages.size > 1 });
+  // team Unit's end-of-Unit gate the step that shows the gate says the line
+  // naming the ones it accepts (gateApproveAcceptsLine), so neither the option
+  // nor the brief says it again: an agent retelling the brief in its own words
+  // lost it. A Unit's Construction checkpoint (its command takes no finding
+  // flag) and a per-stage team Unit gate keep the option as it was.
+  const acceptsLine = gateApproveAcceptsLine(projectDir, stage, unit);
   const openChanged = shown.flatMap((context) =>
     context.findings.filter(findingIsOpen).map((finding) => context.changedAfterReview?.includes(finding.id) === true)
   );
@@ -2633,7 +2655,6 @@ export function renderReviewBrief(
   lines.push(
     "",
     renderFindingsContext(shown),
-    ...(acceptsLine === null ? [] : ["", acceptsLine]),
     "",
     "**Decision options:**",
     `- **Approve** - ${approve}`,
@@ -2699,6 +2720,8 @@ function parseCliFlags(args: string[]): Record<string, string> {
 // record (`<engine>/reviews/<stage>/stage|units/<unit>/briefs/<sha256>.md`,
 // `latest.json` naming the newest), so the gate-open row can record the digest
 // of what the person was shown and a reader can open exactly that text later.
+// The line the gate's step says after it (gateApproveAcceptsLine) is kept with
+// it, so the approval's record names the text that told them what it accepts.
 // Best effort: a keep failure never costs the brief its print.
 function keepGateBrief(
   projectDir: string,
@@ -2782,7 +2805,8 @@ export function main(argv: string[]): void {
       )
     }\n`;
     process.stdout.write(brief);
-    keepGateBrief(projectDir, stage, flags.unit, reason, brief);
+    const accepts = gateApproveAcceptsLine(projectDir, stage, flags.unit);
+    keepGateBrief(projectDir, stage, flags.unit, reason, accepts === null ? brief : `${brief}\n${accepts}\n`);
     return;
   }
   if (command === "context") {

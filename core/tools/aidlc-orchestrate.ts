@@ -734,6 +734,7 @@ import {
 } from "./aidlc-steering.ts";
 import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
 import { refreshActiveMemory } from "./aidlc-includes.ts";
+import { gateApproveAcceptsLine } from "./aidlc-review-brief.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -12910,11 +12911,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
             return;
           }
           const gate = applyGateOnlyShape(directive, pd, stateContent);
-          emit(withChangeNotices(gate, [
+          const skippedNotices = units
+            .filter((u) => skipped.has(u))
+            .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? ""));
+          // The gate's own lines are on the step already. A copy is no longer
+          // the step its route (runStageRoutes) and rules are kept for.
+          emit(skippedNotices.length === 0 ? gate : withChangeNotices(gate, [
             ...((gate as Directive).change_notices ?? []),
-            ...units
-              .filter((u) => skipped.has(u))
-              .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? "")),
+            ...skippedNotices,
           ]));
           return;
         }
@@ -13153,6 +13157,7 @@ function applyGateOnlyShape(
     addContextParkOffer(directive, projectDir);
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
     addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
+    addApproveAcceptsLine(directive, projectDir, gateNode, directive.unit_gate ? unit : null);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -18381,6 +18386,27 @@ function addReviewCheckOffer(
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
+// What Approve accepts at a reviewed gate with open findings, and the other
+// ways to decide one, said as the gate's last line for the person: inside the
+// Review brief it was lost whenever the agent retold the brief in its own
+// words. A line, never a check: a record that cannot be read says nothing.
+function addApproveAcceptsLine(
+  reply: { kind: string; change_notices?: string[] },
+  projectDir: string,
+  node: GraphStage,
+  unit: string | null,
+): void {
+  let line: string | null;
+  try {
+    const stage = findStageBySlug(node.slug);
+    line = stage === undefined ? null : gateApproveAcceptsLine(projectDir, stage, unit ?? undefined);
+  } catch {
+    return;
+  }
+  if (line === null) return;
+  reply.change_notices = [...(reply.change_notices ?? []).filter((said) => said !== line), line];
+}
+
 // The offer to carry on in a new chat when Kiro's own record shows this chat
 // nearly full (#2574), said once per chat beside a question the person is
 // asked anyway: a stage's approval, or a Unit's checkpoint. The person's answer
@@ -20468,6 +20494,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addReviewCheckOffer(unitGate, pd, node, unit);
         addContextParkOffer(unitGate, pd);
         addRevisionCycle(unitGate, pd, slug, unit);
+        addApproveAcceptsLine(unitGate, pd, node, unit);
       }
       emit(unitGate);
       return;
@@ -20792,6 +20819,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addReviewCheckOffer(gateReply, pd, node, unit);
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
+        addApproveAcceptsLine(gateReply, pd, node, unit);
       }
     }
     emit(gateReply);
