@@ -289,16 +289,7 @@ If the user wants to add, remove, or split implementation units mid-workflow:
 - **Removing a unit**: Recompose the unit plan through the owning stage, archive its artifacts if any exist, and check dependencies. Do not hand-edit a unit or stage checkbox in `aidlc-state.md`.
 - **Splitting a unit**: Archive the original unit's artifacts, create two new unit entries in the plan, distribute the original stories between them, run story design for each new unit.
 
-**Team-owned units** (`Unit Ownership: team`). The plan changes on main, while
-the team keeps working: `next --stage units-generation`, revise the units block,
-then approve Units Generation and Delivery Planning again. Every unit's landed
-or claimed work stays as it is: a landed unit stays landed, and a claimed unit
-carries on and lands as it is, unless the revised plan changes that unit's own
-entry, which then asks its checkout to bring in the new main and publish again.
-No unit is claimed until the revised plan is approved. The review request
-answers a plan that leaves out a landed or claimed unit with the step to take:
-keep the unit under its name, or release a claimed one first. A unit the
-revised plan makes depend on one that has not landed lands after it.
+**Team-owned units** (`Unit Ownership: team`): the plan changes on main by going back to Units Generation, and the engine's lines say what each landed or claimed unit keeps.
 
 ### Architectural change handling
 If the user requests a change that affects the application architecture (e.g., switching databases, changing deployment model, adding a major integration):

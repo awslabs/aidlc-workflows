@@ -1649,7 +1649,8 @@ function candidateEvidence(
     true,
   );
   const baseDag = parseBoltDag(dependencyBodyAtOid(projectDir, candidateBaseOid));
-  const dag = parseBoltDag(dependencyBodyAtOid(projectDir, liveIntegrationOid));
+  const dagBody = dependencyBodyAtOid(projectDir, liveIntegrationOid);
+  const dag = parseBoltDag(dagBody);
   if (!baseDag.ok) {
     fail(`Pinned candidate base Unit DAG is ${baseDag.reason}: ${baseDag.detail}.`);
   }
@@ -1678,9 +1679,11 @@ function candidateEvidence(
   }
   const unit = dag.units.find((entry) => entry.name === claim.unit);
   if (!unit) fail(`Pinned integration Unit DAG has no Unit "${claim.unit}".`);
-  // A Unit lands after every Unit it depends on. A revised plan can give a
-  // Unit already claimed a dependency that has not landed yet.
-  const notLanded = unit.depends_on.filter((dep) => !completedUnits(integrationState).has(dep)).sort();
+  // A Unit lands after every Unit it depends on, read by the claim's own
+  // opening rule. A revised plan can give a Unit already claimed a dependency
+  // that has not landed yet (the walking skeleton is not one).
+  const notLanded = (openingStatusFrom(integrationState, dagBody).blockers.get(claim.unit) ?? [])
+    .filter((dep) => dep !== "walking-skeleton").sort();
   if (notLanded.length > 0) {
     const names = notLanded.map((dep) => `"${dep}"`).join(" and ");
     fail(
