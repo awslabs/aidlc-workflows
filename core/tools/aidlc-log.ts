@@ -238,6 +238,8 @@ import {
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
   optionsList,
+  optionsText,
+  recommendedChoices,
   isLearningsNoteDecision,
   boxPicksAddANote,
   picksAddANote,
@@ -1134,8 +1136,7 @@ function withEachOption(args: string[], flags: Record<string, string>): void {
   for (let i = 0; i < args.length - 1; i++) if (args[i] === "--option") each.push(args[++i]);
   delete flags.option;
   if (each.length === 0) return;
-  const choices = [...(flags.options === undefined ? [] : optionsList(flags.options)), ...each];
-  flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+  flags.options = optionsText([...(flags.options === undefined ? [] : optionsList(flags.options)), ...each]);
 }
 
 function handleDecision(args: string[]): void {
@@ -1236,6 +1237,8 @@ function handleDecision(args: string[]): void {
           )
         ? "[protected exact choices]"
         : flags.options;
+    const recommended = recommendedChoices(optionsList(fields.Options));
+    if (recommended.length > 0) fields.Recommended = optionsText(recommended);
   }
   if (flags.rationale) fields.Rationale = flags.rationale;
   // Which of the engine's own questions this is, as the step note's command
@@ -1418,9 +1421,12 @@ function sameInteractionScope(a: AuditShardEvent, b: AuditShardEvent): boolean {
 }
 
 function questionView(row: AuditShardEvent) {
+  // Only a row that kept the field lists it: an older row reads as it did.
+  const recommended = auditBlockField(row.block, "Recommended");
   return {
     question: auditBlockField(row.block, "Decision") ?? "",
     options: optionsList(auditBlockField(row.block, "Options")).filter(Boolean),
+    ...(recommended === null ? {} : { recommended: optionsList(recommended).filter(Boolean) }),
     ...interactionScope(row),
     askedAt: row.timestamp,
   };

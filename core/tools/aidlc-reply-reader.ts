@@ -33,6 +33,16 @@ export function stripRecommendedDecorator(text: string): string {
   return text.replace(RECOMMENDED_DECORATOR_RE, "").trim();
 }
 
+// The choices a question's labels mark as the agent's recommendation, with the
+// mark cut, in order: what the record keeps as `Recommended` so a report can
+// say whether the person followed it. A label that is only the mark names no
+// choice.
+export function recommendedChoices(labels: readonly string[]): string[] {
+  return labels.filter((label) => RECOMMENDED_DECORATOR_RE.test(label))
+    .map((label) => stripRecommendedDecorator(label))
+    .filter((choice) => choice !== "");
+}
+
 const RECEIVED_REPLY_DISPLAY_LIMIT = 120;
 export function formatReceivedReply(text: string | undefined | null): string {
   const normalized = (text ?? "").trim().replace(/\s+/g, " ") || "(empty)";

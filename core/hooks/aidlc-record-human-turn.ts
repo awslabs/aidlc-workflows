@@ -88,6 +88,7 @@ import {
   isoTimestamp,
   markHumanTurn,
   readAuditShardEvents,
+  recommendedChoices,
   recordGateWords,
   recordPreWorkflowHeartbeat,
   resolveProjectDirFromHook,
@@ -978,12 +979,14 @@ try {
               // The question it answered, by its id, when the box asked one
               // open here in the question's own words.
               const id = boxQuestionId(projectDir, sessionId, question);
+              const recommended = options === undefined ? [] : recommendedChoices(options);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
                 Question: question,
                 ...(id !== null ? { [QUESTION_ID_FIELD]: id } : {}),
                 Reply: reply,
                 ...(options !== undefined ? { Options: JSON.stringify(options) } : {}),
+                ...(recommended.length > 0 ? { Recommended: JSON.stringify(recommended) } : {}),
               }, projectDir);
             }
           }

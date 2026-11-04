@@ -93,6 +93,7 @@ import {
 export {
   formatReceivedReply,
   isNonAnswer,
+  recommendedChoices,
   stripRecommendedDecorator,
 } from "./aidlc-reply-reader.ts";
 import {
@@ -14253,6 +14254,11 @@ export function isSummaryConfirmationChoice(text: string | undefined): boolean {
 export function optionsList(text: string | null | undefined): string[] {
   const value = (text ?? "").trimStart();
   return (value.startsWith("|") ? value.slice(1).split("|") : value.split(",")).map((option) => option.trim());
+}
+
+/** Choices written in the grammar optionsList reads: the `|` form when one holds a comma, else commas. */
+export function optionsText(choices: readonly string[]): string {
+  return choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
 }
 
 export function isSummaryConfirmationOptions(options: string | undefined): boolean {

@@ -241,6 +241,14 @@ logged for the menu it answered. Open questions and the rare ambiguous answer
 (no question before it, or writers tied at one second) are reported apart.
 Neither command changes files or takes a lock.
 
+When the agent marks one of a question's choices "(Recommended)", the record
+keeps that choice as `Recommended`: on the question's `Decision Recorded`
+entry when the logged choices carry the mark, and on the `Question Replied`
+entry when you answer in Claude Code's or Codex's question box. `log answers`
+lists it as `recommended` beside the question's `options` and your answer, so
+you can see whether you went with it. Entries written before this have no
+`Recommended`, and read as they always did.
+
 ### Keys and passwords you type
 
 The state file, `project-description.json` and the audit shards are committed
