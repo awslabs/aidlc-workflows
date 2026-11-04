@@ -126,9 +126,9 @@ describe("t-inception-reads-documents: an Inception stage reads the team's docum
     put(proj, "space.md", "# Space\n\nSpace token ZORILLA-1.\n");
     expect(onboard(proj, DEFAULT_SPACE, undefined, new Date().toISOString()).refused).toBeUndefined();
     put(proj, "other.md", "# Other\n\nOther token ZORILLA-2.\n");
-    expect(onboard(proj, DEFAULT_SPACE, "documents/other.md", new Date().toISOString(), other).refused).toBeUndefined();
+    expect(onboard(proj, DEFAULT_SPACE, join(documentsDir(proj, DEFAULT_SPACE), "other.md"), new Date().toISOString(), other).refused).toBeUndefined();
     put(proj, "mine.md", "# Mine\n\nMine token ZORILLA-3.\n");
-    expect(onboard(proj, DEFAULT_SPACE, "documents/mine.md", new Date().toISOString(), mine).refused).toBeUndefined();
+    expect(onboard(proj, DEFAULT_SPACE, join(documentsDir(proj, DEFAULT_SPACE), "mine.md"), new Date().toISOString(), mine).refused).toBeUndefined();
     const card = documentsCard(proj, DEFAULT_SPACE, mine) as string;
     expect(card.indexOf("ZORILLA-3")).toBeGreaterThan(-1);
     expect(card.indexOf("ZORILLA-3")).toBeLessThan(card.indexOf("ZORILLA-1"));
@@ -142,7 +142,7 @@ describe("t-inception-reads-documents: an Inception stage reads the team's docum
   });
 
   test("a Construction stage gets no card", () => {
-    const proj = project("domain-design");
+    const proj = project("build-and-test");
     put(proj, "vision.md", VISION);
     expect(onboard(proj, DEFAULT_SPACE, undefined, new Date().toISOString()).refused).toBeUndefined();
     expect(cardPath(stageStep(proj))).toBeUndefined();
@@ -150,16 +150,16 @@ describe("t-inception-reads-documents: an Inception stage reads the team's docum
 
   test("a document named during the work is filed for that work", () => {
     const proj = project("requirements-analysis");
-    writeFileSync(join(proj, "brief.md"), "# Brief\n\nBrief token ZORILLA-4.\n");
+    writeFileSync(join(proj, "brief.pdf"), Buffer.from("%PDF-1.7\nbrief\n"));
     mkdirSync(dirname(documentInputRequestFilePath(proj)), { recursive: true });
-    writeFileSync(documentInputRequestFilePath(proj), "brief.md\n");
+    writeFileSync(documentInputRequestFilePath(proj), "brief.pdf\n");
     const r = spawnSync(BUN, [UTILITY, "document-input", "--onboard", "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
-    const row = readIndex(proj, DEFAULT_SPACE).documents.find((entry) => entry.source.path === "documents/brief.md");
-    expect(row?.related_intent_ids).toEqual([activeIntentUuid(proj) as string]);
-    expect(existsSync(join(documentsDir(proj, DEFAULT_SPACE), "brief.md"))).toBe(true);
+    const row = readIndex(proj, DEFAULT_SPACE).documents.find((entry) => entry.source.path === "documents/brief.pdf");
+    expect(row?.related_intent_ids, r.stdout).toEqual([activeIntentUuid(proj) as string]);
+    expect(existsSync(join(documentsDir(proj, DEFAULT_SPACE), "brief.pdf"))).toBe(true);
   });
 });
