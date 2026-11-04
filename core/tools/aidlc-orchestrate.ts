@@ -645,6 +645,7 @@ import {
   SESSION_EVENT_TYPES,
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
+import { teamUnitMemoryPath, unitMemoryPath } from "./aidlc-stage-diary.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import { withAuditLock } from "./aidlc-locks.ts";
@@ -8019,20 +8020,33 @@ function resolveScope(
 // the workspace root; the engine only joins them to projectDir for deterministic
 // diary bootstrap. Re-rooting remains a pure prefix swap, not a route through
 // the absolute projectDir-keyed state helpers.
-// Per-unit Construction stages embed a {unit-name} segment that a later engine
-// change resolves; until then the bare phase/slug form is the faithful derivation.
+// A per-Unit stage keeps the one stage-level diary, its notes tagged by Unit,
+// except a team-owned Unit's, which keeps its own (teamUnitMemoryPath).
 function memoryPathFor(phase: string, slug: string, recordPrefix: string | null): string {
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
-function unitMemoryPathFor(
-  slug: string,
-  unit: string,
+// Under team ownership a per-Unit stage's diary is the named Unit's own. A
+// directive that names no Unit (the skeleton-stance ask, the walk after a change
+// reopen) takes the claimed checkout's Unit, so the checkout never makes a
+// stage-level diary it cannot land; on main, which lands its own, it stays
+// stage-level.
+function stageMemoryPath(
+  node: GraphStage,
+  unit: string | null,
+  stateContent: string | null,
   recordPrefix: string | null,
+  projectDir: string | undefined,
 ): string {
-  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
-  return `${prefix}/construction/${unit}/${slug}/memory.md`;
+  const named = unit === UNIT_NAME_PLACEHOLDER ? null : unit;
+  const own = teamUnitMemoryPath(node, named, stateContent, recordPrefix);
+  if (own) return own;
+  if (!isTeamUnitOwnership(stateContent) || !isPerUnitStage(node)) {
+    return memoryPathFor(node.phase, node.slug, recordPrefix);
+  }
+  const claimed = projectDir ? readApplicableTeamUnitScopeStamp(projectDir, stateContent ?? undefined)?.unit : undefined;
+  return claimed ? unitMemoryPath(node.slug, claimed, recordPrefix) : memoryPathFor(node.phase, node.slug, recordPrefix);
 }
 
 // Callers create the stage diary at the deterministic directive-emission boundary
@@ -9234,7 +9248,7 @@ function buildRunStageDirective(
     mode: node.mode as RunStageDirective["mode"],
     inline_context_paths: inlineContext.paths,
     gate: computeGate(node, scope, stateContent),
-    memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
+    memory_path: stageMemoryPath(node, unit, stateContent, recordPrefix, codekbCtx?.projectDir),
     consumes: present,
     produces: resolveProduces(
       node,
@@ -14401,7 +14415,7 @@ function waveEntry(
     completion_required: completionRequired,
     review_state: reviewState,
     review_iteration: reviewIteration,
-    unit_memory_path: unitMemoryPathFor(node.slug, unit, recordPrefix),
+    unit_memory_path: unitMemoryPath(node.slug, unit, recordPrefix),
     consumes: present,
     consumes_absent: absent,
     produces: resolveProduces(
