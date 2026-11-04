@@ -3376,8 +3376,9 @@ function shellListParts(command: string): string[] | null {
 // every path absolute. Any other shape keeps the host's prompt.
 function ownRecordRead(command: string, projectDir: string): boolean {
   const parts = shellListParts(command);
+  if (parts === null) return false;
   const record = workspaceRoot(projectDir);
-  return parts !== null && parts.every((part) => {
+  return parts.every((part) => {
     const words = parseLiteralShellInvocation(part.replace(/[ \t]+2>\/dev\/null[ \t]*$/, ""));
     if (words === null || words.directory !== null) return false;
     const [name, ...args] = words.argv;
