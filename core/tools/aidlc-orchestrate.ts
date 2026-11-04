@@ -553,6 +553,7 @@ import {
   findStageBySlug,
   withPersonsWordsFirst,
   PERSON_ASKED_SKIP_REASON,
+  isPersonAskedSkipReason,
   readUnitSourceManifest,
   otherOpenWorkClaims,
   readIntentRegistry,
@@ -20311,10 +20312,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const planAction = effectivePlanAction(slug, scope, stateContent);
     const reason = flags.reason?.trim();
     // A stage that must run is skipped only when the person asked: the
-    // reason is then the engine's own token from the step that named this
-    // report (planChangeDirective). A skip the agent reports on its own
+    // reason then starts with the engine's own token from the step that named
+    // this report (planChangeDirective). A skip the agent reports on its own
     // reading still needs a CONDITIONAL stage.
-    const personAsked = reason === PERSON_ASKED_SKIP_REASON;
+    const personAsked = isPersonAskedSkipReason(reason);
     if (node.execution !== "CONDITIONAL" && planAction !== "SKIP" && !personAsked) {
       // The person's own skip goes through the step that names this report
       // with the engine's reason, so the refusal names that step.

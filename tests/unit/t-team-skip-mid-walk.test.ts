@@ -209,6 +209,24 @@ function commands(step: Step): string[] {
 const report = (stage: string, unit?: string): string =>
   `bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage}${unit ? ` --unit ${unit}` : ""} --result skipped --reason '${PERSON}'`;
 const recompose = (stage: string): string => `bun .claude/tools/aidlc.ts engine recompose --skip ${stage} --reason '${PERSON}'`;
+// alpha's team approval, given as the person gives it. After a reopen the
+// approval comes back through the step that records the revision first.
+const approveAlpha = (proj: string, stage: string): void => {
+  let gate = next(proj);
+  const revised = /`(bun [^`]*--result revised)`/.exec(String(gate.message ?? ""))?.[1];
+  if (revised !== undefined) {
+    const shown = runNamed(proj, revised);
+    expect(shown.status, shown.out).toBe(0);
+    gate = next(proj);
+  }
+  expect(`${gate.stage}/${gate.unit} ${gate.gate}`, JSON.stringify(gate)).toBe(`${stage}/alpha true`);
+  says(proj, "Approve");
+  const approved = run(proj, "aidlc-orchestrate.ts", [
+    "report", "--stage", stage, "--unit", "alpha", "--result", "approved", "--user-input", "Approve",
+  ]);
+  expect(approved.status, approved.out).toBe(0);
+};
+
 const ONLY = "If their words mean the alpha Unit only";
 const EVERY_FROM = "If they name no Unit, they mean every Unit from here";
 
@@ -255,6 +273,28 @@ describe("a skip the person asks for on a team main that works every Unit itself
     expect(approved.status, approved.out).toBe(0);
     const beta = next(proj);
     expect(`${beta.kind} ${beta.stage}/${beta.unit}`, JSON.stringify(beta)).toBe("run-stage functional-design/beta");
+  });
+
+  // The agent may keep the person's why after the engine's reason. The skip is
+  // still theirs, the why stays in the record, and the words they typed for it
+  // are spent, not handed to a later step.
+  test("the one-Unit skip with the person's why after the engine's reason is still theirs", () => {
+    const proj = walk(["alpha", "beta"]);
+    says(proj, "skip code generation for alpha, Team B writes it by hand");
+    const why = `${PERSON}: Team B writes it by hand`;
+    const skipped = runNamed(proj, report("code-generation", "alpha").replace(`'${PERSON}'`, `'${why}'`));
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(skipped.out).toContain('"kind":"done"');
+    expect(unitSkips(proj, "code-generation")).toEqual(["alpha"]);
+    const row = readAuditShardEvents(proj).find((entry) => entry.event === "UNIT_SKIPPED");
+    expect(auditBlockField(String(row?.block), "Reason")).toBe(why);
+    approveAlpha(proj, "code-generation");
+    const questions = join(dirname(stateFile(proj)), "construction", "beta", "functional-design", "functional-design-questions.md");
+    mkdirSync(dirname(questions), { recursive: true });
+    writeFileSync(questions, "# Functional Design Questions\n\n## Question 1\nWhat does it greet?\n\n[Answer]:\n");
+    const beta = next(proj) as Step & { kept_replies?: unknown };
+    expect(beta.unit, JSON.stringify(beta)).toBe("beta");
+    expect(JSON.stringify(beta.kept_replies ?? null)).not.toContain("Team B writes it by hand");
   });
 
   test("Code Generation for every Unit from here: the plan stops running it, with the walk's undo window", () => {
@@ -349,23 +389,6 @@ describe("a jump that names one Unit on a team main that works every Unit itself
   const backTo = (proj: string, stage: string, unit: string): Step => {
     says(proj, `actually, do ${stage} for ${unit} after all`);
     return next(proj, ["--stage", stage, "--unit", unit]);
-  };
-  // alpha's team approval, given as the person gives it. After a reopen the
-  // approval comes back through the step that records the revision first.
-  const approveAlpha = (proj: string, stage: string): void => {
-    let gate = next(proj);
-    const revised = /`(bun [^`]*--result revised)`/.exec(String(gate.message ?? ""))?.[1];
-    if (revised !== undefined) {
-      const shown = runNamed(proj, revised);
-      expect(shown.status, shown.out).toBe(0);
-      gate = next(proj);
-    }
-    expect(`${gate.stage}/${gate.unit} ${gate.gate}`, JSON.stringify(gate)).toBe(`${stage}/alpha true`);
-    says(proj, "Approve");
-    const approved = run(proj, "aidlc-orchestrate.ts", [
-      "report", "--stage", stage, "--unit", "alpha", "--result", "approved", "--user-input", "Approve",
-    ]);
-    expect(approved.status, approved.out).toBe(0);
   };
 
   test("the skip's way back reopens Code Generation for alpha alone, and the walk hands it out again", () => {

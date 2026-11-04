@@ -58,6 +58,7 @@ import {
   swarmNeedsStageMajor,
   leftOutLine,
   PERSON_ASKED_SKIP_REASON,
+  isPersonAskedSkipReason,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -8840,7 +8841,7 @@ function handleSkip(args: string[]): void {
     }
     // A Unit's step the person asked to skip spends what they typed for it:
     // their words were the skip. The agent's own skip leaves them kept.
-    if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+    if (isPersonAskedSkipReason(reason)) clearGateWords(pd);
     // A team's Unit is skipped for itself only: the stage's own checkbox is
     // derived from every team's Units, so it is never marked or routed here.
     if (teamOwned) {

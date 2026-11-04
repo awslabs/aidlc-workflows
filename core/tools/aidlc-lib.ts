@@ -7177,6 +7177,13 @@ export function markPersonLineHeardThisTurn(projectDir: string, sessionId: strin
 // must run, or one waiting at its own question, is skipped as they asked.
 export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 
+// Whether a skip's reason is the person's: the engine's token, as the step
+// names it or with the agent's words after it (the person's why, which stays
+// in the record).
+export function isPersonAskedSkipReason(reason: string | null | undefined): boolean {
+  return reason?.startsWith(PERSON_ASKED_SKIP_REASON) === true;
+}
+
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
 // null when there are none or a file cannot be read.
@@ -29439,7 +29446,7 @@ export function keptRepliesSinceStageStart(
       answers = [];
     } else if (
       MESSAGE_SPENDING_EVENTS.has(row.event) || GATE_WORDS_SPENT_BY.has(row.event) ||
-      (row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Reason") === PERSON_ASKED_SKIP_REASON)
+      (row.event === "UNIT_SKIPPED" && isPersonAskedSkipReason(auditBlockField(row.block, "Reason")))
     ) {
       from = index;
     } else if (row.event === "QUESTION_ANSWERED" && ours) {
