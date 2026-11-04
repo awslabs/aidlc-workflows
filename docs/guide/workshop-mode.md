@@ -283,7 +283,9 @@ workflow-record changes outside the claimed Unit subtree. Product-source paths
 outside the Unit's record tree remain visible in the gate evidence for human
 overlap judgment, and so does a rule the team kept while working the Unit (the
 space's `memory/project.md` or `memory/team.md`), which lands on main with the
-Unit.
+Unit. Like any shared file, a rules file main changed since the claim (another
+Unit's kept rule landed first) stops the land: rebase onto main, publish again,
+and pin again.
 
 If the claim is released/re-claimed, or the ref moves after pinning, the gate
 and landing commands refuse. Run `pin` again and review the new OID explicitly.
