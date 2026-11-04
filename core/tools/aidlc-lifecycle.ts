@@ -1319,8 +1319,16 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
           });
           const output = Buffer.from(probe.stdout ?? new Uint8Array()).toString("utf-8").trim();
           if (probe.exitCode !== 0 || output !== `aidlc ${version} (runtime ${version})`) {
-            // The helper says why it stopped on stderr, in one aidlc: line.
-            const said = Buffer.from(probe.stderr ?? new Uint8Array()).toString("utf-8").replace(/\s+/g, " ").trim();
+            // The helper says why it stopped on stderr, in one aidlc: line. A
+            // release's helper without the BOM, beside a path that needs one,
+            // reads its own paths garbled, so its reason would name the wrong file.
+            const unreadable = command === commandPath() && probe.exitCode === 4 &&
+              shimHelper === bomlessWindowsShimHelper() && shimHelper !== windowsShimHelper();
+            const said = unreadable
+              ? `${version} cannot start from ${installRoot()}: Windows PowerShell reads that release's launcher in the system code page, which cannot spell a letter in that path${
+                  previous ? `; ${previous} stays active` : ""
+                }`
+              : Buffer.from(probe.stderr ?? new Uint8Array()).toString("utf-8").replace(/\s+/g, " ").trim();
             throw new Error(
               `command pointer validation failed for ${version}: version probe returned ${
                 probe.exitCode ?? "no exit"
@@ -1700,14 +1708,17 @@ export function windowsShimHelperFor(version: string): string {
 }
 
 // 2.11.3 and every release before it accept the current helper only without a
-// BOM. A release newer than this binary has the BOM helper: `aidlc update`
-// runs in the binary it replaces, which writes the new release's helper.
-const FIRST_RELEASE_WITH_BOM_HELPER = "2.11.4";
+// BOM. The first release that writes it is a 2.11.4 preview, whose id was not
+// known here, so the rule has two halves: a release older than both this binary
+// and the first stable with the BOM helper gets the helper without it, and any
+// newer one gets the BOM (`aidlc update` runs in the binary it replaces, which
+// writes the new release's helper).
+const FIRST_STABLE_WITH_BOM_HELPER = "2.11.4";
 
 function predatesBomHelper(version: string): boolean {
   try {
     return compareVersions(version, AIDLC_VERSION) < 0 &&
-      compareVersions(version, FIRST_RELEASE_WITH_BOM_HELPER) < 0;
+      compareVersions(version, FIRST_STABLE_WITH_BOM_HELPER) < 0;
   } catch {
     return false;
   }
