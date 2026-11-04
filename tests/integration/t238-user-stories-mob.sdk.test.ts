@@ -68,17 +68,21 @@ const RULE_MARKERS = [
 // What Claude Code handed each agent as it started (the SubagentStart hook's
 // context), from the agents' own transcripts: the hook's whole output is kept
 // there even when Claude Code shows the agent only a saved file and a preview.
-function startContexts(claudeConfigDir: string): Map<string, string> {
+function startContexts(claudeConfigDir: string): { found: Map<string, string>; seen: string } {
   const found = new Map<string, string>();
+  const transcripts: string[] = [];
+  const hooks = new Set<string>();
   const visit = (dir: string): void => {
     for (const entry of existsSync(dir) ? readdirSync(dir, { withFileTypes: true }) : []) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) visit(path);
       else if (entry.name.endsWith(".jsonl")) {
+        transcripts.push(relative(claudeConfigDir, path));
         for (const line of readFileSync(path, "utf-8").split("\n")) {
           if (!line.includes("\"hook_success\"")) continue;
           try {
             const hook = (JSON.parse(line) as { attachment?: { hookName?: string; stdout?: string } }).attachment;
+            hooks.add(`${hook?.hookName ?? "?"} (${hook?.stdout?.length ?? 0} chars)`);
             const agent = /^SubagentStart:(.+)$/.exec(hook?.hookName ?? "")?.[1];
             if (!agent || !hook?.stdout) continue;
             const context = (JSON.parse(hook.stdout) as { hookSpecificOutput?: { additionalContext?: string } })
@@ -92,7 +96,7 @@ function startContexts(claudeConfigDir: string): Map<string, string> {
     }
   };
   visit(join(claudeConfigDir, "projects"));
-  return found;
+  return { found, seen: `transcripts: ${transcripts.join(", ") || "none"}; hook output: ${[...hooks].join(", ") || "none"}` };
 }
 
 const LIVE_KNOWLEDGE_REL =
@@ -658,7 +662,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         // participant as content: pasted into its brief, or handed to it as it
         // starts (Claude Code's SubagentStart context); a path alone is not
         // accepted.
-        const started = startContexts(claudeConfigDir);
+        const { found: started, seen } = startContexts(claudeConfigDir);
         const roundOne = new Map<string, CapturedToolResult>();
         for (const agent of SUPPORT_AGENTS) {
           const dispatch = result.toolResults.find(
@@ -676,7 +680,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           for (const { marker } of RULE_MARKERS) {
             expect(
               given.includes(marker),
-              `neither the brief for ${agent} nor its start context carries the "${marker}" rule content`,
+              `neither the brief for ${agent} nor its start context carries the "${marker}" rule content (${seen})`,
             ).toBe(true);
           }
           for (const sibling of SUPPORT_AGENTS) {
