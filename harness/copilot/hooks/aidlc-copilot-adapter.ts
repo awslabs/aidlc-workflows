@@ -141,6 +141,8 @@ import {
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
 import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
+import { aidlcInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
+import { LAUNCHER_PATH, launcherBody, launcherVoucherUnspent, recordLauncherVoucher } from "../tools/aidlc-launcher-voucher.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ATTEMPT_FLAG = "--aidlc-attempt-id";
@@ -299,7 +301,16 @@ export async function run(
     copilot.agent_type ?? copilot.agent_name ?? copilot.agentName ?? "";
   const explicitSubagentId = copilot.agent_id ?? copilot.agentId ?? "";
   const subagentId = explicitSubagentId || sessionId;
-  const nativeToolInput = toolInputOf(copilot.tool_input ?? copilot.toolInput ?? copilot.toolArgs);
+  // A command in the launcher's spelling is read as the dispatcher's, so every
+  // check before and after the call sees the one form it knows. Copilot starts each call in a new shell
+  // at the project folder, so only the bare relative spelling is the launcher.
+  const ENGINE_PREFIX = `${aidlcInvocation()} engine`;
+  const typedInput = toolInputOf(copilot.tool_input ?? copilot.toolInput ?? copilot.toolArgs);
+  const typedCommand = typeof typedInput?.command === "string" ? typedInput.command : "";
+  const typedLauncher = typedCommand === LAUNCHER_PATH || typedCommand.startsWith(`${LAUNCHER_PATH} `);
+  const nativeToolInput = typedLauncher && typedInput
+    ? { ...typedInput, command: `${ENGINE_PREFIX}${typedCommand.slice(LAUNCHER_PATH.length)}` }
+    : typedInput;
 
   // Canonicalize the tool name across the two surfaces. The CLI sends
   // Claude-style names (Bash/Write/Edit/Read — live-captured); VS Code agent
@@ -1019,6 +1030,70 @@ export async function run(
     if (routePrefix) return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
     const verbRoute = toolScriptVerbRoute(file, args[0] ?? "");
     return verbRoute && ownProjectRoute([...verbRoute, ...args.slice(1)], file, false) ? { status: "terminal" } : { status: "unrelated" };
+  }
+
+  // The shipped launcher, unchanged, executable and no symlink, or no rewrite:
+  // a clone that lost the mode, an edited file or an install from before it
+  // asks as before.
+  function launcherReady(): boolean {
+    try {
+      // The launcher's path is relative and its voucher is the project's, so
+      // the call's shell must start in the project folder itself.
+      if (realpathSync(copilot.cwd ?? process.cwd()) !== realpathSync(projectDir)) return false;
+      const file = join(projectDir, ...LAUNCHER_PATH.split("/"));
+      const st = lstatSync(file);
+      return st.isFile() && (st.mode & 0o111) !== 0 && readFileSync(file, "utf-8") === launcherBody(aidlcInvocation());
+    } catch { return false; }
+  }
+  // The same command with the launcher in place of the channel's own engine
+  // prefix, or null. On the copy channel a tool script is named by its route.
+  function toLauncher(command: string): string | null {
+    if (command.startsWith(`${ENGINE_PREFIX} `)) return `${LAUNCHER_PATH} ${command.slice(ENGINE_PREFIX.length + 1)}`;
+    if (!ENGINE_PREFIX.startsWith("bun ")) return null;
+    const m = /^bun \.aidlc\/tools\/(aidlc-[a-z0-9-]+\.ts) /.exec(command);
+    if (!m) return null;
+    const rest = command.slice(m[0].length);
+    if (m[1] === "aidlc-orchestrate.ts") return `${LAUNCHER_PATH} orchestrate ${rest}`;
+    const route = toolScriptRoute(m[1]);
+    if (route) return route[0] === "engine" ? `${LAUNCHER_PATH} ${route[1]} ${rest}` : null;
+    const verb = /^(\S+)(?: |$)/.exec(rest);
+    const verbRoute = verb ? toolScriptVerbRoute(m[1], verb[1]) : null;
+    return verbRoute ? `${LAUNCHER_PATH} ${verbRoute[1]} ${verbRoute[2]}${rest.slice(verb![1].length)}` : null;
+  }
+  // The command when it goes out on the launcher, its voucher recorded for the
+  // dispatcher's launcher gate; null leaves the plain spelling, which Copilot
+  // asks. While an earlier voucher is unspent its launcher call did not run,
+  // so a command the agent typed plain goes out plain: Copilot's answer then
+  // names what the agent typed, and a typed launcher call stays the launcher.
+  function launchedWithVoucher(command: string | null): string | null {
+    if (command === null || (!typedLauncher && launcherVoucherUnspent(projectDir))) return null;
+    const words = shellWords(command.replace(/ +2>&1 *$/, ""));
+    if (!words || words[0] !== LAUNCHER_PATH) return null;
+    try { recordLauncherVoucher(projectDir, ["engine", ...words.slice(1)]); }
+    catch { return null; }
+    return command;
+  }
+  // A command that runs a file under `.aidlc/bin/` in any segment: after a
+  // `cd`, in a chain or a substitution, through `sh`, `./` or a full path.
+  function runsUnderBin(command: string): boolean {
+    return command.split(/;|&&|\|\||\||&|\n|\$\(|`|\(|\)/).some((segment) => {
+      const words = segment.trim().split(/\s+/).filter((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+      while (words.length > 0 && ["exec", "command", "env", "nohup", "time", "sh", "bash", "then", "do", "else", "!"].includes(words[0])) words.shift();
+      return /(?:^|[\\/])\.aidlc[\\/]bin[\\/]/.test((words[0] ?? "").replace(/^["']+|["']+$/g, ""));
+    });
+  }
+  // The refusal for a `.aidlc/bin/` call that is not the launcher alone: the
+  // plain command to run, never the file guessed and run.
+  function binCallReason(command: string): string {
+    const words = shellWords(command.replace(/ +2>&1 *$/, ""));
+    if (!words) return `AI-DLC's commands run alone, one at a time, so this did not run. Run each as \`${ENGINE_PREFIX} ...\`, a command of its own.`;
+    const name = /^\.aidlc[\\/]bin[\\/](aidlc-[a-z0-9-]+)$/.exec(words[0] ?? "")?.[1];
+    if (name && name !== "aidlc-engine" && ENGINE_PREFIX.startsWith("bun ") &&
+        existsSync(join(projectDir, ".aidlc", "tools", `${name}.ts`))) {
+      const rest = words.slice(1).map((word) => quoteCommandArgument(word, "posix"));
+      return `\`.aidlc/bin/${name}\` does not exist, so this did not run. Run \`${["bun", `.aidlc/tools/${name}.ts`, ...rest].join(" ")}\` instead.`;
+    }
+    return `Only \`${LAUNCHER_PATH}\`, typed first and from the project folder, runs from \`.aidlc/bin/\`, so this did not run. Run \`${ENGINE_PREFIX} ...\` instead.`;
   }
 
   // Each refusal says what was not accepted and the form to run instead; the
@@ -2281,6 +2356,31 @@ export async function run(
       // Shell calls run the state-transition guard first, then reviewer-scope.
       // Either block converts to the deny JSON (difference #4).
       if (toolName === "Bash") {
+        // Layer 3: a call under `.aidlc/bin/` is the launcher alone, from the
+        // project folder, the shipped file, outside a Windows terminal, naming
+        // a route; anything else is refused before any dialog with the plain
+        // command, so the person is never asked about a call that cannot run.
+        const typedAlone = typedLauncher && shellWords(typedCommand.replace(/ +2>&1 *$/, "")) !== null;
+        if (runsUnderBin(typedCommand) && !typedAlone) {
+          process.stdout.write(denyJson(binCallReason(typedCommand)));
+          return 0;
+        }
+        if (typedLauncher) {
+          const plain = String(nativeToolInput?.command ?? "");
+          const words = shellWords(plain.replace(/ +2>&1 *$/, "")) ?? [];
+          const argv = ["engine", ...words.slice(ENGINE_PREFIX.split(" ").length)];
+          const reason = windowsTerminal
+            ? `\`${LAUNCHER_PATH}\` does not run in this terminal, so this did not run. Run \`${plain}\` instead.`
+            : !launcherReady()
+              ? `\`${LAUNCHER_PATH}\` is not the file AI-DLC installed, so this did not run. Run \`${plain}\` instead.`
+              : routePolicyFor(withoutProjectDirFlag(argv)) === null && argv.length > 1 && !argv[1].startsWith("-")
+                ? `\`${plain}\` is not an AI-DLC command, so this did not run. Run \`${ENGINE_PREFIX} --help\` for the list.`
+                : null;
+          if (reason) {
+            process.stdout.write(denyJson(reason));
+            return 0;
+          }
+        }
         const command = orchestrationCommand();
         if (command.status === "foreign") {
           process.stdout.write(denyJson("This AI-DLC command targets a different physical project. Run it from that project's own Copilot session."));
@@ -2328,15 +2428,20 @@ export async function run(
         // aside for it, and no call without a host session is vouched for.
         const typed = typeof nativeToolInput?.command === "string" ? nativeToolInput.command : "";
         const bare = typed.slice(projectCdLead(typed).length);
-        const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
+        const vouched = sessionId !== "" &&
             [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
             plainInEveryShell(bare) &&
-            !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher())
-          ? ALLOW_DECISION
-          : null;
+            !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher());
+        const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && vouched ? ALLOW_DECISION : null;
+        // On the CLI, outside a Windows terminal, the same vouched commands go
+        // out in the launcher's spelling, which the skill's rule allows.
+        const cliLauncher = !VSCODE_SHELL_TOOLS.has(rawToolName) && !windowsTerminal && vouched && launcherReady();
         // A command passed on unclaimed still runs without a copied attempt id.
-        const passOn = (decision: typeof allow, uncopied: string | undefined): number => {
-          const modifiedArgs = uncopied === undefined ? null : { ...(nativeToolInput ?? {}), command: uncopied };
+        const passOn = (decision: typeof allow, uncopied: string | undefined, route = false): number => {
+          const base = uncopied ?? (typeof nativeToolInput?.command === "string" ? nativeToolInput.command : undefined);
+          const launched = route && cliLauncher && base !== undefined ? launchedWithVoucher(toLauncher(base)) : null;
+          const finalCommand = launched ?? (uncopied !== undefined || typedLauncher ? base : undefined);
+          const modifiedArgs = finalCommand === undefined ? null : { ...(nativeToolInput ?? {}), command: finalCommand };
           if (decision || modifiedArgs) {
             process.stdout.write(`${JSON.stringify({ ...(modifiedArgs ? { modifiedArgs } : {}), hookSpecificOutput: {
               hookEventName: "PreToolUse",
@@ -2346,7 +2451,7 @@ export async function run(
           }
           return 0;
         };
-        if (command.status === "terminal") return passOn(allow, command.uncopied);
+        if (command.status === "terminal") return passOn(allow, command.uncopied, true);
         if (command.status === "unrelated") return passOn(null, command.uncopied);
         if (command.status === "recognized") {
           if (!sessionId) return passOn(null, command.uncopied);
@@ -2366,7 +2471,7 @@ export async function run(
               command: command.claim.commandKind,
               reason,
             });
-            return passOn(command.keepsPrompt ? null : allow, command.uncopied);
+            return passOn(command.keepsPrompt ? null : allow, command.uncopied, !command.keepsPrompt);
           };
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
@@ -2397,7 +2502,9 @@ export async function run(
             process.stdout.write(denyJson(reason));
             return 0;
           }
-          const modifiedArgs = { ...(nativeToolInput ?? {}), command: command.rewrite(claimed.attemptId) };
+          const respelled = command.rewrite(claimed.attemptId);
+          const launchedClaim = !command.keepsPrompt && cliLauncher ? launchedWithVoucher(toLauncher(respelled)) : null;
+          const modifiedArgs = { ...(nativeToolInput ?? {}), command: launchedClaim ?? respelled };
           process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
             hookEventName: "PreToolUse",
             ...(command.keepsPrompt ? {} : allow ?? {}),

@@ -303,7 +303,6 @@ OrderedPipelineEvidenceEvent
 OwedPipelineLinks
 PENDING_PERSON_LINES_MAX_AGE_MS
 PERSONS_WORDS
-PERSON_ASKED_SKIP_REASON
 PERSON_CHECK_SWITCH_VALUES
 PERSON_LINES_SAID_MAX
 PERSON_TEXT_FIELDS
@@ -652,7 +651,6 @@ boltDagMatches
 boltEventUnits
 boltWorktreeBaseCommit
 boundDirectiveMessage
-boundedGitMetadataText
 boxPicksAddANote
 cachedClaimFanoutActive
 candidateAttemptEventMatches
@@ -899,9 +897,7 @@ gcSessionPidEntries
 generatedRunnerSkill
 gitAlternateEntry
 gitCommitSourceListing
-gitCommonDirectory
 gitHeadOid
-gitMetadataDirectory
 gitObjectDirectories
 gitObjectTypeByOid
 gitOidFromRef
@@ -1661,7 +1657,6 @@ shellCommandText
 shellToolResponseText
 shippedRulesSubdir
 shownLastWrittenAt
-singleGitMetadataLine
 singleRunRequest
 singleRunRequestDigest
 singleStageAttemptField

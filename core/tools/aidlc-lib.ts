@@ -151,6 +151,7 @@ import {
   intentUuidForSelection,
   isArchivedIntent,
   isoTimestamp,
+  isPersonAskedSkipReason,
   isTeamUnitOwnership,
   knownAuditShardName,
   legacyBoltName,
@@ -164,6 +165,7 @@ import {
   type ProcessIdentity,
   processIdentityReader,
   processIsAlive,
+  readActiveIntentCursor,
   readAuditShardEvents,
   readAuditShardTexts,
   readIntentRegistry,
@@ -257,6 +259,7 @@ export {
   isArchivedIntent,
   isBindableIntentRecordName,
   isoTimestamp,
+  isPersonAskedSkipReason,
   isTeamUnitOwnership,
   knownAuditShardName,
   legacyBoltName,
@@ -265,6 +268,7 @@ export {
   maximalAttemptEvents,
   parseAuditShardEvents,
   parseCheckboxes,
+  PERSON_ASKED_SKIP_REASON,
   type ProcessIdentity,
   projectStateForDigest,
   readActiveIntentCursor,
@@ -367,10 +371,13 @@ import {
   activeDirectiveLockBudgetMs,
   activeSpace,
   assertNoSymlinkInChainOrThrow,
+  boundedGitMetadataText,
   DEFAULT_SPACE,
   ENGINE_DIR,
   engineDirFor,
   errorMessage,
+  gitCommonDirectory,
+  gitMetadataDirectory,
   intentsDir,
   isPlainObject,
   isReadOnlyEngineProbe,
@@ -384,6 +391,7 @@ import {
   refuseEngineObserverWrite,
   releaseAuditLock,
   releaseCanonicalOwnerStampedLock,
+  singleGitMetadataLine,
   spaceRecordRoot,
   withAuditLock,
   workspaceRoot,
@@ -2482,6 +2490,17 @@ export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
     name: "claude session message",
     pattern: /^<cross-session-message(?: [^\r\n]*)?>\r?\n[\s\S]*\r?\n<\/cross-session-message>$/,
   },
+  // The Claude desktop app's other turns (2.1.31x, captured live): its events
+  // are one element each, its note after a quit is one sentence, and a session
+  // started from another one opens with that session's brief.
+  { name: "claude side sessions event", pattern: /^<side-sessions-event>[\s\S]*<\/side-sessions-event>$/ },
+  { name: "claude ci monitor event", pattern: /^<ci-monitor-event>[\s\S]*<\/ci-monitor-event>$/ },
+  { name: "claude app resume", pattern: /^The app was quit while you were working\. Please continue from where you left off\.$/ },
+  // The app puts its own `<system-reminder>` blocks ahead of the brief.
+  {
+    name: "claude session brief",
+    pattern: /^\s*(?:<system-reminder>(?:(?!<\/system-reminder>)[\s\S])*<\/system-reminder>\s*)*(?:Background|Task) \(from the session that started this one\):\r?\n/,
+  },
 ];
 
 // The whole prompt is one of the host's fixed sentences. Null otherwise.
@@ -2821,8 +2840,10 @@ export function kiroTurnOrigin(options: {
 // row for this `prompt_id` with exactly this text. Claude Code names the turn's
 // origin on it (measured 2.1.280: `turnOrigin: "task_notification"`,
 // `promptSource: "system"`, `origin.kind: "task-notification"` for a
-// background task's notice; `human`/`typed` for a typed turn, `sdk` for one
-// sent through the SDK). A message the person sends while a turn runs has no
+// background task's notice; `human`/`typed` for a typed turn). A row with
+// neither mark decides nothing: the desktop app sends the person's messages and
+// its own notes alike as `sdk`, so its words decide (claudeHostTemplateOrigin
+// in the human-turn hook). A message the person sends while a turn runs has no
 // row of its own (it rides the running turn's prompt id), so no row means
 // nothing is known.
 const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification"]);
@@ -2842,7 +2863,8 @@ export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknow
   ) {
     return { kind: "host", reason: turnOrigin ?? (typeof origin === "string" ? origin : "system"), source: "record" };
   }
-  return { kind: "person", source: "record" };
+  if (origin === "human" || turnOrigin === "human" || entry.promptSource === "typed") return { kind: "person", source: "record" };
+  return null;
 }
 
 // Who wrote a message Claude Code fed into a running turn. The transcript keeps
@@ -5291,43 +5313,58 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
 // Remove a space's active-intent cursor so no record resolves implicitly until
 // the human picks one (`intent <name>`) or creates new work. Best-effort and
 // idempotent, like the writer: an absent cursor is already the desired state.
+// A git worktree with no cursor of its own reads its main checkout's, so when
+// that one still names the record, the worktree gets an empty cursor of its own,
+// which names none; the main checkout's cursor is that checkout's and stays.
 export function clearActiveIntentCursor(
   projectDir: string,
   space?: string,
   expectedIntent?: string,
 ): void {
   const path = join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER);
-  if (expectedIntent !== undefined) {
-    const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
-    try {
-      renameSync(path, staged);
-    } catch {
+  try {
+    if (expectedIntent !== undefined) {
+      const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
+      try {
+        renameSync(path, staged);
+      } catch {
+        return;
+      }
+      try {
+        const captured = readFileSync(staged, "utf-8").trim();
+        if (captured !== expectedIntent && !existsSync(path)) {
+          try {
+            renameSync(staged, path);
+            return;
+          } catch {
+            // A concurrent switch won the destination. Keep its newer cursor.
+          }
+        }
+      } catch {
+        // An unreadable captured cursor is stale runtime state.
+      }
+      try {
+        unlinkSync(staged);
+      } catch {
+        /* already moved or removed */
+      }
       return;
     }
     try {
-      const captured = readFileSync(staged, "utf-8").trim();
-      if (captured !== expectedIntent && !existsSync(path)) {
-        try {
-          renameSync(staged, path);
-          return;
-        } catch {
-          // A concurrent switch won the destination. Keep its newer cursor.
-        }
+      unlinkSync(path);
+    } catch {
+      /* absent cursor, or per-user state is unwritable: nothing to clear */
+    }
+  } finally {
+    // Whichever way the clear went: a cursor a switch wrote meanwhile is kept.
+    const still = readActiveIntentCursor(projectDir, space);
+    if (still !== null && (expectedIntent === undefined || still === expectedIntent)) {
+      try {
+        writeFileSync(path, "", { flag: "wx" });
+      } catch {
+        /* per-user cursor; best-effort */
       }
-    } catch {
-      // An unreadable captured cursor is stale runtime state.
     }
-    try {
-      unlinkSync(staged);
-    } catch {
-      /* already moved or removed */
-    }
-    return;
-  }
-  try {
-    unlinkSync(path);
-  } catch {
-    /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
 }
 
@@ -7136,12 +7173,6 @@ export function personLineHeardThisTurn(projectDir: string, sessionId: string, l
 export function markPersonLineHeardThisTurn(projectDir: string, sessionId: string, line: string): void {
   markPersonLinesHeard(projectDir, sessionId, [turnKeyedPersonLine(projectDir, line)]);
 }
-
-// The reason the engine's skip step hands the agent for a stage the person
-// asked to skip where it stands (orchestrate's planChangeDirective). report
-// and the state tool read it back: that skip is the person's, so a stage that
-// must run, or one waiting at its own question, is skipped as they asked.
-export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
@@ -23230,114 +23261,6 @@ interface FilesystemSourceIdentity {
 
 type SourceSymlinkTargetMode = "follow" | "tree-only";
 
-function boundedGitMetadataText(path: string, maxBytes: number): string | null {
-  let fd: number | undefined;
-  try {
-    const pathStat = lstatSync(path);
-    if (!pathStat.isFile() || pathStat.size > maxBytes) return null;
-    fd = openSync(path, "r");
-    const before = fstatSync(fd);
-    if (!before.isFile() || before.size > maxBytes) return null;
-    const bytes = Buffer.alloc(before.size);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const count = readSync(
-        fd,
-        bytes,
-        offset,
-        bytes.length - offset,
-        offset,
-      );
-      if (count === 0) return null;
-      offset += count;
-    }
-    const after = fstatSync(fd);
-    if (
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    ) {
-      return null;
-    }
-    return bytes.toString("utf-8");
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // The metadata read already fails closed on any earlier error.
-      }
-    }
-  }
-}
-
-function singleGitMetadataLine(raw: string): string | null {
-  const line = raw.replace(/\r?\n$/, "");
-  if (line.length === 0 || line.includes("\n") || line.includes("\r")) {
-    return null;
-  }
-  return line;
-}
-
-function gitMetadataDirectory(worktreeDir: string): string | null {
-  const marker = join(worktreeDir, ".git");
-  try {
-    const markerStat = lstatSync(marker);
-    if (markerStat.isDirectory()) return realpathSync(marker);
-    if (!markerStat.isFile()) return null;
-  } catch {
-    return null;
-  }
-  const pointerRaw = boundedGitMetadataText(marker, 8192);
-  const pointerLine =
-    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
-  if (pointerLine === null || !pointerLine.startsWith("gitdir: ")) {
-    return null;
-  }
-  const pointer = pointerLine.slice("gitdir: ".length);
-  if (pointer.length === 0 || pointer.includes("\0")) return null;
-  const target = isAbsolute(pointer)
-    ? pointer
-    : resolvePath(worktreeDir, pointer);
-  try {
-    if (!lstatSync(target).isDirectory()) return null;
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
-
-function gitCommonDirectory(gitDir: string): string | null {
-  const marker = join(gitDir, "commondir");
-  try {
-    if (!lstatSync(marker).isFile()) return null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return gitDir;
-    return null;
-  }
-  const pointerRaw = boundedGitMetadataText(marker, 8192);
-  const pointerLine =
-    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
-  if (
-    pointerLine === null ||
-    pointerLine.length === 0 ||
-    pointerLine.includes("\0")
-  ) {
-    return null;
-  }
-  const target = isAbsolute(pointerLine)
-    ? pointerLine
-    : resolvePath(gitDir, pointerLine);
-  try {
-    if (!lstatSync(target).isDirectory()) return null;
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
-
 type GitObjectType = "commit" | "other";
 
 function gitObjectDirectories(
@@ -29513,7 +29436,7 @@ export function keptRepliesSinceStageStart(
       answers = [];
     } else if (
       MESSAGE_SPENDING_EVENTS.has(row.event) || GATE_WORDS_SPENT_BY.has(row.event) ||
-      (row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Reason") === PERSON_ASKED_SKIP_REASON)
+      (row.event === "UNIT_SKIPPED" && isPersonAskedSkipReason(auditBlockField(row.block, "Reason")))
     ) {
       from = index;
     } else if (row.event === "QUESTION_ANSWERED" && ours) {
@@ -35238,13 +35161,18 @@ export function unitLifecycleRunFloorForProject(
 // a stage before the Target keeps its attempt: a jump back to Code Generation
 // leaves each Unit's Functional Design as it was. A row whose Target, or a
 // stage, the graph does not know, or a graph that cannot be read, reaches
-// every stage.
+// every stage. A team-owned jump back before the per-Unit block records `Unit
+// Work: kept` (aidlc-jump.ts): it reaches no per-Unit stage, whose work is
+// each Unit's claim's.
 export function stageJumpReaches(block: string, slug: string): boolean {
   const name = auditBlockField(block, "Target");
   if (!name || name === slug) return true;
   try {
     const target = stageIndex(name);
     const at = stageIndex(slug);
+    if (auditBlockField(block, "Unit Work") === "kept" && at !== -1 && isPerUnitStage(loadStageGraph()[at])) {
+      return false;
+    }
     return target === -1 || at === -1 || at >= target;
   } catch {
     return true;
@@ -35290,6 +35218,15 @@ function latestMainWorkflowStageRunFloorFromRows(
   const jumpOrdinals = new Map(
     rowsInput.filter((row) => row.event === "STAGE_JUMPED").sort(byTime).map((row, index) => [row, index + 1]),
   );
+  // Main entering this stage after a jump that kept the Units' work
+  // (stageJumpReaches) starts no new attempt for a Unit: its receipts keep
+  // their floor. Main's own floor for the stage still moves.
+  const forUnits = unit !== undefined || unitReceipts;
+  const keptAt = forUnits
+    ? rowsInput.filter((row) => row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept" &&
+      !stageJumpReaches(row.block, slug)).map((row) => row.timestamp)
+    : [];
+  const reentry = (row: AuditShardEvent): boolean => keptAt.some((at) => at <= row.timestamp);
   const rows = rowsInput
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
@@ -35298,7 +35235,7 @@ function latestMainWorkflowStageRunFloorFromRows(
       if (row.event === "GATE_REJECTED") {
         return gateRejectionMatchesAttempt(row.block, slug, unit);
       }
-      return stageStart(row) &&
+      return stageStart(row) && !reentry(row) &&
         (stageFloored === null || stageFloored.has(row)) &&
         (unitFloored === null || !unitFloored.has(row));
     });

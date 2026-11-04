@@ -119,6 +119,10 @@ import {
   withAuditLock,
   writeFileAtomic,
   writeRecordFileNoFollow,
+  effectivePlanAction,
+  escapeRegex,
+  getField,
+  parseCheckboxes,
 } from "./aidlc-lib.ts";
 import {
   parseRuleFrontmatter,
@@ -459,6 +463,16 @@ export function memoryDirFor(projectDir: string, space?: string): string {
   const resolvedSpace =
     space ?? resolveWorkflowSelection(projectDir).space;
   return join(projectDir, ...memorySegmentsForSpace(resolvedSpace));
+}
+
+/** The file a rule the person keeps is written to, relative to the project in
+ *  posix form: the space's `project.md` or `team.md`, the learning loop's two
+ *  scopes (practiceFilePath, aidlc-learnings.ts, writes the same files). A
+ *  claimed Unit's candidate carries it like the Unit's source
+ *  (candidateBoundary, aidlc-unit.ts). */
+export const KEPT_RULE_SCOPES = ["project", "team"] as const;
+export function keptRuleFile(space: string, scope: (typeof KEPT_RULE_SCOPES)[number]): string {
+  return [...memorySegmentsForSpace(space), `${scope}.md`].join("/");
 }
 
 /** The TPL template-override source-of-truth dir for a workspace:
@@ -1389,6 +1403,45 @@ export function loadGraph(): GraphStage[] {
     _graph = loadStageGraph() as GraphStage[];
   }
   return _graph;
+}
+
+// A stage a plugin added after the work started has no row in the state file's
+// Stage Progress, so a transition onto it would write nothing and the stage
+// would never read as started or done. Its first transition writes the row
+// (not started, with the plan's action) after the rows of its phase that come
+// before it in the graph, or before the first one after it. A stage that has a
+// row, a slug the graph does not know, or a phase with no rows leaves the
+// content as it is.
+export function withStageProgressRow(content: string, slug: string): string {
+  if (parseCheckboxes(content).some((row) => row.slug === slug)) return content;
+  const graph = loadGraph();
+  const at = graph.findIndex((stage) => stage.slug === slug);
+  if (at === -1) return content;
+  const phase = graph[at].phase;
+  const lines = content.split("\n");
+  const rowsOf = (stages: GraphStage[]) =>
+    stages
+      .filter((stage) => stage.phase === phase)
+      .map((stage) => lines.findIndex((line) => new RegExp(`^- \\[[ xSR?-]\\] ${escapeRegex(stage.slug)} —`).test(line)))
+      .filter((row) => row !== -1);
+  const before = rowsOf(graph.slice(0, at));
+  const after = rowsOf(graph.slice(at + 1));
+  const insertAt = before.length > 0 ? Math.max(...before) + 1 : after.length > 0 ? Math.min(...after) : -1;
+  if (insertAt === -1) return content;
+  const eol = lines[before.length > 0 ? insertAt - 1 : insertAt].endsWith("\r") ? "\r" : "";
+  const action = effectivePlanAction(slug, getField(content, "Scope"), content) ?? "EXECUTE";
+  lines.splice(insertAt, 0, `- [ ] ${slug} — ${action}${eol}`);
+  return lines.join("\n");
+}
+
+// True when `slug` runs before the first per-Unit stage of `stages` (a graph in
+// run order): Inception and earlier, where the Unit plan itself is made. A team
+// that goes back there is changing its Unit plan, which leaves each Unit's own
+// work to its claim. False for a slug the graph does not know.
+export function beforePerUnitBlock(stages: readonly { slug: string; for_each?: string }[], slug: string): boolean {
+  const at = stages.findIndex((stage) => stage.slug === slug);
+  const firstPerUnit = stages.findIndex((stage) => isPerUnitStage(stage));
+  return at !== -1 && firstPerUnit !== -1 && at < firstPerUnit;
 }
 
 /** Stages that produce the given artifact. Empty array = orphan

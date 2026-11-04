@@ -1,9 +1,10 @@
 // covers: file:skills/aidlc/SKILL.md
 //
 // t-copilot-record-write-rule: the /aidlc skill AI-DLC ships for Copilot carries
-// one `allowed-tools` rule, so Copilot CLI creates and edits the files of
+// one `allowed-tools` write rule, so Copilot CLI creates and edits the files of
 // AI-DLC's own record without its "Do you want to create" dialog while the skill
-// is in use, and still asks for every other file and every command.
+// is in use, and still asks for every other file. Its one shell rule names
+// AI-DLC's own launcher (t-copilot-engine-launcher.test.ts) and nothing else.
 //
 // Measured on Copilot CLI 1.0.96 and 1.0.105 (Linux) and 1.0.105 (Windows
 // Server), in Copilot's own terminal: Copilot adds a skill's rules when the
@@ -22,6 +23,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { intentsDir } from "../../dist/claude/.claude/tools/aidlc-locks.ts";
+import { LAUNCHER_PATH } from "../../core/tools/aidlc-launcher-voucher.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const SKILLS = ["dist", "dist-release"].map((root) =>
@@ -36,6 +38,7 @@ const INTENTS_ROOT = relative(PROJECT, intentsDir(PROJECT, SPACE))
   .map((part) => (part === SPACE ? "*" : part))
   .join("/");
 const RECORD_RULE = `write(${INTENTS_ROOT}/**)`;
+const LAUNCHER_RULE = `shell(${LAUNCHER_PATH})`;
 
 function allowedTools(skill: string): unknown {
   const fm = readFileSync(skill, "utf-8").match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1];
@@ -49,6 +52,7 @@ function ruleFindings(rules: unknown): string[] {
   if (!Array.isArray(rules)) return [`allowed-tools is not a list: ${JSON.stringify(rules)}`];
   const findings: string[] = [];
   for (const rule of rules) {
+    if (rule === LAUNCHER_RULE) continue;
     const path = typeof rule === "string" ? rule.match(/^write\((.+)\)$/)?.[1] : undefined;
     if (path === undefined) findings.push(`${String(rule)}: not a write rule naming a path`);
     else if (!path.startsWith(`${INTENTS_ROOT}/`) || path.split("/").includes(".."))
@@ -66,10 +70,10 @@ describe("t-copilot-record-write-rule: Copilot writes AI-DLC's own record withou
     const channel = skill.includes(`${sep}dist-release${sep}`) ? "native" : "copy";
 
     test(`${channel} channel: the /aidlc skill allows writes under AI-DLC's record`, () => {
-      expect(allowedTools(skill)).toEqual([RECORD_RULE]);
+      expect(allowedTools(skill)).toEqual([LAUNCHER_RULE, RECORD_RULE]);
     });
 
-    test(`${channel} channel: the rule names only AI-DLC's record path and no shell tool`, () => {
+    test(`${channel} channel: the rules name only AI-DLC's record path and its own launcher`, () => {
       expect(ruleFindings(allowedTools(skill))).toEqual([]);
     });
   }
@@ -79,12 +83,14 @@ describe("t-copilot-record-write-rule: Copilot writes AI-DLC's own record withou
       ruleFindings([
         "shell(bun)",
         "Bash(bun:*)",
+        `shell(${LAUNCHER_PATH} *)`,
         "write",
         "write(src/**)",
         "write(/home/someone/project/aidlc/spaces/*/intents/**)",
         "write(aidlc/spaces/*/intents/../../memory/**)",
         RECORD_RULE,
+        LAUNCHER_RULE,
       ]),
-    ).toHaveLength(6);
+    ).toHaveLength(7);
   });
 });

@@ -3998,6 +3998,7 @@ function handleReview(args: string[]): void {
     if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
       error("Starting a review requires --iteration <positive integer>.");
     }
+    let planLifted = false;
     // Construction walks its Units from Units Generation's units block, so a
     // block the engine cannot read is fixed before the review, while the
     // document can still change. Writing it is the agent's step, so it comes
@@ -4005,7 +4006,28 @@ function handleReview(args: string[]): void {
     // would have the agent tell the person a step to take.
     if (flags.stage === "units-generation" && flags.single !== "true") {
       const dag = resolveBoltDag(pd, intent, space);
-      if (dag.state === "malformed") {
+      // A team's revised plan is read against the Units it already landed or
+      // claimed (unitPlanRefusal) once the block itself reads. Dropping such a
+      // Unit is the person's call: the message they asked in (--person-asked
+      // --message, proved as the review-pass lift proves it) lifts that check,
+      // and the lift goes on the row.
+      let plan: { message: string | null; liftable: boolean; lifted: boolean } | null = null;
+      if (dag.state === "ok") {
+        let personAsked = false;
+        if (flags["person-asked"] === "true" && flags.message !== undefined) {
+          const proof = proveMessage(pd, flags.message, "request", { request: true });
+          if ("refusal" in proof) error(proof.refusal);
+          personAsked = messageSinceReviewRequest(
+            pd, flags.stage, flags.reviewer as string, flags.unit, proof.message, intent, space,
+          );
+        }
+        // Loaded only here: no other review request pays for the Unit tool.
+        const { unitPlanRefusal } = require("./aidlc-unit.ts") as typeof import("./aidlc-unit.ts");
+        plan = unitPlanRefusal(pd, personAsked);
+        planLifted = plan.lifted;
+      }
+      const repair = dag.state === "malformed" ? unitsBlockRepair(dag.reason, dag.detail) : plan?.message ?? null;
+      if (repair !== null) {
         const again = renderReviewRequestCommand({
           projectDir: pd,
           stage: flags.stage,
@@ -4013,9 +4035,12 @@ function handleReview(args: string[]): void {
           iteration: Number(flags.iteration),
           ...(retryPending ? { retryPending: true } : {}),
         });
+        const lift = plan?.liftable
+          ? ` If the person asked for this plan themselves, run it with --person-asked --message <id>${messageFill(pd)}.`
+          : "";
         console.log(JSON.stringify({
           kind: "print",
-          message: `${unitsBlockRepair(dag.reason, dag.detail)} Then run \`${again}\` again.`,
+          message: `${repair} Then run \`${again}\` again.${lift}`,
         }));
         return;
       }
@@ -4596,7 +4621,7 @@ function handleReview(args: string[]): void {
         fields["Artifact Fingerprint"] = snapshot.fingerprint;
         requestId = mintReviewRequestId();
         fields["Request Id"] = requestId;
-        if (lifted) {
+        if (lifted || planLifted) {
           fields["Person Asked"] = "true";
           const reply = personsGateReply(pd, invokingChat(pd), flags.stage as string);
           if (reply.words) fields["Person Reply"] = reply.words;

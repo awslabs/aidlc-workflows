@@ -57,7 +57,7 @@ import {
   CONSTRUCTION_POLICY_RECOVERY,
   swarmNeedsStageMajor,
   leftOutLine,
-  PERSON_ASKED_SKIP_REASON,
+  isPersonAskedSkipReason,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -291,7 +291,7 @@ import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
-import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
+import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
@@ -2053,7 +2053,7 @@ function handleRefreshUnitProgress(
       ) {
         refuseUnitProgress(`Invalid Unit Progress stage: ${slug}`);
       }
-      content = setCheckbox(content, slug, state);
+      content = setCheckbox(withStageProgressRow(content, slug), slug, state);
       if (
         state === "completed" &&
         (
@@ -2084,7 +2084,7 @@ function handleRefreshUnitProgress(
         const nextAfter = nextInScopeStage(next.slug, workflowScope, content);
         const timestamp = isoTimestamp();
         phaseBoundary = finalStage.phase !== next.phase;
-        content = setCheckbox(content, next.slug, "in-progress");
+        content = setCheckbox(withStageProgressRow(content, next.slug), next.slug, "in-progress");
         content = setField(content, "Current Stage", next.slug);
         content = setField(content, "Lifecycle Phase", next.phase.toUpperCase());
         content = setField(content, "Next Stage", nextAfter?.slug ?? "none");
@@ -2417,7 +2417,7 @@ function handleSyncUnitScopeStage(args: string[]): void {
     content = setField(content, "In Progress", slug);
     content = setField(content, "Active Agent", stage.lead_agent);
     if (getSlugState(content, slug) !== "completed") {
-      content = setCheckbox(content, slug, "in-progress");
+      content = setCheckbox(withStageProgressRow(content, slug), slug, "in-progress");
     }
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(pd, content);
@@ -3375,7 +3375,7 @@ function handleCheckbox(args: string[]): void {
   let content = readStateFile(pd);
 
   for (const { slug, state } of changes) {
-    content = setCheckbox(content, slug, state);
+    content = setCheckbox(withStageProgressRow(content, slug), slug, state);
   }
 
   // Sync Completed counter to actual [x] count
@@ -6243,7 +6243,7 @@ function handleAdvance(
   content = setCheckbox(content, completedSlug, "completed");
 
   // 2. Mark next-slug → [-]
-  content = setCheckbox(content, nextSlug, "in-progress");
+  content = setCheckbox(withStageProgressRow(content, nextSlug), nextSlug, "in-progress");
 
   // 3. Update fields
   const nextAfterNext = nextInScopeStage(nextSlug, scope, content);
@@ -6657,7 +6657,17 @@ function teamGateContext(
         `"${final?.slug ?? "unknown"}", not "${stage.slug}".`,
     );
   }
-  return { unit, scope: "unit-end", stages };
+  // The gate covers the stages this Unit ran: one skipped for it (UNIT_SKIPPED
+  // in the current attempt) owes no artifacts and no review, and Request
+  // Changes must not reopen it, as a construction checkpoint's gate leaves out
+  // a stage skipped for every Unit.
+  return {
+    unit,
+    scope: "unit-end",
+    stages: stages.filter(
+      (entry) => entry === final || !unitSkippedUnits(pd, entry.slug, undefined, content).has(unit),
+    ),
+  };
 }
 
 function applicableUnitProduces(
@@ -6722,7 +6732,13 @@ function verifyTeamUnitGateEvidence(
   personCall?: PersonApproval,
 ): void {
   for (const stage of context.stages) {
-    if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
+    // Only Code Generation, where the unit-end gate sits, can be skipped here:
+    // it stays in the gate's stages for pin's Gate Stages match, and a stage
+    // the Unit skipped owes no files, completion or review.
+    if (
+      applicableUnitProduces(pd, stage, context.unit).length === 0 ||
+      unitSkippedUnits(pd, stage.slug, undefined, content).has(context.unit)
+    ) continue;
     const missing = missingUnitArtifacts(pd, stage, context.unit);
     if (missing.length > 0) {
       const message =
@@ -8825,7 +8841,7 @@ function handleSkip(args: string[]): void {
     }
     // A Unit's step the person asked to skip spends what they typed for it:
     // their words were the skip. The agent's own skip leaves them kept.
-    if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+    if (isPersonAskedSkipReason(reason)) clearGateWords(pd);
     // A team's Unit is skipped for itself only: the stage's own checkbox is
     // derived from every team's Units, so it is never marked or routed here.
     if (teamOwned) {
@@ -8895,7 +8911,7 @@ function handleSkip(args: string[]): void {
   // work is a new project) or the person asked to skip it, so the gate
   // closes as skipped, not approved.
   const personDecided = parseStateStageSuffixes(content).get(slug) === "SKIP" ||
-    reason === PERSON_ASKED_SKIP_REASON;
+    isPersonAskedSkipReason(reason);
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
@@ -8964,7 +8980,7 @@ function handleSkip(args: string[]): void {
     : false;
 
   if (nextStage) {
-    content = setCheckbox(content, nextStage.slug, "in-progress");
+    content = setCheckbox(withStageProgressRow(content, nextStage.slug), nextStage.slug, "in-progress");
     const nextAfterNext = nextInScopeStage(nextStage.slug, scope, content);
     content = setField(content, "Current Stage", nextStage.slug);
     content = setField(content, "Lifecycle Phase", nextStage.phase.toUpperCase());
@@ -9061,7 +9077,7 @@ function handleSkip(args: string[]): void {
   }
   // The stage the person asked to skip spends what they typed for it, as a
   // Unit's step does.
-  if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+  if (isPersonAskedSkipReason(reason)) clearGateWords(pd);
 
   writeStateFile(pd, content);
   if (!nextStage) {

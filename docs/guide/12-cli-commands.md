@@ -644,7 +644,9 @@ concurrent claimant succeeds.
 this claim to `per-stage` or `unit-end`; when omitted, the workflow's affirmed
 Unit gate rhythm is used. Claims are refused until dependencies and any required
 walking skeleton are complete, and a checkout with a live claim routes only its
-stamped Unit.
+stamped Unit. While main is back at Units Generation changing the Unit plan, a
+claim still goes ahead, and its result says once that if the approved plan
+changes that Unit's own entry, pin asks for a rebase onto main.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 
@@ -707,6 +709,10 @@ to a candidate commit that preserves both claim and implementation history.
 AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` (written when a
 session starts in a fresh clone) does not count, here or at landing; it stays
 uncommitted, and any other change still stops both.
+A change to a record outside the Unit's `construction/<unit>/` folder (an Inception
+artifact such as `contract-summary.md`, say) is still published, but pin will refuse
+that candidate, so publish names the file and says to take it out of the branch,
+change it on main instead, and publish again.
 A claimed checkout keeps its own audit rows (sessions, turns, answers) in a
 local record under the intent record's `.aidlc-engine/audit/`, which AI-DLC's
 `.gitignore` keeps out of commits, and the claim's tracked shard takes only the
@@ -729,10 +735,16 @@ and audit-shard transport directly from that commit. It does not merge or create
 a worktree. The claim-bound team shard may carry only that Unit's attempt
 receipts; main-authority rows, another Unit's record/receipt paths, extra shards,
 and other workflow-record paths are refused. Pin also compares the candidate
-base's Unit DAG, Unit kinds, and active per-Unit stage columns with live main;
-a changed Construction contract requires rebase and republish. Product-source
-paths outside the Unit record tree are listed in the evidence for the human
+base's entry for the Unit (its kind and dependencies) and the active per-Unit
+stage columns with live main; a changed Construction contract requires rebase
+and republish. A Unit the plan adds, drops or changes elsewhere does not.
+Product-source paths outside the Unit record tree are listed in the evidence for the human
 merge gate.
+A rule kept in the claimed checkout (the space's `memory/project.md` or
+`memory/team.md`) is listed there too and lands with the Unit.
+
+Pin and land also refuse a Unit until every Unit it depends on has landed on
+main.
 
 ### `/aidlc unit gate <unit>` — Decide the pinned merge
 
@@ -768,10 +780,10 @@ neither.
 ```
 
 Landing first fetches the current integration branch and revalidates the
-approved evidence against the live Unit DAG, Unit kinds, and active per-Unit
-stage columns. Contract drift refuses before Git mutation and requires rebase,
-republish, re-pin, and a new merge gate. It then merges
-pinned content while retaining main-owned engine metadata, folds the Unit row,
+approved evidence against the Unit's live entry in the Unit DAG (its kind and
+dependencies) and the active per-Unit stage columns. Contract drift refuses
+before Git mutation and requires rebase, republish, re-pin, and a new merge
+gate. It then merges pinned content while retaining main-owned engine metadata, folds the Unit row,
 and finalizes the transported audit receipts. For crash recovery, run the
 idempotent steps separately:
 
@@ -2782,9 +2794,12 @@ aidlc engine workspace codekb --repo <repo>
 
 It prints the active space's deterministic
 `aidlc/spaces/<space>/codekb/<repo>/` path. Add `--json` for
-`{space, repo, dir}`. The query writes nothing, creates no directory, and emits
-no audit event; reverse-engineering stage prose invokes the same route so paths
-are never derived by hand.
+`{space, repo, dir, record, intent, stage, staged}`: also the active record, its
+intent's slug, the repo's Reverse Engineering staging folder and the files
+already in it (`record` and `intent` are `null` when no work is selected), every
+path relative to the project. The query writes nothing, creates no directory, and emits no audit
+event; reverse-engineering stage prose invokes the same route so paths are never
+derived by hand.
 
 ### `aidlc-utility codekb-snapshot` - bind a scan to source and store generations
 
@@ -3117,7 +3132,7 @@ A name is lowercase letters, digits, and single hyphens, starting with a letter,
 
 ### Creating a workflow with its own stage changes (`--skip` / `--add`)
 
-`next --scope <scope> --skip <slug,...> --add <slug,...> -- "<description>"` creates a workflow on `<scope>` with stages dropped or added for this piece of work only; the conductor passes them for a custom composed plan, and you can type them too. Typed with a request that names no plan, they are yours on the plan question: Go ahead creates the proposed plan with them, and so does another plan you pick from its list (a stage a plan already leaves out or runs is left off for that plan), and Tailor a plan hands them to the composer, so the plan it shows has them. Each slug must name a stage; an initialization stage, a stage on both lists, or a change the scope already makes (`--skip` of a stage it skips) is refused before anything is created. The work's state records `Plan: <name>` (`--plan-name <name>`, which the conductor passes with the composer's suggested name; lowercase letters, digits and hyphens; `tailored plan` without it), and no scope file is written. With `--save-as <name>`, which the conductor passes for **Approve and save as scope**, the creation also saves the plan as a scope with that name, the save [`scope save`](#aidlc-engine-scope-save-keep-a-plan-as-a-scope) does; a name that is taken or cannot name a scope is refused before anything is created. On a running workflow, `/aidlc --skip <slug,...>` and `/aidlc --add <slug,...>` change its remaining stages at once through `recompose`, with no approval question (you named the stages), and say in one line what changed and the way back. A scope or setting typed in the same command is applied first. A stage you name that has already started (in progress, being revised after you asked for changes, or waiting at its own approval question) is skipped where it stands, whatever kind of stage it is, and the work goes on, or ends when it was the last stage on the plan (the way back is to run it on its own, `/aidlc --stage <slug> --single`); an approval typed in the same message at an open gate is recorded too, so both happen once (at a question that named several stages, "skip Functional Design and approve the rest" approves the ones you did not skip, together). While Construction runs one Unit at a time, the step a Unit is on is skipped for that Unit only or for every Unit from here, as your words say (a skip that names no Unit is for every Unit from here); for one Unit the way back is `/aidlc --stage <slug> --unit <unit>`, and a Unit whose code step you skipped has no checkpoint. A later step of the Unit walk, or a stage after it such as Build and Test, comes off the plan for every Unit. A stage you add that the work has just passed over ("Approve, and add User Stories next" recorded as the approval first), while nothing after it has started, is put back and runs next, as when the add comes first. A flip the plan cannot take is refused with what you can do instead.
+`next --scope <scope> --skip <slug,...> --add <slug,...> -- "<description>"` creates a workflow on `<scope>` with stages dropped or added for this piece of work only; the conductor passes them for a custom composed plan, and you can type them too. Typed with a request that names no plan, they are yours on the plan question: Go ahead creates the proposed plan with them, and so does another plan you pick from its list (a stage a plan already leaves out or runs is left off for that plan), and Tailor a plan hands them to the composer, so the plan it shows has them. Each slug must name a stage; an initialization stage, a stage on both lists, or a change the scope already makes (`--skip` of a stage it skips) is refused before anything is created. The work's state records `Plan: <name>` (`--plan-name <name>`, which the conductor passes with the composer's suggested name; lowercase letters, digits and hyphens; `tailored plan` without it), and no scope file is written. With `--save-as <name>`, which the conductor passes for **Approve and save as scope**, the creation also saves the plan as a scope with that name, the save [`scope save`](#aidlc-engine-scope-save-keep-a-plan-as-a-scope) does; a name that is taken or cannot name a scope is refused before anything is created. On a running workflow, `/aidlc --skip <slug,...>` and `/aidlc --add <slug,...>` change its remaining stages at once through `recompose`, with no approval question (you named the stages), and say in one line what changed and the way back. A scope or setting typed in the same command is applied first. A stage you name that has already started (in progress, being revised after you asked for changes, or waiting at its own approval question) is skipped where it stands, whatever kind of stage it is, and the work goes on, or ends when it was the last stage on the plan (the way back is to run it on its own, `/aidlc --stage <slug> --single`); an approval typed in the same message at an open gate is recorded too, so both happen once (at a question that named several stages, "skip Functional Design and approve the rest" approves the ones you did not skip, together). While Construction runs one Unit at a time, the step a Unit is on is skipped for that Unit only or for every Unit from here, as your words say (a skip that names no Unit is for every Unit from here); for one Unit the way back is `/aidlc --stage <slug> --unit <unit>`, and a Unit whose code step you skipped has no checkpoint. A team's main checkout that works every Unit itself reads a skip the same way. A later step of the Unit walk, or a stage after it such as Build and Test, comes off the plan for every Unit. A stage you add that the work has just passed over ("Approve, and add User Stories next" recorded as the approval first), while nothing after it has started, is put back and runs next, as when the add comes first. A flip the plan cannot take is refused with what you can do instead.
 
 After a skip, the undo that one line names holds until the work moves past the earliest stage the change named (a stage it added: until that stage starts), or, with nothing after it on the plan, until the work is finished, and the line says which. While Construction runs one Unit at a time, a step of the Unit walk taken off the plan for every Unit holds until the first stage after the walk starts, since the work stays on the walk until every Unit is through; Reverse Engineering the work still owes holds until the first Construction stage starts. After that, a skipped stage runs on its own with `/aidlc --stage <slug> --single`. A skip typed at the open gate of the stage just before it names only that way, since approving that gate, which the same reply usually does, moves the work past it at once.
 

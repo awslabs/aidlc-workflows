@@ -26,6 +26,7 @@ import {
   rootIntegrationTarget,
 } from "./aidlc-distribution.ts";
 import { aidlcRootParts } from "./aidlc-includes.ts";
+import { KEPT_RULE_SCOPES, keptRuleFile } from "./aidlc-graph.ts";
 import {
   activeIntentUuid,
   activeSpace,
@@ -46,6 +47,7 @@ import {
   extractMarkdownSection,
   filterProducesByKind,
   getField,
+  loadStageGraph,
   humanPresenceGuardDisabled,
   idSuffix,
   invalidateLiveClaimPayloadCache,
@@ -104,6 +106,7 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
+import { beforePerUnitBlock } from "./aidlc-graph.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
@@ -211,7 +214,8 @@ export interface UnitClaimView {
 
 export interface UnitClaimOverview {
   claimable: string[];
-  claimed: Array<{ unit: string; owner: string; generation: number }>;
+  /** `blockedBy`, when present: Units a revised plan made this claimed Unit depend on that have not landed. */
+  claimed: Array<{ unit: string; owner: string; generation: number; blockedBy?: string[] }>;
   waiting: Array<{ unit: string; blockedBy: string[] }>;
   claims: Map<string, UnitClaimView>;
   warning?: string;
@@ -658,9 +662,10 @@ function dependencyBodyAtOid(projectDir: string, oid: string): string {
   return shown.stdout;
 }
 
-function completedUnits(state: string): Set<string> {
+// The Unit Progress table's header and its Unit rows, each as its cells.
+function unitProgressTable(state: string): { header: string[]; rows: string[][] } | null {
   const match = /^## Unit Progress\s*$/m.exec(state);
-  if (!match) return new Set();
+  if (!match) return null;
   const after = match.index + match[0].length;
   const next = /^## /m.exec(state.slice(after));
   const section = state.slice(after, next ? after + next.index : state.length);
@@ -669,20 +674,24 @@ function completedUnits(state: string): Set<string> {
     .filter((line) => line.startsWith("|"))
     .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
   const header = table.find((cells) => cells[0]?.toLowerCase() === "unit");
-  if (!header) return new Set();
+  if (!header) return null;
+  const rows = table.filter((cells) =>
+    cells.length === header.length && cells.length >= 4 &&
+    !(cells[0].toLowerCase() === "unit" && cells[1].toLowerCase() === "owner") &&
+    !cells.every((cell) => /^-+$/.test(cell))
+  );
+  return { header, rows };
+}
+
+function completedUnits(state: string): Set<string> {
+  const table = unitProgressTable(state);
+  if (!table) return new Set();
+  const { header } = table;
   const mergedIndex = header.findIndex(
     (cell) => cell.toLowerCase() === "merged",
   );
   const done = new Set<string>();
-  for (const cells of table) {
-    if (cells.length !== header.length || cells.length < 4) continue;
-    if (
-      (cells[0].toLowerCase() === "unit" &&
-        cells[1].toLowerCase() === "owner") ||
-      cells.every((cell) => /^-+$/.test(cell))
-    ) {
-      continue;
-    }
+  for (const cells of table.rows) {
     const workCells = cells.slice(
       2,
       mergedIndex >= 0 ? mergedIndex : undefined,
@@ -763,7 +772,7 @@ function buildOverview(
   warning?: string,
 ): UnitClaimOverview {
   const claimable: string[] = [];
-  const claimed: Array<{ unit: string; owner: string; generation: number }> = [];
+  const claimed: UnitClaimOverview["claimed"] = [];
   const waiting: Array<{ unit: string; blockedBy: string[] }> = [];
   for (const unit of opening.units) {
     const claim = claims.get(unit);
@@ -772,7 +781,15 @@ function buildOverview(
       continue;
     }
     if (claim?.status === "claimed") {
-      claimed.push({ unit, owner: claim.owner, generation: claim.generation });
+      // A claimed Unit lands after the Units it depends on; a revised plan can
+      // add one that has not landed (the walking skeleton is not one).
+      const blockedBy = (opening.blockers.get(unit) ?? []).filter((dep) => dep !== "walking-skeleton");
+      claimed.push({
+        unit,
+        owner: claim.owner,
+        generation: claim.generation,
+        ...(blockedBy.length > 0 ? { blockedBy } : {}),
+      });
       continue;
     }
     const blockedBy = opening.blockers.get(unit) ?? [];
@@ -1389,8 +1406,8 @@ export function claimAuditRules(
 
 // The record's shared files as `baseOid` has them: every audit shard but the
 // claim's own, and the stages' shared diaries (`<phase>/<stage>/memory.md`,
-// written at each stage start outside any Unit's folder). Pin refuses a change
-// to either (candidateBoundary), and `git add -A` commits both: a checkout
+// outside any Unit's folder). Pin refuses a change to either
+// (candidateBoundary), and `git add -A` commits both: a checkout
 // whose own shard was on main before the claim still recorded its pre-claim
 // rows there. They stay in the clone's history and working copy, as the
 // projected rows do.
@@ -1485,6 +1502,9 @@ function withClaimReviewRecords(
   return { tree, missing };
 }
 
+const OUTSIDE_UNIT_RECORD_TREE = "outside claimed Unit record tree";
+
+// `candidateOid` may be a tree: publish asks before it has a commit to ask about.
 function candidateBoundary(
   projectDir: string,
   baseOid: string,
@@ -1501,7 +1521,8 @@ function candidateBoundary(
       "diff",
       "--no-renames",
       "--name-status",
-      `${baseOid}..${candidateOid}`,
+      baseOid,
+      candidateOid,
       "--",
       auditRoot,
     ],
@@ -1543,7 +1564,7 @@ function candidateBoundary(
 
   const changedPaths = gitOutput(
     projectDir,
-    ["diff", "--no-renames", "--name-only", `${baseOid}..${candidateOid}`],
+    ["diff", "--no-renames", "--name-only", baseOid, candidateOid],
     "Cannot inspect pinned candidate diff",
   )
     .split(/\r?\n/)
@@ -1554,6 +1575,11 @@ function candidateBoundary(
   const unitRootKey = unitRoot.toLowerCase();
   const constructionRootKey = constructionRoot.toLowerCase();
   const recordPrefixKey = `${recordPrefix}/`.toLowerCase();
+  // A rule the person kept while working the Unit is written to the space's
+  // project.md or team.md, not the Unit's folder; it travels with the Unit as
+  // its source does, named at the merge gate.
+  const space = activeSpace(projectDir);
+  const keptRules = new Set(KEPT_RULE_SCOPES.map((scope) => keptRuleFile(space, scope)));
   const outsideUnitRecordPaths: string[] = [];
   for (const path of changedPaths) {
     if (isEngineMergeMetadata(projectDir, path, recordPrefix)) continue;
@@ -1569,12 +1595,16 @@ function candidateBoundary(
     }
     if (pathKey.startsWith(unitRootKey)) continue;
     if (changedAudit.includes(path)) continue;
+    if (keptRules.has(path)) {
+      outsideUnitRecordPaths.push(path);
+      continue;
+    }
     if (
       pathKey.startsWith(constructionRootKey) ||
       pathKey.startsWith(recordPrefixKey) ||
       pathKey.startsWith("aidlc/")
     ) {
-      violations.push(`${path} (outside claimed Unit record tree)`);
+      violations.push(`${path} (${OUTSIDE_UNIT_RECORD_TREE})`);
       continue;
     }
     outsideUnitRecordPaths.push(path);
@@ -1633,19 +1663,23 @@ function candidateEvidence(
     true,
   );
   const baseDag = parseBoltDag(dependencyBodyAtOid(projectDir, candidateBaseOid));
-  const dag = parseBoltDag(dependencyBodyAtOid(projectDir, liveIntegrationOid));
+  const dagBody = dependencyBodyAtOid(projectDir, liveIntegrationOid);
+  const dag = parseBoltDag(dagBody);
   if (!baseDag.ok) {
     fail(`Pinned candidate base Unit DAG is ${baseDag.reason}: ${baseDag.detail}.`);
   }
   if (!dag.ok) {
     fail(`Pinned integration Unit DAG is ${dag.reason}: ${dag.detail}.`);
   }
+  // The contract a candidate is built against is its own Unit's entry (kind,
+  // dependencies) and the per-Unit stage columns: a Unit the plan adds, drops or
+  // changes elsewhere does not make this Unit's work stale.
   const contract = (
     units: typeof dag.units,
     stageColumns: string[],
   ): string => JSON.stringify({
     stage_columns: stageColumns,
-    units: units.map((entry) => ({
+    unit: units.filter((entry) => entry.name === claim.unit).map((entry) => ({
       name: entry.name,
       kind: entry.kind ?? null,
       depends_on: [...entry.depends_on].sort(),
@@ -1659,6 +1693,18 @@ function candidateEvidence(
   }
   const unit = dag.units.find((entry) => entry.name === claim.unit);
   if (!unit) fail(`Pinned integration Unit DAG has no Unit "${claim.unit}".`);
+  // A Unit lands after every Unit it depends on, read by the claim's own
+  // opening rule. A revised plan can give a Unit already claimed a dependency
+  // that has not landed yet (the walking skeleton is not one).
+  const notLanded = (openingStatusFrom(integrationState, dagBody).blockers.get(claim.unit) ?? [])
+    .filter((dep) => dep !== "walking-skeleton").sort();
+  if (notLanded.length > 0) {
+    const names = notLanded.map((dep) => `"${dep}"`).join(" and ");
+    fail(
+      `Unit "${claim.unit}" now depends on ${names}, which ${notLanded.length === 1 ? "has" : "have"} not landed on ` +
+        `main yet; it lands after ${notLanded.length === 1 ? "it does" : "they do"}. Nothing was pinned or landed.`,
+    );
+  }
   const unitKind = unit.kind ?? null;
   const forcedMergeJournals = gitOutput(
     projectDir,
@@ -1718,12 +1764,31 @@ function candidateEvidence(
     return (stage?.produces ?? []).length > 0 &&
       filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
   }));
+  // The clone stamped each receipt with the run floor it read from the whole
+  // audit record (the workflow's own rows plus its own). Read the candidate's
+  // receipts against the same floor: main's rows that are not Unit attempt
+  // rows, as the commit this evidence is read against holds them, with the
+  // transported rows on top. Transported rows alone hold no WORKFLOW_STARTED,
+  // so every real receipt would miss the floor; a file in this checkout that
+  // was never committed does not move it.
+  const mainShards = gitOutput(
+    projectDir,
+    ["ls-tree", "--name-only", liveIntegrationOid, "--", `${recordPrefix}/audit/`],
+    "Cannot list the integration audit shards",
+  )
+    .split(/\r?\n/)
+    .filter((path) => isActiveIntentAuditPath(path, recordPrefix));
+  const floorRows = candidateAuditEvents(projectDir, liveIntegrationOid, mainShards).filter((row) =>
+    !TRANSPORTED_ATTEMPT_EVENTS.has(row.event) &&
+    !TRANSPORTED_DATA_EVENTS.has(row.event)
+  );
+  const snapshotRows = [...floorRows, ...authorityRows];
   const snapshots = new Map(stages.map((stage) => [
     stage,
     unitLifecycleSnapshot(
       projectDir,
       stage,
-      authorityRows,
+      snapshotRows,
       integrationState,
       {
         artifactFingerprint: (stageNode, unitName) =>
@@ -1992,6 +2057,26 @@ function publishUnit(args: string[], projectDir?: string): void {
   const missingReviews = reviews.missing.length > 0
     ? { review_records_missing: reviews.missing }
     : {};
+  // Pin refuses any other record outside the Unit's tree, so publish names
+  // them now, beside the review records, rather than leaving the team to learn
+  // it at pin; the change is theirs to take out, so publish still publishes.
+  const outsideSuffix = ` (${OUTSIDE_UNIT_RECORD_TREE})`;
+  const outside = candidateBoundary(
+    pd, publicationBaseOid, headTree, recordPrefix, unit, current.generation, auditShard,
+  ).violations.filter((violation) => violation.endsWith(outsideSuffix))
+    .map((violation) => violation.slice(0, -outsideSuffix.length));
+  const outsideTree = outside.length > 0
+    ? {
+      records_outside_unit_tree: outside,
+      records_outside_unit_tree_note:
+        "Pin will refuse this candidate: a claimed Unit lands only " +
+        `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
+        "such as contract-summary.md, or a stage-level file) is changed on main. Take these out of " +
+        "this branch (git rm a file main does not have, or " +
+        `git checkout ${publicationIntegrationRef.replace(/^refs\/(remotes|heads)\//, "")} -- <path> for one it does), commit, and ` +
+        "publish again.",
+    }
+    : {};
   if (
     current.payload.candidate_tree_oid === headTree &&
     current.payload.candidate_head_oid === headOid &&
@@ -2007,6 +2092,7 @@ function publishUnit(args: string[], projectDir?: string): void {
       candidate_oid: current.oid,
       generation: current.generation,
       ...missingReviews,
+      ...outsideTree,
     }));
     return;
   }
@@ -2059,6 +2145,7 @@ function publishUnit(args: string[], projectDir?: string): void {
     candidate_head_oid: headOid,
     generation: published.generation,
     ...missingReviews,
+    ...outsideTree,
   }));
 }
 
@@ -3748,6 +3835,86 @@ function validateClaimRefUnit(intentId8: string, unit: string): void {
   }
 }
 
+// A team's revised Unit plan (Units Generation's units block) against what the
+// team already did. Every name must be able to be a claim ref, and with the
+// walking skeleton on the built skeleton stays the Unit built first: a plan that
+// breaks either is repaired. A Unit that landed or is claimed keeps its name,
+// since its receipts, row and claim are read by name; dropping or renaming one is
+// the person's call, so their own request (personAsked) lifts that check, and
+// `lifted` says it did. The first problem as the step that fixes the plan
+// (`liftable` when the person's request would lift it); message null when the
+// plan holds.
+export function unitPlanRefusal(
+  projectDir: string,
+  personAsked = false,
+): { message: string | null; liftable: boolean; lifted: boolean } {
+  let lifted = false;
+  const refuse = (message: string, liftable = false) => ({ message, liftable, lifted });
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (!isTeamUnitOwnership(state)) return { message: null, liftable: false, lifted };
+  const parsed = parseBoltDag(readFileSync(unitDependencyPath(pd), "utf-8"));
+  if (!parsed.ok) return { message: null, liftable: false, lifted };
+  const planned = new Set(parsed.units.map((edge) => edge.name));
+  const identity = activeIdentity(pd);
+  for (const unit of planned) {
+    try {
+      validateClaimRefUnit(identity.intentId8, unit);
+    } catch (e) {
+      return refuse(`${errorMessage(e)} Rename it in the units block.`);
+    }
+  }
+  const completed = completedUnits(state);
+  const leftOut = (unitProgressTable(state)?.rows.map((cells) => cells[0]) ?? [])
+    .filter((name) => !planned.has(name)).sort();
+  for (const unit of leftOut) {
+    if (!completed.has(unit)) continue;
+    if (personAsked) {
+      lifted = true;
+      continue;
+    }
+    return refuse(
+      `Unit "${unit}" has landed on main, and the revised plan leaves it out. A landed Unit's work, row and ` +
+        `receipts are read by its name, so keep "${unit}" in the units block under that name.`,
+      true,
+    );
+  }
+  // The claims are read only for a Unit the plan leaves out: a plan that keeps
+  // every Unit asks nothing of the claim registry.
+  let claims: Map<string, UnitClaimView> = new Map();
+  if (leftOut.length > 0) {
+    try {
+      claims = allClaims(pd, repositoryRemote(pd), identity.intentId8, leftOut);
+    } catch {
+      // Claims that cannot be read here are read again at the next claim.
+    }
+  }
+  for (const [unit, claim] of [...claims].sort(([a], [b]) => a.localeCompare(b))) {
+    if (claim.status !== "claimed") continue;
+    if (personAsked) {
+      lifted = true;
+      continue;
+    }
+    return refuse(
+      `Unit "${unit}" is claimed by ${claim.owner} (attempt ${claim.generation}), and the revised plan leaves ` +
+        `it out. Keep "${unit}" in the units block under that name while it is claimed, or release the claim ` +
+        `first from main, which ends ${claim.owner}'s claim on it: ` +
+        `\`${aidlcInvocation()} unit release ${quoteCommandArgument(unit)}\`.`,
+      true,
+    );
+  }
+  const roots = parsed.batches[0] ?? [];
+  const built = roots.find((name) => completed.has(name));
+  if (teamSkeletonOn(state) && built !== undefined && roots[0] !== built) {
+    return refuse(
+      `Unit "${roots[0]}" depends on nothing and its name sorts before "${built}", so it would take over as the ` +
+        `walking skeleton, which "${built}" already is and has built. Add "${built}" to "${roots[0]}"'s depends_on: ` +
+        "every Unit waits on the walking skeleton anyway.",
+    );
+  }
+  return { message: null, liftable: false, lifted };
+}
+
 function claimOwnerLabel(projectDir: string, supplied?: string): string {
   const owner =
     supplied?.trim() ||
@@ -3966,6 +4133,16 @@ function claimUnit(args: string[], projectDir?: string): void {
     clearUnitScopeStamp(pd);
   }
   const integration = fetchIntegration(pd);
+  // Main back before the per-Unit block is changing the Unit plan: the claim
+  // goes ahead on the plan as it stands there, and its result says the risk once.
+  const integrationStage = getField(stateAtOid(pd, integration.oid), "Current Stage")?.trim() ?? "";
+  const graph = loadStageGraph();
+  const planWarning = beforePerUnitBlock(graph, integrationStage)
+    ? `Main is changing the Unit plan (${graph.find((node) => node.slug === integrationStage)?.name ?? integrationStage} ` +
+      `is open again on ${integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch}), ` +
+      `so "${unit}" is claimed on the plan as it stands there: if the approved plan changes "${unit}"'s own entry, ` +
+      "pin asks this checkout to rebase onto main and publish again."
+    : null;
   const opening = openingStatus(pd, integration.oid);
   if (!opening.units.includes(unit)) fail(`Unit "${unit}" is not in the authoritative Unit DAG.`);
   if (opening.completed.has(unit)) {
@@ -4063,7 +4240,7 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
-  console.log(JSON.stringify({ claimed: true, ...stamp }));
+  console.log(JSON.stringify({ claimed: true, ...stamp, ...(planWarning ? { warning: planWarning } : {}) }));
 }
 
 // A checkout whose own shard main already holds claims into a shard of the

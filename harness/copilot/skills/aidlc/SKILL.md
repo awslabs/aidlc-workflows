@@ -13,6 +13,7 @@ description: >
   --help, plus the intent and space verbs.
   Or describe what you want to build and AI-DLC proposes a plan for it.
 allowed-tools:
+  - shell(.aidlc/bin/aidlc-engine)
   - write(aidlc/spaces/*/intents/**)
 ---
 
