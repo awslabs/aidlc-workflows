@@ -1704,6 +1704,29 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
+export function gateStagesFromBlock(block: string): string[] {
+  const explicit = auditBlockField(block, "Gate Stages");
+  if (explicit) {
+    return explicit
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+  }
+  const stage = auditBlockField(block, "Stage");
+  return stage ? [stage] : [];
+}
+
+// A unit-end gate's stages the Unit skipped. Gate Stages keeps a skipped final
+// stage, where the gate sits, so the gate's own rows and pin still find it.
+export const GATE_SKIPPED_STAGES_FIELD = "Skipped Stages";
+
+// The stages a gate row's Request Changes starts again: never one the Unit
+// skipped, so the person's skip stands.
+export function gateStagesReopened(block: string): string[] {
+  const skipped = (auditBlockField(block, GATE_SKIPPED_STAGES_FIELD) ?? "").split(",").map((value) => value.trim());
+  return gateStagesFromBlock(block).filter((stage) => !skipped.includes(stage));
+}
+
 // This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
 // clone identity (see cloneIdentity). The clone-id token (not the PID) is the
 // cross-clone disambiguator: stable across every process in a clone (so the

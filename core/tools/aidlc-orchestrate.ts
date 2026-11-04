@@ -249,6 +249,7 @@ import {
   changeAlreadyAccepted,
   reviewerGateGuardDisabled,
   getField,
+  gateStagesReopened,
   GUARD_RECOVERY_ASK_TYPE,
   PLAN_APPROVAL_ASK_TYPE,
   type GuardRefusal,
@@ -16365,8 +16366,7 @@ function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): 
     if (auditBlockField(row.block, "Unit") !== unit) return false;
     if (row.event === "UNIT_STARTED") return auditBlockField(row.block, "Stage") === slug;
     if (row.event !== "GATE_REJECTED") return false;
-    return (auditBlockField(row.block, "Gate Stages") ?? auditBlockField(row.block, "Stage") ?? "")
-      .split(",").map((entry) => entry.trim()).includes(slug);
+    return gateStagesReopened(row.block).includes(slug);
   };
   const rows = sortAttemptEvents(readAuditShardEvents(projectDir).filter((row) => isAnswer(row) || spends(row)));
   let chosen = -1;
