@@ -27899,7 +27899,7 @@ export function claudeSettingsHookFiles(projectDir: string, settings: unknown): 
 }
 
 // Missing, there and not valid JSON, or valid and running none of AI-DLC's
-// hooks (read as doctor reads it); null for a file that runs them, whatever
+// hooks (read through doctor's walk); null for a file that runs them, whatever
 // else switches them off, and for one that cannot be opened for another
 // reason, which the lines would not describe. Never throws: its callers run it
 // outside a try. Only Claude Code declares a registration file.
@@ -27916,7 +27916,8 @@ function registrationFault(project: string, path: string): "missing" | "invalid"
   } catch {
     return "invalid";
   }
-  return claudeSettingsHookFiles(project, parsed).length === 0 ? "unwired" : null;
+  // AI-DLC's status line is not a hook and writes no heartbeat.
+  return claudeSettingsHookFiles(project, parsed).every((file) => file === "aidlc-statusline.ts") ? "unwired" : null;
 }
 
 /**

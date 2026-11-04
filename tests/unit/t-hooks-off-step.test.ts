@@ -1190,8 +1190,21 @@ describe("claude: a .claude/settings.json that is missing, not valid JSON or wit
     expect(next(proj, h).message).toBe(`${show(UNWIRED)}."`);
   });
 
+  // AI-DLC's status line, which the person can keep in settings.local.json, is
+  // not a hook: it writes no heartbeat and brings none of them back.
+  test("registers none of AI-DLC's hooks beside AI-DLC's status line: the same config line", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const shipped = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "harness.json"), "utf-8")).statusLine;
+    expect(shipped?.command).toBeTruthy();
+    writeFileSync(join(proj, ".claude", "settings.local.json"), JSON.stringify({ statusLine: shipped }), "utf-8");
+    writeFileSync(settings(proj), `${JSON.stringify({ permissions: {} }, null, 2)}\n`, "utf-8");
+    expect(next(proj, h).message).toBe(`${show(UNWIRED)}."`);
+  });
+
   // disableAllHooks set to true by the person or their administrator, with
-  // AI-DLC's hooks registered, is the tool's own step, as before.
+  // AI-DLC's hooks registered, is the tool's own step, as before: the stop
+  // reads the registration, never the switch, wherever the switch is set.
   for (const where of ["settings.local.json", "settings.json", "managed settings"]) {
     test(`hooks registered and switched off in ${where} keep the tool's step`, () => {
       const proj = installed(h);
@@ -1218,6 +1231,11 @@ describe("claude: a .claude/settings.json that is missing, not valid JSON or wit
     ["missing", MISSING, (proj: string) => unlinkSync(settings(proj))],
     ["not valid JSON", INVALID, (proj: string) => writeFileSync(settings(proj), '{ "hooks": { broken\n', "utf-8")],
     ["without AI-DLC's hooks", UNWIRED, (proj: string) => writeFileSync(settings(proj), "{}\n", "utf-8")],
+    ["without AI-DLC's hooks beside AI-DLC's status line", UNWIRED, (proj: string) => {
+      const shipped = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "harness.json"), "utf-8")).statusLine;
+      writeFileSync(join(proj, ".claude", "settings.local.json"), JSON.stringify({ statusLine: shipped }), "utf-8");
+      writeFileSync(settings(proj), "{}\n", "utf-8");
+    }],
   ] as const) {
     test(`doctor: a settings.json ${fault} gets its repair in the hooks rows`, () => {
       const proj = installed(h);
