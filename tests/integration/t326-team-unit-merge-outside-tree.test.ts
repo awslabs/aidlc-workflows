@@ -15,9 +15,10 @@ import {
 } from "../harness/team-unit-merge.ts";
 
 // Pin refuses a candidate that changes a record outside the claimed Unit's
-// construction/<unit>/ tree. Publish says so first, once it has put back the
-// shared records AI-DLC itself writes (the stages' diaries, the other teams'
-// audit shards), which are not a change the team made.
+// construction/<unit>/ tree. Publish still publishes it and names those records
+// with the way out, once it has put back the shared records AI-DLC itself writes
+// (the stages' diaries, the other teams' audit shards), which are not a change
+// the team made.
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -31,7 +32,7 @@ function claimTip(checkout: string): string {
 }
 
 describe("t326 pinned team Unit merge: a record outside the Unit's tree", () => {
-  test("publish refuses an Inception artifact the Unit changed, and publishes once it is taken out", () => {
+  test("publish names an Inception artifact the Unit changed, and pin takes the Unit once it is taken out", () => {
     const { seed, remote } = makeSeed();
     const candidate = prepareCandidate(remote, "alpha", "alpha-team");
     const published = claimTip(candidate.checkout);
@@ -46,23 +47,30 @@ describe("t326 pinned team Unit merge: a record outside the Unit's tree", () => 
     git(candidate.checkout, ["add", "-A"]);
     git(candidate.checkout, ["commit", "-m", "alpha edits the contract summary"]);
 
-    const refused = runMergeTool(UNIT, ["publish", "alpha"], candidate.checkout);
-    expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("inception/contract-design/contract-summary.md");
-    expect(refused.out).toContain("outside claimed Unit record tree");
-    expect(refused.out).toContain("is changed on main");
-    expect(claimTip(candidate.checkout)).toBe(published);
+    const warned = runMergeTool(UNIT, ["publish", "alpha"], candidate.checkout);
+    expect(warned.status, warned.out).toBe(0);
+    const reply = JSON.parse(warned.stdout) as PublishReply;
+    expect(reply.published).toBe(true);
+    expect(reply.records_outside_unit_tree).toEqual([
+      summary.slice(candidate.checkout.length + 1).replaceAll("\\", "/"),
+    ]);
+    expect(reply.records_outside_unit_tree_note).toContain("is changed on main");
+    expect(reply.records_outside_unit_tree_note).toContain("publish again");
+    expect(claimTip(candidate.checkout)).not.toBe(published);
+    const refusedPin = runMergeTool(UNIT, ["pin", "alpha"], seed);
+    expect(refusedPin.status).not.toBe(0);
+    expect(refusedPin.out).toContain("outside claimed Unit record tree");
 
     git(candidate.checkout, ["rm", "-q", "--", summary]);
     git(candidate.checkout, ["commit", "-m", "leave the contract summary to main"]);
     const republished = runMergeTool(UNIT, ["publish", "alpha"], candidate.checkout);
     expect(republished.status, republished.out).toBe(0);
-    expect(claimTip(candidate.checkout)).not.toBe(published);
+    expect((JSON.parse(republished.stdout) as PublishReply).records_outside_unit_tree).toBeUndefined();
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
   });
 
-  test("publish does not refuse a shared diary or audit shard it puts back as main has it", () => {
+  test("publish names no shared diary or audit shard it puts back as main has it", () => {
     const { seed, remote } = makeSeed();
     const candidate = prepareCandidate(remote, "alpha", "alpha-team");
     const record = seededRecordDir(candidate.checkout);
@@ -77,10 +85,17 @@ describe("t326 pinned team Unit merge: a record outside the Unit's tree", () => 
 
     const republished = runMergeTool(UNIT, ["publish", "alpha"], candidate.checkout);
     expect(republished.status, republished.out).toBe(0);
+    expect((JSON.parse(republished.stdout) as PublishReply).records_outside_unit_tree).toBeUndefined();
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
   });
 });
+
+type PublishReply = {
+  published: boolean;
+  records_outside_unit_tree?: string[];
+  records_outside_unit_tree_note?: string;
+};
 
 function relativeAuditDir(checkout: string): string {
   return seededAuditDir(checkout).slice(checkout.length + 1).replaceAll("\\", "/");

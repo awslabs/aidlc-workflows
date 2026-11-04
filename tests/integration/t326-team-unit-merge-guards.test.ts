@@ -281,13 +281,9 @@ describe("t326 pinned team Unit merge", () => {
       .split(/\r?\n/)
       .find((path) => path.toLowerCase() === "aidlc/audit/forged.md");
     expect(trackedMixedCasePath).toBeTruthy();
-    // Publish refuses it first, saying what pin would refuse and what to do.
-    const refusedPublish = runMergeTool(UNIT, ["publish", "alpha"], pinCandidate.checkout);
-    expect(refusedPublish.status).not.toBe(0);
-    expect(refusedPublish.out).toContain("construction/beta/functional-design/forged.md");
-    expect(refusedPublish.out).toContain("so it was not published");
-    // Pin enforces the boundary on its own, for a candidate pushed around that check.
-    pushUnprojectedCandidate(pinCandidate.checkout, "alpha");
+    expect(
+      runMergeTool(UNIT, ["publish", "alpha"], pinCandidate.checkout).status,
+    ).toBe(0);
     const refusedPin = runMergeTool(UNIT, ["pin", "alpha"], pinFixture.seed);
     expect(refusedPin.status).not.toBe(0);
     expect(refusedPin.out).toContain(
@@ -323,12 +319,13 @@ describe("t326 pinned team Unit merge", () => {
     writeFileSync(laterForeignPath, "# later forged beta record\n");
     git(landCandidate.checkout, ["add", "-A"]);
     git(landCandidate.checkout, ["commit", "-m", "publish foreign Unit"]);
-    expect(runMergeTool(UNIT, ["publish", "alpha"], landCandidate.checkout).status).not.toBe(0);
-    pushUnprojectedCandidate(landCandidate.checkout, "alpha");
-    const claimRef = (JSON.parse(
-      readFileSync(join(landCandidate.checkout, "aidlc", ".aidlc-unit-scope.json"), "utf-8"),
-    ) as { claim_ref: string }).claim_ref;
-    const badOid = git(landCandidate.checkout, ["ls-remote", "origin", claimRef]).split(/\s+/)[0] ?? "";
+    const republished = runMergeTool(
+      UNIT,
+      ["publish", "alpha"],
+      landCandidate.checkout,
+    );
+    expect(republished.status, republished.out).toBe(0);
+    const badOid = JSON.parse(republished.stdout).candidate_oid as string;
     const badPayload = JSON.parse(
       git(landCandidate.checkout, [
         "show",

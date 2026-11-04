@@ -239,8 +239,9 @@ receipts name (AI-DLC keeps those out of commits), and every other audit shard
 and the stages' shared diaries as main has them; what is left out stays in the
 checkout's own history, and publish says how many rows. A change to any other
 record outside the Unit's `construction/<unit>/` folder (an Inception artifact
-such as `contract-summary.md`) is not published: publish names the file, and
-the change is made on main.
+such as `contract-summary.md`) is published too, but pin will refuse it, so
+publish names the file: take it out of the branch, make the change on main,
+and publish again.
 
 ---
 
