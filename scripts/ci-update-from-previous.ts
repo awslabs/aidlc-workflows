@@ -12,11 +12,12 @@
 // next: each project's existing hooks run, `aidlc config --yes` refreshes the
 // project, the hooks run again, and doctor passes. Hooks run through the shell
 // Claude Code uses (Git Bash on Windows, sh elsewhere); each must exit 0 and
-// show in the hook phase trace that the installed engine ran it. On Windows the
-// Git Bash launcher must exist once the first command after the update has
-// run. Last, in a new chat the person types `/aidlc --resume` and approves:
-// the same gate comes back, nothing they answered is asked again, the approval
-// is theirs, the next stage starts, and no file of theirs changed.
+// show in the hook phase trace that the installed engine ran it. On Windows Git
+// Bash must run a bare `aidlc version` and get the candidate once the first
+// command after the update has run. Last, in a new chat the person types
+// `/aidlc --resume` and approves: the same gate comes back, nothing they
+// answered is asked again, the approval is theirs, the next stage starts, and
+// no file of theirs changed.
 //
 // With `--channel copy` the person has no `aidlc` command: each project is a
 // copy of `runtime/<harness>/` from the previous release's
@@ -248,6 +249,23 @@ function gitBash(): string {
   throw new Error("Git for Windows is not installed: Claude Code runs hooks through its Git Bash");
 }
 
+/**
+ * Why the shell Claude Code runs hooks in cannot run a bare `aidlc` from the
+ * updated install, or null when `aidlc version` there reports the target. On
+ * Windows Git Bash finds bin\aidlc.exe, or the extensionless launcher a release
+ * from before it left; which one is there is the lifecycle's to say
+ * (windowsGitBashLauncherState), so this runs the command, not a file check.
+ */
+export function bareAidlcProblem(shell: string, env: NodeJS.ProcessEnv, target: string, cwd: string, timeout: number): string | null {
+  const r = spawnSync(shell, ["-c", "aidlc version"], { cwd, env, encoding: "utf-8", timeout });
+  const output = `${r.stdout ?? ""}${r.stderr ?? ""}${r.error ? `\n${r.error.message}` : ""}`.trim();
+  if (r.status === 0 && output.includes(target)) return null;
+  const said = output.split("\n").slice(-3).join(" | ");
+  return r.status === 0
+    ? `a bare aidlc in Git Bash reports "${said}" after the update, not ${target}, so Claude Code's hooks run another release`
+    : `Git Bash cannot run a bare aidlc after the update and its first command (exited ${r.status}: ${said}), so Claude Code's hooks fail`;
+}
+
 async function main(argv: string[]): Promise<number> {
   const option = (flag: string) => { const at = argv.indexOf(flag); return at >= 0 ? argv[at + 1] : undefined; };
   const previous = option("--previous")?.replace(/^v/, "");
@@ -464,9 +482,8 @@ async function check(previous: string, candidate: string, target: string, root: 
     }
     const after = aidlc("version after the update", ["version"]);
     if (!after.output.includes(target)) fail(`after the update aidlc reports "${after.output}", not ${target}`);
-    if (WINDOWS && !existsSync(join(bin, "aidlc"))) {
-      fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
-    }
+    const bare = WINDOWS ? bareAidlcProblem(shell, env, target, root, within(HOOK_TIMEOUT_MS)) : null;
+    if (bare) fail(bare);
   }
 
   // 5. What the person does next, per project.

@@ -4,11 +4,15 @@
 // the engine ran them. It passes each release's config the Kiro names that
 // release reads.
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
+import { NATIVE_COMPILE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
+  bareAidlcProblem,
   checksumMatches,
   childEnvironment,
   copyRuntimeAsset,
@@ -171,6 +175,47 @@ describe("ci-update-from-previous helpers", () => {
     expect(hookInput("kiro-ide", "aidlc engine adapter kiro-ide after-shell")).toBe("{}");
     expect(hookInput("kiro", "aidlc engine adapter kiro guard-tool-call")).toBe("{}");
     expect(hookInput("claude", "aidlc engine hook review-freeze")).toBe("{}");
+  });
+
+  // On Windows the first command after an update writes bin\aidlc.exe and
+  // removes the extensionless Git Bash launcher on purpose, so the check runs
+  // the bare aidlc the hooks run instead of looking for a file.
+  describe("the hooks' shell runs a bare aidlc that reports the candidate", () => {
+    const target = "9.9.9-update-check";
+    const shell = () => (process.platform === "win32" ? gitBashPath() : "/bin/sh");
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+    // PATH holds only the bin folder, so nothing installed on this machine answers.
+    const bareIn = (bin: string) =>
+      bareAidlcProblem(shell(), { ...process.env, AIDLC_BIN_DIR: bin, [pathKey]: bin }, target, bin, NATIVE_STARTUP_TIMEOUT_MS);
+    const launcher = (bin: string, says: string) => {
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "aidlc"), `#!/bin/sh\necho "aidlc ${says}"\n`, { mode: 0o755 });
+      return bin;
+    };
+    const skip = process.platform === "win32" && gitBashSkipReason() !== null;
+
+    test.skipIf(skip)("a launcher that runs and reports the candidate passes; one that reports another release or nothing there fails", () => {
+      const root = scratch();
+      expect(bareIn(launcher(join(root, "current"), target))).toBeNull();
+      expect(bareIn(launcher(join(root, "stale"), "1.0.0"))).toContain("1.0.0");
+      const none = join(root, "none");
+      mkdirSync(none);
+      expect(bareIn(none)).not.toBeNull();
+    });
+
+    test.skipIf(process.platform !== "win32" || skip)("on Windows bin\\aidlc.exe alone is what Git Bash runs", () => {
+      const root = scratch();
+      const entry = join(root, "fake-aidlc.ts");
+      writeFileSync(entry, `console.log(process.argv.includes("version") ? "aidlc ${target}" : "");\n`);
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      const compiled = spawnSync(process.execPath, ["build", entry, "--compile", "--outfile", join(bin, "aidlc.exe")], {
+        encoding: "utf-8",
+        timeout: NATIVE_COMPILE_TIMEOUT_MS,
+      });
+      expect(compiled.status, `${compiled.stdout}\n${compiled.stderr}`).toBe(0);
+      expect(bareIn(bin)).toBeNull();
+    }, NATIVE_COMPILE_TIMEOUT_MS + NATIVE_STARTUP_TIMEOUT_MS);
   });
 
   // A copied project runs its own tool, so its wiring names `bun <dir>/tools/aidlc.ts`,
