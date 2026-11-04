@@ -186,6 +186,7 @@ import {
   runningWorkflows,
   workflowDisplayName,
   readActiveIntentCursor,
+  activeIntentUuid,
   activeSpace,
   authoritativeProjectDescription,
   assertNoSymlinkInChainOrThrow,
@@ -10597,7 +10598,8 @@ function onboardDocumentInput(
   // only a refusal or an empty result proves nothing names the copy.
   let mayHaveCommitted = false;
   try {
-    const result = kb.onboard(projectRoot, space, target, new Date().toISOString());
+    // A document named during a piece of work is filed for that work; before any work exists it is the space's.
+    const result = kb.onboard(projectRoot, space, target, new Date().toISOString(), activeIntentUuid(projectRoot, space) ?? undefined);
     if (result.refused) failure = result.refused.reason;
     else outcome = result.indexed[0];
   } catch (error) {
