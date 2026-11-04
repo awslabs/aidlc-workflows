@@ -81,6 +81,7 @@ import { installedExecutablePath } from "./aidlc-install-paths.ts";
 import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } from "./aidlc-executable-path.ts";
 import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
+import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
 import {
   HARNESS_PRODUCT_NAMES,
   sessionSetsAgentModels,
@@ -4078,6 +4079,45 @@ export function workspaceSiblingDoctorCheck(
       };
 }
 
+// The folders outside the harness dir where a harness keeps the skills and
+// agents the engine generates and a plugin composes: Codex's `.agents/`, and
+// Copilot's `.github/` (its skills and agent files both live there).
+export const SHARED_SURFACE_DIRS = [".agents", ".github"] as const;
+
+// The skills folders a refresh looks in for the /aidlc skill, the harness's
+// own first.
+export function aidlcSkillsDirs(harnessDir: string): string[] {
+  return [`${harnessDir}/skills`, ...SHARED_SURFACE_DIRS.map((dir) => `${dir}/skills`)];
+}
+
+// Written by the engine from project state, so never recorded as shipped: a
+// refresh writes the staged copy over whatever is there, and never reports it
+// as a local change. Kiro IDE's steering file carries the project's memory text
+// (aidlc-includes.ts kiroIdeSteering).
+export function unbaselinedGenerated(harnessDir: string): string[] {
+  return [
+    ...["harness.json", "stage-graph.json", "scope-grid.json"].map((name) => `${harnessDir}/tools/data/${name}`),
+    ...(harnessDir === ".kiro" ? [KIRO_IDE_STEERING] : []),
+  ];
+}
+
+// The /aidlc skill: in the first skills folder that holds it. Config asks of
+// the staged tree; doctor asks of this install's record, so another harness's
+// skill folder in the project does not move its pick.
+export function aidlcSkillRel(harnessDir: string, present: (rel: string) => boolean): string {
+  const dirs = aidlcSkillsDirs(harnessDir);
+  return `${dirs.find((dir) => present(`${dir}/aidlc/SKILL.md`)) ?? dirs[0]}/aidlc/SKILL.md`;
+}
+
+// The scope and stage tables beside that skill, when they are there. They are
+// recorded as shipped, and a refresh renders them again from the compiled
+// graph, a plugin's rows included, so it stops on them only when they are not
+// a regular file.
+export function refreshedTablesRel(harnessDir: string, present: (rel: string) => boolean): string | undefined {
+  const rel = aidlcSkillRel(harnessDir, present).replace(/SKILL\.md$/, "tables.md");
+  return present(rel) ? rel : undefined;
+}
+
 // The AI-DLC files a refresh refuses to replace: each one config recorded that
 // now differs from what it wrote (line endings aside, #2057). The onboarding
 // file is the instruction row's; files config merges or writes again itself
@@ -4100,11 +4140,9 @@ function changedFrameworkFiles(
   } catch {
     // The instruction row reports an unreadable descriptor.
   }
-  const generated = [
-    ...["harness.json", "stage-graph.json", "scope-grid.json"].map((name) => `${harnessDir}/tools/data/${name}`),
-    // The engine writes Kiro IDE's steering copy of the project's memory itself.
-    `${harnessDir}/steering/aidlc-active-memory.md`,
-  ];
+  const generated = unbaselinedGenerated(harnessDir);
+  // Config renders the tables again over a file, and stops on anything else.
+  const tables = refreshedTablesRel(harnessDir, (rel) => typeof baseline.files?.[rel] === "string");
   // Config takes a plugin's additions to stage files and personas, and the
   // personas' per-harness copies, out before it compares. A persona carries
   // only fragments, so one a plugin composed holds that plugin's marker.
@@ -4148,6 +4186,7 @@ function changedFrameworkFiles(
     } catch {
       continue;
     }
+    if (regular && rel === tables) continue;
     if (regular) {
       const content = readFileSync(path);
       if (
