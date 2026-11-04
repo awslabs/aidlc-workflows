@@ -1325,7 +1325,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
             const unreadable = command === commandPath() && probe.exitCode === 4 &&
               shimHelper === bomlessWindowsShimHelper() && shimHelper !== windowsShimHelper();
             const said = unreadable
-              ? `${version} cannot start from ${installRoot()}: Windows PowerShell reads that release's launcher in the system code page, which cannot spell a letter in that path${
+              ? `${version} did not start from ${installRoot()}: Windows PowerShell read the launcher written for it in the system code page, which cannot spell a letter in that path${
                   previous ? `; ${previous} stays active` : ""
                 }`
               : Buffer.from(probe.stderr ?? new Uint8Array()).toString("utf-8").replace(/\s+/g, " ").trim();
