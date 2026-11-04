@@ -46,7 +46,7 @@ export function canonicalPathKey(path: string): string {
 // only by intent create and switch on this machine, so unlike a lone committed
 // record it is local evidence of a choice. A git worktree with no cursor of its
 // own reads its main checkout's, as activeSpace does, when it names a record
-// this checkout has.
+// this checkout has; an empty one of its own (an archive there leaves it) names none.
 export function readActiveIntentCursor(projectDir: string, space?: string): string | null {
   const sp = space ?? activeSpace(projectDir);
   const dir = intentsDir(projectDir, sp);
@@ -1187,9 +1187,11 @@ function localWorktreeRecord(projectDir: string): string | null {
 
 // Whether this conversation's hooks may write into, or enforce, the record a
 // selection names. Resolution (which record the path helpers name) keeps the
-// lone-record fallback, because worktrees inherit no cursor; participation asks
-// for local evidence that this conversation chose the record. A lone committed
-// record is not such evidence: in a fresh clone it is a teammate's.
+// lone-record fallback, because a checkout may have no cursor (a fresh clone, a
+// worktree whose main checkout has none); participation asks for local evidence
+// that this conversation chose the record. The cursor is such evidence, and in a
+// git worktree with none of its own that is its main checkout's on this machine.
+// A lone committed record is not: in a fresh clone it is a teammate's.
 export function workflowParticipation(
   projectDir: string,
   selection: WorkflowSelection,

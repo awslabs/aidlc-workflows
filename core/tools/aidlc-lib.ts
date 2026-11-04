@@ -164,6 +164,7 @@ import {
   type ProcessIdentity,
   processIdentityReader,
   processIsAlive,
+  readActiveIntentCursor,
   readAuditShardEvents,
   readAuditShardTexts,
   readIntentRegistry,
@@ -5295,43 +5296,58 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
 // Remove a space's active-intent cursor so no record resolves implicitly until
 // the human picks one (`intent <name>`) or creates new work. Best-effort and
 // idempotent, like the writer: an absent cursor is already the desired state.
+// A git worktree with no cursor of its own reads its main checkout's, so when
+// that one still names the record, the worktree gets an empty cursor of its own,
+// which names none; the main checkout's cursor is that checkout's and stays.
 export function clearActiveIntentCursor(
   projectDir: string,
   space?: string,
   expectedIntent?: string,
 ): void {
   const path = join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER);
-  if (expectedIntent !== undefined) {
-    const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
-    try {
-      renameSync(path, staged);
-    } catch {
+  try {
+    if (expectedIntent !== undefined) {
+      const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
+      try {
+        renameSync(path, staged);
+      } catch {
+        return;
+      }
+      try {
+        const captured = readFileSync(staged, "utf-8").trim();
+        if (captured !== expectedIntent && !existsSync(path)) {
+          try {
+            renameSync(staged, path);
+            return;
+          } catch {
+            // A concurrent switch won the destination. Keep its newer cursor.
+          }
+        }
+      } catch {
+        // An unreadable captured cursor is stale runtime state.
+      }
+      try {
+        unlinkSync(staged);
+      } catch {
+        /* already moved or removed */
+      }
       return;
     }
     try {
-      const captured = readFileSync(staged, "utf-8").trim();
-      if (captured !== expectedIntent && !existsSync(path)) {
-        try {
-          renameSync(staged, path);
-          return;
-        } catch {
-          // A concurrent switch won the destination. Keep its newer cursor.
-        }
+      unlinkSync(path);
+    } catch {
+      /* absent cursor, or per-user state is unwritable: nothing to clear */
+    }
+  } finally {
+    // Whichever way the clear went: a cursor a switch wrote meanwhile is kept.
+    const still = readActiveIntentCursor(projectDir, space);
+    if (still !== null && (expectedIntent === undefined || still === expectedIntent)) {
+      try {
+        writeFileSync(path, "", { flag: "wx" });
+      } catch {
+        /* per-user cursor; best-effort */
       }
-    } catch {
-      // An unreadable captured cursor is stale runtime state.
     }
-    try {
-      unlinkSync(staged);
-    } catch {
-      /* already moved or removed */
-    }
-    return;
-  }
-  try {
-    unlinkSync(path);
-  } catch {
-    /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
 }
 

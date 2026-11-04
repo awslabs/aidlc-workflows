@@ -1,8 +1,8 @@
 // A git worktree of a project starts without the git-ignored per-user cursors
 // (aidlc/active-space, a space's active-intent). Until its own first switch it
 // reads the ones its main checkout holds, so it finds the project's space and
-// intent as the main checkout does; a separate clone does not, and a worktree's
-// own cursor wins once it has one.
+// intent as the main checkout does; a separate clone does not, a worktree's own
+// cursor wins once it has one, and an archive there stops the record resolving.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -11,6 +11,7 @@ import { join } from "node:path";
 import {
   activeIntent,
   activeSpace,
+  clearActiveIntentCursor,
   ensureActiveSpaceCursor,
   readActiveIntentCursor,
 } from "../../core/tools/aidlc-lib.ts";
@@ -73,6 +74,25 @@ describe("a git worktree reads its main checkout's cursors until it has its own"
     rmSync(join(worktree, "aidlc", "active-space"));
     writeFileSync(join(main, "aidlc", "active-space"), "elsewhere\n");
     expect(activeSpace(worktree)).toBe("default");
+  });
+
+  test("an archive in the worktree stops the record resolving there, and leaves the main checkout's cursor", () => {
+    const { root, main } = project();
+    const two = "261016-demo-two-bbbbbbbb";
+    const mainCursor = join(main, "aidlc", "spaces", "demo-space", "intents", "active-intent");
+    const borrowed = join(root, "borrowed");
+    git(main, ["worktree", "add", "-q", "--detach", borrowed, "main"]);
+    expect(readActiveIntentCursor(borrowed)).toBe(two);
+    clearActiveIntentCursor(borrowed, "demo-space", two);
+    expect(readActiveIntentCursor(borrowed)).toBeNull();
+    expect(activeIntent(borrowed)).toBeNull();
+    const own = join(root, "own");
+    git(main, ["worktree", "add", "-q", "--detach", own, "main"]);
+    writeFileSync(join(own, "aidlc", "spaces", "demo-space", "intents", "active-intent"), `${two}\n`);
+    clearActiveIntentCursor(own, "demo-space", two);
+    expect(readActiveIntentCursor(own)).toBeNull();
+    expect(readFileSync(mainCursor, "utf-8")).toBe(`${two}\n`);
+    expect(readActiveIntentCursor(main)).toBe(two);
   });
 
   test("a separate clone is another project and keeps the default", () => {
