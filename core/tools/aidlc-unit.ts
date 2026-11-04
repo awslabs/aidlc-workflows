@@ -3734,54 +3734,83 @@ function validateClaimRefUnit(intentId8: string, unit: string): void {
 }
 
 // A team's revised Unit plan (Units Generation's units block) against what the
-// team already did: a Unit that landed or is claimed keeps its name, since its
-// receipts, row and claim are read by name; every name can be a claim ref; and
-// with the walking skeleton on, the skeleton stays the Unit built first. The
-// first problem, as the step that fixes the plan; null when the plan holds.
-export function unitPlanRefusal(projectDir: string): string | null {
+// team already did. Every name must be able to be a claim ref, and with the
+// walking skeleton on the built skeleton stays the Unit built first: a plan that
+// breaks either is repaired. A Unit that landed or is claimed keeps its name,
+// since its receipts, row and claim are read by name; dropping or renaming one is
+// the person's call, so their own request (personAsked) lifts that check, and
+// `lifted` says it did. The first problem as the step that fixes the plan
+// (`liftable` when the person's request would lift it); message null when the
+// plan holds.
+export function unitPlanRefusal(
+  projectDir: string,
+  personAsked = false,
+): { message: string | null; liftable: boolean; lifted: boolean } {
+  let lifted = false;
+  const refuse = (message: string, liftable = false) => ({ message, liftable, lifted });
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
-  if (!isTeamUnitOwnership(state)) return null;
+  if (!isTeamUnitOwnership(state)) return { message: null, liftable: false, lifted };
   const parsed = parseBoltDag(readFileSync(unitDependencyPath(pd), "utf-8"));
-  if (!parsed.ok) return null;
+  if (!parsed.ok) return { message: null, liftable: false, lifted };
   const planned = new Set(parsed.units.map((edge) => edge.name));
   const identity = activeIdentity(pd);
   for (const unit of planned) {
-    if (spawnSync("git", ["check-ref-format", claimRef(identity.intentId8, unit)], { encoding: "utf-8" }).status !== 0) {
-      return `"${unit}" cannot name a Unit: a Unit's claim is a git ref, and git refuses this name ('..', a '.lock' ` +
-        "ending, a leading dot and other ref-reserved forms). Rename it in the units block.";
+    try {
+      validateClaimRefUnit(identity.intentId8, unit);
+    } catch (e) {
+      return refuse(`${errorMessage(e)} Rename it in the units block.`);
     }
   }
   const completed = completedUnits(state);
-  const known = new Set(unitProgressTable(state)?.rows.map((cells) => cells[0]) ?? []);
-  for (const unit of [...known].filter((name) => !planned.has(name)).sort()) {
-    if (completed.has(unit)) {
-      return `Unit "${unit}" has landed on main, and the revised plan leaves it out. A landed Unit's work, row and ` +
-        `receipts are read by its name, so keep "${unit}" in the units block under that name.`;
+  const leftOut = (unitProgressTable(state)?.rows.map((cells) => cells[0]) ?? [])
+    .filter((name) => !planned.has(name)).sort();
+  for (const unit of leftOut) {
+    if (!completed.has(unit)) continue;
+    if (personAsked) {
+      lifted = true;
+      continue;
     }
+    return refuse(
+      `Unit "${unit}" has landed on main, and the revised plan leaves it out. A landed Unit's work, row and ` +
+        `receipts are read by its name, so keep "${unit}" in the units block under that name.`,
+      true,
+    );
   }
-  const remote = repositoryRemote(pd);
+  // The claims are read only for a Unit the plan leaves out: a plan that keeps
+  // every Unit asks nothing of the claim registry.
   let claims: Map<string, UnitClaimView> = new Map();
-  try {
-    claims = allClaims(pd, remote, identity.intentId8, [...known].filter((name) => !planned.has(name)));
-  } catch {
-    // Claims that cannot be read here are read again at the next claim.
+  if (leftOut.length > 0) {
+    try {
+      claims = allClaims(pd, repositoryRemote(pd), identity.intentId8, leftOut);
+    } catch {
+      // Claims that cannot be read here are read again at the next claim.
+    }
   }
   for (const [unit, claim] of [...claims].sort(([a], [b]) => a.localeCompare(b))) {
-    if (claim.status === "claimed") {
-      return `Unit "${unit}" is claimed by ${claim.owner} (attempt ${claim.generation}), and the revised plan leaves ` +
-        `it out. Keep "${unit}" in the units block under that name while it is claimed, or have the claim released ` +
-        `first from main: \`aidlc unit release ${unit}\`.`;
+    if (claim.status !== "claimed") continue;
+    if (personAsked) {
+      lifted = true;
+      continue;
     }
+    return refuse(
+      `Unit "${unit}" is claimed by ${claim.owner} (attempt ${claim.generation}), and the revised plan leaves ` +
+        `it out. Keep "${unit}" in the units block under that name while it is claimed, or release the claim ` +
+        `first from main, which ends ${claim.owner}'s claim on it: ` +
+        `\`${aidlcInvocation()} unit release ${quoteCommandArgument(unit)}\`.`,
+      true,
+    );
   }
   const roots = parsed.batches[0] ?? [];
   const built = roots.find((name) => completed.has(name));
   if (teamSkeletonOn(state) && built !== undefined && roots[0] !== built) {
-    return `Unit "${roots[0]}" depends on nothing and its name sorts before "${built}", so it would take over as the ` +
-      `walking skeleton, which "${built}" already is and has built. Add "${built}" to "${roots[0]}"'s depends_on: ` +
-      "every Unit waits on the walking skeleton anyway.";
+    return refuse(
+      `Unit "${roots[0]}" depends on nothing and its name sorts before "${built}", so it would take over as the ` +
+        `walking skeleton, which "${built}" already is and has built. Add "${built}" to "${roots[0]}"'s depends_on: ` +
+        "every Unit waits on the walking skeleton anyway.",
+    );
   }
-  return null;
+  return { message: null, liftable: false, lifted };
 }
 
 function claimOwnerLabel(projectDir: string, supplied?: string): string {
