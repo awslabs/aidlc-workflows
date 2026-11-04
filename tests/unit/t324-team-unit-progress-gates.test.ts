@@ -1786,8 +1786,6 @@ describe("t324 doctor stage drift against the engine (#1190)", () => {
       recordAbsDir: null,
       hooksHealth: { dirExists: true, heartbeats: [], degradedDrops: [] },
       runtimeGraphExists: true,
-      runtimeGraphMtimeMs: null,
-      authoredInputsNewestMtimeMs: null,
       markers: {
         planExists: false,
         planParseable: null,

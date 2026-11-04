@@ -44,7 +44,6 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
-  statSync,
   type Stats,
   writeFileSync,
 } from "node:fs";
@@ -627,8 +626,6 @@ export interface DiagnosisInput {
   recordAbsDir: string | null; // for structural contribution-file checks
   hooksHealth: HookHealthSnapshot;
   runtimeGraphExists: boolean;
-  runtimeGraphMtimeMs: number | null;
-  authoredInputsNewestMtimeMs: number | null; // newest stage-source mtime
   markers: MarkerSnapshot;
 }
 
@@ -667,8 +664,6 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     recordAbsDir,
     hooksHealth,
     runtimeGraphExists,
-    runtimeGraphMtimeMs,
-    authoredInputsNewestMtimeMs,
     markers,
     stateContent,
     audit,
@@ -841,31 +836,11 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     }
   }
 
-  // Rule 4 — runtime graph older than its authored inputs. A stale graph means
-  // a recompile did not run (the #571 cold-hook downstream). Only when both
-  // mtimes are known.
+  // No staleness rule: the compile reads the state, the audit and the memory
+  // files, never <harness>/aidlc-common/stages, which every refresh rewrites, so
+  // those mtimes say nothing about the graph. Hooks that stop compiling are
+  // hookLiveness's to report.
   if (
-    runtimeGraphExists &&
-    runtimeGraphMtimeMs !== null &&
-    authoredInputsNewestMtimeMs !== null &&
-    authoredInputsNewestMtimeMs > runtimeGraphMtimeMs
-  ) {
-    findings.push({
-      id: "runtime-graph-stale",
-      severity: "warning",
-      summary: "runtime-graph.json is older than its authored stage inputs.",
-      evidence: {
-        runtimeGraphMtime: new Date(runtimeGraphMtimeMs).toISOString(),
-        authoredInputsNewestMtime: new Date(authoredInputsNewestMtimeMs).toISOString(),
-      },
-      remedy:
-        `The compiled runtime graph is out of date. Re-run \`${
-          aidlcToolInvocation("runtime")
-        } compile\`. If it goes out of date again, AI-DLC's hooks are not running here: ` +
-        "doctor's hooks check says what to do.",
-      safeToAutomate: true,
-    });
-  } else if (
     !runtimeGraphExists &&
     (stateContent !== "" ||
       timeline.stages.length > 0 ||
@@ -1214,11 +1189,10 @@ export function runDoctorAnalysis(projectDir: string): DoctorAnalysis {
 
   const rgPath = runtimeGraphPath(projectDir);
   const runtimeGraphExists = existsSync(rgPath) && !isSymlink(rgPath);
-  const runtimeGraphMtimeMs = runtimeGraphExists ? safeMtime(rgPath) : null;
   const graphStages = runtimeGraphExists ? readGraphStages(rgPath) : [];
 
-  // Core allowlists from the SHIPPED graph (always present) — the stale/missing
-  // runtime graph is the very thing we diagnose, so never seed core ids from it.
+  // Core allowlists come from the SHIPPED graph (always present), never from
+  // the runtime graph, which is the very thing doctor diagnoses.
   const shippedStages = readShippedStageGraph(projectDir);
   const coreSlugs = new Set(shippedStages.map((s) => s.slug));
   const coreAgents = new Set<string>();
@@ -1229,7 +1203,6 @@ export function runDoctorAnalysis(projectDir: string): DoctorAnalysis {
   const stagesForDiagnosis = graphStages.length > 0 ? graphStages : shippedStages;
   setCoreSlugs(coreSlugs);
 
-  const authoredNewest = newestStageSourceMtime(projectDir);
   const hooksHealth = readHookHealth(projectDir, audit);
   const markers = readMarkers(projectDir);
   const timeline = reconstructTimeline(audit, stateContent);
@@ -1250,8 +1223,6 @@ export function runDoctorAnalysis(projectDir: string): DoctorAnalysis {
     recordAbsDir: recordDir(projectDir),
     hooksHealth,
     runtimeGraphExists,
-    runtimeGraphMtimeMs,
-    authoredInputsNewestMtimeMs: authoredNewest,
     markers,
   });
 
@@ -1581,30 +1552,6 @@ function readGraphStages(rgPath: string): GraphStageLite[] {
   }
 }
 
-// Newest mtime across the authored stage source (aidlc-common/stages/**.md) —
-// the "authored inputs" the runtime graph is compiled from.
-function newestStageSourceMtime(projectDir: string): number | null {
-  const root = join(projectDir, harnessDir(), "aidlc-common", "stages");
-  let newest: number | null = null;
-  const walk = (dir: string): void => {
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const abs = join(dir, e);
-      const st = safeLstat(abs);
-      if (!st) continue;
-      if (st.isDirectory()) walk(abs);
-      else if (e.endsWith(".md") && (newest === null || st.mtimeMs > newest)) newest = st.mtimeMs;
-    }
-  };
-  walk(root);
-  return newest;
-}
-
 function readHookHealth(projectDir: string, audit: string): HookHealthSnapshot {
   const dir = hooksHealthReadDir(projectDir);
   const dirExists = existsSync(dir);
@@ -1723,14 +1670,6 @@ function safeRead(path: string): string {
     return content;
   } catch {
     return "";
-  }
-}
-
-function safeMtime(path: string): number | null {
-  try {
-    return statSync(path).mtimeMs;
-  } catch {
-    return null;
   }
 }
 

@@ -54,6 +54,7 @@ import {
   readFileSync,
   readdirSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -570,8 +571,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       recordAbsDir: null,
       hooksHealth: { dirExists: false, heartbeats: [], degradedDrops: [] },
       runtimeGraphExists: true,
-      runtimeGraphMtimeMs: 1,
-      authoredInputsNewestMtimeMs: 0,
       markers: { planExists: false, planParseable: null, stopHookDirExists: false },
       ...over,
     };
@@ -1109,6 +1108,26 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(() => JSON.parse(readFileSync(join(run.bundleDir!, "report.json"), "utf-8"))).not.toThrow();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("19b: a refresh that rewrites the stage files does not call the compiled runtime graph out of date", () => {
+    // `aidlc config` after an update rewrites <harness>/aidlc-common/stages/*.md
+    // while work is open. The runtime compile never reads those files, so a
+    // graph older than them is not out of date, and recompiling changes nothing.
+    const proj = createTestProject();
+    created.push(proj);
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const rec = seededRecordDir(proj);
+    mkdirSync(join(rec, "audit"), { recursive: true });
+    writeFileSync(join(rec, "aidlc-state.md"), "- **Status**: In-Progress\n", "utf-8");
+    const graph = join(rec, "runtime-graph.json");
+    writeFileSync(graph, JSON.stringify({ workflow_id: "", scope: "", started_at: "", stages: [] }), "utf-8");
+    const beforeRefresh = new Date(Date.now() - 60 * 60 * 1000);
+    utimesSync(graph, beforeRefresh, beforeRefresh);
+    const run = runExport(proj);
+    expect(run.bundleDir, run.out).not.toBeNull();
+    const report = JSON.parse(readFileSync(join(run.bundleDir!, "report.json"), "utf-8"));
+    expect(report.findings.map((f: { id: string }) => f.id)).not.toContain("runtime-graph-stale");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("20: withinProjectRoot boundary uses the platform separator (Arden r3 #3)", () => {
     // The POSIX-observable half of the Windows fix: the containment check must
     // still admit a real nested input and reject a sibling-prefix sibling. A
@@ -1160,27 +1179,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(withWf.some((f) => f.id === "runtime-graph-missing")).toBe(true);
   });
 
-  test("23b: both runtime-graph remedies name the compiler that writes the file", () => {
+  test("23b: the missing-graph remedy names the compiler that writes the file", () => {
     // aidlc-graph.ts compiles stage-graph.json + scope-grid.json and never
     // writes runtime-graph.json; aidlc-runtime.ts does. A remedy naming the
     // former is a no-op for the finding that printed it.
     const missing = runDiagnosis(
       diagInput({ runtimeGraphExists: false, stateContent: "- **Status**: In-Progress\n" }),
     ).find((f) => f.id === "runtime-graph-missing");
-    const stale = runDiagnosis(
-      diagInput({ runtimeGraphMtimeMs: 1, authoredInputsNewestMtimeMs: 2 }),
-    ).find((f) => f.id === "runtime-graph-stale");
-    for (const finding of [missing, stale]) {
-      expect(finding).toBeDefined();
-      expect(finding?.remedy, "remedy names the runtime compiler")
-        .toContain(`${aidlcToolInvocation("runtime")} compile`);
-      expect(finding?.remedy, "remedy must not send the user to the stage-graph compiler")
-        .not.toContain(aidlcToolInvocation("graph"));
-      // What the person reads names their next step, not AI-DLC's hook names.
-      expect(finding?.remedy).toContain("AI-DLC's hooks are not running here: doctor's hooks check says what to do.");
-      for (const internal of ["rebuild-stage-graph", "harness", "heartbeat"]) {
-        expect(finding?.remedy).not.toContain(internal);
-      }
+    expect(missing).toBeDefined();
+    expect(missing?.remedy, "remedy names the runtime compiler")
+      .toContain(`${aidlcToolInvocation("runtime")} compile`);
+    expect(missing?.remedy, "remedy must not send the user to the stage-graph compiler")
+      .not.toContain(aidlcToolInvocation("graph"));
+    // What the person reads names their next step, not AI-DLC's hook names.
+    expect(missing?.remedy).toContain("AI-DLC's hooks are not running here: doctor's hooks check says what to do.");
+    for (const internal of ["rebuild-stage-graph", "harness", "heartbeat"]) {
+      expect(missing?.remedy).not.toContain(internal);
     }
   });
 
