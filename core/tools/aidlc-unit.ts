@@ -26,6 +26,7 @@ import {
   rootIntegrationTarget,
 } from "./aidlc-distribution.ts";
 import { aidlcRootParts } from "./aidlc-includes.ts";
+import { KEPT_RULE_SCOPES, keptRuleFile } from "./aidlc-graph.ts";
 import {
   activeIntentUuid,
   activeSpace,
@@ -1405,8 +1406,8 @@ export function claimAuditRules(
 
 // The record's shared files as `baseOid` has them: every audit shard but the
 // claim's own, and the stages' shared diaries (`<phase>/<stage>/memory.md`,
-// written at each stage start outside any Unit's folder). Pin refuses a change
-// to either (candidateBoundary), and `git add -A` commits both: a checkout
+// outside any Unit's folder). Pin refuses a change to either
+// (candidateBoundary), and `git add -A` commits both: a checkout
 // whose own shard was on main before the claim still recorded its pre-claim
 // rows there. They stay in the clone's history and working copy, as the
 // projected rows do.
@@ -1501,6 +1502,9 @@ function withClaimReviewRecords(
   return { tree, missing };
 }
 
+const OUTSIDE_UNIT_RECORD_TREE = "outside claimed Unit record tree";
+
+// `candidateOid` may be a tree: publish asks before it has a commit to ask about.
 function candidateBoundary(
   projectDir: string,
   baseOid: string,
@@ -1517,7 +1521,8 @@ function candidateBoundary(
       "diff",
       "--no-renames",
       "--name-status",
-      `${baseOid}..${candidateOid}`,
+      baseOid,
+      candidateOid,
       "--",
       auditRoot,
     ],
@@ -1559,7 +1564,7 @@ function candidateBoundary(
 
   const changedPaths = gitOutput(
     projectDir,
-    ["diff", "--no-renames", "--name-only", `${baseOid}..${candidateOid}`],
+    ["diff", "--no-renames", "--name-only", baseOid, candidateOid],
     "Cannot inspect pinned candidate diff",
   )
     .split(/\r?\n/)
@@ -1570,6 +1575,11 @@ function candidateBoundary(
   const unitRootKey = unitRoot.toLowerCase();
   const constructionRootKey = constructionRoot.toLowerCase();
   const recordPrefixKey = `${recordPrefix}/`.toLowerCase();
+  // A rule the person kept while working the Unit is written to the space's
+  // project.md or team.md, not the Unit's folder; it travels with the Unit as
+  // its source does, named at the merge gate.
+  const space = activeSpace(projectDir);
+  const keptRules = new Set(KEPT_RULE_SCOPES.map((scope) => keptRuleFile(space, scope)));
   const outsideUnitRecordPaths: string[] = [];
   for (const path of changedPaths) {
     if (isEngineMergeMetadata(projectDir, path, recordPrefix)) continue;
@@ -1585,12 +1595,16 @@ function candidateBoundary(
     }
     if (pathKey.startsWith(unitRootKey)) continue;
     if (changedAudit.includes(path)) continue;
+    if (keptRules.has(path)) {
+      outsideUnitRecordPaths.push(path);
+      continue;
+    }
     if (
       pathKey.startsWith(constructionRootKey) ||
       pathKey.startsWith(recordPrefixKey) ||
       pathKey.startsWith("aidlc/")
     ) {
-      violations.push(`${path} (outside claimed Unit record tree)`);
+      violations.push(`${path} (${OUTSIDE_UNIT_RECORD_TREE})`);
       continue;
     }
     outsideUnitRecordPaths.push(path);
@@ -1750,12 +1764,31 @@ function candidateEvidence(
     return (stage?.produces ?? []).length > 0 &&
       filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
   }));
+  // The clone stamped each receipt with the run floor it read from the whole
+  // audit record (the workflow's own rows plus its own). Read the candidate's
+  // receipts against the same floor: main's rows that are not Unit attempt
+  // rows, as the commit this evidence is read against holds them, with the
+  // transported rows on top. Transported rows alone hold no WORKFLOW_STARTED,
+  // so every real receipt would miss the floor; a file in this checkout that
+  // was never committed does not move it.
+  const mainShards = gitOutput(
+    projectDir,
+    ["ls-tree", "--name-only", liveIntegrationOid, "--", `${recordPrefix}/audit/`],
+    "Cannot list the integration audit shards",
+  )
+    .split(/\r?\n/)
+    .filter((path) => isActiveIntentAuditPath(path, recordPrefix));
+  const floorRows = candidateAuditEvents(projectDir, liveIntegrationOid, mainShards).filter((row) =>
+    !TRANSPORTED_ATTEMPT_EVENTS.has(row.event) &&
+    !TRANSPORTED_DATA_EVENTS.has(row.event)
+  );
+  const snapshotRows = [...floorRows, ...authorityRows];
   const snapshots = new Map(stages.map((stage) => [
     stage,
     unitLifecycleSnapshot(
       projectDir,
       stage,
-      authorityRows,
+      snapshotRows,
       integrationState,
       {
         artifactFingerprint: (stageNode, unitName) =>
@@ -2024,6 +2057,26 @@ function publishUnit(args: string[], projectDir?: string): void {
   const missingReviews = reviews.missing.length > 0
     ? { review_records_missing: reviews.missing }
     : {};
+  // Pin refuses any other record outside the Unit's tree, so publish names
+  // them now, beside the review records, rather than leaving the team to learn
+  // it at pin; the change is theirs to take out, so publish still publishes.
+  const outsideSuffix = ` (${OUTSIDE_UNIT_RECORD_TREE})`;
+  const outside = candidateBoundary(
+    pd, publicationBaseOid, headTree, recordPrefix, unit, current.generation, auditShard,
+  ).violations.filter((violation) => violation.endsWith(outsideSuffix))
+    .map((violation) => violation.slice(0, -outsideSuffix.length));
+  const outsideTree = outside.length > 0
+    ? {
+      records_outside_unit_tree: outside,
+      records_outside_unit_tree_note:
+        "Pin will refuse this candidate: a claimed Unit lands only " +
+        `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
+        "such as contract-summary.md, or a stage-level file) is changed on main. Take these out of " +
+        "this branch (git rm a file main does not have, or " +
+        `git checkout ${publicationIntegrationRef.replace(/^refs\/(remotes|heads)\//, "")} -- <path> for one it does), commit, and ` +
+        "publish again.",
+    }
+    : {};
   if (
     current.payload.candidate_tree_oid === headTree &&
     current.payload.candidate_head_oid === headOid &&
@@ -2039,6 +2092,7 @@ function publishUnit(args: string[], projectDir?: string): void {
       candidate_oid: current.oid,
       generation: current.generation,
       ...missingReviews,
+      ...outsideTree,
     }));
     return;
   }
@@ -2091,6 +2145,7 @@ function publishUnit(args: string[], projectDir?: string): void {
     candidate_head_oid: headOid,
     generation: published.generation,
     ...missingReviews,
+    ...outsideTree,
   }));
 }
 
@@ -2662,6 +2717,22 @@ function isEngineMergeMetadata(
   ]).has(path);
 }
 
+// A review record the candidate carries for pin (withClaimReviewRecords) that
+// this checkout's .gitignore ignores, as AI-DLC's own does for its engine
+// folder, and that main does not hold: the landing keeps it out of the merge
+// commit, so main never tracks a file its own .gitignore ignores.
+function isCarriedReviewRecord(
+  projectDir: string,
+  path: string,
+  recordPrefix: string | null,
+  mainTreeish: string,
+): boolean {
+  return recordPrefix !== null &&
+    path.startsWith(`${recordPrefix}/${REVIEW_RECORDS_DIR}/`) &&
+    !gitPathExistsAt(projectDir, mainTreeish, path) &&
+    git(projectDir, ["check-ignore", "-q", "--no-index", "--", path]).ok;
+}
+
 // The paths `git status` lists as changed: tracked changes, and with
 // `untracked: "all"` every untracked file Git does not ignore.
 function worktreeChanges(projectDir: string, untracked: "no" | "all", label: string): string[] {
@@ -2989,9 +3060,11 @@ function inspectLandedTree(
     : {
         violations: ["active intent record is unavailable"],
       };
+  const carriedOnly = (path: string): boolean =>
+    isCarriedReviewRecord(projectDir, path, recordPrefix, mainParent);
   const allowedCommitChanges = new Set(
     candidatePaths.filter((path) =>
-      !isEngineMergeMetadata(projectDir, path, recordPrefix)
+      !isEngineMergeMetadata(projectDir, path, recordPrefix) && !carriedOnly(path)
     ),
   );
   const actualCommitChanges = gitOutput(
@@ -3006,7 +3079,7 @@ function inspectLandedTree(
   const objectMismatches: CandidateExactDetails["object_mismatches"] = [];
   for (const path of candidatePaths) {
     const actual = gitObjectAt(projectDir, treeish, path);
-    const expectedTreeish = isEngineMergeMetadata(projectDir, path, recordPrefix)
+    const expectedTreeish = isEngineMergeMetadata(projectDir, path, recordPrefix) || carriedOnly(path)
       ? mainParent
       : transaction.pinned_oid;
     const expected = gitObjectAt(projectDir, expectedTreeish, path);
@@ -3306,6 +3379,13 @@ function landGit(
         ["merge", "--no-commit", "--no-ff", transaction.pinned_oid],
       );
     restoreMainMetadata(projectDir, changed);
+    const landingRecordPrefix = relativeRecordDir(projectDir);
+    for (const path of changed.filter((path) =>
+      isCarriedReviewRecord(projectDir, path, landingRecordPrefix, "HEAD")
+    )) {
+      const dropped = git(projectDir, ["rm", "-q", "--cached", "--ignore-unmatch", "--", path]);
+      if (!dropped.ok) fail(`Failed to leave the review record ${path} out of the merge: ${dropped.stderr.trim()}.`);
+    }
     const conflicts = conflictFiles(projectDir).filter(
       (path) => !isEngineMergeMetadata(projectDir, path),
     );

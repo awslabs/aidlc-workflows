@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   acquireAuditLock,
@@ -165,7 +165,8 @@ describe("log answers", () => {
         else process.env[key] = value;
       }
     }
-    expect(existsSync(join(pd, "aidlc", ".aidlc-sessions"))).toBe(false);
+    // Only the fixture's own no-git record (tests/harness/fixtures.ts) is there.
+    expect(readdirSync(join(pd, "aidlc", ".aidlc-sessions"))).toEqual(["no-git-said"]);
   });
 
   test("pairs only within the same unit, generation, and single-stage workflow", () => {

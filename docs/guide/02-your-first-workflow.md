@@ -227,6 +227,11 @@ one to be fixed, or reject one as not applying, saying why.
    2. Request Changes
 ```
 
+In a project that is not in git, the first gate also says, once: "This project
+has no git, so AI-DLC can't undo the changes it makes to your files; to get an
+undo, run `git init` and commit them." Without a commit, a file of yours that the
+build changes cannot be put back.
+
 Each finding has an ID, a severity, where it is, and what would resolve it. The
 engine owns the stable finding list. Later checks report only what changed,
 while your decisions remain exactly as you made them. Choose **Approve** to

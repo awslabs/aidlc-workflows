@@ -10,11 +10,14 @@
 //     complete DAG. Compiled from YAML into stage-graph.json.
 //   - A scope is a sub-DAG: scope-mapping.json's EXECUTE slice +
 //     whichever requires_stage edges exist among those nodes.
-//   - The serial runtime linearizes each sub-DAG to numeric order for
-//     iteration. Numeric order is a valid topological sort of the full
-//     graph (proven by t65 assertion 17; protected by compile's
-//     edge-local invariant check below). The future worktree scheduler
-//     will consume the sub-DAG structure directly for parallel Bolts.
+//   - The serial runtime linearizes each sub-DAG to run order for
+//     iteration: numeric order, with each phase's per-Unit stages as one
+//     block (stageRouteOrder). Compile writes stage-graph.json in that
+//     order, and every runtime walk reads the file in it. Run order is a
+//     valid topological sort of the full graph (proven by t65 assertion 17;
+//     protected by compile's edge-local and run-order checks below). The
+//     future worktree scheduler will consume the sub-DAG structure directly
+//     for parallel Bolts.
 //   - topoSort and findCycles exist in the library for analysis
 //     (doctor consumes them) and for future scheduling; they do not
 //     gate runtime iteration today.
@@ -314,7 +317,19 @@ export interface ScopeValidation {
   // run that is not --matched so the composer copies them before it routes.
   // Absent when the classic scope is not enabled here.
   custom_start?: { guard_policy: GuardPolicy; scope_settings: ScopeSettings };
+  // The depth, Guard Policy and settings of the stock scope a matched plan
+  // carries (the one --matched names, else nearest_stock[0]), echoed on every
+  // run so the composer copies them, and checks the depth, instead of finding
+  // that scope's file: no other echo carries a stock scope's depth or settings.
+  matched_start?: MatchedPlanStart;
 }
+
+export type MatchedPlanStart = {
+  scope: string;
+  depth?: "minimal" | "standard" | "comprehensive";
+  guard_policy: GuardPolicy;
+  scope_settings: ScopeSettings;
+};
 
 // The scope-file settings a composer proposal carries beside its grid. The keys
 // are the scope frontmatter spellings, so the approved values are copied into
@@ -444,6 +459,16 @@ export function memoryDirFor(projectDir: string, space?: string): string {
   const resolvedSpace =
     space ?? resolveWorkflowSelection(projectDir).space;
   return join(projectDir, ...memorySegmentsForSpace(resolvedSpace));
+}
+
+/** The file a rule the person keeps is written to, relative to the project in
+ *  posix form: the space's `project.md` or `team.md`, the learning loop's two
+ *  scopes (practiceFilePath, aidlc-learnings.ts, writes the same files). A
+ *  claimed Unit's candidate carries it like the Unit's source
+ *  (candidateBoundary, aidlc-unit.ts). */
+export const KEPT_RULE_SCOPES = ["project", "team"] as const;
+export function keptRuleFile(space: string, scope: (typeof KEPT_RULE_SCOPES)[number]): string {
+  return [...memorySegmentsForSpace(space), `${scope}.md`].join("/");
 }
 
 /** The TPL template-override source-of-truth dir for a workspace:
@@ -1592,11 +1617,11 @@ export function findCycles(stages: GraphStage[]): string[][] {
   return cycles;
 }
 
-/** The scope's sub-DAG as a linear array, sorted by numeric order.
- *  Filter to scope-mapping's EXECUTE slice, then sort by number.
- *  No topological sort at runtime — numeric order is a valid topo-
+/** The scope's sub-DAG as a linear array, in the graph's run order
+ *  (stageRouteOrder, the order compile writes): scope-mapping's EXECUTE
+ *  slice. No topological sort at runtime — run order is a valid topo-
  *  order of the full graph (proven by t65, protected by compile's
- *  invariant) and therefore of any node subset. The future worktree
+ *  invariants) and therefore of any node subset. The future worktree
  *  scheduler will consume the sub-DAG structure directly for
  *  parallelism.
  *
@@ -1618,9 +1643,7 @@ export function subgraphForScope(scope: string): GraphStage[] {
       .filter(([, action]) => action === "EXECUTE")
       .map(([slug]) => slug)
   );
-  return loadGraph()
-    .filter((s) => executeSlugs.has(s.slug))
-    .sort((a, b) => numericStageOrder(a.number, b.number));
+  return loadGraph().filter((s) => executeSlugs.has(s.slug));
 }
 
 /** Rank every graph/plugin-authored stock scope by grid distance from the given
@@ -1675,8 +1698,6 @@ export function resolvePlanForScope(
   const entry = loadScopeGrid()[scope];
   const stages = entry?.stages ?? {};
   return loadGraph()
-    .slice()
-    .sort((a, b) => numericStageOrder(a.number, b.number))
     .map((s) => ({
       slug: s.slug,
       phase: s.phase,
@@ -1950,6 +1971,21 @@ export function customPlanStart(): { guard_policy: GuardPolicy; scope_settings: 
   const settings = scopeSettingsOf("classic");
   if (settings === null) return null;
   return { guard_policy: scopeGuardPolicyDefault("classic"), scope_settings: settings };
+}
+
+/** What a matched plan starts from: its stock scope's own depth, Guard Policy
+ *  and settings, read by the same resolvers the matched check and the
+ *  creation diff use. Null for a scope that is not enabled here. */
+export function matchedPlanStart(scope: string): MatchedPlanStart | null {
+  const settings = scopeSettingsOf(scope);
+  if (settings === null) return null;
+  const depth = (loadScopeMapping()[scope]?.depth ?? "").toLowerCase();
+  return {
+    scope,
+    ...(depth === "minimal" || depth === "standard" || depth === "comprehensive" ? { depth } : {}),
+    guard_policy: scopeGuardPolicyDefault(scope),
+    scope_settings: settings,
+  };
 }
 
 /** The errors for a front/report proposal that names its routing. Either route
@@ -2455,6 +2491,26 @@ function enabledScopeNames(): ReadonlySet<string> | null {
   return new Set(Object.keys(loadScopeMetadata()).sort());
 }
 
+// The order the work runs the stages in: number order, except that a phase's
+// per-Unit stages run as one block where its first per-Unit stage stands. Each
+// Unit walks the block, and the stages that run once per intent come after it.
+// Numbers are pinned and a plugin's new stage is numbered past its phase's
+// highest, so a plugin's per-Unit stage can be numbered after Build and Test;
+// it still runs with its Unit. compileStageGraph writes stage-graph.json in this
+// order and refuses a requires_stage edge it would break.
+export function stageRouteOrder<T extends { slug: string; number: string; phase: string; for_each?: string }>(
+  stages: readonly T[],
+): T[] {
+  const byNumber = [...stages].sort((a, b) => numericStageOrder(a.number, b.number));
+  const routed: T[] = [];
+  for (const stage of byNumber) {
+    if (routed.includes(stage)) continue;
+    if (!isPerUnitStage(stage)) routed.push(stage);
+    else routed.push(...byNumber.filter((other) => other.phase === stage.phase && isPerUnitStage(other)));
+  }
+  return routed;
+}
+
 /** Parse a numeric stage identifier like "3.5" into a tuple [phase, index]
  *  for total-ordering comparison. Returns negative, zero, or positive. */
 export function numericStageOrder(a: string, b: string): number {
@@ -2854,8 +2910,9 @@ export function compileStageGraph(): {
     }
   }
 
-  // Sort by numeric order (phase-prefix.index).
-  stages.sort((a, b) => numericStageOrder(a.number, b.number));
+  // Run order (stageRouteOrder): numeric order, with each phase's per-Unit
+  // stages as one block.
+  stages.splice(0, stages.length, ...stageRouteOrder(stages));
 
   // A team plugin's scope runs the base stages its include_stages names, so
   // each included stage's row carries that scope, as if the stage named it.
@@ -2922,6 +2979,22 @@ export function compileStageGraph(): {
             `direction, or remove the offending requires_stage edge.`
         );
       }
+    }
+  }
+
+  // Run-order invariant: the runtime walks a phase's per-Unit stages as one
+  // block, so a per-Unit stage must not require a stage that runs once per
+  // intent after that block starts; each Unit would reach it before the stage
+  // it needs had run.
+  const runPosition = new Map(stages.map((s, i) => [s.slug, i]));
+  for (const stage of stages) {
+    for (const dep of stage.requires_stage ?? []) {
+      if ((runPosition.get(dep) ?? -1) < (runPosition.get(stage.slug) ?? -1)) continue;
+      throw new Error(
+        `Stage "${stage.slug}" runs once per Unit of Work, but it requires "${dep}", ` +
+          `which runs once for the whole intent after the Units. ` +
+          `Fix: remove "${dep}" from its requires_stage, or drop its for_each: unit-of-work.`
+      );
     }
   }
 
@@ -4230,6 +4303,9 @@ const COMMANDS: Record<string, Handler> = {
       const start = customPlanStart();
       if (start !== null) r.custom_start = start;
     }
+    const startScope = matched ?? r.nearest_stock?.[0]?.scope;
+    const stockStart = startScope === undefined ? null : matchedPlanStart(startScope);
+    if (stockStart !== null) r.matched_start = stockStart;
     if (matched !== undefined || custom) {
       const routeErrors = composerProposalErrors(
         matched ?? null,
