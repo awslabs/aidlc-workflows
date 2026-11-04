@@ -32,7 +32,8 @@ function run(cmd: string, args: string[], cwd: string, input?: Buffer): Buffer {
 const table: Record<string, Record<string, Set<string>>> = {};
 function add(harness: string, rel: string, bytes: Buffer): void {
   const files = (table[harness] ??= {});
-  (files[rel] ??= new Set()).add(createHash("sha256").update(bytes).digest("hex"));
+  // The form the projection descriptor's file signatures take (aidlc-distribution.ts validateHashes).
+  (files[rel] ??= new Set()).add(`sha256:${createHash("sha256").update(bytes).digest("hex")}`);
 }
 
 // A tag's committed dist/: every blob under dist/<harness>/, read through git.
