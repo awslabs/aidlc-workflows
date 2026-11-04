@@ -1,0 +1,299 @@
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-utility:recompose, audit:UNIT_SKIPPED
+//
+// A team's main checkout that works every Unit itself (no team has taken one)
+// walks the Units one at a time, as a solo walk does. The plan-change step read
+// only the solo walk, so a person's "skip code generation for alpha" there took
+// Code Generation off the plan for every Unit, beta included, and "skip
+// functional design for alpha" was sent to recompose, which refuses the current
+// stage. The step now offers the solo walk's reading on that main too: that
+// Unit only, or every Unit from here, as the person's words say. A jump that
+// names one Unit is not taken on a team main, so the one-Unit line names no way
+// back there. The solo walk's lines are pinned by t-skip-mid-walk, and a claimed
+// clone's skip by t-team-unit-skip-handed-out-step.
+//
+// Mechanism: cli - spawns the shipped tools against temp projects created via
+// intent-create, walked to a Unit's step through the tools; the person's words
+// go through the human-turn hook every harness uses.
+
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { cleanupTestProject, runOrchestrateNext, setupIntegrationProject } from "../harness/fixtures.ts";
+import { artifactFilename, auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
+
+const SESSION = "01995000-7a11-7000-8000-00000000e3e4";
+const PERSON = "the person asked to skip it";
+
+const env: Record<string, string | undefined> = { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_UNATTENDED: "0" };
+for (const key of ["AIDLC_SCOPE_MAPPING", "AIDLC_SCOPE_GRID", "AIDLC_SCOPES_DIR", "AIDLC_COMPOSED_SCOPES_DIR", "AIDLC_STAGE_GRAPH", "AWS_AIDLC_DEFAULT_SCOPE"]) {
+  delete env[key];
+}
+
+const tempDirs: string[] = [];
+afterAll(() => {
+  for (const dir of tempDirs) cleanupTestProject(dir);
+});
+
+const DESIGN: Record<string, { produces: string[]; reviewed: string }> = {
+  "functional-design": { produces: ["entities", "rules", "functional-spec", "frontend-components", "traceability"], reviewed: "functional-spec" },
+  "nfr-requirements": {
+    produces: ["performance-requirements", "security-requirements", "scalability-requirements", "reliability-requirements", "observability-requirements", "tech-stack-decisions", "traceability"],
+    reviewed: "security-requirements",
+  },
+  "nfr-design": {
+    produces: ["performance-design", "security-design", "scalability-design", "reliability-design", "observability-design", "logical-components", "traceability"],
+    reviewed: "security-design",
+  },
+  "infrastructure-design": { produces: ["infrastructure-specification", "monitoring-design", "cicd-pipeline", "traceability"], reviewed: "cicd-pipeline" },
+};
+
+function run(proj: string, tool: string, args: string[]): { status: number; out: string } {
+  const res = spawnSync(process.execPath, [join(proj, ".claude", "tools", tool), ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: { ...env, CLAUDE_PROJECT_DIR: proj },
+    cwd: proj,
+  });
+  return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+}
+
+// What the person types, through the human-turn hook every harness uses.
+function says(proj: string, prompt: string): void {
+  const res = spawnSync(process.execPath, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    cwd: proj,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    env: { ...env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(res.status, res.stderr).toBe(0);
+}
+
+function stateFile(proj: string): string {
+  const intents = join(proj, "aidlc", "spaces", "default", "intents");
+  const record = readdirSync(intents).find((name) => existsSync(join(intents, name, "aidlc-state.md")));
+  return join(intents, String(record), "aidlc-state.md");
+}
+
+type Step = { kind?: string; stage?: string; unit?: string; gate?: boolean; message?: string; receipt?: string };
+
+function next(proj: string, args: string[] = []): Step {
+  const tool = join(proj, ".claude", "tools", "aidlc-orchestrate.ts");
+  const opts = { cwd: proj, env: { ...env, CLAUDE_PROJECT_DIR: proj } };
+  let step = runOrchestrateNext(tool, proj, args, opts).directive as Step;
+  if (step?.kind === "load-steering") {
+    const res = run(proj, "aidlc-orchestrate.ts", ["continue", String(step.receipt)]);
+    step = JSON.parse(res.out.split("\n").find((line) => line.trim().startsWith("{")) ?? "{}") as Step;
+  }
+  return step;
+}
+
+// A feature piece of work on a team's main checkout that no team has taken a
+// Unit from, so it walks every Unit itself, Current Stage on Functional Design
+// as the walk leaves it. `units[0]`'s first `designed` design steps (all four
+// with true, none with false) are started, written, reviewed READY and
+// recorded complete through the tools, so it is on the next one, or on its
+// Code Generation after all four. The person turned the summary confirmation
+// off earlier. Team approvals come once at the end of each Unit unless
+// `rhythm` says after every stage.
+function walk(units: string[], designed: boolean | number = true, rhythm: "unit-end" | "per-stage" = "unit-end"): string {
+  const steps = Object.entries(DESIGN).slice(0, designed === true ? 4 : designed === false ? 0 : designed);
+  const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
+  tempDirs.push(proj);
+  const created = run(proj, "aidlc-utility.ts", ["intent-create", "--scope", "feature"]);
+  expect(created.status, created.out).toBe(0);
+  const path = stateFile(proj);
+  const record = dirname(path);
+  let seen = false;
+  const lines = readFileSync(path, "utf-8").split("\n").map((line) => {
+    const row = /^- \[.\] ([a-z0-9-]+) \u2014 (EXECUTE|SKIP)$/.exec(line);
+    if (!row) return line;
+    if (row[1] === "functional-design") {
+      seen = true;
+      return `- [-] ${row[1]} \u2014 ${row[2]}`;
+    }
+    return !seen && row[2] === "EXECUTE" ? `- [x] ${row[1]} \u2014 ${row[2]}` : line;
+  });
+  writeFileSync(path, lines.join("\n")
+    .replace(/- \*\*Current Stage\*\*: .*/, "- **Current Stage**: functional-design")
+    .replace(/- \*\*In Progress\*\*: .*/, "- **In Progress**: functional-design")
+    .replace(/- \*\*Lifecycle Phase\*\*: .*/, "- **Lifecycle Phase**: CONSTRUCTION")
+    .replace(
+      "- **State Version**: 8",
+      `- **State Version**: 8\n- **Unit Ownership**: team\n- **Unit Gate Rhythm**: ${rhythm}\n- **Skeleton Stance**: on`,
+    )
+    .replace(/- \*\*Summary Confirmation\*\*: .*/, "- **Summary Confirmation**: off (set by you)"));
+  writeFileSync(join(record, "runtime-graph.json"), `${JSON.stringify({
+    bolt_dag: { units: units.map((name) => ({ name, depends_on: [] })), batches: [units] },
+  }, null, 2)}\n`);
+  const unit = units[0];
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  for (const [stage, { produces, reviewed }] of steps) {
+    // The team walk hands a step out until its files are written, so the Unit
+    // starts it first, as the agent does.
+    const started = run(proj, "aidlc-state.ts", ["unit", "start", "--stage", stage, "--unit", unit]);
+    expect(started.status, started.out).toBe(0);
+    const dir = join(record, "construction", unit, stage);
+    mkdirSync(dir, { recursive: true });
+    for (const name of produces) writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
+    const review = ["review", "--stage", stage, "--reviewer", reviewer, "--unit", unit, "--iteration", "1"];
+    const asked = run(proj, "aidlc-log.ts", review);
+    expect(asked.status, asked.out).toBe(0);
+    appendFileSync(join(dir, artifactFilename(reviewed)),
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`);
+    const verdict = run(proj, "aidlc-log.ts", [...review, "--verdict", "READY"]);
+    expect(verdict.status, verdict.out).toBe(0);
+    const done = run(proj, "aidlc-state.ts", ["unit", "complete", "--stage", stage, "--unit", unit]);
+    expect(done.status, done.out).toBe(0);
+  }
+  const at = next(proj);
+  expect(at.unit, JSON.stringify(at)).toBe(unit);
+  return proj;
+}
+
+// The engine commands the step names, undo commands left out.
+function named(step: Step): string[] {
+  return [...String(step.message).matchAll(/`([^`]*(?:engine recompose|aidlc-orchestrate\.ts report)[^`]*)`/g)]
+    .map((match) => match[1])
+    .filter((command) => !command.includes("--add"));
+}
+
+function runNamed(proj: string, command: string): { status: number; out: string } {
+  const words = command.split(" ");
+  const at = words.findIndex((word) => word.endsWith("aidlc.ts") || word.endsWith("aidlc-orchestrate.ts"));
+  const args: string[] = [];
+  let quoted: string | null = null;
+  for (const word of words.slice(at + 1)) {
+    if (quoted !== null) {
+      quoted += ` ${word}`;
+      if (word.endsWith("'")) {
+        args.push(quoted.slice(1, -1));
+        quoted = null;
+      }
+    } else if (word.startsWith("'") && !word.endsWith("'")) quoted = word;
+    else args.push(word.replace(/^'(.*)'$/, "$1"));
+  }
+  return run(proj, words[at].endsWith("aidlc.ts") ? "aidlc.ts" : "aidlc-orchestrate.ts", args);
+}
+
+const segment = (message: string, from: string, to?: string): Step =>
+  ({ message: message.slice(message.indexOf(from), to === undefined ? undefined : message.indexOf(to)) });
+
+// Which Units the record says skipped the stage.
+function unitSkips(proj: string, stage: string): string[] {
+  return readAuditShardEvents(proj)
+    .filter((row) => row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Stage") === stage)
+    .map((row) => String(auditBlockField(row.block, "Unit")));
+}
+
+const report = (stage: string, unit?: string): string =>
+  `bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage}${unit ? ` --unit ${unit}` : ""} --result skipped --reason '${PERSON}'`;
+const recompose = (stage: string): string => `bun .claude/tools/aidlc.ts engine recompose --skip ${stage} --reason '${PERSON}'`;
+const ONLY = "If their words mean the alpha Unit only";
+const EVERY_FROM = "If they name no Unit, they mean every Unit from here";
+
+describe("a skip the person asks for on a team main that works every Unit itself", () => {
+  test("Code Generation for the alpha Unit only: alpha skips it, beta still owes it, and no refused way back is named", () => {
+    const proj = walk(["alpha", "beta"]);
+    says(proj, "skip code generation for alpha, I'll write that code myself");
+    const step = next(proj, ["--skip", "code-generation"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    const message = String(step.message);
+    expect(named(segment(message, ONLY, EVERY_FROM)), message).toEqual([report("code-generation", "alpha")]);
+    expect(named(segment(message, EVERY_FROM)), message).toEqual([recompose("code-generation")]);
+    expect(message).toContain('"Skipped Code Generation for the alpha Unit; the other Units still get it." and re-run `next`');
+    expect(message).toContain(
+      'If they name another Unit, run nothing and tell them in one line: "Code Generation can be skipped for one Unit ' +
+        'while that Unit is working on it; the alpha Unit is on Code Generation now." and stop.',
+    );
+    // A jump that names one Unit is refused on a team main: it is never offered as the way back.
+    expect(message).not.toContain("--stage code-generation --unit alpha");
+    const skipped = runNamed(proj, report("code-generation", "alpha"));
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(unitSkips(proj, "code-generation")).toEqual(["alpha"]);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] code-generation \u2014 EXECUTE");
+    // alpha is done: its team approval is next, not its Code Generation.
+    const after = next(proj);
+    expect(after.unit, JSON.stringify(after)).toBe("alpha");
+    expect(after.kind === "run-stage" && after.stage === "code-generation" && after.gate !== true, JSON.stringify(after)).toBe(false);
+  });
+
+  test("Code Generation for every Unit from here: the plan stops running it, with the walk's undo window", () => {
+    const proj = walk(["alpha", "beta"]);
+    const step = next(proj, ["--skip", "code-generation"]);
+    const message = String(step.message);
+    expect(message).toContain('"Skipped Code Generation for every Unit from here. You can undo that until Build and Test starts."');
+    expect(message).toContain(
+      "If they later ask to undo skipping it for every Unit, run `bun .claude/tools/aidlc.ts engine recompose --add code-generation`.",
+    );
+    const replanned = runNamed(proj, recompose("code-generation"));
+    expect(replanned.status, replanned.out).toBe(0);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] code-generation \u2014 SKIP");
+    expect(unitSkips(proj, "code-generation")).toEqual([]);
+  });
+
+  test("Functional Design, the walk's first step, for the alpha Unit only: alpha goes on to NFR Requirements", () => {
+    const proj = walk(["alpha", "beta"], false);
+    says(proj, "skip functional design for alpha");
+    const step = next(proj, ["--skip", "functional-design"]);
+    const message = String(step.message);
+    // Never the plan change recompose refuses for the current stage.
+    expect(message).not.toContain("engine recompose --skip functional-design");
+    expect(named(segment(message, ONLY, EVERY_FROM)), message).toEqual([report("functional-design", "alpha")]);
+    expect(named(segment(message, EVERY_FROM)), message).toEqual([report("functional-design")]);
+    expect(message).toContain('"Skipped Functional Design for the alpha Unit; the other Units still get it."');
+    expect(message).not.toContain("--stage functional-design --unit alpha");
+    const skipped = runNamed(proj, report("functional-design", "alpha"));
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(unitSkips(proj, "functional-design")).toEqual(["alpha"]);
+    const after = next(proj);
+    expect(`${after.kind} ${after.stage}/${after.unit}`, JSON.stringify(after)).toBe("run-stage nfr-requirements/alpha");
+  });
+
+  test("Functional Design for every Unit from here: every Unit that owes it skips it", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const step = next(proj, ["--skip", "functional-design"]);
+    const message = String(step.message);
+    expect(message).toContain(
+      '"Skipped Functional Design for every Unit from here. It can still be run on its own with `/aidlc --stage functional-design --single`."',
+    );
+    const skipped = runNamed(proj, report("functional-design"));
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(unitSkips(proj, "functional-design").sort()).toEqual(["alpha", "beta"]);
+  });
+
+  test("Code Generation named while alpha is on Functional Design: one Unit is answered, the plan change covers every Unit", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const step = next(proj, ["--skip", "code-generation"]);
+    const message = String(step.message);
+    expect(named(step), message).toEqual([recompose("code-generation")]);
+    expect(message).toContain("covers every Unit");
+    expect(message).toContain(
+      '"Code Generation can be skipped for one Unit while that Unit is working on it; the alpha Unit is on Functional Design now."',
+    );
+    expect(message).toContain('"Skipped Code Generation for every Unit from here. You can undo that until Build and Test starts."');
+  });
+
+  test("a Unit waiting at its team approval: a later step for that Unit only is answered with where it stands", () => {
+    const proj = walk(["alpha", "beta"], 1, "per-stage");
+    const step = next(proj, ["--skip", "nfr-requirements"]);
+    const message = String(step.message);
+    expect(named(step), message).toEqual([recompose("nfr-requirements")]);
+    expect(message).toContain(
+      '"NFR Requirements can be skipped for one Unit while that Unit is working on it; the alpha Unit is waiting for its approval now."',
+    );
+  });
+});
