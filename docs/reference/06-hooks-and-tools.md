@@ -2537,7 +2537,8 @@ the build, a Unit's) carries `brought_files_note`, and a dispatched build's
 project held when the work started, less the code itself on existing code and
 the files AI-DLC's install wrote whole and still holds as written (the same
 check the line uses), up to ten by name and then a count, and says to leave
-them as they are unless the work's plan changes one of them. On a teammate's
+them as they are, changing one only when the person asks for it or the work
+cannot be built without it. On a teammate's
 clone it names the files from the listing taken there (above). A Code Generation
 run on its own (`next --stage code-generation --single`) reads neither the
 work's listing nor another work's: its first step takes its own, the files

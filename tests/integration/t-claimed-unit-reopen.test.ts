@@ -141,7 +141,7 @@ function clone(remote: string, label: string): string {
   return dir;
 }
 
-function run(tool: string, args: string[], cwd: string) {
+function run(tool: string, args: string[], cwd: string, env: Record<string, string> = {}) {
   const result = spawnSync(process.execPath, [tool, ...args, "--project-dir", cwd], {
     cwd,
     encoding: "utf-8",
@@ -150,6 +150,7 @@ function run(tool: string, args: string[], cwd: string) {
       AIDLC_SKIP_ARTIFACT_GUARD: "1",
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      ...env,
     },
   });
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`, stdout: result.stdout ?? "" };
@@ -319,6 +320,37 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
     });
 
+    test(`${label}: a change they ask for in words to an approved stage is recorded in their words`, () => {
+      const { checkout } = claimedPastFunctionalDesign(shape);
+      const words = "I want to change Functional Design: names are trimmed.";
+      // The next step's question is on screen when they say it, as in the live run.
+      expect(run(LOG, ["decision", "--stage", "nfr-requirements", "--decision", "A choice", "--unit", "alpha"], checkout).status).toBe(0);
+      says(checkout, words);
+      const turn = readAuditShardEvents(checkout).filter((event) => event.event === "HUMAN_TURN").at(-1);
+      const id = /\*\*Message Id\*\*: (\S+)/.exec(turn?.block ?? "")?.[1];
+      expect(id, turn?.block).toBeDefined();
+      expect(turn?.block).toContain("**Open Questions**");
+      // The agent reads their words as a change: the jump print names the form for one.
+      const jump = run(ORCH, ["report", "--result", "resumed", "--choice", "jump", "--target", FD, "--unit", "alpha"], checkout);
+      expect(jump.status, jump.out).toBe(0);
+      expect((JSON.parse(jump.stdout) as Directive).message).toContain(`\`next --stage ${FD} --unit alpha --change\``);
+      // With no Unit named, the claimed Unit is the one the change is for.
+      const unnamed = run(ORCH, ["report", "--result", "resumed", "--choice", "jump", "--target", FD], checkout);
+      expect((JSON.parse(unnamed.stdout) as Directive).message, unnamed.out).toContain(`\`next --stage ${FD} --unit alpha --change\``);
+      const printed = next(checkout, ["--stage", FD, "--unit", "alpha", "--change"]);
+      expect(printed.kind, JSON.stringify(printed)).toBe("print");
+      const command = /reopen --target \S+ --stages \S+ --units alpha --scope feature --via change/.exec(printed.message ?? "")?.[0];
+      expect(command, printed.message).toBeDefined();
+      const reopened = run(JUMP, command!.split(" "), checkout, { AIDLC_SESSION_OVERRIDE: SESSION });
+      expect(reopened.status, reopened.out).toBe(0);
+      const row = readAuditShardEvents(checkout).filter((event) => event.event === "GATE_REJECTED").at(-1)?.block ?? "";
+      expect(row).toContain("**Reopen**: change");
+      expect(row).toContain("**User Input**: Request Changes");
+      expect(row).toContain(`**Feedback**: ${words}`);
+      expect(row).toContain(`**Message Id**: ${id}`);
+      expect(row).not.toContain("/aidlc --stage");
+    });
+
     test(`${label}: a move outside the Unit names a place the person can go`, () => {
       const { checkout } = claimedPastFunctionalDesign(shape);
       const before = recordSnapshot(checkout);
@@ -357,6 +389,19 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
     });
   }
 
+  test("a reopen they ask for as a jump keeps its jump row", () => {
+    const { checkout } = claimedPastFunctionalDesign("clone");
+    says(checkout, "Go back to Functional Design for alpha.");
+    const printed = next(checkout, ["--stage", FD, "--unit", "alpha"]);
+    expect(printed.kind, JSON.stringify(printed)).toBe("print");
+    const reopened = run(JUMP, printedReopen(printed.message).split(" "), checkout, { AIDLC_SESSION_OVERRIDE: SESSION });
+    expect(reopened.status, reopened.out).toBe(0);
+    const row = readAuditShardEvents(checkout).filter((event) => event.event === "GATE_REJECTED").at(-1)?.block ?? "";
+    expect(row).toContain("**Reopen**: jump");
+    expect(row).toContain(`**Feedback**: Reopened Functional Design for unit alpha (/aidlc --stage ${FD}).`);
+    expect(row).not.toContain("Message Id");
+  });
+
   test("at Code Generation the guards let the printed reopen through", () => {
     const { checkout } = claimedPastFunctionalDesign("shared");
     for (const slug of ["nfr-requirements", "nfr-design", "infrastructure-design"]) {
@@ -389,6 +434,40 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
     const reopened = run(JUMP, printedReopen(printed.message).split(" "), checkout);
     expect(reopened.status, reopened.out).toBe(0);
     expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha", gate: false });
+  });
+
+  test("at Code Generation the guards let the change the jump print offers through", () => {
+    const { checkout } = claimedPastFunctionalDesign("shared");
+    for (const slug of ["nfr-requirements", "nfr-design", "infrastructure-design"]) {
+      expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: slug, unit: "alpha" });
+      workStage(checkout, "alpha", slug, 1);
+      approveStage(checkout, "alpha", slug, "awaiting-approval");
+    }
+    expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+    says(checkout, "I want to change Functional Design: names are trimmed.");
+    // The person names no Unit; the agent reads a change and runs the form the print offers.
+    const jump = run(ORCH, ["report", "--result", "resumed", "--choice", "jump", "--target", FD], checkout);
+    const offered = /`next (--stage \S+(?: --unit \S+)? --change)`/.exec((JSON.parse(jump.stdout) as Directive).message ?? "")?.[1];
+    expect(offered, jump.out).toBeDefined();
+    const printed = next(checkout, offered!.split(" "));
+    expect(printed.kind, JSON.stringify(printed)).toBe("print");
+    const reopen = /reopen --target \S+ --stages \S+ --units alpha --scope feature --via change/.exec(printed.message ?? "")?.[0];
+    expect(reopen, printed.message).toBeDefined();
+    for (const hook of [PLAN_GUARD, TRANSITION_GUARD]) {
+      const judged = spawnSync(process.execPath, [hook], {
+        cwd: checkout,
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          session_id: SESSION,
+          tool_name: "Bash",
+          tool_input: { command: `aidlc engine jump ${reopen}` },
+          cwd: checkout,
+        }),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: checkout },
+        encoding: "utf-8",
+      });
+      expect(judged.status, `${hook}: ${judged.stderr}`).toBe(0);
+    }
   });
 
   test("the question offers no reopen a claimed checkout cannot take, and main still offers it", () => {

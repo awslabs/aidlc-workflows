@@ -380,14 +380,18 @@ export function broughtFileNames(projectDir: string, stateContent: string | null
   }
 }
 
-/** The sentence for the plan writer and the builder, naming the first of `names` and counting the rest. */
+/**
+ * The sentence for the plan writer and the builder, naming the first of `names` and counting the rest. Its reasons to
+ * change one are the Code Generation stage rule's own (Critical Rules); the work's plan is not one of them, since with
+ * Plan Approval off the plan is the agent's.
+ */
 export function broughtFilesNote(names: readonly string[]): string {
   const named = names.slice(0, NAMED_MAX).map((name) => `\`${name}\``).join(", ");
   const more = names.length > NAMED_MAX
     ? `, and ${names.length - NAMED_MAX} more that were here before this work started.`
     : ".";
   return `These files were in this project before this work started and are the person's: ${named}${more} ` +
-    "Leave them as they are unless this work's plan changes one of them.";
+    "Leave them as they are: change one only when the person asks for it or the work cannot be built without it.";
 }
 
 // The order the line names files in: deleted, then top-level, then by path.
