@@ -64,6 +64,10 @@ export type TurnEvent = {
   reply?: string;
   // A refusal's or a Stop hook's text as the tool logged it; safe.json keeps AI-DLC's own words of it (lib-shape.ts).
   reason?: string;
+  // How a failed Kiro call ended (kiroErrorFacts).
+  exitCode?: number;
+  timeoutMs?: number;
+  interrupted?: true;
   noTime?: boolean;
 };
 // A reply the person typed, as the tool logged it. Codex adds how it reached the tool.
@@ -368,9 +372,43 @@ function noteStop(t: Tally, tool: string, local: Local, ts: string, command: str
   ev(t, ts, { kind: "stop-hook-feedback", owner, ...(hook ? { hook } : {}), ...(text ? { reason: text.slice(0, 1500) } : {}) });
 }
 
-function noteError(t: Tally, tool: string, local: Local, ts: string, text: string) {
+function noteError(t: Tally, tool: string, local: Local, ts: string, text: string, facts: Partial<TurnEvent> = {}) {
   t.add(ts, () => local.errors.push({ tool, ts, text: text.slice(0, 600) }));
-  ev(t, ts, { kind: "tool-error" });
+  ev(t, ts, { kind: "tool-error", ...facts });
+}
+
+// How a failed Kiro call ended, from the trailer Kiro writes after the command's output, as numbers and a flag only (the
+// text itself stays in local/): its last line `Exit Code: N`; Kiro's own time limit as `Command timed out after Nms`
+// right before an exit of -1, and Ctrl+C as a `^C` line right before an exit of 130; or a result that is Kiro's
+// `This tool was interrupted before it reported a result…` (shapes measured on Kiro IDE; Kiro CLI v3 keeps the same
+// store). A command's own last line pairs with its own exit code, so it is not taken for Kiro's.
+export function kiroErrorFacts(raw: string): { exitCode?: number; timeoutMs?: number; interrupted?: true } {
+  let text = raw;
+  if (/^\s*[[{"]/.test(raw)) {
+    try {
+      const strings: string[] = [];
+      const walk = (v: unknown) => {
+        if (typeof v === "string") strings.push(v);
+        else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) if (k !== "type") walk(x);
+      };
+      walk(JSON.parse(raw));
+      text = strings.join("\n");
+    } catch {
+      // not JSON: read as written
+    }
+  }
+  if (/^\s*(?:Output:\s*)?This tool was interrupted before it reported a result/.test(text)) return { interrupted: true };
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const exit = lines.at(-1)?.match(/^Exit Code: (-?\d{1,10})$/);
+  if (!exit) return {};
+  const code = Number(exit[1]);
+  const before = lines.length > 1 ? lines[lines.length - 2] : "";
+  const timeout = code === -1 ? before.match(/^Command timed out after (\d{1,9})ms$/) : null;
+  return {
+    exitCode: code,
+    ...(timeout ? { timeoutMs: Number(timeout[1]) } : {}),
+    ...(code === 130 && before === "^C" ? { interrupted: true as const } : {}),
+  };
 }
 
 // Same tool with the same input three times or more = a loop worth naming.
@@ -894,7 +932,7 @@ function kiroFailure(t: Tally, tool: string, local: Local, ts: string, text: str
     });
     ev(t, ts, { kind: "tool-denied", detail: k });
   }
-  noteError(t, tool, local, ts, text);
+  noteError(t, tool, local, ts, text, kiroErrorFacts(text));
 }
 
 export function kiroV3(project: string, since: number, until: number, local: Local): Summary | null {

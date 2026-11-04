@@ -314,3 +314,36 @@ test("AI-DLC's message text is taken from its installed tools: the fixed parts, 
   writeFileSync(join(project, ".kiro", "tools", "aidlc-log.ts"), `${tool}\nconst x = "Contoso Bank asked for the review again";`);
   expect([...loadVocab(project, [".kiro"]).phrases].some((p) => p.includes("Contoso"))).toBe(false);
 });
+
+test("a failed Kiro call keeps how it ended as numbers and a flag: exit code, time limit, cut short; never its text", async () => {
+  const { kiroErrorFacts } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  // Kiro's own trailer (measured on a Kiro IDE run, 2026-11-04).
+  expect(kiroErrorFacts("Output:\n^C\r\n\nExit Code: 130")).toEqual({ exitCode: 130, interrupted: true });
+  expect(kiroErrorFacts("This tool was interrupted before it reported a result, so it may or may not have taken effect.")).toEqual({ interrupted: true });
+  expect(kiroErrorFacts("Output:\n\n\nCommand timed out after 120000ms\n\nExit Code: -1")).toEqual({ exitCode: -1, timeoutMs: 120000 });
+  expect(kiroErrorFacts("npm ERR! code ENOENT /srv/acme")).toEqual({});
+  // What the command printed is not read: above the trailer, nor as its own last line beside its own exit code.
+  expect(kiroErrorFacts("Output:\nCommand timed out after 5000ms\n^C\nInterrupted: 1 error\nexited with code 2\n\nExit Code: 1")).toEqual({ exitCode: 1 });
+  expect(kiroErrorFacts("Output:\nCommand timed out after 5000ms\n\nExit Code: 1")).toEqual({ exitCode: 1 });
+  expect(kiroErrorFacts("Output:\n^C\n\nExit Code: 1")).toEqual({ exitCode: 1 });
+  expect(kiroErrorFacts("Output:\nThis tool was interrupted before it reported a result, so it may or may not have taken effect.")).toEqual({ interrupted: true });
+  expect(kiroErrorFacts(JSON.stringify([{ type: "text", text: "Output:\n\nExit Code: 2" }]))).toEqual({ exitCode: 2 });
+  expect(kiroErrorFacts(JSON.stringify([{ type: "text", text: "This tool was interrupted before it reported a result." }]))).toEqual({ interrupted: true });
+  const v = loadVocab(install(), [".kiro"]);
+  const t = new Shaper(v, new Labels()).transcript({
+    tool: "kiro (v3: Kiro IDE)", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 1, toolErrors: 1, denials: {}, aidlcHookBlocks: {},
+    otherHookBlocks: 0, unattributedHookBlocks: 0, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {},
+    repeats: [], timeline: [], subagents: {}, engine: null, toolVersions: {}, models: {}, efforts: {}, agents: {},
+    approvalModes: {}, handRunChecks: [], reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [],
+    events: [
+      { ts: "2026-11-04T07:00:00Z", session: "s1", kind: "tool-error", exitCode: -1, timeoutMs: 120000 },
+      { ts: "2026-11-04T07:01:00Z", session: "s1", kind: "tool-error", exitCode: 130, interrupted: true },
+      { ts: "2026-11-04T07:02:00Z", session: "s1", kind: "tool-error", exitCode: 123456789, timeoutMs: 1.5 },
+    ],
+  }) as { events: Record<string, unknown>[] };
+  expect(t.events[0]).toMatchObject({ kind: "tool-error", exitCode: -1, timeoutMs: 120000 });
+  expect(t.events[1]).toMatchObject({ exitCode: 130, interrupted: true });
+  expect(t.events[2].exitCode).toBeUndefined();
+  expect(t.events[2].timeoutMs).toBeUndefined();
+  expect(safeHits(gateContext(v, { entries: [] }), { transcripts: [t] })).toEqual([]);
+});

@@ -505,6 +505,7 @@ const SAFE_FIELDS = new Set([
   "timeline", "tool", "toolCalls", "toolErrors", "toolVersions", "tools", "toolsUsed", "totalStages", "transcriptCursors",
   "transcripts", "trees", "ts", "unattributedHookBlocks", "unboundApprovals", "until", "version", "versionsMissing", "window",
   "rows", "seq", "fields", "events", "session", "input", "verb", "owner", "reply", "toolsNamed", "engineAfter",
+  "exitCode", "timeoutMs", "interrupted",
 ]);
 
 // `parent`: the field the object sits under, "" below a data map's key. lib-check.ts reads safe.json by the

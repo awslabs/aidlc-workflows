@@ -62,7 +62,10 @@ two folders are unrelated.
     `owner` (`aidlc`, `other`, `unknown`) of a refusal, `reason` of a refusal or a Stop hook's feedback (its text, kept
     by the rule of an audit row's `Reason`: AI-DLC's own phrases as written, the rest labels; Kiro CLI v3 and Kiro IDE
     log none),
-    `detail` of a denial, `reply` (what the person typed, as a label). Kinds: `person-turn`, `call`, `aidlc-command`, `tool-error`, `tool-denied`, `approval-prompt`,
+    `detail` of a denial, `reply` (what the person typed, as a label), and of a Kiro `tool-error` how the call ended, read
+    from the trailer Kiro writes after the command's output, as numbers and a flag only: `exitCode`, `timeoutMs` (Kiro's
+    time limit it hit), `interrupted` (shapes measured on Kiro IDE; Kiro CLI v3 keeps the same store); other tools'
+    failed calls carry none (their shapes are not measured). Kinds: `person-turn`, `call`, `aidlc-command`, `tool-error`, `tool-denied`, `approval-prompt`,
     `stop-hook-feedback`, `aidlc-hook-block`, `other-hook-block`, `hook-block` (a refusal whose record does not say
     whose). `noTime`: the tool logged no time of its own for it (Kiro CLI v2), so `ts` is its session's; Kiro CLI v2's
     `repeats` carry its session's time the same way.

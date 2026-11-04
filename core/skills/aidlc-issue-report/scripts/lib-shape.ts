@@ -425,6 +425,11 @@ export class Shaper {
           // A refusal's text by the rule of an audit row's `Reason` (lib-rows.ts): AI-DLC's own phrases kept, the rest
           // labels. lib-gate.ts reads it back by the same rule.
           ...(e.reason !== undefined ? { reason: shapeValue(this.v, this.rowShape, "", "Reason", e.reason) } : {}),
+          // An exit code holds four digits at most (0-255, 128 + a signal, -1): a longer one could carry a number.
+          ...(Number.isInteger(e.exitCode) && Math.abs(e.exitCode as number) <= 9999 ? { exitCode: e.exitCode } : {}),
+          // A time limit in milliseconds up to seven digits (Kiro's is 120000), for the same reason.
+          ...(Number.isInteger(e.timeoutMs) && (e.timeoutMs as number) >= 0 && (e.timeoutMs as number) < 1e7 ? { timeoutMs: e.timeoutMs } : {}),
+          ...(e.interrupted === true ? { interrupted: true } : {}),
           ...(e.noTime ? { noTime: true } : {}),
         })),
       reportModels: modelMap(s.reportModels),
