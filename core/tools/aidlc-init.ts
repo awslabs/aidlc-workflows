@@ -6777,6 +6777,14 @@ function prepareRefreshSource(
     : descriptor.distribution === "codex"
     ? join(currentHarness, "config.toml")
     : null;
+  if (descriptor.distribution === "claude" && currentConfiguration && regularFile(currentConfiguration)) {
+    try {
+      JSON.parse(withoutBom(readFileSync(currentConfiguration, "utf-8")));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new ProjectSettingsError(`${descriptor.harnessDir}/settings.json`, reason);
+    }
+  }
   // Kiro CLI always stages: its MCP servers are merged and granted per project.
   if (
     descriptor.distribution !== "kiro" &&
@@ -7930,6 +7938,14 @@ function selectSource(
 class ProjectLinkError extends Error {
   constructor(readonly path: string, link: boolean) {
     super(`${shownValue(path)} is ${link ? "a link" : "not a regular file"}`);
+  }
+}
+
+// The person's .claude/settings.json does not parse. Config merges into it, so
+// it stops before any read of it, naming the file; the file is left as it is.
+class ProjectSettingsError extends Error {
+  constructor(readonly path: string, reason: string) {
+    super(`${shownValue(path)} is not valid JSON (${reason})`);
   }
 }
 
@@ -14526,6 +14542,15 @@ export async function main(
         `put the file itself at ${shownValue(error.path)}, then run ${
           rerun ? `\`${rerun}\`` : "the same command"
         } again`,
+      ), options);
+      return;
+    }
+    if (error instanceof ProjectSettingsError) {
+      const rerun = configRerunWith(input, projectDir, []);
+      emitResult(failure(
+        rawMessage,
+        EXIT.integrity,
+        `correct ${shownValue(error.path)}, then run ${rerun ? `\`${rerun}\`` : "the same command"} again`,
       ), options);
       return;
     }
