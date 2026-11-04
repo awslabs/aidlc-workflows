@@ -1722,12 +1722,31 @@ function candidateEvidence(
     return (stage?.produces ?? []).length > 0 &&
       filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
   }));
+  // The clone stamped each receipt with the run floor it read from the whole
+  // audit record (the workflow's own rows plus its own). Read the candidate's
+  // receipts against the same floor: main's rows that are not Unit attempt
+  // rows, as the commit this evidence is read against holds them, with the
+  // transported rows on top. Transported rows alone hold no WORKFLOW_STARTED,
+  // so every real receipt would miss the floor; a file in this checkout that
+  // was never committed does not move it.
+  const mainShards = gitOutput(
+    projectDir,
+    ["ls-tree", "--name-only", liveIntegrationOid, "--", `${recordPrefix}/audit/`],
+    "Cannot list the integration audit shards",
+  )
+    .split(/\r?\n/)
+    .filter((path) => isActiveIntentAuditPath(path, recordPrefix));
+  const floorRows = candidateAuditEvents(projectDir, liveIntegrationOid, mainShards).filter((row) =>
+    !TRANSPORTED_ATTEMPT_EVENTS.has(row.event) &&
+    !TRANSPORTED_DATA_EVENTS.has(row.event)
+  );
+  const snapshotRows = [...floorRows, ...authorityRows];
   const snapshots = new Map(stages.map((stage) => [
     stage,
     unitLifecycleSnapshot(
       projectDir,
       stage,
-      authorityRows,
+      snapshotRows,
       integrationState,
       {
         artifactFingerprint: (stageNode, unitName) =>
