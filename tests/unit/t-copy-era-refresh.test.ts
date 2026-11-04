@@ -5,9 +5,10 @@
 // person's by the bytes those releases shipped (scripts/copy-era-files.json,
 // merged into each harness's projection by scripts/package.ts). The fixtures
 // are the files as 2.6.18 and 2.3.0 shipped them: an agent this release still
-// ships, and the Application Design stage it no longer ships. Unchanged, the
-// first is refreshed and the second removed and listed; changed by the person,
-// a file is kept and named, never overwritten.
+// ships, the Application Design stage it no longer ships, and 2.3.0's own
+// settings with a hook this release retired. Unchanged, the first is refreshed
+// and the others removed and listed, each once; changed by the person, a file
+// is kept and named, never overwritten.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -63,6 +64,16 @@ describe("t-copy-era-refresh", () => {
     expect(r.out).not.toContain("schema validation failed");
     expect(r.out.match(/no longer part of AI-DLC/g)?.length).toBe(1);
     expect(r.out).toContain(RETIRED);
+  });
+
+  test("a 2.3.0 tree's own settings and retired hook: the hook is removed once and the refresh lands", () => {
+    const project = copyEraProject();
+    for (const rel of [".claude/settings.json", ".claude/hooks/aidlc-mint-presence.ts"]) cpSync(join(OLD, rel), join(project, rel));
+    const r = config(project);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).not.toContain("transaction operations overlap");
+    expect(existsSync(join(project, ".claude", "hooks", "aidlc-mint-presence.ts"))).toBe(false);
+    expect(existsSync(join(project, RETIRED))).toBe(false);
   });
 
   test("a copy-era file the person changed is kept and named, nothing overwritten", () => {
