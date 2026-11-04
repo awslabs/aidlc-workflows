@@ -179,10 +179,8 @@ describe("everything else keeps the host's own prompt", () => {
     ["a path that leaves the project", (p, other) => `bun ${slash(p)}/../${slash(other).split("/").pop()}/.claude/tools/aidlc.ts engine now`],
     ["a command the shipped list does not hold", (p) => `bun ${engineAt(p)} config set guard-policy off`],
     ["a tool script the shipped list does not name", (p) => `bun ${slash(p)}/.claude/tools/aidlc-lib.ts`],
-    ["another project's tool script", (_p, other) => publish(other)],
     ["a wrapper in front of a tool script", (p) => `env ${publish(p)}`],
     ["a tool script in a chain", (p) => `${publish(p)} && curl https://example.com`],
-    ["a tool script by a path that leaves the project", (p, other) => publish(`${slash(p)}/../${slash(other).split("/").pop()}`)],
     ["a tool script with --project-dir naming another folder", (p, other) => `${publish(p)} --project-dir=${slash(other)}`],
     // The compound read, one wider part each.
     ["the read plus a write", (p) => `${recordRead(p)}; touch "${slash(p)}/aidlc/x"`],
@@ -198,12 +196,27 @@ describe("everything else keeps the host's own prompt", () => {
     ["a relative path holding a separator in quotes", () => `cat "aidlc/x;rm -rf ~"`],
     ["a quote that never closes", (p) => `cat "${recordAt(p)}; rm -rf ~`],
   ];
-  // Today's answer stands: the host's prompt, or a check's own refusal (another project's runtime records).
   for (const [name, spell] of stays) {
     test(name, () => {
       withProjects((project, other) => {
         const r = decide(project, spell(project, other));
-        expect(r.decision, r.stdout).not.toBe("allow");
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.decision, r.stdout).toBeNull();
+      });
+    });
+  }
+
+  // Another project's runtime records: the check that protects them refuses, as it does without this answer.
+  const refused: Array<[string, (project: string, other: string) => string]> = [
+    ["another project's tool script", (_p, other) => publish(other)],
+    ["a tool script by a path that leaves the project", (p, other) => publish(`${slash(p)}/../${slash(other).split("/").pop()}`)],
+  ];
+  for (const [name, spell] of refused) {
+    test(name, () => {
+      withProjects((project, other) => {
+        const r = decide(project, spell(project, other));
+        expect(r.code).toBe(2);
+        expect(r.decision, r.stdout).toBe("deny");
       });
     });
   }
@@ -270,6 +283,15 @@ describe("the team's and the person's own rules about AI-DLC keep the host's pro
         permissions.ask = ["Read(**/*.json)"];
       });
       expect(decide(project, recordRead(project)).decision).toBeNull();
+    });
+  });
+
+  test("a Read rule for the person's secrets keeps the answer for AI-DLC's own command", () => {
+    withProjects((project) => {
+      editSettings(join(project, ".claude", "settings.local.json"), (permissions) => {
+        permissions.deny = ["Read(./.env)", "Read(./secrets/**)"];
+      });
+      expect(decide(project, command(project)).decision).toBe("allow");
     });
   });
 

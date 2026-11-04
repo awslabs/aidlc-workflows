@@ -99,7 +99,8 @@ before: another project's tools, an assignment or wrapper in front of `bun`, a
 writes, or any other part. Claude Code applies deny and ask rules over a
 hook's allow, but a Bash rule written for AI-DLC's own spelling never meets the
 absolute one, so a deny or ask rule that could be meant for these commands
-(one naming `aidlc`, a `Read` rule, or a `Bash` rule naming `bun` or `.claude`)
+(one naming `aidlc`, a `Bash` rule naming `bun` or `.claude`, or for the read a
+`Read` rule)
 in the project's `settings.json` or `settings.local.json`, the user's
 `settings.json`, or a managed settings file also means no answer, and so does a
 team taking a rule out of the list. Policy that arrives by MDM, the Windows

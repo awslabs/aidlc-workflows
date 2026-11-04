@@ -46,13 +46,13 @@ function claudeSettingsFiles(projectDir: string, harness: string): string[] {
 }
 
 // The project's own allow list, or null when a deny or ask rule could be meant for these commands or a
-// settings file cannot be read: the host decides alone. Read rules count because the host applies
-// them to `cat` by path; other tools' rules (`Edit(.claude/settings.json)`) do not.
-function claudeOwnCommandRules(projectDir: string, harness: string): { allow: string[] } | null {
+// settings file cannot be read: the host decides alone. Read rules count for the record read (`reads`),
+// as the host applies them to `cat` by path; other tools' rules (`Edit(.claude/settings.json)`) never.
+function claudeOwnCommandRules(projectDir: string, harness: string, reads: boolean): { allow: string[] } | null {
   const shellWord = new RegExp(`\\bbun\\b|${harness.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i");
   const meantForThese = (rules: unknown): boolean =>
     Array.isArray(rules) && rules.some((rule) => typeof rule === "string" &&
-      (/aidlc/i.test(rule) || /^Read\b/i.test(rule) || (/^Bash\b/i.test(rule) && shellWord.test(rule))));
+      (/aidlc/i.test(rule) || (reads && /^Read\b/i.test(rule)) || (/^Bash\b/i.test(rule) && shellWord.test(rule))));
   let allow: string[] = [];
   for (const [index, file] of claudeSettingsFiles(projectDir, harness).entries()) {
     if (!existsSync(file)) continue;
@@ -172,8 +172,8 @@ export function claudeAllowsOwnCommand(command: string, projectDir: string): boo
   if (words?.rawWords[0] === "bun") {
     const relative = relativeToolCommand(words, projectDir, harness);
     if (relative === null) return false;
-    return claudeOwnCommandRules(projectDir, harness)?.allow.some((rule) =>
+    return claudeOwnCommandRules(projectDir, harness, false)?.allow.some((rule) =>
       rule.startsWith(`Bash(bun ${harness}/tools/`) && ruleAllows(rule, relative)) === true;
   }
-  return ownRecordRead(command, projectDir) && claudeOwnCommandRules(projectDir, harness) !== null;
+  return ownRecordRead(command, projectDir) && claudeOwnCommandRules(projectDir, harness, true) !== null;
 }
