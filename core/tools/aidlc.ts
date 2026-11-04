@@ -3061,11 +3061,13 @@ async function runGroupMembers(
     // A payload this process cannot read goes to every member, which judges it.
   }
   let code = 0;
+  let printed = false;
   const refusals: string[] = [];
   const failures: string[] = [];
   for (const member of action.members) {
     if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
     const said = await runGroupMember(member, input);
+    printed ||= said.printed;
     if (said.code === 2) {
       code = 2;
       if (said.reason && !refusals.includes(said.reason)) refusals.push(said.reason);
@@ -3080,7 +3082,29 @@ async function runGroupMembers(
   // it builds the deny decision from it), so a direct descriptor write would
   // reach the person's terminal but leave that decision without its reason.
   if (said.length > 0) process.stderr.write(said.join(""));
+  // Every check passed and none printed (an answer beside a notice is not JSON to the host).
+  if (code === 0 && !printed && toolName === "Bash") {
+    const allow = await claudeOwnCommandAllow(input);
+    if (allow) process.stdout.write(allow);
+  }
   return code;
+}
+
+// Claude Code runs AI-DLC's own command without a prompt however a helper spells this project's
+// path (aidlc-lib.ts claudeAllowsOwnCommand); its deny and ask rules still apply over this answer.
+// No reason text, so the person reads nothing new.
+async function claudeOwnCommandAllow(input: string): Promise<string> {
+  let payload: { hook_event_name?: unknown; tool_input?: { command?: unknown } };
+  try {
+    payload = JSON.parse(input);
+  } catch {
+    return "";
+  }
+  const command = payload.tool_input?.command;
+  if (payload.hook_event_name !== "PreToolUse" || typeof command !== "string" || runtimeHarnessName() !== "claude") return "";
+  const lib = await import("./aidlc-lib.ts");
+  if (!lib.claudeAllowsOwnCommand(command, lib.resolveProjectDirFromHook(import.meta.url))) return "";
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } })}\n`;
 }
 
 // One member, with what it said collected so the group can carry each refusal
@@ -3089,22 +3113,29 @@ async function runGroupMembers(
 async function runGroupMember(
   member: HookGroupMember & { path: string },
   input: string,
-): Promise<{ code: number; reason: string }> {
+): Promise<{ code: number; reason: string; printed: boolean }> {
   if (!existsSync(member.path)) {
     return {
       code: 1,
       reason: `aidlc engine hook ${member.hook}: not available in this install\n`,
+      printed: false,
     };
   }
   hookTrace("hook-group-member-begin", { hook: member.hook });
   const collected: string[] = [];
+  let printed = false;
   const stderrWrite = process.stderr.write;
+  const stdoutWrite = process.stdout.write;
   process.stderr.write = ((chunk: unknown) => {
     collected.push(
       typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8"),
     );
     return true;
   }) as typeof process.stderr.write;
+  process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+    printed = true;
+    return (stdoutWrite as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+  }) as typeof process.stdout.write;
   let code: number;
   try {
     // Named phases, because this process loads the hook's code where a hook of
@@ -3127,9 +3158,10 @@ async function runGroupMember(
     code = 1;
   } finally {
     process.stderr.write = stderrWrite;
+    process.stdout.write = stdoutWrite;
   }
   hookTrace("hook-group-member-end", { hook: member.hook, code });
-  return { code, reason: collected.join("") };
+  return { code, reason: collected.join(""), printed };
 }
 
 async function runSensorScriptFile(
