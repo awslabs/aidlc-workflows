@@ -2786,9 +2786,12 @@ aidlc engine workspace codekb --repo <repo>
 
 It prints the active space's deterministic
 `aidlc/spaces/<space>/codekb/<repo>/` path. Add `--json` for
-`{space, repo, dir}`. The query writes nothing, creates no directory, and emits
-no audit event; reverse-engineering stage prose invokes the same route so paths
-are never derived by hand.
+`{space, repo, dir, record, intent, stage, staged}`: also the active record, its
+intent's slug, the repo's Reverse Engineering staging folder and the files
+already in it (`null` and `[]` when no work is selected), every path relative to
+the project. The query writes nothing, creates no directory, and emits no audit
+event; reverse-engineering stage prose invokes the same route so paths are never
+derived by hand.
 
 ### `aidlc-utility codekb-snapshot` - bind a scan to source and store generations
 

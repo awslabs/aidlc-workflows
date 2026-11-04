@@ -116,10 +116,15 @@ describe("Reverse Engineering's tools in a project folder named with a space or 
       expect(codekbRepoName(project)).toBe(repo);
       const path = utility(project, ["codekb-path", "--json"]);
       expect(path.status, path.stderr).toBe(0);
+      // No work is selected here, so there is no record, intent or staging folder to name.
       expect(JSON.parse(path.stdout)).toEqual({
         space: DEFAULT_SPACE,
         repo,
         dir: `aidlc/spaces/${DEFAULT_SPACE}/codekb/${repo}`,
+        record: null,
+        intent: null,
+        stage: null,
+        staged: [],
       });
       for (const args of [[], ["--repo", repo]]) {
         const snapshot = utility(project, ["codekb-snapshot", ...args, "--paths", "./", "--json"]);

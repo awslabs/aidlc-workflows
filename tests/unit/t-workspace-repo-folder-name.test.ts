@@ -13,7 +13,7 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -181,7 +181,19 @@ describe("work in a workspace whose repo folder has a space or another character
     created(proj);
     const path = utility(proj, ["codekb-path", "--repo", "my lib", "--json"]);
     expect(path.status, path.out).toBe(0);
-    expect(JSON.parse(path.stdout)).toEqual({ space: DEFAULT_SPACE, repo: "my lib", dir: `aidlc/spaces/${DEFAULT_SPACE}/codekb/my lib` });
+    // The record, its intent's slug and the staging folder come from the engine, so the stage's agent reads none of
+    // them from the record by shell.
+    const named = JSON.parse(path.stdout) as Record<string, unknown>;
+    expect(named).toMatchObject({ space: DEFAULT_SPACE, repo: "my lib", dir: `aidlc/spaces/${DEFAULT_SPACE}/codekb/my lib`, intent: "fix-the-greeting", staged: [] });
+    expect(String(named.record)).toMatch(new RegExp(`^aidlc/spaces/${DEFAULT_SPACE}/intents/\\d{6}-fix-the-greeting$`));
+    expect(named.stage).toBe(`${named.record}/.aidlc-engine/codekb-stage-my lib/`);
+    expect(Object.keys(named).sort()).toEqual(["dir", "intent", "record", "repo", "space", "stage", "staged"]);
+    // What is in the staging folder is listed by name.
+    const staging = join(proj, String(named.stage));
+    mkdirSync(staging, { recursive: true });
+    writeFileSync(join(staging, "architecture.md"), "# Architecture\n");
+    expect(JSON.parse(utility(proj, ["codekb-path", "--repo", "my lib", "--json"]).stdout).staged).toEqual(["architecture.md"]);
+    unlinkSync(join(staging, "architecture.md"));
     const paths = ["src/"];
     const snapshot = utility(proj, ["codekb-snapshot", "--repo", "my lib", "--paths", paths.join(","), "--json"]);
     expect(snapshot.status, snapshot.out).toBe(0);

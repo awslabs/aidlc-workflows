@@ -295,6 +295,7 @@ import {
   listIntentDirs,
   legacyWorktreePath,
   listIntents,
+  engineDir,
   workToPickUp,
   finishedWork,
   workStanding,
@@ -510,7 +511,7 @@ import {
   declaredProjectType,
   installWithoutReplacing,
 } from "./aidlc-lib.ts";
-import { chatTookStep } from "./aidlc-record-core.ts";
+import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -10074,12 +10075,20 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   if (kept.length > 0) process.stdout.write(`${kept.join("\n")}\n`);
 }
 
+// The folder a repo's Reverse Engineering candidate is written in before codekb-publish swaps it into the store
+// (reverse-engineering.md). Made at dispatch (aidlc-orchestrate.ts prepareRecordFolders), printed by codekb-path.
+export function codekbStageDir(projectDir: string, repo: string, intent?: string, space?: string): string {
+  return join(engineDir(projectDir, intent, space), `codekb-stage-${repo}`);
+}
+
 // `aidlc-utility.ts codekb-path [--repo <name>] [--json]` — read-only. Prints the
 // deterministic space-level per-repo codekb directory (forward-slash, workspace-
 // relative) the reverse-engineering stage writes its 9 artifacts into. The repo
 // is the caller-supplied --repo, else the engine-resolved codekbRepoName (the
 // lone recorded repo, or the project folder's name as a repo name when none is
-// recorded). No mkdir,
+// recorded). With --json it also names the active record, its intent's slug, the
+// repo's staging folder and the files staged in it, so the stage's agent runs no
+// shell read of the record for them. Every path is workspace-relative. No mkdir,
 // no state read, no audit — mirrors the intent/space read-only query arms.
 function handleCodekbPath(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
@@ -10090,7 +10099,23 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
     : codekbRepoName(projectDir, space, selection.intent ?? undefined);
   const dir = relativeCodekbDir(projectDir, repo, space);
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ space, repo, dir })}\n`);
+    const record = relativeRecordDirForSelection(selection);
+    const stageDir = record === null ? null : codekbStageDir(projectDir, repo, selection.intent ?? undefined, space);
+    let staged: string[] = [];
+    try {
+      if (stageDir !== null) staged = readdirSync(stageDir).sort();
+    } catch {
+      // Not made yet: nothing is staged.
+    }
+    process.stdout.write(`${JSON.stringify({
+      space,
+      repo,
+      dir,
+      record,
+      intent: record === null ? null : listIntents(projectDir, space).find((entry) => entry.dirName === selection.intent)?.slug ?? null,
+      stage: stageDir === null ? null : `${relative(projectDir, stageDir).split(sep).join("/")}/`,
+      staged,
+    })}\n`);
     return;
   }
   process.stdout.write(`${dir}/\n`);
