@@ -644,7 +644,9 @@ concurrent claimant succeeds.
 this claim to `per-stage` or `unit-end`; when omitted, the workflow's affirmed
 Unit gate rhythm is used. Claims are refused until dependencies and any required
 walking skeleton are complete, and a checkout with a live claim routes only its
-stamped Unit.
+stamped Unit. While main is back at Units Generation changing the Unit plan, a
+claim still goes ahead, and its result says once that if the approved plan
+changes that Unit's own entry, pin asks for a rebase onto main.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 
