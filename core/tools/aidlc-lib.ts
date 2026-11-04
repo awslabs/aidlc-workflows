@@ -480,7 +480,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
-import { readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
+import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -763,10 +763,10 @@ function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
 }
 
 function registrationLines(value: unknown): Pick<HookActivation, "registration"> {
-  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown } | null | undefined;
+  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown; unwired?: unknown } | null | undefined;
   return typeof lines?.file === "string" && lines.file !== "" && typeof lines.missing === "string" &&
-      typeof lines.invalid === "string"
-    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid } }
+      typeof lines.invalid === "string" && typeof lines.unwired === "string"
+    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid, unwired: lines.unwired } }
     : {};
 }
 
@@ -794,7 +794,7 @@ export interface HookActivation {
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
-  registration?: { file: string; missing: string; invalid: string };
+  registration?: { file: string; missing: string; invalid: string; unwired: string };
   startedInsideProject?: string;
 }
 
@@ -27854,28 +27854,40 @@ export function projectSettingsRepair(distribution: string): string {
   return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
 }
 
-// Missing, or there and not valid JSON (read as doctor reads it); null for a
-// valid file and for one that cannot be opened for another reason, which the
-// lines would not describe. Never throws: both callers run it outside a try.
-function registrationFault(path: string): "missing" | "invalid" | null {
-  let text: string;
+/**
+ * The harness's line for its hook registration file when that file is
+ * missing, not valid JSON, or valid and running none of AI-DLC's hooks (read
+ * through doctor's walk), with doctor's repair in it and `<entry>` left for
+ * the caller; null for a file that runs them, whatever else switches them off,
+ * for one that cannot be opened for another reason, which the lines would not
+ * describe, and for a harness that declares none (only Claude Code does). No
+ * setting brings those hooks back, so this line comes first. Never throws.
+ */
+export function registrationFault(projectDir?: string): string | null {
+  const registration = hookActivation()?.registration;
+  if (!registration) return null;
+  const project = resolveProjectDir(projectDir);
+  let fault: "missing" | "invalid" | "unwired" | null = null;
   try {
-    text = readFileSync(path, "utf-8");
+    const parsed = JSON.parse(withoutBom(readFileSync(join(project, registration.file), "utf-8")));
+    // AI-DLC's status line is not a hook and writes no heartbeat.
+    if (claudeSettingsHookTargets(project, parsed).every((target) => target === "statusline")) fault = "unwired";
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : null;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") fault = "missing";
+    else if (error instanceof SyntaxError) fault = "invalid";
   }
-  try {
-    JSON.parse(withoutBom(text));
-    return null;
-  } catch {
-    return "invalid";
-  }
+  return fault === null
+    ? null
+    : registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
 }
 
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(projectDir?: string): string {
   const startedInside = startedInsideProjectStep(projectDir);
   if (startedInside !== null) return startedInside;
+  const faultLine = registrationFault(projectDir);
+  if (faultLine !== null) return fillHookActivationText(faultLine, projectDir);
   const declared = hookActivation()?.recovery;
   if (declared) return fillHookActivationText(declared, projectDir);
   return HOOK_EXECUTION_RECOVERY_OTHER;
@@ -27940,14 +27952,12 @@ export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () 
   // Started in a folder inside the project, no file or setting brings the
   // hooks back: the one step is to start the tool in the project folder.
   const startedInside = startedInsideProjectLine(project);
-  const registration = activation.registration;
-  const fault = startedInside === null && registration ? registrationFault(join(project, registration.file)) : null;
+  const faultLine = startedInside === null ? registrationFault(project) : null;
   let step: string;
   if (startedInside !== null) {
     step = `Show the person this line and end your turn: "${startedInside}"`;
-  } else if (registration && fault) {
-    const line = registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
-    step = `Show the person this line and end your turn: "${line}"`;
+  } else if (faultLine !== null) {
+    step = `Show the person this line and end your turn: "${faultLine}"`;
   } else {
     // Through a link the agent would change a file outside the project.
     const edits = activation.agentStepEdits;
