@@ -29,7 +29,7 @@
 //
 // FIXTURE DISCIPLINE - replicate the .sh's make_project (t91) EXACTLY:
 // a fresh temp project under aidlc-docs/ + a self-contained .claude/ skeleton
-// with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-lib.ts,
+// with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-stage-diary.ts, aidlc-lib.ts,
 // aidlc-settings.ts, aidlc-install-paths.ts, aidlc-distribution.ts,
 // aidlc-channel.ts, aidlc-version.ts,
 // aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-guard-fences.ts,
@@ -129,6 +129,10 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-runtime.ts"),
     join(proj, ".claude", "tools", "aidlc-runtime.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-stage-diary.ts"),
+    join(proj, ".claude", "tools", "aidlc-stage-diary.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-lib.ts"),

@@ -280,6 +280,7 @@ function makeProject(withState: boolean): string {
   mkdirSync(join(proj, ".claude", "hooks"), { recursive: true });
   for (const t of [
     "aidlc-runtime.ts",
+    "aidlc-stage-diary.ts",
     "aidlc-lib.ts",
     "aidlc-settings.ts",
     "aidlc-markdown.ts",
