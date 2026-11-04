@@ -151,6 +151,7 @@ import {
   intentUuidForSelection,
   isArchivedIntent,
   isoTimestamp,
+  isPersonAskedSkipReason,
   isTeamUnitOwnership,
   knownAuditShardName,
   legacyBoltName,
@@ -258,6 +259,7 @@ export {
   isArchivedIntent,
   isBindableIntentRecordName,
   isoTimestamp,
+  isPersonAskedSkipReason,
   isTeamUnitOwnership,
   knownAuditShardName,
   legacyBoltName,
@@ -266,6 +268,7 @@ export {
   maximalAttemptEvents,
   parseAuditShardEvents,
   parseCheckboxes,
+  PERSON_ASKED_SKIP_REASON,
   type ProcessIdentity,
   projectStateForDigest,
   readActiveIntentCursor,
@@ -7169,19 +7172,6 @@ export function personLineHeardThisTurn(projectDir: string, sessionId: string, l
 
 export function markPersonLineHeardThisTurn(projectDir: string, sessionId: string, line: string): void {
   markPersonLinesHeard(projectDir, sessionId, [turnKeyedPersonLine(projectDir, line)]);
-}
-
-// The reason the engine's skip step hands the agent for a stage the person
-// asked to skip where it stands (orchestrate's planChangeDirective). report
-// and the state tool read it back: that skip is the person's, so a stage that
-// must run, or one waiting at its own question, is skipped as they asked.
-export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
-
-// Whether a skip's reason is the person's: the engine's token, as the step
-// names it or with the agent's words after it (the person's why, which stays
-// in the record).
-export function isPersonAskedSkipReason(reason: string | null | undefined): boolean {
-  return reason?.startsWith(PERSON_ASKED_SKIP_REASON) === true;
 }
 
 // What the person asked to leave out of a build (#1342): the `Deferred` items

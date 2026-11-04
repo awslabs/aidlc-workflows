@@ -57,7 +57,6 @@ import {
   CONSTRUCTION_POLICY_RECOVERY,
   swarmNeedsStageMajor,
   leftOutLine,
-  PERSON_ASKED_SKIP_REASON,
   isPersonAskedSkipReason,
   auditShardName,
   appendSlug,
@@ -8911,7 +8910,7 @@ function handleSkip(args: string[]): void {
   // work is a new project) or the person asked to skip it, so the gate
   // closes as skipped, not approved.
   const personDecided = parseStateStageSuffixes(content).get(slug) === "SKIP" ||
-    reason === PERSON_ASKED_SKIP_REASON;
+    isPersonAskedSkipReason(reason);
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
@@ -9077,7 +9076,7 @@ function handleSkip(args: string[]): void {
   }
   // The stage the person asked to skip spends what they typed for it, as a
   // Unit's step does.
-  if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+  if (isPersonAskedSkipReason(reason)) clearGateWords(pd);
 
   writeStateFile(pd, content);
   if (!nextStage) {

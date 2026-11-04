@@ -281,6 +281,8 @@ describe("a skip the person asks for on a team main that works every Unit itself
   test("the one-Unit skip with the person's why after the engine's reason is still theirs", () => {
     const proj = walk(["alpha", "beta"]);
     says(proj, "skip code generation for alpha, Team B writes it by hand");
+    const kept = join(dirname(stateFile(proj)), ".aidlc-engine", "gate-words");
+    expect(existsSync(kept)).toBe(true);
     const why = `${PERSON}: Team B writes it by hand`;
     const skipped = runNamed(proj, report("code-generation", "alpha").replace(`'${PERSON}'`, `'${why}'`));
     expect(skipped.status, skipped.out).toBe(0);
@@ -288,6 +290,7 @@ describe("a skip the person asks for on a team main that works every Unit itself
     expect(unitSkips(proj, "code-generation")).toEqual(["alpha"]);
     const row = readAuditShardEvents(proj).find((entry) => entry.event === "UNIT_SKIPPED");
     expect(auditBlockField(String(row?.block), "Reason")).toBe(why);
+    expect(existsSync(kept)).toBe(false);
     approveAlpha(proj, "code-generation");
     const questions = join(dirname(stateFile(proj)), "construction", "beta", "functional-design", "functional-design-questions.md");
     mkdirSync(dirname(questions), { recursive: true });
