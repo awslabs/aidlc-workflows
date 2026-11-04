@@ -21077,10 +21077,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         });
         refreshTeamUnitProgress(pd, deriveTeamUnitProgressModel(pd, live, rows));
       } catch (e) {
-        changeNotices.push(
-          `Main's Unit Progress table could not take the new Unit plan: ${errorMessage(e)} ` +
-            `Run \`${aidlcInvocation()} doctor\` before the next Unit lands.`,
-        );
+        changeNotices.push(`Main's Unit Progress table could not take the new Unit plan: ${errorMessage(e)}`);
       }
     }
   }
