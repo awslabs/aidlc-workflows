@@ -5843,7 +5843,6 @@ function publishCodeGenerationStart(
   prepared: ReturnType<typeof prepareCodeGenerationStart>,
   options: { recordContinuation?: boolean },
   originals: PlanApprovalRuntimeReceipt[],
-  pickUp: boolean,
 ): string[] {
   const { authority, receipt, continuation } = prepared;
   if (continuation) recordContinuedStaleContract(projectDir, continuation);
@@ -5853,9 +5852,10 @@ function publishCodeGenerationStart(
   // the person's change request: the receipt keeps the content the build
   // started on, at the attempt it started in, so an interrupted build in the
   // approval's own attempt picks up (see "Picking up an interrupted build"),
-  // and their next change request is judged against it (planAsSentBack). A
-  // swarm, a worktree delegation and a batch keep their own continuation rule.
-  const started = pickUp && continuation && !receipt.batch
+  // and their next change request is judged against it (planAsSentBack): a
+  // swarm batch, a worktree delegation and a grouped approval as well, so a
+  // second Request Changes in a row there is judged against the revision too.
+  const started = continuation
     ? buildContentFingerprint(continuation.artifacts.plan, continuation.artifacts.instructions, authority) : null;
   const startedOn = started !== null && started !== receipt.fingerprint ? { startedFingerprint: started } : {};
   if (receipt.status === "generation") {
@@ -5865,7 +5865,12 @@ function publishCodeGenerationStart(
     // attempt, which no judgement made in this attempt can match, and the
     // retry writes it again), and their sweep is for receipts of this
     // attempt, not of the one the approval was given in.
-    if (continuation?.carried && started !== null && started !== receipt.startedFingerprint) {
+    // A delegated receipt is the parent's copy in the Unit's worktree and must
+    // stay byte-equal to it (worktreeDelegationParent): the parent keeps it.
+    if (
+      continuation?.carried && started !== null && started !== receipt.startedFingerprint &&
+      receipt.delegation === undefined
+    ) {
       // The receipt as it stands now: the batch start may have marked it
       // (`carriedInto`) since it was read, and that mark must stay.
       const current = readPlanApprovalReceipt(projectDir, receipt) ?? receipt;
@@ -6021,7 +6026,7 @@ export function beginCodeGenerationBatch(
           if (carriedFresh) {
             writePlanApprovalReceipt(projectDir, { ...started.receipt, carriedInto: started.authority.runFloor });
           }
-          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals, pickUp));
+          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals));
         }
         if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
           throw new Error("Source files changed while code generation was starting. Retry the step.");
