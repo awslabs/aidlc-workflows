@@ -17408,6 +17408,16 @@ function openGateAnswerStep(slug: string, approvalHeld = false): string {
     "otherwise stop: the question still waits.";
 }
 
+// The answer to the open code plan question that the person's message may
+// also give ("approve the plan, and skip build and test"): recorded after the
+// change, so the approval binds the plan as the change leaves it. The plan
+// question is no stage gate, so openGateAnswerStep never reaches it.
+function planQuestionAnswerStep(): string {
+  return "If their message also answered the open code plan question, record the choice they made now with " +
+    `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\` ` +
+    `${PLAN_CHANGE_DETAILS} and re-run \`next\`; otherwise stop: the question still waits.`;
+}
+
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
 // command typed with them), and one line says what changed and the way back;
@@ -17441,7 +17451,8 @@ function planChangeDirective(
     switchedTo?: string; carriesOn?: boolean; skippedFirst?: string[];
   } | null,
   // The code plan's question is open: it stays the open step, so what the
-  // person says next is kept as their answer to it.
+  // person says next is kept as their answer to it, and an answer this
+  // message also gave is recorded after the change (planQuestionAnswerStep).
   planWaits = false,
   // Parked work stays parked: the one line ends by saying so.
   stillParked: string | null = null,
@@ -17450,7 +17461,7 @@ function planChangeDirective(
 ): PrintDirective {
   const filled = beforeFill === "" ? "" : `${beforeFill},`;
   const kept = (directive: PrintDirective): PrintDirective => keptWhilePlanWaits(directive, planWaits);
-  const end = " Then stop.";
+  const end = planWaits && stillParked === null ? ` ${planQuestionAnswerStep()}` : " Then stop.";
   const parkedTail = stillParked === null ? "" : ` ${stillParked}`;
   const resume = stillParked === null ? "" : resumeOnYes();
   // The person reads stage names, never slugs.
