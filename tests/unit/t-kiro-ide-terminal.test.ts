@@ -355,9 +355,9 @@ describe("what the agent reads", () => {
         "once the command finishes it holds the whole reply, below its first line (the command itself). While the file is not " +
         "there, the command is still running in Kiro's terminal: read it again in a few seconds. If it is still not there after " +
         "a few reads, tell the person in one line that it is still running and may be waiting for their answer in Kiro's " +
-        "terminal panel, and end your turn; on your next turn read it again, and if it is still not there and they did not " +
-        "answer a question there, tell them its reply was lost and check what the command was meant to change. Do not run the " +
-        "command again.",
+        "terminal panel, and end your turn; on your next turn read it again a few times, and if it is still not there, tell them " +
+        "in one line that it has not finished yet (a long command can take many minutes, or wait for their answer there) or its " +
+        "reply was not saved, then check what it was meant to change. Do not run the command again.",
     );
   });
 
@@ -916,7 +916,7 @@ describe("a PowerShell terminal whose shell integration did not run", () => {
     });
   });
 
-  test("the agent reads an empty -1 there as cut off, not as trust or a declined command, and relays doctor's step once", () => {
+  test("the agent reads an empty -1 there as cut off, not as trust or a declined command, and names the check once", () => {
     const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(skill).toContain(
       "When an `AI-DLC reply:` line in this chat said Kiro's terminal here runs without its shell integration, every command " +
@@ -924,6 +924,11 @@ describe("a PowerShell terminal whose shell integration did not run", () => {
         "not by that code), so a result that shows nothing is a command whose output was cut off, that may still be " +
         "running, or that Kiro did not run, and neither reading below applies: do not run it again to see its output;",
     );
-    expect(skill).toMatch(/The first time that line shows in a chat, run `[^`]+ doctor` and tell the person, in one line, what its `Kiro terminal` row says to check\./);
+    expect(skill).toMatch(
+      /\*\*When an `AI-DLC reply:` line says Kiro's terminal here runs without its shell integration\*\*, whether or not the reply after it is whole, tell the person this once in the chat, in their language, then go on with their request: "Kiro's terminal here runs without its shell integration, so every command shows exit code -1, replies that take over a second are cut off, and steps take extra turns\. `[^`]+ doctor` run in Kiro's terminal says why and what to change\."/,
+    );
+    // The agent does not run doctor itself: it would cost a command in this terminal, and the skill's utility route
+    // (`engine orchestrate next --doctor`) is a turn-ending print that would stop the person's work.
+    expect(skill).not.toMatch(/run `[^`]*doctor` and tell the person/);
   });
 });
