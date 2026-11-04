@@ -717,6 +717,7 @@ import {
   guardPreflight as stateGuardPreflight,
   leftOutNotice,
   parkWorkflow,
+  practicesRulesToAdd,
 } from "./aidlc-state.ts";
 import {
   inspectStageValidity, stageDefinitionChangedFields, stageDefinitionChangedLine, stageLabel, staleStageNote,
@@ -13144,12 +13145,14 @@ function applyGateOnlyShape(
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
     const unit = directive.unit ?? null;
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
-    // What the person left out of the build, the files of theirs it changed,
-    // and a check that still fails on a declared output, are said with the
-    // gate, each on its own line after what the stage produced: the narration
-    // is the person's line, and the produced sentence stays whole.
+    // The rules Approve adds to the project's rules, what the person left out
+    // of the build, the files of theirs it changed, and a check that still
+    // fails on a declared output, are said with the gate, each on its own line
+    // after what the stage produced: the narration is the person's line, and
+    // the produced sentence stays whole.
     const narration = [
-      line, leftOutNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
+      line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
+      broughtFilesGateLine(projectDir, gateNode, stateContent),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
@@ -19007,6 +19010,31 @@ function practicesDraftPostureProblem(pd: string): string | null {
   return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
 }
 
+// The rules Approve at Practices Discovery adds to the project's rules, said
+// with the gate from the reading practices-promote writes them from; said too
+// when it adds none, so a summary that counts rules the draft does not hold as
+// list items never stands alone. Null when there is no draft to read.
+function practicesRulesGateLine(pd: string, node: { slug: string }): string | null {
+  if (node.slug !== "practices-discovery") return null;
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  const projectRules = join(memoryDirFor(pd), "project.md");
+  let rules: { mandated: string[]; forbidden: string[] };
+  try {
+    const draft = readFileSync(join(pd, prefix, "inception", "practices-discovery", "discovered-rules.md"), "utf-8");
+    rules = practicesRulesToAdd(draft, existsSync(projectRules) ? readFileSync(projectRules, "utf-8") : "");
+  } catch {
+    return null;
+  }
+  const where = toPosix(relative(pd, projectRules));
+  if (rules.mandated.length + rules.forbidden.length === 0) return `Approve adds no rules to ${where}.`;
+  return [
+    `Approve adds these rules to ${where}, which every later stage follows:`,
+    ...rules.mandated.map((rule) => `- Mandated: ${rule}`),
+    ...rules.forbidden.map((rule) => `- Forbidden: ${rule}`),
+  ].join("\n");
+}
+
 // The report that opens a stage's gate, or shows it again after a revision.
 function gateReportCommand(slug: string, result: "awaiting-approval" | "revised"): string {
   return renderEngineInvocation({ route: "orchestrate", args: ["report", "--stage", slug, "--result", result] });
@@ -20794,13 +20822,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const gateState = loadStateFileIfPresent(pd);
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
         const line = producedLine(node, unit, unitFolders, pd);
-        // What the person left out of the build, the files of theirs it
-        // changed, and a check that still fails on a declared output, are said
-        // with the gate, each on its own line after what the stage produced:
+        // The rules Approve adds to the project's rules, what the person left
+        // out of the build, the files of theirs it changed, and a check that
+        // still fails on a declared output, are said with the gate, each on its
+        // own line after what the stage produced:
         // the narration is the person's line (the produced sentence stays
         // whole), and the change lines stay what changed.
         const narration = [
-          line, leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, gateState),
+          line, practicesRulesGateLine(pd, node), leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, gateState),
           failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
