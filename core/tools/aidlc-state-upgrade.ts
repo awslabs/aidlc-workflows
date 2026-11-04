@@ -7,7 +7,7 @@
 import { existsSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { classifyStateVersion, findStageBySlug } from "./aidlc-lib.ts";
+import { classifyStateVersion, findStageBySlug, nextInScopeStage } from "./aidlc-lib.ts";
 import { isReadOnlyEngineProbe, withAuditLock, writeFileAtomic } from "./aidlc-locks.ts";
 import { auditBlockField, getField, readAuditShardEvents, setField, writeStateFile } from "./aidlc-record-core.ts";
 
@@ -91,6 +91,10 @@ export function bringStateUpToDate(
     added.push(...step.added);
     version = step.to;
   }
+  // The next stage as this graph routes it (a stage the newer graph added comes
+  // first), which status reads; a scope the graph does not know keeps its field.
+  const after = nextInScopeStage(getField(text, "Current Stage") ?? "", getField(text, "Scope") ?? "", text);
+  if (after) text = setField(text, "Next Stage", after.slug);
   if (isReadOnlyEngineProbe()) return text;
   try {
     const recordDir = dirname(statePath);
