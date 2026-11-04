@@ -3285,6 +3285,9 @@ type InstructionState = {
   path: string;
   kind: "managed-block" | "whole-file" | "json-entries";
   state: "intact" | "missing" | "conflict";
+  // Codex's override holds a well-formed AI-DLC block that is not the current
+  // one: older after an update, or edited; doctor cannot tell which.
+  notCurrent?: true;
 };
 
 // Root guidance in a copy config never ran in: AI-DLC's part is the marked
@@ -3321,7 +3324,7 @@ function copiedAgentsState(
     path === "AGENTS.override.md" && merged.currentHash !== undefined &&
     merged.currentHash !== merged.nextHash
   ) {
-    return { path, kind: "managed-block", state: "conflict" };
+    return { path, kind: "managed-block", state: "conflict", notCurrent: true };
   }
   return {
     path,
@@ -3509,12 +3512,14 @@ function instructionStates(
       return { path, kind: contribution.policy, state: "conflict" };
     }
     const block = text.slice(beginAt, endAt + markers.end.length);
+    if (holdsRecordedWrite(block, contribution.hash) || ownTitleOnly(block, contribution.hash)) {
+      return { path, kind: contribution.policy, state: "intact" };
+    }
     return {
       path,
       kind: contribution.policy,
-      state: holdsRecordedWrite(block, contribution.hash) || ownTitleOnly(block, contribution.hash)
-        ? "intact"
-        : "conflict",
+      state: "conflict",
+      ...(path === "AGENTS.override.md" ? { notCurrent: true as const } : {}),
     };
   });
   if (onboardingPath && !onboardingHash) {
@@ -3588,6 +3593,13 @@ export function instructionFileDoctorCheck(
   };
   const conflicts = states.filter((item) => item.state === "conflict");
   const missing = states.filter((item) => item.state === "missing");
+  const conflictWords = (items: InstructionState[]): string => {
+    const modified = items.filter((item) => !item.notCurrent).map((item) => item.path);
+    return [
+      ...(modified.length > 0 ? [`hand-modified - conflict (${modified.join(", ")})`] : []),
+      ...items.filter((item) => item.notCurrent).map((item) => `the AI-DLC block in ${item.path} is not the current one`),
+    ].join("; ");
+  };
   if (conflicts.length > 0) {
     const missingNote = loadedFile && missing.length > 0
       ? `; block or file missing (${missing.map((item) => item.path).join(", ")})`
@@ -3595,8 +3607,7 @@ export function instructionFileDoctorCheck(
     return {
       pass: false,
       severity: "warn",
-      label:
-        `Instruction file: hand-modified - conflict (${conflicts.map((item) => item.path).join(", ")})${missingNote}${loadedFile}`,
+      label: `Instruction file: ${conflictWords(conflicts)}${missingNote}${loadedFile}`,
       fix: fixFor(loadedFile ? [...conflicts, ...missing] : conflicts),
     };
   }

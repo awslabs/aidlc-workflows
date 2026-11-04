@@ -2898,6 +2898,22 @@ describe("t294 instruction-file doctor row", () => {
       expect(readFileSync(overridePath, "utf-8")).toBe(repaired);
     });
 
+    // What a copy holds once an update changed AI-DLC's block, or after an
+    // edit inside it: doctor cannot tell the two apart, so it says neither.
+    test(`${setup}: an earlier or edited block in the Codex override is not called hand-modified`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      writeFileSync(
+        join(project, "AGENTS.override.md"),
+        block.replace("<!-- END AI-DLC:agents -->", "Earlier guidance.\n<!-- END AI-DLC:agents -->"),
+      );
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(false);
+      expect(result.label).toContain("the AI-DLC block in AGENTS.override.md is not the current one");
+      expect(result.label).not.toContain("hand-modified");
+      expect(result.fix).toContain("with the current block from AGENTS.md");
+    });
+
     test(`${setup}: empty Codex override still hides AGENTS.md`, () => {
       const project = codexProject();
       for (const content of ["", " \t\r\n"]) {
