@@ -1485,6 +1485,9 @@ function withClaimReviewRecords(
   return { tree, missing };
 }
 
+const OUTSIDE_UNIT_RECORD_TREE = "outside claimed Unit record tree";
+
+// `candidateOid` may be a tree: publish asks before it has a commit to ask about.
 function candidateBoundary(
   projectDir: string,
   baseOid: string,
@@ -1501,7 +1504,8 @@ function candidateBoundary(
       "diff",
       "--no-renames",
       "--name-status",
-      `${baseOid}..${candidateOid}`,
+      baseOid,
+      candidateOid,
       "--",
       auditRoot,
     ],
@@ -1543,7 +1547,7 @@ function candidateBoundary(
 
   const changedPaths = gitOutput(
     projectDir,
-    ["diff", "--no-renames", "--name-only", `${baseOid}..${candidateOid}`],
+    ["diff", "--no-renames", "--name-only", baseOid, candidateOid],
     "Cannot inspect pinned candidate diff",
   )
     .split(/\r?\n/)
@@ -1574,7 +1578,7 @@ function candidateBoundary(
       pathKey.startsWith(recordPrefixKey) ||
       pathKey.startsWith("aidlc/")
     ) {
-      violations.push(`${path} (outside claimed Unit record tree)`);
+      violations.push(`${path} (${OUTSIDE_UNIT_RECORD_TREE})`);
       continue;
     }
     outsideUnitRecordPaths.push(path);
@@ -1992,6 +1996,26 @@ function publishUnit(args: string[], projectDir?: string): void {
   const missingReviews = reviews.missing.length > 0
     ? { review_records_missing: reviews.missing }
     : {};
+  // Pin refuses any other record outside the Unit's tree, so publish names
+  // them now, beside the review records, rather than leaving the team to learn
+  // it at pin; the change is theirs to take out, so publish still publishes.
+  const outsideSuffix = ` (${OUTSIDE_UNIT_RECORD_TREE})`;
+  const outside = candidateBoundary(
+    pd, publicationBaseOid, headTree, recordPrefix, unit, current.generation, auditShard,
+  ).violations.filter((violation) => violation.endsWith(outsideSuffix))
+    .map((violation) => violation.slice(0, -outsideSuffix.length));
+  const outsideTree = outside.length > 0
+    ? {
+      records_outside_unit_tree: outside,
+      records_outside_unit_tree_note:
+        "Pin will refuse this candidate: a claimed Unit lands only " +
+        `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
+        "such as contract-summary.md, or a stage-level file) is changed on main. Take these out of " +
+        "this branch (git rm a file main does not have, or " +
+        `git checkout ${publicationIntegrationRef.replace(/^refs\/(remotes|heads)\//, "")} -- <path> for one it does), commit, and ` +
+        "publish again.",
+    }
+    : {};
   if (
     current.payload.candidate_tree_oid === headTree &&
     current.payload.candidate_head_oid === headOid &&
@@ -2007,6 +2031,7 @@ function publishUnit(args: string[], projectDir?: string): void {
       candidate_oid: current.oid,
       generation: current.generation,
       ...missingReviews,
+      ...outsideTree,
     }));
     return;
   }
@@ -2059,6 +2084,7 @@ function publishUnit(args: string[], projectDir?: string): void {
     candidate_head_oid: headOid,
     generation: published.generation,
     ...missingReviews,
+    ...outsideTree,
   }));
 }
 
