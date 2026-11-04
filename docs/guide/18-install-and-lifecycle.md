@@ -1291,8 +1291,7 @@ nobody changed Kiro's copy since (its `kiroUpgrade` stamp still matches it):
 switching to `kiro-ide` removes it with the rest, keeps Kiro's `.json.bak`
 backups, and says so in one line. A copy Kiro did not stamp stays a conflict.
 Switching to `kiro-ide` names every `.kiro/hooks/*.json` file AI-DLC does not
-own: Kiro runs those on its v3 engine, which the switch pins in
-`.kiro/settings/cli.json`, and in Kiro IDE. When there is one, the switch applies
+own: Kiro runs those on its v3 engine (`kiro-cli --v3`) and in Kiro IDE. When there is one, the switch applies
 only with your approval of that exact set of files: answer the prompt in a
 terminal, or run the switch with `--dry-run`, review the files, and apply it with
 the `--plan-token` that dry run prints. A hook file added, removed, renamed, or
@@ -1405,8 +1404,8 @@ Successful config prints the host-specific next step:
 | Harness | Next step |
 |---------|-----------|
 | Claude Code | Open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor` |
-| Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
+| Kiro CLI | Run `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)), then `/aidlc --doctor` |
+| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli --v3` in the project instead; if Kiro asks whether you trust this workspace and you know what is in this folder, choose "Trust, continue"; then run `/aidlc --doctor`) |
 | Codex CLI | Run `codex` (when it asks about hooks, choose Trust all and continue), then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 

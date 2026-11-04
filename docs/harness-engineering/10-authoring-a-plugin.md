@@ -547,13 +547,16 @@ AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<pro
 # fallback: run the composer explicitly:
 AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<project>" \
   AIDLC_HARNESS_DIR=.kiro bun "<project>/.kiro/aidlc-plugins/<name>/hooks/compose.ts"
-# open in Kiro IDE or kiro-cli chat → /aidlc
+# open in Kiro IDE or start kiro-cli --v3 (kiro-cli --v2 for the kiro projection, on Kiro CLI 2.21.4 or later) → /aidlc
 ```
 
 > **Kiro note.** Use the `kiro-ide` projection for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
 > includes a `version: "v1"` `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
 > that runs `aidlc engine plugin sync --harness-dir .kiro --plugin-root ./.kiro/aidlc-plugins/<name>` from the workspace root,
 > or that plugin folder's cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher where `aidlc` is not installed.
+> The registration asks for 1800 seconds, as Kiro stops a hook with no `timeout` after 60. AI-DLC
+> does not add it to a registration already in a project; a projection built with this release or
+> later carries it.
 > The `kiro` projection emits no hook registration,
 > so run one of the explicit composer commands above. Neither projection emits the
 > retired `.kiro.hook` plugin registration.

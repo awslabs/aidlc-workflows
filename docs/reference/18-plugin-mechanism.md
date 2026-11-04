@@ -154,7 +154,7 @@ The composer runs once over `bare core + {chosen plugins}` and writes the effect
 | **Claude** | SessionStart hook (fires eagerly on session spawn) | managed allowlist (`strictKnownMarketplaces`) |
 | **Codex** | SessionStart hook (fires lazily on first interaction) | one-time trust prompt, content-hash-pinned |
 | **Kiro CLI** | `aidlc engine plugin sync` when the binary is on PATH, or manual `bun <plugin>/hooks/compose.ts` after the folder-drop | n/a - folder-drop distribution |
-| **Kiro IDE** | SessionStart hook registered by the folder-dropped projection (`.kiro/hooks/aidlc-<plugin>-compose.json`, running the launcher in the plugin's folder `.kiro/aidlc-plugins/<name>/`) | n/a - folder-drop distribution |
+| **Kiro IDE** | SessionStart hook registered by the folder-dropped projection (`.kiro/hooks/aidlc-<plugin>-compose.json`, running the launcher in the plugin's folder `.kiro/aidlc-plugins/<name>/`, with a 1800-second `timeout`) | n/a - folder-drop distribution |
 
 The steps (identical regardless of trigger):
 
