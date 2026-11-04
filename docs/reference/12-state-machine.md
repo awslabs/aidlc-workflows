@@ -171,7 +171,7 @@ alone) is not marked, because that beat can still apply a fix.
 Under unit-major with Unit checkpoints off (the field disabled or absent), the
 per-Unit stage approvals still due once the whole grid is covered are one
 question. The first covered gate carries `approve_together`: the pending block
-stages from `directive.stage` on, in graph order, the Units, and the engine's
+stages from `directive.stage` on, in run order, the Units, and the engine's
 question naming both. It is set only for solo work at the first pending block
 stage with at least two stages left; checkpoint-enabled, stage-major, team-owned
 and autonomous gates keep their own flow. Opening that gate records the list on
