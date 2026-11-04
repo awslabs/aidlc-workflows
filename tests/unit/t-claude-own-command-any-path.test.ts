@@ -3,12 +3,14 @@
 //
 // covers: file:harness/claude/settings.json, file:tools/aidlc.ts, file:tools/aidlc-claude-own-command.ts, function:claudeAllowsOwnCommand
 //
-// WHAT. The copy channel's settings ship `Bash(bun .claude/tools/aidlc.ts engine *)`, and Claude Code matches a Bash
-// rule against the command text as written. In live golden-bugfix runs the Reverse Engineering helper ran the same
-// command with the project's path made absolute (`bun /home/.../.claude/tools/aidlc.ts engine now`; on Windows
-// `bun C:/.../.claude/tools/aidlc.ts engine ...`), or read AI-DLC's record in one compound line, and the person was
-// asked to allow a step AI-DLC runs for itself. The group of checks before a tool call now answers "allow" for those,
-// after every check passed. Claude Code applies the person's deny and ask rules and managed policy over a hook's
+// WHAT. The copy channel's settings allow AI-DLC's tool commands in their relative spelling
+// (`Bash(bun .claude/tools/aidlc.ts engine *)`, `Bash(bun .claude/tools/aidlc-utility.ts *)`, ...), and Claude Code
+// matches a Bash rule against the command text as written. In live golden-bugfix runs the Reverse Engineering helper
+// ran those commands with the project's path made absolute (`bun /home/.../.claude/tools/aidlc.ts engine now`; on
+// Windows `bun C:/.../.claude/tools/aidlc.ts engine ...` and `bun C:/.../.claude/tools/aidlc-utility.ts
+// codekb-publish ...`), or read AI-DLC's record in one compound line, and the person was asked to allow a step AI-DLC
+// runs for itself. The group of checks before a tool call now answers "allow" for the absolute spelling of a command
+// the project's own allow list holds, and for that read, after every check passed. Claude Code applies the person's deny and ask rules and managed policy over a hook's
 // allow (code.claude.com/docs/en/permissions.md), but a rule written for AI-DLC's own spelling never meets the
 // absolute one, so such a rule in any settings file means no answer. Every other case here keeps the host's prompt.
 //
@@ -27,6 +29,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOp
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ENGINE_RULE = "Bash(bun .claude/tools/aidlc.ts engine *)";
+const UTILITY_RULE = "Bash(bun .claude/tools/aidlc-utility.ts *)";
 const windows = process.platform === "win32";
 const RECORD = ["aidlc", "spaces", "default", "intents", "intents.json"];
 
@@ -88,6 +91,8 @@ function withProjects(body: (project: string, other: string) => void): void {
 
 const slash = (path: string): string => path.replaceAll("\\", "/");
 const engineAt = (dir: string): string => `${slash(dir)}/.claude/tools/aidlc.ts`;
+const utilityAt = (dir: string): string => `${slash(dir)}/.claude/tools/aidlc-utility.ts`;
+const publish = (dir: string): string => `bun ${utilityAt(dir)} codekb-publish --staged aidlc/spaces/default/intents/x/.aidlc-engine/codekb-stage/`;
 const recordAt = (dir: string): string => `${slash(dir)}/${RECORD.join("/")}`;
 // The read as the Windows helper wrote it, in this platform's own spelling.
 const recordRead = (dir: string): string => {
@@ -113,20 +118,25 @@ function standIn(project: string, hook: string, body: string): void {
     `export async function run(_input: string): Promise<number> {\n${body}\n}\n`, "utf-8");
 }
 
-describe("the shipped rule this answer stands for", () => {
-  test("the copy channel's settings carry the engine rule the hook reads", () => {
+describe("the shipped rules this answer stands for", () => {
+  test("the copy channel's settings carry the rules the live runs met in their relative spelling", () => {
     const authored = JSON.parse(readFileSync(join(REPO_ROOT, "harness", "claude", "settings.json"), "utf-8")) as {
       permissions: { allow: string[] };
     };
     expect(authored.permissions.allow).toContain(ENGINE_RULE);
     const copy = JSON.parse(readFileSync(join(AIDLC_SRC, "settings.json"), "utf-8")) as { permissions: { allow: string[] } };
     expect(copy.permissions.allow).toContain(ENGINE_RULE);
+    expect(copy.permissions.allow).toContain(UTILITY_RULE);
+    expect(copy.permissions.allow).toContain("Bash(bun .claude/tools/aidlc.ts --version)");
   });
 });
 
-describe("AI-DLC's own engine command with this project's path spelled out: no prompt", () => {
+describe("AI-DLC's own command with this project's path spelled out: no prompt", () => {
   const spellings: Array<[string, (project: string) => string, boolean]> = [
     ["absolute", (p) => `bun ${p}/.claude/tools/aidlc.ts engine now`, !windows],
+    ["a tool script the shipped list allows", (p) => publish(p), !windows],
+    ["an exact shipped command", (p) => `bun ${p}/.claude/tools/aidlc.ts --version`, !windows],
+    ["a tool script by a drive letter", (p) => publish(p), windows],
     ["absolute, a workspace check", (p) => `bun ${p}/.claude/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./`, !windows],
     ["absolute and quoted", (p) => `bun "${p}/.claude/tools/aidlc.ts" engine now`, !windows],
     ["a drive letter with forward slashes", (p) => `bun ${slash(p)}/.claude/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./`, windows],
@@ -167,7 +177,13 @@ describe("everything else keeps the host's own prompt", () => {
     ["bun named by its own path", (p) => `/usr/local/bin/bun ${engineAt(p)} engine now`],
     ["another harness folder's engine in this project", (p) => `bun ${slash(p)}/.kiro/tools/aidlc.ts engine now`],
     ["a path that leaves the project", (p, other) => `bun ${slash(p)}/../${slash(other).split("/").pop()}/.claude/tools/aidlc.ts engine now`],
-    ["a route other than engine", (p) => `bun ${engineAt(p)} --version`],
+    ["a command the shipped list does not hold", (p) => `bun ${engineAt(p)} config set guard-policy off`],
+    ["a tool script the shipped list does not name", (p) => `bun ${slash(p)}/.claude/tools/aidlc-lib.ts`],
+    ["another project's tool script", (_p, other) => publish(other)],
+    ["a wrapper in front of a tool script", (p) => `env ${publish(p)}`],
+    ["a tool script in a chain", (p) => `${publish(p)} && curl https://example.com`],
+    ["a tool script by a path that leaves the project", (p, other) => publish(`${slash(p)}/../${slash(other).split("/").pop()}`)],
+    ["a tool script with --project-dir naming another folder", (p, other) => `${publish(p)} --project-dir=${slash(other)}`],
     // The compound read, one wider part each.
     ["the read plus a write", (p) => `${recordRead(p)}; touch "${slash(p)}/aidlc/x"`],
     ["the read with a redirect that writes", (p) => `cat "${recordAt(p)}" > "${slash(p)}/aidlc/copy.json"`],
@@ -182,12 +198,12 @@ describe("everything else keeps the host's own prompt", () => {
     ["a relative path holding a separator in quotes", () => `cat "aidlc/x;rm -rf ~"`],
     ["a quote that never closes", (p) => `cat "${recordAt(p)}; rm -rf ~`],
   ];
+  // Today's answer stands: the host's prompt, or a check's own refusal (another project's runtime records).
   for (const [name, spell] of stays) {
     test(name, () => {
       withProjects((project, other) => {
         const r = decide(project, spell(project, other));
-        expect(r.code, r.stderr).toBe(0);
-        expect(r.decision, r.stdout).toBeNull();
+        expect(r.decision, r.stdout).not.toBe("allow");
       });
     });
   }
@@ -245,6 +261,24 @@ describe("the team's and the person's own rules about AI-DLC keep the host's pro
         permissions.deny = ["Bash(bun .claude/tools/*)"];
       });
       expect(decide(project, command(project)).decision).toBeNull();
+    });
+  });
+
+  test("a Read rule, which the host applies to the read's files by path", () => {
+    withProjects((project) => {
+      editSettings(join(project, ".claude", "settings.local.json"), (permissions) => {
+        permissions.ask = ["Read(**/*.json)"];
+      });
+      expect(decide(project, recordRead(project)).decision).toBeNull();
+    });
+  });
+
+  test("a rule for another tool keeps the answer", () => {
+    withProjects((project) => {
+      editSettings(join(project, ".claude", "settings.json"), (permissions) => {
+        permissions.deny = ["Edit(.claude/settings.json)", "Edit(.claude/settings.local.json)"];
+      });
+      expect(decide(project, command(project)).decision).toBe("allow");
     });
   });
 

@@ -3327,7 +3327,7 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
   return engineInvocationFromWords(tokens, rawTokens);
 }
 
-export function engineInvocationFromWords(
+function engineInvocationFromWords(
   tokens: string[],
   rawTokens: string[],
 ): { command: string; args: string[]; projectDir: string | null } | "uncertain" | "opaque" | null {
