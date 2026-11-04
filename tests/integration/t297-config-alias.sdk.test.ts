@@ -35,6 +35,16 @@ const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 const REPLY = "Acknowledge the trust settings.";
 const ASKED = "what they want to change in their trust settings, or whether to leave them as they are";
 
+// The trust section's record as the engine reports it: null until an answer
+// lands, or why it could not be read.
+function trustRecord(project: string): unknown {
+  const shown = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc.ts"), "config", "trust", "--show", "--json"], {
+    cwd: project, encoding: "utf-8",
+  });
+  if (shown.status !== 0) return { failure: shown.stderr || shown.stdout };
+  return (JSON.parse(shown.stdout) as { data: { record: unknown } }).data.record;
+}
+
 // Asked once, in the box or in words (a model reads the words), and never again
 // after the answer: the reason it was not, or undefined.
 function askedOnce(result: Pick<DriveResult, "turns" | "askedQuestions">, judgeDir: string): string | undefined {
@@ -59,17 +69,24 @@ describe("t297 /aidlc --config trust (SDK live)", () => {
         stripEnvScope: true,
       });
       const judgeDir = judgeFolder();
+      // The record when the person answered: in the box, or after a turn that asked in words.
+      let atAnswer: unknown;
       try {
         const result = await driveAidlc("/aidlc --config trust", {
           projectDir: project,
           answerScript: {
             kind: "pick",
             pick: (question) => {
+              atAnswer ??= trustRecord(project);
               const at = question.options.findIndex((o) => /^acknowledge\b/i.test(o.label));
               return at < 0 ? { text: REPLY } : { optionIndex: at };
             },
           },
-          nextMessage: (turn) => (turn.turn === 1 && turn.askedQuestions === 0 ? REPLY : undefined),
+          nextMessage: (turn) => {
+            if (turn.turn !== 1 || turn.askedQuestions > 0) return undefined;
+            atAnswer ??= trustRecord(project);
+            return REPLY;
+          },
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
           }),
@@ -96,21 +113,10 @@ describe("t297 /aidlc --config trust (SDK live)", () => {
         );
 
         expect(askedOnce(result, judgeDir)).toBeUndefined();
-        const turn1 = result.turns![0];
 
-        // Nothing changed before the person answered, and their answer is recorded.
-        const answeredAt = turn1.askedQuestions === 1
-          ? result.toolResults.findIndex((item) => item.toolName === "AskUserQuestion") + 1
-          : turn1.toolResults;
-        const landedAt = result.toolResults.findIndex((item) =>
-          item.toolName === "Bash" && /\bconfig\b.*\s--yes\b/.test(String(item.input.command ?? ""))
-        );
-        expect(landedAt, "no config --yes command landed the answer after it was given").toBeGreaterThanOrEqual(answeredAt);
-        const shown = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc.ts"), "config", "trust", "--show", "--json"], {
-          cwd: project, encoding: "utf-8",
-        });
-        expect(shown.status, shown.stderr).toBe(0);
-        expect(JSON.parse(shown.stdout).data.record, shown.stdout).toMatchObject({ reviewed: true });
+        // Nothing was recorded before the person answered, and their answer is.
+        expect(atAnswer, "the trust record before the person answered").toBeNull();
+        expect(trustRecord(project), "the trust record after the answer").toMatchObject({ reviewed: true });
 
         const intents = join(
           project,
