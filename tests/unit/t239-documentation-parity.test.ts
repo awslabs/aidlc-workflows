@@ -739,12 +739,6 @@ describe("documentation parity derives current behavior from authored implementa
     };
     perScope("workflow-profiles", read("docs", "guide", "workflow-profiles.md"), /^## `([a-z][a-z-]+)`/);
     perScope("05-scopes-and-depth", read("docs", "guide", "05-scopes-and-depth.md"), /^### ([a-z][a-z-]+)\n/);
-
-    // The composer reads a matched scope's value in the loader's order.
-    const precedence =
-      "`guard_policy:`, then the retired `change_control:`, then strict when neither line is present";
-    expect(normalized(read("core", "knowledge", "aidlc-composer-agent", "composing.md"))).toContain(precedence);
-    expect(normalized(read("core", "agents", "aidlc-composer-agent.md"))).toContain(precedence);
   });
 
   test("workspace CLI docs follow the implemented public and hidden routes", () => {

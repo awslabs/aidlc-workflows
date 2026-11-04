@@ -53,14 +53,14 @@
 ## Forbidden
 
 <!-- Populated by practices-discovery affirmation gate. -->
-<!-- Format: NEVER [behavior] (affirmed [date]) -->
-<!-- Example: NEVER throw exceptions across service layer boundaries (affirmed 2026-05-17) -->
+<!-- Format: - NEVER [behavior] (affirmed [date]) -->
+<!-- Example: - NEVER throw exceptions across service layer boundaries (affirmed 2026-05-17) -->
 
 ## Mandated
 
 <!-- Populated by practices-discovery affirmation gate. -->
-<!-- Format: ALWAYS [behavior] (affirmed [date]) -->
-<!-- Example: ALWAYS use Result<T,E> for fallible operations in service layer (affirmed 2026-05-17) -->
+<!-- Format: - ALWAYS [behavior] (affirmed [date]) -->
+<!-- Example: - ALWAYS use Result<T,E> for fallible operations in service layer (affirmed 2026-05-17) -->
 
 ## Corrections
 

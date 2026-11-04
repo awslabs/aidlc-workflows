@@ -256,7 +256,7 @@ export interface GraphStage extends StageEntry {
   summary_confirmation?: "required" | "if-present";
 }
 
-/** A stage a custom plan skips and the stages it keeps that use what it makes. */
+/** A stage a custom plan skips and the stages it keeps that use what it makes (none when no kept stage does). */
 export interface SkippedInput {
   stage: string;
   used_by: string[];
@@ -269,8 +269,9 @@ export interface ScopeValidation {
   // The deterministic ceremony count of the validated grid (stage/gate/per-unit
   // counts). The composer copies this into its proposal verbatim so the gate the
   // human sees leads with numbers the validator computed, not an LLM recount.
-  // A passing --custom run adds skipped_inputs when the plan's own skips leave a
-  // kept stage without what it uses: the offer says it once, in one line.
+  // A passing --custom run adds skipped_inputs when the plan drops a stage from
+  // its base or leaves a kept stage without what it uses: the offer says it
+  // once, in one line.
   summary?: ScopeCostSummary & { skipped_inputs?: SkippedInput[] };
   // Graph/plugin-authored stock scopes ranked by grid distance from the
   // validated proposal; composer-authored entries are excluded. A front/report
@@ -312,7 +313,19 @@ export interface ScopeValidation {
   // run that is not --matched so the composer copies them before it routes.
   // Absent when the classic scope is not enabled here.
   custom_start?: { guard_policy: GuardPolicy; scope_settings: ScopeSettings };
+  // The depth, Guard Policy and settings of the stock scope a matched plan
+  // carries (the one --matched names, else nearest_stock[0]), echoed on every
+  // run so the composer copies them, and checks the depth, instead of finding
+  // that scope's file: no other echo carries a stock scope's depth or settings.
+  matched_start?: MatchedPlanStart;
 }
+
+export type MatchedPlanStart = {
+  scope: string;
+  depth?: "minimal" | "standard" | "comprehensive";
+  guard_policy: GuardPolicy;
+  scope_settings: ScopeSettings;
+};
 
 // The scope-file settings a composer proposal carries beside its grid. The keys
 // are the scope frontmatter spellings, so the approved values are copied into
@@ -1787,13 +1800,10 @@ export function validateGrid(
   // The ceremony count travels with the validation so the composer relays the
   // validator's numbers, not a hand recount. Computed over the raw proposal
   // entries; unknown slugs already produced errors above and contribute only to
-  // total/execute per gridCostSummary's graph-lookup guard. Creation skips
-  // reverse-engineering on a greenfield project, so a greenfield count leaves
-  // it out too and the offer's numbers are the ones creation prints.
+  // total/execute per gridCostSummary's graph-lookup guard. Counted as
+  // creation runs the grid, so the offer's numbers are the ones creation prints.
   const summary = gridCostSummary(
-    (opts?.projectType === "greenfield" && grid["reverse-engineering"] === "EXECUTE"
-      ? { ...grid, "reverse-engineering": "SKIP" }
-      : grid) as Record<string, "EXECUTE" | "SKIP">,
+    asCreated(grid, opts?.projectType) as Record<string, "EXECUTE" | "SKIP">,
   );
   // Distance to each stock scope travels with the validation for the same
   // reason as summary: the match decision must ride the validator's numbers.
@@ -1803,6 +1813,17 @@ export function validateGrid(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
   return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
+}
+
+/** `grid` as creation runs it: a new project skips Reverse Engineering, so
+ *  the plan offer's counts and its skip line leave it out there too. */
+function asCreated(
+  grid: Record<string, string>,
+  projectType?: "brownfield" | "greenfield",
+): Record<string, string> {
+  return projectType === "greenfield" && grid["reverse-engineering"] === "EXECUTE"
+    ? { ...grid, "reverse-engineering": "SKIP" }
+    : grid;
 }
 
 /** Each required input `grid` leaves unmade: a stage it runs whose required
@@ -1832,22 +1853,30 @@ function unmadeInputs(
   return unmade;
 }
 
-/** The stages a custom plan skips that a stage it keeps uses, where the plan's
- *  own changes cause it. A stock scope leaves some inputs unmade by design
- *  (t66 pins those edges), so a skipped producer is named only when one of the
- *  plan's unmade inputs it would make is not one `base`, the stock scope the
- *  plan runs on, leaves unmade too (the plan skipped it, or added a stage that
- *  needs it); it is then named with every kept stage that uses what it makes,
- *  so the offer's one line is whole. Display names, in stage order. */
+/** The stages a custom plan skips, for the offer's one line: every stage it
+ *  drops from `base`, the stock scope it runs on (planChangesBetween, the list
+ *  creation records as Stages skipped), and every skipped producer of an input
+ *  a kept stage needs that `base` does not leave unmade too (the plan added a
+ *  stage that needs it). A stock scope leaves some inputs unmade by design (t66
+ *  pins those edges), so those name nothing. Each is named with every kept stage
+ *  that uses what it makes, none when no kept stage does, so the line is whole.
+ *  Display names, in stage order. */
 function skippedInputs(
   plan: Record<string, string>,
-  base: Record<string, string>,
+  base: Record<string, "EXECUTE" | "SKIP">,
   projectType?: "brownfield" | "greenfield",
 ): SkippedInput[] {
   const key = (gap: { stage: GraphStage; artifact: string }): string => `${gap.stage.slug} ${gap.artifact}`;
   const onBase = new Set(unmadeInputs(base, projectType).map(key));
   const gaps = unmadeInputs(plan, projectType).filter((gap) => gap.producers.length > 0);
-  const named = new Set(gaps.filter((gap) => !onBase.has(key(gap))).flatMap((gap) => gap.producers.map((p) => p.slug)));
+  const dropped = planChangesBetween(
+    asCreated(base, projectType) as Record<string, "EXECUTE" | "SKIP">,
+    asCreated(plan, projectType),
+  ).skip;
+  const named = new Set([
+    ...dropped,
+    ...gaps.filter((gap) => !onBase.has(key(gap))).flatMap((gap) => gap.producers.map((p) => p.slug)),
+  ]);
   return loadGraph()
     .filter((s) => named.has(s.slug))
     .sort((a, b) => numericStageOrder(a.number, b.number))
@@ -1922,6 +1951,21 @@ export function customPlanStart(): { guard_policy: GuardPolicy; scope_settings: 
   const settings = scopeSettingsOf("classic");
   if (settings === null) return null;
   return { guard_policy: scopeGuardPolicyDefault("classic"), scope_settings: settings };
+}
+
+/** What a matched plan starts from: its stock scope's own depth, Guard Policy
+ *  and settings, read by the same resolvers the matched check and the
+ *  creation diff use. Null for a scope that is not enabled here. */
+export function matchedPlanStart(scope: string): MatchedPlanStart | null {
+  const settings = scopeSettingsOf(scope);
+  if (settings === null) return null;
+  const depth = (loadScopeMapping()[scope]?.depth ?? "").toLowerCase();
+  return {
+    scope,
+    ...(depth === "minimal" || depth === "standard" || depth === "comprehensive" ? { depth } : {}),
+    guard_policy: scopeGuardPolicyDefault(scope),
+    scope_settings: settings,
+  };
 }
 
 /** The errors for a front/report proposal that names its routing. Either route
@@ -4202,6 +4246,9 @@ const COMMANDS: Record<string, Handler> = {
       const start = customPlanStart();
       if (start !== null) r.custom_start = start;
     }
+    const startScope = matched ?? r.nearest_stock?.[0]?.scope;
+    const stockStart = startScope === undefined ? null : matchedPlanStart(startScope);
+    if (stockStart !== null) r.matched_start = stockStart;
     if (matched !== undefined || custom) {
       const routeErrors = composerProposalErrors(
         matched ?? null,
