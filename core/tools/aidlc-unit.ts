@@ -3946,17 +3946,16 @@ function claimUnit(args: string[], projectDir?: string): void {
     clearUnitScopeStamp(pd);
   }
   const integration = fetchIntegration(pd);
-  // Main back before the per-Unit block is changing the Unit plan: a Unit is
-  // claimed from the plan once its revision is approved, never from a draft.
+  // Main back before the per-Unit block is changing the Unit plan: the claim
+  // goes ahead on the plan as it stands there, and its result says the risk once.
   const integrationStage = getField(stateAtOid(pd, integration.oid), "Current Stage")?.trim() ?? "";
-  if (beforePerUnitBlock(loadStageGraph(), integrationStage)) {
-    const stage = loadStageGraph().find((node) => node.slug === integrationStage);
-    const where = integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch;
-    fail(
-      `Main is changing the Unit plan (${stage?.name ?? integrationStage} is open again on ${where}), so a Unit is ` +
-        "claimed once the revised plan is approved and on main. Nothing was claimed.",
-    );
-  }
+  const graph = loadStageGraph();
+  const planWarning = beforePerUnitBlock(graph, integrationStage)
+    ? `Main is changing the Unit plan (${graph.find((node) => node.slug === integrationStage)?.name ?? integrationStage} ` +
+      `is open again on ${integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch}), ` +
+      `so "${unit}" is claimed on the plan as it stands there: if the approved plan changes "${unit}"'s own entry, ` +
+      "pin asks this checkout to rebase onto main and publish again."
+    : null;
   const opening = openingStatus(pd, integration.oid);
   if (!opening.units.includes(unit)) fail(`Unit "${unit}" is not in the authoritative Unit DAG.`);
   if (opening.completed.has(unit)) {
@@ -4054,7 +4053,7 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
-  console.log(JSON.stringify({ claimed: true, ...stamp }));
+  console.log(JSON.stringify({ claimed: true, ...stamp, ...(planWarning ? { warning: planWarning } : {}) }));
 }
 
 // A checkout whose own shard main already holds claims into a shard of the
