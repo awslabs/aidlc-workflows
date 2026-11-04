@@ -507,6 +507,7 @@ import {
   isScopedReviewCopy,
   KIRO_CONDUCTOR_AGENT_FILE,
   PERSON_ASKED_SKIP_REASON,
+  isPersonAskedSkipReason,
   personsWordsText,
   declaredProjectType,
   installWithoutReplacing,
@@ -12927,7 +12928,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // A stage the person named is skipped as they asked (the engine's skip
     // step passes its own reason for that): the stages after it run from what
     // there is, as they do after a stage skipped where it stood.
-    if (newErrors.length > 0 && reason !== PERSON_ASKED_SKIP_REASON) {
+    if (newErrors.length > 0 && !isPersonAskedSkipReason(reason)) {
       die(
         `Recompose rejected by the strict validator:\n${newErrors.map((e) => `  - ${e}`).join("\n")}\n` +
           "To make the change, also add a stage that produces what is missing, or also skip the stage that needs it." +

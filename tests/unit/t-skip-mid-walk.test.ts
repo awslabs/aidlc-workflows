@@ -234,6 +234,23 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(JSON.stringify(next(proj).kept_replies ?? null)).not.toContain("skip code generation");
   });
 
+  // The agent may keep the person's why after the engine's reason: the skip
+  // is still theirs and spends what they typed, so beta's question is not
+  // handed it.
+  test("this Unit only with the person's why after the engine's reason: beta's question is not handed the skip", () => {
+    const proj = walk(["alpha", "beta"]);
+    says(proj, "skip code generation for this unit, I'll write that code myself");
+    const skipped = runNamed(proj, THIS_UNIT.replace(`'${PERSON}'`, `'${PERSON}: I will write that code myself'`));
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(skipped.out).toContain('for unit \\"alpha\\" only');
+    const questions = join(dirname(stateFile(proj)), "construction", "beta", "functional-design", "functional-design-questions.md");
+    mkdirSync(dirname(questions), { recursive: true });
+    writeFileSync(questions, "# Functional Design Questions\n\n## Question 1\nWhat does it greet?\n\n[Answer]:\n");
+    const beta = next(proj);
+    expect(beta.unit, JSON.stringify(beta)).toBe("beta");
+    expect(JSON.stringify(beta.kept_replies ?? null)).not.toContain("skip code generation");
+  });
+
   // A setting asked for in plain words beside the skip names the message they
   // asked in, so it lands as theirs (t-set-by-you-needs-their-reply).
   test("a setting asked for beside the skip names their message", () => {
@@ -355,6 +372,17 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
 
   // What keeps a plan change the agent or the composer makes on its own from
   // starving a later stage: without the person's reason recompose still refuses.
+  // The agent may keep the person's why after the engine's reason: the plan
+  // change is still theirs.
+  test("a plan change with the person's why after the engine's reason is still theirs", () => {
+    const proj = walk(["alpha", "beta"]);
+    const replanned = run(proj, "aidlc.ts", [
+      "engine", "recompose", "--skip", "code-generation", "--reason", `${PERSON}: we write the code by hand`,
+    ]);
+    expect(replanned.status, replanned.out).toBe(0);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] code-generation \u2014 SKIP");
+  });
+
   test("a plan change that starves a later stage is still refused when the person did not ask for it", () => {
     const proj = walk(["alpha", "beta"]);
     const before = readFileSync(stateFile(proj), "utf-8");

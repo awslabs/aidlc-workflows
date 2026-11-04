@@ -2467,3 +2467,16 @@ export function setCheckbox(
 export function isoTimestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
+
+// The reason the engine's skip step hands the agent for a stage the person
+// asked to skip where it stands (orchestrate's planChangeDirective). report
+// and the state tool read it back: that skip is the person's, so a stage that
+// must run, or one waiting at its own question, is skipped as they asked.
+export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
+
+// Whether a skip's reason is the person's: the engine's token, as the step
+// names it or with the agent's words after it (the person's why, which stays
+// in the record).
+export function isPersonAskedSkipReason(reason: string | null | undefined): boolean {
+  return reason?.startsWith(PERSON_ASKED_SKIP_REASON) === true;
+}

@@ -152,6 +152,25 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
     });
   });
 
+  // The claimed checkout walks its one Unit: the plan-change step offers no
+  // "this Unit only / every Unit from here" reading there (t-team-skip-mid-walk
+  // has it on a main that works every Unit itself).
+  test("the person's typed skip in the claimed checkout gets no Unit reading", () => {
+    const { remote } = teamSeed();
+    prepareCandidate(remote, "alpha", "alpha-team", {
+      stages: WORKED,
+      beforeCommit: (checkout) => {
+        handedOut(checkout);
+        const typed = runMergeTool(ORCH, ["next", "--skip", STAGE], checkout);
+        expect(typed.status, typed.out).toBe(0);
+        const step = JSON.parse(typed.stdout) as { kind?: string; message?: string };
+        expect(step.kind, typed.out).toBe("print");
+        expect(String(step.message)).not.toContain("Unit only");
+        expect(String(step.message)).not.toContain("every Unit from here");
+      },
+    });
+  });
+
   test("a Unit whose files for the step are written still stops the agent's skip with its own line; the person's skip goes through", () => {
     const { remote } = teamSeed();
     prepareCandidate(remote, "alpha", "alpha-team", {

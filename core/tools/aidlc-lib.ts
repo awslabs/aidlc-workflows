@@ -151,6 +151,7 @@ import {
   intentUuidForSelection,
   isArchivedIntent,
   isoTimestamp,
+  isPersonAskedSkipReason,
   isTeamUnitOwnership,
   knownAuditShardName,
   legacyBoltName,
@@ -258,6 +259,7 @@ export {
   isArchivedIntent,
   isBindableIntentRecordName,
   isoTimestamp,
+  isPersonAskedSkipReason,
   isTeamUnitOwnership,
   knownAuditShardName,
   legacyBoltName,
@@ -266,6 +268,7 @@ export {
   maximalAttemptEvents,
   parseAuditShardEvents,
   parseCheckboxes,
+  PERSON_ASKED_SKIP_REASON,
   type ProcessIdentity,
   projectStateForDigest,
   readActiveIntentCursor,
@@ -7170,12 +7173,6 @@ export function personLineHeardThisTurn(projectDir: string, sessionId: string, l
 export function markPersonLineHeardThisTurn(projectDir: string, sessionId: string, line: string): void {
   markPersonLinesHeard(projectDir, sessionId, [turnKeyedPersonLine(projectDir, line)]);
 }
-
-// The reason the engine's skip step hands the agent for a stage the person
-// asked to skip where it stands (orchestrate's planChangeDirective). report
-// and the state tool read it back: that skip is the person's, so a stage that
-// must run, or one waiting at its own question, is skipped as they asked.
-export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
@@ -29439,7 +29436,7 @@ export function keptRepliesSinceStageStart(
       answers = [];
     } else if (
       MESSAGE_SPENDING_EVENTS.has(row.event) || GATE_WORDS_SPENT_BY.has(row.event) ||
-      (row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Reason") === PERSON_ASKED_SKIP_REASON)
+      (row.event === "UNIT_SKIPPED" && isPersonAskedSkipReason(auditBlockField(row.block, "Reason")))
     ) {
       from = index;
     } else if (row.event === "QUESTION_ANSWERED" && ours) {

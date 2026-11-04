@@ -553,6 +553,7 @@ import {
   findStageBySlug,
   withPersonsWordsFirst,
   PERSON_ASKED_SKIP_REASON,
+  isPersonAskedSkipReason,
   readUnitSourceManifest,
   otherOpenWorkClaims,
   readIntentRegistry,
@@ -15715,13 +15716,23 @@ function teamUnitMajorWalkStep(
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
 ): TeamUnitWalkStep {
+  // A pause halts the walk, except one set aside for another Unit of this walk
+  // (a jump that named that Unit, unitMajorReopen): that Unit goes first, then
+  // the walk stops at the pause to pick it up again, as the solo walk does.
+  const setAside = new Map<string, Extract<TeamUnitWalkStep, { kind: "paused" }>>();
+  const inProgress = new Set<string>();
   for (const stage of block) {
-    const checkpoint = ledgers.get(stage.slug)?.checkpoint;
-    if (checkpoint?.state === "paused") return { kind: "paused", stage: stage.slug, checkpoint };
+    for (const checkpoint of ledgers.get(stage.slug)?.open ?? []) {
+      if (checkpoint.state === "in-progress") inProgress.add(checkpoint.unit);
+      if (checkpoint.state !== "paused") continue;
+      const pause = { kind: "paused" as const, stage: stage.slug, checkpoint };
+      if (checkpoint.setAsideFor === null || !units.includes(checkpoint.setAsideFor)) return pause;
+      if (!setAside.has(checkpoint.unit)) setAside.set(checkpoint.unit, pause);
+    }
   }
   const finalStage = block[block.length - 1];
-  for (const unit of units) {
-    if (mergedUnits.has(unit)) continue;
+  // The Unit's first stop, or null when it is done.
+  const stopFor = (unit: string): TeamUnitWalkStep | null => {
     const unitKind = kinds?.get(unit) ?? null;
     for (const stage of block) {
       if (!teamUnitStageApplies(stage, unitKind)) continue;
@@ -15746,8 +15757,23 @@ function teamUnitMajorWalkStep(
     ) {
       return { kind: "gate", stage: finalStage, unit, gate: "unit-end" };
     }
+    return null;
+  };
+  // A Unit in progress goes before the others, so a Unit picked up again comes first.
+  const waiting: TeamUnitWalkStep[] = [];
+  for (const unit of [...units.filter((u) => inProgress.has(u)), ...units.filter((u) => !inProgress.has(u))]) {
+    if (mergedUnits.has(unit)) continue;
+    const pause = setAside.get(unit);
+    if (pause) {
+      if (stopFor(pause.checkpoint.setAsideFor ?? unit) === null) return pause;
+      waiting.push(pause);
+      continue;
+    }
+    const stop = stopFor(unit);
+    if (stop) return stop;
   }
-  return { kind: "covered" };
+  // Units set aside for each other: ask to pick the first one up.
+  return waiting[0] ?? { kind: "covered" };
 }
 
 // The (stage, Unit) work the team walk hands out right now for the Current
@@ -15761,6 +15787,22 @@ function teamUnitMajorWorkBeat(
   stateContent: string,
   currentSlug: string,
 ): { stage: GraphStage; unit: string; context: UnitWorkContext } | null {
+  const walk = teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  return walk?.step.kind === "work"
+    ? { stage: walk.step.stage, unit: walk.step.unit, context: walk.context }
+    : null;
+}
+
+// Where the team walk stands for the Current Stage: its step, the block it
+// walks, and the Unit DAG context, or null when the work is not team-owned
+// Units on the per-unit block. The skip report reads its work beat and the plan
+// change all of it, the same walk routing hands out.
+function teamUnitMajorWalkBeat(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): { step: TeamUnitWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
   if (readConstructionIteration(stateContent) !== "unit-major" || !isTeamUnitOwnership(stateContent)) return null;
   const resolution = resolveBoltBatches(projectDir);
   if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
@@ -15785,9 +15827,7 @@ function teamUnitMajorWorkBeat(
     projectDir, stateContent, block, units, resolution.unitKinds, model.ledgers, model.mergedUnits,
     effectiveUnitGateRhythm(projectDir, stateContent), auditRows, recordPrefix, codekbCtx,
   );
-  return step.kind === "work"
-    ? { stage: step.stage, unit: step.unit, context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx } }
-    : null;
+  return { step, block, context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx } };
 }
 
 // The first stop of the solo unit-major walk, without emitting it. Units walk
@@ -15966,20 +16006,22 @@ function unitMajorWalkBeat(
 // on past it to a later Construction stage (Build and Test, say), as a walk
 // whose Units are all covered; null on the same conditions as
 // unitMajorWalkBeat. From here a jump back that names one Unit reopens its
-// step for that Unit only.
+// step for that Unit only. `team`: the team walk's block instead
+// (teamUnitMajorWalkBeat's conditions), on a team's main.
 function unitMajorFinishedWalk(
   projectDir: string,
   scope: string,
   stateContent: string,
   currentSlug: string,
+  team = false,
 ): { step: UnitMajorWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
   if (readConstructionIteration(stateContent) !== "unit-major") return null;
-  if (isTeamUnitOwnership(stateContent)) return null;
+  if (isTeamUnitOwnership(stateContent) !== team) return null;
   const node = nodeForSlug(currentSlug);
   if (!node || isPerUnit(node) || node.phase !== "construction") return null;
-  const checkpoints = checkpointPolicyEnabled(stateContent);
-  if (checkpoints && getField(stateContent, "Construction Execution") === "swarm") return null;
-  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
+  const checkpoints = team || checkpointPolicyEnabled(stateContent);
+  if (!team && checkpoints && getField(stateContent, "Construction Execution") === "swarm") return null;
+  if (!team && usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
   const context = unitWorkContext(projectDir);
   if (!context || context.units.length === 0) return null;
   const block = constructionUnitMajorBlock(scope, stateContent, checkpoints);
@@ -15996,10 +16038,12 @@ function unitMajorFinishedWalk(
 // whether another Unit still owes the step (so "this Unit" and "every Unit
 // from here" differ), whether another Unit already did the step, and whether
 // the walk has no other Unit at all. Null when the walk is not on a Unit.
+// A team's main checkout that works every Unit itself walks them one at a time
+// too; there a Unit can also wait at its team approval (`gate`).
 type PlanChangeWalk = {
   stage: string;
   unit: string;
-  at: "work" | "summary" | "paused" | "checkpoint";
+  at: "work" | "summary" | "paused" | "checkpoint" | "gate";
   steps: string[];
   others: boolean;
   worked: boolean;
@@ -16007,7 +16051,12 @@ type PlanChangeWalk = {
 };
 function planChangeWalk(projectDir: string, scope: string, stateContent: string): PlanChangeWalk | null {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
-  const walk = current === "" ? null : unitMajorWalkBeat(projectDir, scope, stateContent, current);
+  if (current === "") return null;
+  const solo = unitMajorWalkBeat(projectDir, scope, stateContent, current);
+  const team = solo === null && teamMainWorksItsUnits(projectDir, stateContent)
+    ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, current)
+    : null;
+  const walk = solo ?? team;
   if (walk === null || walk.step.kind === "covered") return null;
   const steps = walk.block.map((step) => step.slug);
   const alone = walk.context.units.length === 1;
@@ -16017,10 +16066,25 @@ function planChangeWalk(projectDir: string, scope: string, stateContent: string)
   if (walk.step.kind === "paused") {
     return { stage: walk.step.stage, unit: walk.step.checkpoint.unit, at: "paused", steps, others: true, worked: false, alone };
   }
+  if (walk.step.kind === "gate") {
+    return { stage: walk.step.stage.slug, unit: walk.step.unit, at: "gate", steps, others: true, worked: false, alone };
+  }
   const { stage, unit } = walk.step;
   const others = unitsOwingStage(projectDir, stage, walk.context, stateContent).some((u) => u !== unit);
   const worked = unitsWithStageWork(projectDir, stage, walk.context).some((u) => u !== unit);
   return { stage: stage.slug, unit, at: walk.step.kind, steps, others, worked, alone };
+}
+
+// Whether this checkout is a team's main that works the Units itself: no Unit
+// claim of its own (a claimed clone walks its one Unit) and no team holding a
+// claim (then no Unit's work runs here). validateLiveUnitScope owns both.
+function teamMainWorksItsUnits(projectDir: string, stateContent: string): boolean {
+  if (!isTeamUnitOwnership(stateContent)) return false;
+  try {
+    return validateLiveUnitScope(projectDir) === null;
+  } catch {
+    return false;
+  }
 }
 
 // The Units that still owe a step of the walk: not done with it, not skipped
@@ -16269,18 +16333,23 @@ function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): 
   return chosen !== -1 && !attemptEventIsCrossShardTied(rows, chosen);
 }
 
-// The solo unit-major walk a jump to a per-unit step is judged in. Past the
-// block, only a named Unit is reopened: for every Unit the backward jump
-// redoes the target and keeps the steps before it.
+// The unit-major walk a jump to a per-unit step is judged in: the solo walk,
+// or, for a jump that names a Unit, the walk of a team's main that works every
+// Unit itself. Past the block, only a named Unit is reopened: for every Unit
+// the backward jump redoes the target and keeps the steps before it.
+type UnitJumpStep = UnitMajorWalkStep | TeamUnitWalkStep;
 function unitJumpWalk(
   projectDir: string,
   scope: string,
   stateContent: string,
   namesUnit: boolean,
-): { step: UnitMajorWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
+): { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext } | null {
   const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
-  return unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
+  const solo = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
     (namesUnit ? unitMajorFinishedWalk(projectDir, scope, stateContent, currentSlug) : null);
+  if (solo !== null || !namesUnit || !teamMainWorksItsUnits(projectDir, stateContent)) return solo;
+  return teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
+    unitMajorFinishedWalk(projectDir, scope, stateContent, currentSlug, true);
 }
 
 // The one check of a Unit named for a jump to one of the walk's steps, asked
@@ -16395,7 +16464,7 @@ function claimedCheckoutMove(
 // already on the target for that Unit; null when this is no such jump.
 // The Unit the walk's step is for: the one a jump back reopens when the person
 // names none. Null once every Unit has done the block.
-function walkStepUnit(step: UnitMajorWalkStep): string | null {
+function walkStepUnit(step: UnitJumpStep): string | null {
   return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
 }
 
@@ -16454,9 +16523,13 @@ function unitMajorReopen(
     ` If they ask to pick ${unit} up again, run \`next --stage ${stage} --unit ${unit}\`.`;
   // A Unit has reached the target when it finished it, skipped it in this
   // attempt (a jump ahead moved it past), or when the walk has it on a later
-  // step of the block (or at its checkpoint, after every step).
+  // step of the block (or at its checkpoint, after every step, or at a team's
+  // approval of a later step; at its approval of the target it reopens, from
+  // the work it finished there).
   const pastTarget = inFlight !== null &&
-    (liveStage === null ? step.kind === "checkpoint" : blockSlugs.indexOf(liveStage) > targetIndex);
+    (liveStage !== null
+      ? blockSlugs.indexOf(liveStage) > targetIndex
+      : step.kind === "gate" ? blockSlugs.indexOf(step.stage.slug) > targetIndex : step.kind === "checkpoint");
   const skippedHere = unitLedgerFor(projectDir, targetSlug).skipped;
   const reached = (unit: string): boolean =>
     finished.has(unit) || skippedHere.has(unit) || (unit === inFlight && pastTarget);
@@ -16558,8 +16631,12 @@ function unitMajorReopen(
       `to reopen "${targetSlug}" and the steps after it for ${list(reopened.map((unit) => `unit "${unit}"`))} only, then tell the person ` +
       `in one line: "${line}" and re-run \`next\` to continue.` +
       (first ? backTo(first.unit, first.aside.stage) : "") +
-      ` If they then ask for every unit, run \`next --stage ${targetSlug} --every-unit\`; if they name a unit, ` +
-      `\`next --stage ${targetSlug} --unit <name>\`.`,
+      // On a team's main `--every-unit` is not read on the team walk (it is the
+      // plain jump), so it is not named as the way to reopen every Unit there.
+      (isTeamUnitOwnership(stateContent)
+        ? ` If they then name a unit, run \`next --stage ${targetSlug} --unit <name>\`.`
+        : ` If they then ask for every unit, run \`next --stage ${targetSlug} --every-unit\`; if they name a unit, ` +
+          `\`next --stage ${targetSlug} --unit <name>\`.`),
   };
 }
 
@@ -17405,6 +17482,7 @@ function planChangeDirective(
     : walk.at === "summary" ? `done with ${name(walk.stage)} and at its summary`
     : walk.at === "paused" ? `paused on ${name(walk.stage)}`
     : walk.at === "checkpoint" ? "at its checkpoint"
+    : walk.at === "gate" ? `waiting for its ${name(walk.stage)} approval`
     : `on ${name(walk.stage)}`;
   // The skips the scope change carries out itself: the stage it reopens is the
   // one after them, so they are behind the work, as a stage skipped where it
@@ -20235,10 +20313,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const planAction = effectivePlanAction(slug, scope, stateContent);
     const reason = flags.reason?.trim();
     // A stage that must run is skipped only when the person asked: the
-    // reason is then the engine's own token from the step that named this
-    // report (planChangeDirective). A skip the agent reports on its own
+    // reason then starts with the engine's own token from the step that named
+    // this report (planChangeDirective). A skip the agent reports on its own
     // reading still needs a CONDITIONAL stage.
-    const personAsked = reason === PERSON_ASKED_SKIP_REASON;
+    const personAsked = isPersonAskedSkipReason(reason);
     if (node.execution !== "CONDITIONAL" && planAction !== "SKIP" && !personAsked) {
       // The person's own skip goes through the step that names this report
       // with the engine's reason, so the refusal names that step.
