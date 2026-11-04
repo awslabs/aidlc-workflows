@@ -131,6 +131,23 @@ describe("a native Windows install hands aidlc's arguments on as typed", () => {
         const first = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `& '${join(bin, "aidlc.cmd")}' version`]);
         expect(first.out).toContain(`aidlc ${AIDLC_VERSION}`);
         typed();
+
+        // A folder with a non-ASCII letter: the release's own lines the installer
+        // prints spell it byte for byte as the installer's own lines do.
+        const accented = join(root, "Jos\u00e9", "machine");
+        const printed = spawnSync("powershell.exe", [
+          "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(release, "install.ps1"), "-From", release, "-NoModifyPath",
+        ], {
+          cwd: work,
+          encoding: "latin1",
+          env: { ...env, AIDLC_INSTALL_ROOT: accented, AIDLC_BIN_DIR: join(accented, "bin") },
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(printed.status, `${printed.stdout}${printed.stderr}`).toBe(0);
+        const out = `${printed.stdout}${printed.stderr}`;
+        const folder = /Command: (.+)\\bin\\aidlc\.exe/.exec(out)?.[1];
+        expect(folder, out).toBeDefined();
+        expect(out).toContain(`${folder}\\plugins`);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
