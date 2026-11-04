@@ -92,6 +92,7 @@ import {
 import {
   AIDLC_HOOK_ENTRY_PREFIX,
   aidlcHookRegistrationHashes,
+  claudeSettingsHookTargets,
   readJsonFile,
   sha256Bytes,
   TEAM_MEMORY_FILES,
@@ -122,6 +123,7 @@ import {
 import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, addRootBlocks, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   codexHookTrustHash,
+  hookGroupMemberNames,
   PRE_TOOL_USE_GROUP_TARGET,
   HUMAN_PRESENCE_NO_SWITCH,
   TRUSTED_COMMAND_PREFIX,
@@ -468,8 +470,7 @@ import {
   fillHookActivationText,
   hookActivation,
   hookExecutionRecoveryText,
-  claudeSettingsHookFiles,
-  registrationFaultLine,
+  registrationFault,
   startedInsideProjectStep,
   projectSettingsRepair,
   hookLiveness,
@@ -4360,7 +4361,20 @@ export async function collectDoctorReport(
       const parsed = JSON.parse(withoutBom(raw)) as unknown;
       const parsedSettings = isPlainObject(parsed) ? parsed : {};
       settingsHooks = parsedSettings.hooks;
-      expectedHooks = claudeSettingsHookFiles(projectDir, parsed);
+      const refs = new Set<string>();
+      for (const target of claudeSettingsHookTargets(projectDir, parsed)) {
+        if (target === "statusline") refs.add("aidlc-statusline.ts");
+        else {
+          // One registration can run several hooks in one process
+          // (aidlc-command.ts HOOK_GROUPS): the files it stands for are its
+          // members', so the roster below checks those and no shipped guard
+          // reads as unwired.
+          const members = hookGroupMemberNames(target);
+          if (members.length > 0) for (const hook of members) refs.add(`aidlc-${hook}.ts`);
+          else refs.add(`aidlc-${target}.ts`);
+        }
+      }
+      expectedHooks = [...refs].sort();
     } catch {
       settingsReadable = false;
     }
@@ -5283,7 +5297,7 @@ export async function collectDoctorReport(
   const hooksNotRunYet = declaredNotRunYet === undefined
     ? undefined
     : startedInsideProjectStep(projectDir) ??
-      fillHookActivationText(registrationFaultLine(projectDir) ?? declaredNotRunYet, projectDir);
+      fillHookActivationText(registrationFault(projectDir) ?? declaredNotRunYet, projectDir);
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,

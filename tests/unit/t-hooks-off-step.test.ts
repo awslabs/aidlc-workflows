@@ -1,4 +1,4 @@
-// covers: function:hooksOffAgentStep, function:registrationFaultLine, function:claudeSettingsHookFiles, function:hookExecutionRecoveryText, function:projectSettingsRepair, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
+// covers: function:hooksOffAgentStep, function:registrationFault, function:claudeSettingsHookTargets, function:hookExecutionRecoveryText, function:projectSettingsRepair, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
 //
 // When the engine KNOWS a harness's hooks have never run in the joined
 // workflow, `next` does no work. It tells the agent what to do itself and the

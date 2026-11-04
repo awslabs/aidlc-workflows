@@ -32,7 +32,7 @@ import {
   repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
-import { hookGroupMemberNames, NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
+import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -480,7 +480,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
-import { aidlcDispatcherTarget, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
+import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -27855,82 +27855,28 @@ export function projectSettingsRepair(distribution: string): string {
 }
 
 /**
- * The aidlc-*.ts hook files a parsed .claude/settings.json runs, with AI-DLC's
- * status line in the person's own settings.local.json; empty when it runs none.
- * Doctor's hook contract and the hooks-off step both read the file through it.
+ * The harness's line for its hook registration file when that file is
+ * missing, not valid JSON, or valid and running none of AI-DLC's hooks (read
+ * through doctor's walk), with doctor's repair in it and `<entry>` left for
+ * the caller; null for a file that runs them, whatever else switches them off,
+ * for one that cannot be opened for another reason, which the lines would not
+ * describe, and for a harness that declares none (only Claude Code does). No
+ * setting brings those hooks back, so this line comes first. Never throws.
  */
-export function claudeSettingsHookFiles(projectDir: string, settings: unknown): string[] {
-  const commands: string[] = [];
-  const collectCommands = (value: unknown): void => {
-    if (Array.isArray(value)) return void value.forEach(collectCommands);
-    if (!value || typeof value !== "object") return;
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      if (key === "command" && typeof item === "string") commands.push(item);
-      else collectCommands(item);
-    }
-  };
-  collectCommands(settings);
-  // AI-DLC's status line lives in the person's own settings.local.json when
-  // they chose it, so the file it runs is checked from there too.
-  try {
-    const local = JSON.parse(withoutBom(readFileSync(join(projectDir, ".claude", "settings.local.json"), "utf-8")));
-    const localStatusLine = isPlainObject(local) ? local.statusLine : undefined;
-    if (isPlainObject(localStatusLine) && typeof localStatusLine.command === "string") {
-      commands.push(localStatusLine.command);
-    }
-  } catch {
-    // No personal file, or one Claude Code itself reports.
-  }
-  const refs = new Set<string>();
-  for (const command of commands) {
-    const target = aidlcDispatcherTarget(command, true, projectDir);
-    if (target === "statusline") refs.add("aidlc-statusline.ts");
-    else if (target === null) continue;
-    else {
-      // One registration can run several hooks in one process
-      // (aidlc-command.ts HOOK_GROUPS): the files it stands for are its
-      // members', so no shipped guard reads as unwired.
-      const members = hookGroupMemberNames(target);
-      if (members.length > 0) for (const hook of members) refs.add(`aidlc-${hook}.ts`);
-      else refs.add(`aidlc-${target}.ts`);
-    }
-  }
-  return [...refs].sort();
-}
-
-// Missing, there and not valid JSON, or valid and running none of AI-DLC's
-// hooks (read through doctor's walk); null for a file that runs them, whatever
-// else switches them off, and for one that cannot be opened for another
-// reason, which the lines would not describe. Never throws: its callers run it
-// outside a try. Only Claude Code declares a registration file.
-function registrationFault(project: string, path: string): "missing" | "invalid" | "unwired" | null {
-  let text: string;
-  try {
-    text = readFileSync(path, "utf-8");
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(withoutBom(text));
-  } catch {
-    return "invalid";
-  }
-  // AI-DLC's status line is not a hook and writes no heartbeat.
-  return claudeSettingsHookFiles(project, parsed).every((file) => file === "aidlc-statusline.ts") ? "unwired" : null;
-}
-
-/**
- * The harness's line for a hook registration file that is missing, not valid
- * JSON or runs none of AI-DLC's hooks, with doctor's repair in it and
- * `<entry>` left for the caller; null when the file runs them or the harness
- * declares none. No setting brings those hooks back, so this line comes first.
- */
-export function registrationFaultLine(projectDir?: string): string | null {
+export function registrationFault(projectDir?: string): string | null {
   const registration = hookActivation()?.registration;
   if (!registration) return null;
   const project = resolveProjectDir(projectDir);
-  const fault = registrationFault(project, join(project, registration.file));
+  let fault: "missing" | "invalid" | "unwired" | null = null;
+  try {
+    const parsed = JSON.parse(withoutBom(readFileSync(join(project, registration.file), "utf-8")));
+    // AI-DLC's status line is not a hook and writes no heartbeat.
+    if (claudeSettingsHookTargets(project, parsed).every((target) => target === "statusline")) fault = "unwired";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") fault = "missing";
+    else if (error instanceof SyntaxError) fault = "invalid";
+  }
   return fault === null
     ? null
     : registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
@@ -27940,7 +27886,7 @@ export function registrationFaultLine(projectDir?: string): string | null {
 export function hookExecutionRecoveryText(projectDir?: string): string {
   const startedInside = startedInsideProjectStep(projectDir);
   if (startedInside !== null) return startedInside;
-  const faultLine = registrationFaultLine(projectDir);
+  const faultLine = registrationFault(projectDir);
   if (faultLine !== null) return fillHookActivationText(faultLine, projectDir);
   const declared = hookActivation()?.recovery;
   if (declared) return fillHookActivationText(declared, projectDir);
@@ -28006,7 +27952,7 @@ export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () 
   // Started in a folder inside the project, no file or setting brings the
   // hooks back: the one step is to start the tool in the project folder.
   const startedInside = startedInsideProjectLine(project);
-  const faultLine = startedInside === null ? registrationFaultLine(project) : null;
+  const faultLine = startedInside === null ? registrationFault(project) : null;
   let step: string;
   if (startedInside !== null) {
     step = `Show the person this line and end your turn: "${startedInside}"`;
