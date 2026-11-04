@@ -8666,7 +8666,7 @@ describe("t243 release lifecycle", () => {
         // That release's own helper has no BOM, so it cannot start here: the
         // switch stops at the probe, says why, and the machine stays as it was.
         expect(() => activate(older)).toThrow(
-          `version probe returned 4 "": ${older} cannot start from `,
+          `version probe returned 4 "": ${older} did not start from `,
         );
         expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(AIDLC_VERSION);
       }
