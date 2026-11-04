@@ -1,5 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
+import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -4465,32 +4466,6 @@ function isNonDocPath(p: string): boolean {
   return !HARNESS_DOC_DIRS.has(firstSeg);
 }
 
-// Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping. The person's
-// own git settings apply: this is their machine and their project, and git here
-// behaves as it does in their terminal. `outside` is a checkout outside the
-// project: --no-optional-locks keeps git from refreshing its index there, so
-// asking it writes nothing.
-function git(pd: string, args: string[], outside = false): string | null {
-  try {
-    const r = spawnSync("git", outside ? ["--no-optional-locks", ...args] : args, {
-      cwd: pd,
-      encoding: "utf-8",
-      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-    });
-    if (r.status !== 0 || typeof r.stdout !== "string") return null;
-    return r.stdout;
-  } catch {
-    return null;
-  }
-}
-
-// True when `pd` is inside a git work tree. (`--is-inside-work-tree` prints
-// "true"/"false"; a non-repo exits non-zero -> git() returns null -> false.)
-function isGitRepo(pd: string, outside = false): boolean {
-  return git(pd, ["rev-parse", "--is-inside-work-tree"], outside)?.trim() === "true";
-}
-
 // Git-aware "did this workspace get real source work?" signal (issue #366
 // Update 3). Distinguishes "code produced this session" from a brownfield repo's
 // pre-existing src/ - which the bare filesystem check cannot. True when EITHER:
@@ -6681,7 +6656,17 @@ function teamGateContext(
         `"${final?.slug ?? "unknown"}", not "${stage.slug}".`,
     );
   }
-  return { unit, scope: "unit-end", stages };
+  // The gate covers the stages this Unit ran: one skipped for it (UNIT_SKIPPED
+  // in the current attempt) owes no artifacts and no review, and Request
+  // Changes must not reopen it, as a construction checkpoint's gate leaves out
+  // a stage skipped for every Unit.
+  return {
+    unit,
+    scope: "unit-end",
+    stages: stages.filter(
+      (entry) => entry === final || !unitSkippedUnits(pd, entry.slug, undefined, content).has(unit),
+    ),
+  };
 }
 
 function applicableUnitProduces(
@@ -6746,7 +6731,13 @@ function verifyTeamUnitGateEvidence(
   personCall?: PersonApproval,
 ): void {
   for (const stage of context.stages) {
-    if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
+    // Only Code Generation, where the unit-end gate sits, can be skipped here:
+    // it stays in the gate's stages for pin's Gate Stages match, and a stage
+    // the Unit skipped owes no files, completion or review.
+    if (
+      applicableUnitProduces(pd, stage, context.unit).length === 0 ||
+      unitSkippedUnits(pd, stage.slug, undefined, content).has(context.unit)
+    ) continue;
     const missing = missingUnitArtifacts(pd, stage, context.unit);
     if (missing.length > 0) {
       const message =

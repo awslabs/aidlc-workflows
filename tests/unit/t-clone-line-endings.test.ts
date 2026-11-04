@@ -60,6 +60,10 @@ function git(cwd: string, args: string[], autocrlf = false): void {
     "-c", "init.defaultBranch=main",
     "-c", "commit.gpgsign=false",
     "-c", `core.autocrlf=${autocrlf}`,
+    // No automatic maintenance: from Git 2.54 a commit starts a background
+    // repack, and the local clone right after it hardlinks the pack while it
+    // is still being written ("hardlink different from source").
+    "-c", "gc.auto=0", "-c", "maintenance.auto=false",
     ...args,
   ], { cwd, encoding: "utf-8" });
   if (result.error) throw result.error;

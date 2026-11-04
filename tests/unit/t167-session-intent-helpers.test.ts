@@ -15,7 +15,7 @@
 //     space, or null for an unknown uuid (a stale stamp from a deleted intent).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntentUuid,
@@ -51,7 +51,8 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
 
   test("a blank session id never writes a stray record (no-op)", () => {
     writeSessionIntentUuid(proj, "", "uuid-x");
-    expect(existsSync(join(proj, "aidlc", ".aidlc-sessions"))).toBe(false);
+    // Only the fixture's own no-git record (tests/harness/fixtures.ts) is there.
+    expect(readdirSync(join(proj, "aidlc", ".aidlc-sessions"))).toEqual(["no-git-said"]);
   });
 
   test("a blank uuid is a no-op (does not clear/create)", () => {
