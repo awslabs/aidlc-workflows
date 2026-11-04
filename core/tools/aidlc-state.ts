@@ -6656,7 +6656,17 @@ function teamGateContext(
         `"${final?.slug ?? "unknown"}", not "${stage.slug}".`,
     );
   }
-  return { unit, scope: "unit-end", stages };
+  // The gate covers the stages this Unit ran: one skipped for it (UNIT_SKIPPED
+  // in the current attempt) owes no artifacts and no review, and Request
+  // Changes must not reopen it, as a construction checkpoint's gate leaves out
+  // a stage skipped for every Unit.
+  return {
+    unit,
+    scope: "unit-end",
+    stages: stages.filter(
+      (entry) => entry === final || !unitSkippedUnits(pd, entry.slug, undefined, content).has(unit),
+    ),
+  };
 }
 
 function applicableUnitProduces(
@@ -6721,7 +6731,13 @@ function verifyTeamUnitGateEvidence(
   personCall?: PersonApproval,
 ): void {
   for (const stage of context.stages) {
-    if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
+    // Only Code Generation, where the unit-end gate sits, can be skipped here:
+    // it stays in the gate's stages for pin's Gate Stages match, and a stage
+    // the Unit skipped owes no files, completion or review.
+    if (
+      applicableUnitProduces(pd, stage, context.unit).length === 0 ||
+      unitSkippedUnits(pd, stage.slug, undefined, content).has(context.unit)
+    ) continue;
     const missing = missingUnitArtifacts(pd, stage, context.unit);
     if (missing.length > 0) {
       const message =

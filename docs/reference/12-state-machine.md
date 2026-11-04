@@ -290,7 +290,9 @@ read from the one walk `next` routes, before or after `unit start`. The
 transition writes only the Unit's `UNIT_SKIPPED` receipt (with its claim's
 `Attempt Generation`): the stage's checkbox is derived from every team's Units,
 so it is never marked or routed in the claimed checkout. The walk asks no
-summary, review or gate for that step, the Unit's row shows it `[x]` like a
+summary, review or gate for that step (a Unit claimed with the unit-end rhythm
+leaves it out of its one gate's checks, and out of `Gate Stages` unless it is
+Code Generation, where that gate sits), the Unit's row shows it `[x]` like a
 stage its kind writes nothing for, the receipt travels with the published
 work, and pin takes the stage as one the Unit owes nothing: no documents,
 review, receipt or per-stage gate (for Code Generation, no plan or Plan
