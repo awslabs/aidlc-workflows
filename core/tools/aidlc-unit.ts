@@ -106,7 +106,7 @@ import {
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock } from "./aidlc-graph.ts";
-import { approvalDecidesOpenFindings } from "./aidlc-review-brief.ts";
+import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
   aidlcInvocation,
@@ -1160,7 +1160,7 @@ function candidateReviewCoverage(
     produces_kinds?: Record<string, string[]>;
   },
   unitKind: string | null,
-): ReturnType<typeof candidateReviewCoverageProjection> {
+): { coverage: "ready" | "approved"; findings: ReturnType<typeof approvalOpenFindings> } | null {
   const expectedFingerprint = candidateReviewFingerprint(
     projectDir,
     oid,
@@ -1178,7 +1178,7 @@ function candidateReviewCoverage(
       return parseReviewRecordBytes(bytes);
     });
   const artifactPrefix = `construction/${unit}/${stage.slug}/`;
-  return candidateReviewCoverageProjection(events, {
+  const covered = candidateReviewCoverageProjection(events, {
     unit,
     generation,
     stage: stage.slug,
@@ -1188,6 +1188,10 @@ function candidateReviewCoverage(
     completionRecord,
     approvalAccepts: (block) => approvalDecidesOpenFindings(block, artifactPrefix),
   });
+  return covered && {
+    coverage: covered.coverage,
+    findings: covered.approval ? approvalOpenFindings(covered.approval, artifactPrefix) : [],
+  };
 }
 
 function namesInProse(names: string[]): string {
@@ -1766,7 +1770,7 @@ function candidateEvidence(
   );
   const reviewersExpected: string[] = [];
   const reviewersReady: string[] = [];
-  const reviewersApprovedOverConcerns: string[] = [];
+  const reviewersApprovedOverConcerns: NonNullable<UnitMergeEvidence["reviewers_approved_over_concerns"]> = [];
   const unreviewed: string[] = [];
   const artifactPaths: string[] = [];
   for (const stageSlug of stages) {
@@ -1803,9 +1807,10 @@ function candidateEvidence(
           stage,
           unitKind,
         );
-        if (coverage === "ready") reviewersReady.push(stageSlug);
-        else if (coverage === "approved") reviewersApprovedOverConcerns.push(stageSlug);
-        else unreviewed.push(stage.name ?? stageSlug);
+        // A stage reads as clean only when its approval left no finding open.
+        if (coverage === null) unreviewed.push(stage.name ?? stageSlug);
+        else if (coverage.coverage === "ready" && coverage.findings.length === 0) reviewersReady.push(stageSlug);
+        else reviewersApprovedOverConcerns.push({ stage: stageSlug, findings: coverage.findings });
       }
     }
   }

@@ -260,8 +260,11 @@ with git object plumbing, not by merging or creating a worktree:
 - team gate approvals at the claim rhythm;
 - each required review's `READY` verdict, or the team's approval of the stage
   after a review that stayed `NOT-READY`, accepting its open findings (an
-  approval that asked for a finding to be fixed waits for the next review; the
-  evidence lists the approved stages in `reviewers_approved_over_concerns`);
+  approval that asked for a finding to be fixed waits for the next review). The
+  evidence's `reviewers_ready` holds only stages approved with nothing open;
+  `reviewers_approved_over_concerns` names every stage approved with a finding
+  open, under either verdict, with each finding's id, severity and what the
+  approval recorded for it;
 - Plan Approval fingerprint and explicit approval;
 - the candidate state row;
 - the transportable team audit shard.
