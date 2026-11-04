@@ -866,7 +866,7 @@ They do bring AI-DLC's own copy of the active space's memory up to date
 start does, so the command is safe to run before the first intent is created;
 once an intent exists it also records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
 
-When a workflow has issues, `--doctor` also lists the structured findings in its Project section, one `warn [<id>] <summary>` row with a `fix:` line each (e.g. `gate-unresolved`, `runtime-graph-stale`), for unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
+When a workflow has issues, `--doctor` also lists the structured findings in its Project section, one `warn [<id>] <summary>` row with a `fix:` line each (e.g. `gate-unresolved`, `runtime-graph-missing`), for unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
 
 **Syntax:**
 
@@ -986,7 +986,7 @@ audit trail (stage durations, gates, revisions, gaps, and long-duration,
 incomplete or skipped flags; a skipped stage shows its skip time as Completed),
 then runs **deterministic** condition→remedy rules (no LLM) for the
 common "it will not advance" causes: unresolved approval gates, state/audit
-drift, and a stale or missing runtime graph / cold or frozen hook heartbeats.
+drift, and a missing runtime graph / cold or frozen hook heartbeats.
 Findings come from the same shared `DoctorFinding` model the
 live `--doctor` uses, so the command and the report can never diverge. A remedy
 that names a recovery bypass (for example an `AIDLC_DISABLE_*` env var or an
@@ -1015,7 +1015,7 @@ Diagnostic report created:
 
 Findings:
   ERROR gate-unresolved
-  WARNING runtime-graph-stale
+  WARNING runtime-graph-missing
 
 No source files or artifact bodies were included.
 ```
