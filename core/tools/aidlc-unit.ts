@@ -661,9 +661,10 @@ function dependencyBodyAtOid(projectDir: string, oid: string): string {
   return shown.stdout;
 }
 
-function completedUnits(state: string): Set<string> {
+// The Unit Progress table's header and its Unit rows, each as its cells.
+function unitProgressTable(state: string): { header: string[]; rows: string[][] } | null {
   const match = /^## Unit Progress\s*$/m.exec(state);
-  if (!match) return new Set();
+  if (!match) return null;
   const after = match.index + match[0].length;
   const next = /^## /m.exec(state.slice(after));
   const section = state.slice(after, next ? after + next.index : state.length);
@@ -672,20 +673,24 @@ function completedUnits(state: string): Set<string> {
     .filter((line) => line.startsWith("|"))
     .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
   const header = table.find((cells) => cells[0]?.toLowerCase() === "unit");
-  if (!header) return new Set();
+  if (!header) return null;
+  const rows = table.filter((cells) =>
+    cells.length === header.length && cells.length >= 4 &&
+    !(cells[0].toLowerCase() === "unit" && cells[1].toLowerCase() === "owner") &&
+    !cells.every((cell) => /^-+$/.test(cell))
+  );
+  return { header, rows };
+}
+
+function completedUnits(state: string): Set<string> {
+  const table = unitProgressTable(state);
+  if (!table) return new Set();
+  const { header } = table;
   const mergedIndex = header.findIndex(
     (cell) => cell.toLowerCase() === "merged",
   );
   const done = new Set<string>();
-  for (const cells of table) {
-    if (cells.length !== header.length || cells.length < 4) continue;
-    if (
-      (cells[0].toLowerCase() === "unit" &&
-        cells[1].toLowerCase() === "owner") ||
-      cells.every((cell) => /^-+$/.test(cell))
-    ) {
-      continue;
-    }
+  for (const cells of table.rows) {
     const workCells = cells.slice(
       2,
       mergedIndex >= 0 ? mergedIndex : undefined,
@@ -3806,6 +3811,86 @@ function validateClaimRefUnit(intentId8: string, unit: string): void {
         "leading dots, and other git-ref-reserved forms.",
     );
   }
+}
+
+// A team's revised Unit plan (Units Generation's units block) against what the
+// team already did. Every name must be able to be a claim ref, and with the
+// walking skeleton on the built skeleton stays the Unit built first: a plan that
+// breaks either is repaired. A Unit that landed or is claimed keeps its name,
+// since its receipts, row and claim are read by name; dropping or renaming one is
+// the person's call, so their own request (personAsked) lifts that check, and
+// `lifted` says it did. The first problem as the step that fixes the plan
+// (`liftable` when the person's request would lift it); message null when the
+// plan holds.
+export function unitPlanRefusal(
+  projectDir: string,
+  personAsked = false,
+): { message: string | null; liftable: boolean; lifted: boolean } {
+  let lifted = false;
+  const refuse = (message: string, liftable = false) => ({ message, liftable, lifted });
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (!isTeamUnitOwnership(state)) return { message: null, liftable: false, lifted };
+  const parsed = parseBoltDag(readFileSync(unitDependencyPath(pd), "utf-8"));
+  if (!parsed.ok) return { message: null, liftable: false, lifted };
+  const planned = new Set(parsed.units.map((edge) => edge.name));
+  const identity = activeIdentity(pd);
+  for (const unit of planned) {
+    try {
+      validateClaimRefUnit(identity.intentId8, unit);
+    } catch (e) {
+      return refuse(`${errorMessage(e)} Rename it in the units block.`);
+    }
+  }
+  const completed = completedUnits(state);
+  const leftOut = (unitProgressTable(state)?.rows.map((cells) => cells[0]) ?? [])
+    .filter((name) => !planned.has(name)).sort();
+  for (const unit of leftOut) {
+    if (!completed.has(unit)) continue;
+    if (personAsked) {
+      lifted = true;
+      continue;
+    }
+    return refuse(
+      `Unit "${unit}" has landed on main, and the revised plan leaves it out. A landed Unit's work, row and ` +
+        `receipts are read by its name, so keep "${unit}" in the units block under that name.`,
+      true,
+    );
+  }
+  // The claims are read only for a Unit the plan leaves out: a plan that keeps
+  // every Unit asks nothing of the claim registry.
+  let claims: Map<string, UnitClaimView> = new Map();
+  if (leftOut.length > 0) {
+    try {
+      claims = allClaims(pd, repositoryRemote(pd), identity.intentId8, leftOut);
+    } catch {
+      // Claims that cannot be read here are read again at the next claim.
+    }
+  }
+  for (const [unit, claim] of [...claims].sort(([a], [b]) => a.localeCompare(b))) {
+    if (claim.status !== "claimed") continue;
+    if (personAsked) {
+      lifted = true;
+      continue;
+    }
+    return refuse(
+      `Unit "${unit}" is claimed by ${claim.owner} (attempt ${claim.generation}), and the revised plan leaves ` +
+        `it out. Keep "${unit}" in the units block under that name while it is claimed, or release the claim ` +
+        `first from main, which ends ${claim.owner}'s claim on it: ` +
+        `\`${aidlcInvocation()} unit release ${quoteCommandArgument(unit)}\`.`,
+      true,
+    );
+  }
+  const roots = parsed.batches[0] ?? [];
+  const built = roots.find((name) => completed.has(name));
+  if (teamSkeletonOn(state) && built !== undefined && roots[0] !== built) {
+    return refuse(
+      `Unit "${roots[0]}" depends on nothing and its name sorts before "${built}", so it would take over as the ` +
+        `walking skeleton, which "${built}" already is and has built. Add "${built}" to "${roots[0]}"'s depends_on: ` +
+        "every Unit waits on the walking skeleton anyway.",
+    );
+  }
+  return { message: null, liftable: false, lifted };
 }
 
 function claimOwnerLabel(projectDir: string, supplied?: string): string {
