@@ -465,6 +465,16 @@ export function memoryDirFor(projectDir: string, space?: string): string {
   return join(projectDir, ...memorySegmentsForSpace(resolvedSpace));
 }
 
+/** The file a rule the person keeps is written to, relative to the project in
+ *  posix form: the space's `project.md` or `team.md`, the learning loop's two
+ *  scopes (practiceFilePath, aidlc-learnings.ts, writes the same files). A
+ *  claimed Unit's candidate carries it like the Unit's source
+ *  (candidateBoundary, aidlc-unit.ts). */
+export const KEPT_RULE_SCOPES = ["project", "team"] as const;
+export function keptRuleFile(space: string, scope: (typeof KEPT_RULE_SCOPES)[number]): string {
+  return [...memorySegmentsForSpace(space), `${scope}.md`].join("/");
+}
+
 /** The TPL template-override source-of-truth dir for a workspace:
  *  `<projectDir>/aidlc/spaces/<space>/memory/templates` — where SEED ships the
  *  `templates/` floor and a team drops `<artifact>.md` overrides. Used by the
@@ -1422,6 +1432,16 @@ export function withStageProgressRow(content: string, slug: string): string {
   const action = effectivePlanAction(slug, getField(content, "Scope"), content) ?? "EXECUTE";
   lines.splice(insertAt, 0, `- [ ] ${slug} — ${action}${eol}`);
   return lines.join("\n");
+}
+
+// True when `slug` runs before the first per-Unit stage of `stages` (a graph in
+// run order): Inception and earlier, where the Unit plan itself is made. A team
+// that goes back there is changing its Unit plan, which leaves each Unit's own
+// work to its claim. False for a slug the graph does not know.
+export function beforePerUnitBlock(stages: readonly { slug: string; for_each?: string }[], slug: string): boolean {
+  const at = stages.findIndex((stage) => stage.slug === slug);
+  const firstPerUnit = stages.findIndex((stage) => isPerUnitStage(stage));
+  return at !== -1 && firstPerUnit !== -1 && at < firstPerUnit;
 }
 
 /** Stages that produce the given artifact. Empty array = orphan

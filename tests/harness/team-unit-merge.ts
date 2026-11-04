@@ -348,13 +348,14 @@ export function auditBlock(
   generation: number,
   stage: string,
   extra = "",
+  runFloor = "unstarted#0",
 ): string {
   return `## ${event}
 **Timestamp**: 2026-08-20T01:00:00Z
 **Event**: ${event}
 **Stage**: ${stage}
 **Unit**: ${unit}
-**Run floor**: unstarted#0
+**Run floor**: ${runFloor}
 **Attempt Generation**: ${generation}
 ${extra}
 ---
@@ -536,6 +537,10 @@ export function prepareCandidate(
      *  Unit's work is committed and published: a case drives the engine on
      *  the worked checkout there (a skip of the step it hands out, say). */
     beforeCommit?: (checkout: string) => void;
+    /** The run floor every receipt carries, as a clone that read the whole
+     *  audit record (main's rows included) stamps it. The default is the
+     *  floor of a record with no WORKFLOW_STARTED row. */
+    runFloor?: string;
   } = {},
 ): {
   checkout: string;
@@ -635,7 +640,7 @@ export function prepareCandidate(
     directiveEpoch: `sha256:${createHash("sha256")
       .update(`directive:${unit}:${generation}`)
       .digest("hex")}`,
-    runFloor: "unstarted#0",
+    runFloor: options.runFloor ?? "unstarted#0",
     sourceFloor: `sha256:${createHash("sha256")
       .update(`source:${unit}:${generation}`)
       .digest("hex")}`,
@@ -664,6 +669,7 @@ export function prepareCandidate(
     writeFileSync(join(srcDir, "shared.ts"), options.sharedText);
   }
 
+  const floor = options.runFloor ?? "unstarted#0";
   let audit = "";
   for (const stage of stages) {
     const stageNode = graph.find((entry) => entry.slug === stage);
@@ -683,6 +689,7 @@ export function prepareCandidate(
       generation,
       stage,
       lifecycleExtra,
+      floor,
     );
     if (stage === "code-generation") {
       const promptSha256 = createHash("sha256")
@@ -708,6 +715,7 @@ export function prepareCandidate(
           `**Questions SHA-256**: ${createHash("sha256").update(questions, "utf-8").digest("hex")}\n` +
           `**Prompt SHA-256**: ${promptSha256}\n` +
           `**Session**: ${label}-session\n`,
+        floor,
       );
     }
     if (stageNode?.reviewer) {
@@ -731,6 +739,7 @@ export function prepareCandidate(
         generation,
         stage,
         review.request,
+        floor,
       );
       audit += auditBlock(
         "REVIEW_COMPLETED",
@@ -738,6 +747,7 @@ export function prepareCandidate(
         generation,
         stage,
         review.completion,
+        floor,
       );
     }
     if (options.unitEnd) continue;
@@ -747,6 +757,7 @@ export function prepareCandidate(
       generation,
       stage,
       `**Gate Scope**: per-stage\n**Gate Stages**: ${stage}\n**User Input**: Approve\n`,
+      floor,
     );
   }
   const lastStage = stages[stages.length - 1];
@@ -757,6 +768,7 @@ export function prepareCandidate(
       generation,
       lastStage,
       `**Gate Scope**: unit-end\n**Gate Stages**: ${stages.join(", ")}\n**User Input**: Approve\n`,
+      floor,
     );
   }
   const auditShard = auditShardName(checkout);
