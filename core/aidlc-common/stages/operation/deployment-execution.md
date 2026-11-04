@@ -52,11 +52,9 @@ outputs: deployment-log.md, smoke-test-results.md, health-check-report.md, deplo
 - Read build/test results from `<record>/construction/build-and-test/` (if exists)
 - Read rollback runbook (if exists)
 
-Incremental scopes (`bugfix`, `refactor`, `security-patch`, and `infra`) plus
-`express` may skip Environment Provisioning or Build and Test by design.
-`bugfix`, `refactor`, `security-patch`, and `express` retain Build and Test but
-skip Environment Provisioning; `infra` retains Environment Provisioning but
-skips Build and Test. Deployment Pipeline may also report skipped when the
+Incremental scopes (`bugfix`, `refactor`, and `security-patch`) plus `express`
+retain Build and Test but skip Environment Provisioning by design; `infra`
+retains both. Deployment Pipeline may also report skipped when the
 workspace's existing pipeline is already adequate; in that case its absent
 `cd-config` and `deployment-strategy` artifacts are expected, and this stage
 must inspect and use the real pipeline configuration in the workspace instead
