@@ -291,7 +291,7 @@ import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
-import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
+import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
@@ -2052,7 +2052,7 @@ function handleRefreshUnitProgress(
       ) {
         refuseUnitProgress(`Invalid Unit Progress stage: ${slug}`);
       }
-      content = setCheckbox(content, slug, state);
+      content = setCheckbox(withStageProgressRow(content, slug), slug, state);
       if (
         state === "completed" &&
         (
@@ -2083,7 +2083,7 @@ function handleRefreshUnitProgress(
         const nextAfter = nextInScopeStage(next.slug, workflowScope, content);
         const timestamp = isoTimestamp();
         phaseBoundary = finalStage.phase !== next.phase;
-        content = setCheckbox(content, next.slug, "in-progress");
+        content = setCheckbox(withStageProgressRow(content, next.slug), next.slug, "in-progress");
         content = setField(content, "Current Stage", next.slug);
         content = setField(content, "Lifecycle Phase", next.phase.toUpperCase());
         content = setField(content, "Next Stage", nextAfter?.slug ?? "none");
@@ -2416,7 +2416,7 @@ function handleSyncUnitScopeStage(args: string[]): void {
     content = setField(content, "In Progress", slug);
     content = setField(content, "Active Agent", stage.lead_agent);
     if (getSlugState(content, slug) !== "completed") {
-      content = setCheckbox(content, slug, "in-progress");
+      content = setCheckbox(withStageProgressRow(content, slug), slug, "in-progress");
     }
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(pd, content);
@@ -3374,7 +3374,7 @@ function handleCheckbox(args: string[]): void {
   let content = readStateFile(pd);
 
   for (const { slug, state } of changes) {
-    content = setCheckbox(content, slug, state);
+    content = setCheckbox(withStageProgressRow(content, slug), slug, state);
   }
 
   // Sync Completed counter to actual [x] count
@@ -6242,7 +6242,7 @@ function handleAdvance(
   content = setCheckbox(content, completedSlug, "completed");
 
   // 2. Mark next-slug → [-]
-  content = setCheckbox(content, nextSlug, "in-progress");
+  content = setCheckbox(withStageProgressRow(content, nextSlug), nextSlug, "in-progress");
 
   // 3. Update fields
   const nextAfterNext = nextInScopeStage(nextSlug, scope, content);
@@ -8979,7 +8979,7 @@ function handleSkip(args: string[]): void {
     : false;
 
   if (nextStage) {
-    content = setCheckbox(content, nextStage.slug, "in-progress");
+    content = setCheckbox(withStageProgressRow(content, nextStage.slug), nextStage.slug, "in-progress");
     const nextAfterNext = nextInScopeStage(nextStage.slug, scope, content);
     content = setField(content, "Current Stage", nextStage.slug);
     content = setField(content, "Lifecycle Phase", nextStage.phase.toUpperCase());
