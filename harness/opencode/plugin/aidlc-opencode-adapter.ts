@@ -80,10 +80,14 @@ function runCoreHook(
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
     const hook = hookFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+    // The native engine finds its tree by looking in .claude first, so with
+    // Claude Code installed here too a hook would run as Claude Code's.
     const env = {
       ...process.env,
       AIDLC_PROJECT_DIR: cwd,
       CLAUDE_PROJECT_DIR: cwd,
+      AIDLC_HARNESS_DIR: ".aidlc",
+      AIDLC_HARNESS_NAME: "opencode",
     };
     const [bin, ...prefix] = aidlcCommand;
     if (!bin) return resolve({ stdout: "", stderr: "", code: 0 });
