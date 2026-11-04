@@ -294,6 +294,7 @@ import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligi
 import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -9331,6 +9332,51 @@ function handlePracticesEvent(args: string[]): void {
   );
 }
 
+// The rules Approve at Practices Discovery adds to project.md: the list items
+// under the draft's `## Mandated` and `## Forbidden`, a wrapped line joined to
+// its item (prose, a "None.", a nested list, a quote, code and comments are no
+// rule), less the rules that heading of project.md already holds. The gate
+// names these and practices-promote writes them, so the person approves
+// exactly what is written. A terminal `(affirmed <date>)` stamp is provenance,
+// not rule identity: an existing rule keeps its original date.
+export function practicesRulesToAdd(
+  discoveredRules: string,
+  projectMd: string,
+): { mandated: string[]; forbidden: string[] } {
+  const ruleText = (text: string): string => text.replace(/(?: \(affirmed \d{4}-\d{2}-\d{2}\))+$/, "");
+  const draftRules = (section: string): string[] => {
+    const blocks = markdownBlocks(section);
+    const visible = projectVisibleMarkdownLines(section, blocks, { preserveIndentedCode: true });
+    const items = new Map<number, string[]>();
+    blocks.lines.forEach((line, index) => {
+      const item = line.containers[0];
+      if (line.kind !== "paragraph" || line.containers.length !== 1 || item?.kind !== "listItem") return;
+      const text = visible[index].slice(line.contentStart).trim();
+      if (text !== "") items.set(item.id, [...(items.get(item.id) ?? []), text]);
+    });
+    return [...items.values()].map((parts) => ruleText(parts.join(" "))).filter((rule) => rule !== "");
+  };
+  // project.md as its writers have left it: one rule a line, with or without a
+  // list marker.
+  const heldRules = (section: string): string[] =>
+    section
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("<!--") && !l.startsWith("#"))
+      .map((l) => ruleText(l.replace(/^(?:[-*+]|\d+[.)])\s+/, "")));
+  const toAdd = (heading: string): string[] => {
+    const held = new Set(heldRules(extractMarkdownSection(projectMd, heading)));
+    const rules: string[] = [];
+    for (const rule of draftRules(extractMarkdownSection(discoveredRules, heading))) {
+      if (held.has(rule)) continue;
+      held.add(rule);
+      rules.push(rule);
+    }
+    return rules;
+  };
+  return { mandated: toAdd("## Mandated"), forbidden: toAdd("## Forbidden") };
+}
+
 // practices-promote --team-practices <path> --discovered-rules <path>
 //                   [--affirming-user <name>] [--target-dir <path>]
 //
@@ -9518,69 +9564,19 @@ function handlePracticesPromote(args: string[]): void {
     }
   }
 
-  // Step 4b: Build new project-guardrails.md by appending each rule under the
-  // matching heading with a date stamp. Rules are one-per-line in the draft;
-  // empty/blank lines and comment lines are skipped. The generated terminal
-  // date stamps are provenance, not rule identity; leave an existing rule and
-  // its original date untouched when the same text is affirmed again.
-  const parseRules = (sectionContent: string): string[] => {
-    return sectionContent
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith("<!--") && !l.startsWith("#"));
-  };
-  const mandatedDraft = extractMarkdownSection(
-    discoveredRulesDraft,
-    "## Mandated"
-  );
-  const forbiddenDraft = extractMarkdownSection(
-    discoveredRulesDraft,
-    "## Forbidden"
-  );
-  const mandatedRules = parseRules(mandatedDraft);
-  const forbiddenRules = parseRules(forbiddenDraft);
-  const ruleText = (line: string): string =>
-    line.replace(/(?: \(affirmed \d{4}-\d{2}-\d{2}\))+$/, "");
-
+  // Step 4b: Build new project-guardrails.md by appending, under the matching
+  // heading with a date stamp, exactly the rules the gate named.
+  const rulesToAdd = practicesRulesToAdd(discoveredRulesDraft, guardrailsMd);
   let newGuardrailsMd = guardrailsMd;
-  const existingMandatedRules = new Set(
-    parseRules(extractMarkdownSection(guardrailsMd, "## Mandated")).map(ruleText),
-  );
-  const existingForbiddenRules = new Set(
-    parseRules(extractMarkdownSection(guardrailsMd, "## Forbidden")).map(ruleText),
-  );
-  for (const rule of mandatedRules) {
-    const text = ruleText(rule);
-    if (existingMandatedRules.has(text)) continue;
-    const stampedLine = `${text} (affirmed ${today})`;
-    try {
-      newGuardrailsMd = appendUnderHeading(
-        newGuardrailsMd,
-        "## Mandated",
-        `${stampedLine}\n`
-      );
-      existingMandatedRules.add(text);
-      rulesAppended.mandated++;
-    } catch (e) {
-      fail(`appendUnderHeading failed on Mandated: ${errorMessage(e)}`);
-      return;
-    }
-  }
-  for (const rule of forbiddenRules) {
-    const text = ruleText(rule);
-    if (existingForbiddenRules.has(text)) continue;
-    const stampedLine = `${text} (affirmed ${today})`;
-    try {
-      newGuardrailsMd = appendUnderHeading(
-        newGuardrailsMd,
-        "## Forbidden",
-        `${stampedLine}\n`
-      );
-      existingForbiddenRules.add(text);
-      rulesAppended.forbidden++;
-    } catch (e) {
-      fail(`appendUnderHeading failed on Forbidden: ${errorMessage(e)}`);
-      return;
+  for (const [heading, kind] of [["## Mandated", "mandated"], ["## Forbidden", "forbidden"]] as const) {
+    for (const rule of rulesToAdd[kind]) {
+      try {
+        newGuardrailsMd = appendUnderHeading(newGuardrailsMd, heading, `- ${rule} (affirmed ${today})\n`);
+        rulesAppended[kind]++;
+      } catch (e) {
+        fail(`appendUnderHeading failed on ${heading.slice(3)}: ${errorMessage(e)}`);
+        return;
+      }
     }
   }
 

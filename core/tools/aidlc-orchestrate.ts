@@ -718,6 +718,7 @@ import {
   guardPreflight as stateGuardPreflight,
   leftOutNotice,
   parkWorkflow,
+  practicesRulesToAdd,
 } from "./aidlc-state.ts";
 import {
   inspectStageValidity, stageDefinitionChangedFields, stageDefinitionChangedLine, stageLabel, staleStageNote,
@@ -735,6 +736,7 @@ import {
 } from "./aidlc-steering.ts";
 import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
 import { refreshActiveMemory } from "./aidlc-includes.ts";
+import { gateApproveAcceptsLine } from "./aidlc-review-brief.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -6023,7 +6025,7 @@ export interface ParsedFlags {
   phase?: string;
   jumpUnit?: string; // --unit <name> with --stage: reopen that per-unit stage for this Unit (unit-major)
   everyUnit?: boolean; // --every-unit with --stage: reopen that per-unit stage for every Unit (unit-major)
-  change?: boolean; // --change with --stage and --unit or --every-unit: the reopen is the person's change at the open gate
+  change?: boolean; // --change with --stage and --unit or --every-unit: the reopen is the person's change
   depth?: string;
   testStrategy?: string;
   projectType?: "greenfield" | "brownfield"; // --project-type: the person's word on new project vs existing code
@@ -7679,7 +7681,7 @@ function composeDispatchDirective(
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and no proposal writes a scope file; if the human edits a matched stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as a SHORT offer before the approve/edit/reject gate (first read composer.md, beside the aidlc skill's SKILL.md, and follow it): (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by one line with the plan and the validator's numbers in plain words, "Plan: <scopeName>, <shown> stages, <gates> approval questions" (${modeContract})${inFlight ? "" : ', then, when the summary carries skipped_inputs (each a stage this plan skips and the stages it keeps that use what it makes), one plain line saying so, once, for all of them together, naming those stages, for example "This plan skips Units Generation, which Contract Design, Functional Design and Code Generation use"'}, then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (when they ask to raise or lower it, run " + aidlcDispatcherInvocation("config set guard-policy <value>") + " yourself, before any scope change they also asked for; a scope change the person asked for carries the new scope's own default, and any other scope change keeps the running policy and says so in one line)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked at or below that value; pass \`--guard-policy <value>\` for \`strict\` or \`relaxed\`, never for \`off\`, so creation records the scope's own default or raises a lower one; if the human flips a matched plan's value below its stock default at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards; a flip above the default keeps the plan matched and rides that flag)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, collaborators <collaborators>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and a plan_approval in creationSettings becomes --plan-approval like the others (a custom plan raises it on a base that builds without asking), but only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) one line saying they can ask to see why each stage is in or out and the scores behind the sizing. ${inFlight ? "Keep" : "Apart from the skipped_inputs line, keep"} the composer's stage-decision table (with any fold advisories) and its ARS score table off screen until the person asks; then show them as returned, the score table under a "Scoring detail (advisory)" heading with its method line and arsRationale, never recomputed, collapsed into prose, or trimmed. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as a SHORT offer before the approve/edit/reject gate (first read composer.md, beside the aidlc skill's SKILL.md, and follow it): (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by one line with the plan and the validator's numbers in plain words, "Plan: <scopeName>, <shown> stages, <gates> approval questions" (${modeContract})${inFlight ? "" : ', then, when the summary carries skipped_inputs (each a stage this plan skips, with the stages it keeps that use what it makes, if any), one plain line saying so, once, for all of them together, naming every one of those stages, for example "This plan skips Units Generation, which Contract Design, Functional Design and Code Generation use, and Deployment Execution"'}, then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (when they ask to raise or lower it, run " + aidlcDispatcherInvocation("config set guard-policy <value>") + " yourself, before any scope change they also asked for; a scope change the person asked for carries the new scope's own default, and any other scope change keeps the running policy and says so in one line)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked at or below that value; pass \`--guard-policy <value>\` for \`strict\` or \`relaxed\`, never for \`off\`, so creation records the scope's own default or raises a lower one; if the human flips a matched plan's value below its stock default at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards; a flip above the default keeps the plan matched and rides that flag)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, collaborators <collaborators>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and a plan_approval in creationSettings becomes --plan-approval like the others (a custom plan raises it on a base that builds without asking), but only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) one line saying they can ask to see why each stage is in or out and the scores behind the sizing. ${inFlight ? "Keep" : "Apart from the skipped_inputs line, keep"} the composer's stage-decision table (with any fold advisories) and its ARS score table off screen until the person asks; then show them as returned, the score table under a "Scoring detail (advisory)" heading with its method line and arsRationale, never recomputed, collapsed into prose, or trimmed. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   if (!inFlight) {
     parts.push(
@@ -10216,12 +10218,14 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
   if (claimed.length === 0) return null;
   return `Still claimed: ${claimed.map((claim) => `${claim.unit} (${claim.owner})`).join(", ")}. Their work carries ` +
     "on and lands as it is; one whose own entry the revised plan changes brings in the new main and publishes " +
-    "again first. No new Unit is claimed until the revised plan is approved.";
+    "again first.";
 }
 
 // Main is redoing a stage that comes before the per-Unit block (Units
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
+// A participant clone (`unit participate`) came for a Unit, so it keeps the
+// board even when it pulls main mid-replan.
 function beforeTeamUnitWork(stateContent: string): boolean {
   return beforePerUnitBlock(loadGraph(), getField(stateContent, "Current Stage")?.trim() ?? "");
 }
@@ -12703,7 +12707,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         emit(errorDirective(errorMessage(e)));
         return;
       }
-    } else if (!beforeTeamUnitWork(stateContent)) {
+    } else if (!beforeTeamUnitWork(stateContent) || existsSync(unitParticipantPath(pd))) {
       try {
         const participant = existsSync(unitParticipantPath(pd));
         const mergeTransactions = unitMergeTransactions(pd);
@@ -12934,11 +12938,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
             return;
           }
           const gate = applyGateOnlyShape(directive, pd, stateContent);
-          emit(withChangeNotices(gate, [
+          const skippedNotices = units
+            .filter((u) => skipped.has(u))
+            .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? ""));
+          // The gate's own lines are on the step already. A copy is no longer
+          // the step its route (runStageRoutes) and rules are kept for.
+          emit(skippedNotices.length === 0 ? gate : withChangeNotices(gate, [
             ...((gate as Directive).change_notices ?? []),
-            ...units
-              .filter((u) => skipped.has(u))
-              .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? "")),
+            ...skippedNotices,
           ]));
           return;
         }
@@ -13164,12 +13171,14 @@ function applyGateOnlyShape(
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
     const unit = directive.unit ?? null;
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
-    // What the person left out of the build, the files of theirs it changed,
-    // and a check that still fails on a declared output, are said with the
-    // gate, each on its own line after what the stage produced: the narration
-    // is the person's line, and the produced sentence stays whole.
+    // The rules Approve adds to the project's rules, what the person left out
+    // of the build, the files of theirs it changed, and a check that still
+    // fails on a declared output, are said with the gate, each on its own line
+    // after what the stage produced: the narration is the person's line, and
+    // the produced sentence stays whole.
     const narration = [
-      line, leftOutNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
+      line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
+      broughtFilesGateLine(projectDir, gateNode, stateContent),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
@@ -13177,6 +13186,7 @@ function applyGateOnlyShape(
     addContextParkOffer(directive, projectDir);
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
     addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
+    addApproveAcceptsLine(directive, projectDir, gateNode, directive.unit_gate ? unit : null);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -16301,6 +16311,12 @@ function claimedCheckoutMove(
 // aside for the reopened Unit, and the person can pick it up again by name:
 // the same flags then resume it where it stopped. "route" when the walk is
 // already on the target for that Unit; null when this is no such jump.
+// The Unit the walk's step is for: the one a jump back reopens when the person
+// names none. Null once every Unit has done the block.
+function walkStepUnit(step: UnitMajorWalkStep): string | null {
+  return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+}
+
 function unitMajorReopen(
   projectDir: string,
   scope: string,
@@ -16314,7 +16330,7 @@ function unitMajorReopen(
   const targetIndex = blockSlugs.indexOf(targetSlug);
   if (targetIndex === -1) return null;
   const step = walk.step;
-  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  const inFlight = walkStepUnit(step);
   const liveStage = step.kind === "work" || step.kind === "summary"
     ? step.stage.slug
     : step.kind === "paused" ? step.stage : null;
@@ -16492,7 +16508,7 @@ function unitMajorForwardJump(
   const graph = loadGraph();
   const at = (slug: string): number => graph.findIndex((node) => node.slug === slug);
   const blockSlugs = walk.block.map((stage) => stage.slug);
-  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  const inFlight = walkStepUnit(step);
   if (
     inFlight !== null && liveStage !== null &&
     blockSlugs.indexOf(targetSlug) > blockSlugs.indexOf(liveStage) &&
@@ -18407,6 +18423,27 @@ function addReviewCheckOffer(
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
+// What Approve accepts at a reviewed gate with open findings, and the other
+// ways to decide one, said as the gate's last line for the person: inside the
+// Review brief it was lost whenever the agent retold the brief in its own
+// words. A line, never a check: a record that cannot be read says nothing.
+function addApproveAcceptsLine(
+  reply: { kind: string; change_notices?: string[] },
+  projectDir: string,
+  node: GraphStage,
+  unit: string | null,
+): void {
+  let line: string | null;
+  try {
+    const stage = findStageBySlug(node.slug);
+    line = stage === undefined ? null : gateApproveAcceptsLine(projectDir, stage, unit ?? undefined);
+  } catch {
+    return;
+  }
+  if (line === null) return;
+  reply.change_notices = [...(reply.change_notices ?? []).filter((said) => said !== line), line];
+}
+
 // The offer to carry on in a new chat when Kiro's own record shows this chat
 // nearly full (#2574), said once per chat beside a question the person is
 // asked anyway: a stage's approval, or a Unit's checkpoint. The person's answer
@@ -19005,6 +19042,31 @@ function practicesDraftPostureProblem(pd: string): string | null {
     return null;
   }
   return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
+}
+
+// The rules Approve at Practices Discovery adds to the project's rules, said
+// with the gate from the reading practices-promote writes them from; said too
+// when it adds none, so a summary that counts rules the draft does not hold as
+// list items never stands alone. Null when there is no draft to read.
+function practicesRulesGateLine(pd: string, node: { slug: string }): string | null {
+  if (node.slug !== "practices-discovery") return null;
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  const projectRules = join(memoryDirFor(pd), "project.md");
+  let rules: { mandated: string[]; forbidden: string[] };
+  try {
+    const draft = readFileSync(join(pd, prefix, "inception", "practices-discovery", "discovered-rules.md"), "utf-8");
+    rules = practicesRulesToAdd(draft, existsSync(projectRules) ? readFileSync(projectRules, "utf-8") : "");
+  } catch {
+    return null;
+  }
+  const where = toPosix(relative(pd, projectRules));
+  if (rules.mandated.length + rules.forbidden.length === 0) return `Approve adds no rules to ${where}.`;
+  return [
+    `Approve adds these rules to ${where}, which every later stage follows:`,
+    ...rules.mandated.map((rule) => `- Mandated: ${rule}`),
+    ...rules.forbidden.map((rule) => `- Forbidden: ${rule}`),
+  ].join("\n");
 }
 
 // The report that opens a stage's gate, or shows it again after a revision.
@@ -19818,8 +19880,26 @@ function emitTypedResumeChoice(
       emit(unknownUnit);
       return;
     }
+    // Back to a Unit's step, the person may want it run again or a change made
+    // to it: the agent reads which, and `--change` keeps their words as the change.
+    // When they named none, the Unit the reopen is for is named: a checkout's
+    // claimed Unit, or a solo walk's Unit in flight (the one unitMajorReopen
+    // reopens). That is the form the plan-approval guard admits for the reopen
+    // it prints.
+    const claim = units === "" && isTeamUnitOwnership(stateContent)
+      ? readApplicableTeamUnitScopeStamp(pd, stateContent)
+      : null;
+    const walk = units === "" && !isTeamUnitOwnership(stateContent) && validScopes().has(scope)
+      ? unitJumpWalk(pd, scope, stateContent, false)
+      : null;
+    const inFlight = walk?.block.some((stage) => stage.slug === node.slug) ? walkStepUnit(walk.step) : null;
+    const changeUnits = claim !== null ? ` --unit ${claim.unit}` : inFlight !== null ? ` --unit ${inFlight}` : units;
+    const change = changeUnits !== "" && isPerUnit(node)
+      ? ` If what they asked for is a change to that stage's work, run \`next --stage ${node.slug}${changeUnits} --change\` ` +
+        "instead, so the reopen keeps their words as the change."
+      : "";
     emit(move(printDirective(
-      `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.`,
+      `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.${change}`,
     )));
     return;
   }
@@ -20494,6 +20574,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addReviewCheckOffer(unitGate, pd, node, unit);
         addContextParkOffer(unitGate, pd);
         addRevisionCycle(unitGate, pd, slug, unit);
+        addApproveAcceptsLine(unitGate, pd, node, unit);
       }
       emit(unitGate);
       return;
@@ -20793,13 +20874,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const gateState = loadStateFileIfPresent(pd);
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
         const line = producedLine(node, unit, unitFolders, pd);
-        // What the person left out of the build, the files of theirs it
-        // changed, and a check that still fails on a declared output, are said
-        // with the gate, each on its own line after what the stage produced:
+        // The rules Approve adds to the project's rules, what the person left
+        // out of the build, the files of theirs it changed, and a check that
+        // still fails on a declared output, are said with the gate, each on its
+        // own line after what the stage produced:
         // the narration is the person's line (the produced sentence stays
         // whole), and the change lines stay what changed.
         const narration = [
-          line, leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, gateState),
+          line, practicesRulesGateLine(pd, node), leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, gateState),
           failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
@@ -20818,6 +20900,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addReviewCheckOffer(gateReply, pd, node, unit);
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
+        addApproveAcceptsLine(gateReply, pd, node, unit);
       }
     }
     emit(gateReply);
@@ -21103,10 +21186,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         });
         refreshTeamUnitProgress(pd, deriveTeamUnitProgressModel(pd, live, rows));
       } catch (e) {
-        changeNotices.push(
-          `Main's Unit Progress table could not take the new Unit plan: ${errorMessage(e)} ` +
-            `Run \`${aidlcInvocation()} doctor\` before the next Unit lands.`,
-        );
+        changeNotices.push(`Main's Unit Progress table could not take the new Unit plan: ${errorMessage(e)}`);
       }
     }
   }

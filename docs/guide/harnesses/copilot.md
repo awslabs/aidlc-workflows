@@ -314,6 +314,14 @@ then use the ignored local `dist/copilot/` output.
   it does need chat hooks enabled, as the rest of AI-DLC does. On the Copilot
   CLI the adapter gives no permission decision, so your own `--allow-tool` and
   `--deny-tool` rules decide as before.
+- **In the Copilot CLI, AI-DLC's record of your work is written without a
+  prompt.** While the `/aidlc` skill is in use, Copilot creates and edits the
+  files under `aidlc/spaces/<space>/intents/` without asking "Do you want to
+  create ...?", because the skill allows that path (`allowed-tools` in
+  `.github/skills/aidlc/SKILL.md`). Copilot matches the path by its ending, so a
+  folder of yours whose path ends in `aidlc/spaces/<name>/intents/` counts too.
+  Your own `--deny-tool` still wins, and Copilot asks as before for writes to
+  any other file, the space's `memory/` files included, and for commands.
 - **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
   orchestrator, source-dispatcher, and real compiled `next`, `continue`,
   `report`, and `park` commands. One trailing `2>&1` is supported. Inspection
