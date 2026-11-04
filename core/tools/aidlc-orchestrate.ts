@@ -649,7 +649,7 @@ import {
   SESSION_EVENT_TYPES,
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { teamUnitMemoryPath, unitMemoryPath } from "./aidlc-stage-diary.ts";
+import { unitMemoryPath, unitStageMemoryPath } from "./aidlc-stage-diary.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import { withAuditLock } from "./aidlc-locks.ts";
@@ -8024,18 +8024,19 @@ function resolveScope(
 // the workspace root; the engine only joins them to projectDir for deterministic
 // diary bootstrap. Re-rooting remains a pure prefix swap, not a route through
 // the absolute projectDir-keyed state helpers.
-// A per-Unit stage keeps the one stage-level diary, its notes tagged by Unit,
-// except a team-owned Unit's, which keeps its own (teamUnitMemoryPath).
+// A per-Unit stage's step keeps the diary of its Unit instead (stageMemoryPath).
 function memoryPathFor(phase: string, slug: string, recordPrefix: string | null): string {
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
-// Under team ownership a per-Unit stage's diary is the named Unit's own. A
-// directive that names no Unit (the skeleton-stance ask, the walk after a change
-// reopen) takes the claimed checkout's Unit, so the checkout never makes a
-// stage-level diary it cannot land; on main, which lands its own, it stays
-// stage-level.
+// A per-Unit stage's diary is its Unit's own (unitStageMemoryPath); `unit` is the
+// directive's artifact Unit, null in a scope without Units, whose documents and
+// diary stay stage-level. A directive that names no Unit (the skeleton-stance
+// ask, the walk after a change reopen) takes the claimed checkout's Unit under
+// team ownership, so the checkout never makes a stage-level diary it cannot
+// land, and main, which lands its own, keeps the stage-level one; a solo run
+// takes the Unit plan's first Unit, so no stage folder sits beside the Units.
 function stageMemoryPath(
   node: GraphStage,
   unit: string | null,
@@ -8043,14 +8044,17 @@ function stageMemoryPath(
   recordPrefix: string | null,
   projectDir: string | undefined,
 ): string {
-  const named = unit === UNIT_NAME_PLACEHOLDER ? null : unit;
-  const own = teamUnitMemoryPath(node, named, stateContent, recordPrefix);
+  const own = unitStageMemoryPath(node, unit === UNIT_NAME_PLACEHOLDER ? null : unit, recordPrefix);
   if (own) return own;
-  if (!isTeamUnitOwnership(stateContent) || !isPerUnitStage(node)) {
-    return memoryPathFor(node.phase, node.slug, recordPrefix);
+  if (unit === null || !isPerUnitStage(node) || !projectDir) return memoryPathFor(node.phase, node.slug, recordPrefix);
+  let fallback: string | undefined;
+  if (isTeamUnitOwnership(stateContent)) {
+    fallback = readApplicableTeamUnitScopeStamp(projectDir, stateContent ?? undefined)?.unit;
+  } else {
+    const dag = resolveBoltDag(projectDir);
+    fallback = dag.state === "ok" ? dag.units[0] : undefined;
   }
-  const claimed = projectDir ? readApplicableTeamUnitScopeStamp(projectDir, stateContent ?? undefined)?.unit : undefined;
-  return claimed ? unitMemoryPath(node.slug, claimed, recordPrefix) : memoryPathFor(node.phase, node.slug, recordPrefix);
+  return fallback ? unitMemoryPath(node.slug, fallback, recordPrefix) : memoryPathFor(node.phase, node.slug, recordPrefix);
 }
 
 // Callers create the stage diary at the deterministic directive-emission boundary
@@ -9252,7 +9256,7 @@ function buildRunStageDirective(
     mode: node.mode as RunStageDirective["mode"],
     inline_context_paths: inlineContext.paths,
     gate: computeGate(node, scope, stateContent),
-    memory_path: stageMemoryPath(node, unit, stateContent, recordPrefix, codekbCtx?.projectDir),
+    memory_path: stageMemoryPath(node, artifactUnit, stateContent, recordPrefix, codekbCtx?.projectDir),
     consumes: present,
     produces: resolveProduces(
       node,
