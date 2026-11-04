@@ -1610,7 +1610,7 @@ export { windowsPosixShim };
 // bytes every release since FIRST_RELEASE_WITH_CURRENT_HELPER wrote.
 function windowsShimHelper(): string {
   const helper = bomlessWindowsShimHelper();
-  return /[^\x00-\x7f]/.test(helper) ? `\uFEFF${helper}` : helper;
+  return /[\u0080-\uffff]/.test(helper) ? `\uFEFF${helper}` : helper;
 }
 
 function bomlessWindowsShimHelper(): string {
