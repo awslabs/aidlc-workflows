@@ -1788,6 +1788,11 @@ continuation (native, or `bun <harness-dir>/tools/aidlc-jump.ts execute ...` in 
 source install) is admitted only for the current recovery ask's recorded human
 selection. Its target and Scope must match the selected operation and current
 state; its `redo` or `backward` direction is checked against the effective plan.
+In a checkout that claimed a team Unit, the restart of one of that Unit's stages
+returns the Unit's own
+`jump reopen --target <stage> --stages <list> --units <unit> --scope <scope>`
+instead, admitted the same way when the ask names the claimed Unit and the list
+is exactly that stage and the per-Unit stages after it.
 Forward moves, extra arguments, shell wrappers, and additional work do not
 receive this exception. The reset produces no Plan Approval receipt.
 On Copilot, claiming the selected `next --stage` command temporarily requires
