@@ -6755,7 +6755,13 @@ function verifyTeamUnitGateEvidence(
   personCall?: PersonApproval,
 ): void {
   for (const stage of context.stages) {
-    if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
+    // Only Code Generation, where the unit-end gate sits, can be skipped here:
+    // it stays in the gate's stages for pin's Gate Stages match, and a stage
+    // the Unit skipped owes no files, completion or review.
+    if (
+      applicableUnitProduces(pd, stage, context.unit).length === 0 ||
+      unitSkippedUnits(pd, stage.slug, undefined, content).has(context.unit)
+    ) continue;
     const missing = missingUnitArtifacts(pd, stage, context.unit);
     if (missing.length > 0) {
       const message =

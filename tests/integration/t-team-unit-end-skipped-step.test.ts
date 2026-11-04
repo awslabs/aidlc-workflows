@@ -7,7 +7,9 @@
 // guard-recovery question (REQUIRED_ARTIFACTS_MISSING for Infrastructure
 // Design) whose only way out was Request Changes. The unit-end gate covers the
 // stages the Unit ran: a stage skipped for the Unit is left out of its checks
-// and of the approval row's Gate Stages, and the Unit lands.
+// and of the approval row's Gate Stages, and the Unit lands. A skipped Code
+// Generation, the stage the gate sits on, stays in Gate Stages and is left out
+// of the checks.
 //
 // Mechanism: cli - spawns the shipped tools against a seeded team project, a
 // bare remote and a claimed clone.
@@ -29,16 +31,26 @@ import {
   unitProgressRow,
 } from "../harness/team-unit-merge.ts";
 import { seededAuditDir, seededStateFile } from "../harness/fixtures.ts";
-import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { PERSON_ASKED_SKIP_REASON, auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
 
-const STAGE = "infrastructure-design";
-// Every per-Unit stage but Infrastructure Design is written; the walk hands
-// that one out next.
-const WORKED = ["functional-design", "nfr-requirements", "nfr-design", "code-generation"];
-const REASON = "alpha is a pure library function: nothing to provision";
+// The stage the Unit skips, as the walk hands it out next, the per-Unit stages
+// it writes, and the skip's reason (Code Generation always runs, so only the
+// person's ask skips it).
+const CASES = [
+  {
+    skip: "infrastructure-design",
+    worked: ["functional-design", "nfr-requirements", "nfr-design", "code-generation"],
+    reason: "alpha is a pure library function: nothing to provision",
+  },
+  {
+    skip: "code-generation",
+    worked: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"],
+    reason: PERSON_ASKED_SKIP_REASON,
+  },
+];
 
 function teamSeed(): { seed: string; remote: string } {
   const made = makeSeed();
@@ -54,8 +66,9 @@ function teamSeed(): { seed: string; remote: string } {
 
 // The fixture writes the Unit's gate approved and its reviews shaped for pin,
 // not for the walk's own review check: the gate is taken out so the case asks
-// it, and reviews are off so the walk routes.
-function ungated(checkout: string): void {
+// it, and reviews are off so the walk routes. Plan Approval stays on when the
+// Unit skips Code Generation, the stage it governs, as a stock run has it.
+function ungated(checkout: string, planApproval: boolean): void {
   for (const name of readdirSync(seededAuditDir(checkout))) {
     const path = join(seededAuditDir(checkout), name);
     const blocks = readFileSync(path, "utf-8").split(/(?=^## )/m);
@@ -66,7 +79,7 @@ function ungated(checkout: string): void {
     statePath,
     readFileSync(statePath, "utf-8").replace(
       "- **Review Override**: adversarial",
-      "- **Review Override**: none\n- **Plan Approval**: off (set by you)",
+      `- **Review Override**: none${planApproval ? "" : "\n- **Plan Approval**: off (set by you)"}`,
     ),
   );
 }
@@ -78,13 +91,13 @@ function gateReport(checkout: string, args: string[]): Record<string, unknown> {
 }
 
 describe("t-team-unit-end-skipped-step: a unit-end gate leaves out the step skipped for the Unit", () => {
-  test("the gate opens, takes Approve, records only the stages the Unit ran, and the Unit lands", () => {
+  for (const { skip: STAGE, worked: WORKED, reason: REASON } of CASES) test(`${STAGE} skipped: the gate opens, takes Approve, and the Unit lands`, () => {
     const { seed, remote } = teamSeed();
     prepareCandidate(remote, "alpha", "alpha-team", {
       unitEnd: true,
       stages: WORKED,
       beforeCommit: (checkout) => {
-        ungated(checkout);
+        ungated(checkout, STAGE === "code-generation");
         const handed = nextDirective(checkout);
         expect(handed.stage, JSON.stringify(handed)).toBe(STAGE);
         const skipped = runMergeTool(ORCH, ["report", "--stage", STAGE, "--unit", "alpha", "--result", "skipped", "--reason", REASON], checkout);
@@ -99,7 +112,9 @@ describe("t-team-unit-end-skipped-step: a unit-end gate leaves out the step skip
         const approval = readAuditShardEvents(checkout)
           .filter((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Gate Scope") === "unit-end")
           .at(-1);
-        expect(auditBlockField(approval?.block ?? "", "Gate Stages")?.split(",")).toEqual(WORKED);
+        expect(auditBlockField(approval?.block ?? "", "Gate Stages")?.split(",")).toEqual(
+          STAGE === "code-generation" ? [...WORKED, STAGE] : WORKED,
+        );
         expect(String(nextDirective(checkout).message ?? "")).toContain('Unit "alpha" is complete and approved in this checkout.');
         // The engine's turn marker, which a real install's .gitignore keeps out.
         appendFileSync(join(checkout, ".git", "info", "exclude"), "**/.aidlc-engine/engine-touch\n");
