@@ -356,6 +356,8 @@ describe("t282 a v7 record is brought up in place and resumes", () => {
     }
     expect(now).not.toMatch(/application-design/);
     expect(now).toMatch(/^- \*\*Last Completed Stage\*\*: domain-design$/m);
+    // The route after Units Generation runs through Contract Design now, and status reads this field.
+    expect(now).toMatch(/^- \*\*Next Stage\*\*: contract-design$/m);
     // Contract Design has no row until the work moves onto it, as for any stage a newer release adds.
     expect(now).not.toMatch(/contract-design/);
     // The approved design is where Units Generation reads it.
@@ -432,5 +434,6 @@ describe("t282 a v7 record is brought up in place and resumes", () => {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
     });
     expect(`${status.stdout}`).toMatch(/^Brought up: +from an older AI-DLC on \d{4}-\d{2}-\d{2} \(the record as it was: aidlc-state\.v7\.md\)$/m);
+    expect(`${status.stdout}`).toMatch(/^Next Stage: +Contract Design$/m);
   });
 });
