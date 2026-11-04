@@ -743,6 +743,9 @@ merge gate.
 A rule kept in the claimed checkout (the space's `memory/project.md` or
 `memory/team.md`) is listed there too and lands with the Unit.
 
+Pin and land also refuse a Unit until every Unit it depends on has landed on
+main.
+
 ### `/aidlc unit gate <unit>` — Decide the pinned merge
 
 ```bash

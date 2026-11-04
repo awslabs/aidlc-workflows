@@ -214,7 +214,8 @@ export interface UnitClaimView {
 
 export interface UnitClaimOverview {
   claimable: string[];
-  claimed: Array<{ unit: string; owner: string; generation: number }>;
+  /** `blockedBy`, when present: Units a revised plan made this claimed Unit depend on that have not landed. */
+  claimed: Array<{ unit: string; owner: string; generation: number; blockedBy?: string[] }>;
   waiting: Array<{ unit: string; blockedBy: string[] }>;
   claims: Map<string, UnitClaimView>;
   warning?: string;
@@ -771,7 +772,7 @@ function buildOverview(
   warning?: string,
 ): UnitClaimOverview {
   const claimable: string[] = [];
-  const claimed: Array<{ unit: string; owner: string; generation: number }> = [];
+  const claimed: UnitClaimOverview["claimed"] = [];
   const waiting: Array<{ unit: string; blockedBy: string[] }> = [];
   for (const unit of opening.units) {
     const claim = claims.get(unit);
@@ -780,7 +781,15 @@ function buildOverview(
       continue;
     }
     if (claim?.status === "claimed") {
-      claimed.push({ unit, owner: claim.owner, generation: claim.generation });
+      // A claimed Unit lands after the Units it depends on; a revised plan can
+      // add one that has not landed (the walking skeleton is not one).
+      const blockedBy = (opening.blockers.get(unit) ?? []).filter((dep) => dep !== "walking-skeleton");
+      claimed.push({
+        unit,
+        owner: claim.owner,
+        generation: claim.generation,
+        ...(blockedBy.length > 0 ? { blockedBy } : {}),
+      });
       continue;
     }
     const blockedBy = opening.blockers.get(unit) ?? [];
@@ -1654,7 +1663,8 @@ function candidateEvidence(
     true,
   );
   const baseDag = parseBoltDag(dependencyBodyAtOid(projectDir, candidateBaseOid));
-  const dag = parseBoltDag(dependencyBodyAtOid(projectDir, liveIntegrationOid));
+  const dagBody = dependencyBodyAtOid(projectDir, liveIntegrationOid);
+  const dag = parseBoltDag(dagBody);
   if (!baseDag.ok) {
     fail(`Pinned candidate base Unit DAG is ${baseDag.reason}: ${baseDag.detail}.`);
   }
@@ -1683,6 +1693,18 @@ function candidateEvidence(
   }
   const unit = dag.units.find((entry) => entry.name === claim.unit);
   if (!unit) fail(`Pinned integration Unit DAG has no Unit "${claim.unit}".`);
+  // A Unit lands after every Unit it depends on, read by the claim's own
+  // opening rule. A revised plan can give a Unit already claimed a dependency
+  // that has not landed yet (the walking skeleton is not one).
+  const notLanded = (openingStatusFrom(integrationState, dagBody).blockers.get(claim.unit) ?? [])
+    .filter((dep) => dep !== "walking-skeleton").sort();
+  if (notLanded.length > 0) {
+    const names = notLanded.map((dep) => `"${dep}"`).join(" and ");
+    fail(
+      `Unit "${claim.unit}" now depends on ${names}, which ${notLanded.length === 1 ? "has" : "have"} not landed on ` +
+        `main yet; it lands after ${notLanded.length === 1 ? "it does" : "they do"}. Nothing was pinned or landed.`,
+    );
+  }
   const unitKind = unit.kind ?? null;
   const forcedMergeJournals = gitOutput(
     projectDir,

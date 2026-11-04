@@ -343,7 +343,8 @@ Landing is ordered and resumable:
    audit shard and per-Unit artifacts/source land. Real source conflicts abort
    back to a clean checkout and list the files. A clean automatic merge of a
    shared file is also refused when its result differs from the pinned candidate;
-   rebase and republish. No Unit row has been folded.
+   rebase and republish. No Unit row has been folded. A Unit lands only after
+   every Unit it depends on has landed.
 2. **State fold.** Under the per-intent lock, derive the candidate's transported
    receipts, write the merged Unit row while preserving main's singletons and
    other rows, then emit `UNIT_MERGED`.
