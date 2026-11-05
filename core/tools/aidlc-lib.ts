@@ -25867,9 +25867,12 @@ function sourceKeyRegistryRoots(
     const parsed = splitSourcePathKey(key);
     if (parsed === null) return null;
     if (parsed.repo !== "") {
-      // A repo mapped to "." is the workspace folder, shell and all.
+      // A repo mapped to "." is the workspace folder, shell and all; one
+      // repos.json maps elsewhere is named where it is.
       const root = repoDir(projectDir, parsed.repo);
-      return { root, path: parsed.path, carriesWorkspaceShell: rootCarriesWorkspaceShell(projectDir, root), shown: parsed.repo };
+      const mapped = readWorkspaceRepos(projectDir).entries.get(parsed.repo)?.path;
+      const shown = mapped === undefined ? parsed.repo : rootCarriesWorkspaceShell(projectDir, root) ? "" : mapped.replaceAll("\\", "/").replace(/\/+$/, "");
+      return { root, path: parsed.path, carriesWorkspaceShell: rootCarriesWorkspaceShell(projectDir, root), shown };
     }
     const atRoot = { root: projectDir, path: parsed.path, carriesWorkspaceShell: true, shown: "" };
     if (!namesSourceCheckout(parsed.path)) return atRoot;

@@ -55,8 +55,8 @@ import {
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
   WORKSPACE_GITIGNORE_GATE_END as GATE_END,
   workspaceGitignoreEntries,
+  withoutCredentials,
 } from "./aidlc-workspace-manifest.ts";
-import { recordableGitAddress } from "./aidlc-workspace-repos.ts";
 
 const COLOR =
   !!process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== "dumb";
@@ -1464,7 +1464,7 @@ function writeManifest(root: string): number {
   }
   const origin = (dir: string): string => {
     const result = git(dir, ["remote", "get-url", "origin"]);
-    return result.status === 0 ? recordableGitAddress(result.stdout) : "";
+    return result.status === 0 ? withoutCredentials(result.stdout.trim()) : "";
   };
   const children = discoverSiblingRepos(root);
   const repos = children.length > 0

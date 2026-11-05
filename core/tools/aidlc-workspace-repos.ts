@@ -78,14 +78,6 @@ export function workspaceTargetPath(projectDir: string, target: string): string 
   return resolvePath(projectDir, target);
 }
 
-// A git address as AI-DLC records or prints it: an http(s) URL's user and
-// token (some hosts and CI checkouts keep them in origin) stay in the person's
-// own git config. Over ssh, in a URL or the scp form, the user is part of the
-// address and no secret.
-export function recordableGitAddress(address: string): string {
-  return address.trim().replace(/^(https?:\/\/)[^/@]*@/i, "$1");
-}
-
 // One repo however a clone spells its address: scheme, user, token, the
 // default port, host case, a trailing slash and `.git` aside, so `git@host:o/r`,
 // `ssh://git@host/o/r` and `https://host/o/r.git` are one. A local path or

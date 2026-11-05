@@ -1,4 +1,4 @@
-// covers: function:repoDir, function:resolveIntentRepoSet, function:insideProject, function:workspaceTargetPath, function:repoNotThereLine, file:core/tools/aidlc-workspace-manifest.ts, file:core/tools/aidlc-workspace-repos.ts
+// covers: function:repoDir, function:resolveIntentRepoSet, function:sourceKeyRegistryFiles, function:insideProject, function:workspaceTargetPath, function:repoNotThereLine, file:core/tools/aidlc-workspace-manifest.ts, file:core/tools/aidlc-workspace-repos.ts
 //
 // Repos anywhere on disk (#2410, item 1). repos.json can give a repo a `path`
 // (relative to the workspace and outside it, absolute, or "." for the workspace
@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { repoDir, resolveIntentRepoSet } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { repoDir, resolveIntentRepoSet, sourceKeyRegistryFiles, sourcePathKey } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   localRepoOverrideLines,
   parseWorkspaceManifest,
@@ -120,7 +120,12 @@ describe("repos.json: path, optional org, blank url", () => {
       '{ "repos": [ { "name": "a" }, { "name": "b", "path": "../b" }, { "name": "c", "path": "/srv/c" },' +
         ' { "name": "d", "path": "nested/d" }, { "name": "e", "path": "." } ] }',
     );
-    expect(workspaceGitignoreEntries(manifest)).toEqual(["/.aidlc-workspace-sync-recovery-*/", "/a/", "/nested/d/"]);
+    expect(workspaceGitignoreEntries(manifest)).toEqual([
+      "/.aidlc-workspace-sync-recovery-*/",
+      "/.aidlc-workspace-sync-txn-*/",
+      "/a/",
+      "/nested/d/",
+    ]);
   });
 });
 
@@ -227,6 +232,15 @@ describe("a mapped repo counts as the project", () => {
     expect(insideProject(ws, join(root, "billing", "src", "refund.ts"))).toBe(true);
     expect(insideProject(ws, join(ws, "src", "x.ts"))).toBe(true);
     expect(insideProject(ws, join(root, "unrelated", "x.ts"))).toBe(false);
+  });
+
+  test("the source list a line names for a mapped repo is the one in that repo's own folder", () => {
+    const { root, ws } = layout();
+    repoAt(join(root, "billing"));
+    writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", path: "../../billing" }, { name: "api" }, { name: "ws", path: "." }] }));
+    expect(sourceKeyRegistryFiles(ws, [sourcePathKey("billing", "src/refund.ts")])).toEqual(["../../billing/.aidlc-source-paths.json"]);
+    expect(sourceKeyRegistryFiles(ws, [sourcePathKey("api", "src/x.ts")])).toEqual(["api/.aidlc-source-paths.json"]);
+    expect(sourceKeyRegistryFiles(ws, [sourcePathKey("ws", "src/x.ts")])).toEqual([".aidlc-source-paths.json"]);
   });
 
   test("a traceability target in a mapped repo is spelled <repo>/<path> and resolves there", () => {

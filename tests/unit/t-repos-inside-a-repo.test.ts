@@ -113,6 +113,9 @@ function review(project: string, record: string, unit: string, writes: Array<{ r
   const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", "1"];
   const request = cli(LOG, args, project);
   expect(request.rc, request.out).toBe(0);
+  // The stage's checks run on its documents before the review; asked again,
+  // the request is recorded without checking again.
+  if (request.out.includes("Before the review")) expect(cli(LOG, args, project).rc).toBe(0);
   writeFileSync(join(dir, "code-generation-plan.md"), `# Plan\n\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`);
   const verdict = cli(LOG, [...args, "--verdict", "READY"], project);
   expect(verdict.rc, verdict.out).toBe(0);

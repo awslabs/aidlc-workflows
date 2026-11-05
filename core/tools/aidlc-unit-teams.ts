@@ -24,10 +24,12 @@ import {
   markdownBlocks,
   parseBoltDag,
   readStateFile,
+  REQUEST_TEXT_DIR,
   slugify,
   unitDependencyPath,
 } from "./aidlc-lib.ts";
-import { gitAddressKey, recordableGitAddress } from "./aidlc-workspace-repos.ts";
+import { gitAddressKey } from "./aidlc-workspace-repos.ts";
+import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
 
 // Where the home of team-built work is: the address the workspace's own
 // remote points to (origin, else its one remote; read, never set, with any user
@@ -55,7 +57,7 @@ export function workspaceHomeLocation(projectDir: string): string | null {
   const remotes = read(["remote"]).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
   const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
   const address = remote === null ? "" : read(["remote", "get-url", remote]);
-  return address ? recordableGitAddress(address) : "local";
+  return address ? withoutCredentials(address.trim()) : "local";
 }
 
 // Each Unit's likely repos, as Units Generation proposed them (a guide only),

@@ -1,4 +1,4 @@
-// covers: function:gitAddressKey, function:recordableGitAddress, function:workspaceHomeLocation, function:sameGitAddress, function:checkTeamResults, subcommand:aidlc-unit:push
+// covers: function:gitAddressKey, function:withoutCredentials, function:workspaceHomeLocation, function:sameGitAddress, function:checkTeamResults, subcommand:aidlc-unit:push
 //
 // One identity for a git address and the person's own git setup, for teams
 // building Units as work of their own (#2410). A user and token in an origin
@@ -44,7 +44,8 @@ const TOKEN = "ghp_r2SecretToken";
 
 describe("addresses", () => {
   test("every spelling of one repo's address is one key, and a recorded address never carries a user or token", async () => {
-    const { gitAddressKey, recordableGitAddress } = await import("../../dist/claude/.claude/tools/aidlc-workspace-repos.ts");
+    const { gitAddressKey } = await import("../../dist/claude/.claude/tools/aidlc-workspace-repos.ts");
+    const { withoutCredentials } = await import("../../dist/claude/.claude/tools/aidlc-workspace-manifest.ts");
     const one = [
       "git@example.test:org/ws.git",
       "ssh://git@example.test/org/ws",
@@ -55,11 +56,11 @@ describe("addresses", () => {
     expect(new Set(one.map((address) => gitAddressKey(address)))).toEqual(new Set(["example.test/org/ws"]));
     expect(gitAddressKey("https://example.test/org/other.git")).not.toBe(gitAddressKey(one[0]));
     expect(gitAddressKey("/srv/git/ws.git")).toBe(gitAddressKey("file:///srv/git/ws"));
-    expect(recordableGitAddress(`https://lead:${TOKEN}@example.test/org/ws.git`)).toBe("https://example.test/org/ws.git");
-    expect(recordableGitAddress("git@example.test:org/ws.git")).toBe("git@example.test:org/ws.git");
+    expect(withoutCredentials(`https://lead:${TOKEN}@example.test/org/ws.git`)).toBe("https://example.test/org/ws.git");
+    expect(withoutCredentials("git@example.test:org/ws.git")).toBe("git@example.test:org/ws.git");
     // Over ssh the user is part of the address, not a secret.
-    expect(recordableGitAddress("ssh://git@example.test/org/ws.git")).toBe("ssh://git@example.test/org/ws.git");
-    expect(recordableGitAddress(`http://lead:${TOKEN}@example.test/org/ws.git`)).toBe("http://example.test/org/ws.git");
+    expect(withoutCredentials("ssh://git@example.test/org/ws.git")).toBe("ssh://git@example.test/org/ws.git");
+    expect(withoutCredentials(`http://lead:${TOKEN}@example.test/org/ws.git`)).toBe("http://example.test/org/ws.git");
   });
 
   test("an origin with a token in it: teams are chosen and repos.json is written, and neither the record nor the file holds the token", () => {
