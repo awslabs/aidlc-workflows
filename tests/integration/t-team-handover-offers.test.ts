@@ -241,23 +241,23 @@ describe("step 2: another clone takes a Unit", () => {
 
   // The claim command next prints, run through the shell the agent runs it in:
   // bash (Git Bash on Windows, Claude Code's), PowerShell (Kiro's and Codex's on
-  // Windows), cmd.exe. cmd.exe takes single quotes as characters (the Copilot and
-  // opencode skills rewrite them for it), so it runs only a name printed in
-  // double quotes. The board is every other clone's: the Take question's holders.
-  const NAMES = ["O'Brien", "Ops & QA", "QA\\"];
+  // Windows), cmd.exe (Copilot's and opencode's). No one quoting reads an
+  // apostrophe beside & the same in PowerShell and Git Bash. The board is every
+  // other clone's: the Take question's holders.
+  const NAMES = ["O'Brien", "Ops & QA", "QA\\", "O'Brien & QA"];
   const SHELLS = [
-    { shell: "bash", names: NAMES, skip: gitBashSkipReason() },
-    { shell: "PowerShell", names: NAMES, skip: process.platform === "win32" ? null : "Windows only" },
-    { shell: "cmd.exe", names: ["O'Brien"], skip: process.platform === "win32" ? null : "Windows only" },
+    { shell: "bash", skip: gitBashSkipReason() },
+    { shell: "PowerShell", skip: process.platform === "win32" ? null : "Windows only" },
+    { shell: "cmd.exe", skip: process.platform === "win32" ? null : "Windows only" },
   ] as const;
-  for (const { shell, names, skip } of SHELLS) {
-    test.skipIf(skip !== null)(`a team name as given reaches the board, through ${shell}: ${names.join(", ")}`, () => {
-      const units = ["alpha", "beta", "gamma", "delta"];
+  for (const { shell, skip } of SHELLS) {
+    test.skipIf(skip !== null)(`a team name as given reaches the board, through ${shell}: ${NAMES.join(", ")}`, () => {
+      const units = ["alpha", "beta", "gamma", "delta", "epsilon"];
       const { remote } = makeSeed(
         "# Unit dependencies\n\n```yaml\nunits:\n  - name: skeleton\n    depends_on: []\n" +
           units.map((unit) => `  - name: ${unit}\n    depends_on: [skeleton]\n`).join("") + "```\n",
       );
-      names.forEach((name, i) => {
+      NAMES.forEach((name, i) => {
         const mate = clone(remote, `mate${i}`);
         const take = runMergeTool(ORCH, ["next", "--claim", units[i], "--team", name], mate);
         expect(take.status, take.out).toBe(0);
@@ -294,7 +294,7 @@ describe("step 2: another clone takes a Unit", () => {
         expect(JSON.parse(claimed.stdout).owner, printed).toBe(name);
       });
       const offer = nextDirective(clone(remote, "late"));
-      for (const [i, name] of names.entries()) expect(String(offer.question)).toContain(`${units[i]} is with ${name}`);
+      for (const [i, name] of NAMES.entries()) expect(String(offer.question)).toContain(`${units[i]} is with ${name}`);
     });
   }
 
