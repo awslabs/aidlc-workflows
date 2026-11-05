@@ -129,6 +129,7 @@ import {
   type RuleFrontmatter,
   validateRuleFrontmatter,
 } from "./aidlc-rule-schema.ts";
+import { PLUGIN_RULES_OPENING } from "./aidlc-plugin-rules.ts";
 import {
   parseSensorManifest,
   type SensorManifest,
@@ -1133,7 +1134,7 @@ function parseRuleHeadings(raw: string): Map<string, string> {
   let inFence = false;
   let inComment = false;
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     if (/^```/.test(line)) {
       inFence = !inFence;
       continue;
@@ -1156,7 +1157,10 @@ function parseRuleHeadings(raw: string): Map<string, string> {
     }
 
     if (/^## /.test(line)) {
-      current = line.slice(3).trim();
+      // A plugin's rules section says whose it is, so doctor's overlap row
+      // names the plugin, not the file's own layer, as the source.
+      const owner = PLUGIN_RULES_OPENING.exec(lines[index + 1]?.trim() ?? "")?.[1];
+      current = `${line.slice(3).trim()}${owner ? ` (plugin ${owner})` : ""}`;
       if (!out.has(current)) out.set(current, "");
       continue;
     }

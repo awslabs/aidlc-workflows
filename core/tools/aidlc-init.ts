@@ -167,6 +167,7 @@ import {
   editTomlInstructions,
   nextCompose,
   personaTwinRels,
+  pluginRulesStripWrites,
   type StageContribRecord,
   stripRecordedAdds,
 } from "./aidlc-plugin.ts";
@@ -179,6 +180,7 @@ import {
   canonicalStageTableRegion,
   renderScopeTable,
   renderStageTable,
+  pluginsTurnedOff,
   stripPluginsTurnedOff,
 } from "./aidlc-utility.ts";
 import {
@@ -442,6 +444,8 @@ type PreparedRefreshSource = {
   unproven?: ReadonlySet<string>;
   /** Contribution sidecars the refresh retired: their last record, or their plugin is off. */
   emptiedSidecars?: Set<string>;
+  /** The team's rule files without the rules of a plugin the refresh turns off. */
+  ruleStrips?: Array<{ rel: string; content: string }>;
   /** What to record for each composed file it carried over: the file without the plugin's additions. */
   composedRecords?: ReadonlyMap<string, string>;
   /** Composed files this row no longer ships whose record proves them AI-DLC's. */
@@ -7256,6 +7260,7 @@ function prepareRefreshSource(
     composedRecords.set(rel, sha256Bytes(stripRecordedContributions(asRead, { ...record, requires_stage: replayedEdges })));
   }
   const emptiedSidecars = new Set<string>();
+  const ruleStrips: Array<{ rel: string; content: string }> = [];
   if (retiredEdges.size > 0 && pathPresent(dataDir) && lstatSync(dataDir).isDirectory()) {
     for (const file of readdirSync(dataDir).filter((name) => /^plugin-contrib-.+\.json$/.test(name))) {
       const rel = `${descriptor.harnessDir}/tools/data/${file}`;
@@ -7346,6 +7351,9 @@ function prepareRefreshSource(
         : [];
     const recorded = sidecars();
     stripPluginsTurnedOff();
+    // The team's rule files are not in this staged tree: a plugin turned off
+    // loses its rules sections there through the refresh's own writes.
+    for (const plugin of pluginsTurnedOff()) ruleStrips.push(...pluginRulesStripWrites(projectDir, plugin));
     const kept = new Set(sidecars());
     for (const file of recorded.filter((name) => !kept.has(name))) {
       const rel = `${descriptor.harnessDir}/tools/data/${file}`;
@@ -7438,6 +7446,7 @@ function prepareRefreshSource(
     projectOverlays,
     unproven,
     emptiedSidecars,
+    ruleStrips,
     composedRecords,
     provenRetired,
     modelWritten,
@@ -13689,6 +13698,12 @@ export async function main(
       if (!regularFile(target) || operations.some((operation) => operation.path === rel)) continue;
       operations.push({ kind: "remove", path: rel, expected: expected(target) });
       actions.push({ path: rel, action: "remove", detail: "plugin contribution record no longer needed" });
+    }
+    for (const strip of prepared.ruleStrips ?? []) {
+      const target = join(projectDir, strip.rel);
+      if (!regularFile(target) || operations.some((operation) => operation.path === strip.rel)) continue;
+      operations.push(writeOperation(strip.rel, strip.content, expected(target)));
+      actions.push({ path: strip.rel, action: "update", detail: "rules of a plugin turned off taken out" });
     }
     // An explicit Bedrock choice for OpenCode owns the region and profile leaves
     // of the team's opencode.json from now on, and says so once when it changes

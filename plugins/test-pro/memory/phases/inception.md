@@ -1,0 +1,1 @@
+- Every requirement carries at least one acceptance criterion that a test can check.

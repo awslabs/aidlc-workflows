@@ -105,6 +105,7 @@ const CONTENT_DIRS = [
   "scopes",
   "agents",
   "knowledge",
+  "memory",
 ] as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

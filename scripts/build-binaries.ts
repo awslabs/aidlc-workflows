@@ -1127,7 +1127,10 @@ function realPluginSyncGate(artifact: string): GateResult {
       "real-plugin-sync",
       result,
       result.status === 0 &&
-        result.stdout.trim() === "plugin sync complete: 1 plugin(s)" &&
+        // test-pro ships rules, so sync says once where they went.
+        result.stdout.trim().split("\n")[0] === "plugin sync complete: 1 plugin(s)" &&
+        readFileSync(join(project, "aidlc", "spaces", "default", "memory", "team.md"), "utf-8")
+          .includes("## Rules from the test-pro plugin") &&
         existsSync(composedStage) &&
         graphContainsPlugin &&
         !existsSync(composeDrops) &&
