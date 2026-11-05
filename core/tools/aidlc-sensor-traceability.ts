@@ -752,7 +752,8 @@ function verifyTargets(
           .map((artifact) => `${artifact}.md`);
       const targeted = new Set<string>();
       for (const entry of okEntries) {
-        if (!writesRules) {
+        // A rules.md kept from earlier work still takes rows that name its rules.
+        if (!writesRules && (rules.ids.size === 0 || extractIds(entry.target ?? "", [ID_PATTERNS.BR]).size === 0)) {
           const file = designFiles.find((name) => name === normalizePath(entry.target?.trim() ?? ""));
           if (!file) {
             invalidTargets.push(`${entry.id}: target must be one of this Unit's Functional Design files, named on its own: ${designFiles.join(", ")}`);

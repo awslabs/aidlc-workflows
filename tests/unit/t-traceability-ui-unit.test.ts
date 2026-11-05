@@ -126,6 +126,19 @@ describe("t-traceability-ui-unit a UI Unit traces to its UI design, not to busin
     ]);
   });
 
+  test("a ui Unit that already has a rules.md keeps its rows that name those rules", () => {
+    const proj = project();
+    write(proj, "construction/cart-page/functional-design/functional-spec.md", "# Cart page\n");
+    write(proj, "construction/cart-page/functional-design/rules.md", "# Rules\n\n- BR1.1 Every item shows its price\n- BR1.2 An empty cart says so\n");
+    const out = run(proj, "cart-page", [
+      { id: "AC1.2.1", status: "OK", target: "BR1.1" },
+      { id: "AC1.2.2", status: "OK", target: "BR1.2" },
+    ]);
+    expect(out.invalid_targets).toEqual([]);
+    expect(out.orphans).toEqual([]);
+    expect(out.pass).toBe(true);
+  });
+
   test("a service Unit still traces to BRx.y rules in rules.md", () => {
     const proj = project();
     write(proj, "construction/checkout-service/functional-design/functional-spec.md", "# Checkout\n");
