@@ -16,7 +16,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CORE_COMMAND_WORDS } from "../../core/tools/aidlc-command.ts";
-import { pluginCommandTable } from "../../core/tools/aidlc-lib.ts";
+import { pluginCommandTable } from "../../core/tools/aidlc-plugin-commands.ts";
 import { readPluginCommands, validatePluginRoot } from "../../core/tools/aidlc-plugin-validate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";

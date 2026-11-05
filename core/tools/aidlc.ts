@@ -29,7 +29,6 @@ import {
   tipLabel,
 } from "./aidlc-color.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { pluginScriptLaunch } from "./aidlc-plugin-script.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -1528,8 +1527,9 @@ function pluginCommandsHelp(out: NodeJS.WriteStream): string[] {
   } catch {
     return [];
   }
-  const { projectPluginCommands } = require("./aidlc-lib.ts") as typeof import("./aidlc-lib.ts");
-  const rows = [...projectPluginCommands().commands.values()];
+  const { pluginsEnabled, validScopes } = require("./aidlc-lib.ts") as typeof import("./aidlc-lib.ts");
+  const { projectPluginCommands } = require("./aidlc-plugin-commands.ts") as typeof import("./aidlc-plugin-commands.ts");
+  const rows = [...projectPluginCommands({ pluginsEnabled, validScopes }).commands.values()];
   if (rows.length === 0) return [];
   const width = Math.max(12, ...rows.map((row) => row.name.length + 2));
   const plugins = [...new Set(rows.map((row) => row.plugin))].sort();
@@ -4097,9 +4097,12 @@ async function runPluginCommand(
 ): Promise<number | null> {
   if (head === null) return null;
   const projectDir = runtimeProjectDir();
+  // Loaded only here, so the dispatcher's own start keeps its import graph.
   const lib = await import("./aidlc-lib.ts");
+  const { projectPluginCommands } = await import("./aidlc-plugin-commands.ts");
+  const { pluginScriptLaunch } = await import("./aidlc-plugin-script.ts");
   const name = argv[head.at];
-  const table = lib.projectPluginCommands();
+  const table = projectPluginCommands({ pluginsEnabled: lib.pluginsEnabled, validScopes: lib.validScopes });
   const row = table.commands.get(name);
   const invoke = aidlcInvocation();
   if (row === undefined) {

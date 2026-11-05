@@ -27,14 +27,13 @@ import {
   parseStageFrontmatter,
   pausedBySelection,
   PHASES,
-  pluginCommandTable,
-  type PluginCommandSkip,
   pluginsEnabled,
   releaseAuditLock,
   resolveProjectDir,
   validScopes,
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
+import { pluginCommandTable, type PluginCommandSkip } from "./aidlc-plugin-commands.ts";
 import {
   aidlcInvocation,
   compiledExecutable,

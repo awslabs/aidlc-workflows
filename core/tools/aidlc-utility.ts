@@ -420,7 +420,6 @@ import {
   inspectSubagentInflight,
   harnessDataPath,
   pluginsEnabled,
-  projectPluginCommands,
   pluginsSelected,
   pausedPlugins,
   pausedBySelection,
@@ -546,6 +545,7 @@ import {
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
 import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
+import { projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import { pluginScriptLaunch } from "./aidlc-plugin-script.ts";
 import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
 import {
@@ -5074,7 +5074,7 @@ export async function collectDoctorReport(
 
   // 4e. A plugin command not added, which the sync said once: kept here so it
   // can be found again. Nothing for the person to fix, so never a warning.
-  for (const skip of projectPluginCommands().skipped) {
+  for (const skip of projectPluginCommands({ pluginsEnabled, validScopes }).skipped) {
     results.push({ pass: true, label: `Plugin command: ${skippedCommandLine(skip)}` });
   }
 
