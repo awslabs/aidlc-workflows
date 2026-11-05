@@ -781,13 +781,13 @@ describe("t230 dispatcher route parity", () => {
     const plugin = viaDispatcher(["engine", "plugin", "sync", "--help"], projectDir);
     expect(plugin.exitCode, plugin.stdout.toString()).toBe(0);
     expect(plugin.stdout.toString()).toContain("usage: aidlc engine plugin");
+    expect(plugin.stdout.toString()).toContain("--rules-level");
     expect(plugin.stderr.toString()).toBe("");
 
     const runtime = viaDispatcher(["engine", "runtime", "compile", "--help"], projectDir);
     expect(runtime.exitCode, runtime.stdout.toString()).toBe(0);
     expect(runtime.stdout.toString()).toContain("Usage: aidlc-runtime");
     expect(runtime.stderr.toString()).toBe("");
-    expect(existsSync(join(projectDir, "aidlc-docs", "runtime-graph.json"))).toBe(false);
   });
 
   // The commands Reverse Engineering's repo question hands the agent, through

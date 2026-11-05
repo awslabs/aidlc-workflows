@@ -3230,9 +3230,11 @@ function jsonEnvelope(
   })}\n`;
 }
 
+const PLUGIN_USAGE = "usage: aidlc engine plugin <list|sync [--prune-missing] [--rules-level <plugin>=<org|team|project>]>";
+
 export async function main(argv: string[]): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write("usage: aidlc engine plugin <list|sync [--prune-missing]>\n");
+    process.stdout.write(`${PLUGIN_USAGE}\n`);
     return;
   }
   const { positional, flags } = parseArgs(argv);
@@ -3278,7 +3280,7 @@ export async function main(argv: string[]): Promise<void> {
       refreshRulesCopy(projectDir);
       return;
     }
-    throw new Error("usage: aidlc engine plugin <list|sync [--prune-missing] [--rules-level <plugin>=<org|team|project>]>");
+    throw new Error(PLUGIN_USAGE);
   } catch (error) {
     const message = withTransactionFix(error, errorMessage(error));
     const code = error instanceof PluginUsageError ? 2 : 1;
