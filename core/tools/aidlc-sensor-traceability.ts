@@ -3,7 +3,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import {
   asksForHelp,
   errorMessage,
+  filterProducesByKind,
   getField,
+  loadStageGraph,
   parseCheckboxes,
   parseStateStageSuffixes,
   printUsageAndExit,
@@ -53,6 +55,8 @@ interface UnitContext {
   unitName: string;
   units: string[];
   unitIds: Map<string, string>;
+  // The kind unit-of-work-dependency.md gives this Unit; absent when untagged.
+  kind?: string;
 }
 
 type RequirementKind = "functional" | "non-functional";
@@ -450,13 +454,26 @@ function resolveUnitContext(
   if (dag.state === "ok" && !units.includes(unitName)) {
     return { reason: `unit "${unitName}" is not declared in unit-of-work-dependency.md` };
   }
+  const kind = dag.state === "ok" ? dag.unitKinds?.get(unitName) : undefined;
   return {
     context: {
       unitName,
       units,
       unitIds: unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), units),
+      ...(kind ? { kind } : {}),
     },
   };
+}
+
+// Whether Functional Design's produces_kinds gives a Unit of this kind the
+// artifact; without a readable stage graph, it does.
+function designWrites(kind: string | undefined, artifact: string): boolean {
+  try {
+    const stage = loadStageGraph().find((candidate) => candidate.slug === "functional-design");
+    return filterProducesByKind(stage?.produces_kinds, [artifact], kind ?? null).length > 0;
+  } catch {
+    return true;
+  }
 }
 
 function addSource(result: UpstreamResolution, source: { ids: Set<string>; reason?: string }): Set<string> {
@@ -719,11 +736,31 @@ function verifyTargets(
   if (stage === "functional-design" && docsDir) {
     const unit = upstream.unitContext?.unitName ?? extractUnitName(outputPath);
     if (unit !== null) {
-      const brPath = join(constructionDir(docsDir, unit, "functional-design"), "rules.md");
-      const rules = idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md");
+      const designDir = constructionDir(docsDir, unit, "functional-design");
+      const brPath = join(designDir, "rules.md");
+      const writesRules = designWrites(upstream.unitContext?.kind, "rules");
+      // A ui Unit writes no rules.md; one it has anyway is still checked.
+      const rules = writesRules || existsSync(brPath)
+        ? idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md")
+        : { ids: new Set<string>() };
       if (rules.reason) reasons.push(rules.reason);
+      // Such a Unit has no BRx.y to name, so each row names the design file that covers it.
+      const designFiles = writesRules
+        ? []
+        : ["functional-spec", "frontend-components"]
+          .filter((artifact) => designWrites(upstream.unitContext?.kind, artifact))
+          .map((artifact) => `${artifact}.md`);
       const targeted = new Set<string>();
       for (const entry of okEntries) {
+        if (!writesRules) {
+          const file = designFiles.find((name) => name === normalizePath(entry.target?.trim() ?? ""));
+          if (!file) {
+            invalidTargets.push(`${entry.id}: target must be one of this Unit's Functional Design files, named on its own: ${designFiles.join(", ")}`);
+          } else if (!existsSync(join(designDir, file))) {
+            invalidTargets.push(`${entry.id}: target ${file} does not exist in this Unit's functional-design`);
+          }
+          continue;
+        }
         const targets = extractIds(entry.target ?? "", [ID_PATTERNS.BR]);
         if (targets.size === 0) invalidTargets.push(`${entry.id}: target must name at least one BRx.y ID`);
         for (const target of targets) {
