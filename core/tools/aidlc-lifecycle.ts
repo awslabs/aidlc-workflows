@@ -136,8 +136,15 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   runtimeHarnessDir,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+
+// A release's harnesses as a person types them after --harness; the JSON
+// result keeps the ids.
+function typedHarnessList(distributions: readonly string[]): string {
+  return distributions.map(typedHarnessName).join(",");
+}
 
 export class LifecycleCommandError extends Error {
   constructor(
@@ -2020,7 +2027,7 @@ async function installVersion(options: {
       const root = join(candidate, "runtime", distribution);
       const { stamp } = projectionFiles(root);
       if (stamp.frameworkVersion !== version || stamp.distribution !== distribution) {
-        throw new Error(`${distribution} runtime stamp does not match release ${version}`);
+        throw new Error(`${typedHarnessName(distribution)} runtime stamp does not match release ${version}`);
       }
     }
     const baselinePath = join(candidate, basename(runtimeIntegrityPath(version)));
@@ -2130,7 +2137,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
     return success(
       (versions.length
         ? versions.map((item) =>
-            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${item.distributions.join(",")}]${item.pinPaths.length > 0 ? ` pinned by ${item.pinPaths.length} project(s)` : ""}${item.stalePinPaths.length > 0 ? ` ${item.stalePinPaths.length} stale pin(s)` : ""}${item.complete ? "" : " incomplete"}`
+            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${typedHarnessList(item.distributions)}]${item.pinPaths.length > 0 ? ` pinned by ${item.pinPaths.length} project(s)` : ""}${item.stalePinPaths.length > 0 ? ` ${item.stalePinPaths.length} stale pin(s)` : ""}${item.complete ? "" : " incomplete"}`
           ).join("\n")
         : "no retained versions") +
         (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
@@ -2612,7 +2619,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   }
   return success(
     dryRun
-      ? `update plan: ${current ?? "none"} -> ${result.version} [${result.distributions.join(",")}]${switched}`
+      ? `update plan: ${current ?? "none"} -> ${result.version} [${typedHarnessList(result.distributions)}]${switched}`
       : `updated ${current ?? "new install"} -> ${result.version}${switched}${
         pruned.length > 0 ? `; pruned ${pruned.join(", ")}` : ""
       }`,
@@ -2690,7 +2697,7 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     const eligible = versions.filter((item) => item.complete && !item.active);
     return success(
       (eligible.length
-        ? eligible.map((item) => `${item.version} [${item.distributions.join(",")}]`).join("\n")
+        ? eligible.map((item) => `${item.version} [${typedHarnessList(item.distributions)}]`).join("\n")
         : "no rollback target") +
         (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
       { versions: eligible, pinWarnings },
@@ -2720,7 +2727,7 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     : [];
   if (missing.length > 0 && !argv.includes("--allow-harness-loss")) {
     throw new Error(
-      `rollback target ${target} lacks harnesses: ${missing.join(", ")}; ` +
+      `rollback target ${target} lacks harnesses: ${missing.map(typedHarnessName).join(", ")}; ` +
         "to roll back anyway, without them, run it again with --allow-harness-loss",
     );
   }
@@ -2770,7 +2777,7 @@ export async function installPinnedRelease(options: {
           caBundle: options.caBundle,
         })).distributions;
     if (!distributions.includes(options.distribution)) {
-      commandError(`${version} does not contain the ${options.distribution} runtime`, EXIT.usage);
+      commandError(`${version} does not contain the ${typedHarnessName(options.distribution)} runtime`, EXIT.usage);
     }
   } finally {
     releaseReservation?.();
@@ -2927,7 +2934,7 @@ export async function configureProjectPin(
       }
       const distribution = projectDistribution(projectDir);
       if (distribution && !distributions.includes(distribution)) {
-        commandError(`${version} does not contain this project's ${distribution} runtime`, EXIT.usage);
+        commandError(`${version} does not contain this project's ${typedHarnessName(distribution)} runtime`, EXIT.usage);
       }
       if (dryRun) {
         return success(

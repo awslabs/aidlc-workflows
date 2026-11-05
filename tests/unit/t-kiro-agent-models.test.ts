@@ -231,7 +231,7 @@ describe("an agent's model and effort through config", () => {
       });
       return { status: result.status, out: `${result.stdout}${result.stderr}` };
     };
-    const install = run(["config", "--project-dir", dir, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", "--yes"]);
+    const install = run(["config", "--project-dir", dir, "--from", KIRO_IDE_RELEASE, "--harness", "kiro", "--mcp", "none", "--yes"]);
     expect(install.status, install.out).toBe(0);
     const agent = (file: string) => frontmatter(readFileSync(join(dir, ".kiro", "agents", file), "utf-8"));
     const models = (...args: string[]) => run(["config", "models", "--project-dir", dir, ...args]);
@@ -275,7 +275,7 @@ describe("an agent's model and effort through config", () => {
     expect(said).toContain(
       "Kiro now runs developer on effort low, as set for that agent with config models (an agent's effort is shared with your other tools); `",
     );
-    expect(said).toMatch(/; `[^`]*config models --show --harness kiro-ide( --project-dir \S+)?` shows where each is set\./);
+    expect(said).toMatch(/; `[^`]*config models --show --harness kiro( --project-dir \S+)?` shows where each is set\./);
     expect(p.agent("aidlc-developer-agent.md")).toMatch(/^effortLevel: low$/m);
     expect(p.models("--check").status).toBe(0);
     const again = p.run(["config", "--project-dir", p.dir, "--yes"]);
@@ -323,11 +323,11 @@ describe("an agent's model and effort through config", () => {
     const claude = run(["config", "--project-dir", dir, "--from", join(REPO_ROOT, "dist-release", "claude"), "--harness", "claude", "--mcp", "none", "--yes"]);
     expect(claude.status, claude.out).toBe(0);
     writeFileSync(projectSettingsPath(dir), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, agents: { developer: { effort: "low" } } } }, null, 2)}\n`);
-    const kiro = run(["config", "--project-dir", dir, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", "--yes"]);
+    const kiro = run(["config", "--project-dir", dir, "--from", KIRO_IDE_RELEASE, "--harness", "kiro", "--mcp", "none", "--yes"]);
     expect(kiro.status, kiro.out).toBe(0);
     const said = kiro.out.replace(/\s+/g, " ");
     expect(said).toContain("Kiro now runs developer on effort low");
-    expect(said).toMatch(/`[^`]*config models --show --harness kiro-ide( --project-dir \S+)?` shows where each is set\./);
+    expect(said).toMatch(/`[^`]*config models --show --harness kiro( --project-dir \S+)?` shows where each is set\./);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("the same model again puts back lines the agent file lost, and names another agent's value it writes too", () => {

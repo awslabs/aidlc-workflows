@@ -39,7 +39,7 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, or
+Replace `claude` with `kiro`, `kiro-v2`, `codex`, `cursor`, `opencode`, or
 `copilot`. A bare `aidlc config` starts the interactive setup.
 
 ### 3. Start

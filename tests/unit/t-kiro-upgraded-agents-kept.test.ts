@@ -8,7 +8,7 @@
 // hashes of the fields it wrote and of the ones it kept, and treats a file
 // whose hashes no longer match as edited by the person (the captured pairs in
 // tests/fixtures/kiro-agent-upgrade-2.34.2). Measured on Kiro CLI 2.29.0: the
-// next `aidlc config --harness kiro` stopped on 15 "locally modified or
+// next `aidlc config --harness kiro-v2` stopped on 15 "locally modified or
 // unowned" conflicts and wrote nothing, so no other file of the release
 // arrived. A refresh keeps the files Kiro upgraded as they are, says so once
 // with the way to take this release's versions, and delivers the rest. A file
@@ -21,7 +21,7 @@
 // start without a question (the new backup kept as `.json.bak.1`); unset, Kiro
 // asks first; false, Kiro runs its default agent in its place.
 // An upgrade Kiro did not stamp (Kiro CLI 2.27.1) is read by its kept fields.
-// Switching such a project to the Kiro row (`--harness kiro-ide`), which ships
+// Switching such a project to the Kiro row (`--harness kiro`), which ships
 // no agent JSON, removes each stamped, untouched upgrade with the rest of the
 // old row's files, keeps the backups and says so once; a file changed after the
 // upgrade, or one with no stamp, stops it as a conflict.
@@ -36,6 +36,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { kiroUpgradeStamp, kiroUpgradeUntouched, sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
 import { frameworkFilesDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -56,7 +57,7 @@ const kiroHome = (project: string): string => `${project}-kiro-home`;
 function config(project: string, extra: string[], harness = "kiro"): { status: number; out: string } {
   const result = spawnSync(process.execPath, [
     INIT, "config", "--project-dir", project, "--from", join(REPO_ROOT, "dist-release", harness),
-    "--harness", harness, "--mcp", "none", ...extra,
+    "--harness", typedHarnessName(harness), "--mcp", "none", ...extra,
   ], {
     cwd: project,
     encoding: "utf-8",
@@ -151,10 +152,10 @@ const snapshot = (project: string, rels: string[]): Map<string, string> =>
   new Map(rels.map((rel) => [rel, readFileSync(join(project, rel), "utf-8")]));
 
 const KEPT_CHANGED =
-  /^ {2}Note: 1 agent file in \.kiro\/agents that Kiro upgraded for its 3\.0 engine was kept and still allows what an older release allowed; `[^`]*config --harness kiro --force` takes this release's version\.$/m;
+  /^ {2}Note: 1 agent file in \.kiro\/agents that Kiro upgraded for its 3\.0 engine was kept and still allows what an older release allowed; `[^`]*config --harness kiro-v2 --force` takes this release's version\.$/m;
 
 const NOTE =
-  /^ {2}Note: Kiro upgraded 15 agent files in \.kiro\/agents for its 3\.0 engine and they were kept as they are; to take this release's versions run `[^`]*config --harness kiro --force`, and Kiro upgrades them again the next time it starts on its 3\.0 engine\.$/m;
+  /^ {2}Note: Kiro upgraded 15 agent files in \.kiro\/agents for its 3\.0 engine and they were kept as they are; to take this release's versions run `[^`]*config --harness kiro-v2 --force`, and Kiro upgrades them again the next time it starts on its 3\.0 engine\.$/m;
 
 describe("a refresh keeps the agent files Kiro upgraded for its 3.0 engine", () => {
   test("the files Kiro upgraded stay as they are, one line says so, and the rest of the release lands", () => {
@@ -375,7 +376,7 @@ describe("switching to the Kiro row removes the agent files Kiro upgraded from A
 
     const switched = config(project, ["--yes"], "kiro-ide");
     expect(switched.status, switched.out).toBe(0);
-    expect(switched.out).toContain("that kiro ships and kiro-ide does not:");
+    expect(switched.out).toContain("that kiro-v2 ships and kiro does not:");
     expect(switched.out).toMatch(backupsKept(15));
     expect(switched.out.match(/Kiro's backups of the/g)?.length).toBe(1);
     expect(jsons.filter((rel) => existsSync(join(project, rel)))).toEqual([]);

@@ -682,6 +682,67 @@ export function runtimeHarnessName(
   return "claude";
 }
 
+// The name a person types after --harness, where it differs from the harness
+// id. Installed projects keep the ids they record (`kiro` = Kiro CLI on its V2
+// engine, `kiro-ide` = Kiro for Kiro IDE and Kiro CLI v3), so their stamps,
+// hook commands and model keys mean what they meant; only what is typed and
+// printed changes. `kiro-ide` is still read as the id it is. The `kiro:` line
+// is how another release's files tell that it reads these names
+// (runtimePathsReadTypedNames).
+const TYPED_HARNESS_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  kiro: "kiro-v2",
+  "kiro-ide": "kiro",
+});
+const TYPED_NAMES_MARK = 'kiro: "kiro-v2"';
+
+/**
+ * Whether the release whose runtime-paths file this is reads the typed names;
+ * a release from before them reads ids, so a missing file means ids.
+ */
+export function runtimePathsReadTypedNames(file: string): boolean {
+  try {
+    return readFileSync(file, "utf-8").includes(TYPED_NAMES_MARK);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the `aidlc.ts` tool at this path reads the typed names, as its files are now. */
+export function toolReadsTypedNames(tool: string): boolean {
+  return runtimePathsReadTypedNames(join(dirname(tool), "aidlc-runtime-paths.ts"));
+}
+
+/** The name to print after --harness for a harness id, for the `aidlc.ts` tool that will read it. */
+export function harnessNameFor(id: string, tool: string | undefined): string {
+  if (tool && !toolReadsTypedNames(tool)) return id;
+  return Object.hasOwn(TYPED_HARNESS_NAMES, id) ? TYPED_HARNESS_NAMES[id] : id;
+}
+
+/** The name to print after --harness for a harness id. */
+export function typedHarnessName(id: string): string {
+  return harnessNameFor(id, undefined);
+}
+
+/** The harness id a typed --harness name means. */
+export function harnessIdFromTyped(name: string): string {
+  return Object.entries(TYPED_HARNESS_NAMES).find(([, typed]) => typed === name)?.[0] ?? name;
+}
+
+/** A command line's --harness values, typed names read as harness ids. */
+export function harnessArgsAsIds(args: readonly string[]): string[] {
+  return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? harnessIdFromTyped(arg) : arg));
+}
+
+/** The same line with each --harness id written by `name`, to print. */
+export function harnessArgsWith(args: readonly string[], name: (id: string) => string): string[] {
+  return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? name(arg) : arg));
+}
+
+/** The same line with its --harness ids written as the names a person types, to print. */
+export function harnessArgsAsTyped(args: readonly string[]): string[] {
+  return harnessArgsWith(args, typedHarnessName);
+}
+
 /**
  * Pin the harness a command names (`--harness-dir`) for this process and the
  * tools it loads: a compiled aidlc has already pinned the first one installed

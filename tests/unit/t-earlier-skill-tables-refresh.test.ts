@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EARLIER_RELEASE_REGIONS } from "../../scripts/earlier-release-regions.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -57,7 +58,7 @@ function config(project: string, from: string, harness: string, ...extra: string
   const machine = temp("aidlc-t-earlier-tables-machine-");
   const result = spawnSync(
     BUN,
-    [INIT, "config", "--project-dir", project, "--from", from, "--harness", harness, "--mcp", "none", ...extra],
+    [INIT, "config", "--project-dir", project, "--from", from, "--harness", typedHarnessName(harness), "--mcp", "none", ...extra],
     {
       cwd: project,
       env: { ...process.env, AIDLC_INSTALL_ROOT: join(machine, "share"), AIDLC_BIN_DIR: join(machine, "bin") },
