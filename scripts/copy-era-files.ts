@@ -7,9 +7,12 @@
 // scripts/package.ts adds them to each harness's legacy managed-file hashes.
 //
 // Usage: bun scripts/copy-era-files.ts [--check]
-// Reads the release tags. 2.1.1 to 2.6.18 committed their dist/ trees; 2.7.0
-// did not and published no assets, so its tree is packaged from the tag in a
-// new temporary folder (bun install, then its own scripts/package.ts), left in
+// Reads the repository's history. The copy channel was the v2 branch: a person
+// checked it out and copied its dist/, so every state dist/ took from 2.1.1 up
+// to the native distribution (NATIVE_DISTRIBUTION, which dropped dist/ from the
+// tree) is a version a project may hold, tagged or not. 2.7.0 committed no
+// dist/ and published no assets, so its tree is packaged from the tag in a new
+// temporary folder (bun install, then its own scripts/package.ts), left in
 // place for the caller. --check compares with the committed file instead of
 // writing it.
 import { spawnSync } from "node:child_process";
@@ -20,7 +23,8 @@ import { join, relative, sep } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const OUT = join(REPO_ROOT, "scripts", "copy-era-files.json");
-const COMMITTED_DIST = ["v2.1.1", "v2.1.2", "v2.1.3", "v2.1.4", "v2.1.5", "v2.1.6", "v2.1.7", "v2.2.0", "v2.3.0", "v2.6.18"];
+const FIRST_COPY_RELEASE = "v2.1.1";
+const NATIVE_DISTRIBUTION = "12b8d6e049200692ea431e6344bdb796ed31187b";
 const PACKAGED_FROM_TAG = ["v2.7.0"];
 
 function run(cmd: string, args: string[], cwd: string, input?: Buffer): Buffer {
@@ -30,24 +34,37 @@ function run(cmd: string, args: string[], cwd: string, input?: Buffer): Buffer {
 }
 
 const table: Record<string, Record<string, Set<string>>> = {};
-function add(harness: string, rel: string, bytes: Buffer): void {
+// The form the projection descriptor's file signatures take (aidlc-distribution.ts validateHashes).
+const sha256 = (bytes: Buffer): string => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+function add(harness: string, rel: string, hash: string): void {
   const files = table[harness] ?? {};
   table[harness] = files;
   const hashes = files[rel] ?? new Set<string>();
   files[rel] = hashes;
-  // The form the projection descriptor's file signatures take (aidlc-distribution.ts validateHashes).
-  hashes.add(`sha256:${createHash("sha256").update(bytes).digest("hex")}`);
+  hashes.add(hash);
 }
 
-// A tag's committed dist/: every blob under dist/<harness>/, read through git.
-for (const tag of COMMITTED_DIST) {
-  const listing = run("git", ["ls-tree", "-r", tag, "dist/"], REPO_ROOT).toString().split("\n").filter(Boolean);
+// Each committed state of dist/: every blob under dist/<harness>/, read through
+// git, each blob hashed once.
+const states = [
+  FIRST_COPY_RELEASE,
+  ...run("git", ["log", "--format=%H", `${FIRST_COPY_RELEASE}..${NATIVE_DISTRIBUTION}^`, "--", "dist/"], REPO_ROOT)
+    .toString().split("\n").filter(Boolean),
+];
+const blobHashes = new Map<string, string>();
+for (const commit of states) {
+  const listing = run("git", ["ls-tree", "-r", commit, "dist/"], REPO_ROOT).toString().split("\n").filter(Boolean);
   for (const line of listing) {
     const [meta, path] = line.split("\t");
     const [, type, blob] = meta.split(" ");
     const parts = path.split("/");
     if (type !== "blob" || parts.length < 3 || parts[1] === "plugins") continue;
-    add(parts[1], parts.slice(2).join("/"), run("git", ["cat-file", "blob", blob], REPO_ROOT));
+    let hash = blobHashes.get(blob);
+    if (hash === undefined) {
+      hash = sha256(run("git", ["cat-file", "blob", blob], REPO_ROOT));
+      blobHashes.set(blob, hash);
+    }
+    add(parts[1], parts.slice(2).join("/"), hash);
   }
 }
 
@@ -68,7 +85,7 @@ for (const tag of PACKAGED_FROM_TAG) {
   for (const harness of readdirSync(dist)) {
     if (harness === "plugins" || !statSync(join(dist, harness)).isDirectory()) continue;
     for (const file of walk(join(dist, harness))) {
-      add(harness, relative(join(dist, harness), file).split(sep).join("/"), readFileSync(file));
+      add(harness, relative(join(dist, harness), file).split(sep).join("/"), sha256(readFileSync(file)));
     }
   }
   console.error(`packaged ${tag} in ${tree} (left in place)`);
@@ -81,7 +98,7 @@ const sorted = Object.fromEntries(Object.keys(table).sort().map((harness) => [
 const text = `${JSON.stringify(sorted, null, 1)}\n`;
 if (process.argv.includes("--check")) {
   const same = existsSync(OUT) && readFileSync(OUT, "utf-8") === text;
-  console.log(same ? "copy-era-files.json is current" : "copy-era-files.json differs from the tags");
+  console.log(same ? "copy-era-files.json is current" : "copy-era-files.json differs from the history");
   process.exit(same ? 0 : 1);
 }
 writeFileSync(OUT, text);
