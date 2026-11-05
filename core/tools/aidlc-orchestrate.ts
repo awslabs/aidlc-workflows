@@ -726,6 +726,7 @@ import {
   leftOutNotice,
   parkWorkflow,
   practicesRulesToAdd,
+  unitsWithoutInputsNotice,
 } from "./aidlc-state.ts";
 import {
   inspectStageValidity, stageDefinitionChangedFields, stageDefinitionChangedLine, stageLabel, staleStageNote,
@@ -13412,7 +13413,7 @@ function applyGateOnlyShape(
     // the produced sentence stays whole.
     const narration = [
       line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
-      broughtFilesGateLine(projectDir, gateNode, stateContent),
+      unitsWithoutInputsNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
@@ -21245,8 +21246,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         // the narration is the person's line (the produced sentence stays
         // whole), and the change lines stay what changed.
         const narration = [
-          line, practicesRulesGateLine(pd, node), leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, gateState),
-          failedCheckNotices(pd, node, unit).join(" "),
+          line, practicesRulesGateLine(pd, node), leftOutNotice(pd, node, unit), unitsWithoutInputsNotice(pd, node, unit),
+          broughtFilesGateLine(pd, node, gateState), failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
         // On Windows, the Unit names Units Generation just wrote can deepen their
@@ -21569,15 +21570,27 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // The transition committed. Emit a terminal `done` directive naming the move
   // — the loop driver reads this to know the report landed and the next `next`
   // will see fresh state. An approval that also asked to stop for now parks.
+  // A gate this report opened and approved at once was never shown, so what it
+  // would have said about Units with no work is said with the approval, or
+  // with the pause when the approval also asked to stop for now.
+  const openedHere = flags.result === "approved" &&
+    sequence.some((step) => step[0] === "gate-start" && step.includes("--recovered"));
+  const unbuilt = openedHere ? unitsWithoutInputsNotice(pd, node, null) : null;
   const parked = stopForNow && workflowContinues(pd).workflow_continues
     ? parkAfterApproval(pd, lastApproved, !isAutonomousConstructionGate(stateContent, node, pd))
     : null;
   if (parked) {
-    emit(withChangeNotices({ ...parked, reason: `${parked.reason}${keepNote}` }, changeNotices));
+    const parkedNarration = [unbuilt, parked.narration].filter(Boolean).join("\n");
+    emit(withChangeNotices({
+      ...parked,
+      reason: `${parked.reason}${keepNote}`,
+      ...(parkedNarration ? { narration: parkedNarration } : {}),
+    }, changeNotices));
     return;
   }
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
   const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
+  const narration = [unbuilt, progress].filter(Boolean).join("\n");
   emit(
     withChangeNotices(
       {
@@ -21585,7 +21598,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         reason:
           `Committed ${committed.join(" + ")} for "${approvedTogether.join('", "')}" (scope: ${scope}). ` +
           `State advanced; run next to continue.${keepNote}`,
-        ...(progress ? { narration: progress } : {}),
+        ...(narration ? { narration } : {}),
         ...workflowContinues(pd),
       },
       changeNotices,

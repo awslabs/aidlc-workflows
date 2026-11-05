@@ -97,6 +97,7 @@ import {
   extractMarkdownSection,
   filterProducesByKind,
   findStageBySlug,
+  isPerUnitStage,
   findAllEvents,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
@@ -297,7 +298,9 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
 import {
+  stageLabel,
   stageValidationAuditFields,
+  unitInputGaps,
   VALIDATION_WARNING_FIELD,
 } from "./aidlc-validity.ts";
 import {
@@ -7291,6 +7294,39 @@ export function leftOutNotice(pd: string, stage: GateStage, unit: string | null 
   if (stage.workspace_requires !== true) return null;
   try {
     return leftOutLine(declaredOutputsForGate(pd, stage, unit).filter((path) => basename(path) === "traceability.json"));
+  } catch {
+    return null;
+  }
+}
+
+// Which Units a per-Unit stage that runs for every Unit (Code Generation) has
+// not finished, said by the stage that reads its work first (#3531): its
+// `requires_stage` names it, so a stage after it does not say it again.
+// Counted from the files the stage's Validation Basis records
+// (unitInputGaps). A design stage runs for a Unit only when its condition
+// holds, so a Unit without its documents is the plan, not a gap, and is not
+// said. Said with the gate, and with an approval that opened the gate in the
+// same step. A per-Unit gate, or nothing missing, says nothing. Said with
+// Sensors off too: it is the record, not a check.
+export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: string | null = null): string | null {
+  if (unit !== null || isPerUnitStage(stage)) return null;
+  try {
+    const gaps = unitInputGaps(pd, stage, readStateFile(pd)).filter((gap) =>
+      gap.missing.length > 0 && (stage.requires_stage ?? []).includes(gap.producer) &&
+      findStageBySlug(gap.producer)?.execution === "ALWAYS");
+    if (gaps.length === 0) return null;
+    const and = (names: readonly string[]): string =>
+      names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    const units = (names: readonly string[]): string => `unit${names.length === 1 ? "" : "s"} ${and(names)}`;
+    const stageName = stageLabel(stage, stage.slug) ?? stage.slug;
+    // What the record backs: the stage has not finished for them, so some of
+    // their work may not be there (a Unit can have its source but not its
+    // summary).
+    return gaps.map(({ producer, missing }) => {
+      const from = stageLabel(findStageBySlug(producer), producer) ?? producer;
+      return `${from} has not finished for ${units(missing)}, so ${missing.length === 1 ? "its" : "their"} code ` +
+        `may be missing from ${stageName}.`;
+    }).join(" ");
   } catch {
     return null;
   }
