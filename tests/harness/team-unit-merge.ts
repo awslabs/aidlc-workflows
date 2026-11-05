@@ -102,8 +102,9 @@ export function runMergeTool(
   const windowsClaimOrPin = process.platform === "win32" && tool === UNIT &&
     (args[0] === "claim" || args[0] === "pin");
   // On Windows the trace costs about a quarter of each of these calls, so a
-  // file's first attempt under the runner goes without it; the runner's retry
-  // of a failed file, and a run outside the runner, trace again. The retry
+  // file's first attempt under a runner that retries goes without it; the
+  // retry of a failed file, a run that does not retry and a run outside the
+  // runner trace again. The retry
   // rule (tests/lib/file-retry.ts) does not retry a file whose first attempt
   // ran long, so the pinned-merge diagnostics below print untraced too.
   const windowsFirstAttempt = process.platform === "win32" && process.env[FILE_ATTEMPT_ENV] === "1";
@@ -503,7 +504,7 @@ export function reportPinnedMergeFailure(
     console.error(`t326 pinned merge diagnostics unavailable: ${String(error)}`);
   }
   if (!tracePath) {
-    console.error("t326 landing Git trace: not taken on this first attempt on Windows; the runner's retry takes it");
+    console.error("t326 landing Git trace: off on a Windows first attempt; a retry of this file traces it");
     return;
   }
   try {

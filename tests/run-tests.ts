@@ -1102,11 +1102,14 @@ async function runBunTestFile(
   const env: NodeJS.ProcessEnv = {
     ...testGuardEnvironment({ ...process.env, ...context?.env }, context?.guardProfile ?? args.guardProfile),
     AIDLC_TEST_NAME: base,
-    [FILE_ATTEMPT_ENV]: String(attempt),
     // Survives each file's private TMPDIR, but never crosses runner invocations.
     AIDLC_TEST_COMPILED_DIR: join(logDir, "compiled"),
     AIDLC_MANAGED_SETTINGS_PATH: join(args.isolatedFiles && context ? context.artifacts : logDir, ".aidlc-managed-settings-absent.json"),
   };
+  // Only a run that retries says the attempt; one that never retries clears
+  // what the run that started it said (a runner inside a test file).
+  if (args.fileRetries) env[FILE_ATTEMPT_ENV] = String(attempt);
+  else delete env[FILE_ATTEMPT_ENV];
   // Command-scope config outranks the isolated global file. Preserve its safety
   // entries above, then remove all command-scope injection before spawning tests.
   for (const key of Object.keys(env)) {
