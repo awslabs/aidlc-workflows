@@ -51,8 +51,8 @@ function put(p: string, name: string, data: Buffer | string): string {
 }
 
 /** A PDF of one standard-font line per page, written here: no fixture needed. With `image`, every page also
- *  draws one Flate-compressed image of that many raw bytes. */
-function minimalPdf(pages: string[], image?: number): Buffer {
+ *  draws one Flate-compressed image of that many raw bytes; with `filter`, each page's content stream names it. */
+function minimalPdf(pages: string[], image?: number, filter?: string): Buffer {
   const objs: string[] = [];
   const kids: number[] = [];
   const first = 5;
@@ -61,7 +61,7 @@ function minimalPdf(pages: string[], image?: number): Buffer {
     const draw = image === undefined ? "" : "q 612 0 0 792 0 0 cm /Im1 Do Q ";
     const content = line === "" ? draw : `${draw}BT /F1 12 Tf 72 720 Td (${line}) Tj ET`;
     objs[first + 2 * k] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >>${xobject} >> /Contents ${first + 2 * k + 1} 0 R >>`;
-    objs[first + 2 * k + 1] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+    objs[first + 2 * k + 1] = `<< /Length ${content.length}${filter ? ` /Filter /${filter}` : ""} >>\nstream\n${content}\nendstream`;
     kids.push(first + 2 * k);
   });
   objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
@@ -144,6 +144,14 @@ describe("t-knowledge-pdf-fallback: a PDF is read where pdftotext is missing", (
     const broken = extractWithout(p, put(p, "broken.pdf", "%PDF-1.4\n"));
     expect(broken.record.state).toBe("extraction_failed");
     expect(broken.record.reason).toStartWith("AI-DLC could not read it as a PDF: it is damaged");
+  });
+
+  test("text in a compression the reader does not decode is recorded as not read, not as a scan", () => {
+    const p = project();
+    const out = extractWithout(p, put(p, "old.pdf", minimalPdf(["Old page text"], undefined, "LZWDecode")));
+    expect(out.record.state).toBe("extraction_failed");
+    expect(out.record.reason).toContain("LZWDecode");
+    expect(out.record.reason).toContain("pdftotext");
   });
 
   test("the page cap holds: pages past it are left out and the row says so", () => {
@@ -257,6 +265,7 @@ describe("t-knowledge-pdf-fallback: the reader itself", () => {
 
   test("a file it cannot open is a PdfError in the person's terms", () => {
     expect(() => pdfText(Buffer.from("not a pdf"))).toThrow(PdfError);
+    expect(() => pdfText(minimalPdf(["Old page text"], undefined, "RunLengthDecode"))).toThrow("RunLengthDecode");
     expect(() => pdfText(fixture("pdf-rc4-open-password.pdf"))).toThrow("it is protected by a password");
   });
 });
