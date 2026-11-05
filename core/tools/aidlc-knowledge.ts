@@ -2697,8 +2697,9 @@ function unreadReason(row: DocumentRow): UnreadReason | null {
       // A Word or Excel file added before AI-DLC read them is read on the next sync.
       return builtinReadsRow(row) ? "office" : "no-reader";
     case "extractor_unavailable":
-      // A PDF added when the computer had no PDF reader: AI-DLC reads it itself on the next sync.
-      return row.extraction.extractor?.name === DEFAULT_PDF_ARGV[0] ? "pdf" : "no-extractor";
+      // A PDF added when the computer had no PDF reader: AI-DLC reads it itself on the next sync (the rule
+      // shouldRetryExtraction uses). A team's own extractor that is missing stays a program to install.
+      return extractorArgvFor(detectMimeFromRow(row)) === DEFAULT_PDF_ARGV ? "pdf" : "no-extractor";
     case "extraction_failed":
       return "failed";
     case "no_extractable_text":
