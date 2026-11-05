@@ -102,7 +102,6 @@ import {
   recordHookDrop,
   rejectionAtRunFloor,
   rejectionIsFreshAttempt,
-  BACKGROUND_SYNC_CAUSE,
   renderChangedPaths,
   renderSourcePathKeys,
   governedChangeControl,
@@ -184,7 +183,7 @@ import {
   recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
 import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } from "./aidlc-swarm-source.ts";
-import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
+import { BACKGROUND_SYNC_CAUSE, CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";

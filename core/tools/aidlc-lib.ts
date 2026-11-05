@@ -20556,6 +20556,8 @@ export function freshReviewReceipts(
       }
       continue;
     }
+    // A newer stage review covered every write before it, matching or not.
+    if (!unit) stageWrittenPaths.length = 0;
     if (!fingerprintMatches) {
       if (fingerprintUsable && recordedFingerprint !== null && currentFingerprint !== null && isRelaxed()) {
         // Reviewed content differs from the receipt. Under relaxed the verdict
@@ -41719,10 +41721,6 @@ export function renderChangedPaths(paths: readonly string[]): string {
   const more = paths.length - shown.length;
   return more > 0 ? `${shown.join(", ")} (and ${more} more)` : shown.join(", ");
 }
-
-export const BACKGROUND_SYNC_CAUSE =
-  "A background sync client (Google Drive, iCloud Drive, OneDrive, Dropbox) rewriting files " +
-  "on its own can do this too, with nobody editing them.";
 
 /** The audit fields a CHANGE_ACCEPTED row carries for one accepted change. */
 export function acceptedChangeFields(change: AcceptedChange): Record<string, string> {

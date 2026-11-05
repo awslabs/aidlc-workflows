@@ -1,6 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
-import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
+import { BACKGROUND_SYNC_CAUSE, CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -46,7 +46,6 @@ import {
   openGateApprovesTogether,
   unitOpenCheckpoints,
   auditBlockField,
-  BACKGROUND_SYNC_CAUSE,
   clearGateWords,
   GATE_WORDS_SPENT_BY,
   authorizedVerificationCommand,

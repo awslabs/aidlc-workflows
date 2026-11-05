@@ -193,18 +193,18 @@ function expectValidationError(stderr: string, path: string): void {
   );
 }
 
-function recordReadyReview(proj: string): void {
+function recordReadyReview(proj: string, iteration = 1): void {
   const dir = stageDir(proj);
   for (const name of ["requirements.md", `${STAGE}-questions.md`]) {
     const path = join(dir, name);
     if (!existsSync(path)) writeFileSync(path, `# ${name}\n`);
   }
-  const base = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1"];
+  const base = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", String(iteration)];
   const requested = run(LOG_TOOL, base, proj);
   expect(requested.status, requested.stderr).toBe(0);
   appendFileSync(
     join(dir, "requirements.md"),
-    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`,
     "utf-8",
   );
   const completed = run(LOG_TOOL, [...base, "--verdict", "READY"], proj);
@@ -444,6 +444,24 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
       "A background sync client (Google Drive, iCloud Drive, OneDrive, Dropbox) rewriting files on its own",
     );
     expect(acceptedRows(proj)).toHaveLength(0);
+  });
+
+  test("strict names only the files written after the newest review, not those the recovery review covered", () => {
+    const proj = project("strict");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    editReviewedArtifact(proj);
+    recordReadyReview(proj, 2);
+    const trace = join(stageDir(proj), "traceability.json");
+    writeFileSync(trace, "{}\n", "utf-8");
+    appendAuditEntry(
+      "ARTIFACT_CREATED",
+      { File: trace, Tool: "Write", Context: `inception > ${STAGE} > traceability.json` },
+      proj,
+    );
+    const receipts = freshReviewReceipts(proj, readFileSync(seededStateFile(proj), "utf-8"), stage());
+    expect(receipts.stageStale).toBe(true);
+    expect(receipts.stageWrittenPaths).toEqual([relative(proj, trace).replaceAll("\\", "/")]);
   });
 
   test("the review-freeze fence holds under strict and stands aside, logged, under relaxed and off", () => {
