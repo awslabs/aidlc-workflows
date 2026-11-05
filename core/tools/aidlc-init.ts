@@ -5230,8 +5230,9 @@ function replaceGeneratedRegion(
 
 // Releases 2.8.0 to 2.11.0 kept the scope and stage tables inside the skill,
 // and a plugin sync there rewrote them, so the skill no longer matches its
-// record. With its tables put back to the ones this release ships (2.9.0 to
-// 2.11.0 shipped the same ones), it is the file the record says AI-DLC wrote,
+// record. With its tables put back to the ones this release ships, or to its
+// stage graph and the scope grid 2.9.0 to 2.11.0 shipped
+// (EARLIER_SKILL_SCOPE_GRID_BODY), it is the file the record says AI-DLC wrote,
 // and the refresh writes this release's skill over it. A skill recorded with
 // other tables, or changed anywhere else, keeps the conflict.
 function earlierSkillTablesOnly(
@@ -5242,16 +5243,54 @@ function earlierSkillTablesOnly(
   if (priorHash === undefined || !regularFile(skillPath) || !regularFile(releaseTablesPath)) return false;
   if (ownedFileHash(skillPath, [priorHash]).hash === priorHash) return false;
   const tables = readFileSync(releaseTablesPath, "utf-8").replaceAll("\r\n", "\n");
-  let restored = readFileSync(skillPath, "utf-8").replaceAll("\r\n", "\n");
-  try {
-    restored = replaceGeneratedRegion(restored, tables, "stage");
-    restored = replaceGeneratedRegion(restored, tables, "scope");
-  } catch {
-    // A skill without both marker pairs (Copilot's own, or one an earlier tool's
-    // scope table swallowed) has none to put back.
-    return false;
+  const skill = readFileSync(skillPath, "utf-8").replaceAll("\r\n", "\n");
+  // This release's tables first, then the same tables with the scope grid
+  // those releases shipped, for a release whose scope grid has since changed.
+  for (const candidate of [tables, withEarlierScopeGrid(tables)]) {
+    let restored: string;
+    try {
+      restored = replaceGeneratedRegion(skill, candidate, "stage");
+      restored = replaceGeneratedRegion(restored, candidate, "scope");
+    } catch {
+      // A skill without both marker pairs (Copilot's own, or one an earlier tool's
+      // scope table swallowed) has none to put back.
+      return false;
+    }
+    if (ownedHash(Buffer.from(restored, "utf-8"), [priorHash]).hash === priorHash) return true;
   }
-  return ownedHash(Buffer.from(restored, "utf-8"), [priorHash]).hash === priorHash;
+  return false;
+}
+
+// The scope grid body (between its BEGIN and END lines) that 2.9.0 to 2.11.0
+// kept in their /aidlc skill, the same on every harness. A later release whose
+// scope grid differs (infra gained Code Generation and Build and Test) still
+// proves those skills with it. Pinned by t-earlier-skill-tables-refresh.
+export const EARLIER_SKILL_SCOPE_GRID_BODY = [
+  "",
+  "",
+  "| Scope          | Depth         | TestStrategy | EXECUTE / Total |",
+  "|----------------|---------------|--------------|-----------------|",
+  "| bugfix         | Minimal       | (default)    | 9 / 33          |",
+  "| classic        | Standard      | (default)    | 18 / 33         |",
+  "| enterprise     | Comprehensive | (default)    | 33 / 33         |",
+  "| express        | Minimal       | (default)    | 10 / 33         |",
+  "| feature        | Standard      | (default)    | 33 / 33         |",
+  "| infra          | Standard      | (default)    | 13 / 33         |",
+  "| mvp            | Standard      | (default)    | 23 / 33         |",
+  "| poc            | Minimal       | (default)    | 8 / 33          |",
+  "| refactor       | Minimal       | (default)    | 10 / 33         |",
+  "| security-patch | Minimal       | (default)    | 10 / 33         |",
+  "| workshop       | Standard      | Minimal      | 26 / 33         |",
+  "",
+  "",
+].join("\n");
+
+function withEarlierScopeGrid(tables: string): string {
+  const begin = tables.indexOf("<!-- BEGIN: compiled scope grid via ");
+  const open = begin < 0 ? -1 : tables.indexOf("-->", begin);
+  const close = open < 0 ? -1 : tables.indexOf("<!-- END: compiled scope grid -->", open);
+  if (close < 0) return tables;
+  return `${tables.slice(0, open + 3)}${EARLIER_SKILL_SCOPE_GRID_BODY}${tables.slice(close)}`;
 }
 
 function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
