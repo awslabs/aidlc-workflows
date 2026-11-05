@@ -704,6 +704,10 @@ aws-aidlc-rule-details/
     │   └── baseline/
     │       ├── resiliency-baseline.md          # Baseline resiliency rules
     │       └── resiliency-baseline.opt-in.md   # Opt-in prompt
+    └── coordination/                  # Extension category
+        └── unit-context-sync/
+            ├── unit-context-sync.md          # Unit context sync rules
+            └── unit-context-sync.opt-in.md   # Opt-in prompt
 ```
 
 The [`v1-operations` branch](https://github.com/awslabs/aidlc-workflows/tree/v1-operations) adds `deployment/`, `observability/`,
