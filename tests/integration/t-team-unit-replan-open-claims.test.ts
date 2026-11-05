@@ -131,7 +131,7 @@ function pull(main: string): void {
 
 describe("t-team-unit-replan-open-claims: a plan change while Units are claimed and mid-work", () => {
   test("the jump to Units Generation is allowed with a claim open; landed work and the claim stay", () => {
-    const { seed, remote } = betaClaimed();
+    const { seed } = betaClaimed();
     pull(seed);
     const jump = reopenUnitsGeneration(seed);
     expect(jump.status, jump.out).toBe(0);
@@ -144,7 +144,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("the jump's step names the claimed Unit and its owner, and says the claim carries on", () => {
-    const { seed, remote } = betaClaimed();
+    const { seed } = betaClaimed();
     pull(seed);
     const jump = reopenUnitsGeneration(seed);
     expect(jump.status, jump.out).toBe(0);
@@ -224,7 +224,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("after the revised plan is approved and pushed, unit status and the board name the same claimable Units", () => {
-    const { seed, remote } = betaClaimed();
+    const { seed } = betaClaimed();
     pull(seed);
     replan(seed, WITH_GAMMA);
     // `unit status` reads the pushed integration ref and the board reads
@@ -237,7 +237,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("Units that landed before the jump stay landed: not claimable, not claimed, and their dependents open", () => {
-    const { seed, remote } = betaClaimed();
+    const { seed } = betaClaimed();
     replan(seed, WITH_GAMMA);
     const status = unitStatus(seed);
     expect(status.claimed.map((claim) => claim.unit)).toEqual(["beta"]);
@@ -246,7 +246,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("the board shows a landed Unit's finished stages as done after the jump", () => {
-    const { seed, remote } = betaClaimed();
+    const { seed } = betaClaimed();
     pull(seed);
     const before = boardOf(nextDirective(seed));
     expect(boardCells(before.text, "alpha"), before.text).toEqual(["[x]", "[x]", "[x]", "[x]", "[x]", "[x]"]);
