@@ -17909,9 +17909,10 @@ function skippedJumpCheck(resolved: ResolvedJump, scope: string): Directive | nu
 // person's explicit request, so, as with a typed config request, `next` runs
 // that command itself and routes on from the state it wrote: the person's first
 // step comes back from this one call, not after a print, the jump and another
-// `next`. Where the jump is not this `next`'s to make (jumpRunsInNext) or needs
-// steps or a line around it, the WITH-STATE path still emits a `print` naming
-// `execute` for the conductor to run before re-running `next`. Either way the
+// `next`. Where the jump is not this `next`'s to make (jumpRunsInNext) or moves
+// only one Unit on (steps and a line around it), the WITH-STATE path still
+// emits a `print` naming `execute` for the conductor to run before re-running
+// `next`. Either way the
 // existing CLI-only `execute` handler does the jump (no new directive field and
 // no jump vocabulary in `report`).
 //
