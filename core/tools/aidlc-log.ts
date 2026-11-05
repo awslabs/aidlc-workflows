@@ -2738,8 +2738,9 @@ function handleAnswer(args: string[]): void {
       }
       const changeNotices = [...planEvidence!.changeNotices, ...recorded.changeNotices];
       if (recorded.overridden) fields.Override = "yes";
+      Object.assign(fields, personGitNameField(pd));
       try {
-        emitAudit(pd, "PLAN_APPROVAL_RECORDED", { ...fields, ...personGitNameField(pd) });
+        emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
       } catch (e) {
         error(`Audit emission failed: ${errorMessage(e)}`);
       }
@@ -2784,7 +2785,8 @@ function handleAnswer(args: string[]): void {
       }
       try {
         if (flags.details === "Approve Plan") {
-          emitAudit(pd, "PLAN_APPROVAL_RECORDED", { ...fields, ...personGitNameField(pd) });
+          Object.assign(fields, personGitNameField(pd));
+          emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
         } else {
           emitAudit(pd, "QUESTION_ANSWERED", fields);
         }
