@@ -13,7 +13,7 @@
 // deny or ask rule that could (naming aidlc, a Read rule, or a Bash rule naming bun or the harness
 // folder) in a settings file this process can read means no allow. MDM, registry and
 // server-delivered policy cannot be read here.
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import {
@@ -23,25 +23,15 @@ import {
   sameDirectory,
 } from "./aidlc-lib.ts";
 import { workspaceRoot } from "./aidlc-locks.ts";
+import { managedSettingsFiles, resolveManagedSettingsCandidates } from "./aidlc-statusline-choice.ts";
 
+// The managed files come from the resolver the doctor and the statusline already read them through.
 function claudeSettingsFiles(projectDir: string, harness: string): string[] {
-  const managed = process.platform === "win32"
-    ? "C:\\Program Files\\ClaudeCode"
-    : process.platform === "darwin" ? "/Library/Application Support/ClaudeCode" : "/etc/claude-code";
-  let dropIns: string[] = [];
-  try {
-    dropIns = readdirSync(join(managed, "managed-settings.d"))
-      .filter((name) => name.endsWith(".json"))
-      .map((name) => join(managed, "managed-settings.d", name));
-  } catch {
-    // No drop-in folder.
-  }
   return [
     join(projectDir, harness, "settings.json"),
     join(projectDir, harness, "settings.local.json"),
     join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
-    join(managed, "managed-settings.json"),
-    ...dropIns,
+    ...resolveManagedSettingsCandidates(process.platform, process.env).flatMap(managedSettingsFiles),
   ];
 }
 
@@ -146,11 +136,11 @@ function shellListParts(command: string): string[] | null {
 }
 
 // The compound read as helpers ran it, and nothing wider: `cat` of files in this project's `aidlc/`
-// record, `echo` of plain words, and `git -C <this project> rev-parse HEAD`, each part alone a read,
-// every path absolute. Any other shape keeps the host's prompt.
+// record, with `echo` of plain words and `git -C <this project> rev-parse HEAD` beside it, each part
+// alone a read, every path absolute. Any other shape, an echo alone included, keeps the host's prompt.
 function ownRecordRead(command: string, projectDir: string): boolean {
   const parts = shellListParts(command);
-  if (parts === null) return false;
+  if (parts === null || !parts.some((part) => /^\s*cat\s/.test(part))) return false;
   const record = workspaceRoot(projectDir);
   return parts.every((part) => {
     const words = parseLiteralShellInvocation(part.replace(/[ \t]+2>\/dev\/null[ \t]*$/, ""));
