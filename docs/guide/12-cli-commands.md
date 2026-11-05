@@ -686,9 +686,10 @@ Each `<unit>=<team>` writes a claim held for that team at the home's remote
 stays open for any team; a Unit a team already holds stays with it, and the
 command says so. One Unit named for two teams is refused with both names. The
 walking skeleton, when on, is built at the home first and is never held for a
-team. `--person-words '<their words>'` (or `--person-words-file <path>`) records
-the words the answer came from in the `UNITS_ASSIGNED` audit row, when a turn of
-yours stands behind them. When the home cannot be reached, the answer is kept
+team. The agent writes the words the answer came from to the request file the
+command names (`--request-file aidlc/.aidlc-request-text/unit-assign.txt`), and
+they go into the `UNITS_ASSIGNED` audit row when a turn of yours stands behind
+them. When the home cannot be reached, the answer is kept
 (`Held: not yet`) and the next step offers to try again.
 
 ### `/aidlc unit take <unit> --home <record>` - Take a Unit as your team's own work
@@ -755,7 +756,9 @@ did not list is added to the build's repos first (`intent add-repo`), said once.
 ### `/aidlc unit hand-off <unit> --team <team>` - Hand a Unit off by file
 
 At the home, for a team that cannot reach the home's repository. The agent
-runs it from your words with `--person-words '<your words>'`. The Unit is held
+runs it with your words in the request file its command names
+(`--request-file aidlc/.aidlc-request-text/unit-hand-off-<unit>.txt` from the
+board's offer). The Unit is held
 for that team, and `aidlc/handoff/<work>-<unit>.md` is written: one readable
 Markdown file with the work's id, the Unit, the attempt and fingerprints at the
 top, and each document the Unit was approved with in its own block. Send it to
@@ -781,13 +784,14 @@ marked so.
 
 In a Unit's build, `propose --input <file> [--file <changed text>]` sends the
 home your change to one of the files the Unit was approved with (your edited
-copy, or the text in `--file`), with `--person-words`; the build carries on, and
+copy, or the text in `--file`), with your words in the request file its command
+names (`--request-file`); the build carries on, and
 offers it once when your copy changed. At the home, the owner of the shared
 plan is asked once, with the path of the team's version (the board keeps the
 choice after a "Not now"), and the agent runs
-`amend <unit> --input <file> --answer <approve|reject> --person-words '<their
-words>'` from their reply: their own words after the question was shown, not
-empty and not the agent's. An approved change is written into the home's
+`amend <unit> --input <file> --answer <approve|reject> --request-file <file>`
+with their reply written to that file: their own words after the question was
+shown, not empty and not the agent's. An approved change is written into the home's
 record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
 onto the claim of every Unit whose stages read it; a team it did not reach is
 named, and a team by file gets a newer hand-off file.
@@ -813,14 +817,15 @@ they are out of the way.
 it is off by default. While it is on, a Unit counts as done only once the lead
 signed its team's result off and every repo it changed merged. The home asks
 once as a result arrives, and the board keeps the choice after a "Not now"; the
-agent runs `sign-off <unit> --person-words
-'<their words>'` from their reply, under the same rules as any answer of
-theirs (their own words, after the question was shown, not the agent's).
+agent runs `sign-off <unit> --request-file <file>` with their reply written to
+that file, under the same rules as any answer of theirs (their own words, after
+the question was shown, not the agent's).
 
 ### `/aidlc unit turned-down <unit> --repo <repo>` - Send a repo back
 
 At the home, when a team's pull request in one repo is turned down. The agent
-runs it from your words with `--person-words '<your words>'`. Your words go onto
+runs it with your words in the request file its command names
+(`--request-file aidlc/.aidlc-request-text/unit-turned-down.txt`). Your words go onto
 the Unit's claim, and the team hears them once at its next step; its build asks
 once whether to take the Unit back to Code Generation so it can be changed and
 pushed again. A repo that already merged stays merged.
@@ -829,7 +834,8 @@ pushed again. A repo that already merged stays merged.
 
 At the home, when a repo merged a team's Unit in a way the board does not see (the
 change made again by hand, or merged through another branch). The agent runs it
-from your words with `--person-words '<your words>'`. Your words go onto the
+with your words in the request file its command names
+(`--request-file aidlc/.aidlc-request-text/unit-merged.txt`). Your words go onto the
 Unit's claim, the repo counts as merged at the home's next step, and the Unit's
 done record keeps them ("by your word").
 

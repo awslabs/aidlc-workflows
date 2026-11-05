@@ -747,12 +747,14 @@ Units ... You can go back to Units Generation any time"), and clears the mark,
 so a later change is asked about afresh. A ledger that cannot take the row
 refuses the step with that function's own repair step. Under `relaxed` or `off`
 the repo command itself writes the row at the change.
-When choosing teams recorded `Home Location` (the workspace is a Git
-repository: its `origin` address, or `local`), the next step is `ask_type:
+When choosing teams recorded `Home Location` (work that records code repos of
+its own, `buildOutHomeLocation`, in a workspace that is a Git repository: its
+`origin` address, or `local`), the next step is `ask_type:
 unit-assignment` instead, asked once before any Unit starts: who builds which
 Unit, each named with its likely repos and the Units it waits on. The person
 answers in their own words; the agent runs `assign_command` (`unit assign
-<unit>=<team> ... --person-words`) with the Units they named, or the **Leave
+<unit>=<team> ... --request-file <file>`, their words written to that file
+first) with the Units they named, or the **Leave
 them all open** choice's command. A `UNITS_ASSIGNED` row after the latest team
 `UNIT_OWNERSHIP_SET` settles it. The home then walks only the Units no team
 holds, skipping a Unit that waits, directly or through another, on one a team
@@ -764,7 +766,8 @@ reached, a turn-down asked again, a clone where nothing is ready to take) is a
 `print` that ends the turn (`lineEndingTurn`): what the person reads rides as
 `narration`, the engine's own instruction is the `message`, and any `offers`
 ride with it, so every harness's skill acts on it from a fresh chat. Team work
-without `Home Location` keeps the dispatcher flow.
+without `Home Location` (the code is the workspace's own repo, or the teams
+were chosen before it was recorded) keeps the dispatcher flow.
 
 In a team member's workspace, a plain `next` with no work selected returns
 `ask_type: unit-take` when a home with `Home Location` is visible here and the
@@ -844,7 +847,7 @@ Unit merged that way with every stage done. While a team still holds a Unit and
 none is left to the home, the step is the board (`renderUnitBoard`). A
 `turned_down` note on the claim reaches the build once, on any step. The lead's
 word that a repo merged where the check cannot see it (`unit merged <unit> --repo
-<repo> --person-words`) goes on the claim as `said_merged`, and that repo's
+<repo> --request-file <file>`) goes on the claim as `said_merged`, and that repo's
 verdict reads merged "by your word" from then on (a push after a turn-down
 keeps it only for a repo whose head did not change). Every step at a team home
 (the board, and a stage the home builds itself) carries `board_note`
@@ -865,8 +868,8 @@ check's claim reads and its write of the verdicts and `done` (a
 claims fetch; an unwritten verdict stays local, the board line says it may be
 behind, and the next step writes it again.
 
-When `next --hand-file <path>` (the agent's exact argument), or words that are
-just the path, name a file carrying the `aidlc-handoff` mark (located by
+When `next --hand-file <path>` (the agent's exact argument; the engine never
+reads a path out of the person's words) names a file carrying the `aidlc-handoff` mark (located by
 `markdownBlocks`), `next` returns `ask_type: unit-handoff` (**Start <unit>**
 runs `unit take --file <path>`; **Not now** runs nothing); a file carrying the
 `aidlc-result` or `aidlc-progress` mark returns a run-then-continue `print` that
