@@ -19,7 +19,7 @@
 // the prompt is only the key to its own row. Any doubt leaves the turn the
 // person's, as today: no row, no transcript, a key the store's retention
 // dropped, a failure here.
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
