@@ -282,6 +282,12 @@ export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
 // consults the engine and reads only the directive off stdout.
 export const ROUTE_CHECK_ENV = "AIDLC_ROUTE_CHECK";
 
+// The env marker on the `next` a prompt hook runs ahead of the agent (Kiro
+// CLI's verb-intercept). Not an observer: its step is real, but the hook hands
+// it to the chat only when it fits the hook's reply, so a line on it is not
+// yet heard.
+export const HOOK_PRE_DISPATCH_ENV = "AIDLC_HOOK_PRE_DISPATCH";
+
 // --- Engine observer mode -----------------------------------------------------
 //
 // An OBSERVER is an engine invocation whose whole purpose is to LEARN the
@@ -307,6 +313,10 @@ export function isRouteCheckProbe(): boolean {
 
 export function isReadOnlyEngineProbe(): boolean {
   return isStopHookProbe() || isRouteCheckProbe();
+}
+
+export function isHookPreDispatch(): boolean {
+  return process.env[HOOK_PRE_DISPATCH_ENV] === "1";
 }
 
 // --- Error helpers (catch-block discipline) ---

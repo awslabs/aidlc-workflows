@@ -653,7 +653,7 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { teamUnitMemoryPath, unitMemoryPath } from "./aidlc-stage-diary.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
-import { withAuditLock } from "./aidlc-locks.ts";
+import { isHookPreDispatch, withAuditLock } from "./aidlc-locks.ts";
 import {
   askedQuestionFields,
   engineAskQuestionId,
@@ -2303,6 +2303,17 @@ function writePrepared(prepared: PreparedEmission): void {
   ) {
     markKiroHooksOffSaid(engineProjectDir, harnessDir());
     activeKiroHooksOffNotices = [];
+  }
+  // A finished stage that is behind is said once a chat: the step that tells
+  // the agent to say it (its note rides every kind but a rules part) counts it
+  // heard, and projectStageValidityAdvisory leaves it off the steps after. A
+  // step a prompt hook runs ahead may never reach the chat, so it counts nothing.
+  const { stage_validity: validity, stage_validity_note: note } = prepared.transported;
+  if (
+    engineProjectDir && engineSessionId && validity && note !== undefined &&
+    !isReadOnlyEngineProbe() && !isHookPreDispatch()
+  ) {
+    markPersonLinesHeard(engineProjectDir, engineSessionId, [validity.warning]);
   }
 }
 
