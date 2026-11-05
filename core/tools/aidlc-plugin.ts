@@ -991,7 +991,7 @@ export function comparePluginState(
       state: provedMissing ? "installed-missing" : "inventory-unavailable",
       action: provedMissing ? "attention" : "current",
       message: provedMissing
-        ? `installed plugin missing; reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove what it added`
+        ? `installed plugin missing; a plugin composed from a folder was never in your host's list, so it keeps working - reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove it and everything it contributes (its stages, sensors and scopes)`
         : "not compared: no host plugin list",
     });
   }
