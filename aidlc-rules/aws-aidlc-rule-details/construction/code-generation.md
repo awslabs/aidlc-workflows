@@ -200,6 +200,13 @@ This stage generates code for each unit of work through two integrated parts:
 - **UPDATE CHECKBOXES**: Mark [x] immediately after completing each step
 - **STORY TRACEABILITY**: Mark unit stories [x] when functionality is implemented
 - **RESPECT DEPENDENCIES**: Only implement when unit dependencies are satisfied
+- **HONOR QUALITY TARGETS**: Measurable quality targets defined in NFR Requirements
+  or NFR Design (e.g. test coverage thresholds, performance budgets) are inputs to
+  Code Generation, not suggestions. Generated tests and configuration MUST aim to
+  meet them. NEVER relax, lower, or disable a previously defined quality target
+  (including threshold settings in test or build configuration) to make a step
+  "pass". If a target cannot be met, surface the gap explicitly in the completion
+  message instead of silently weakening the target.
 
 ### Automation Friendly Code Rules
 When generating UI code (web, mobile, desktop), ensure elements are automation-friendly:

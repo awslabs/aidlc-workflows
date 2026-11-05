@@ -19,6 +19,12 @@ Analyze the project to determine appropriate testing strategy:
 - **Contract tests**: API contract validation between services
 - **Security tests**: Vulnerability scanning, penetration testing
 
+When NFR Requirements defined measurable quality targets for any unit (e.g. test
+coverage thresholds, performance budgets), record those targets here. The summary
+in Step 7 MUST compare actual results against them and state whether each target
+was met. If a target was not met, the summary MUST say so explicitly and the
+"Ready for Operations" field MUST reflect it.
+
 ---
 
 ## Step 2: Generate Build Instructions
@@ -265,6 +271,8 @@ Create `aidlc-docs/construction/build-and-test/build-and-test-summary.md`:
 - **Passed**: [X]
 - **Failed**: [X]
 - **Coverage**: [X]%
+- **Coverage Target (from NFR Requirements)**: [X]% (or N/A if none defined)
+- **Target Met**: [Yes/No/N/A]
 - **Status**: [Pass/Fail]
 
 ### Integration Tests
