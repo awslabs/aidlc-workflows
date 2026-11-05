@@ -2494,15 +2494,19 @@ try {
     const gap = reviewTargetGap(given);
     if (gap === null || reviewTargetGap(before) !== null) return given;
     // An output with no entry is what widens the stage. Merge only the outputs
-    // that have one; if the stage's own entries for those still widen it, merge
-    // none.
+    // that have one, one at a time, and keep each that leaves the stage within
+    // its review target, so the drop names only the outputs that widen it.
     const kinds = parsedStage(given)?.produces_kinds;
     const mapped = added.filter((name) => typeof kinds === "object" && kinds !== null && Object.hasOwn(kinds, name));
     const landed: string[] = [];
-    let kept = giveProducesKinds(mergeListField(before, "produces", mapped, target, landed), landed);
-    if (landed.length > 0 && reviewTargetGap(kept) !== null) {
-      kept = before;
-      landed.length = 0;
+    let kept = before;
+    for (const name of mapped) {
+      const one: string[] = [];
+      const next = giveProducesKinds(mergeListField(kept, "produces", [name], target, one), one);
+      if (one.length > 0 && reviewTargetGap(next) === null) {
+        kept = next;
+        landed.push(...one);
+      }
     }
     const skipped = added.filter((name) => !landed.includes(name));
     const fix = addPluginProducesKinds

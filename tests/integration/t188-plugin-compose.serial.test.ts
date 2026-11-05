@@ -1753,6 +1753,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // An installed functional-design with optional outputs of its own: one with
     // no entry, which a plugin output gets none for, and one whose entry
     // reaches past functional-spec, which widens the stage however it lands.
+    // A plugin output that fits still lands beside them, and the drop names
+    // only the outputs that widen the stage.
     const contrib = (target: string, outputs: string[]) => [
       "---", `target: ${target}`, "plugin: syn-kinds-refused",
       "adds:", "  produces:", ...outputs.map((name) => `    - ${name}`),
@@ -1760,7 +1762,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ].join("\n");
     const cases: Array<[string[], string]> = [
       [["syn-kinds-local", "syn-kinds-refused-notes"], "syn-kinds-local"],
-      [["syn-kinds-refused-notes", "syn-kinds-wide"], "syn-kinds-refused-notes, syn-kinds-wide"],
+      [["syn-kinds-refused-notes", "syn-kinds-wide"], "syn-kinds-wide"],
+      [["syn-kinds-local", "syn-kinds-wide", "syn-kinds-refused-notes"], "syn-kinds-local, syn-kinds-wide"],
     ];
     for (const [outputs, skipped] of cases) {
       const { drops, proj } = composeSynthetic(
