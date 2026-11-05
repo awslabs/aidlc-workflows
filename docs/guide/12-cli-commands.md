@@ -579,6 +579,21 @@ budget. An extraction timeout records `extraction_failed`; it does not establish
 that the document was read successfully. These time budgets do not change the
 byte, page, or output caps above.
 
+**Where pdftotext is missing** (Windows and macOS out of the box), AI-DLC reads a
+PDF itself, with nothing to install (`show --json` names that reader
+`builtin-pdf`). pdftotext still runs first wherever it is on `PATH`, and a PDF
+AI-DLC read itself is read again by pdftotext on the next `sync` after you install
+it. A project's own configured PDF extractor is never replaced: when it is
+missing the document is `extractor_unavailable`, as above. AI-DLC's reader runs as
+its own process under the same extraction budget and the same 50-page and
+200,000-character caps. A PDF that only restricts printing or copying is read; one
+that needs a password to open is `extraction_failed` with that reason. Known
+limits, where pdftotext does better: words in Thai, Hindi and other scripts whose
+letters combine can come out with spaces inside them, a PDF encrypted with AES-256
+or with its text compressed the older LZW or RunLength way is `extraction_failed`
+with the reason, and a PDF whose fonts carry no text mapping gives unreadable text. A scanned PDF has no text for either reader (`no_extractable_text`;
+there is no OCR).
+
 A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
 the document's path is substituted into. A configuration without it is refused when
 the tool starts, rather than accepted: a process that never receives the file would

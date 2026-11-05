@@ -98,8 +98,8 @@ Team knowledge files are curated reference material. DocumentKB is the companion
 catalog for documents the team already owns: vision documents, PRDs,
 requirements briefs, policies, contracts, PDFs, Word and Excel files, Markdown,
 CSV, and plain text. AI-DLC reads Word and Excel files itself (a workbook's every
-sheet, as a table); a PDF needs `pdftotext` on the computer, which Windows does
-not have by default. See
+sheet, as a table), and a PDF with `pdftotext` where it is installed, or with
+its own reader where it is not (see Reading PDFs below). See
 [Starting from an existing document](02-your-first-workflow.md#starting-from-an-existing-document)
 for ways to use one as workflow input.
 
@@ -150,7 +150,7 @@ asked. A document you name when you start the work is filed for that work;
 
 A file in `documents/` that is not in the knowledge base yet, or is in it with
 no text it can read (a type it has no reader for, such as an old `.xls` or a slide
-deck, a PDF on a computer without `pdftotext`, a scanned page), is named by AI-DLC in one line when work starts
+deck, or a scanned page), is named by AI-DLC in one line when work starts
 or goes on, with what to do for each kind: add it with `sync`, or save a text
 copy (`.md`, `.txt` or `.csv`) beside it with the same name, then `sync`. Each
 file is named once in a piece of work, and the work goes on: carrying on
@@ -166,6 +166,17 @@ text follows. Tags survive that invalidation; passing `--tags` replaces the set,
 omitting it leaves the existing tags alone. Because tags may be LLM-authored
 from customer content, `list` and `show` frame them as untrusted labels, never
 instructions.
+
+**Reading PDFs.** A PDF is read by `pdftotext` (Poppler) where it is installed.
+Where it is not, as on Windows and macOS out of the box, AI-DLC reads the PDF
+itself with nothing to install (`show --json` names that reader
+`builtin-pdf`); install pdftotext later and the next `sync` reads those PDFs again
+with it. AI-DLC's own reader has known limits where pdftotext does better:
+words in Thai, Hindi and other scripts whose letters combine can come out with
+spaces inside them, and a PDF encrypted with AES-256, or an older one whose text
+is compressed the LZW or RunLength way, is not opened (`extraction_failed`, with
+the reason). Neither reader gets text from a scanned PDF (there is no
+OCR) or from one that needs a password to open.
 
 Recovery is intentionally limited. If only `documentkb/index.json` is lost,
 `sync` rebuilds it from the surviving per-document `metadata.json` records,

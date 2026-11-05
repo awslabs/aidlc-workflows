@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { existsSync, readdirSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1037,7 +1038,9 @@ export const ROUTES: readonly Route[] = [
     // this literal, because reading the route is exactly what missed it.
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help"],
+    // `read-pdf` is the built-in PDF reader's child-process entry in a compiled binary (aidlc-knowledge.ts
+    // extractDocument); it is routed but never listed in help.
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help", "read-pdf"],
     tool: TOOLS.knowledge,
     ...PUBLIC_ENGINE,
     // ONE line in the human help, which is capped at 20 lines: it is a summary
@@ -3340,12 +3343,16 @@ async function execute(action: Action): Promise<number> {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
+    // A turn Claude Code started itself is settled before the hook reads a turn;
+    // the human-turn hook settles in its own process, which loads the engine anyway.
+    if (action.name !== "record-human-turn") settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHook({ ...action, projectDir }));
   }
   if (action.type === "hook-group") {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
+    settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHookGroup({ ...action, projectDir }));
   }
   if (action.type === "statusline") {

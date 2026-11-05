@@ -128,6 +128,7 @@ import {
   auditFilePath,
   type AuditMark,
   auditShardBlocks,
+  auditShardTurnBlocks,
   type AuditShardEvent,
   auditShardName,
   auditShards,
@@ -215,6 +216,7 @@ import {
   validSessionId,
   windowsParentEdge,
   windowsSessionProcessIdentity,
+  withdrawnTurnPositions,
   type WorkflowParticipation,
   workflowParticipation,
   type WorkflowSelection,
@@ -1069,8 +1071,8 @@ function shippedRulesSubdir(): string | null {
  *
  * STRICT: a malformed block throws here rather than being silently ignored,
  * because the value becomes a process invocation and a half-parsed extractor is
- * worse than none. Absent is the normal case — the tool then probes `pdftotext`
- * on PATH and degrades to `extractor_unavailable`.
+ * worse than none. Absent is the normal case: the tool then probes `pdftotext`
+ * on PATH and, where it is missing, reads a PDF with AI-DLC's own reader.
  */
 export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec> | null {
   return readShippedHarnessData().documentExtractors;
@@ -2607,12 +2609,15 @@ function entryText(content: unknown): string {
 
 // The newest `type: "user"` entry of a JSONL chat record whose text is exactly
 // this prompt and that `matches`; `entryOf` finds the entry in a line (Kiro
-// wraps each one). Null when there is none, or the record cannot be read.
+// wraps each one), `rowText` the prompt a row's text stands for (a host that
+// wraps a command in its own envelope). Null when there is none, or the record
+// cannot be read.
 function newestUserEntry(
   path: string,
   prompt: string,
   matches: (entry: Record<string, unknown>) => boolean,
   entryOf: (line: Record<string, unknown>) => unknown = (line) => line,
+  rowText: (text: string) => string = (text) => text,
 ): Record<string, unknown> | null {
   const text = tailText(path, 1 << 20);
   if (text === null) return null;
@@ -2636,7 +2641,7 @@ function newestUserEntry(
     const content = message !== null && typeof message === "object"
       ? (message as Record<string, unknown>).content
       : record.content;
-    if (entryText(content).trim() === want) return record;
+    if (rowText(entryText(content).trim()).trim() === want) return record;
   }
   return null;
 }
@@ -2854,17 +2859,27 @@ export function kiroTurnOrigin(options: {
 // row for this `prompt_id` with exactly this text. Claude Code names the turn's
 // origin on it (measured 2.1.280: `turnOrigin: "task_notification"`,
 // `promptSource: "system"`, `origin.kind: "task-notification"` for a
-// background task's notice; `human`/`typed` for a typed turn). A row with
+// background task's notice; `human`/`typed` for a typed turn; measured 2.1.278
+// and 2.1.318: `turnOrigin: "scheduled"` for a scheduled wake-up). A row with
 // neither mark decides nothing: the desktop app sends the person's messages and
 // its own notes alike as `sdk`, so its words decide (claudeHostTemplateOrigin
 // in the human-turn hook). A message the person sends while a turn runs has no
 // row of its own (it rides the running turn's prompt id), so no row means
-// nothing is known.
-const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification"]);
+// nothing is known. A slash command's row holds Claude Code's envelope of it
+// (`<command-message>`, `<command-name>`, `<command-args>`, captured live on
+// both builds): its command name and arguments are the prompt the hook got.
+const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification", "scheduled"]);
 export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknown, prompt: string): TurnOrigin | null {
   if (typeof transcriptPath !== "string" || !transcriptPath.endsWith(".jsonl") || !prompt.trim()) return null;
   const id = typeof promptId === "string" && promptId.trim() ? promptId.trim() : null;
-  const entry = newestUserEntry(transcriptPath, prompt, (row) => id === null || row.promptId === id);
+  const commandPrompt = (text: string): string => {
+    const envelope = /^<command-message>[^<]*<\/command-message>\s*<command-name>([^<]*)<\/command-name>(?:\s*<command-args>([\s\S]*)<\/command-args>)?\s*$/
+      .exec(text);
+    if (envelope === null) return text;
+    const args = (envelope[2] ?? "").trim();
+    return args ? `${envelope[1].trim()} ${args}` : envelope[1].trim();
+  };
+  const entry = newestUserEntry(transcriptPath, prompt, (row) => id === null || row.promptId === id, undefined, commandPrompt);
   if (entry === null) return null;
   const origin = entry.origin !== null && typeof entry.origin === "object"
     ? (entry.origin as Record<string, unknown>).kind
@@ -9347,7 +9362,7 @@ function readActiveDirectiveMarkerSnapshot(path: string): {
   }
 }
 
-function transactActiveDirective<T>(
+export function transactActiveDirective<T>(
   projectDir: string,
   update: (
     marker: ActiveDirectiveMarker | null,
@@ -10232,7 +10247,7 @@ export function normalizeGuardRecoveryText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function guardRecoveryTextSha256(text: string): string | null {
+export function guardRecoveryTextSha256(text: string): string | null {
   const normalized = normalizeGuardRecoveryText(text);
   return normalized.length === 0 ? null : contentSha256(normalized);
 }
@@ -12144,7 +12159,7 @@ export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean
     const shardPath = auditFilePath(projectDir);
     if (projectRelativePath(projectDir, shardPath) !== mark.shard) return false;
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    return auditShardTurnBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
   }
@@ -12176,7 +12191,7 @@ export function repliesAfter(projectDir: string, mark: AuditMark): Array<{ messa
     const shardPath = auditFilePath(projectDir);
     if (projectRelativePath(projectDir, shardPath) !== mark.shard) return [];
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardBlocks(after)
+    return auditShardTurnBlocks(after)
       .filter((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }))
       .map((block) => ({ messageId: auditBlockField(block, "Message Id"), at: auditBlockField(block, "Timestamp") ?? "" }));
   } catch {
@@ -12289,7 +12304,7 @@ function projectTypeTurnOnRecord(projectDir: string): boolean {
   if (personTurnStands(projectDir, "plain", { replies: true })) return true;
   try {
     const after = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").subarray(asked.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    return auditShardTurnBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
   }
@@ -12334,7 +12349,7 @@ function engineAskPassedOver(projectDir: string, name: string): boolean {
     const shardPath = auditFilePath(projectDir);
     if (projectRelativePath(projectDir, shardPath) !== asked.shard) return false;
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(asked.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    return auditShardTurnBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
   }
@@ -12377,8 +12392,9 @@ export function humanTurnState(
   for (let t = 0; t < texts.length; t++) {
     const s = texts[t].shardIndex;
     const blocks = auditShardBlocks(texts[t].content);
+    const withdrawn = withdrawnTurnPositions(blocks);
     for (let i = 0; i < blocks.length; i++) {
-      if (copied[t].has(i)) continue;
+      if (copied[t].has(i) || withdrawn.has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
       // A host's own turn (HOST_TURN) is neither a person's turn nor a decision:
@@ -28949,10 +28965,14 @@ export function gateWordsSinceUnitReview(
     .filter((message) => message.offset > floor && message.offset <= ceiling && !isNonAnswer(message.text));
   if (taken.length === 0) return null;
   const bytes = (at: number): number => Buffer.byteLength(content.slice(0, at), "utf-8");
-  return taken.map((message) => {
+  // Words kept for a turn a HOST_TURN took back (withdrawnTurnPositions) were never theirs.
+  const blocks = auditShardBlocks(content);
+  const takenBack = new Set([...withdrawnTurnPositions(blocks)].map((pos) => auditBlockField(blocks[pos], "Message Id")));
+  const replies = taken.map((message) => {
     const id = turns.findLast((span) => message.offset > bytes(span.start) && message.offset <= bytes(span.end))?.id;
     return { ...(id === undefined ? {} : { messageId: id }), words: message.text };
-  });
+  }).filter((reply) => reply.messageId === undefined || !takenBack.has(reply.messageId));
+  return replies.length === 0 ? null : replies;
 }
 
 // Whether the person replied to the stage's approval question as it was last
@@ -28973,7 +28993,7 @@ export function personRepliedSincePresentation(
   }
   const from = gatePresentationStart(content, gate, { answeredBy: true });
   if (from === null) return null;
-  return auditShardBlocks(content.slice(from))
+  return auditShardTurnBlocks(content.slice(from))
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
@@ -29017,7 +29037,7 @@ function turnSinceGateShown(
   }
   const from = gatePresentationStart(content, gate, { firstShowing: true });
   if (from === null) return null;
-  return auditShardBlocks(content.slice(from))
+  return auditShardTurnBlocks(content.slice(from))
     .some((block) => which({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
@@ -40317,9 +40337,10 @@ export function boxPicksAddANote(projectDir: string, messageId?: string): boolea
   try {
     const blocks = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8")
       .replace(/\r\n/g, "\n").split("\n---\n");
+    const withdrawn = withdrawnTurnPositions(blocks);
     const isTurn = (block: string) => auditBlockField(block, "Event") === "HUMAN_TURN";
     let turn = blocks.length - 1;
-    while (turn >= 0 && !(isTurn(blocks[turn]) &&
+    while (turn >= 0 && !(isTurn(blocks[turn]) && !withdrawn.has(turn) &&
       (messageId === undefined || auditBlockField(blocks[turn], "Message Id") === messageId))) turn--;
     if (turn < 0) return null;
     const replies: string[] = [];
