@@ -18,7 +18,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, onlyLabels, PUBLIC_URL, redact, smallLabel, TOOL_DIRS } from "./redact.ts";
-import { DOCTOR_SEVERITIES, EVENT_KEYS, isOsLine, isVersion, KERNEL_RELEASE, OWN, PUBLIC_MODEL } from "./lib-shape.ts";
+import { DOCTOR_SEVERITIES, EVENT_KEYS, endFactOk, eventValueOk, isOsLine, isVersion, KERNEL_RELEASE, OWN, PUBLIC_MODEL, seqOk } from "./lib-shape.ts";
 import { fieldNameOk, type RowVocab, valueOk } from "./lib-rows.ts";
 
 export type GateContext = {
@@ -663,7 +663,7 @@ function rowHits(ctx: GateContext, rows: unknown, hits: GateHit[], start: number
     }
     const r = row as Record<string, unknown>;
     if (Object.keys(r).some((k) => !ROW_KEYS.includes(k))) refuse(at, "a key a row does not have");
-    if (typeof r.seq !== "number" || !Number.isInteger(r.seq) || r.seq < 1 || r.seq > 1e7) refuse(`${at}.seq`);
+    if (!seqOk(r.seq)) refuse(`${at}.seq`);
     if (r.ts !== null && !(typeof r.ts === "string" && TIME.test(r.ts))) refuse(`${at}.ts`);
     if (typeof r.event !== "string" || !(onlyLabels(r.event) || (/^[A-Z][A-Z0-9_]{1,59}$/.test(r.event) && v.words.has(r.event)))) refuse(`${at}.event`);
     if (r.intent !== null && !(typeof r.intent === "string" && (r.intent === "(space)" || onlyLabels(r.intent)))) refuse(`${at}.intent`);
@@ -691,7 +691,12 @@ function rowHits(ctx: GateContext, rows: unknown, hits: GateHit[], start: number
   return n;
 }
 
-const CLOSED: [RegExp, ReadonlySet<string>][] = [[/^safe\.transcripts\[\d+\]\.events\[\d+\]$/, EVENT_KEYS]];
+// A data key and its value read together, as `name=value`: a secret's name in the key, its value beside it.
+const pairHoldsCredential = (name: string, value: unknown) => credentialSpans(labelMask(`${name}=${String(value)}`)).length > 0;
+
+// One event of a transcript's stream, and its refusal text.
+const EVENT = /^safe\.transcripts\[\d+\]\.events\[\d+\]$/;
+const EVENT_REASON = /^safe\.transcripts\[\d+\]\.events\[\d+\]\.reason$/;
 
 // safe.json, decoded: each string checked by its field, each key that is data (not one of this skill's field
 // names) checked as a value. `line` is the field's place among the leaves.
@@ -700,27 +705,59 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
   // A name kept for the report only (part of AI-DLC's own words) is left to AI-DLC's words in safe.json.
   const names = (v: string) => namesAt(v, ctx.dict).filter((n) => n.entry.kind !== "report-only").map((n) => `a name in the redaction map (write ${n.entry.label})`);
   let n = 0;
+  // What a key and its value to be removed held, said once each so the file is known to have held it: a hidden name
+  // in the key, a secret as `name=value` beside it, and what the same walk finds in the value read as data, its
+  // reasons kept without their fix (the fix is to remove them).
+  const heldIn = (key: string, value: unknown, at: string): Set<string> => {
+    const said = new Set(names(key).map((r) => r.replace(/ \(write [^)]*\)$/, "")));
+    // As the walk reads a data key: its plain value, or each plain value of its list.
+    if ((Array.isArray(value) ? value : [value]).some((y) => (y === null || typeof y !== "object") && pairHoldsCredential(key, y))) said.add("a credential");
+    const start = hits.length;
+    walk(value, at, "", "");
+    for (const h of hits.splice(start)) said.add(h.reason.replace(/ \((?:replace|remove|write)\b[^)]*\)$/, ""));
+    return said;
+  };
   const walk = (v: unknown, path: string, field: string, parent: string) => {
+    if (EVENT.test(path)) {
+      // An event is an object; anything else in its place is refused once.
+      if (!v || typeof v !== "object" || Array.isArray(v)) {
+        n++;
+        hits.push({ line: n, field: path, reason: "not what this part holds (remove it)" });
+        return;
+      }
+      // A tool event holds the keys the shaper writes, each in the shape it writes (lib-shape.ts eventValueOk), and
+      // nothing else: one hit for anything else, which says to remove it. A string is then read by its field's rule.
+      for (const [i, [k, x]] of Object.entries(v).entries()) {
+        if (!EVENT_KEYS.has(k)) {
+          n++;
+          // Named by its place, never by the key itself (a key is data: it can be a name).
+          const at = `${path} (its key number ${i + 1})`;
+          hits.push({ line: n, field: at, reason: "a key this part does not have (remove that key)" });
+          for (const reason of heldIn(k, x, at)) hits.push({ line: n, field: at, reason });
+          continue;
+        }
+        if (!eventValueOk(k, x)) {
+          n++;
+          const at = `${path}.${k}`;
+          const fix = "not what this field's rule writes (remove it)";
+          hits.push({ line: n, field: at, reason: fix });
+          for (const reason of heldIn(k, x, at)) if (reason !== fix.replace(" (remove it)", "")) hits.push({ line: n, field: at, reason });
+          continue;
+        }
+        walk(x, `${path}.${k}`, k, k);
+      }
+      return;
+    }
     if (Array.isArray(v)) {
       for (const [i, x] of v.entries()) walk(x, `${path}[${i}]`, field, parent);
       return;
     }
     if (v && typeof v === "object") {
-      // A tool event holds the fields the shaper writes and no other (lib-shape.ts transcript): an extra key is
-      // refused, whatever its value.
-      const closed = CLOSED.find(([re]) => re.test(path))?.[1];
-      const stray = new Set<string>();
-      for (const [i, k] of Object.keys(v).entries()) {
-        if (!closed || closed.has(k)) continue;
-        stray.add(k);
-        // Named by its place, never by the key itself (a key is data: it can be a name), so the one key is removed.
-        hits.push({ line: n + 1, field: `${path} (its key number ${i + 1})`, reason: "a key this part does not have (remove that key)" });
-      }
       for (const [k, x] of Object.entries(v)) {
         const own = keepsKey(parent, k);
         // A data key and its value read together, as `name=value`: a secret's name in the key, its value beside it.
         // This skill's own field names (`pass`, `secretRules`) are not secrets' names.
-        const pair = (val: unknown) => credentialSpans(labelMask(`${k}=${String(val)}`)).length > 0;
+        const pair = (val: unknown) => pairHoldsCredential(k, val);
         const leaves = Array.isArray(x) ? x : [x];
         if (!own && leaves.some((val) => val === null || typeof val !== "object") && leaves.some((val) => (val === null || typeof val !== "object") && pair(val))) {
           hits.push({ line: n + 1, field: `${path}.<key>`, reason: "a credential" });
@@ -730,8 +767,7 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
           n = rowHits(ctx, x, hits, n, names);
           continue;
         }
-        // A key refused above is to be removed: one hit for it, not a second asking for other words.
-        if (!own && !stray.has(k)) {
+        if (!own) {
           n++;
           if (!atomOk(ctx, k, parent)) hits.push({ line: n, field: `${path} (a key)`, reason: "not one of AI-DLC's words, a label or a known shape" });
           for (const reason of names(k)) hits.push({ line: n, field: `${path} (a key)`, reason });
@@ -741,14 +777,18 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
       return;
     }
     n++;
+    // How a failed call ended, outside an event too (the shaper writes it in events only): the shaper's own rule
+    // (lib-shape.ts endFactOk), and one hit that says to remove it.
+    if (field === "exitCode" || field === "timeoutMs") {
+      if (!endFactOk(field, v)) hits.push({ line: n, field: path, reason: "not what this field's rule writes (remove it)" });
+      if (typeof v === "string") for (const reason of names(v)) hits.push({ line: n, field: path, reason });
+      return;
+    }
     // A count holds up to nine digits; a longer number can be an account or a phone number.
-    if (typeof v === "number" && Math.abs(v) >= 1e9 && field !== "exitCode" && field !== "timeoutMs") hits.push({ line: n, field: path, reason: "a long number (replace it with <redacted>)" });
-    // How a failed call ended, as the shaper keeps it (lib-shape.ts): four digits for an exit code, seven for a limit.
-    if (field === "exitCode" && !(typeof v === "number" && Number.isInteger(v) && Math.abs(v) <= 9999)) hits.push({ line: n, field: path, reason: "not what this field's rule writes (remove it)" });
-    if (field === "timeoutMs" && !(typeof v === "number" && Number.isInteger(v) && v >= 0 && v < 1e7)) hits.push({ line: n, field: path, reason: "not what this field's rule writes (remove it)" });
+    if (typeof v === "number" && Math.abs(v) >= 1e9) hits.push({ line: n, field: path, reason: "a long number (replace it with <redacted>)" });
     if (typeof v !== "string") return;
     // A tool event's refusal text passes only as an audit row's `Reason` is written (lib-rows.ts).
-    if (field === "reason" && /^safe\.transcripts\[\d+\]\.events\[\d+\]\.reason$/.test(path)) {
+    if (field === "reason" && EVENT_REASON.test(path)) {
       if (!valueOk(ctx.rows ?? NO_ROW_WORDS, "", "Reason", v)) hits.push({ line: n, field: path, reason: "not what this field's rule writes (replace it with <redacted>)" });
     } else if (PROSE_FIELDS.has(field)) {
       if (!ownSentence(ctx, v)) hits.push({ line: n, field: path, reason: "not one of this skill's own sentences (replace it with <redacted>)" });

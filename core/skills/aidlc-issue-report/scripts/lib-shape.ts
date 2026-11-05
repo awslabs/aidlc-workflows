@@ -104,13 +104,37 @@ const EVENT_KINDS = new Set([
   "call", "aidlc-command", "person-turn", "tool-error", "tool-denied", "approval-prompt", "stop-hook-feedback",
   "aidlc-hook-block", "other-hook-block", "hook-block",
 ]);
+// A record's place in its list, from 1: an audit row's or an event's (lib-gate.ts reads both by it).
+export const seqOk = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1e7;
+// The keys an event in the stream may hold, and the shape of each value as transcript() below writes it: an event is
+// flat, so a list or an object is never one of them. lib-gate.ts refuses any other key and any other shape, then reads
+// a string by its field's own rule.
+const EVENT_VALUES: Record<string, (v: unknown) => boolean> = {
+  seq: seqOk,
+  ts: (v) => v === null || typeof v === "string",
+  session: (v) => v === null || typeof v === "string",
+  kind: (v) => typeof v === "string" && (EVENT_KINDS.has(v) || v === "other"),
+  owner: (v) => v === "aidlc" || v === "other" || v === "unknown",
+  ...Object.fromEntries(["input", "detail", "reply"].map((k) => [k, (v: unknown) => typeof v === "string"])),
+  // A tool, a hook or a command that is not one of AI-DLC's names is null (tool, hook, command below).
+  ...Object.fromEntries(["tool", "verb", "hook"].map((k) => [k, (v: unknown) => v === null || typeof v === "string"])),
+  // By the rule of an audit row's `Reason` (lib-rows.ts shapeValue), a string.
+  reason: (v) => typeof v === "string",
+  exitCode: (v) => endFactOk("exitCode", v),
+  timeoutMs: (v) => endFactOk("timeoutMs", v),
+  ...Object.fromEntries(["interrupted", "inRunningTurn", "sameAsBeforeInTurn", "noTime"].map((k) => [k, (v: unknown) => v === true])),
+};
+export const EVENT_KEYS: ReadonlySet<string> = new Set(Object.keys(EVENT_VALUES));
+export const eventValueOk = (key: string, v: unknown): boolean => Object.hasOwn(EVENT_VALUES, key) && EVENT_VALUES[key](v);
+// How a failed call ended, as kept: an exit code of four digits at most (0-255, 128 + a signal, -1) and a time limit in
+// milliseconds of seven digits at most (Kiro's is 120000), since a longer number could carry one. lib-gate.ts reads
+// the same rule back.
+export function endFactOk(field: "exitCode" | "timeoutMs", v: unknown): boolean {
+  if (typeof v !== "number" || !Number.isInteger(v)) return false;
+  return field === "exitCode" ? Math.abs(v) <= 9999 : v >= 0 && v < 1e7;
+}
 // The severities a doctor finding keeps, and `other` for any else: this skill's own words, which the check accepts in
 // that field whatever AI-DLC's word list holds (lib-gate.ts).
-// The keys an event in the stream may hold: the ones transcript() below writes. lib-gate.ts refuses any other.
-export const EVENT_KEYS: ReadonlySet<string> = new Set([
-  "seq", "ts", "session", "kind", "tool", "input", "verb", "hook", "owner", "detail", "reply", "reason", "exitCode", "timeoutMs",
-  "interrupted", "inRunningTurn", "sameAsBeforeInTurn", "noTime",
-]);
 export const DOCTOR_SEVERITIES: ReadonlySet<string> = new Set(["error", "warning", "warn", "info", "other"]);
 // AI-DLC's harness rows.
 export const HARNESS_ROWS = new Set(["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]);
@@ -433,10 +457,8 @@ export class Shaper {
           // A refusal's text by the rule of an audit row's `Reason` (lib-rows.ts): AI-DLC's own phrases kept, the rest
           // labels. lib-gate.ts reads it back by the same rule.
           ...(e.reason !== undefined ? { reason: shapeValue(this.v, this.rowShape, "", "Reason", e.reason) } : {}),
-          // An exit code holds four digits at most (0-255, 128 + a signal, -1): a longer one could carry a number.
-          ...(Number.isInteger(e.exitCode) && Math.abs(e.exitCode as number) <= 9999 ? { exitCode: e.exitCode } : {}),
-          // A time limit in milliseconds up to seven digits (Kiro's is 120000), for the same reason.
-          ...(Number.isInteger(e.timeoutMs) && (e.timeoutMs as number) >= 0 && (e.timeoutMs as number) < 1e7 ? { timeoutMs: e.timeoutMs } : {}),
+          ...(endFactOk("exitCode", e.exitCode) ? { exitCode: e.exitCode } : {}),
+          ...(endFactOk("timeoutMs", e.timeoutMs) ? { timeoutMs: e.timeoutMs } : {}),
           ...(e.interrupted === true ? { interrupted: true } : {}),
           ...(e.inRunningTurn === true ? { inRunningTurn: true } : {}),
           ...(e.sameAsBeforeInTurn === true ? { sameAsBeforeInTurn: true } : {}),

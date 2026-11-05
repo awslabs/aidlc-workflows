@@ -9,7 +9,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { shapeValue } from "../../core/skills/aidlc-issue-report/scripts/lib-rows.ts";
-import { Labels, Shaper } from "../../core/skills/aidlc-issue-report/scripts/lib-shape.ts";
+import { eventValueOk, Labels, Shaper } from "../../core/skills/aidlc-issue-report/scripts/lib-shape.ts";
 import { loadVocab } from "../../core/skills/aidlc-issue-report/scripts/lib-vocab.ts";
 import { gateContext } from "../../core/skills/aidlc-issue-report/scripts/lib-check.ts";
 import { safeHits } from "../../core/skills/aidlc-issue-report/scripts/lib-gate.ts";
@@ -131,6 +131,30 @@ describe("other fields", () => {
     });
     expect(Object.keys(h.last).sort()).toEqual(["<custom-hook-1>", "plan-approval-guard"]);
     expect(h.drops.map((d) => d.reason)).toEqual(["lock busy", "other"]);
+  });
+  test("every event the shaper writes passes the check, a name that is not AI-DLC's (null) included", () => {
+    const v = loadVocab(install(), [".kiro"]);
+    const s = new Shaper(v, new Labels());
+    const base = {
+      tool: "codex", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 0, toolErrors: 0, denials: {}, aidlcHookBlocks: {},
+      otherHookBlocks: 0, unattributedHookBlocks: 0, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {},
+      repeats: [], timeline: [], subagents: {}, engine: null, toolVersions: {}, models: {}, efforts: {}, agents: {},
+      approvalModes: {}, handRunChecks: [], reportSessions: 0, mixedSessions: 0, reportModels: {}, notes: [],
+    };
+    const t = s.transcript({
+      ...base,
+      events: [
+        { ts: "2026-10-29T01:00:00Z", session: "", kind: "aidlc-command", verb: "contoso-deploy now" },
+        { ts: "2026-10-29T01:01:00Z", session: "s1", kind: "call", tool: "", input: "k" },
+        { ts: "2026-10-29T01:01:30Z", session: "s1", kind: "call", tool: "ContosoTool", input: "k" },
+        { ts: "2026-10-29T01:02:00Z", session: "s1", kind: "aidlc-hook-block", hook: "", owner: "aidlc", reason: "Gate is closed." },
+        { ts: "2026-10-29T01:02:30Z", session: "s1", kind: "aidlc-hook-block", hook: "contoso-hook", owner: "aidlc" },
+        { ts: "2026-10-29T01:03:00Z", session: "s1", kind: "tool-error", exitCode: 1, timeoutMs: 120000, interrupted: true, noTime: true },
+        { ts: "2026-10-29T01:04:00Z", session: "s1", kind: "person-turn", reply: "go on", inRunningTurn: true, sameAsBeforeInTurn: true },
+      ],
+    }) as { events: Record<string, unknown>[] };
+    expect([t.events[0].verb, t.events[1].tool, t.events[3].hook]).toEqual([null, null, null]);
+    expect(safeHits(gateContext(v, { entries: [] }), { transcripts: [t] })).toEqual([]);
   });
   test("the event stream keeps its kinds and AI-DLC's names; a session, an input and a reply are labels, the same value the same label", () => {
     const s = shaper();
@@ -372,6 +396,43 @@ test("a failed Kiro call keeps how it ended as numbers and a flag: exit code, ti
   expect(safeHits(gateContext(v, { entries: [] }), odd).map((h) => `${h.field}: ${h.reason}`)).toEqual([
     "safe.transcripts[0].events[0] (its key number 4): a key this part does not have (remove that key)",
   ]);
+  // The key has one hit; an end fact that is not a number gets one too.
+  const named = { transcripts: [{ events: [{ ts: t.events[0].ts, session: t.events[0].session, kind: "tool-error", extra: "Contoso", exitCode: "<redacted>" }] }] };
+  const namedHits = safeHits(gateContext(v, { entries: [] }), named).map((h) => `${h.field}: ${h.reason}`);
+  // What the stray value held is said beside it, without a second fix.
+  expect(namedHits.filter((h) => h.includes("(its key number") || h.includes(".exitCode:"))).toEqual([
+    "safe.transcripts[0].events[0] (its key number 4): a key this part does not have (remove that key)",
+    "safe.transcripts[0].events[0] (its key number 4): not one of AI-DLC's words, a label or a known shape",
+    "safe.transcripts[0].events[0].exitCode: not what this field's rule writes (remove it)",
+  ]);
+  // An event is flat: a list or an object in any of its fields is refused whole, once, whatever keys it holds; an
+  // end fact outside an event is read by the same rule; a stray key holding a secret keeps its credential hit.
+  const ctx = gateContext(v, { entries: [] });
+  const ev0 = { ts: t.events[0].ts, session: t.events[0].session, kind: "tool-error" };
+  const one = (e: object) => safeHits(ctx, { transcripts: [{ events: [{ ...ev0, ...e }] }] }).map((h) => `${h.field}: ${h.reason}`);
+  for (const [key, bad] of [["exitCode", [12345678]], ["exitCode", { seq: 87654321 }], ["timeoutMs", [{ ts: 87654321 }]], ["interrupted", { seq: 123456789 }], ["noTime", [{ count: 987654321 }]], ["reason", ["Gate is closed."]], ["interrupted", false]] as const) {
+    const got = one({ [key]: bad });
+    // One fix, to remove it; anything else said is what it held, with no second fix.
+    expect(got.filter((h) => /\((?:replace|remove|write)\b/.test(h))).toEqual([`safe.transcripts[0].events[0].${key}: not what this field's rule writes (remove it)`]);
+  }
+  expect(one({ reason: 12345678 })).toEqual(["safe.transcripts[0].events[0].reason: not what this field's rule writes (remove it)"]);
+  // An event that is not an object is refused once; a secret deep in a stray key's value is still said.
+  expect(safeHits(ctx, { transcripts: [{ events: [[{ ...ev0, exitCode: [12345678] }]] }] }).map((h) => `${h.field}: ${h.reason}`)).toEqual(["safe.transcripts[0].events[0]: not what this part holds (remove it)"]);
+  expect(one({ extra: { token: "ghp_abcdefghijklmnopqrstuvwxyz0123456789" } }).map((h) => h.split(": ")[1])).toContain("a credential");
+  expect(one({ password: ["hunter2xyz"] }).map((h) => h.split(": ")[1])).toContain("a credential");
+  // A wrong-shaped value, and a key inside a stray value, are read for what they held too.
+  expect(one({ reason: [{ token: "ghp_abcdefghijklmnopqrstuvwxyz0123456789" }] }).map((h) => h.split(": ")[1])).toContain("a credential");
+  expect(eventValueOk("constructor", "x")).toBe(false);
+  expect(one({ kind: "deploy" })[0]).toBe("safe.transcripts[0].events[0].kind: not what this field's rule writes (remove it)");
+  expect(one({ owner: "contoso" })[0]).toBe("safe.transcripts[0].events[0].owner: not what this field's rule writes (remove it)");
+  const held = one({ extra: 123456789012 }).map((h) => h.split(": ")[1]);
+  expect(held).toContain("a long number");
+  expect(safeHits(ctx, { transcripts: [{ events: [{ ...ev0, timeoutMs: { a: 87654321 } }] }] }).map((h) => h.reason)).toContain("not what this field's rule writes (remove it)");
+  expect(safeHits(ctx, { hooks: { exitCode: 87654321 } }).map((h) => h.field)).toEqual(["safe.hooks.exitCode"]);
+  const secret = safeHits(ctx, { transcripts: [{ events: [{ ...ev0, password: "hunter2xyz" }] }] }).map((h) => h.reason);
+  expect(secret).toContain("a key this part does not have (remove that key)");
+  expect(secret).toContain("a credential");
+  expect(secret.filter((r) => r.startsWith("a key this part"))).toHaveLength(1);
   expect(t.events[2].timeoutMs).toBeUndefined();
   expect(safeHits(gateContext(v, { entries: [] }), { transcripts: [t] })).toEqual([]);
 });
