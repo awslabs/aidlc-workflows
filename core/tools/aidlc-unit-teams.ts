@@ -184,6 +184,12 @@ export function teamSpaceOf(label: string): string {
   return slugify(label);
 }
 
+// A team named in a line, by the label the lead gave it: "the payments team",
+// and "the data team" for a label that already says team.
+export function theTeam(label: string): string {
+  return /\bteam$/i.test(label.trim()) ? `the ${label.trim()}` : `the ${label.trim()} team`;
+}
+
 // --- A Unit's build -----------------------------------------------------------
 //
 // The piece of work a team builds one Unit of the home's work as, in its own

@@ -179,6 +179,7 @@ import {
   writesByRepo,
   unitWordsArg,
   TEAM_RHYTHM_OFFER,
+  theTeam,
 } from "./aidlc-unit-teams.js";
 import { repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -5596,10 +5597,10 @@ function takeUnit(args: string[], projectDir?: string): void {
   const activeTeam = activeSpace(pd) === DEFAULT_SPACE ? null : activeSpace(pd);
   if (current?.status === "claimed") {
     if (current.payload.taken_by !== undefined) {
-      fail(`${unit} is held by the ${current.owner} team (${current.payload.taken_by} took it).`);
+      fail(`${unit} is held by ${theTeam(current.owner)} (${current.payload.taken_by} took it).`);
     }
     if (activeTeam !== null && flags.team === undefined && teamSpaceOf(current.owner) !== activeTeam) {
-      fail(`${unit} is held by the ${current.owner} team.${openUnits.length > 0 ? ` Open: ${openUnits.join(", ")}.` : ""}`);
+      fail(`${unit} is held by ${theTeam(current.owner)}.${openUnits.length > 0 ? ` Open: ${openUnits.join(", ")}.` : ""}`);
     }
   }
   if (opening.completed.has(unit)) fail(`${unit} is already done at the home.`);
@@ -5671,7 +5672,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   let resultByFile = false;
   if (!pushed.ok) {
     const winner = currentClaim(pd, home.target, ref);
-    if (winner?.status === "claimed" && winner.nonce !== current?.nonce) fail(`${unit} was just taken by the ${winner.owner} team.`);
+    if (winner?.status === "claimed" && winner.nonce !== current?.nonce) fail(`${unit} was just taken by ${theTeam(winner.owner)}.`);
     if (winner?.status === "claimed" && winner.payload.taken_by !== undefined) fail(`${unit} was just taken by ${winner.payload.taken_by}.`);
     if (current?.status !== "claimed") {
       fail(
@@ -5733,7 +5734,7 @@ function takeUnit(args: string[], projectDir?: string): void {
     team,
     space: build.space,
     record: build.dirName,
-    notice: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, for the ${team} team. Its build is its own ` +
+    notice: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, for ${theTeam(team)}. Its build is its own ` +
       `piece of work here, under your team's rules, from what the home approved.` +
       (resultByFile
         ? ` You can read the home but not write to it, so the result of ${unit} goes back as a file when it is built.`
@@ -6825,7 +6826,7 @@ function turnedDown(args: string[], projectDir?: string): void {
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
-  console.log(JSON.stringify({ unit, notice: `The ${live.owner} team hears that ${flags.repo} was turned down, with your words, at its next step.` }));
+  console.log(JSON.stringify({ unit, notice: `${theTeam(live.owner).replace(/^the/, "The")} hears that ${flags.repo} was turned down, with your words, at its next step.` }));
 }
 
 // The lead says a repo merged the Unit where the merge check cannot see it (a
@@ -6932,7 +6933,7 @@ function handOff(args: string[], projectDir?: string): void {
     unit,
     team,
     file: rel,
-    notice: `The hand-off file for ${unit} is ${rel}: send it to the ${team} team. They take it in by ` +
+    notice: `The hand-off file for ${unit} is ${rel}: send it to ${theTeam(team)}. They take it in by ` +
       "pointing AI-DLC at it in their own workspace, and send its result back to you as a file." +
       (planChanging === null ? "" : ` ${planChanging}`),
   }));
@@ -6958,7 +6959,7 @@ function writeHandOffFile(pd: string, unit: string, team: string, attempt: numbe
   writeHandFile(pd, rel, renderHandFile(
     "handoff",
     `Hand-off: ${unit} of ${label}`,
-    `This file hands ${unit} to the ${team} team. Point AI-DLC at this file in your own workspace and it offers ` +
+    `This file hands ${unit} to ${theTeam(team)}. Point AI-DLC at this file in your own workspace and it offers ` +
       "to start it as a piece of work of its own. It is not signed: it is bound by the work's id, the " +
       "Unit, the attempt and the fingerprints below.",
     {

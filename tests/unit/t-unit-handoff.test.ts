@@ -88,6 +88,17 @@ describe("the lead hands a Unit off by file", () => {
     expect(row?.block).toContain("**Person Words**: hand off reporting to the data team");
   });
 
+  test("a team the lead calls the data team is named once: no line says team twice", () => {
+    const home = makeHome({ dependencies: OPEN, repos: { ledger: "" } });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const handed = run(UNIT, ["hand-off", "reporting", "--team", "data team"], home.dir);
+    expect(handed.status, handed.out).toBe(0);
+    expect(String(handed.json?.notice)).toContain(": send it to the data team. They take it in by ");
+    const file = readFileSync(join(home.dir, "aidlc", "handoff", "fixture-reporting.md"), "utf-8");
+    expect(file).toContain("This file hands reporting to the data team. Point AI-DLC");
+    expect(`${handed.out}${file}`).not.toContain("team team");
+  });
+
   test("with the Unit plan open again at the home, the hand-off says once that the Unit goes on the plan as it stands", () => {
     const home = makeHome({
       dependencies: OPEN,

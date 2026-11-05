@@ -691,6 +691,7 @@ import {
   inputName,
   soloUnitsProgress,
   teamSpaceOf,
+  theTeam,
   teamUnitStageApplies,
   unitsBuiltBeforeTeams,
   parseHandFile,
@@ -8629,7 +8630,7 @@ function unitTakeLook(
           unit,
           holder,
           `Start ${unit}`,
-          holder !== null ? `For the ${holder} team.` : `Open: for ${team !== null ? `the ${team} team` : "a team"}.`,
+          holder !== null ? `For ${theTeam(holder)}.` : `Open: for ${team !== null ? theTeam(team) : "a team"}.`,
         ));
       }
       const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (its home is ${homeLocation(state)})` : "";
