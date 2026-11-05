@@ -7,9 +7,9 @@
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import {
   artifactFilename,
   auditShardName,
@@ -340,6 +340,60 @@ export function clone(remote: string, label: string): string {
   writeFileSync(join(dir, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`);
   writeFileSync(join(intentsDirOf(dir), "active-intent"), `${DEFAULT_RECORD_DIR}\n`);
   return dir;
+}
+
+// A world (a remote and the checkouts made from it) that several cases of a
+// file start from is built once, and each case gets its own copy. Building it
+// goes through the engine's own claim, publish, pin, gate and land, about a
+// thousand git processes, which is most of a case on Windows; a copy of its
+// few hundred small files is under a second. No engine record of a world
+// names one of its folders (only git's origin, FETCH_HEAD and reflogs name
+// the remote), so a copy is the same world once each checkout's origin points
+// at the copied remote and its index has the new files' stats. The built
+// folders stay until cleanupWorlds, which a file registers with afterAll.
+const worlds: Array<{ remote: string; refs: string; dirs: string[] }> = [];
+
+export function builtOnce<W extends { remote: string }>(build: () => W): () => W {
+  let built: W | undefined;
+  return () => {
+    if (!built) {
+      const mark = tempDirs.length;
+      built = build();
+      worlds.push({ remote: built.remote, refs: git(built.remote, ["for-each-ref"]), dirs: tempDirs.splice(mark) });
+    }
+    const remote = copyFolder(built.remote);
+    const copy: Record<string, unknown> = { ...built, remote };
+    for (const [key, value] of Object.entries(built)) {
+      if (key === "remote" || typeof value !== "string" || !isAbsolute(value) || !existsSync(join(value, ".git"))) continue;
+      const checkout = copyFolder(value);
+      git(checkout, ["remote", "set-url", "origin", remote]);
+      // --unmerged: a world can hold a checkout stopped mid-rebase.
+      git(checkout, ["update-index", "-q", "--unmerged", "--refresh"]);
+      copy[key] = checkout;
+    }
+    return copy as W;
+  };
+}
+
+// Beside the original with its name's prefix (mkdtemp adds six characters), so
+// the copy has the path shape its original had.
+function copyFolder(dir: string): string {
+  const to = mkdtempSync(join(dirname(dir), basename(dir).slice(0, -6)));
+  tempDirs.push(to);
+  // Kept mtimes: the engine compares some of its files' times.
+  cpSync(dir, to, { recursive: true, preserveTimestamps: true });
+  return to;
+}
+
+/** Removes the built worlds, after checking that no case pushed into one. */
+export function cleanupWorlds(): void {
+  const moved: string[] = [];
+  for (const world of worlds.splice(0)) {
+    tempDirs.push(...world.dirs);
+    if (git(world.remote, ["for-each-ref"]) !== world.refs) moved.push(world.remote);
+  }
+  cleanupTempDirs();
+  expect(moved, "a case pushed into a built world instead of its copy").toEqual([]);
 }
 
 export function auditBlock(
