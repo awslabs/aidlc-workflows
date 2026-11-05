@@ -10,7 +10,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -103,6 +103,23 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(after.ask_type, JSON.stringify(after)).not.toBe("unit-assignment");
   });
 
+  test("the lead's words reach the record whole through the file the command names: apostrophes, $ and backticks", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    const ask = next(home.dir);
+    const file = /--request-file (\S+)/.exec(String(ask.assign_command))?.[1];
+    expect(file).toBe("aidlc/.aidlc-request-text/unit-assign.txt");
+    const words = "payments' team takes refunds, it's $HOME's `job`";
+    mkdirSync(join(home.dir, file!, ".."), { recursive: true });
+    writeFileSync(join(home.dir, file!), `${words}\n`);
+    const assigned = run(UNIT, ["assign", "refunds=payments", "--request-file", file!], home.dir);
+    expect(assigned.status, assigned.out).toBe(0);
+    const row = readAuditShardEvents(home.dir).find((entry) => entry.event === "UNITS_ASSIGNED");
+    expect(row?.block).toContain(`**Person Words**: ${words}`);
+    // Spent once the command has done its work.
+    expect(existsSync(join(home.dir, file!))).toBe(false);
+  });
+
   test("a Unit held for one team is never given to another", () => {
     const home = makeHome();
     chooseTeams(home.dir);
@@ -169,7 +186,7 @@ describe("the lead's answer is never asked for twice", () => {
       "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. Do you want me to try again?",
     );
     const retry = String(offer.choices[0].command);
-    expect(retry).toEndWith("aidlc-unit.ts assign refunds=payments checkout-ui=web --person-words '<their words>'");
+    expect(retry).toEndWith("aidlc-unit.ts assign refunds=payments checkout-ui=web --request-file aidlc/.aidlc-request-text/unit-assign.txt");
     git(home.dir, ["remote", "set-url", "origin", home.remote]);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "yes, try again"], home.dir).status).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.owner).toBe("payments");

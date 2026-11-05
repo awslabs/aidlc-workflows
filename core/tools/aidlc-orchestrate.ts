@@ -708,6 +708,8 @@ import {
   assignmentNotHeld,
   unitsInPlanOrder,
   unknownLikelyReposLine,
+  UNIT_WORDS_NOTE,
+  unitWordsArg,
 } from "./aidlc-unit-teams.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import {
@@ -5137,16 +5139,16 @@ type StepOffer = NonNullable<PrintDirective["offers"]>[number];
 function teamCommandsNote(): string {
   const unitTool = aidlcToolInvocation("unit");
   return "When the person says a repo turned a Unit down, run " +
-    `\`${unitTool} turned-down <unit> --repo <repo> --person-words '<their words>'\`; when they say a repo merged it ` +
-    `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`. ` +
-    `When they sign a team's result off, run \`${unitTool} sign-off <unit> --person-words '<their words>'\`; when they ` +
+    `\`${unitTool} turned-down <unit> --repo <repo> ${unitWordsArg("turned-down")}\`; when they say a repo merged it ` +
+    `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> ${unitWordsArg("merged")}\`. ` +
+    `When they sign a team's result off, run \`${unitTool} sign-off <unit> ${unitWordsArg("sign-off")}\`; when they ` +
     `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
-    "--person-words '<their words>'`. " +
+    `${unitWordsArg("amend")}\`. ` +
     `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
     `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`. ` +
-    `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> --person-words '<their words>'\`; ` +
-    `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. Say the notice line ` +
-    "each prints.";
+    `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> ${unitWordsArg("hand-off")}\`; ` +
+    `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. ${UNIT_WORDS_NOTE} ` +
+    "Say the notice line each prints.";
 }
 
 // The offers a step has not put to the person in this chat yet; each is put
@@ -5196,7 +5198,7 @@ function lineEndingTurn(line: string | null, offers: StepOffer[] = [], boardNote
     ? "Say the line above, then end the turn."
     : `${line === null ? "Put" : "Say the line above, then put"} each offer below to the person as a plain question in ` +
       "its own words, with its choices as given and the one marked recommended first, and end the turn. When they " +
-      "answer one, run the command of the choice they picked, filling in their words; a choice with no command runs nothing.");
+      "answer one, run the command of the choice they picked; a choice with no command runs nothing. " + UNIT_WORDS_NOTE);
   if (line !== null) step.narration = line;
   if (offers.length > 0) step.offers = offers;
   if (boardNote !== undefined) step.board_note = boardNote;
@@ -5750,7 +5752,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
   const question = `${skeleton !== null ? `${skeleton} is the walking skeleton, built here first. ` : ""}` +
     `Who builds which Unit? ${described.join(", ")}. Name a team for each, or leave a Unit open for any team ` +
     "to take later.";
-  const assignCommand = `${unitTool} assign <unit>=<team> [<unit>=<team> ...] --person-words '<their words>'`;
+  const assignCommand = `${unitTool} assign <unit>=<team> [<unit>=<team> ...] ${unitWordsArg("assign")}`;
   const open = { label: "Leave them all open", detail: "Any team takes a Unit when it is ready.", command: `${unitTool} assign --open` };
   // Asked once: after the lead spoke without naming teams, the step is where
   // it stands, with the same choice, and nothing is built here meanwhile.
@@ -8743,7 +8745,7 @@ function unitProposeAsk(projectDir: string, stateContent: string): AskDirective 
         {
           label: "Send it to the home",
           detail: `${build.unit} carries on with your version meanwhile.`,
-          command: `${aidlcToolInvocation("unit")} propose --input ${shellArg(changed.path)} --person-words '<their words>'`,
+          command: `${aidlcToolInvocation("unit")} propose --input ${shellArg(changed.path)} ${unitWordsArg("propose")}`,
         },
         { label: "Keep it here only", detail: `${build.unit} is built with your version; the home's stays as it is.` },
       ],
@@ -17072,7 +17074,7 @@ function emitTeamUnitMajorRunStage(
           { label: "Turn it down", detail: `${proposal.claim.owner} carries on with the approved one, and hears your words.` },
         ],
         amend_command: `${aidlcToolInvocation("unit")} amend ${shellArg(proposal.claim.unit)} --input ${shellArg(proposal.entry.input)} ` +
-          "--answer <approve|reject> --person-words '<their words>'",
+          `--answer <approve|reject> ${unitWordsArg("amend", proposal.claim.unit)}`,
       });
       return;
     }
@@ -17098,7 +17100,7 @@ function emitTeamUnitMajorRunStage(
           { label: "Sign it off", detail: "It counts as done once every repo it changed has merged." },
           { label: "Not now", detail: "It waits for your sign-off." },
         ],
-        signoff_command: `${aidlcToolInvocation("unit")} sign-off ${shellArg(toSignOff.unit)} --person-words '<their words>'`,
+        signoff_command: `${aidlcToolInvocation("unit")} sign-off ${shellArg(toSignOff.unit)} ${unitWordsArg("sign-off", toSignOff.unit)}`,
       });
       return;
     }
@@ -17111,7 +17113,7 @@ function emitTeamUnitMajorRunStage(
     const offers = heldNotTaken.map(({ unit, team }) => ({
       question: `If ${team} cannot reach this workspace, I can hand ${unit} to them as a file they build it from. Do you want me to?`,
       choices: [
-        { label: `Hand ${unit} to ${team} as a file`, command: `${unitTool} hand-off ${unit} --team ${shellArg(team)} --person-words '<their words>'` },
+        { label: `Hand ${unit} to ${team} as a file`, command: `${unitTool} hand-off ${unit} --team ${shellArg(team)} ${unitWordsArg("hand-off", unit)}` },
         { label: `Keep ${unit} for ${team} here`, recommended: true as const },
       ],
     }));
@@ -17122,8 +17124,8 @@ function emitTeamUnitMajorRunStage(
         return {
           question: `${claim.owner} proposes a change to the ${inputName(entry.input)} for ${claim.unit}. Approve it for every Unit that uses it, or turn it down?`,
           choices: [
-            { label: "Approve it", command: `${amend} approve --person-words '<their words>'` },
-            { label: "Turn it down", command: `${amend} reject --person-words '<their words>'` },
+            { label: "Approve it", command: `${amend} approve ${unitWordsArg("amend", claim.unit)}` },
+            { label: "Turn it down", command: `${amend} reject ${unitWordsArg("amend", claim.unit)}` },
             { label: "Not now" },
           ],
         };
@@ -17132,7 +17134,7 @@ function emitTeamUnitMajorRunStage(
         ? [{
           question: `${claim.unit} came back from ${claim.owner}. Sign it off?`,
           choices: [
-            { label: "Sign it off", command: `${unitTool} sign-off ${shellArg(claim.unit)} --person-words '<their words>'` },
+            { label: "Sign it off", command: `${unitTool} sign-off ${shellArg(claim.unit)} ${unitWordsArg("sign-off", claim.unit)}` },
             { label: "Not now" },
           ],
         }]

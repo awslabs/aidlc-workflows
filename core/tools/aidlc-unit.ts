@@ -177,6 +177,7 @@ import {
   unitsInPlanOrder,
   workspaceHomeLocation,
   writesByRepo,
+  unitWordsArg,
 } from "./aidlc-unit-teams.js";
 import { repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -4864,7 +4865,17 @@ export function publishedAtHead(projectDir: string): boolean {
 }
 
 // The person's words as the agent hands them: a file (`--person-words-file`) or inline.
+// The person's words for a Unit command: from the request file the agent wrote
+// them to (readRequestFile, spent once the command has done its work), else
+// as given.
+let spendWordsFile: (() => void) | null = null;
 function personWordsOf(pd: string, flags: Record<string, string | undefined>): string {
+  if (flags["request-file"] !== undefined) {
+    const request = readRequestFile(pd, flags["request-file"]);
+    if (typeof request === "string") fail(request);
+    spendWordsFile = request.spend;
+    return request.text.trim();
+  }
   return (flags["person-words-file"] !== undefined ? readAnswerTextFile(pd, flags["person-words-file"]) : flags["person-words"] ?? "").trim();
 }
 
@@ -5027,7 +5038,7 @@ function assignUnits(args: string[], projectDir?: string): void {
 // The assignment the lead gave, run again.
 export function assignRetryCommand(pairs: string[], open: boolean): string {
   return `${aidlcToolInvocation("unit")} assign ${pairs.length > 0 ? pairs.map(shellArg).join(" ") : ""}${open ? " --open" : ""} ` +
-    "--person-words '<their words>'";
+    unitWordsArg("assign");
 }
 
 // --- Taking a Unit: a team builds it as a piece of work of its own -----------
@@ -6560,7 +6571,7 @@ function renewForAmendedInput(projectDir: string, rel: string, extra: Record<str
 // person's own file, or their edited copy. The build carries on meanwhile.
 function proposeChange(args: string[], projectDir?: string): void {
   const { flags } = parseArgs(args);
-  if (!flags.input) fail("Usage: aidlc-unit propose --input <file it was approved with> [--file <changed text>] [--person-words '<their words>']");
+  if (!flags.input) fail("Usage: aidlc-unit propose --input <file it was approved with> [--file <changed text>] [--request-file <file> | --person-words <text>]");
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
   const build = unitBuildOf(state);
@@ -6684,7 +6695,7 @@ function amendInput(args: string[], projectDir?: string): void {
   const unit = positional[0];
   const answer = flags.answer;
   if (!unit || !flags.input || (answer !== "approve" && answer !== "reject")) {
-    fail("Usage: aidlc-unit amend <unit> --input <file> --answer <approve|reject> --person-words '<their words>'");
+    fail("Usage: aidlc-unit amend <unit> --input <file> --answer <approve|reject> (--request-file <file> | --person-words <text>)");
   }
   const pd = resolveProjectDir(projectDir);
   const words = personWordsOf(pd, flags);
@@ -6761,7 +6772,7 @@ function amendInput(args: string[], projectDir?: string): void {
 function turnedDown(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit || !flags.repo) fail("Usage: aidlc-unit turned-down <unit> --repo <repo> --person-words '<their words>'");
+  if (!unit || !flags.repo) fail("Usage: aidlc-unit turned-down <unit> --repo <repo> (--request-file <file> | --person-words <text>)");
   const pd = resolveProjectDir(projectDir);
   const words = personWordsOf(pd, flags);
   requireLeadsWord(pd, "A turn-down");
@@ -6786,7 +6797,7 @@ function turnedDown(args: string[], projectDir?: string): void {
 function saidMerged(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit || !flags.repo) fail("Usage: aidlc-unit merged <unit> --repo <repo> --person-words '<their words>'");
+  if (!unit || !flags.repo) fail("Usage: aidlc-unit merged <unit> --repo <repo> (--request-file <file> | --person-words <text>)");
   const pd = resolveProjectDir(projectDir);
   const words = personWordsOf(pd, flags);
   requireLeadsWord(pd, "That it merged");
@@ -6836,7 +6847,7 @@ function handOff(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
   const team = flags.team?.trim();
-  if (!unit || !team) fail("Usage: aidlc-unit hand-off <unit> --team <team> [--person-words '<their words>']");
+  if (!unit || !team) fail("Usage: aidlc-unit hand-off <unit> --team <team> [--request-file <file> | --person-words <text>]");
   if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
@@ -7165,7 +7176,7 @@ export function signOffAskName(unit: string): string {
 function signOff(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit sign-off <unit> --person-words '<their words>'");
+  if (!unit) fail("Usage: aidlc-unit sign-off <unit> (--request-file <file> | --person-words <text>)");
   const pd = resolveProjectDir(projectDir);
   const words = personWordsOf(pd, flags);
   const identity = activeIdentity(pd);
@@ -7236,6 +7247,8 @@ export function main(argv: string[]): void {
         `Usage: aidlc-unit <${[...UNIT_VERBS.keys()].join("|")}> ...`,
       );
     }
+    // The command did its work: the request file its words came in is spent.
+    spendWordsFile?.();
   } catch (error) {
     console.error(JSON.stringify({
       error: errorMessage(error),

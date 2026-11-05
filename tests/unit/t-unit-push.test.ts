@@ -567,8 +567,8 @@ describe("at the home", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const board = next(home.dir);
     expect(board.kind).toBe("print");
-    expect(String(board.board_note)).toContain("aidlc-unit.ts turned-down <unit> --repo <repo> --person-words '<their words>'");
-    expect(String(board.board_note)).toContain("aidlc-unit.ts merged <unit> --repo <repo> --person-words '<their words>'");
+    expect(String(board.board_note)).toContain("aidlc-unit.ts turned-down <unit> --repo <repo> --request-file aidlc/.aidlc-request-text/unit-turned-down.txt");
+    expect(String(board.board_note)).toContain("aidlc-unit.ts merged <unit> --repo <repo> --request-file aidlc/.aidlc-request-text/unit-merged.txt");
   });
 
   test("the lead's word that a repo merged where the check cannot see: kept in their words, and the Unit is done", () => {

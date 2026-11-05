@@ -297,7 +297,7 @@ describe("the lead's sign-off", () => {
     const signOff = (board.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)
       .find((offer) => offer.question === "refunds came back from payments. Sign it off?");
     expect(signOff?.choices.map((choice) => choice.label)).toEqual(["Sign it off", "Not now"]);
-    expect(String(signOff?.choices[0].command)).toEndWith("aidlc-unit.ts sign-off refunds --person-words '<their words>'");
+    expect(String(signOff?.choices[0].command)).toEndWith("aidlc-unit.ts sign-off refunds --request-file aidlc/.aidlc-request-text/unit-sign-off-refunds.txt");
     for (const command of ["sign-off <unit>", "amend <unit> --input <file>", "lead-sign-off on", "release <unit>"]) {
       expect(String(board.board_note)).toContain(command);
     }

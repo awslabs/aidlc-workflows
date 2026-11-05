@@ -257,6 +257,19 @@ export function isHomesCopiedWork(projectDir: string, state: string): boolean {
   return !sameGitAddress(home, workspaceHomeLocation(projectDir) ?? "");
 }
 
+// The person's words for a Unit command never go on its line (a shell would
+// read their quotes): the agent writes them, as they typed them, to the file
+// the command names, with its file tool, and the command reads them from there
+// (readRequestFile, as `unit gate` does).
+export function unitWordsArg(verb: string, unit?: string): string {
+  const name = [verb, ...(unit === undefined ? [] : [unit])].join("-").replace(/[^A-Za-z0-9._-]+/g, "-");
+  return `--request-file ${REQUEST_TEXT_DIR}/unit-${name}.txt`;
+}
+
+export const UNIT_WORDS_NOTE =
+  "Where a command names a --request-file, write the person's words to it first, as they typed them, with your " +
+  "file tool, never a shell, then run the command.";
+
 // --- A Unit's result, and whether it merged -----------------------------------
 //
 // What a team's push sends home on the claim: per repo, the branch, the commit

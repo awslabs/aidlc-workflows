@@ -83,10 +83,14 @@ function withTools(dir: string): string {
   return dir;
 }
 
-// A command as the agent runs it: the person's words in place of the slot.
+// A command as the agent runs it: the person's words written to the request
+// file it names, as the agent writes them with its file tool.
 function runPrinted(dir: string, env: NodeJS.ProcessEnv, command: string): { status: number; out: string } {
-  const line = command.replace(/^bun /, `${process.execPath} `).replace(/'<their words>'/g, "'yes, go ahead'")
-    .replace(/'<their team>'/g, "'payments'");
+  for (const match of command.matchAll(/--request-file (\S+)/g)) {
+    mkdirSync(join(dir, match[1], ".."), { recursive: true });
+    writeFileSync(join(dir, match[1]), "yes, go ahead\n");
+  }
+  const line = command.replace(/^bun /, `${process.execPath} `).replace(/'<their team>'/g, "'payments'");
   const r = spawnSync("bash", ["-c", line], { cwd: dir, encoding: "utf-8", env });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }

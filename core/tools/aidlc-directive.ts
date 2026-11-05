@@ -1427,14 +1427,15 @@ export function repoEstimateNote(facts: RepoFacts, withQuestion: boolean): strin
 // A proposed change to a shared input: the person's own words answer it.
 export function unitAmendQuestionNote(invocation: string): string {
   return questionNote(invocation) + " Their words answer it: when they approve or turn it down, run amend_command " +
-    "with --answer approve or --answer reject and their words, single-quoted, as --person-words; anything else leaves it waiting.";
+    "with --answer approve or --answer reject, after writing their words, as they typed them, to the file it names with " +
+    "your file tool, never a shell; anything else leaves it waiting.";
 }
 
 // Who builds which Unit: the person's own words name a team per Unit.
 export function unitAssignmentQuestionNote(invocation: string): string {
   return questionNote(invocation) + " Their words name who builds which Unit: run assign_command with one " +
-    "<unit>=<team> for each Unit they gave a team (the team as they named it) and their words, single-quoted, as " +
-    "--person-words; a Unit they left out or called open stays open.";
+    "<unit>=<team> for each Unit they gave a team (the team as they named it), after writing their words, as they " +
+    "typed them, to the file it names with your file tool, never a shell; a Unit they left out or called open stays open.";
 }
 
 // The routing question asked while no piece of work is selected: continue and
@@ -1962,7 +1963,7 @@ export function withAgentNotes<T extends object>(
       : d.ask_type === "unit-amend"
       ? unitAmendQuestionNote(invocation)
       : d.ask_type === "unit-signoff"
-      ? questionNote(invocation, choices?.length === 1) + " Their words sign it off: when they do, run signoff_command with their words, single-quoted, as --person-words; anything else leaves it waiting."
+      ? questionNote(invocation, choices?.length === 1) + " Their words sign it off: when they do, write them, as they typed them, to the file signoff_command names with your file tool, never a shell, and run it; anything else leaves it waiting."
       : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
       // A question with no options (a guard that has no way on) is said as it is.

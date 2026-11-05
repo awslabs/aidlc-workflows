@@ -100,8 +100,8 @@ describe("the lead hands a Unit off by file", () => {
     ]);
     expect(tellsWhatToType(board.narration, board.offers, board.change_notices)).toBe(false);
     expect(offers[0].choices.map((choice) => choice.label)).toEqual(["Hand refunds to payments as a file", "Keep refunds for payments here"]);
-    expect(offers[0].choices[0].command).toEndWith("aidlc-unit.ts hand-off refunds --team payments --person-words '<their words>'");
-    expect(String(board.board_note)).toContain("aidlc-unit.ts hand-off <unit> --team <team> --person-words '<their words>'");
+    expect(offers[0].choices[0].command).toEndWith("aidlc-unit.ts hand-off refunds --team payments --request-file aidlc/.aidlc-request-text/unit-hand-off-refunds.txt");
+    expect(String(board.board_note)).toContain("aidlc-unit.ts hand-off <unit> --team <team> --request-file aidlc/.aidlc-request-text/unit-hand-off.txt");
     expect(String(board.board_note)).toContain("aidlc-unit.ts take-in <file>");
     // Put once in a chat: the next look keeps only the board's note of the command.
     const again = next(home.dir, chat);
