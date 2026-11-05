@@ -12,7 +12,7 @@ import { insertJsoncSetting, jsoncRootMembers, jsoncSettingValue, replaceJsoncSe
 import { installRoot } from "./aidlc-install-paths.ts";
 import { setByDotenvFile } from "./aidlc-kiro-session.ts";
 import { insideKiroIde, kiroIdeUserSettingsPath } from "./aidlc-kiro-ide-workflows.ts";
-import { writeFileAtomic } from "./aidlc-lib.ts";
+import { atATerminal, writeFileAtomic } from "./aidlc-lib.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 
 export const KIRO_TERMINAL_SETTING = "terminal.integrated.defaultProfile.windows";
@@ -295,6 +295,48 @@ export function inCommandPromptTerminal(
     : kiroTerminalApplies(env, platform) && readKiroIdeTerminal(env, platform).commandPrompt;
 }
 
+// Kiro starts PowerShell with its shell integration script, dot-sourced inside
+// try/catch, and the script's first lines clear VSCODE_NONCE, which Kiro set
+// for it. When the script does not run, the nonce stays in every command the
+// terminal runs, and the terminal behaves as Command Prompt does: exit code -1
+// for every run, and a reply only when it is ready within a second (measured
+// on Kiro IDE 1.4.86 with Windows PowerShell 5.1: an execution policy of
+// Restricted or AllSigned stops the unsigned script; RemoteSigned lets it run).
+// VSCODE_INJECTION=1 with VSCODE_A11Y_MODE, which Kiro sets only for
+// PowerShell's script, says Kiro asked PowerShell to run it ("not-loaded").
+// Without them Kiro started no PowerShell script ("off"): its
+// `terminal.integrated.shellIntegration.enabled` was off (measured), or the
+// terminal is one Kiro does not inject. PowerShell's script also
+// stops early outside its FullLanguage mode (an organization's application
+// control), so "not-loaded" does not prove the execution policy stopped it.
+// Only a process in the terminal can see this: the chat's hooks, and doctor
+// typed in the chat, run in Kiro's own environment.
+export type KiroTerminalIntegrationGap = "not-loaded" | "off";
+
+/** Kiro's terminal on Windows, other than Command Prompt, whose shell integration script did not run for this command. */
+export function kiroTerminalIntegrationGap(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): KiroTerminalIntegrationGap | null {
+  if (hostValue(env, "TERM_PROGRAM") !== "kiro" || !kiroTerminalApplies(env, platform)) return null;
+  if (hostValue(env, "VSCODE_NONCE") === undefined || inCommandPromptTerminal(env, platform)) return null;
+  return hostValue(env, "VSCODE_INJECTION") === "1" && hostValue(env, "VSCODE_A11Y_MODE") !== undefined
+    ? "not-loaded"
+    : "off";
+}
+
+export function kiroTerminalIntegrationFix(gap: KiroTerminalIntegrationGap): string {
+  return gap === "not-loaded"
+    ? "in Kiro's PowerShell terminal, run `Get-ExecutionPolicy -List` and `$ExecutionContext.SessionState.LanguageMode`: " +
+      "when MachinePolicy or UserPolicy is set, or the language mode is not FullLanguage, your organization manages " +
+      "it; when Process is set, Kiro took it from where it was started: start Kiro from the Start menu instead; " +
+      "when the policy in effect comes from " +
+      "CurrentUser or LocalMachine and is Restricted or AllSigned, `Set-ExecutionPolicy -Scope CurrentUser " +
+      "-ExecutionPolicy RemoteSigned` there lets Kiro's script load; then restart Kiro"
+    : "check that Kiro's setting `terminal.integrated.shellIntegration.enabled` is on and that Kiro's terminal is " +
+      "PowerShell with no extra arguments in its profile (Kiro may not start it in other terminals), then restart Kiro";
+}
+
 /**
  * The quote pair Command Prompt left on the words. cmd.exe passes single quotes
  * on as characters, so a value written for PowerShell (`'fix the greeter'`)
@@ -347,11 +389,11 @@ export function commandPromptChildCommand(
 }
 
 // Kiro reads the terminal one second after sending the command. The child's
-// output is held for a little longer than that, then relayed as it comes: the
-// agent's result keeps the shape the live run proved (the pointer alone, or the
-// pointer and the whole reply when the command finished within the second),
-// while a question a command asks on the terminal shows a moment later instead
-// of never, and a person at Kiro's own terminal panel can answer it.
+// output is held for a little longer than that, then relayed as it comes, so a
+// question a command asks on the terminal shows a moment later instead of
+// never, and a person at Kiro's own terminal panel can answer it. The hold does
+// not decide what the agent's result shows: a long reply can still be cut off
+// after the pointer.
 const KIRO_RELAY_HOLD_MS = 1500;
 
 /**
@@ -389,22 +431,30 @@ export async function relayCommandPromptChild(
 }
 
 /**
- * Kiro's Command Prompt terminal hands the agent what a command printed within
- * a second and drops the rest. So in that terminal, in a project with an
+ * Kiro's Command Prompt terminal, and its other terminals when their shell
+ * integration script did not run, hand the agent what a command printed within
+ * a second and drop the rest. So when such a terminal is both ends of the
+ * command, in a project with an
  * `aidlc/` folder, a tool prints one pointer line first, runs itself as a child
  * process (the engine writes its reply straight to fd 1, so nothing in-process
  * can copy it), relays the child's output and writes it to the file the pointer
  * names under `aidlc/.aidlc-sessions/` (gitignored, per-user scratch, the newest
- * twenty kept) when the child exits. The agent reads the file when its result
- * ends at the pointer, instead of running the command again. Resolves false,
- * having done nothing, everywhere else and in the child; otherwise it exits
- * with the child's code.
+ * twenty kept) when the child exits. When the result ends at the pointer or the
+ * reply after it is cut off, the agent goes on from the file instead of running
+ * the command again. Resolves false, having done nothing, everywhere else and
+ * in the child; otherwise it exits with the child's code.
  */
 export async function commandPromptReplyTee(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): Promise<boolean> {
-  if (env[KIRO_REPLY_TEE_ENV] === "1" || !inCommandPromptTerminal(env, platform)) return false;
+  // Kiro's terminal is a terminal at both ends (measured: bun sees a TTY under
+  // the agent's execute_pwsh, directly and through cmd /c). A host's hook, a
+  // pipe, and a tool reading its own child's output read a pipe, which the
+  // pointer line would break.
+  if (env[KIRO_REPLY_TEE_ENV] === "1" || !atATerminal(env)) return false;
+  const gap = kiroTerminalIntegrationGap(env, platform);
+  if (gap === null && !inCommandPromptTerminal(env, platform)) return false;
   const project = process.cwd();
   if (!existsSync(join(project, "aidlc"))) return false;
   const replies = resolve(project, KIRO_REPLY_DIR);
@@ -424,10 +474,14 @@ export async function commandPromptReplyTee(
   } catch {
     return false;
   }
+  const terminal = gap === null
+    ? "Command Prompt shows a reply only when it is ready within a second"
+    : "Kiro's terminal here runs without its shell integration, so it shows a reply only when it is ready within a " +
+      "second and every result ends with exit code -1";
   writeSync(
     1,
-    `AI-DLC reply: ${file} (Command Prompt shows a reply only when it is ready within a second; when this result ends here, ` +
-      "the command is still running: read that file, which appears when it finishes)\n",
+    `AI-DLC reply: ${file} (${terminal}; when this result ends here or its reply is cut off, go on from that file, ` +
+      "which holds the whole reply once the command finishes; until it appears, the command is still running)\n",
   );
   const started = performance.now();
   const result = await relayCommandPromptChild(child);

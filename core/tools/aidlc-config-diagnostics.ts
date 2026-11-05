@@ -19,6 +19,8 @@ import {
   KIRO_TERMINAL_ISSUE_ID,
   kiroTerminalApplies,
   kiroTerminalFix,
+  kiroTerminalIntegrationFix,
+  kiroTerminalIntegrationGap,
   kiroTerminalIssueMessage,
   readKiroIdeTerminal,
   readKiroTerminalAnswer,
@@ -3792,6 +3794,19 @@ export function kiroIdeTerminalDoctorCheck(
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (selected?.harness !== "kiro-ide") return null;
   if (!kiroTerminalApplies(env, platform)) return null;
+  // Seen only when doctor runs in Kiro's terminal; doctor typed in a chat runs
+  // in Kiro's own environment and gets the profile rows below.
+  const gap = kiroTerminalIntegrationGap(env, platform);
+  if (gap !== null) {
+    return {
+      pass: false,
+      severity: "warn",
+      label:
+        "Kiro terminal: this terminal runs without Kiro's shell integration, so every command shows exit code -1 and " +
+        "output after its first second is cut off (AI-DLC keeps its own replies in a file)",
+      fix: kiroTerminalIntegrationFix(gap),
+    };
+  }
   const state = readKiroIdeTerminal(env, platform);
   if (!state.readable) {
     return {
