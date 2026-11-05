@@ -1647,7 +1647,8 @@ PowerShell content and item cmdlets the shared target parser knows, including
 inside `bash -c` and `$(...)` bodies), is refused with exit 2 and one
 sentence naming the routes to use instead: `engine log decision` and
 `engine log answer` for a question and its response, `engine audit append-raw`
-for a free-form note, `engine orchestrate report` for a gate. The match is
+for a free-form note, `engine orchestrate report` for a gate, followed by the
+target that matched. The match is
 anchored on the workspace layout, so a project's own `src/audit/` is untouched,
 and it is case-insensitive across both separators, so `C:\...\Audit\` spellings
 classify like POSIX ones. Reads (`cat`, `grep`, `ls`, `Read`, a redirect to
@@ -1658,18 +1659,25 @@ the parser's gaps fail closed: a write whose target word it cannot place (a
 command, or any write in a command that spells a backslash `\audit\` path,
 which a PowerShell host would resolve) is refused whenever the word names an
 `audit` directory, so `cd <record> && ... >> audit/<shard>.md` cannot forge a
-`HUMAN_TURN` row. Before any of this the command's backslash-newline
-continuations are joined, as the shell joins them. Literal assignments are
-dequoted by the shell's rules and expanded over every value the command gives
-a variable, and relative words are resolved against every directory a literal
-`cd` could leave the shell in; each result is checked against the anchored
-path, so a project's own `src/audit/` stays writable. A word that still cannot
-be decided (a computed assignment or a command substitution such as
-`$(printf au)dit`) is refused when the command names an `audit` folder in any
-quoting (`x/audit`, `audit/x`; not `npm audit` or `audit-service`), or reaches
-into `aidlc/spaces/`, or already runs inside that tree. The folders the shell
-stands in and above are the person's own path, so a project under a folder
-named audit does not count. Any other
+`HUMAN_TURN` row. A script the model writes is read as text before it ever
+runs, so there a word it cannot place is refused only when it names the
+trail's own layout (`aidlc/spaces/<space>/intents/<record>/audit/`); a
+backslash `\audit\` spelling and a relative `audit/` word after a `cd` it
+cannot decide still fail closed. A deploy helper that copies a report into a
+bucket's `audit/` prefix, or tees a log inside an `audit` folder while another
+path in it cannot be placed, passes, and its text is read again as a command
+when it runs. Before any of this the command's
+backslash-newline continuations are joined, as the shell joins them. Literal
+assignments are dequoted by the shell's rules and expanded over every value the
+command gives a variable, and relative words are resolved against every
+directory a literal `cd` could leave the shell in; each result is checked
+against the anchored path, so a project's own `src/audit/` stays writable. A
+word that still cannot be decided (a computed assignment or a command
+substitution such as `$(printf au)dit`) is refused when the command names an
+`audit` folder in any quoting (`x/audit`, `audit/x`; not `npm audit` or
+`audit-service`), or reaches into `aidlc/spaces/`, or already runs inside that
+tree. The folders the shell stands in and above are the person's own path, so a
+project under a folder named audit does not count. Any other
 unresolvable write keeps the fail-open treatment the runtime-record check gives
 such targets. This is a guardrail against prose-driven and casual writes, not a
 boundary against a model that runs arbitrary code: evidence the hooks can
