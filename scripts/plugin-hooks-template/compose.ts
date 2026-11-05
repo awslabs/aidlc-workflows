@@ -2452,7 +2452,8 @@ try {
   // because only that engine's strip takes it out again and its refresh writes
   // it back. An output that would still fail the compile (for example, because
   // an older engine gives it no entry) is skipped with a drop, so the compile
-  // does not fail and roll back the whole plugin.
+  // does not fail and roll back the whole plugin. The drop names the stage, the
+  // outputs, the kinds the review target does not cover, and what to change.
   type AddPluginProducesKinds = (content: string, added: readonly string[]) => string;
   const addPluginProducesKinds: AddPluginProducesKinds | null =
     await import(join(HARNESS_DIR, "tools", "aidlc-plugin-produces-kinds.ts"))
@@ -2467,16 +2468,17 @@ try {
       return null;
     }
   };
-  // Matches the review_artifact rule's error in aidlc-stage-schema.ts by its
-  // text, which every engine that has the rule words the same way.
-  const widensPastReviewTarget = (content: string): boolean => {
+  // The review_artifact rule's error in aidlc-stage-schema.ts, found by its
+  // text, which every engine that has the rule words the same way; null when
+  // the stage passes the rule.
+  const reviewTargetGap = (content: string): string | null => {
     const stage = parsedStage(content);
-    if (stage === null || typeof installedSchema?.validateStageFrontmatter !== "function") return false;
+    if (stage === null || typeof installedSchema?.validateStageFrontmatter !== "function") return null;
     try {
       const errors = installedSchema.validateStageFrontmatter(stage).errors ?? [];
-      return errors.some((error) => error.includes("is pruned for applicable unit kinds"));
+      return errors.find((error) => error.includes("is pruned for applicable unit kinds")) ?? null;
     } catch {
-      return false;
+      return null;
     }
   };
   const giveProducesKinds = (content: string, added: string[]): string => {
@@ -2489,7 +2491,8 @@ try {
   };
   const withProducesKinds = (target: string, before: string, merged: string, added: string[]): string => {
     const given = giveProducesKinds(merged, added);
-    if (!widensPastReviewTarget(given) || widensPastReviewTarget(before)) return given;
+    const gap = reviewTargetGap(given);
+    if (gap === null || reviewTargetGap(before) !== null) return given;
     // An output with no entry is what widens the stage. Merge only the outputs
     // that have one; if the stage's own entries for those still widen it, merge
     // none.
@@ -2497,15 +2500,15 @@ try {
     const mapped = added.filter((name) => typeof kinds === "object" && kinds !== null && Object.hasOwn(kinds, name));
     const landed: string[] = [];
     let kept = giveProducesKinds(mergeListField(before, "produces", mapped, target, landed), landed);
-    if (landed.length > 0 && widensPastReviewTarget(kept)) {
+    if (landed.length > 0 && reviewTargetGap(kept) !== null) {
       kept = before;
       landed.length = 0;
     }
     const skipped = added.filter((name) => !landed.includes(name));
-    const why = addPluginProducesKinds
-      ? ""
-      : ", and the installed engine cannot write produces_kinds entries; upgrade the engine, then re-run compose";
-    recordDrop(`contribution to ${target}: adds.produces ${skipped.join(", ")} would make the stage apply to Unit kinds its review target does not cover${why}; skipped`);
+    const fix = addPluginProducesKinds
+      ? `; skipped — take ${skipped.length === 1 ? "it" : "them"} out of this contribution's adds.produces`
+      : ", and the installed engine cannot write produces_kinds entries; skipped — upgrade the engine, then re-run compose";
+    recordDrop(`contribution to ${target}: adds.produces ${skipped.join(", ")} would make the stage apply to Unit kinds its review target does not cover (${gap})${fix}`);
     added.splice(0, added.length, ...landed);
     return kept;
   };

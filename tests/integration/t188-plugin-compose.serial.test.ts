@@ -1735,8 +1735,9 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         );
       },
     );
+    // The drop names the stage, the output, the uncovered kind and what to do.
     expect(drops).toContain(
-      "contribution to functional-design: adds.produces syn-kinds-old-notes would make the stage apply to Unit kinds its review target does not cover",
+      'contribution to functional-design: adds.produces syn-kinds-old-notes would make the stage apply to Unit kinds its review target does not cover (review_artifact "functional-spec" is pruned for applicable unit kinds: packaging), and the installed engine cannot write produces_kinds entries; skipped — upgrade the engine, then re-run compose',
     );
     expect(drops).not.toContain("aidlc-graph compile failed");
     expect(stage(proj, "functional-design")?.produces).not.toContain("syn-kinds-old-notes");
@@ -1776,8 +1777,9 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
             .replace("  frontend-components: [ui]\n", "  frontend-components: [ui]\n  syn-kinds-wide: [packaging]\n"));
         },
       );
+      const them = skipped.includes(", ") ? "them" : "it";
       expect(drops, skipped).toContain(
-        `contribution to functional-design: adds.produces ${skipped} would make the stage apply to Unit kinds its review target does not cover; skipped`,
+        `contribution to functional-design: adds.produces ${skipped} would make the stage apply to Unit kinds its review target does not cover (review_artifact "functional-spec" is pruned for applicable unit kinds: packaging); skipped — take ${them} out of this contribution's adds.produces`,
       );
       expect(drops, skipped).not.toContain("aidlc-graph compile failed");
       const landed = outputs.filter((name) => !skipped.split(", ").includes(name));
