@@ -76,7 +76,7 @@ function hex(s: string, i: number): [Buffer, number] {
 }
 
 const NUM = /[+-]?(?:\d+\.?\d*|\.\d+)/y;
-const REF_TAIL = /\s+(\d+)\s+R(?![^\0\t\n\f\r ()<>\[\]{}\/%])/y;
+const REF_TAIL = /\s+(\d+)\s+R(?![^\0\t\n\f\r ()<>[\]{}/%])/y;
 
 function parse(s: string, i: number, depth = 0): [Val, number] {
   if (depth > 256) throw new PdfError("it is damaged (nested too deep)");
@@ -277,7 +277,7 @@ class Doc {
     let start = k + 6;
     if (this.s[start] === "\r") start++;
     if (this.s[start] === "\n") start++;
-    let len = this.resolve(v.get("Length"));
+    const len = this.resolve(v.get("Length"));
     let end = typeof len === "number" ? start + len : -1;
     if (end < 0 || end > this.buf.length || !/^\s*endstream/.test(this.s.slice(end, end + 32))) {
       end = this.s.indexOf("endstream", start);
@@ -424,7 +424,9 @@ function parseCMap(text: string): CMap {
       const lo = Number.parseInt(m[1], 16);
       const hi = Math.min(Number.parseInt(m[2], 16), lo + 65535);
       if (m[3].startsWith("[")) {
-        [...m[3].matchAll(/<([0-9a-fA-F]*)>/g)].forEach((d, k) => map.set(lo + k, utf16be(Buffer.from(d[1], "hex"))));
+        [...m[3].matchAll(/<([0-9a-fA-F]*)>/g)].forEach((d, k) => {
+          map.set(lo + k, utf16be(Buffer.from(d[1], "hex")));
+        });
         continue;
       }
       const base = Buffer.from(m[3].slice(1, -1), "hex");
@@ -469,7 +471,9 @@ function loadFont(doc: Doc, fd: Dict): Font {
     for (let i = 0; i < W.length;) {
       const c = Number(doc.resolve(W[i]));
       const next = doc.resolve(W[i + 1]);
-      if (Array.isArray(next)) { next.forEach((w, k) => widths.set(c + k, Number(doc.resolve(w)))); i += 2; }
+      if (Array.isArray(next)) { next.forEach((w, k) => {
+        widths.set(c + k, Number(doc.resolve(w)));
+      }); i += 2; }
       else { const hi = Number(next); const w = Number(doc.resolve(W[i + 2])); for (let k = c; k <= hi && k - c < 65536; k++) widths.set(k, w); i += 3; }
     }
     const enc = doc.stream(fd.get("Encoding"));
@@ -682,7 +686,7 @@ function runContent(doc: Doc, data: Buffer, res: Dict | undefined, ctm0: M, sink
       case "BI": {
         // An inline image: skip its parameters and binary data up to EI.
         const id = s.indexOf("ID", i);
-        let k = id < 0 ? s.length : id + 3;
+        const k = id < 0 ? s.length : id + 3;
         const m = /\sEI(?=[\s]|$)/g;
         m.lastIndex = k;
         const e = m.exec(s);

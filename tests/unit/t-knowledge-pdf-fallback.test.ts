@@ -70,7 +70,7 @@ function minimalPdf(pages: string[]): Buffer {
 
 /** Runs `body` (with the knowledge module as `kb`) in a child whose PATH is empty, so no pdftotext is on it on
  *  any machine; returns what `body` returns. */
-function withoutPdftotext(p: string, body: string): any {
+function withoutPdftotext<T>(p: string, body: string): T {
   const empty = join(p, "empty-bin");
   mkdirSync(empty, { recursive: true });
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PATH"));
@@ -85,11 +85,16 @@ console.log(JSON.stringify(out));`], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
-  return JSON.parse(r.stdout.trim().split("\n").at(-1) ?? "null");
+  return JSON.parse(r.stdout.trim().split("\n").at(-1) ?? "null") as T;
 }
 
-function extractWithout(p: string, abs: string): any {
-  return withoutPdftotext(p, `return kb.extractDocument(${JSON.stringify(abs)}, "application/pdf", ${statSync(abs).size}, ${JSON.stringify(DIGEST)});`);
+interface Outcome {
+  record: { state: string; extractor?: unknown; reason?: string; truncated?: boolean; pages_kept?: number; detectedType?: string };
+  text?: string;
+}
+
+function extractWithout(p: string, abs: string): Outcome {
+  return withoutPdftotext<Outcome>(p, `return kb.extractDocument(${JSON.stringify(abs)}, "application/pdf", ${statSync(abs).size}, ${JSON.stringify(DIGEST)});`);
 }
 
 describe("t-knowledge-pdf-fallback: a PDF is read where pdftotext is missing", () => {
@@ -103,7 +108,7 @@ describe("t-knowledge-pdf-fallback: a PDF is read where pdftotext is missing", (
       expect(out.text).toContain(line);
     }
     // Each page ends with a form feed, as pdftotext ends them.
-    expect(out.text.endsWith("\n\f")).toBe(true);
+    expect(out.text?.endsWith("\n\f")).toBe(true);
   });
 
   test("a file with only an owner password is read; one with an open password is recorded once, with the reason", () => {
@@ -142,7 +147,7 @@ describe("t-knowledge-pdf-fallback: a PDF is read where pdftotext is missing", (
   test("a document recorded with no reader before is read on the next sync, once", () => {
     const p = project();
     put(p, "handbook.pdf", fixture("pdf-libreoffice.pdf"));
-    const rows = withoutPdftotext(p, `
+    const rows = withoutPdftotext<{ first: number; second: number; state: { state: string; extractor?: unknown } }>(p, `
       const p = ${JSON.stringify(p)};
       kb.onboard(p, "default", undefined, ${JSON.stringify(NOW)});
       const index = kb.readIndex(p, "default");
