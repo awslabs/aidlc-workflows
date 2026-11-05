@@ -359,15 +359,70 @@ roots are configured but none carries `hooks/compose.ts`, it exits 1 and names
 each root and reason; with a mixed set it warns for each skipped root, composes
 the valid roots, and exits 0.
 
+### Plugin commands
+
+A plugin names commands in its manifest, `aidlc.commands`, each name mapped to
+one `.ts` script directly in its `tools/` and a one-line description
+(`readPluginCommands` in `aidlc-plugin-validate.ts` is the one reading;
+`VALIDATE` and `BUILD` refuse a bad entry under rule `manifest-commands`, an
+AI-DLC name included). Compose lands the script with the plugin's other tools;
+`plugin sync` writes the declared commands whose script the plugin's ownership
+record holds into its composition stamp (`plugin-compose-<plugin>.json`,
+`commands`), so a name never runs a file core or another plugin owns.
+`compositionIsCurrent` compares them, so a project composed before the field
+records them at its next sync.
+
+`pluginCommandTable` in `aidlc-lib.ts` is the one owner of which command runs:
+it reads the stamps, the enabled set (`pluginsEnabled()`, the set doctor uses)
+and the plan names, takes plugins in name order, and skips a name AI-DLC's own
+commands use (`CORE_COMMAND_WORDS` in `aidlc-command.ts`), a plan's name, or a
+name an earlier plugin took; an off plugin's free names are kept as off. The
+winner depends only on what is installed and on, never on which sync ran first.
+The sync says each skip once, in one line naming both
+(`skippedCommandLine`), and records it in the stamp (`skippedCommands`) so a
+later sync stays silent; doctor shows every skip as a passing row.
+
+- **Terminal:** `aidlc <name> [args]`. The dispatcher (`runPluginCommand` in
+  `aidlc.ts`) takes the first word after its own launcher flags; a word that is
+  one of AI-DLC's own resolves as before. Only the words before the name pick
+  the project (`runtimeProjectDirFrom`), and every token after it is the
+  script's, `--json` and `--project-dir` included. It starts the script through
+  `pluginScriptLaunch`, with the person's working directory and stdio, no
+  timeout, and passes the exit code through. An off plugin's name prints one
+  line with the `config project --plugins` command that turns it on (or its
+  base, when it is paused); any other word is the unknown-command error as
+  before.
+- **Chat:** `/aidlc <name> [args]` reaches the engine unchanged (no harness
+  skill names plugin commands). `readNextLine` reads a leading table name, an
+  off plugin's included, after every core leading form and before `next`'s own
+  flags: alone or with flags or one word it is exact, and `routeNext` prints the
+  command for the agent to run, as for `--doctor`; followed by a sentence it is
+  the `command` reading step, as for a noun of the engine's own, and the agent
+  reads which the person meant. `isReadOnlyNextArgv` answers true for that
+  line (no workflow work) and `classifyTerminalCommand` answers null, so no
+  harness seam runs a plugin's code off-band. Kiro IDE's one-argument line is
+  read by its opening word.
+- **Help:** `aidlc --help` lists the enabled commands under `PLUGIN COMMANDS`,
+  by plugin, with their descriptions; a project without them gets the help it
+  had, and the engine library is not loaded for it.
+- The host's own permission prompt applies: no plugin command is on an
+  install's pre-approved list.
+- Plugin management (`aidlc plugin validate|build|test`, and any later
+  marketplace verbs) and plugin commands sit apart: `plugin` is AI-DLC's own
+  word, management verbs never run a plugin's code, and a plugin command never
+  manages plugins.
+
 ### Plugin doctor checks
 
 An enabled plugin may ship `tools/<plugin>-doctor.ts`. `/aidlc --doctor`
 discovers that script in the composed harness tools directory and runs it
 directly with Bun, no shell, with `AIDLC_PROJECT_DIR`, `AIDLC_HARNESS_DIR`, and
 `AIDLC_PLUGIN_NAME` set. On a native install that Bun is the `aidlc` binary
-run with `BUN_BE_BUN=1`, which the script inherits, so an `aidlc` command the
-script runs would start Bun instead: check with Bun APIs, not by running
-`aidlc`. A disabled plugin's script remains inert. When
+run with `BUN_BE_BUN=1`; the preload shipped beside the binary
+(`aidlc-plugin-script-preload.ts`) takes the variable out before the script
+runs, so an `aidlc` command the script runs reaches the engine. The launch is
+one function, `pluginScriptLaunch` in `aidlc-plugin-script.ts`, which plugin
+commands use too (below). A disabled plugin's script remains inert. When
 `harness.json` has no `plugins` selection, every installed plugin is eligible:
 one that owns a stage or scope, or one whose composition left a sidecar under
 `tools/data/` (`plugin-contrib-`, `plugin-owned-`, or `plugin-compose-<plugin>.json`).
