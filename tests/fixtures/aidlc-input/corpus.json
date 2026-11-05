@@ -18856,5 +18856,79 @@
         "asks": 0
       }
     }
+  },
+  {
+    "id": "hs19-g",
+    "category": "help-status-in-sentence",
+    "input": "how far along are we?",
+    "state": "gate-open",
+    "meaning": "the person means: ask where the work stands while the approval gate waits; the agent answers from the status and the approval gate stays open",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "how far along are we?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "gate": "open",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs20-s",
+    "category": "help-status-in-sentence",
+    "input": "which stages are done so far?",
+    "state": "stage-question-asked",
+    "meaning": "the person means: ask where the work stands while the stage's question waits; the agent answers from the status and the stage's question stays open",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "which stages are done so far?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs21-p",
+    "category": "help-status-in-sentence",
+    "input": "how much is left on this?",
+    "state": "plan-question-open",
+    "meaning": "the person means: ask where the work stands while the code plan question waits; the agent answers from the status and the code plan question stays open",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "how much is left on this?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "plan": "open",
+        "asks": 0
+      }
+    }
   }
 ]
