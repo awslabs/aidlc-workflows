@@ -208,6 +208,18 @@ describe("the lead's answer is never asked for twice", () => {
   });
 });
 
+describe("the Unit plan open again at the home", () => {
+  test("the lead's assign says once that the Units go to their teams on the plan as it stands", () => {
+    const home = makeHome({ state: homeState().replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: units-generation") });
+    chooseTeams(home.dir);
+    const assigned = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir);
+    expect(assigned.status, assigned.out).toBe(0);
+    const notice = String(assigned.json?.notice);
+    expect(notice).toContain("The Unit plan is open again here (");
+    expect(notice).toContain("), so refunds and checkout-ui go to their teams on the plan as it stands, which may still change.");
+  });
+});
+
 describe("the home walks only the Units no team holds", () => {
   test("with refunds and checkout-ui held, reporting waits on refunds, so the home shows the board", () => {
     const home = makeHome();

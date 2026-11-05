@@ -4301,6 +4301,15 @@ function unitPlanChangingStage(state: string): string | null {
   return beforePerUnitBlock(graph, stage) ? graph.find((node) => node.slug === stage)?.name ?? stage : null;
 }
 
+// The same risk said at the home itself, as the lead hands Units to teams
+// while it is changing the Unit plan.
+function homePlanChangingLine(state: string, units: readonly string[]): string | null {
+  const changing = unitPlanChangingStage(state);
+  if (changing === null || units.length === 0) return null;
+  return `The Unit plan is open again here (${changing}), so ${joinNames([...units])} ` +
+    `${units.length === 1 ? "goes to its team" : "go to their teams"} on the plan as it stands, which may still change.`;
+}
+
 function claimUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
@@ -5007,6 +5016,8 @@ function assignUnits(args: string[], projectDir?: string): void {
     Open: openUnits.join(", ") || "none",
     ...(words.trim() ? { "Person Words": words.trim() } : {}),
   }, pd);
+  const planChanging = homePlanChangingLine(state, assigned.map((row) => row.unit));
+  if (planChanging !== null) lines.push(planChanging);
   const sentence = (unit: string): string => unit.charAt(0).toUpperCase() + unit.slice(1);
   const summary = [
     ...assigned.map((row) => `${sentence(row.unit)}: ${row.team}.`),
@@ -6911,6 +6922,7 @@ function handOff(args: string[], projectDir?: string): void {
   invalidateLiveClaimPayloadCache(pd, unit);
   const rel = writeHandOffFile(pd, unit, team, payload.generation);
   const words = leadSpoke(pd) ? personWordsOf(pd, flags) : "";
+  const planChanging = homePlanChangingLine(state, [unit]);
   appendAuditEntry("UNITS_ASSIGNED", {
     Assigned: `${unit}=${team}`,
     "By File": rel,
@@ -6921,7 +6933,8 @@ function handOff(args: string[], projectDir?: string): void {
     team,
     file: rel,
     notice: `The hand-off file for ${unit} is ${rel}: send it to the ${team} team. They take it in by ` +
-      "pointing AI-DLC at it in their own workspace, and send its result back to you as a file.",
+      "pointing AI-DLC at it in their own workspace, and send its result back to you as a file." +
+      (planChanging === null ? "" : ` ${planChanging}`),
   }));
 }
 

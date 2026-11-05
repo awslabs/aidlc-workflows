@@ -22,6 +22,7 @@ import {
   codeHost,
   ENV,
   git,
+  homeState,
   makeHome,
   next,
   run,
@@ -85,6 +86,18 @@ describe("the lead hands a Unit off by file", () => {
     const row = readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNITS_ASSIGNED").at(-1);
     expect(row?.block).toContain(`**By File**: ${FILE}`);
     expect(row?.block).toContain("**Person Words**: hand off reporting to the data team");
+  });
+
+  test("with the Unit plan open again at the home, the hand-off says once that the Unit goes on the plan as it stands", () => {
+    const home = makeHome({
+      dependencies: OPEN,
+      repos: { ledger: "" },
+      state: homeState().replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: units-generation"),
+    });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const handed = run(UNIT, ["hand-off", "reporting", "--team", "data"], home.dir);
+    expect(handed.status, handed.out).toBe(0);
+    expect(String(handed.json?.notice)).toEndWith("), so reporting goes to its team on the plan as it stands, which may still change.");
   });
 
   test("the board offers the hand-off once for a Unit held for a team and not taken, and gives the agent the commands", () => {
