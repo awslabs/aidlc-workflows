@@ -98,8 +98,8 @@ Team knowledge files are curated reference material. DocumentKB is the companion
 catalog for documents the team already owns: vision documents, PRDs,
 requirements briefs, policies, contracts, PDFs, Word and Excel files, Markdown,
 CSV, and plain text. AI-DLC reads Word and Excel files itself (a workbook's every
-sheet, as a table); a PDF needs `pdftotext` on the computer, which Windows does
-not have by default. See
+sheet, as a table), and a PDF with `pdftotext` where it is installed, or with
+its own reader where it is not (see Reading PDFs below). See
 [Starting from an existing document](02-your-first-workflow.md#starting-from-an-existing-document)
 for ways to use one as workflow input.
 
