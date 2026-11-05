@@ -2008,15 +2008,16 @@ A plugin can add commands of its own, such as a report or a dashboard. Run one
 the way you run AI-DLC's own:
 
 ```
-/aidlc test-pro-report --since 7d     # in the chat ($aidlc in Codex)
-aidlc test-pro-report --since 7d      # in a terminal, on any shell
+/aidlc test-pro-report --since 7d                          # in the chat ($aidlc in Codex)
+aidlc test-pro-report --since 7d                           # in a terminal, native install
+bun .claude/tools/aidlc.ts test-pro-report --since 7d      # in a terminal, copy install (your harness folder)
 ```
 
-AI-DLC starts the plugin's script itself, with its own runtime, so the same
-command works on native and copy installs and in PowerShell, cmd, and POSIX
-shells; everything after the name goes to the script, and its output and exit
-code come back as they are. Your tool asks before it runs a plugin's command
-the first time, as it does for any command.
+AI-DLC starts the plugin's script itself, with its own runtime, so the command
+works on native and copy installs and in PowerShell, cmd, and POSIX shells;
+everything after the name goes to the script, and its output and exit code
+come back as they are. Your tool applies its own permission settings to it, as
+to any command: AI-DLC does not pre-approve plugin commands.
 
 - Only a plugin that is installed and on in this project runs. When it is off,
   the command says so in one line and names the `aidlc config project --plugins`

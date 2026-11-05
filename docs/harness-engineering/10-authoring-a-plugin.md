@@ -487,15 +487,19 @@ its `tools/` and a one-line description:
 ```
 
 People then run it like AI-DLC's own commands: `aidlc test-pro-report` in a
-terminal, `/aidlc test-pro-report` in the chat (`$aidlc test-pro-report` in
-Codex), and your stage prose names it the same way, `{{INVOKE}} test-pro-report`.
+terminal (`bun <harness-dir>/tools/aidlc.ts test-pro-report` on a copy install),
+`/aidlc test-pro-report` in the chat (`$aidlc test-pro-report` in Codex), and
+your stage prose names it the same way, `{{INVOKE}} test-pro-report`, which
+becomes the right form for each install.
 AI-DLC starts the script with its own runtime, the way doctor starts a doctor
 check: Bun on a copy install, the `aidlc` binary on a native one, with no shell
 in between, so it works in PowerShell, cmd, and POSIX shells alike. The script
 gets every argument after the name, stdin, stdout, stderr, and its exit code
 passes through. `AIDLC_PROJECT_DIR`, `AIDLC_HARNESS_DIR`, and
-`AIDLC_PLUGIN_NAME` are set, and an `aidlc` command the script runs reaches the
-engine. `aidlc --help` lists your commands under your plugin with their
+`AIDLC_PLUGIN_NAME` are set. On a native install an `aidlc` command the script
+runs reaches the engine; on a copy install the script reaches it as
+`bun $AIDLC_HARNESS_DIR/tools/aidlc.ts` (run from `AIDLC_PROJECT_DIR`), the
+command people type there. `aidlc --help` lists your commands under your plugin with their
 descriptions.
 
 - **Names:** lowercase letters, digits, and `-`, starting with a letter, at most
