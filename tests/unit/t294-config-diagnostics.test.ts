@@ -3027,6 +3027,28 @@ describe("t294 instruction-file doctor row", () => {
       });
     });
 
+    // A team that commits its override and keeps AGENTS.md personal: a clone
+    // has no AGENTS.md to copy from until config writes it.
+    test(`${setup}: with no AGENTS.md, the offer says config writes it first`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      rmSync(join(project, "AGENTS.md"));
+      const overridePath = join(project, "AGENTS.override.md");
+      for (const [content, fix] of [
+        ["# Team instructions\n", /^if you want Codex to read it too, run `[^`]* config` to write AI-DLC's block to AGENTS\.md, then copy it into AGENTS\.override\.md, keeping your own text$/],
+        [
+          block.replace("<!-- END AI-DLC:agents -->", "Earlier guidance.\n<!-- END AI-DLC:agents -->"),
+          /^if you want Codex to read the current one, run `[^`]* config` to write AI-DLC's block to AGENTS\.md, then replace /,
+        ],
+      ] as const) {
+        writeFileSync(overridePath, content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.severity).toBe("warn");
+        expect(result.fix).toMatch(fix);
+        expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      }
+    });
+
     // Windows file symlinks require privileges a contributor may not have.
     test.skipIf(process.platform === "win32")(`${setup}: doctor follows a symlinked override and only reads it`, () => {
       const project = codexProject();

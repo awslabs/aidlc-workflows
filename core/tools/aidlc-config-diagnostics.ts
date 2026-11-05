@@ -3577,13 +3577,21 @@ export function instructionFileDoctorCheck(
         ? "whose AI-DLC block is not the current one"
         : "whose AI-DLC:agents markers are unmatched or duplicated"
     }; AI-DLC keeps its block in AGENTS.md`;
+  // A clone of a team that keeps AGENTS.md personal has none to copy from
+  // until config writes it.
+  const writeFirst = existsSync(join(projectDir, "AGENTS.md"))
+    ? ""
+    : `run \`${invoke} config\` to write AI-DLC's block to AGENTS.md, then `;
   const overrideFix = !overrideItem || overrideItem.state === "intact"
     ? undefined
     : overrideItem.state === "missing"
-    ? `if you want Codex to read it too, copy the AI-DLC:agents block from AGENTS.md into ${override}, ` +
-      "keeping your own text"
-    : "if you want Codex to read the current one, replace the AI-DLC block and any unmatched or duplicate " +
-      `AI-DLC:agents markers in ${override} with the block from AGENTS.md, keeping your own text`;
+    ? `if you want Codex to read it too, ${writeFirst}copy ${
+      writeFirst ? "it" : "the AI-DLC:agents block from AGENTS.md"
+    } into ${override}, keeping your own text`
+    : `if you want Codex to read the current one, ${writeFirst}replace the AI-DLC block and any unmatched or ` +
+      `duplicate AI-DLC:agents markers in ${override} with ${
+        writeFirst ? "it" : "the block from AGENTS.md"
+      }, keeping your own text`;
   const fixFor = (items: InstructionState[]): string => {
     const fixes: string[] = [];
     const rootConflict = overrideItem && items.some((item) => item.path === "AGENTS.md" && item.state === "conflict");
