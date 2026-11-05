@@ -42,6 +42,7 @@ diagnostic and lifecycle routes.
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space that starts from the default space's org rules and empty team and project practices |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
+| `/aidlc <plugin command> [args]` | Run a command an installed plugin adds (`aidlc <name>` in a terminal); `aidlc --help` lists them under their plugin |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
@@ -1995,6 +1996,39 @@ Display a summary of available commands and flags.
 ```
 /aidlc --help
 ```
+
+In a project whose plugins add commands, `aidlc --help` at a terminal lists
+them under `PLUGIN COMMANDS`, by plugin.
+
+---
+
+### `/aidlc <plugin command>` - Run a command a plugin adds
+
+A plugin can add commands of its own, such as a report or a dashboard. Run one
+the way you run AI-DLC's own:
+
+```
+/aidlc test-pro-report --since 7d                          # in the chat ($aidlc in Codex)
+aidlc test-pro-report --since 7d                           # in a terminal, native install
+bun .claude/tools/aidlc.ts test-pro-report --since 7d      # in a terminal, copy install (your harness folder)
+```
+
+AI-DLC starts the plugin's script itself, with its own runtime, so the command
+works on native and copy installs and in PowerShell, cmd, and POSIX shells;
+everything after the name goes to the script, and its output and exit code
+come back as they are. Your tool applies its own permission settings to it, as
+to any command: AI-DLC does not pre-approve plugin commands.
+
+- Only a plugin that is installed and on in this project runs. When it is off,
+  the command says so in one line and names the `aidlc config project --plugins`
+  command that turns it back on.
+- AI-DLC's own commands always keep their names. A plugin command named like
+  one of them, like a plan, or like another plugin's command is not added; the
+  plugin sync that meets it says so once, naming both, and `aidlc doctor
+  --verbose` shows it again.
+- When the name opens a longer sentence (`/aidlc test-pro-report on the login
+  bug`), the agent reads whether you meant the command or a request, and asks
+  you only if it cannot tell.
 
 ---
 

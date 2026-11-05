@@ -538,6 +538,7 @@ import {
   personaTwinRels,
   projectDiffPlan,
   recordedContributionGaps,
+  skippedCommandLine,
   type StageContribRecord,
   stripRecordedAdds,
   syncCommand,
@@ -545,6 +546,8 @@ import {
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
 import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
+import { projectPluginCommands } from "./aidlc-plugin-commands.ts";
+import { pluginScriptLaunch } from "./aidlc-plugin-script.ts";
 import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
@@ -2580,16 +2583,6 @@ function validPluginIdentity(plugin: string): boolean {
   );
 }
 
-function pathContainedBy(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return (
-    rel !== "" &&
-    rel !== ".." &&
-    !rel.startsWith(`..${sep}`) &&
-    !isAbsolute(rel)
-  );
-}
-
 function uniquePluginDoctorFindingId(
   plugin: string,
   check: string,
@@ -2670,80 +2663,48 @@ function appendPluginDoctorChecks(
     }
 
     const scriptPath = resolve(toolsDir, `${plugin}-doctor.ts`);
-    if (!pathContainedBy(toolsDir, scriptPath)) {
-      results.push(pluginDoctorResult(
-        false,
-        `Plugin check (${plugin}): doctor script path escapes the harness tools directory`,
-        {
+    const launch = pluginScriptLaunch({ projectDir, harnessDir: harness, plugin, file: `${plugin}-doctor.ts` });
+    if (!launch.ok && launch.reason === "missing") continue;
+    if (!launch.ok) {
+      const finding = launch.reason === "outside"
+        ? {
+          label: "doctor script path escapes the harness tools directory",
           fix: `Expected the script under ${toolsDir}.`,
-          id: uniquePluginDoctorFindingId(
-            plugin,
-            "script-path-boundary",
-            findingIds,
-          ),
-          severity: "error",
-        },
-      ));
-      continue;
-    }
-    if (!existsSync(scriptPath)) continue;
-    let realToolsDir: string;
-    let realScriptPath: string;
-    try {
-      realToolsDir = realpathSync(toolsDir);
-      realScriptPath = realpathSync(scriptPath);
-    } catch (e) {
-      results.push(pluginDoctorResult(
-        false,
-        `Plugin check (${plugin}): doctor script path could not be resolved`,
-        {
-          fix: errorMessage(e),
-          id: uniquePluginDoctorFindingId(
-            plugin,
-            "script-path-resolution",
-            findingIds,
-          ),
-          severity: "error",
-        },
-      ));
-      continue;
-    }
-    if (!pathContainedBy(realToolsDir, realScriptPath)) {
-      results.push(pluginDoctorResult(
-        false,
-        `Plugin check (${plugin}): doctor script resolves outside the harness tools directory`,
-        {
+          check: "script-path-boundary",
+        }
+        : launch.reason === "unresolved"
+        ? {
+          label: "doctor script path could not be resolved",
+          fix: launch.detail ?? "",
+          check: "script-path-resolution",
+        }
+        : {
+          label: "doctor script resolves outside the harness tools directory",
           fix: `Replace ${scriptPath} with a regular file contained by ${toolsDir}.`,
-          id: uniquePluginDoctorFindingId(
-            plugin,
-            "script-realpath-boundary",
-            findingIds,
-          ),
+          check: "script-realpath-boundary",
+        };
+      results.push(pluginDoctorResult(
+        false,
+        `Plugin check (${plugin}): ${finding.label}`,
+        {
+          fix: finding.fix,
+          id: uniquePluginDoctorFindingId(plugin, finding.check, findingIds),
           severity: "error",
         },
       ));
       continue;
     }
 
-    // Installing a plugin is the trust boundary for its code. Spawn its doctor
-    // script directly through Bun (never a shell), following the sensor
-    // dispatcher's sibling-script precedent. Sensors fail open because they are
-    // advisory runtime checks; doctor fails loud because this is the diagnostic
-    // surface users rely on to explain a broken install.
+    // Sensors fail open because they are advisory runtime checks; doctor fails
+    // loud because this is the diagnostic surface users rely on to explain a
+    // broken install. The launch itself is aidlc-plugin-script.ts's.
     const startedAt = Date.now();
     // SIGKILL hard-bounds the direct script process. Detached grandchildren can
     // still outlive that process; plugins must not create them.
-    const executable = compiledExecutable();
-    const run = spawnSync(executable ?? process.execPath, [realScriptPath], {
+    const run = spawnSync(launch.command, launch.args, {
       cwd: projectDir,
       encoding: "utf-8",
-      env: {
-        ...process.env,
-        ...(executable ? { BUN_BE_BUN: "1" } : {}),
-        AIDLC_PROJECT_DIR: projectDir,
-        AIDLC_HARNESS_DIR: harness,
-        AIDLC_PLUGIN_NAME: plugin,
-      },
+      env: launch.env,
       maxBuffer: PLUGIN_DOCTOR_MAX_BUFFER,
       timeout: timeoutMs,
       killSignal: "SIGKILL",
@@ -5130,6 +5091,12 @@ export async function collectDoctorReport(
       label: "Plugin checks: discovery failed",
       fix: errorMessage(e),
     });
+  }
+
+  // 4e. A plugin command not added, which the sync said once: kept here so it
+  // can be found again. Nothing for the person to fix, so never a warning.
+  for (const skip of projectPluginCommands({ pluginsEnabled, validScopes }).skipped) {
+    results.push({ pass: true, label: `Plugin command: ${skippedCommandLine(skip)}` });
   }
 
   // 5. Workspace shell ready (P4: no --init artifact to check). With auto-create

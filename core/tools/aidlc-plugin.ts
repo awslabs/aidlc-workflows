@@ -27,10 +27,13 @@ import {
   parseStageFrontmatter,
   pausedBySelection,
   PHASES,
+  pluginsEnabled,
   releaseAuditLock,
   resolveProjectDir,
+  validScopes,
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
+import { type PluginCommandSkip, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import {
   aidlcInvocation,
   compiledExecutable,
@@ -58,8 +61,10 @@ import {
   hostIdSegment,
   pluginStageSlugs,
   readPluginBase,
+  readPluginCommands,
   scopeIncludes,
   type PluginBaseProblem,
+  type PluginCommandEntry,
   type PluginDependency,
 } from "./aidlc-plugin-validate.ts";
 
@@ -89,6 +94,8 @@ export type InstalledPlugin = {
   // manifest cannot say.
   base: PluginDependency | null;
   baseProblem: PluginBaseProblem | { kind: "unreadable"; reason: string } | null;
+  // The commands its own manifest names (aidlc.commands), well-formed ones only.
+  commands?: Record<string, PluginCommandEntry>;
   // The host's own id for it (name@marketplace), where the host lists plugins.
   hostId?: string;
 };
@@ -117,6 +124,11 @@ export type CompositionStamp = {
   // The base plugin this one builds on. A host with no plugin list reads it
   // here to keep layering one level deep.
   base?: string;
+  // The commands it adds whose script it installed (pluginCommandTable reads
+  // them), and the names the sync that wrote this found taken, so it says each
+  // once. Absent when it has none.
+  commands?: Record<string, PluginCommandEntry>;
+  skippedCommands?: string[];
 };
 
 export type PluginStatusName =
@@ -342,7 +354,49 @@ export function normalizeInstalledPlugin(
     enabled,
     sourceHash: pluginSourceHash(canonicalRoot),
     ...installedBase(canonicalRoot, key),
+    commands: installedCommands(canonicalRoot),
   };
+}
+
+// A projection built before the plugin's own manifest travelled with it names
+// no commands; nor does a manifest that cannot be read.
+function installedCommands(root: string): Record<string, PluginCommandEntry> {
+  try {
+    const manifest = readJson(join(root, ".aidlc-plugin", "plugin.json")) as { aidlc?: unknown } | null;
+    return readPluginCommands(manifest?.aidlc).commands;
+  } catch {
+    return {};
+  }
+}
+
+// The commands a plugin adds: those whose script is a file it installed, as its
+// ownership record says, so a name never runs a file core or another plugin owns.
+function ownedCommands(
+  plugin: InstalledPlugin,
+  ownedPaths: ReadonlySet<string>,
+  harnessDir: string,
+): Record<string, PluginCommandEntry> {
+  const leaf = harnessDir.split(sep).join("/");
+  return Object.fromEntries(
+    Object.entries(plugin.commands ?? {}).filter(([, entry]) => ownedPaths.has(`${leaf}/${entry.script}`)),
+  );
+}
+
+function sameCommands(
+  left: Record<string, PluginCommandEntry> | undefined,
+  right: Record<string, PluginCommandEntry>,
+): boolean {
+  return JSON.stringify(Object.entries(left ?? {}).sort()) === JSON.stringify(Object.entries(right).sort());
+}
+
+// The one line a sync says, once, for a plugin command it does not add.
+export function skippedCommandLine(skip: PluginCommandSkip): string {
+  const holder = skip.by.kind === "core"
+    ? `AI-DLC's own ${skip.name} command has that name`
+    : skip.by.kind === "plan"
+      ? `the ${skip.by.name} plan has that name`
+      : `the ${skip.by.plugin} plugin's command has that name`;
+  return `${skip.plugin}'s command '${skip.name}' is not added: ${holder}.`;
 }
 
 // A projection built before the plugin's own manifest travelled with it
@@ -1158,12 +1212,14 @@ function writeCompositionRecords(
     name: plugin.key,
     files: [...files.values()].sort((left, right) => left.path.localeCompare(right.path)),
   };
+  const commands = ownedCommands(plugin, new Set(files.keys()), harnessDir);
   const stamp: CompositionStamp = {
     schemaVersion: 1,
     name: plugin.key,
     version: plugin.version,
     sourceHash: plugin.sourceHash,
     ...(plugin.base ? { base: plugin.base.name } : {}),
+    ...(Object.keys(commands).length > 0 ? { commands } : {}),
   };
   writeFileSync(
     join(dataDir, `plugin-owned-${plugin.key}.json`),
@@ -1173,6 +1229,30 @@ function writeCompositionRecords(
     join(dataDir, `plugin-compose-${plugin.key}.json`),
     `${JSON.stringify(stamp, null, 2)}\n`,
   );
+}
+
+// The plugin commands this run does not add, written into each composed
+// plugin's stamp, and the line for each one the previous stamp did not record:
+// said once by the sync that meets it, as a held plugin is.
+function recordSkippedCommands(
+  plugins: InstalledPlugin[],
+  stagedData: string,
+  evidence: ProjectEvidence,
+): string[] {
+  const table = projectPluginCommands({ pluginsEnabled, validScopes }, stagedData);
+  const lines: string[] = [];
+  for (const plugin of plugins) {
+    const path = join(stagedData, `plugin-compose-${plugin.key}.json`);
+    const stamp = parseStamp(path);
+    if (stamp === null) continue;
+    const skips = table.skipped.filter((skip) => skip.plugin === plugin.key);
+    const said = new Set(evidence.stamps.get(plugin.key)?.skippedCommands ?? []);
+    for (const skip of skips) if (!said.has(skip.name)) lines.push(skippedCommandLine(skip));
+    const { skippedCommands: _previous, ...rest } = stamp;
+    const next: CompositionStamp = skips.length > 0 ? { ...rest, skippedCommands: skips.map((skip) => skip.name) } : rest;
+    writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+  }
+  return lines;
 }
 
 function firstLinkInside(
@@ -2057,6 +2137,10 @@ function compositionIsCurrent(
   }
   const ownership = evidence.ownership.get(plugin.key);
   if (!ownership) return false;
+  // A project composed before a plugin's commands were recorded records them.
+  if (!sameCommands(stamp.commands, ownedCommands(plugin, new Set(ownership.files.map((file) => file.path)), harnessDir))) {
+    return false;
+  }
   return ownership.files.every((file) => {
     const target = assertOwnedPath(projectDir, file.path);
     return existsSync(target) &&
@@ -2354,6 +2438,7 @@ async function syncPluginsLocked(
   newlyHeld: HeldRecord[];
   paused: string[];
   superseded: string[];
+  skippedCommands: string[];
 }> {
   const harness = harnessKind(harnessDir, projectDir);
   const inventory = currentRoots().length > 0
@@ -2486,6 +2571,7 @@ async function syncPluginsLocked(
       newlyHeld,
       paused,
       superseded,
+      skippedCommands: [],
     };
   }
   const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-sync-"));
@@ -2539,6 +2625,7 @@ async function syncPluginsLocked(
         claimedPaths,
       );
     }
+    const skippedCommands = recordSkippedCommands(plugins, stagedData, evidence);
     if (pruned.length > 0) regenerateAfterPrune(stagedProject, harnessDir);
     const plan = projectDiffPlan(projectDir, stagedProject, harnessDir);
     const failAfter = Number(process.env.AIDLC_PLUGIN_SYNC_FAIL_AFTER ?? "0");
@@ -2576,6 +2663,7 @@ async function syncPluginsLocked(
           newlyHeld: [],
           paused,
           superseded,
+          skippedCommands: [],
         };
       }
       throw error;
@@ -2602,6 +2690,7 @@ async function syncPluginsLocked(
       newlyHeld,
       paused,
       superseded,
+      skippedCommands,
     };
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -2647,6 +2736,7 @@ export async function main(argv: string[]): Promise<void> {
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
         (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
         result.newlyHeld.map((record) => `\n${record.reason}`).join("") +
+        result.skippedCommands.map((line) => `\n${line}`).join("") +
         result.superseded.map((line) => `\n${line}`).join("");
       if (flags.json === "true") process.stdout.write(jsonEnvelope(0, message, result));
       else if (flags.quiet !== "true") process.stdout.write(`${message}\n`);

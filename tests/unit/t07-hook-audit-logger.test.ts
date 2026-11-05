@@ -433,6 +433,11 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(AIDLC_SRC, "tools", "aidlc-command.ts"),
       join(proj, ".claude", "tools", "aidlc-command.ts"),
     );
+    // aidlc-lib.ts reads a plugin command leading a line with this.
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-plugin-commands.ts"),
+      join(proj, ".claude", "tools", "aidlc-plugin-commands.ts"),
+    );
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-color.ts"),
       join(proj, ".claude", "tools", "aidlc-color.ts"),

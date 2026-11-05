@@ -162,6 +162,8 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-lock-line.ts",
       "aidlc-review-manifest.ts",
       "aidlc-command.ts",
+      // aidlc-lib.ts reads a plugin command leading a line with this.
+      "aidlc-plugin-commands.ts",
       "aidlc-color.ts",
     ]) {
       copyFileSync(

@@ -77,7 +77,10 @@ block:
       "scopes": "scopes/",            // NEW scope identities
       "knowledge": "knowledge/",      // methodology knowledge for agents
       "sensors": "sensors/",          // sensor manifests
-      "tools": "tools/"               // runnable sensor + doctor scripts
+      "tools": "tools/"               // runnable sensor, doctor, and command scripts
+    },
+    "commands": {                     // optional: commands people run as `aidlc <name>` (§4)
+      "test-pro-report": { "script": "tools/test-pro-report.ts", "description": "Print the coverage report" }
     }
   }
 }
@@ -88,8 +91,8 @@ not implemented yet, so each present value must use the exact canonical path
 shown above; VALIDATE, BUILD, and TEST reject alternatives such as
 `"stages": "custom-stages/"` instead of silently omitting that content.
 `tools` lands CLI scripts in the harness `tools/` dir so a plugin can ship a
-**runnable sensor** (its manifest in `sensors/` + its script in `tools/`) and an
-optional doctor check.
+**runnable sensor** (its manifest in `sensors/` + its script in `tools/`), an
+optional doctor check, and the scripts behind its commands (`commands`, below).
 Keep tests and fixtures in the plugin's top-level `tests/` directory, never
 inside `tools/`. Compose drops files under `tools/tests/`, `tools/__tests__/`,
 or `tools/fixtures/`, plus co-located `*.test.ts` and `*.spec.ts` files, and
@@ -470,6 +473,53 @@ console.log(JSON.stringify({
 Omit `severity` for the default `error` behavior. Use `advisory` for a visible
 finding that must not fail doctor. Keep the script read-only and dependency-free;
 doctor bounds its runtime/output and turns script failures into diagnostic rows.
+
+### Ship a command
+
+A plugin with a tool people run on demand (a report, a dashboard, a generator)
+names it in `aidlc.commands`, each name mapped to one `.ts` script directly in
+its `tools/` and a one-line description:
+
+```json
+"commands": {
+  "test-pro-report": { "script": "tools/test-pro-report.ts", "description": "Print the coverage report" }
+}
+```
+
+People then run it like AI-DLC's own commands: `aidlc test-pro-report` in a
+terminal (`bun <harness-dir>/tools/aidlc.ts test-pro-report` on a copy install),
+`/aidlc test-pro-report` in the chat (`$aidlc test-pro-report` in Codex), and
+your stage prose names it the same way, `{{INVOKE}} test-pro-report`, which
+becomes the right form for each install.
+AI-DLC starts the script with its own runtime, the way doctor starts a doctor
+check: Bun on a copy install, the `aidlc` binary on a native one, with no shell
+in between, so it works in PowerShell, cmd, and POSIX shells alike. The script
+gets every argument after the name, stdin, stdout, stderr, and its exit code
+passes through. `AIDLC_PROJECT_DIR`, `AIDLC_HARNESS_DIR`, and
+`AIDLC_PLUGIN_NAME` are set. On a native install an `aidlc` command the script
+runs reaches the engine; on a copy install the script reaches it as
+`bun $AIDLC_HARNESS_DIR/tools/aidlc.ts` (run from `AIDLC_PROJECT_DIR`), the
+command people type there. `aidlc --help` lists your commands under your plugin with their
+descriptions.
+
+- **Names:** lowercase letters, digits, and `-`, starting with a letter, at most
+  40 characters. Prefix them with your plugin's name: a short common word can
+  also open a person's own sentence (`/aidlc report the bug`), and AI-DLC then
+  asks the agent to read which they meant.
+- **AI-DLC's names stay AI-DLC's:** `aidlc plugin validate` refuses a name
+  AI-DLC's own commands use (`doctor`, `config`, `plugin`, `space`, ...). A plan's
+  name, or a name an enabled plugin earlier by name already has, is skipped when
+  the plugin is installed, and the sync says so once in one line naming both;
+  doctor keeps that line.
+- **Only on:** a command runs only while its plugin is installed and on in the
+  project. When it is off, `aidlc <name>` says so in one line, with the
+  `aidlc config project --plugins` command that turns it back on.
+- `VALIDATE` and `BUILD` refuse a bad entry (rule `manifest-commands`): a bad
+  name, a script outside `tools/` or missing, no `contributes.tools`, or an
+  unknown key. An AI-DLC older than the field ignores it: the command is simply
+  not there.
+- A project composed before your plugin named commands records them at its next
+  plugin sync (a new session on Claude Code and Codex; `plugin sync` elsewhere).
 
 ## 5. Distribution + install
 

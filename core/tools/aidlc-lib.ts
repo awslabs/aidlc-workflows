@@ -35,6 +35,7 @@ export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGE
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
+import { pluginCommandOnLine, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -1522,7 +1523,10 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   // stays one when the refusal becomes a reading step: either way the turn
   // carries no workflow work (Full Suite 36549553601).
   if (isRefusedModifierNextArgv(args)) return true;
-  if (readNextLine(args).kind !== "exact") return false;
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact") return false;
+  // A plugin command runs as itself, no workflow work.
+  if (reading.command !== undefined) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -2336,8 +2340,10 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string, ses
   // A line the engine would hand to the agent is never acted on here: a seam
   // that runs before any agent reads the line must stand back from it, which is
   // what readNextLine answers for both of us. Only an exact line is this
-  // engine's own command.
-  if (readNextLine(args).kind !== "exact") return null;
+  // engine's own command. A plugin command stays on the engine and conductor
+  // path, as park does: no seam runs a plugin's code off-band.
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact" || reading.command !== undefined) return null;
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
   // freeform intent text and the funnel offers to create an intent named
@@ -39810,12 +39816,15 @@ export function nextTokenKind(token: string, following: string | undefined): "fl
  */
 export type NextLineReading =
   // `unit`: the Unit tool's argv, when the line is the person's Unit command (unitCommandArgv).
-  | { kind: "exact"; unit?: string[] }
+  // `command`: a plugin command leading the line, with its own arguments.
+  | { kind: "exact"; unit?: string[]; command?: { name: string; args: string[] } }
   | { kind: "words" }
   | { kind: "untaken-flag"; token: string; value?: string }
   | { kind: "value"; flag: string; value: string; valid: readonly string[] }
   | { kind: "plan-word"; scope: string }
-  | { kind: "noun"; noun: string };
+  | { kind: "noun"; noun: string }
+  // A plugin command's name opening a sentence of theirs.
+  | { kind: "command"; name: string; plugin: string };
 
 /**
  * One argument that is nothing but flags and their values is that command,
@@ -39966,6 +39975,13 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (head.includes("--config")) return { kind: "exact" };
   if (head[0] === "--statusline") return { kind: "exact" };
   if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
+  // A plugin command owns its argv, so nothing on it is read as next's own.
+  const command = pluginCommandOnLine(args, splitKiroCommandArgs, () => projectPluginCommands({ pluginsEnabled, validScopes }));
+  if (command !== null) {
+    return command.sentence
+      ? { kind: "command", name: command.name, plugin: command.plugin }
+      : { kind: "exact", command: { name: command.name, args: command.args } };
+  }
 
   const words: string[] = [];
   let took = false;
