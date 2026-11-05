@@ -63,6 +63,24 @@ const RULE_MARKERS = [
   { marker: "first-class" },
   { marker: "Given/When/Then" },
 ] as const;
+// What Claude Code handed each agent as it started: the SubagentStart hooks'
+// output, as the SDK reports it (`SubagentStart:<agent>`).
+function startContexts(hooks: DriveResult["subagentStartHooks"]): Map<string, string> {
+  const found = new Map<string, string>();
+  for (const { hookName, stdout } of hooks ?? []) {
+    const agent = /^SubagentStart:(.+)$/.exec(hookName)?.[1];
+    if (!agent) continue;
+    try {
+      const context = (JSON.parse(stdout) as { hookSpecificOutput?: { additionalContext?: string } })
+        .hookSpecificOutput?.additionalContext ?? "";
+      found.set(agent, (found.get(agent) ?? "") + context);
+    } catch {
+      // A hook that printed no JSON handed nothing over.
+    }
+  }
+  return found;
+}
+
 const LIVE_KNOWLEDGE_REL =
   "aidlc/spaces/default/knowledge/aidlc-product-agent/issue-495-live.md";
 const LIVE_KNOWLEDGE_MARKER = "ISSUE_495_LIVE_KNOWLEDGE_DELIVERY_EVIDENCE";
@@ -515,6 +533,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         let evidenceCompleteAtApproval = false;
         const result = await driveAidlc("/aidlc", {
           projectDir,
+          captureSubagentStartHooks: true,
           answerScript: APPROVE_ALL,
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
@@ -617,10 +636,13 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         }
 
         // Round 1 dispatched every declared support. Each brief names the
-        // shared draft/input, carries the active-space rules delivered by the
-        // preceding load-steering sequence (content pasted into the brief;
-        // path-only briefs are not accepted), plus only that participant's
-        // contribution filename, never a sibling's contribution.
+        // shared draft/input and only that participant's contribution
+        // filename, never a sibling's. The active-space rules reach each
+        // participant as content: pasted into its brief, or handed to it as it
+        // starts (Claude Code's SubagentStart context); a path alone is not
+        // accepted.
+        const started = startContexts(result.subagentStartHooks);
+        const seen = (result.subagentStartHooks ?? []).map(({ hookName, stdout }) => `${hookName} (${stdout.length} chars)`).join(", ") || "no SubagentStart hook output";
         const roundOne = new Map<string, CapturedToolResult>();
         for (const agent of SUPPORT_AGENTS) {
           const dispatch = result.toolResults.find(
@@ -634,13 +656,11 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           expect(prompt).toContain("personas.md");
           expect(prompt).toContain("requirements.md");
           expect(prompt).toContain(`${agent}.md`);
-          // Rule steering reached the brief as content: each distinctive
-          // marker must survive the transfer. A path alone
-          // does not satisfy this assertion.
+          const given = prompt + (started.get(agent) ?? "");
           for (const { marker } of RULE_MARKERS) {
             expect(
-              prompt.includes(marker),
-              `brief for ${agent} does not carry the "${marker}" rule content`,
+              given.includes(marker),
+              `neither the brief for ${agent} nor its start context carries the "${marker}" rule content (${seen})`,
             ).toBe(true);
           }
           for (const sibling of SUPPORT_AGENTS) {

@@ -191,6 +191,8 @@ export interface DriveResult {
   sessionStarts?: string[];
   /** What each UserPromptSubmit hook printed, when capturePromptHooks was set. */
   promptHooks?: string[];
+  /** What each SubagentStart hook printed (its name is `SubagentStart:<agent>`), when captureSubagentStartHooks was set. */
+  subagentStartHooks?: Array<{ hookName: string; stdout: string }>;
   /**
    * Every request Claude Code put to canUseTool other than AskUserQuestion:
    * what a person on the drive's permission mode and settings would be asked.
@@ -561,6 +563,8 @@ export interface DriveOptions {
   captureStopHooks?: boolean;
   /** Capture what every UserPromptSubmit hook printed into DriveResult.promptHooks. */
   capturePromptHooks?: boolean;
+  /** Capture what every SubagentStart hook printed into DriveResult.subagentStartHooks. */
+  captureSubagentStartHooks?: boolean;
   /**
    * End the drive, as a person closing the session would, as soon as this
    * returns true. Checked after every tool result with the results so far, so
@@ -846,6 +850,7 @@ export async function driveAidlc(
   const stopHooks: CapturedStopHook[] = [];
   const sessionStarts: string[] = [];
   const promptHooks: string[] = [];
+  const subagentStartHooks: Array<{ hookName: string; stdout: string }> = [];
   // toolUseID -> { toolName, input } so we can join tool_use to its later
   // synthetic-user tool_result block.
   const pendingTools = new Map<
@@ -969,7 +974,7 @@ export async function driveAidlc(
         // need the transcript that Stop hooks inspect before accepting a stop.
         persistSession: opts.persistSession ?? false,
         // The SDK reports a hook other than SessionStart only when asked.
-        ...(opts.captureStopHooks || opts.capturePromptHooks ? { includeHookEvents: true } : {}),
+        ...(opts.captureStopHooks || opts.capturePromptHooks || opts.captureSubagentStartHooks ? { includeHookEvents: true } : {}),
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         ...(containment
@@ -1064,6 +1069,9 @@ export async function driveAidlc(
         }
         if (m.subtype === "hook_response" && m.hook_event === "UserPromptSubmit" && typeof m.stdout === "string") {
           promptHooks.push(m.stdout);
+        }
+        if (m.subtype === "hook_response" && m.hook_event === "SubagentStart" && typeof m.stdout === "string") {
+          subagentStartHooks.push({ hookName: String(m.hook_name ?? ""), stdout: m.stdout });
         }
         if (m.subtype === "hook_response" && m.hook_event === "Stop") {
           const stop = capturedStopHook(m, turn);
@@ -1321,6 +1329,7 @@ export async function driveAidlc(
     stopHooks,
     sessionStarts,
     ...(opts.capturePromptHooks ? { promptHooks } : {}),
+    ...(opts.captureSubagentStartHooks ? { subagentStartHooks } : {}),
     permissionRequests,
   };
 
