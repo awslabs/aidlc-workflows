@@ -5369,6 +5369,7 @@ function preserveClaudeProviderFields(
   prior: Baseline | null,
   notes: string[],
   providersAnswered: boolean,
+  descriptor?: ProjectionDescriptor,
 ): Set<string> {
   const retiredManagedFiles = new Set<string>();
   const relative = `${harnessDir}/settings.json`;
@@ -5402,7 +5403,9 @@ function preserveClaudeProviderFields(
     const hookPath = join(projectDir, hookRelative);
     if (!regularFile(hookPath)) return false;
     const released = RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target];
-    return released?.has(sha256FileMatching(hookPath, [...(released ?? [])])) ?? false;
+    if (released?.has(sha256FileMatching(hookPath, [...released]))) return true;
+    // A registration a copy-era release wrote for its own hook file, unchanged.
+    return descriptor !== undefined && copyEraOwnFile(descriptor, hookRelative, hookPath);
   });
   const ownedHookTargets = new Set([
     ...Object.keys(incomingHookHashes),
@@ -5426,12 +5429,15 @@ function preserveClaudeProviderFields(
       projectDir,
     );
     const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
+    // With no install record, registrations for an earlier release's own hook
+    // files are that release's: the difference is the release's change.
     const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
       ? currentOwnedHash !== priorEntries.hooksAidlc
       : priorEntries?.hooks !== undefined
       ? currentOwnedHash !== priorEntries.hooks
-      : canonical(currentOwnedHooks) !==
-        canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
+      : !(prior === null && attributableLegacyTargets.length > 0) &&
+        canonical(currentOwnedHooks) !==
+          canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
     if (hadLocalHookDrift) {
       // A settings file the project wrote before AI-DLC has none of its hooks yet.
       notes.push(Object.keys(currentOwnedHooks).length === 0
@@ -6685,6 +6691,7 @@ function preserveUserProviderFields(
   retiredManagedFiles: Set<string>,
   unproven: Set<string>,
   providersAnswered: boolean,
+  descriptor?: ProjectionDescriptor,
 ): boolean {
   if (harness === "claude") {
     // Claude settings merge per entry, so the refreshed file always applies.
@@ -6698,6 +6705,7 @@ function preserveUserProviderFields(
       prior,
       notes,
       providersAnswered,
+      descriptor,
     )) retiredManagedFiles.add(rel);
     return true;
   } else if (harness === "codex") {
@@ -7005,6 +7013,7 @@ function prepareRefreshSource(
     retiredManagedFiles,
     unproven,
     diagnosticsOverride !== undefined && Object.hasOwn(diagnosticsOverride, "providers"),
+    descriptor,
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
@@ -7092,6 +7101,7 @@ function prepareRefreshSource(
       if (
         existsSync(staged) ||
         (prior?.shippedOnly && prior.files[rel]) ||
+        (prior === null && copyEraOwnFile(descriptor, rel, join(projectDir, rel))) ||
         rel === `${descriptor.harnessDir}/tools/data/aidlc-manifest.json` ||
         !generatedOverlayCandidate(rel, descriptor.harnessDir)
       ) continue;
@@ -10178,6 +10188,27 @@ function planManagedFiles(
     operations.push({ kind: "remove", path: rel, expected: expected(target) });
     actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
   }
+  // A copied tree no `aidlc config` recorded: a file a copy-era release shipped
+  // that this one no longer ships, unchanged, goes the way a recorded one does.
+  if (prior === null) {
+    for (const rel of Object.keys(descriptor.retiredCopyFileHashes ?? {})) {
+      if (shipped.has(rel) || workspaceState(rel) || hostToolPath(rel)) continue;
+      const target = join(projectDir, rel);
+      if (!pathPresent(target) || !copyEraOwnFile(descriptor, rel, target)) continue;
+      operations.push({ kind: "remove", path: rel, expected: expected(target) });
+      actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
+    }
+  }
+}
+
+// A file a release shipped at this path for copying, unchanged (this
+// release's own copy tree and the copy-era releases', scripts/copy-era-files.ts;
+// a path this release no longer ships has its own list). In a project no
+// `aidlc config` recorded it is AI-DLC's own; a file that matches none stays
+// the person's.
+function copyEraOwnFile(descriptor: ProjectionDescriptor, rel: string, path: string): boolean {
+  const known = descriptor.legacyManagedFileHashes?.[rel] ?? descriptor.retiredCopyFileHashes?.[rel];
+  return known !== undefined && regularFile(path) && known.includes(ownedFileHash(path, known).hash);
 }
 
 // A refresh names every file it removes because the release no longer ships
@@ -13644,7 +13675,8 @@ export async function main(
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);
-      if (!pathPresent(target)) continue;
+      // A copy-era file planManagedFiles already removes is that one removal.
+      if (!pathPresent(target) || operations.some((operation) => operation.path === rel)) continue;
       operations.push({ kind: "remove", path: rel, expected: expected(target) });
       actions.push({
         path: rel,
