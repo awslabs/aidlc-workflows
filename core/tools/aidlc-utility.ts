@@ -4118,9 +4118,13 @@ export async function collectDoctorReport(
         )
       );
       let nativePermission = false;
+      // A bare Bash allow (an early release shipped one, and a refresh keeps
+      // it as the person's) lets every shell command through; it takes nothing
+      // from AI-DLC's own entry, so the row says it rather than fail on it.
+      let everyBashAllowed = false;
       if (currentHarnessDir === ".claude") {
-        nativePermission = commands.includes(`Bash(${trustedCommand("*")})`) &&
-          !commands.includes("Bash");
+        nativePermission = commands.includes(`Bash(${trustedCommand("*")})`);
+        everyBashAllowed = commands.includes("Bash");
       } else if (currentHarnessDir === ".kiro") {
         nativePermission = commands.includes(trustedCommand(".*")) ||
           commands.includes(trustedCommand("*"));
@@ -4173,7 +4177,8 @@ export async function collectDoctorReport(
       results.push({
         pass: nativeTrustReady,
         label: nativeTrustReady
-          ? "Native command trust: host hooks and permission entries select the installed `aidlc` command"
+          ? "Native command trust: host hooks and permission entries select the installed `aidlc` command" +
+            (everyBashAllowed ? "; your Claude Code settings also allow every Bash command without asking (`Bash` in .claude/settings.json)" : "")
           : `Native command trust is incomplete: ${legacy.length} Bun-shaped entr${
             legacy.length === 1 ? "y" : "ies"
           }, native hooks ${nativeHooks ? "present" : "missing"}, native permission/trust ${

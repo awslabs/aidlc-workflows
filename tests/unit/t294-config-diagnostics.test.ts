@@ -1832,6 +1832,53 @@ describe("t294 trust diagnostics", () => {
     '{"enabled":true,"name":"aidlc-left-over","when":{"type":"promptSubmit"},' +
     '"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-human-turn.ts"}}';
 
+  // Claude Code's row, as the installed aidlc command reads it. A bare Bash allow
+  // an early release shipped and a refresh keeps as the person's takes nothing
+  // from AI-DLC's own entry: the row passes and says once what it lets through.
+  test("claude: native trust passes beside a bare Bash allow entry and says it lets every command through", async () => {
+    const project = temp("aidlc-t294-trust-claude-bare-bash-");
+    cpSync(join(DIST_RELEASE, "claude"), project, { recursive: true });
+    const machine = temp("aidlc-t294-trust-claude-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".claude",
+      AIDLC_HARNESS_NAME: "claude",
+      AIDLC_RUNTIME_HARNESS_ROOT: join(project, ".claude"),
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const trustRow = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    try {
+      Object.assign(process.env, overrides);
+      const clean = await trustRow();
+      expect(clean.pass, clean.label).toBe(true);
+      expect(clean.label).not.toContain("every Bash command");
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions: { allow: string[] } };
+      settings.permissions.allow.push("Bash");
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const broad = await trustRow();
+      expect(broad.pass, broad.label).toBe(true);
+      expect(broad.label.match(/every Bash command/g)?.length).toBe(1);
+      expect((JSON.parse(readFileSync(settingsPath, "utf-8")) as typeof settings).permissions.allow).toContain("Bash");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   for (const harness of ["kiro-ide", "kiro"] as const) {
     test(`${harness}: Kiro native trust passes with a dropped plugin's compose hook, and still counts a leftover Bun entry`, async () => {
       const project = temp(`aidlc-t294-trust-kiro-plugin-${harness}-`);
