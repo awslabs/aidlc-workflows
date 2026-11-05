@@ -612,17 +612,7 @@ export function validateStageFrontmatter(
     }
 
     if (o.for_each === "unit-of-work" && isPlainObject(o.produces_kinds)) {
-      const applicableKinds = new Set<string>();
-      for (const name of requiredProduces) {
-        const kinds = o.produces_kinds[name];
-        if (Array.isArray(kinds)) {
-          for (const kind of kinds) {
-            if (typeof kind === "string") applicableKinds.add(kind);
-          }
-        } else {
-          for (const kind of UNIT_KINDS) applicableKinds.add(kind);
-        }
-      }
+      const applicableKinds = applicableUnitKinds(requiredProduces, o.produces_kinds);
       const targetKinds = o.produces_kinds[o.review_artifact];
       const targetApplicable = new Set<string>(
         Array.isArray(targetKinds)
@@ -782,6 +772,28 @@ export function validateStageFrontmatter(
   // keeps it out of every caller.
   // type-coverage:ignore-next-line — documented validator trust boundary
   return { valid: true, data: o as unknown as StageFrontmatter };
+}
+
+// The Unit kinds a per-Unit stage applies to: the kinds of its required
+// outputs, where an output with no produces_kinds entry applies to every kind.
+// Shared by the review_artifact check and addPluginProducesKinds
+// (aidlc-plugin-produces-kinds.ts), so both compute the kinds the same way.
+export function applicableUnitKinds(
+  requiredProduces: readonly string[],
+  producesKinds: Record<string, unknown>,
+): Set<string> {
+  const kinds = new Set<string>();
+  for (const name of requiredProduces) {
+    const listed = producesKinds[name];
+    if (Array.isArray(listed)) {
+      for (const kind of listed) {
+        if (typeof kind === "string") kinds.add(kind);
+      }
+    } else {
+      for (const kind of UNIT_KINDS) kinds.add(kind);
+    }
+  }
+  return kinds;
 }
 
 // --- Helpers ---

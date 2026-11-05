@@ -1374,4 +1374,81 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("24: a Cursor upgrade keeps a plugin output's produces_kinds entry, and a disable takes it out with the output", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-plugin-kinds-"));
+    const project = join(root, "project");
+    try {
+      const installer = join(CURSOR_ROOT, "install.ts");
+      expect(
+        spawnSync("bun", [installer, project], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        }).status,
+      ).toBe(0);
+
+      // As compose writes it on a stage that maps every required output to
+      // Unit kinds: the output, and an entry for the kinds the stage covers.
+      const stageRel =
+        ".cursor/aidlc-common/stages/construction/functional-design.md";
+      const stagePath = join(project, stageRel);
+      const artifact = "plugin-artifact-k";
+      const compose = (content: string, kinds: string) =>
+        content
+          .replace(/^(produces:\n(?: {2}- .+\n)*)/m, `$1  - ${artifact}\n`)
+          .replace(
+            /^(produces_kinds:\n(?: {2}[a-z-]+: .+\n)*)/m,
+            `$1  ${artifact}: [${kinds}]\n`,
+          );
+      writeFileSync(
+        stagePath,
+        compose(readFileSync(stagePath, "utf-8"), "service, spec, ui, library"),
+      );
+      writeFileSync(
+        join(project, ".cursor", "tools", "data", "plugin-contrib-test-pro.json"),
+        `${JSON.stringify(
+          { "functional-design": { produces: [artifact] } },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const stagedDist = join(root, "cursor-v2");
+      cpSync(CURSOR_ROOT, stagedDist, { recursive: true });
+      cpSync(CURSOR_INSTALLER_SOURCE, join(stagedDist, "install.ts"));
+      const stagedStage = join(stagedDist, stageRel);
+      const incoming = `${readFileSync(stagedStage, "utf-8")}\nUpstream refresh marker.\n`;
+      writeFileSync(stagedStage, incoming);
+      const upgrade = spawnSync("bun", [join(stagedDist, "install.ts"), project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(upgrade.status, upgrade.stderr).toBe(0);
+      expect(readFileSync(stagePath, "utf-8")).toBe(
+        compose(incoming, "service, spec, ui, library"),
+      );
+
+      // select-plugins knows test-pro by its installed scope.
+      cpSync(
+        join(REPO_ROOT, "dist", "plugins", "test-pro", "cursor", "scopes", "test-pro-validation.md"),
+        join(project, ".cursor", "scopes", "test-pro-validation.md"),
+      );
+      const disable = spawnSync(
+        "bun",
+        [join(project, ".cursor", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc", "--project-dir", project],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".cursor" },
+        },
+      );
+      expect(disable.status, disable.stderr).toBe(0);
+      expect(readFileSync(stagePath, "utf-8")).toBe(incoming);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Three CLI steps plus a distribution copy need a bounded Windows startup allowance.
 });
