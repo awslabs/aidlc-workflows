@@ -11579,14 +11579,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
     const verb = flags.claim ? "claim" : "release";
     const unit = flags.claim ?? flags.release!;
+    // Quoted for the agent's shell: PowerShell splits a POSIX-quoted O'Brien,
+    // and the claim would record "O" as the team.
     const teamArg = flags.claimTeam
-      ? ` --team ${shellArg(flags.claimTeam)}`
+      ? ` --team ${quoteCommandArgument(flags.claimTeam)}`
       : "";
     const rhythmArg = flags.claimRhythm
-      ? ` --rhythm ${shellArg(flags.claimRhythm)}`
+      ? ` --rhythm ${quoteCommandArgument(flags.claimRhythm)}`
       : "";
     emit(turnEndingPrint(
-      `Run \`${aidlcInvocation()} --${verb} ${shellArg(unit)}${teamArg}${rhythmArg}\`, ` +
+      `Run \`${aidlcInvocation()} --${verb} ${quoteCommandArgument(unit)}${teamArg}${rhythmArg}\`, ` +
         `print its output verbatim, then stop. Re-run ${entrySkillInvocation()} after the claim registry changes.`,
     ));
     return;
