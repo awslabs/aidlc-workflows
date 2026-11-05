@@ -96,8 +96,10 @@ aidlc/knowledge/                  # empty at bootstrap; create the subdirs you n
 
 Team knowledge files are curated reference material. DocumentKB is the companion
 catalog for documents the team already owns: vision documents, PRDs,
-requirements briefs, policies, contracts, PDFs, Word files, Markdown, and plain
-text. See
+requirements briefs, policies, contracts, PDFs, Word and Excel files, Markdown,
+CSV, and plain text. AI-DLC reads Word and Excel files itself (a workbook's every
+sheet, as a table); a PDF needs `pdftotext` on the computer, which Windows does
+not have by default. See
 [Starting from an existing document](02-your-first-workflow.md#starting-from-an-existing-document)
 for ways to use one as workflow input.
 
