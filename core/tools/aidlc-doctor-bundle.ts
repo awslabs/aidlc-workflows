@@ -1007,7 +1007,12 @@ const STATE_ALLOWLIST = [
   "Unit State",
   "Unit Pause Reason",
   "Unit Next Action",
+  "Construction Autonomy Mode",
+  "Construction Iteration",
 ] as const;
+
+// State fields that hold only a Unit name (hashed whole, see hashUnitNames).
+const STATE_UNIT_FIELDS = ["Active Unit"] as const;
 
 // Audit event types that carry routing/gate signal. Other event types (and all
 // free-text Details/Request fields) are dropped.
@@ -1033,13 +1038,25 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  "STAGE_JUMPED",
+  "UNIT_STARTED",
+  "UNIT_PAUSED",
+  "UNIT_RESUMED",
+  "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
+  "UNIT_MERGED",
+  "UNIT_OWNERSHIP_SET",
+  "UNIT_GATE_RHYTHM_SET",
+  "AUTONOMY_MODE_SET",
+  "CONSTRUCTION_POLICY_SET",
 ]);
 
 // Audit block fields kept per event (structural only — no Details/Request/
 // Reason free text, which can carry paths or decisions).
 // Document identity and digest fields are safe structural evidence. `Source`
 // and `Last Path` are deliberately excluded: they carry customer-chosen
-// filenames, while the diagnostic bundle is redacted by design.
+// filenames, while the diagnostic bundle is redacted by design. `Unit` is
+// hashed before it is written (hashUnitNames).
 const AUDIT_FIELD_ALLOWLIST = [
   "Event",
   "Timestamp",
@@ -1051,7 +1068,21 @@ const AUDIT_FIELD_ALLOWLIST = [
   "Change",
   "Digest",
   "Last Digest",
+  "Unit",
 ];
+
+// Fields kept on one event only, because another event uses the same name for
+// a filename (`Source` on DOCUMENT_*) or a file path (`Target` on a guard's
+// refusal row, recordGuardBlockedRow). Each value here is a stage slug or one
+// of its setter's fixed values.
+const AUDIT_EVENT_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  STAGE_JUMPED: ["Direction", "Source", "Target"],
+  STAGE_SKIPPED: ["Skip Kind"],
+  AUTONOMY_MODE_SET: ["Mode"],
+  UNIT_OWNERSHIP_SET: ["Mode"],
+  UNIT_GATE_RHYTHM_SET: ["Rhythm"],
+  CONSTRUCTION_POLICY_SET: ["Field", "Value", "Previous Value"],
+};
 
 export interface NormalizedEvidence {
   state: Record<string, string>;
@@ -1079,7 +1110,7 @@ export function extractAuditEvents(audit: string): Array<Record<string, string>>
   for (const e of parseAuditEvents(audit)) {
     if (!AUDIT_EVENT_ALLOWLIST.has(e.event)) continue;
     const row: Record<string, string> = {};
-    for (const f of AUDIT_FIELD_ALLOWLIST) {
+    for (const f of [...AUDIT_FIELD_ALLOWLIST, ...(AUDIT_EVENT_FIELDS[e.event] ?? [])]) {
       const v = auditBlockField(e.block, f);
       if (v !== null) row[f] = v;
     }
@@ -1136,6 +1167,7 @@ function seedCustomIdentifiers(
   coreAgents: Set<string>,
   graphStages: GraphStageLite[],
   timeline: Timeline,
+  unitNames: readonly string[],
 ): void {
   const seed = (id: string): void => {
     // Defense-in-depth: a corrupt graph (valid JSON, wrong element types) can
@@ -1168,6 +1200,33 @@ function seedCustomIdentifiers(
   }
   // Any stage slug the timeline surfaced (covers audit-only slugs not in graph).
   for (const s of timeline.stages) seed(s.slug);
+  // Every Unit name the evidence holds, so a mention in another field hashes too.
+  for (const u of unitNames) seed(u);
+}
+
+// A Unit's name is the person's own name for a piece of their work, so it
+// leaves the box as its short hash, the way an intent id does. A field that
+// holds only a Unit name is hashed whole here: a legacy name that is short or
+// has a dot never meets redactString's token scan whole. Returns the names for
+// seedCustomIdentifiers.
+function hashUnitNames(
+  ctx: RedactionContext,
+  state: Record<string, string>,
+  rows: Array<Record<string, string>>,
+): string[] {
+  const names: string[] = [];
+  const hashed = (name: string): string => {
+    names.push(name);
+    ctx.rulesApplied.add("unit-name");
+    return `<id:${shortHash(name)}>`;
+  };
+  for (const field of STATE_UNIT_FIELDS) {
+    if (state[field]) state[field] = hashed(state[field]);
+  }
+  for (const row of rows) {
+    if (row.Unit) row.Unit = hashed(row.Unit);
+  }
+  return names;
 }
 
 // Run the fresh analysis. Reads through symlink-rejecting safeRead; seeds all
@@ -1206,13 +1265,16 @@ export function runDoctorAnalysis(projectDir: string): DoctorAnalysis {
   const hooksHealth = readHookHealth(projectDir, audit);
   const markers = readMarkers(projectDir);
   const timeline = reconstructTimeline(audit, stateContent);
+  const state = extractStateFields(stateContent);
+  const auditEvents = extractAuditEvents(audit);
+  const unitNames = hashUnitNames(ctx, state, auditEvents);
 
   // Seed the active intent + every other custom id BEFORE serialization.
   if (intentSlug) {
     ctx.idHashes.set(intentSlug, intentHash);
     ctx.rulesApplied.add("intent-id");
   }
-  seedCustomIdentifiers(ctx, projectDir, coreSlugs, coreAgents, stagesForDiagnosis, timeline);
+  seedCustomIdentifiers(ctx, projectDir, coreSlugs, coreAgents, stagesForDiagnosis, timeline, unitNames);
 
   const findings = runDiagnosis({
     projectDir,
@@ -1227,8 +1289,8 @@ export function runDoctorAnalysis(projectDir: string): DoctorAnalysis {
   });
 
   const evidence: NormalizedEvidence = {
-    state: extractStateFields(stateContent),
-    auditEvents: extractAuditEvents(audit),
+    state,
+    auditEvents,
     graph: runtimeGraphExists ? { stageCount: graphStages.length, stages: graphStages } : null,
     hooks: hooksHealth,
     markers,

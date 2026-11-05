@@ -1055,7 +1055,7 @@ report directory and tells you to compress it yourself. Share that archive (or
 directory) — it carries the diagnosis and redacted evidence, **not your work
 product**. No workspace source, raw state/audit/runtime-graph files, or
 artifact/contribution/question/memory bodies are included; paths are normalized,
-intent ids are hashed, and secret-like values are scrubbed.
+intent ids and Unit names are hashed, and secret-like values are scrubbed.
 
 The report reconstructs the workflow timeline from the audit trail and runs
 deterministic condition→remedy rules. The two most common causes it catches:

@@ -1002,8 +1002,8 @@ workflow starts while workflow-authority readers remain intent-scoped. `list` an
 **Safety.** The report never includes workspace source, raw state/audit/
 runtime-graph files, artifact/contribution/question/memory bodies, environment
 variables, or command output. Every emitted string is redacted: your home dir
-becomes `~`, the project root becomes `<project>`, intent ids are hashed, and
-secret-like values are scrubbed. Inputs whose real path escapes the project root
+becomes `~`, the project root becomes `<project>`, intent ids and Unit names are
+hashed, and secret-like values are scrubbed. Inputs whose real path escapes the project root
 are refused (a symlinked leaf or parent is not followed out of the tree),
 per-file and total size are capped (truncations are recorded in the manifest),
 and files are created owner-only where the platform supports it.
