@@ -1684,9 +1684,11 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const echoed = validate(proj, { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: "off", depth: "standard" }, ["--custom"]);
     const base = echoed.base_scope as string;
     expect(base).not.toBe("feature");
-    // After a Reject the person names another plan with its own stage change.
-    expect(creationOf(next(proj, ["--scope", "feature", "--skip", "code-generation", "--request", id])))
-      .toContain("--skip code-generation");
+    // After a Reject the person names another plan with its own stage change:
+    // the plan the gate showed is named once, and the same command creates theirs.
+    const picked = ["--scope", "feature", "--skip", "code-generation", "--request", id];
+    expect(next(proj, picked).message).toContain("run the same command again: it creates this plan as typed");
+    expect(creationOf(next(proj, picked))).toContain("--skip code-generation");
     // Or picks the plan's own base with no stage changes: its stock grid.
     const plain = creationOf(next(proj, ["--scope", base, "--request", id]));
     expect(plain).not.toContain("--add");

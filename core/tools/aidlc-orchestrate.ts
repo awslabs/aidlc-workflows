@@ -7066,8 +7066,13 @@ function composedPlanChangeStep(
 // reply makes it the plan shown. The later plan typed with the shown plan's own
 // stages gets the step too while a value typed is not the shown plan's, until
 // the step is said once (markComposerPlanNamed); then it is created as typed.
-// Null when the plan typed is the one shown, is not the one kept after the
-// message, or the record is other work's (keptComposerPlans).
+// A creation on another scope than the plan kept before that message (an
+// Approve the agent rebuilt on a base it guessed, with no composer to ask) gets
+// the same approval named, also once: the plan offer's other plans carry this
+// request too, so a person who turned the plan down and picked another gets it
+// as typed when the agent runs it again. Null when the plan typed is the one
+// shown, is on its scope and not the one kept after the message, or the record
+// is other work's (keptComposerPlans).
 function unseenComposedPlanStep(
   flags: ParsedFlags,
   scope: string,
@@ -7077,12 +7082,35 @@ function unseenComposedPlanStep(
 ): PrintDirective | null {
   if (!flags.request) return null;
   const kept = keptComposerPlans(projectDir, requests, composerPlanSeen(projectDir));
+  if (kept === null) return null;
   const typed = flags.planChanges ?? { skip: [], add: [] };
   const isTyped = (plan: KeptComposerPlan): boolean => plan.scope === scope && sameStageChanges(typed, plan.changes);
-  if (!kept?.unseen || !isTyped(kept.unseen)) return null;
+  const typedPlan = `${scope} with ${stageChangesListed(typed)}`;
+  // The shown plan's own values, from the record, never one typed here: which
+  // typed value is the person's is the agent's reading of their reply. A
+  // setting they asked for earlier in this chat still comes from their words.
+  const approvalOf = (shown: KeptComposerPlan): string => {
+    const asShown: ParsedFlags = { ...flags, depth: undefined, review: undefined, changeControl: undefined, ceremony: undefined };
+    fillApprovedPlanSettings(asShown, shown, projectDir);
+    markComposerPlanNamed(projectDir, requests);
+    return `\`${composedApprovalCommand(asShown, shown.scope, shown.changes, described)}\`` +
+      (described ? ", with the same creationDescription as one shell-safe argument" : "");
+  };
+  const planOf = (plan: KeptComposerPlan): string => `${plan.scope} with ${stageChangesListed(plan.changes)}`;
+  if (kept.unseen === null || !isTyped(kept.unseen)) {
+    if (kept.shown === null || kept.shown.scope === scope || kept.named) return null;
+    return printDirective(
+      `Nothing is created yet: the plan typed here (${typedPlan}) runs on another scope than the plan the composer ` +
+        `proposed for this request, which its gate showed (${planOf(kept.shown)}). If that is the plan you showed ` +
+        `them and their reply approved it, run ${approvalOf(kept.shown)}, adding the flag for any setting their reply ` +
+        "asked for in their own words, and follow what it returns: it creates the plan they approved. If they asked " +
+        "for a change to it, dispatch the composer again to apply it, as composer.md says for an edit, and show them " +
+        "the revised plan. If they turned it down and picked this plan themselves, run the same command again: it " +
+        "creates this plan as typed.",
+    );
+  }
   const onShown = kept.shown !== null && isTyped(kept.shown);
   if (kept.shown !== null && onShown && (kept.named || !typedOffPlan(flags, kept.shown))) return null;
-  const typedPlan = `${scope} with ${stageChangesListed(typed)}`;
   if (kept.shown === null) {
     return printDirective(
       `Nothing is created yet: this plan (${typedPlan}) was worked out after the person's last message on record, and ` +
@@ -7091,22 +7119,14 @@ function unseenComposedPlanStep(
         "prose, and end your turn: their next reply creates it.",
     );
   }
-  // The shown plan's own values, from the record, never one typed here: which
-  // typed value is the person's is the agent's reading of their reply. A
-  // setting they asked for earlier in this chat still comes from their words.
-  const asShown: ParsedFlags = { ...flags, depth: undefined, review: undefined, changeControl: undefined, ceremony: undefined };
-  fillApprovedPlanSettings(asShown, kept.shown, projectDir);
-  const approval = composedApprovalCommand(asShown, kept.shown.scope, kept.shown.changes, described);
-  markComposerPlanNamed(projectDir, requests);
-  const shownPlan = `${kept.shown.scope} with ${stageChangesListed(kept.shown.changes)}`;
+  const approval = approvalOf(kept.shown);
   return printDirective(
     (onShown
       ? `Nothing is created yet: the depth or settings typed here are those of a plan worked out after the person's ` +
-        `last message on record, and the plan kept before that message (${shownPlan}) has its own. `
+        `last message on record, and the plan kept before that message (${planOf(kept.shown)}) has its own. `
       : `Nothing is created yet: the plan typed here (${typedPlan}) was worked out after the person's last message on ` +
-        `record, and the plan kept before that message is ${shownPlan}. `) +
-      "If that is the plan you showed them and their reply approved it, run " +
-      `\`${approval}\`${described ? ", with the same creationDescription as one shell-safe argument" : ""}, adding the ` +
+        `record, and the plan kept before that message is ${planOf(kept.shown)}. `) +
+      `If that is the plan you showed them and their reply approved it, run ${approval}, adding the ` +
       "flag for any setting their reply asked for in their own words, and follow what it returns: it creates the plan " +
       "they approved. Otherwise (they asked for a change of stages, or you showed them this plan), show them this plan " +
       "as composer.md shows an offer, with its gate as numbered prose, and end your turn: their next reply creates it.",
