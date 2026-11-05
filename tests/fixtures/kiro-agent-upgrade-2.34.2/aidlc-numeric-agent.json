@@ -1,0 +1,112 @@
+{
+  "name": "aidlc-numeric-agent",
+  "description": "Ein Prüfer — 검토 agent",
+  "prompt": "file://./aidlc-sample-agent.md",
+  "includeMcpJson": true,
+  "tools": [
+    "read",
+    "shell",
+    "thinking",
+    "write"
+  ],
+  "allowedTools": [
+    "fs_read",
+    "thinking"
+  ],
+  "toolsSettings": {
+    "execute_bash": {
+      "allowedCommands": [
+        "bun *.kiro/tools/aidlc.ts* engine *",
+        "git status"
+      ],
+      "deniedCommands": [
+        "rm -rf /"
+      ]
+    },
+    "fs_write": {
+      "allowedPaths": [
+        "aidlc/**",
+        "10",
+        "2"
+      ]
+    },
+    "10": {
+      "b": 1,
+      "a": [
+        2,
+        1
+      ]
+    },
+    "2": {
+      "z": true
+    }
+  },
+  "resources": [
+    "file://.kiro/aidlc-common/protocols/stage-protocol.md"
+  ],
+  "hooks": [
+    {
+      "name": "agentSpawn-0",
+      "trigger": "agentSpawn",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-session-start.ts"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "preToolUse-0",
+      "trigger": "preToolUse",
+      "matcher": "write",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-guard.ts"
+      },
+      "timeout": 10
+    }
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "shell",
+        "match": [
+          "bun*kiro/tools/aidlc*ts* engine *",
+          "bun*kiro/tools/aidlc*ts* engine",
+          "bun*kiro/tools/aidlc*t engine *",
+          "bun*kiro/tools/aidlc*t engine",
+          "git status"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "match": [
+          "rm -rf /"
+        ],
+        "effect": "deny"
+      },
+      {
+        "capability": "fs_write",
+        "match": [
+          "aidlc/**",
+          "10",
+          "2"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:08635e42165267210aee67ef782e85c97feba39fb20bccc3dbeb24200b4b3c94",
+    "source": "sha256:4defb17aee08fe0b0bda8c2f5eaa203b82c5eadcdae5ca2d4d4c5257041b4a47"
+  }
+}

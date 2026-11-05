@@ -462,7 +462,9 @@ describe("t325 atomic team Unit claims", () => {
     const claimlessDirective = nextDirective(claimless.seed, {
       AIDLC_STOP_HOOK_PROBE: "1",
     });
-    expect(claimlessDirective).toMatchObject({ kind: "run-stage", unit: "skeleton" });
+    // The lead's claim-less walk with a remote: before its first Unit, the
+    // offer to share the plan with the teams; the probe writes nothing.
+    expect(claimlessDirective).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["share"] });
     expect(localRuntimeSnapshot(claimless.seed)).toEqual(claimlessRuntime);
     expect(readAllAuditShards(claimless.seed)).toBe(claimlessAudit);
 

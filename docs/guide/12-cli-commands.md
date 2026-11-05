@@ -42,13 +42,15 @@ diagnostic and lifecycle routes.
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space that starts from the default space's org rules and empty team and project practices |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
+| `/aidlc <plugin command> [args]` | Run a command an installed plugin adds (`aidlc <name>` in a terminal); `aidlc --help` lists them under their plugin |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
-| `/aidlc unit publish <unit>` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref |
+| `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
+| `/aidlc unit publish <unit> [--commit]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the work first |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
 | `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
@@ -506,7 +508,7 @@ switching examples, and what is committed.
 
 ### `/aidlc knowledge <verb>` — Index and read your own documents
 
-Put your documents — PDFs, Word files, Markdown, plain text — under
+Put your documents (PDFs, Word and Excel files, Markdown, plain text, CSV) under
 `aidlc/spaces/<space>/knowledge/documents/`, organised however you like, then index
 them so agents can cite them instead of guessing.
 
@@ -545,11 +547,18 @@ stored association is always the UUID, so renaming a slug never re-points a
 document). Scoping to an intent that has finished is refused unless you add
 `--allow-inactive`, which exists for back-filling evidence onto a closed record.
 
-**Text extraction** is delegated to whatever extractor the project configures. PDF
-gets a default extractor (`pdftotext`) if none is configured; a Word (`.docx`) file
-has no built-in default — with none configured it is catalogued and citable as
-`unsupported_type`; after configuring an extractor, run `sync` to retry unchanged
-rows of that detected type. If a CONFIGURED extractor is not installed the
+**Text extraction**: Markdown, plain text and CSV are read as they are, and Word
+(`.docx`) and Excel (`.xlsx`) files are read by AI-DLC itself, with nothing to
+install: a Word file's paragraphs and tables, and every sheet of a workbook as a
+table, with each formula's last saved result (dates and numbers as the file stores
+them; images, charts, comments and headers are not read). A project can configure
+its own extractor for any type, and a configured one wins. PDF gets a default
+extractor (`pdftotext`) if none is configured; any other type is catalogued and
+citable as `unsupported_type`; after configuring an extractor, run `sync` to retry
+unchanged rows of that detected type. A Word or Excel file AI-DLC cannot open (one
+that is password-protected, damaged, or in the older `.doc` or `.xls` format saved
+under the new name) is catalogued as `extraction_failed` with the reason. A Word or
+Excel file added before AI-DLC read them gets its text on the next `sync`. If a CONFIGURED extractor is not installed the
 document is catalogued as `extractor_unavailable` — visible in `list`, and fixed by
 installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on the
 same unchanged path reports `already` and does NOT retry extraction — only `sync`
@@ -557,7 +566,7 @@ re-probes rows in this state. Nothing is silently skipped.
 
 **Extraction is capped**: 50 pages for PDF with the default extractor
 (`pdftotext -l 50`, then a check for a page 51) and 200,000
-characters of extractor output. Past a cap the text is cut and the row records
+characters of extractor output (a Word or Excel file's text too). Past a cap the text is cut and the row records
 `truncated` — `show` prints a `truncated  yes` line above the content (`after
 page 50` when the page cap cut it) and the `--json` payload carries the flag
 inside `extraction`, with `pages_kept` for a page cut. Treat a truncated
@@ -569,6 +578,21 @@ per document. A configured extractor's `timeoutMs` overrides the extraction
 budget. An extraction timeout records `extraction_failed`; it does not establish
 that the document was read successfully. These time budgets do not change the
 byte, page, or output caps above.
+
+**Where pdftotext is missing** (Windows and macOS out of the box), AI-DLC reads a
+PDF itself, with nothing to install (`show --json` names that reader
+`builtin-pdf`). pdftotext still runs first wherever it is on `PATH`, and a PDF
+AI-DLC read itself is read again by pdftotext on the next `sync` after you install
+it. A project's own configured PDF extractor is never replaced: when it is
+missing the document is `extractor_unavailable`, as above. AI-DLC's reader runs as
+its own process under the same extraction budget and the same 50-page and
+200,000-character caps. A PDF that only restricts printing or copying is read; one
+that needs a password to open is `extraction_failed` with that reason. Known
+limits, where pdftotext does better: words in Thai, Hindi and other scripts whose
+letters combine can come out with spaces inside them, a PDF encrypted with AES-256
+or with its text compressed the older LZW or RunLength way is `extraction_failed`
+with the reason, and a PDF whose fonts carry no text mapping gives unreadable text. A scanned PDF has no text for either reader (`no_extractable_text`;
+there is no OCR).
 
 A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
 the document's path is substituted into. A configuration without it is refused when
@@ -688,20 +712,43 @@ successor attempt and prevents a lost-output retry from tombstoning it.
 
 Write the gitignored participant marker for this clone. A subsequent bare
 `/aidlc` on unscoped main emits the typed Unit picker with claimable, already
-claimed, and dependency-blocked rows; a facilitator checkout without the marker
-receives the terminal fan-out notice instead.
+claimed, and dependency-blocked rows. A fresh clone of the shared work does not
+need it: its `/aidlc` offers the Units open to take on its own. A facilitator
+checkout without the marker receives the terminal fan-out notice instead.
 
 ```
 /aidlc unit participate
 ```
 
+### `/aidlc unit share` - Share main with the teams
+
+Run from a checkout of team work that holds no Unit claim, on the integration
+branch:
+
+```bash
+/aidlc unit share
+```
+
+It commits what git shows changed here (files git does not track included,
+ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
+`opencode.json` left out), then pushes the integration branch to the remote
+with a plain push, never forced, so the teams can take Units from the plan or
+see a Unit that landed. After it, this checkout shows the board instead of
+building Units. A push the remote refuses keeps the commit and says why; pull
+the branch, then share again. `/aidlc` offers this step itself when it is due:
+before a Unit would start on the lead's checkout, and after a land the remote
+does not have yet.
+
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 
 Run from the scoped team checkout after committing its artifacts, source, state
-mirror, and audit shard:
+mirror, and audit shard, or with `--commit` to commit them first (what git shows
+changed, as `share` commits it); `/aidlc` offers that step itself when the
+Unit is complete and approved:
 
 ```bash
 /aidlc unit publish user-profile-api
+/aidlc unit publish user-profile-api --commit
 ```
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref
@@ -1001,8 +1048,8 @@ workflow starts while workflow-authority readers remain intent-scoped. `list` an
 **Safety.** The report never includes workspace source, raw state/audit/
 runtime-graph files, artifact/contribution/question/memory bodies, environment
 variables, or command output. Every emitted string is redacted: your home dir
-becomes `~`, the project root becomes `<project>`, intent ids are hashed, and
-secret-like values are scrubbed. Inputs whose real path escapes the project root
+becomes `~`, the project root becomes `<project>`, intent ids and Unit names are
+hashed, and secret-like values are scrubbed. Inputs whose real path escapes the project root
 are refused (a symlinked leaf or parent is not followed out of the tree),
 per-file and total size are capped (truncations are recorded in the manifest),
 and files are created owner-only where the platform supports it.
@@ -1995,6 +2042,39 @@ Display a summary of available commands and flags.
 ```
 /aidlc --help
 ```
+
+In a project whose plugins add commands, `aidlc --help` at a terminal lists
+them under `PLUGIN COMMANDS`, by plugin.
+
+---
+
+### `/aidlc <plugin command>` - Run a command a plugin adds
+
+A plugin can add commands of its own, such as a report or a dashboard. Run one
+the way you run AI-DLC's own:
+
+```
+/aidlc test-pro-report --since 7d                          # in the chat ($aidlc in Codex)
+aidlc test-pro-report --since 7d                           # in a terminal, native install
+bun .claude/tools/aidlc.ts test-pro-report --since 7d      # in a terminal, copy install (your harness folder)
+```
+
+AI-DLC starts the plugin's script itself, with its own runtime, so the command
+works on native and copy installs and in PowerShell, cmd, and POSIX shells;
+everything after the name goes to the script, and its output and exit code
+come back as they are. Your tool applies its own permission settings to it, as
+to any command: AI-DLC does not pre-approve plugin commands.
+
+- Only a plugin that is installed and on in this project runs. When it is off,
+  the command says so in one line and names the `aidlc config project --plugins`
+  command that turns it back on.
+- AI-DLC's own commands always keep their names. A plugin command named like
+  one of them, like a plan, or like another plugin's command is not added; the
+  plugin sync that meets it says so once, naming both, and `aidlc doctor
+  --verbose` shows it again.
+- When the name opens a longer sentence (`/aidlc test-pro-report on the login
+  bug`), the agent reads whether you meant the command or a request, and asks
+  you only if it cannot tell.
 
 ---
 

@@ -200,15 +200,19 @@ routes only the stamped Unit and carries the claim generation on lifecycle,
 review, gate, and fork evidence. Unscoped main emits a terminal fan-out notice
 while claims are live. `aidlc-unit.ts release <unit>` writes a tombstone instead
 of deleting the ref, invalidating stale attempts while preserving history. A
-participant clone opts into the guided claim picker once with
-`aidlc-unit.ts participate`; facilitator main deliberately omits that marker.
+team's clone of the work (every stage or gate row of the plan's own, the ones that
+name no Unit, in another clone's shard, `planMadeElsewhere`) is offered the Units open to take without the participant
+marker, which still opts a clone into the picker by hand
+(`aidlc-unit.ts participate`); facilitator main omits it.
 Scoped routing and receipt writes are offline-first: the claim-time stamp is
 authoritative. Registry liveness is rechecked only at claim-sensitive
 boundaries such as fork/release; an unavailable remote warns and proceeds from
 the stamp, while an online stale or released attempt is refused.
 
-Completed teams commit and run `aidlc unit publish <unit>`. Unscoped main then
-pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
+A completed team is asked once whether to commit and publish
+(`aidlc unit publish <unit> --commit`). An unscoped checkout reads the teams'
+claim refs from the remote on each `next` and offers a published Unit for
+review, then pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
 Plan Approval without materializing a worktree, records one human merge gate,
 and lands the candidate through `aidlc unit land`. Git content lands before the
 Unit row is folded; main-owned state/runtime markers are retained, the team's
@@ -240,8 +244,8 @@ paired-review state, and whether its wave completion receipt is still required.
 Builders receive the parent stage file, inline context roster, warnings, and
 exact accumulated steering content. A blocked builder withholds an applicable
 required path, not an optional or kind-exempt path. After build and review,
-`unit complete --wave` verifies the live entry, fans Unit diary entries into the
-parent diary idempotently, and emits `UNIT_COMPLETED`. The engine holds the
+`unit complete --wave` verifies the live entry and emits `UNIT_COMPLETED`; each
+Unit's notes stay in its own diary. The engine holds the
 current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch

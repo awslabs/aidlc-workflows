@@ -15,7 +15,7 @@ where the workflow stands by reading five sources, in this order:
 1. **Artefact tree** (`<record>/<phase>/<stage>/*.md`) — the decisions
    themselves, in finished form. Read first: it is the durable record of what
    was actually agreed.
-2. **`memory.md` per stage, only when the `learnings` module is listed** (`<record>/<phase>/<stage>/memory.md`) — what
+2. **`memory.md` per stage, only when the `learnings` module is listed** (`<record>/<phase>/<stage>/memory.md`, a per-Unit stage's in each Unit's `<record>/construction/<unit>/<stage>/`) — what
    got noticed during the decision-making (interpretations, deviations,
    trade-offs, open questions).
 3. **Audit log**: run `{{INVOKE}} engine audit history` for when each event

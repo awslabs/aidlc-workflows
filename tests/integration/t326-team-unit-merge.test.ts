@@ -27,8 +27,8 @@ import {
   prepareCandidate,
   approveMerge,
   gateAndLand,
-  nextDirective,
   unitProgressRow,
+  nextPastPushOffer,
 } from "../harness/team-unit-merge.ts";
 
 // The pinned merge cases are split across four files
@@ -66,7 +66,8 @@ describe("t326 pinned team Unit merge", () => {
     expect(
       readAllAuditShards(seed).match(/\*\*Event\*\*: UNIT_MERGED/g) ?? [],
     ).toHaveLength(2);
-    expect(nextDirective(seed)).toMatchObject({
+    // The last landing is not on the remote yet: the push is offered first.
+    expect(nextPastPushOffer(seed)).toMatchObject({
       kind: "run-stage",
       stage: "build-and-test",
     });

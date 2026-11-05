@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
@@ -100,6 +101,9 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_UNPARKED",
   "WORKFLOW_ARCHIVED",
   "WORKFLOW_UNARCHIVED",
+  // A record an earlier State Version wrote, brought up in place by the
+  // engine's state read (aidlc-state-upgrade.ts).
+  "STATE_UPGRADED",
   "INTENT_REPOS_CHANGED",
   "INTENT_CHECKOUTS_CHANGED",
   // Session events (hook-owned)
@@ -111,9 +115,11 @@ const VALID_EVENT_TYPES = new Set([
   // approval/interview gate requires a HUMAN_TURN appended AFTER the last gate
   // resolution (in ledger order) before it commits.
   "HUMAN_TURN",
-  // Hook-owned, advisory, never a human turn: a prompt the host made for the
-  // agent (a workflow notice, a background task's notice, a brief) reached
-  // the prompt-submit seam and was not counted as the person's turn.
+  // Hook-owned, never a human turn: a prompt the host made for the agent (a
+  // workflow notice, a background task's notice, a brief) reached the
+  // prompt-submit seam and was not counted as the person's turn. One that names
+  // a Message Id takes back the HUMAN_TURN of that message (a Claude Code
+  // wake-up, settled once its own row was on record: settleClaudeTurns).
   "HOST_TURN",
   // Initialization events (fire IN ADDITION TO STAGE_COMPLETED)
   "WORKSPACE_SCAFFOLDED",
@@ -359,6 +365,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_UNPARKED: "Workflow Unparked",
   WORKFLOW_ARCHIVED: "Workflow Archived",
   WORKFLOW_UNARCHIVED: "Workflow Unarchived",
+  STATE_UPGRADED: "State Upgraded",
   INTENT_REPOS_CHANGED: "Intent Repos Changed",
   INTENT_CHECKOUTS_CHANGED: "Intent Checkouts Changed",
   SESSION_STARTED: "Session Start",
@@ -486,8 +493,9 @@ function jsonError(message: string): never {
 
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
-  // Hook-owned like HUMAN_TURN: only the hook that saw the host's prompt may
-  // say a turn was the host's.
+  // Hook-owned like HUMAN_TURN: only the hook that saw the host's prompt, or
+  // settleClaudeTurns reading Claude Code's own row for a turn the hook could
+  // not yet tell apart (aidlc-claude-turn-origin.ts), may say a turn was the host's.
   "HOST_TURN",
   // Hook-owned like HUMAN_TURN: it spends a person's turn, so only the hook
   // that saw the empty question box may write it.
@@ -558,13 +566,17 @@ export interface AuditEntryInput {
 // (verifyReviewerPrecondition), swarm attempt/convergence (the finalize and
 // artifact-guard boundaries), and the autonomy grant. Each has exactly one owning emitter that
 // reaches appendAuditEntry through the library import (hooks, aidlc-state,
-// aidlc-log, aidlc-swarm, aidlc-bolt). The public CLI refuses them so a
+// aidlc-log, aidlc-swarm, aidlc-bolt), except HOST_TURN, which the human-turn
+// hook and settleClaudeTurns (aidlc-claude-turn-origin.ts) write from the one
+// decider of who started a Claude Code turn (claudeTranscriptOrigin). The public CLI refuses them so a
 // conductor cannot mint authority it does not have; everything else stays
 // CLI-appendable as the diagnostic escape hatch. Test fixtures that simulate
 // the owning emitters set AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 (the same escape
 // idiom as AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS in aidlc-state.ts).
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
+  // Its Stages added sends `next` back to a stage the work just passed over.
+  "STATE_UPGRADED",
   "STAGE_DEFINITION_CHANGED",
   "STAGE_OUTPUT_AMENDED",
   // The check's own record of a first refusal opens the gate on the next
@@ -2543,6 +2555,8 @@ function handleTurns(args: string[], projectDir: string): void {
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   // Extract --project-dir before general parsing

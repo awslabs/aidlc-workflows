@@ -32,6 +32,7 @@ import {
 } from "node:path";
 import {
   assertPluginContentHasNoSymlinks,
+  assertPluginCommands,
   assertSupportedPluginContributionPaths,
   pluginMarketplaceIssue,
   scanPluginFiles,
@@ -104,6 +105,7 @@ const CONTENT_DIRS = [
   "scopes",
   "agents",
   "knowledge",
+  "memory",
 ] as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -874,6 +876,7 @@ export function buildPluginProjection(
   const manifest = readPluginManifest(pluginRoot);
   const pluginName = pluginNameFromManifest(pluginRoot, manifest);
   assertSupportedPluginContributionPaths(manifest);
+  assertPluginCommands(manifest);
   const firstParty = options.firstParty === true;
   const marketplaceIssue = firstParty ? null : pluginMarketplaceIssue(manifest.aidlc);
   if (marketplaceIssue) {

@@ -20,17 +20,23 @@ import {
   sep,
 } from "node:path";
 import {
+  CHANGE_CONTROL_HEADING,
   frontmatterBlock,
+  GUARD_POLICY_HEADING,
   listField,
   parseStageFrontmatter,
   scalarField,
+  structuredField,
+  visibleMarkdownLines,
 } from "./aidlc-lib.ts";
+import { SETTING_FIELDS } from "./aidlc-learnings.ts";
 import {
   type StageFrontmatter,
   type ValidationContext,
   validateStageFrontmatter,
 } from "./aidlc-stage-schema.ts";
 import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
+import { CORE_COMMAND_WORDS, PLUGIN_COMMAND_NAME_RE, PLUGIN_COMMAND_SCRIPT_RE } from "./aidlc-command.ts";
 
 export type PluginValidationRule =
   | "plugin-root"
@@ -39,6 +45,7 @@ export type PluginValidationRule =
   | "manifest-shape"
   | "manifest-name"
   | "manifest-marketplace"
+  | "manifest-commands"
   | "content-symlink"
   | "stage-frontmatter"
   | "stage-schema"
@@ -76,7 +83,11 @@ export type PluginValidationRule =
   | "test-idempotency"
   | "test-live-mutation"
   | "create-target"
-  | "create-write";
+  | "create-write"
+  | "memory-level"
+  | "memory-lock"
+  | "memory-setting"
+  | "memory-file";
 
 export interface PluginValidationFinding {
   file: string;
@@ -144,6 +155,7 @@ const CANONICAL_CONTRIBUTION_PATHS: Record<string, string> = {
   sensors: "sensors/",
   knowledge: "knowledge/",
   tools: "tools/",
+  memory: "memory/",
 };
 const PLUGIN_SYMLINK_SCAN_DIRS = [
   ".aidlc-plugin",
@@ -154,6 +166,7 @@ const PLUGIN_SYMLINK_SCAN_DIRS = [
   "scopes",
   "agents",
   "knowledge",
+  "memory",
   "hooks",
 ] as const;
 
@@ -233,15 +246,6 @@ function contributionPathIssues(
       });
       continue;
     }
-    if (key === "memory") {
-      issues.push({
-        key,
-        message:
-          "aidlc.contributes.memory is not supported by the current plugin projection",
-        fix: "Remove the memory contribution until memory projection ships.",
-      });
-      continue;
-    }
     const canonical = CANONICAL_CONTRIBUTION_PATHS[key];
     if (canonical && value !== canonical) {
       issues.push({
@@ -316,6 +320,96 @@ export type PluginBaseProblem =
 
 // npm's range grammar, checked here because Bun.semver.satisfies, which plugin
 // sync uses, accepts any string: "garbage" satisfies every version.
+// A command a plugin names in its manifest: `aidlc <name>` runs `script`, one
+// file in the plugin's own tools/, and `aidlc --help` shows `description`.
+export type PluginCommandEntry = { script: string; description: string };
+export type PluginCommandIssue = { name?: string; message: string; fix: string };
+
+const PLUGIN_COMMAND_KEYS = new Set(["script", "description"]);
+const COMMANDS_SHAPE_FIX =
+  'Use "commands": {"<name>": {"script": "tools/<file>.ts", "description": "<one line>"}}.';
+
+/**
+ * The one reading of a manifest's `aidlc.commands`: validate and build report
+ * its issues, and the sync records the well-formed entries, a name AI-DLC's own
+ * commands have included (the command table skips it). Checks that need the
+ * plugin's files (the script exists, tools/ is contributed) are validate's.
+ */
+export function readPluginCommands(
+  aidlc: unknown,
+): { commands: Record<string, PluginCommandEntry>; issues: PluginCommandIssue[] } {
+  const commands: Record<string, PluginCommandEntry> = {};
+  const issues: PluginCommandIssue[] = [];
+  if (!isPlainRecord(aidlc) || aidlc.commands === undefined) return { commands, issues };
+  if (!isPlainRecord(aidlc.commands)) {
+    issues.push({ message: "aidlc.commands must be an object keyed by command name", fix: COMMANDS_SHAPE_FIX });
+    return { commands, issues };
+  }
+  const entries = Object.entries(aidlc.commands).sort(([left], [right]) => left.localeCompare(right));
+  for (const [name, value] of entries) {
+    if (!PLUGIN_COMMAND_NAME_RE.test(name)) {
+      issues.push({
+        name,
+        message: `command name "${name}" must be lowercase letters, digits and "-", start with a letter, and be at most 40 characters`,
+        fix: 'Rename it, for example "my-plugin-report".',
+      });
+      continue;
+    }
+    if (!isPlainRecord(value)) {
+      issues.push({ name, message: `command "${name}" must be an object with script and description`, fix: COMMANDS_SHAPE_FIX });
+      continue;
+    }
+    const unknown = Object.keys(value).filter((key) => !PLUGIN_COMMAND_KEYS.has(key)).sort();
+    if (unknown.length > 0) {
+      issues.push({
+        name,
+        message: `command "${name}" has unknown key${unknown.length === 1 ? "" : "s"} ${unknown.join(", ")}`,
+        fix: "A command takes only script and description.",
+      });
+      continue;
+    }
+    if (typeof value.script !== "string" || !PLUGIN_COMMAND_SCRIPT_RE.test(value.script)) {
+      issues.push({
+        name,
+        message: `command "${name}" script must be one .ts file directly in tools/, such as "tools/${name}.ts"`,
+        fix: `Put the script in tools/ and set "script": "tools/<file>.ts".`,
+      });
+      continue;
+    }
+    const description = typeof value.description === "string" ? value.description.trim() : "";
+    if (description === "" || /[\r\n]/.test(description) || description.length > 120) {
+      issues.push({
+        name,
+        message: `command "${name}" needs a description: one line of at most 120 characters, shown in aidlc --help`,
+        fix: `Set "description" to what 'aidlc ${name}' does, in a few words.`,
+      });
+      continue;
+    }
+    commands[name] = { script: value.script, description };
+    // Kept, so a name a later AI-DLC takes is skipped where a person sees it
+    // (pluginCommandTable, the sync's line); the author hears it here.
+    if (CORE_COMMAND_WORDS.has(name)) {
+      issues.push({
+        name,
+        message: `command name "${name}" is AI-DLC's own command`,
+        fix: `Pick another name: AI-DLC's own 'aidlc ${name}' keeps this one.`,
+      });
+    }
+  }
+  return { commands, issues };
+}
+
+/** Build refuses what validate reports, before anything is written. */
+export function assertPluginCommands(
+  manifest: Record<string, unknown>,
+  manifestFile = MANIFEST_REL.split(sep).join("/"),
+): void {
+  const { issues } = readPluginCommands(manifest.aidlc);
+  if (issues.length > 0) {
+    throw new Error(`${manifestFile}: ${issues.map((issue) => issue.message).join("; ")}`);
+  }
+}
+
 const RANGE_VERSION =
   String.raw`(?:\d+|[xX*])(?:\.(?:\d+|[xX*])){0,2}(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
 const RANGE_PLAIN = new RegExp(`^${RANGE_VERSION}$`);
@@ -856,7 +950,103 @@ function validateManifest(
     );
   }
 
+  const declared = readPluginCommands(manifest.aidlc);
+  for (const issue of declared.issues) {
+    addError(findings, displayFile, "manifest-commands", issue.message, issue.fix);
+  }
+  const named = Object.entries(declared.commands);
+  if (named.length > 0 && manifest.aidlc.contributes.tools !== CANONICAL_CONTRIBUTION_PATHS.tools) {
+    addError(
+      findings,
+      displayFile,
+      "manifest-commands",
+      "aidlc.commands needs aidlc.contributes.tools: a command's script ships in tools/",
+      'Add "tools": "tools/" to aidlc.contributes.',
+    );
+  }
+  for (const [name, entry] of named) {
+    const file = join(root, ...entry.script.split("/"));
+    if (!existsSync(file) || !statSync(file).isFile()) {
+      addError(
+        findings,
+        displayFile,
+        "manifest-commands",
+        `command "${name}" script ${entry.script} is not in the plugin`,
+        `Add ${entry.script}, or point the command at a script in tools/.`,
+      );
+    }
+  }
+
   return { pluginName: declaredName, base };
+}
+
+// A plugin's rules are practice rules in words: the level they land at is
+// the manifest's (aidlc.rulesLevel), and they carry no lock (Guard Policy) and
+// no setting field (SETTING_FIELDS, the one list of fields AI-DLC's tools
+// read from a rule file). Their own headings are nested at compose, never
+// refused.
+const RULE_PHASE_FILES = ["ideation", "inception", "construction", "operation"].map((phase) => `phases/${phase}.md`);
+
+function validateMemory(root: string, findings: MutableFindings): void {
+  const memory = join(root, "memory");
+  if (!existsSync(memory)) return;
+  const files = scanPluginFiles(memory).files.map((file) => posixRelative(memory, file)).sort();
+  const manifestFile = MANIFEST_REL.split(sep).join("/");
+  let level: unknown;
+  try {
+    const manifest = JSON.parse(readFileSync(join(root, MANIFEST_REL), "utf-8")) as { aidlc?: { rulesLevel?: unknown } };
+    level = manifest.aidlc?.rulesLevel;
+  } catch {
+    return; // validateManifest names it
+  }
+  if (files.includes("rules.md") && !["org", "team", "project"].includes(level as string)) {
+    addError(
+      findings,
+      manifestFile,
+      "memory-level",
+      level === undefined
+        ? "memory/rules.md needs aidlc.rulesLevel, the rule file its rules land in by default"
+        : `aidlc.rulesLevel must be org, team or project; got ${JSON.stringify(level)}`,
+      'Set "aidlc": {"rulesLevel": "team"} (or "org", "project"); an install can choose another with --rules-level.',
+    );
+  }
+  const fieldNames = [...new Set([...SETTING_FIELDS.values()].flat())];
+  for (const rel of files) {
+    const display = `memory/${rel}`;
+    if (rel !== "rules.md" && !RULE_PHASE_FILES.includes(rel)) {
+      addWarning(
+        findings,
+        display,
+        "memory-file",
+        "a plugin's rules are memory/rules.md and memory/phases/<ideation|inception|construction|operation>.md; this file is not read",
+        "Move its rules into memory/rules.md or the phase file they belong to.",
+      );
+      continue;
+    }
+    const lines = visibleMarkdownLines(readFileSync(join(memory, rel), "utf-8"));
+    for (const heading of [GUARD_POLICY_HEADING, CHANGE_CONTROL_HEADING]) {
+      if (lines.some((line) => line.trimEnd() === heading)) {
+        addError(
+          findings,
+          display,
+          "memory-lock",
+          `${heading} is a lock the team sets; a plugin ships rules only`,
+          `Remove the ${heading} section; the team or project sets Guard Policy in its own team.md or project.md.`,
+        );
+      }
+    }
+    for (const field of fieldNames) {
+      if (structuredField(lines.join("\n"), field) !== null) {
+        addError(
+          findings,
+          display,
+          "memory-setting",
+          `"${field}:" is a setting AI-DLC reads from a rule file; a plugin ships rules in words only`,
+          `Reword the line so it does not start with "${field}:", or leave the setting to the team's own team.md or project.md.`,
+        );
+      }
+    }
+  }
 }
 
 function validateStages(
@@ -1423,6 +1613,7 @@ export function validatePluginRoot(
   validateScopes(root, pluginName, findings, base, baseCheckout?.stages ?? null, options.coreStageSlugs);
   validateAgents(root, pluginName, findings);
   validateTools(root, findings);
+  validateMemory(root, findings);
   const composeHook = validateComposeHook(
     root,
     findings,

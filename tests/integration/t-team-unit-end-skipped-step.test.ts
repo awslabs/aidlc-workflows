@@ -115,7 +115,8 @@ describe("t-team-unit-end-skipped-step: a unit-end gate leaves out the step skip
         expect(auditBlockField(approval?.block ?? "", "Gate Stages")?.split(",")).toEqual(
           STAGE === "code-generation" ? [...WORKED, STAGE] : WORKED,
         );
-        expect(String(nextDirective(checkout).message ?? "")).toContain('Unit "alpha" is complete and approved in this checkout.');
+        // The Unit's done step: the offer to publish it.
+        expect(nextDirective(checkout)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha" });
         // The engine's turn marker, which a real install's .gitignore keeps out.
         appendFileSync(join(checkout, ".git", "info", "exclude"), "**/.aidlc-engine/engine-touch\n");
       },

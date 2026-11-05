@@ -13,6 +13,7 @@ import {
   staleStageLine,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
+import { withdrawnTurnPositions } from "./aidlc-record-core.ts";
 import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
@@ -402,16 +403,19 @@ function consumeIsApplicable(
   return !conditionalOn || !projectType || conditionalOn === projectType;
 }
 
-function captureInputBasis(
+// The concrete files each applicable input of `stage` resolves to, with the
+// stage that produces it: what the stage's Validation Basis records
+// (captureInputBasis), and what its gate reads for the Units with none
+// (unitInputGaps).
+function resolvedInputs(
   projectDir: string,
   stage: StageValidityNode,
   stages: readonly StageValidityNode[],
   projectType: "brownfield" | "greenfield" | null,
-  options: CaptureStageValidationOptions,
-): ArtifactBasis[] {
+  resolution: CaptureStageValidationOptions["resolution"],
+): { artifact: string; owner: StageValidityNode; required: boolean; instances: ArtifactInstance[] }[] {
   const producers = producersByArtifact(stages);
-  const inputs: ArtifactBasis[] = [];
-
+  const inputs: { artifact: string; owner: StageValidityNode; required: boolean; instances: ArtifactInstance[] }[] = [];
   for (const consume of stage.consumes ?? []) {
     if (!consumeIsApplicable(consume.conditional_on, projectType)) continue;
     const required = consume.required !== false;
@@ -420,21 +424,56 @@ function captureInputBasis(
     // producer. With no producer there is no observed edge to record.
     if (!required && owners.length === 0) continue;
     const owner = uniqueProducer(consume.artifact, producers);
-    const instances = resolveArtifactInstances(
-      projectDir,
-      consume.artifact,
-      owner,
-      options.resolution,
-    );
-    const basis = aggregateArtifactBasis(
-      consume.artifact,
-      owner.slug,
-      required,
-      instances,
-    );
+    const instances = resolveArtifactInstances(projectDir, consume.artifact, owner, resolution);
+    inputs.push({ artifact: consume.artifact, owner, required, instances });
+  }
+  return inputs;
+}
+
+function captureInputBasis(
+  projectDir: string,
+  stage: StageValidityNode,
+  stages: readonly StageValidityNode[],
+  projectType: "brownfield" | "greenfield" | null,
+  options: CaptureStageValidationOptions,
+): ArtifactBasis[] {
+  const inputs: ArtifactBasis[] = [];
+  for (const input of resolvedInputs(projectDir, stage, stages, projectType, options.resolution)) {
+    const basis = aggregateArtifactBasis(input.artifact, input.owner.slug, input.required, input.instances);
     if (basis) inputs.push(basis);
   }
   return sortedArtifactBases(inputs);
+}
+
+/**
+ * For each per-Unit stage that produces a required input of `stage`, the Units
+ * its files are expected for and the ones missing any of them, read the way
+ * captureStageValidationBasis reads them (a Unit whose kind needs none is not
+ * expected). Units in the order of their files.
+ */
+export function unitInputGaps(
+  projectDir: string,
+  stage: StageValidityNode,
+  stateContent: string,
+  stages: readonly StageValidityNode[] = loadGraph(),
+): { producer: string; units: string[]; missing: string[] }[] {
+  const gaps = new Map<string, { units: Set<string>; missing: Set<string> }>();
+  const inputs = resolvedInputs(projectDir, stage, stages, projectTypeFrom(stateContent), { stateContent });
+  for (const input of inputs) {
+    if (!input.required) continue;
+    for (const instance of input.instances) {
+      if (instance.unit === null) continue;
+      const gap = gaps.get(input.owner.slug) ?? { units: new Set<string>(), missing: new Set<string>() };
+      gap.units.add(instance.unit);
+      if (!fingerprintInstance(instance).present) gap.missing.add(instance.unit);
+      gaps.set(input.owner.slug, gap);
+    }
+  }
+  return [...gaps].map(([producer, gap]) => ({
+    producer,
+    units: [...gap.units],
+    missing: [...gap.units].filter((unit) => gap.missing.has(unit)),
+  }));
 }
 
 function captureOutputBasis(
@@ -585,10 +624,11 @@ export function parseStageValidationBasis(
 
 function orderedMainWorkflowEvents(audit: string): OrderedAuditEvent[] {
   if (audit.length === 0) return [];
-  const events = audit
-    .replaceAll("\r\n", "\n")
-    .split(/\n---\n/)
+  const blocks = audit.replaceAll("\r\n", "\n").split(/\n---\n/);
+  const withdrawn = withdrawnTurnPositions(blocks);
+  const events = blocks
     .map((block, position): OrderedAuditEvent | null => {
+      if (withdrawn.has(position)) return null;
       const event = auditBlockField(block, "Event");
       if (!event) return null;
       if (auditBlockField(block, "Workflow")?.startsWith("single-stage:")) {

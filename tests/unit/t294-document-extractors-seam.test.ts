@@ -269,7 +269,7 @@ describe("t294 absent by default — no harness is perturbed", () => {
 
   test("the runtime accessor returns null when nothing is configured", () => {
     // Absent is the NORMAL case, not an error: the tool then probes pdftotext on
-    // PATH and degrades to extractor_unavailable.
+    // PATH and, where it is missing, reads a PDF with AI-DLC's own reader.
     expect(documentExtractors()).toBeNull();
   });
 });

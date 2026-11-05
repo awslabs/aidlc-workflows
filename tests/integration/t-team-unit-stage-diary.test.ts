@@ -24,6 +24,7 @@ import {
   UNIT,
   cleanupTempDirs,
   clone,
+  asLeadsOwnCheckout,
   makeSeed,
   nextDirective,
   parallelDependencyBody,
@@ -80,6 +81,7 @@ describe("t-team-unit-stage-diary a team Unit keeps its stage diary in its own r
   test("on main working the Units unclaimed, a directive that names no Unit keeps main's own stage diary", () => {
     const { remote } = makeSeed(parallelDependencyBody());
     const checkout = clone(remote, "main-no-stance");
+    asLeadsOwnCheckout(checkout);
     const shared = join(checkout, ".claude", "knowledge", "aidlc-shared");
     mkdirSync(shared, { recursive: true });
     copyFileSync(join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md"), join(shared, "memory-template.md"));
@@ -94,6 +96,7 @@ describe("t-team-unit-stage-diary a team Unit keeps its stage diary in its own r
   test("on main working the Units unclaimed, the directive and the learnings step use the same Unit diary", () => {
     const { remote } = makeSeed(parallelDependencyBody());
     const checkout = clone(remote, "main-unclaimed");
+    asLeadsOwnCheckout(checkout);
     writeFileSync(
       seededStateFile(checkout),
       readFileSync(seededStateFile(checkout), "utf-8").replace(
@@ -101,6 +104,9 @@ describe("t-team-unit-stage-diary a team Unit keeps its stage diary in its own r
         "- **Unit Gate Rhythm**: per-stage\n- **Skeleton Stance**: on",
       ),
     );
+    // With a remote, the walk first asks whether to share the plan with the
+    // teams; "Build them here for now" runs next and the walk goes on.
+    expect(nextDirective(checkout)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["share"] });
     const directive = nextDirective(checkout);
     expect(directive).toMatchObject({ kind: "run-stage", stage: "functional-design" });
     const unit = directive.unit as string;

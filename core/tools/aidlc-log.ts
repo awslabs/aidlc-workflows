@@ -6,6 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -315,8 +316,10 @@ import {
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   APPROVAL_GATE_CHOICES,
+  recommendedChoices,
   SUMMARY_CONFIRMATION_CHOICES,
 } from "./aidlc-reply-reader.ts";
 
@@ -1126,6 +1129,12 @@ function keptMessageRefusal(pd: string): string | null {
     `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
+// Choices written in the grammar optionsList reads: the `|` form when one holds
+// a comma, else commas. The one writer of that list form here.
+function optionsText(choices: readonly string[]): string {
+  return choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+}
+
 // A question's choices given one --option each, so a choice may hold a comma
 // with no separator on the command line for a shell to read: they join any
 // --options list in the grammar optionsList reads.
@@ -1134,8 +1143,7 @@ function withEachOption(args: string[], flags: Record<string, string>): void {
   for (let i = 0; i < args.length - 1; i++) if (args[i] === "--option") each.push(args[++i]);
   delete flags.option;
   if (each.length === 0) return;
-  const choices = [...(flags.options === undefined ? [] : optionsList(flags.options)), ...each];
-  flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+  flags.options = optionsText([...(flags.options === undefined ? [] : optionsList(flags.options)), ...each]);
 }
 
 function handleDecision(args: string[]): void {
@@ -1236,6 +1244,8 @@ function handleDecision(args: string[]): void {
           )
         ? "[protected exact choices]"
         : flags.options;
+    const recommended = recommendedChoices(optionsList(fields.Options));
+    if (recommended.length > 0) fields.Recommended = optionsText(recommended);
   }
   if (flags.rationale) fields.Rationale = flags.rationale;
   // Which of the engine's own questions this is, as the step note's command
@@ -1418,9 +1428,12 @@ function sameInteractionScope(a: AuditShardEvent, b: AuditShardEvent): boolean {
 }
 
 function questionView(row: AuditShardEvent) {
+  // Only a row that kept the field lists it: an older row reads as it did.
+  const recommended = auditBlockField(row.block, "Recommended");
   return {
     question: auditBlockField(row.block, "Decision") ?? "",
     options: optionsList(auditBlockField(row.block, "Options")).filter(Boolean),
+    ...(recommended === null ? {} : { recommended: optionsList(recommended).filter(Boolean) }),
     ...interactionScope(row),
     askedAt: row.timestamp,
   };
@@ -2437,7 +2450,7 @@ function handleAnswer(args: string[]): void {
       }, namedProtectedReply(pd, flags.stage, fields.Session, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
-      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
+      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", { ...fields, ...personGitNameField(pd) });
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage, command_sha256: verificationCommand.sha256 }));
@@ -2456,7 +2469,7 @@ function handleAnswer(args: string[]): void {
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.
-      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);
+      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", { ...fields, ...personGitNameField(pd) });
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "construction-policy", stage: flags.stage }));
@@ -2612,7 +2625,7 @@ function handleAnswer(args: string[]): void {
         );
       }
       try {
-        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", fields);
+        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", { ...fields, ...personGitNameField(pd) });
       } catch (e) {
         // Restore the registry to its exact prior bytes (or absence) so no
         // authorization exists without the receipt that minted it. A restore
@@ -2727,6 +2740,7 @@ function handleAnswer(args: string[]): void {
               Fingerprint: planEvidence!.fingerprint,
               ...(personReply?.words ? { "Person Reply": personReply.words } : {}),
               ...(personReply ? { "Message Id": personReply.messageId } : {}),
+              ...personGitNameField(pd),
             });
           },
         );
@@ -2736,6 +2750,7 @@ function handleAnswer(args: string[]): void {
       }
       const changeNotices = [...planEvidence!.changeNotices, ...recorded.changeNotices];
       if (recorded.overridden) fields.Override = "yes";
+      Object.assign(fields, personGitNameField(pd));
       try {
         emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
       } catch (e) {
@@ -2782,6 +2797,7 @@ function handleAnswer(args: string[]): void {
       }
       try {
         if (flags.details === "Approve Plan") {
+          Object.assign(fields, personGitNameField(pd));
           emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
         } else {
           emitAudit(pd, "QUESTION_ANSWERED", fields);
@@ -5454,6 +5470,8 @@ let projectDir: string | undefined;
 let readOnlyCommand = false;
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   // Extract --project-dir
@@ -5550,9 +5568,10 @@ function error(msg: string, changeNotices: readonly string[] = []): never {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

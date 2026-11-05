@@ -131,6 +131,30 @@ describe("a native Windows install hands aidlc's arguments on as typed", () => {
         const first = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `& '${join(bin, "aidlc.cmd")}' version`]);
         expect(first.out).toContain(`aidlc ${AIDLC_VERSION}`);
         typed();
+
+        // A folder with a non-ASCII letter, from a console on code page 437 as a
+        // person's window is (the console a test runs in can be on UTF-8): the
+        // release's own lines the installer prints spell it byte for byte as the
+        // installer's own lines do, and the console's code page comes back.
+        const accented = join(root, "Jos\u00e9", "machine");
+        const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+        const printed = spawnSync("powershell.exe", [
+          "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+          "$e = [Console]::OutputEncoding; [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(437); " +
+            `try { & ${quote(join(release, "install.ps1"))} -From ${quote(release)} -NoModifyPath; $code = $LASTEXITCODE; ` +
+            "\"code page after: $([Console]::OutputEncoding.CodePage)\" } finally { [Console]::OutputEncoding = $e }; exit $code",
+        ], {
+          cwd: work,
+          encoding: "latin1",
+          env: { ...env, AIDLC_INSTALL_ROOT: accented, AIDLC_BIN_DIR: join(accented, "bin") },
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(printed.status, `${printed.stdout}${printed.stderr}`).toBe(0);
+        const out = `${printed.stdout}${printed.stderr}`;
+        const folder = /Command: (.+)\\bin\\aidlc\.exe/.exec(out)?.[1];
+        expect(folder, out).toBeDefined();
+        expect(out).toContain(`${folder}\\plugins`);
+        expect(out).toContain("code page after: 437");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

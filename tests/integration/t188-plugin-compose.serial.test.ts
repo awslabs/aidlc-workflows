@@ -990,7 +990,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(invocation.argv).toEqual(["engine", "plugin", "sync"]);
     expect(invocation.status).toBe(0);
     expect(invocation.signal).toBeNull();
-    expect(invocation.stdout).toBe("plugin sync complete: 1 plugin(s)\n");
+    // test-pro ships rules, so the sync says once where they went.
+    expect(invocation.stdout).toBe(
+      "plugin sync complete: 1 plugin(s)\n" +
+        "test-pro's rules are in team.md (and phases/inception.md), in a section of their own at the end. " +
+        "To keep them in org.md or project.md instead: /aidlc plugin select --rules-level test-pro=org\n",
+    );
     expect(invocation.stderr).toBe("");
     expect(invocation.error).toBeNull();
     expect(invocation.env?.AIDLC_HARNESS_DIR).toBe(".cursor");

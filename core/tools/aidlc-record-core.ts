@@ -1704,6 +1704,29 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
+export function gateStagesFromBlock(block: string): string[] {
+  const explicit = auditBlockField(block, "Gate Stages");
+  if (explicit) {
+    return explicit
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+  }
+  const stage = auditBlockField(block, "Stage");
+  return stage ? [stage] : [];
+}
+
+// A unit-end gate's stages the Unit skipped. Gate Stages keeps a skipped final
+// stage, where the gate sits, so the gate's own rows and pin still find it.
+export const GATE_SKIPPED_STAGES_FIELD = "Skipped Stages";
+
+// The stages a gate row's Request Changes starts again: never one the Unit
+// skipped, so the person's skip stands.
+export function gateStagesReopened(block: string): string[] {
+  const skipped = (auditBlockField(block, GATE_SKIPPED_STAGES_FIELD) ?? "").split(",").map((value) => value.trim());
+  return gateStagesFromBlock(block).filter((stage) => !skipped.includes(stage));
+}
+
 // This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
 // clone identity (see cloneIdentity). The clone-id token (not the PID) is the
 // cross-clone disambiguator: stable across every process in a clone (so the
@@ -1729,6 +1752,20 @@ export function auditShardName(projectDir: string): string {
   const name = `${identity.host}-${identity.token}.md`;
   AUDIT_SHARD_NAMES.set(key, name);
   return name;
+}
+
+// The work's plan was made in another checkout: every stage or gate row of the
+// work's own (one that names no Unit, as Inception's do) is in another clone's
+// shard, or this clone has written none. A team's clone stays one after it
+// builds a Unit, whose rows name the Unit; the lead's own checkout, and a copy
+// of it, keep the plan's rows in their own shard. Team routing shows such a
+// clone the board or the Units it can take, never the walk the lead keeps.
+export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
+  const ownShard = knownAuditShardName(projectDir);
+  const plan = rows.filter((row) =>
+    (row.event.startsWith("STAGE_") || row.event.startsWith("GATE_")) && /^\*\*Unit\*\*:/m.test(row.block) === false
+  );
+  return plan.length > 0 && plan.every((row) => basename(row.shard) !== ownShard);
 }
 
 // This clone's shard name when it is already known, without minting a token or
@@ -1840,6 +1877,36 @@ export function readAuditShardTexts(
 // than carrying its own copy of the grammar.
 export function auditShardBlocks(content: string): string[] {
   return content.replace(/\r\n/g, "\n").split(/\n---\n/);
+}
+
+// The HUMAN_TURN blocks a later HOST_TURN takes back, by position. The hook
+// records a Claude Code turn as the person's before Claude Code has written its
+// own row for it; once that row says the host started the turn (a scheduled
+// wake-up), settleClaudeTurns (aidlc-claude-turn-origin.ts) appends a HOST_TURN
+// naming the turn's Message Id after it, in the same clone's shard. Every
+// reader that counts a person's turns skips these, whether it walks parsed rows
+// (parseAuditShardEvents) or a shard's blocks itself.
+export function withdrawnTurnPositions(blocks: readonly string[]): Set<number> {
+  const withdrawn = new Set<number>();
+  // Most shards hold no such HOST_TURN: one substring test per block then.
+  if (!blocks.some((block) => block.includes("HOST_TURN") && block.includes("**Message Id**"))) return withdrawn;
+  const takenBack = new Set<string>();
+  for (let pos = blocks.length - 1; pos >= 0; pos--) {
+    const event = auditBlockField(blocks[pos], "Event");
+    const id = event === "HOST_TURN" || event === "HUMAN_TURN" ? auditBlockField(blocks[pos], "Message Id") : null;
+    if (id === null) continue;
+    if (event === "HOST_TURN") takenBack.add(id);
+    else if (takenBack.has(id)) withdrawn.add(pos);
+  }
+  return withdrawn;
+}
+
+// A shard's blocks without the turns a HOST_TURN took back (withdrawnTurnPositions),
+// for a reader that counts a person's turns in the text and needs no positions.
+export function auditShardTurnBlocks(content: string): string[] {
+  const blocks = auditShardBlocks(content);
+  const withdrawn = withdrawnTurnPositions(blocks);
+  return withdrawn.size === 0 ? blocks : blocks.filter((_, pos) => !withdrawn.has(pos));
 }
 
 // A shard file that a sync tool or a person copied (a "<shard> 2.md" conflict
@@ -1969,8 +2036,9 @@ export function parseAuditShardEvents(
 ): AuditShardEvent[] {
   const rows: AuditShardEvent[] = [];
   const blocks = auditShardBlocks(content);
+  const withdrawn = withdrawnTurnPositions(blocks);
   for (let pos = 0; pos < blocks.length; pos++) {
-    if (copied.has(pos)) continue;
+    if (copied.has(pos) || withdrawn.has(pos)) continue;
     const event = auditBlockField(blocks[pos], "Event");
     const timestamp = auditBlockField(blocks[pos], "Timestamp");
     if (!event || !timestamp) continue;

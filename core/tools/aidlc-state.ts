@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
@@ -97,6 +98,7 @@ import {
   extractMarkdownSection,
   filterProducesByKind,
   findStageBySlug,
+  isPerUnitStage,
   findAllEvents,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
@@ -104,6 +106,7 @@ import {
   freshReviewReceipts,
   unchangedChangeRequest,
   REVIEW_KEPT_FIELD,
+  GATE_SKIPPED_STAGES_FIELD,
   getField,
   guardRecoveryAnswerAdmits,
   readActiveDirectiveMarker,
@@ -177,7 +180,6 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseCheckboxes,
-  parseMemoryEntries,
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
@@ -258,7 +260,6 @@ import {
   withWorkspaceSourceStateCache,
   writeStateFile,
   writeUnitScopeStamp,
-  writeFileAtomic,
   answerModeStageStartedFields,
   keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
@@ -286,7 +287,8 @@ import {
   swarmWorkerWorktreeMeta,
   UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
-import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { chatTookStepHere, withdrawnTurnPositions } from "./aidlc-record-core.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
@@ -297,7 +299,9 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
 import {
+  stageLabel,
   stageValidationAuditFields,
+  unitInputGaps,
   VALIDATION_WARNING_FIELD,
 } from "./aidlc-validity.ts";
 import {
@@ -745,7 +749,9 @@ function unrecordedRevisionSinceGateOpen(
     file: string | null;
     recovered: boolean;
   }[] = [];
+  const withdrawn = withdrawnTurnPositions(blocks);
   for (let i = 0; i < blocks.length; i++) {
+    if (withdrawn.has(i)) continue;
     const ev = auditField(blocks[i], "Event");
     if (!ev || !RELEVANT.has(ev)) continue;
     events.push({
@@ -934,6 +940,8 @@ function assertWorkflowNotArchived(content: string, operation: string): void {
 class UnitWaveRouteRefusalError extends StateCommandError {}
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const args = [...argv];
 
   // Extract --project-dir flag
@@ -1178,9 +1186,10 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
@@ -2986,10 +2995,6 @@ function handleUnit(args: string[]): void {
       }
     }
 
-    const memoryEntries =
-      action === "complete" && waveMode
-        ? fanInWaveUnitMemory(pd, slug, unit)
-        : 0;
     const waveFingerprint =
       action === "complete" && waveMode
         ? reviewArtifactFingerprint(pd, stage, unit, {
@@ -3023,7 +3028,6 @@ function handleUnit(args: string[]): void {
       ...(waveMode
         ? {
             Mode: "wave",
-            "Wave memory entries": String(memoryEntries),
             "Artifact Fingerprint": waveFingerprint ?? "",
           }
         : {}),
@@ -3074,7 +3078,7 @@ function handleUnit(args: string[]): void {
       stage: slug,
       unit,
       timestamp,
-      ...(waveMode ? { wave: true, memory_entries: memoryEntries } : {}),
+      ...(waveMode ? { wave: true } : {}),
     }));
   });
 }
@@ -3266,56 +3270,6 @@ function requireEngineRoutedWaveUnit(
         "not currently expose that entry as build-complete, review-settled, and awaiting its completion receipt.",
     );
   }
-}
-
-function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
-  const headings = [
-    "Interpretations",
-    "Deviations",
-    "Tradeoffs",
-    "Open questions",
-  ] as const;
-  const rec = recordDir(pd);
-  if (rec === null) {
-    error(
-      `Refusing wave completion for unit "${unit}" of "${stage}": no active intent record directory exists.`,
-    );
-  }
-  const unitPath = join(rec, "construction", unit, stage, "memory.md");
-  const parentPath = join(rec, "construction", stage, "memory.md");
-  const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
-  const entries = parseMemoryEntries(unitContent);
-  if (entries.length === 0 && !existsSync(parentPath)) return 0;
-
-  let parentContent = existsSync(parentPath)
-    ? readFileSync(parentPath, "utf-8")
-    : `${headings.map((heading) => `## ${heading}\n`).join("\n")}\n`;
-  for (const heading of headings) {
-    if (!new RegExp(`^## ${heading}$`, "m").test(parentContent)) {
-      parentContent = `${parentContent.trimEnd()}\n\n## ${heading}\n`;
-    }
-  }
-
-  let added = 0;
-  for (const entry of entries) {
-    const digest = createHash("sha256")
-      .update(`${stage}\0${unit}\0${entry.heading}\0${entry.raw}`, "utf-8")
-      .digest("hex");
-    const marker = `<!-- aidlc-wave-memory:${unit}:${digest} -->`;
-    if (parentContent.includes(marker)) continue;
-    parentContent = appendUnderHeading(
-      parentContent,
-      `## ${entry.heading}`,
-      `\n${entry.raw}\n${marker}\n`,
-    );
-    added++;
-  }
-
-  mkdirSync(dirname(parentPath), { recursive: true });
-  if (!existsSync(parentPath) || added > 0) {
-    writeFileAtomic(parentPath, parentContent.endsWith("\n") ? parentContent : `${parentContent}\n`);
-  }
-  return added;
 }
 
 // The unit's missing REQUIRED artifacts (kind-filtered like the engine's
@@ -6609,6 +6563,7 @@ interface TeamGateContext {
   unit: string;
   scope: UnitGateScope;
   stages: NonNullable<ReturnType<typeof findStageBySlug>>[];
+  skipped?: string[];
 }
 
 function teamGateContext(
@@ -6659,13 +6614,14 @@ function teamGateContext(
   // The gate covers the stages this Unit ran: one skipped for it (UNIT_SKIPPED
   // in the current attempt) owes no artifacts and no review, and Request
   // Changes must not reopen it, as a construction checkpoint's gate leaves out
-  // a stage skipped for every Unit.
+  // a stage skipped for every Unit. The final stage, where the gate sits,
+  // stays in its stages and is named skipped (GATE_SKIPPED_STAGES_FIELD).
+  const skipped = stages.filter((entry) => unitSkippedUnits(pd, entry.slug, undefined, content).has(unit));
   return {
     unit,
     scope: "unit-end",
-    stages: stages.filter(
-      (entry) => entry === final || !unitSkippedUnits(pd, entry.slug, undefined, content).has(unit),
-    ),
+    stages: stages.filter((entry) => entry === final || !skipped.includes(entry)),
+    skipped: skipped.filter((entry) => entry === final).map((entry) => entry.slug),
   };
 }
 
@@ -7349,6 +7305,39 @@ export function leftOutNotice(pd: string, stage: GateStage, unit: string | null 
   }
 }
 
+// Which Units a per-Unit stage that runs for every Unit (Code Generation) has
+// not finished, said by the stage that reads its work first (#3531): its
+// `requires_stage` names it, so a stage after it does not say it again.
+// Counted from the files the stage's Validation Basis records
+// (unitInputGaps). A design stage runs for a Unit only when its condition
+// holds, so a Unit without its documents is the plan, not a gap, and is not
+// said. Said with the gate, and with an approval that opened the gate in the
+// same step. A per-Unit gate, or nothing missing, says nothing. Said with
+// Sensors off too: it is the record, not a check.
+export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: string | null = null): string | null {
+  if (unit !== null || isPerUnitStage(stage)) return null;
+  try {
+    const gaps = unitInputGaps(pd, stage, readStateFile(pd)).filter((gap) =>
+      gap.missing.length > 0 && (stage.requires_stage ?? []).includes(gap.producer) &&
+      findStageBySlug(gap.producer)?.execution === "ALWAYS");
+    if (gaps.length === 0) return null;
+    const and = (names: readonly string[]): string =>
+      names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    const units = (names: readonly string[]): string => `unit${names.length === 1 ? "" : "s"} ${and(names)}`;
+    const stageName = stageLabel(stage, stage.slug) ?? stage.slug;
+    // What the record backs: the stage has not finished for them, so some of
+    // their work may not be there (a Unit can have its source but not its
+    // summary).
+    return gaps.map(({ producer, missing }) => {
+      const from = stageLabel(findStageBySlug(producer), producer) ?? producer;
+      return `${from} has not finished for ${units(missing)}, so ${missing.length === 1 ? "its" : "their"} code ` +
+        `may be missing from ${stageName}.`;
+    }).join(" ");
+  } catch {
+    return null;
+  }
+}
+
 // A stage artifact may list the decisions only the person can make in a fenced
 // `aidlc-decisions` block (yaml: `decisions:` then `- id: <id>` items, with
 // `decision:`, `owner:` and `blocking:` beside each). The gate records the ids;
@@ -7423,6 +7412,7 @@ function teamGateFields(
     Unit: context.unit,
     "Gate Scope": context.scope,
     "Gate Stages": context.stages.map((entry) => entry.slug).join(","),
+    ...(context.skipped?.length ? { [GATE_SKIPPED_STAGES_FIELD]: context.skipped.join(",") } : {}),
     ...claimAttemptFields(resolveProjectDir(projectDir), context.unit),
   };
 }
@@ -7988,6 +7978,7 @@ function handleApprove(args: string[]): void {
             }
           : {}),
         ...(teamPersonCall.unfinishedReviews.length > 0 ? { Review: "not finished" } : {}),
+        ...personGitNameField(pd),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8168,6 +8159,7 @@ function handleApprove(args: string[]): void {
     } else if (!autonomousDecision) {
       Object.assign(gateFields, personsWordsFields(pd, slug, message), approvesTogetherFields(listedTogether));
     }
+    const theirs = together !== null || !autonomousDecision;
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
@@ -8175,6 +8167,7 @@ function handleApprove(args: string[]): void {
     if ((personCall?.unfinishedReviews.length ?? 0) > 0) gateFields.Review = "not finished";
     Object.assign(gateFields, briefDigestField(pd, stage, undefined), decisionsAcceptedOpenField(pd, slug, undefined));
     if (stage.workspace_requires) Object.assign(gateFields, sourceWorkFields());
+    if (theirs) Object.assign(gateFields, personGitNameField(pd));
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -8516,6 +8509,7 @@ function handleReject(args: string[]): void {
                 reviewFindingDispositions,
             }
           : {}),
+        ...personGitNameField(pd),
       });
       emitAudit(pd, "STAGE_REVISING", {
         ...fields,
@@ -8562,6 +8556,7 @@ function handleReject(args: string[]): void {
       rejFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
     }
+    if (!autonomousDecision) Object.assign(rejFields, personGitNameField(pd));
     emitAudit(pd, "GATE_REJECTED", rejFields);
     emitAudit(pd, "STAGE_REVISING", {
       Stage: slug,
@@ -8834,6 +8829,7 @@ function handleSkip(args: string[]): void {
           checkpoints,
         ),
         ...claimAttemptFields(pd, unit),
+        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8892,6 +8888,7 @@ function handleSkip(args: string[]): void {
     try {
       const fields: Record<string, string> = { Stage: slug };
       if (reason) fields.Reason = reason;
+      if (isPersonAskedSkipReason(reason)) Object.assign(fields, personGitNameField(pd));
       emitAudit(pd, "STAGE_SKIPPED", fields);
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -9016,6 +9013,7 @@ function handleSkip(args: string[]): void {
         Stage: slug,
         Reason: reason,
         "Skip Kind": "conditional-runtime",
+        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
       });
     }
     if (nextStage) {
