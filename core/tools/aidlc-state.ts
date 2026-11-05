@@ -178,7 +178,6 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseCheckboxes,
-  parseMemoryEntries,
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
@@ -259,7 +258,6 @@ import {
   withWorkspaceSourceStateCache,
   writeStateFile,
   writeUnitScopeStamp,
-  writeFileAtomic,
   answerModeStageStartedFields,
   keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
@@ -2987,10 +2985,6 @@ function handleUnit(args: string[]): void {
       }
     }
 
-    const memoryEntries =
-      action === "complete" && waveMode
-        ? fanInWaveUnitMemory(pd, slug, unit)
-        : 0;
     const waveFingerprint =
       action === "complete" && waveMode
         ? reviewArtifactFingerprint(pd, stage, unit, {
@@ -3024,7 +3018,6 @@ function handleUnit(args: string[]): void {
       ...(waveMode
         ? {
             Mode: "wave",
-            "Wave memory entries": String(memoryEntries),
             "Artifact Fingerprint": waveFingerprint ?? "",
           }
         : {}),
@@ -3075,7 +3068,7 @@ function handleUnit(args: string[]): void {
       stage: slug,
       unit,
       timestamp,
-      ...(waveMode ? { wave: true, memory_entries: memoryEntries } : {}),
+      ...(waveMode ? { wave: true } : {}),
     }));
   });
 }
@@ -3267,56 +3260,6 @@ function requireEngineRoutedWaveUnit(
         "not currently expose that entry as build-complete, review-settled, and awaiting its completion receipt.",
     );
   }
-}
-
-function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
-  const headings = [
-    "Interpretations",
-    "Deviations",
-    "Tradeoffs",
-    "Open questions",
-  ] as const;
-  const rec = recordDir(pd);
-  if (rec === null) {
-    error(
-      `Refusing wave completion for unit "${unit}" of "${stage}": no active intent record directory exists.`,
-    );
-  }
-  const unitPath = join(rec, "construction", unit, stage, "memory.md");
-  const parentPath = join(rec, "construction", stage, "memory.md");
-  const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
-  const entries = parseMemoryEntries(unitContent);
-  if (entries.length === 0 && !existsSync(parentPath)) return 0;
-
-  let parentContent = existsSync(parentPath)
-    ? readFileSync(parentPath, "utf-8")
-    : `${headings.map((heading) => `## ${heading}\n`).join("\n")}\n`;
-  for (const heading of headings) {
-    if (!new RegExp(`^## ${heading}$`, "m").test(parentContent)) {
-      parentContent = `${parentContent.trimEnd()}\n\n## ${heading}\n`;
-    }
-  }
-
-  let added = 0;
-  for (const entry of entries) {
-    const digest = createHash("sha256")
-      .update(`${stage}\0${unit}\0${entry.heading}\0${entry.raw}`, "utf-8")
-      .digest("hex");
-    const marker = `<!-- aidlc-wave-memory:${unit}:${digest} -->`;
-    if (parentContent.includes(marker)) continue;
-    parentContent = appendUnderHeading(
-      parentContent,
-      `## ${entry.heading}`,
-      `\n${entry.raw}\n${marker}\n`,
-    );
-    added++;
-  }
-
-  mkdirSync(dirname(parentPath), { recursive: true });
-  if (!existsSync(parentPath) || added > 0) {
-    writeFileAtomic(parentPath, parentContent.endsWith("\n") ? parentContent : `${parentContent}\n`);
-  }
-  return added;
 }
 
 // The unit's missing REQUIRED artifacts (kind-filtered like the engine's

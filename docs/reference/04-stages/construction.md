@@ -240,8 +240,8 @@ paired-review state, and whether its wave completion receipt is still required.
 Builders receive the parent stage file, inline context roster, warnings, and
 exact accumulated steering content. A blocked builder withholds an applicable
 required path, not an optional or kind-exempt path. After build and review,
-`unit complete --wave` verifies the live entry, fans Unit diary entries into the
-parent diary idempotently, and emits `UNIT_COMPLETED`. The engine holds the
+`unit complete --wave` verifies the live entry and emits `UNIT_COMPLETED`; each
+Unit's notes stay in its own diary. The engine holds the
 current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch

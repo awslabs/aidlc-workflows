@@ -414,6 +414,44 @@ describe("t342 Construction checkpoint routing", () => {
     expect(counted()).toBe(2);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A Unit keeps its notes in its own folder; work started before that kept
+  // them in the one stage diary. A Unit's checkpoint counts its own diary and
+  // its notes in the stage diary, never another Unit's.
+  test("a Unit's checkpoint counts its own diary and its older notes in the stage diary", () => {
+    const p = fixture();
+    const surface = learningsSurface(p);
+    const dash = "—";
+    const write = (path: string, lines: string[]) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, `${lines.join("\n")}\n`);
+    };
+    const construction = join(seededRecordDir(p), "construction");
+    write(join(construction, "functional-design", "memory.md"), [
+      "## Interpretations",
+      `- 2026-10-05T10:00:00Z [unit alpha] ${dash} alpha keeps its own store; it owns the data`,
+      `- 2026-10-05T10:05:00Z ${dash} every Unit logs in UTC; the team asked for it`,
+      `- 2026-10-05T11:00:00Z [unit beta] ${dash} beta reads the store through alpha; no second copy`,
+    ]);
+    const counted = () => {
+      const result = surface("functional-design");
+      expect(result.status, result.stderr).toBe(0);
+      return (JSON.parse(result.stdout) as { memory_entries_total: number }).memory_entries_total;
+    };
+    cover(p, "alpha");
+    write(join(construction, "alpha", "functional-design", "memory.md"), [
+      "## Tradeoffs", `- 2026-11-05T10:00:00Z ${dash} one list over a grid; fewer clicks`,
+    ]);
+    write(join(construction, "beta", "functional-design", "memory.md"), [
+      "## Tradeoffs", `- 2026-11-05T11:00:00Z ${dash} beta's own note; not alpha's`,
+    ]);
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    expect(counted()).toBe(3);
+    approve(p, "alpha");
+    cover(p, "beta");
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    expect(counted()).toBe(3);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the working skeleton's checkpoint offers the learnings of the stages its Unit walked", () => {
     const p = fixture({ stance: "on", iteration: "stage-major" });
     seedBoltDag(p, [{ name: "beta", depends_on: ["alpha"] }, "alpha"], [["alpha"], ["beta"]]);

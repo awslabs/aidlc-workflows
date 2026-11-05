@@ -161,7 +161,7 @@ Each file carries topical `##` headings (Way of Working, Testing Posture, Deploy
 
 The rule files are not static: the learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM writes observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions), and the orchestrator later performs the admission comparison. Candidate extraction and persistence are deterministic tools; selections and conflict disposition are human decisions:
 
-1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
+1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md`, a per-Unit stage's in each Unit's `<record>/construction/<unit>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
 2. **Surface (tool).** At the approval gate, `aidlc engine learnings surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
 4. **Admission check (orchestrator LLM).** The orchestrator compares each kept learning against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
