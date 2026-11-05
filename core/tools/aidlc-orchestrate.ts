@@ -14015,7 +14015,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         const dag = resolveBoltBatches(pd);
         const unitWorkLeft = dag.state === "ok" &&
           dag.batches.flat().some((unit) => !model.mergedUnits.has(unit));
-        const teamsTakeUnits = cachedClaimFanoutActive(pd) || teamSharedHere(pd) || planMadeElsewhere(pd);
+        const teamsTakeUnits = cachedClaimFanoutActive(pd, stateContent) || teamSharedHere(pd) || planMadeElsewhere(pd);
         if (board.awaitingMerge.length > 0 || (unitWorkLeft && teamsTakeUnits)) {
           lastSeen();
           emit(noticeDirective(

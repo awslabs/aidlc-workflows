@@ -30321,7 +30321,11 @@ export function worktreeClaimBoundaryMatches(
 // still says `claimed`, a landed Unit's included (land never releases it). The
 // guard below and `next` in an unscoped team checkout (aidlc-orchestrate.ts,
 // routeNext) both read it, so `next` never hands out Unit work the guard refuses.
-export function cachedClaimFanoutActive(projectDir: string): boolean {
+// At the home of teams that build their Units as work of their own, a claim is
+// held for a team elsewhere and never keeps the home from the Units no team
+// holds.
+export function cachedClaimFanoutActive(projectDir: string, stateContent?: string): boolean {
+  if (unitTeams().homeLocation(stateContent ?? readStateFile(projectDir)) !== null) return false;
   const cache = readUnitClaimRegistryCache(projectDir);
   const space = activeSpace(projectDir);
   const intentUuid = activeIntentUuid(projectDir, space);
@@ -30384,9 +30388,7 @@ export function validateLiveUnitScope(
   if (!isTeamUnitOwnership(state)) return null;
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
-    // The home of teams that build their Units as work of their own works the
-    // Units no team holds itself.
-    if (cachedClaimFanoutActive(pd) && unitTeams().homeLocation(state) === null) {
+    if (cachedClaimFanoutActive(pd, state)) {
       throw new Error(
         "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is " +
           `claimed with \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,
