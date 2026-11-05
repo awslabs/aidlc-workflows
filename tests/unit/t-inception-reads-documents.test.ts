@@ -22,15 +22,17 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   FIXTURES_DIR,
+  intentsDirOf,
   resetAidlcEnv,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { documentInputRequestFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { documentsCard, documentsDir, onboard, readIndex } from "../../core/tools/aidlc-knowledge.ts";
-import { activeIntentUuid } from "../../core/tools/aidlc-lib.ts";
+import { activeIntentUuid, setActiveIntentCursor, writeSessionBinding } from "../../core/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -88,6 +90,31 @@ function stageStep(proj: string): Record<string, unknown> {
   }
   throw new Error("the rules parts did not reach the step in 10 hops");
 }
+
+// document-input --onboard as the agent runs it, in `chat` when given, with the
+// path written where each record's step reads it.
+function namedOnboard(proj: string, named: string, chat?: string): void {
+  for (const record of [DEFAULT_RECORD_DIR, OTHER_RECORD]) {
+    const engine = join(intentsDirOf(proj, DEFAULT_SPACE), record, ".aidlc-engine");
+    if (existsSync(join(intentsDirOf(proj, DEFAULT_SPACE), record))) {
+      mkdirSync(engine, { recursive: true });
+      writeFileSync(join(engine, "document-input-path"), `${named}\n`);
+    }
+  }
+  const env: Record<string, string | undefined> = { ...process.env, ...(chat ? { AIDLC_SESSION_OVERRIDE: chat } : {}) };
+  for (const name of ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_CHILD_SESSION", "CODEX_THREAD_ID", "KIRO_SESSION_ID"]) {
+    delete env[name];
+  }
+  const r = spawnSync(BUN, [UTILITY, "document-input", "--onboard", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env,
+  });
+  expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+}
+
+const OTHER_RECORD = "second-work-00000002";
+const OTHER_UUID = "00000000-0000-7000-8000-000000000002";
 
 function cardPath(directive: Record<string, unknown>): string | undefined {
   return ((directive.inline_context_paths as string[] | undefined) ?? []).find((path) => path.endsWith(CARD));
@@ -161,5 +188,30 @@ describe("t-inception-reads-documents: an Inception stage reads the team's docum
     const row = readIndex(proj, DEFAULT_SPACE).documents.find((entry) => entry.source.path === "documents/brief.pdf");
     expect(row?.related_intent_ids, r.stdout).toEqual([activeIntentUuid(proj) as string]);
     expect(existsSync(join(documentsDir(proj, DEFAULT_SPACE), "brief.pdf"))).toBe(true);
+  });
+
+  test("a document already in the knowledge base for the whole space keeps its scope when it is named again", () => {
+    const proj = project("requirements-analysis");
+    put(proj, "vision.pdf", "%PDF-1.7\nvision\n");
+    expect(onboard(proj, DEFAULT_SPACE, undefined, new Date().toISOString()).refused).toBeUndefined();
+    namedOnboard(proj, `aidlc/spaces/${DEFAULT_SPACE}/knowledge/documents/vision.pdf`);
+    const row = readIndex(proj, DEFAULT_SPACE).documents.find((entry) => entry.source.path === "documents/vision.pdf");
+    expect(row?.related_intent_ids).toBeUndefined();
+  });
+
+  test("a document named in one chat is filed for that chat's work, not the work the selection is on", () => {
+    const proj = project("requirements-analysis");
+    const intents = intentsDirOf(proj, DEFAULT_SPACE);
+    mkdirSync(join(intents, OTHER_RECORD), { recursive: true });
+    writeFileSync(join(intents, OTHER_RECORD, "aidlc-state.md"), readFileSync(seededStateFile(proj), "utf-8"));
+    const registry = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8")) as Array<Record<string, unknown>>;
+    registry.push({ uuid: OTHER_UUID, slug: "second-work", dirName: OTHER_RECORD, status: "in-flight" });
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
+    setActiveIntentCursor(proj, DEFAULT_RECORD_DIR);
+    writeSessionBinding(proj, "sess-second-work-0001", DEFAULT_SPACE, OTHER_RECORD, "switch");
+    writeFileSync(join(proj, "notes.pdf"), Buffer.from("%PDF-1.7\nnotes\n"));
+    namedOnboard(proj, "notes.pdf", "sess-second-work-0001");
+    const row = readIndex(proj, DEFAULT_SPACE).documents.find((entry) => entry.source.path === "documents/notes.pdf");
+    expect(row?.related_intent_ids).toEqual([OTHER_UUID]);
   });
 });
