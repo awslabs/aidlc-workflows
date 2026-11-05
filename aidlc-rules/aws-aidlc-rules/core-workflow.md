@@ -23,6 +23,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Load `common/process-overview.md` for workflow overview
 - Load `common/session-continuity.md` for session resumption guidance
 - Load `common/content-validation.md` for content validation requirements
+- Load `common/onboarding-index.md` for onboarding index (`000-index.md`) generation rules
 - Load `common/question-format-guide.md` for question formatting rules
 - Reference these throughout the workflow execution
 
@@ -56,6 +57,12 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Escape special characters properly
 - Provide text alternatives for complex visual content
 - Test content parsing compatibility
+
+## MANDATORY: Onboarding Index Maintenance
+**CRITICAL**: Immediately after writing a stage's artifacts, before presenting stage completion, create or update the affected `000-index.md` files per `common/onboarding-index.md`:
+- The stage-artifact folder's own index
+- Its parent phase folder's index
+- The root `aidlc-docs/000-index.md`
 
 ## MANDATORY: Question File Format
 **CRITICAL**: When asking questions at any phase, you MUST follow question format guidelines.
@@ -513,13 +520,17 @@ The Operations stage will eventually include:
 ├── [project-specific structure]    # Varies by project (see code-generation.md)
 │
 ├── aidlc-docs/                     # 📄 DOCUMENTATION ONLY
+│   ├── 000-index.md                # Onboarding index — see onboarding-index.md
 │   ├── inception/                  # 🔵 INCEPTION PHASE
+│   │   ├── 000-index.md
 │   │   ├── plans/
 │   │   ├── reverse-engineering/    # Brownfield only
+│   │   │   └── 000-index.md
 │   │   ├── requirements/
 │   │   ├── user-stories/
 │   │   └── application-design/
 │   ├── construction/               # 🟢 CONSTRUCTION PHASE
+│   │   ├── 000-index.md
 │   │   ├── plans/
 │   │   ├── {unit-name}/
 │   │   │   ├── functional-design/
