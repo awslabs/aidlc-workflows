@@ -989,6 +989,26 @@ export function appendMainHumanTurn(projectDir: string): void {
   );
 }
 
+/** The lead's own checkout: this clone ran the work, so its own shard holds
+ *  the work's approvals (Inception's last gate here), and the walk that
+ *  builds Units here is its step, never the board a fresh clone of the work
+ *  shows (workRanElsewhere). makeSeed's clone has no rows of its own. */
+export function asLeadsOwnCheckout(projectDir: string): void {
+  const shard = join(seededAuditDir(projectDir), auditShardName(projectDir));
+  const existing = existsSync(shard) ? readFileSync(shard, "utf-8") : "";
+  writeFileSync(
+    shard,
+    `${existing}## Gate Approved
+**Timestamp**: 2026-08-19T23:00:00Z
+**Event**: GATE_APPROVED
+**Stage**: units-generation
+**User Input**: Approve
+
+---
+`,
+  );
+}
+
 /** The person's reply to the merge gate the pin showed: a main-shard human
  *  turn stamped after the pin (both are second-precision), so it is the turn
  *  the gate counts and the turn that ran the pin is not. */

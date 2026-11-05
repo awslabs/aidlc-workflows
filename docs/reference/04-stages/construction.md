@@ -200,15 +200,19 @@ routes only the stamped Unit and carries the claim generation on lifecycle,
 review, gate, and fork evidence. Unscoped main emits a terminal fan-out notice
 while claims are live. `aidlc-unit.ts release <unit>` writes a tombstone instead
 of deleting the ref, invalidating stale attempts while preserving history. A
-participant clone opts into the guided claim picker once with
-`aidlc-unit.ts participate`; facilitator main deliberately omits that marker.
+fresh clone of the work (every stage or gate row of it in another clone's shard,
+`workRanElsewhere`) is offered the Units open to take without the participant
+marker, which still opts a clone into the picker by hand
+(`aidlc-unit.ts participate`); facilitator main omits it.
 Scoped routing and receipt writes are offline-first: the claim-time stamp is
 authoritative. Registry liveness is rechecked only at claim-sensitive
 boundaries such as fork/release; an unavailable remote warns and proceeds from
 the stamp, while an online stale or released attempt is refused.
 
-Completed teams commit and run `aidlc unit publish <unit>`. Unscoped main then
-pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
+A completed team is asked once whether to commit and publish
+(`aidlc unit publish <unit> --commit`). An unscoped checkout reads the teams'
+claim refs from the remote on each `next` and offers a published Unit for
+review, then pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
 Plan Approval without materializing a worktree, records one human merge gate,
 and lands the candidate through `aidlc unit land`. Git content lands before the
 Unit row is folded; main-owned state/runtime markers are retained, the team's

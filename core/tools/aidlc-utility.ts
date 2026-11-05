@@ -193,7 +193,7 @@ import {
   auditFilePath,
   auditShardHost,
   auditShards,
-  knownAuditShardName,
+  workRanElsewhere,
   assertChangeControlLedgerWritable,
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
@@ -5329,10 +5329,7 @@ export async function collectDoctorReport(
     // while audit shards travel in commits. Progress that only other clones'
     // shards record says nothing about this clone's hooks, and the hooks step
     // would be aimed at the wrong machine.
-    const ownShard = knownAuditShardName(projectDir);
-    const ranElsewhere = stageOrGateEvents.length > 0 &&
-      stageOrGateEvents.every((event) => basename(event.shard) !== ownShard);
-    if (ranElsewhere) {
+    if (workRanElsewhere(projectDir, auditShardEvents)) {
       const hosts = [
         ...new Set(
           stageOrGateEvents

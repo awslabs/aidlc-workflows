@@ -12238,6 +12238,51 @@ export function clearEngineAskMark(projectDir: string, name: string): void {
   if (path !== null) removeRuntimeFile(path);
 }
 
+// A team hand-over question (share, join, publish, review, push) is put once in
+// the state it is due in: its mark names the offer and that state, so a new
+// state is a new mark and the reply that does not take it never meets it again.
+export function teamHandoverMarkName(kind: string, key: string): string {
+  return `team-handover-${kind}-${key.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 120)}.json`;
+}
+
+const TEAM_SHARED = "team-shared.json";
+
+// This checkout shared the plan with the teams (`aidlc unit share`), so it
+// shows the board from then on, not the walk that builds the Units here.
+export function noteTeamShared(projectDir: string): void {
+  noteEngineAskMark(projectDir, TEAM_SHARED);
+}
+
+export function teamSharedHere(projectDir: string): boolean {
+  return engineAskMark(projectDir, TEAM_SHARED) !== null;
+}
+
+// A hand-over that did not happen (a push the remote refused) is due again.
+export function clearTeamHandoverMarks(projectDir: string, kinds: readonly string[]): void {
+  const root = recordDir(projectDir);
+  if (root === null) return;
+  const dir = join(root, ".aidlc-engine");
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (kinds.some((kind) => name.startsWith(`team-handover-${kind}-`))) removeRuntimeFile(join(dir, name));
+  }
+}
+
+// The work was run from another checkout: every stage or gate row of it is in
+// another clone's shard, or this clone has written none (a fresh clone of it).
+// Doctor's hook check aims at this machine only when it is not; team routing
+// shows a fresh clone the board, never the walk the lead's checkout keeps.
+export function workRanElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
+  const ownShard = knownAuditShardName(projectDir);
+  const progress = rows.filter((row) => row.event.startsWith("STAGE_") || row.event.startsWith("GATE_"));
+  return progress.length > 0 && progress.every((row) => basename(row.shard) !== ownShard);
+}
+
 const PROJECT_TYPE_ASK = "project-type-ask.json";
 
 export function noteProjectTypeAsked(projectDir: string): void {

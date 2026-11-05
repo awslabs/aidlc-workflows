@@ -49,7 +49,8 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
-| `/aidlc unit publish <unit>` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref |
+| `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
+| `/aidlc unit publish <unit> [--commit]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the work first |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
 | `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
@@ -689,20 +690,43 @@ successor attempt and prevents a lost-output retry from tombstoning it.
 
 Write the gitignored participant marker for this clone. A subsequent bare
 `/aidlc` on unscoped main emits the typed Unit picker with claimable, already
-claimed, and dependency-blocked rows; a facilitator checkout without the marker
-receives the terminal fan-out notice instead.
+claimed, and dependency-blocked rows. A fresh clone of the shared work does not
+need it: its `/aidlc` offers the Units open to take on its own. A facilitator
+checkout without the marker receives the terminal fan-out notice instead.
 
 ```
 /aidlc unit participate
 ```
 
+### `/aidlc unit share` - Share main with the teams
+
+Run from a checkout of team work that holds no Unit claim, on the integration
+branch:
+
+```bash
+/aidlc unit share
+```
+
+It commits what git shows changed here (files git does not track included,
+ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
+`opencode.json` left out), then pushes the integration branch to the remote
+with a plain push, never forced, so the teams can take Units from the plan or
+see a Unit that landed. After it, this checkout shows the board instead of
+building Units. A push the remote refuses keeps the commit and says why; pull
+the branch, then share again. `/aidlc` offers this step itself when it is due:
+before a Unit would start on the lead's checkout, and after a land the remote
+does not have yet.
+
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 
 Run from the scoped team checkout after committing its artifacts, source, state
-mirror, and audit shard:
+mirror, and audit shard, or with `--commit` to commit them first (what git shows
+changed, as `share` commits it); `/aidlc` offers that step itself when the
+Unit is complete and approved:
 
 ```bash
 /aidlc unit publish user-profile-api
+/aidlc unit publish user-profile-api --commit
 ```
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref

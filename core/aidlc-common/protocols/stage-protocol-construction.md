@@ -308,18 +308,19 @@ gitignored checkout-local scope stamp. A stamped checkout executes only that
 Unit's active per-unit Construction stages and gates; every lifecycle, review,
 gate, and fork operation must name the stamped Unit and current attempt
 generation. A terminal `notice` means main is acting as the fan-out dispatcher:
-print it verbatim and stop. A participant clone runs `aidlc-unit.ts participate`
-once to opt into the guided picker; the unmarked facilitator main remains the
-notice surface. Release runs only from unscoped main via
+print it verbatim and stop. A team's hand-overs (sharing the plan, taking a
+Unit, publishing it, reviewing a published one, pushing main after a land) come
+as `ask_type: team-handover` questions with a command for each choice. Release runs only from unscoped main via
 `aidlc-unit.ts release <unit>` and leaves a generation-bumping tombstone ref.
 Scoped `next`, lifecycle, decision, review, and gate writes trust the locally
 validated claim-time stamp and never require the network. Fork/release are
 claim-sensitive boundaries: recheck the registry when reachable, refuse an
 online stale attempt, and warn once plus proceed from the stamp when offline.
 
-**Pinned Unit merge-back.** When the scoped Unit is complete, commit its tracked
-work and run `aidlc unit publish <unit>`; publication CAS-updates the claim ref
-but does not integrate it. On unscoped main, run `aidlc unit pin <unit>`, then
+**Pinned Unit merge-back.** When the scoped Unit is complete, `next` offers to
+publish it (`aidlc unit publish <unit> --commit`); publication CAS-updates the
+claim ref but does not integrate it. On unscoped main, `aidlc unit pin <unit>`
+(a review choice of that offer, or the person's own command), then
 in the same turn present the returned pinned OID + evidence summary as one merge
 gate, as its `merge_gate` says. Write the person's reply, as they typed it, to
 `aidlc/.aidlc-request-text/gate-<unit>.txt` with your file tool, not a shell, and

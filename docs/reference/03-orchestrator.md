@@ -683,6 +683,30 @@ Units and how to ask for teams. Work with recorded repos is never asked: the
 first step carries `teamsAcrossReposLine` instead, the line the setter's
 refusal also says.
 
+With `Unit Ownership: team`, each hand-over between people is an engine ask
+when it is due, `ask_type: team-handover` (response route `command`), its
+`handovers` naming which: `share` (`teamShareOffer`, before a Unit starts on
+a claimless checkout that ran the work, claims open and a remote set: **Share
+them with the teams** runs `unit share`, **Build them here for now** runs
+`next`), `join` and `review` (`teamReviewOrJoinOffer`, on a checkout with no
+claim: a Unit published at a commit no merge transaction pinned, and, in a
+fresh clone of the work, the Units open to take, in one question; each Unit's
+choice runs `unit pin <unit>` or `next --claim <unit>`), `publish`
+(`teamPublishOffer`, the claimed checkout's done step, with the Unit: `unit
+publish <unit> --commit`) and `push` (`teamPushOffer`, first in the team block,
+when a landed commit is not on the remote branch as fetched, `landedNotOnRemote`:
+`unit share`). Each is put once in its state: an engine ask mark
+(`teamHandoverMarkName`) names the offer and its state (the Unit about to
+start, the set of open Units, the HEAD, the published claim commit, the landed
+commit) and is written as the question is put, so its **Not now** choice, which
+runs `next`, never meets it again; a push the remote refuses clears the share and
+push marks. Before deciding walk or board, the team block fetches the claim refs
+from the remote (`refreshClaimRefs`, best effort, three seconds at most).
+`claimlessTeamCheckout` is false once this checkout shared the plan
+(`teamSharedHere`) or is a fresh clone of work whose claims are open
+(`workRanElsewhere` and `claimsOpenHere`), and the board shows there while Unit
+work is left.
+
 Which repos Reverse Engineering reads is asked the same way, once per work
 (`reverseEngineeringScopeAsk`). When the step `next` would route is Reverse
 Engineering on existing code, not started (no link on record), and the work

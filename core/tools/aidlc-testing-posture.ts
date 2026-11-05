@@ -2747,8 +2747,10 @@ export function codeGenerationIssuance(
  * approved here: the Unit's stages are the checkout's whole walk, so Code
  * Generation is over there, as it is once a workflow's walk moves past it,
  * though Current Stage stays on it. The engine records that notice as the step
- * on record on every harness (prepareEmission), the one notice it records. A
- * stamp that cannot be read leaves the step as it was.
+ * on record on every harness (prepareEmission), the one notice it records, and
+ * so the offer to publish that Unit it puts there first (a team-handover ask
+ * naming the Unit) is that same step. A stamp that cannot be read leaves the
+ * step as it was.
  */
 export function codeGenerationStepOnRecord(
   projectDir: string,
@@ -2756,7 +2758,8 @@ export function codeGenerationStepOnRecord(
   marker: ActiveDirectiveMarker | null,
 ): boolean {
   if (!codeGenerationIsTheStep(marker?.stage ?? "", getField(stateContent, "Current Stage") ?? "")) return false;
-  if (marker?.version !== 2 || marker.kind !== "notice" || !marker.unit) return true;
+  const doneStep = marker?.kind === "notice" || (marker?.kind === "ask" && marker.ask_type === "team-handover");
+  if (marker?.version !== 2 || !doneStep || !marker.unit) return true;
   try {
     return readApplicableTeamUnitScopeStamp(projectDir, stateContent)?.unit !== marker.unit;
   } catch {

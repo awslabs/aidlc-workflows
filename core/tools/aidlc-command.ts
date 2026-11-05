@@ -214,6 +214,7 @@ export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
   ["pin", true],
   ["publish", true],
   ["release", true],
+  ["share", false],
   ["status", false],
 ]);
 

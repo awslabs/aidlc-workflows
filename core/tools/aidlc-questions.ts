@@ -51,7 +51,7 @@ export const QUESTION_SHOWN = "QUESTION_SHOWN";
 export const ENGINE_ASK_TYPES: ReadonlySet<string> = new Set([
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "new-work-routing", "project-type",
   "construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "guard-recovery", "unit-claim",
-  "legacy-plan-approval-recovery",
+  "legacy-plan-approval-recovery", "team-handover",
 ]);
 
 // The questions a stage asks of its own (logged by the agent); they stay listed

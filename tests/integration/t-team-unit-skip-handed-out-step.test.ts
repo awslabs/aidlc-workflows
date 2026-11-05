@@ -111,9 +111,9 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
         // No summary, review or approval is asked for the skipped step: the
         // claimed Unit is done in this checkout.
         const after = nextDirective(checkout);
-        expect(String(after.message ?? after.reason ?? ""), JSON.stringify(after)).toContain(
-          'Unit "alpha" is complete and approved in this checkout.',
-        );
+        expect(after, JSON.stringify(after)).toMatchObject({
+          kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha",
+        });
         const cells = unitProgressRow(checkout, "alpha").split("|").slice(1, -1).map((cell) => cell.trim());
         expect(cells.slice(2)).toEqual(["[x]", "[x]", "[x]", "[x]", "[x]", "[x]"]);
       },

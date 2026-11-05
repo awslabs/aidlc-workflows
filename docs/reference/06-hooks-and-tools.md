@@ -1763,10 +1763,11 @@ every call while there is no workflow state, as before; the run's
 `report --single` still waits for the approved plan.
 
 **A claimed Unit that is done.** In a checkout claimed for a team Unit, once
-every stage of the Unit is settled and approved, `next` answers the `notice`
-that the Unit is complete and approved there (commit it and run
-`aidlc unit publish <unit>`), with the Unit in its `unit` field. That notice is
-the step on record on every harness, at the stage of the step it follows, so
+every stage of the Unit is settled and approved, `next` first offers to publish
+it (`ask_type: team-handover`, with the Unit in its `unit` field), then answers
+the `notice` that the Unit is complete and approved there, with the Unit in its
+`unit` field. Either is the step on record on every harness, at the stage of the
+step it follows, so
 Code Generation is not the step in that checkout any more, though Current Stage
 stays on it (`codeGenerationStepOnRecord`, which `next --stage` reads too): the
 Unit's own commit, in any spelling, and every file change pass this hook as
