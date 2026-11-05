@@ -31,7 +31,6 @@ import {
   nextDirective,
   unitProgressRow,
   nextPastPushOffer,
-  asLeadsOwnCheckout,
 } from "../harness/team-unit-merge.ts";
 
 // The pinned merge cases are split across four files
@@ -278,8 +277,6 @@ describe("t326 pinned team Unit merge", () => {
 
   test("dormancy leaves solo and claim-less workflows without merge transactions", () => {
     const { seed } = makeSeed();
-    // Main as the lead's own checkout: the walk that builds the Units here.
-    asLeadsOwnCheckout(seed);
     const before = readFileSync(seededStateFile(seed), "utf-8");
     const auditBefore = readAllAuditShards(seed);
     const refsBefore = git(seed, ["show-ref"]);

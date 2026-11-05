@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-unit:share, subcommand:aidlc-unit:publish, subcommand:aidlc-unit:land, subcommand:aidlc-unit:pin, function:workRanElsewhere, function:codeGenerationStepOnRecord
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-unit:share, subcommand:aidlc-unit:publish, subcommand:aidlc-unit:land, subcommand:aidlc-unit:pin, function:planMadeElsewhere, function:codeGenerationStepOnRecord
 //
 // In team-owned Construction on the workspace's own repository, each hand-over
 // between people is put to the person as one question at the moment it is due,
@@ -169,6 +169,21 @@ describe("step 2: another clone takes a Unit", () => {
     expect(isHandover(board)).toBe(false);
     expect(boardText(board)).toContain("# Team Construction Dispatcher");
     expect(boardText(nextDirective(mate))).toContain("# Team Construction Dispatcher");
+  });
+
+  // The live run: a team built its first Unit in its own clone (that Unit's
+  // rows are in the clone's own shard), the lead merged and pushed it, and the
+  // team pulled main: its next Unit is offered, never a typed claim.
+  test("a team's clone after its Unit lands and it pulls is offered the next Unit", () => {
+    const { seed: lead, remote } = makeSeed(parallelDependencyBody());
+    const { checkout } = prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    expect(runMergeTool(UNIT, ["land", "alpha"], lead).status).toBe(0);
+    git(lead, ["push", "origin", "main"]);
+    git(checkout, ["pull", "-q", "--ff-only", "origin", "main"]);
+    const offer = nextDirective(checkout);
+    expect(isHandover(offer, "join"), JSON.stringify(offer)).toBe(true);
+    expect(labels(offer)).toEqual(["Take beta", "Not now"]);
   });
 
   test("the participant marker keeps today's picker", () => {

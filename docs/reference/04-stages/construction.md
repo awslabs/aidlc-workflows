@@ -200,8 +200,8 @@ routes only the stamped Unit and carries the claim generation on lifecycle,
 review, gate, and fork evidence. Unscoped main emits a terminal fan-out notice
 while claims are live. `aidlc-unit.ts release <unit>` writes a tombstone instead
 of deleting the ref, invalidating stale attempts while preserving history. A
-fresh clone of the work (every stage or gate row of it in another clone's shard,
-`workRanElsewhere`) is offered the Units open to take without the participant
+team's clone of the work (every stage or gate row of the plan's own, the ones that
+name no Unit, in another clone's shard, `planMadeElsewhere`) is offered the Units open to take without the participant
 marker, which still opts a clone into the picker by hand
 (`aidlc-unit.ts participate`); facilitator main omits it.
 Scoped routing and receipt writes are offline-first: the claim-time stamp is

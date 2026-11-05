@@ -704,7 +704,7 @@ push marks. Before deciding walk or board, the team block fetches the claim refs
 from the remote (`refreshClaimRefs`, best effort, three seconds at most).
 `claimlessTeamCheckout` is false once this checkout shared the plan
 (`teamSharedHere`) or is a fresh clone of work whose claims are open
-(`workRanElsewhere` and `claimsOpenHere`), and the board shows there while Unit
+(`planMadeElsewhere` and `claimsOpenHere`), and the board shows there while Unit
 work is left.
 
 Which repos Reverse Engineering reads is asked the same way, once per work

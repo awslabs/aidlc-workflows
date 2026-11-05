@@ -569,7 +569,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { chatTookStep, workRanElsewhere } from "./aidlc-record-core.ts";
+import { chatTookStep, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -5170,13 +5170,13 @@ function constructionStaffingAsk(
 // the teams, nor is it a fresh clone of work run elsewhere whose claims are
 // open. Team routing then keeps the single-checkout walk, and the lead hears
 // how a team takes a Unit. Facts of this checkout, never who the person is:
-// the lead's own checkout keeps its rows, so a push of main for backup while it
-// builds a Unit here never turns it into the board.
+// the lead's own checkout keeps the plan's rows, so a push of main for backup
+// while it builds a Unit here never turns it into the board.
 function claimlessTeamCheckout(projectDir: string): boolean {
   const journal = unitMergeTransactions(projectDir);
   if (existsSync(unitParticipantPath(projectDir)) || hasAnyUnitClaimRefs(projectDir) || journal.length > 0) return false;
   if (teamSharedHere(projectDir)) return false;
-  return !(workRanElsewhere(projectDir) && claimsOpenHere(projectDir));
+  return !(planMadeElsewhere(projectDir) && claimsOpenHere(projectDir));
 }
 
 const NOT_NOW_DETAIL = "Nothing changes now.";
@@ -5305,7 +5305,7 @@ function teamReviewOrJoinOffer(
 ): AskDirective | null {
   const ready = board.ready.filter((row) => !handoverOffered(projectDir, teamHandoverMarkName("review", row.key)));
   const joining = !existsSync(unitParticipantPath(projectDir)) && !teamSharedHere(projectDir) &&
-    workRanElsewhere(projectDir) && overview.claimable.length > 0;
+    planMadeElsewhere(projectDir) && overview.claimable.length > 0;
   const joinMark = teamHandoverMarkName("join", [...overview.claimable].sort().join("-"));
   const join = joining && !handoverOffered(projectDir, joinMark) ? [...overview.claimable].sort(compareBoardKeys) : [];
   if (ready.length === 0 && join.length === 0) return null;
@@ -5353,7 +5353,7 @@ function teamPushOffer(projectDir: string): AskDirective | null {
       (work === null ? "" : ` I'd commit ${work} first.`),
     choices: [{
       label: `Push ${target.branch}`,
-      detail: work === null ? "A plain push; nothing is forced." : "A commit, then a plain push; nothing is forced.",
+      detail: `${work === null ? "Pushes" : "Commits, then pushes"} ${target.branch} to ${target.remote}; nothing is forced.`,
       command: `${aidlcInvocation()} unit share`,
     }],
   });
@@ -13224,7 +13224,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         const dag = resolveBoltBatches(pd);
         const unitWorkLeft = dag.state === "ok" &&
           dag.batches.flat().some((unit) => !model.mergedUnits.has(unit));
-        const teamsTakeUnits = cachedClaimFanoutActive(pd) || teamSharedHere(pd) || workRanElsewhere(pd);
+        const teamsTakeUnits = cachedClaimFanoutActive(pd) || teamSharedHere(pd) || planMadeElsewhere(pd);
         if (board.awaitingMerge.length > 0 || (unitWorkLeft && teamsTakeUnits)) {
           lastSeen();
           emit(noticeDirective(

@@ -193,6 +193,7 @@ import {
   auditFilePath,
   auditShardHost,
   auditShards,
+  knownAuditShardName,
   assertChangeControlLedgerWritable,
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
@@ -514,7 +515,7 @@ import {
   declaredProjectType,
   installWithoutReplacing,
 } from "./aidlc-lib.ts";
-import { chatTookStep, relativeRecordDirForSelection, workRanElsewhere } from "./aidlc-record-core.ts";
+import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -5328,7 +5329,10 @@ export async function collectDoctorReport(
     // while audit shards travel in commits. Progress that only other clones'
     // shards record says nothing about this clone's hooks, and the hooks step
     // would be aimed at the wrong machine.
-    if (workRanElsewhere(projectDir, auditShardEvents)) {
+    const ownShard = knownAuditShardName(projectDir);
+    const ranElsewhere = stageOrGateEvents.length > 0 &&
+      stageOrGateEvents.every((event) => basename(event.shard) !== ownShard);
+    if (ranElsewhere) {
       const hosts = [
         ...new Set(
           stageOrGateEvents
