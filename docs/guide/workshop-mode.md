@@ -67,9 +67,10 @@ unless the lead asks for one approval at the end of each Unit
 the first team step offers it. On the workspace's own repo, while no team has
 taken a Unit, that step also says once that this session builds the Units
 here, starting with the first DAG Unit (the walking skeleton, when the scope
-runs one), and how a team takes one instead: share the work through git, then
-run `aidlc unit participate` and `/aidlc` in the team's own clone (see
-[Claim, build, and publish](#claim-build-and-publish)).
+runs one). With a shared remote, the step that would start a Unit here asks
+first whether to share the plan with the teams (see below); without one, the
+line says to share the work through git, and each team then runs `/aidlc` in
+its own clone to take a Unit.
 
 When the work records code repos of its own and the workspace is a Git
 repository, choosing **Several teams** also records where the home of the work
@@ -95,11 +96,11 @@ gate; claims open once its Unit Progress row on the pushed main is complete.
 With `skeleton: off`, or `Skeleton Stance: off` recorded in the work's state,
 dependency-ready Units open immediately.
 
-Teams take Units from the plan on the shared remote. Once claims are open (at
-once with the skeleton off, once the walking skeleton is approved with it on)
-and the repository has a remote, the step that would start a Unit on main asks
-once whether to share the plan with the teams, before each Unit this session
-would build:
+On the workspace's own repo, teams take Units from the plan on the shared
+remote. Once claims are open (at once with the skeleton off, once the walking
+skeleton is approved with it on) and the repository has a remote, the step that
+would start a Unit on main asks once whether to share the plan with the teams,
+before each Unit this session would build:
 
 - **Share them with the teams** runs `aidlc unit share`: it commits what git
   shows changed here (the question names how many files, and any new file
@@ -114,6 +115,14 @@ would build:
 
 Typed, the same step is `/aidlc unit share`, or your own commit and
 `git push origin main`.
+
+Where the work records code repos of its own, the home asks who builds which
+Unit instead, and the lead publishes the approved Inception state and artifacts
+before teams take their Units:
+
+```bash
+git push origin main
+```
 
 Claims open by dependency batch. "Delivery planning is complete" does not mean
 every Unit is claimable; a Unit remains blocked until every `depends_on` row is
@@ -225,8 +234,12 @@ merge, discard, and purge to completion only with matching intent provenance;
 new Bolts never use that shape. `doctor` reports both shapes.
 
 Normal scoped `next`, lifecycle, review, and gate work is offline-first. Network
-access is confined to explicit claim, publish, status, pin, and merge-ref
-verification operations.
+access is confined to explicit claim, share, publish, status, pin, and merge-ref
+verification operations, and to the board on a checkout that holds no Unit
+claim: each `/aidlc` there in team mode fetches the teams' claim refs, and only
+those, from the shared remote (best effort, a few seconds at most, no prompt;
+when the remote does not answer, the board says once that it shows what this
+clone last saw).
 
 ### Claim, build, and publish
 
@@ -797,16 +810,17 @@ keeps **Sign it off** there after a **Not now**.
 
 1. The facilitator runs Inception with the group.
 2. If enabled, the facilitator builds and gates the walking skeleton on main,
-   then pushes main.
-3. Alice claims `billing`; Bob claims `notifications`.
+   then shares the plan with the teams when asked.
+3. Alice takes `billing`; Bob takes `notifications`, each from the question in
+   their own clone.
 4. Each team runs its scoped 3.1-3.5 chain and team gates.
-5. Each team commits and runs `aidlc unit publish`.
+5. Each team publishes its Unit when asked.
 
 #### Day 2
 
-1. The facilitator pins Alice's candidate, reviews its evidence, records the
-   merge gate, and lands it.
-2. Main is pushed; any Unit depending on `billing` becomes claimable.
+1. The facilitator's board offers Alice's Unit for review; the facilitator
+   reviews its evidence, records the merge gate, and lands it.
+2. Main is pushed when asked; any Unit depending on `billing` becomes claimable.
 3. The facilitator repeats pin/gate/land for Bob's pinned candidate.
 4. When the final row is merged, `/aidlc` on main routes Build and Test, then
    CI Pipeline.
