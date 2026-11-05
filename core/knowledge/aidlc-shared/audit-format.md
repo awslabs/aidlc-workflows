@@ -59,12 +59,14 @@ unattended run (`AIDLC_UNATTENDED=1`), the field is absent and the row is what
 it would be without it. The rows that carry it:
 - `GATE_APPROVED` and `GATE_REJECTED` the person decided: a stage gate, a team
   Unit gate, a Unit or batch checkpoint, a Unit merge gate, and the reopen a
-  jump of theirs writes; never an autonomous Construction decision or the
-  revision backstop's `Recovered` row.
+  jump of theirs writes; never an autonomous Construction decision (its
+  Build and Test loop-back included) or the revision backstop's `Recovered`
+  row.
 - `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_OVERRIDDEN`,
   `SUMMARY_CONFIRMATION_RECORDED`, `VERIFICATION_COMMAND_RECORDED` and
   `CONSTRUCTION_POLICY_RECORDED`.
-- `STAGE_JUMPED`; `STAGE_SKIPPED` and `UNIT_SKIPPED` whose Reason starts with
+- `STAGE_JUMPED`, except one that lands in Construction while it runs on its own;
+  `STAGE_SKIPPED` and `UNIT_SKIPPED` whose Reason starts with
   `the person asked to skip it`; `RECOMPOSED` for a skip the person asked for
   or their approval at the compose question.
 - `GUARD_POLICY_SET`, `CEREMONY_SET`, `GUARD_DISABLED` and `GUARD_RESTORED`

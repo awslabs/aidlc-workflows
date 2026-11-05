@@ -18,6 +18,7 @@ import {
   errorMessage,
   extractMarkdownSection,
   findStageBySlug,
+  isAutonomousConstructionDecision,
   firstInScopeStageOfPhase,
   getField,
   isPerUnitStage,
@@ -295,6 +296,10 @@ function handleReopen(args: string[]): void {
   // IDE audit-sync hook reads it).
   const current = getField(content, "Current Stage")?.trim() ?? "";
   const from = findStageBySlug(current);
+  // While Construction runs on its own, the loop-back from Build and Test
+  // reopens Units with nobody at the keyboard: those rows name nobody. A
+  // change stands on the person's own reply at the gate.
+  const theirs = flags.via === "change" || !isAutonomousConstructionDecision(content, targetStage.phase);
   let stagesReset: string[] = [];
   let movedFrom: string | undefined;
   if (from && !isPerUnitStage(from) && from.phase === targetStage.phase && stageIndex(current) > stageIndex(targetSlug)) {
@@ -328,7 +333,7 @@ function handleReopen(args: string[]): void {
       ...(change?.messageId ? { "Message Id": change.messageId } : {}),
       ...(change ? windowMessageIds(change) : {}),
       ...(movedFrom ? { "Moved From": movedFrom } : {}),
-      ...personGitNameField(pd),
+      ...(theirs ? personGitNameField(pd) : {}),
     });
     // A redo answers the re-use question for this Unit's step too: recorded
     // here, so the reopened step redoes it without asking again.
@@ -716,6 +721,9 @@ function handleExecute(args: string[]): void {
 
   const graph = loadStageGraph();
   const currentSlug = getField(content, "Current Stage") || "state-init";
+  // While Construction runs on its own, its loop-back jump lands back inside
+  // Construction with nobody at the keyboard, so its row names nobody.
+  const theirs = !isAutonomousConstructionDecision(content, targetStage.phase);
   // Where the person was: the active Unit's own step in a unit-at-a-time walk,
   // which Current Stage does not name, or else the step the engine last put to
   // them (a Unit's code plan, say) while it still matches this state.
@@ -825,7 +833,7 @@ function handleExecute(args: string[]): void {
         : {}),
       ...(keepsTeamUnitWork ? { "Unit Work": "kept" } : {}),
       ...jumpSourceBaseline,
-      ...personGitNameField(pd),
+      ...(theirs ? personGitNameField(pd) : {}),
     });
 
     // Target enters Active state — emit STAGE_STARTED so audit reflects the

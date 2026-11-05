@@ -1,12 +1,13 @@
-// covers: function:gitUserName, function:personGitNameField, cli:aidlc-state(approve), cli:aidlc-state(reject), cli:aidlc-state(skip), cli:aidlc-orchestrate(report), subcommand:aidlc-utility:status, subcommand:aidlc-utility:config-change
+// covers: function:gitUserName, function:personGitNameField, cli:aidlc-state(approve), cli:aidlc-state(reject), cli:aidlc-state(skip), cli:aidlc-orchestrate(report), cli:aidlc-jump(execute), cli:aidlc-jump(reopen), subcommand:aidlc-utility:status, subcommand:aidlc-utility:config-change
 //
 // A decision of the person's records who was at the keyboard as their git
 // reports it: `Git Name`, read from `git config user.name` in the project (the
 // repo's own setting, then their global one), the name the Unit board shows
 // (#3234). With no name in git the row is what it was before, byte for byte;
 // a team clone records its own name; a row nobody decided (the engine's own
-// backfill, an agent's skip, an unattended run) carries none. `--status` names
-// who approved the last completed stage.
+// backfill, an agent's skip, a jump while Construction runs on its own, an
+// unattended run) carries none. `--status` names who approved the last
+// completed stage.
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -17,6 +18,7 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  seedBoltDag,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -33,6 +35,8 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const DISPATCH = join(AIDLC_SRC, "tools", "aidlc.ts");
+const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
+const DASH = "\u2014"; // the state file's stage-line separator
 const SESSION = "t-audit-git-name";
 
 const projects: string[] = [];
@@ -102,6 +106,43 @@ function project(name?: string, globalName?: string): Project {
   seedStateFile(dir, "state-mid-ideation.md");
   git(p, ["init", "-q"]);
   if (name !== undefined) git(p, ["config", "user.name", name]);
+  return p;
+}
+
+// Construction at Build and Test, Code Generation done, in its own git
+// repository named "Jane Doe"; Construction either runs on its own after the
+// person's autonomy grant, or asks them at each gate.
+function constructionProject(autonomy: "autonomous" | "gated", unitMajor: boolean): Project {
+  const p = project("Jane Doe");
+  const skipped = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"];
+  writeFileSync(seededStateFile(p.dir), `# AI-DLC State Tracking
+## Project Information
+- **Project**: Jumps under autonomy
+- **Project Type**: Greenfield
+- **Scope**: classic
+- **State Version**: 8
+## Runtime State
+- **Revision Count**: 0
+- **Skeleton Stance**: off
+${unitMajor ? "- **Construction Iteration**: unit-major\n" : ""}- **Construction Autonomy Mode**: ${autonomy}
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+## Stage Progress
+### INCEPTION PHASE
+- [x] requirements-analysis ${DASH} EXECUTE
+### CONSTRUCTION PHASE
+${skipped.map((stage) => `- [S] ${stage} ${DASH} SKIP`).join("\n")}
+- [x] code-generation ${DASH} EXECUTE
+- [-] build-and-test ${DASH} EXECUTE
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: build-and-test
+- **Status**: Running
+`);
+  if (unitMajor) seedBoltDag(p.dir, ["alpha"]);
   return p;
 }
 
@@ -218,6 +259,34 @@ describe("t-audit-git-name: a decision records the person's git name", () => {
     const command = rows(p, "CEREMONY_SET").at(-1)!;
     expect(auditBlockField(command.block, "Source")).not.toBe("you");
     expect(gitNameLines(command.block)).toEqual([]);
+  });
+
+  test("a jump back while Construction runs on its own names nobody; the same jump with the person at the gates names them", () => {
+    for (const [autonomy, named] of [["autonomous", []], ["gated", ["**Git Name**: Jane Doe"]]] as const) {
+      const p = constructionProject(autonomy, false);
+      const jumped = run(p, [JUMP, "execute", "--target", "code-generation", "--direction", "backward", "--scope", "classic"]);
+      expect(jumped.rc, jumped.out).toBe(0);
+      const row = rows(p, "STAGE_JUMPED").at(-1);
+      expect(row, jumped.out).toBeDefined();
+      expect(gitNameLines(row!.block)).toEqual([...named]);
+    }
+    // The person's own jump out of Construction, back to Requirements, is theirs either way.
+    const out = constructionProject("autonomous", false);
+    const back = run(out, [JUMP, "execute", "--target", "requirements-analysis", "--direction", "backward", "--scope", "classic"]);
+    expect(back.rc, back.out).toBe(0);
+    expect(gitNameLines(rows(out, "STAGE_JUMPED").at(-1)!.block)).toEqual(["**Git Name**: Jane Doe"]);
+  });
+
+  test("a Unit reopened from Build and Test while Construction runs on its own names nobody; with the person at the gates it names them", () => {
+    for (const [autonomy, named] of [["autonomous", []], ["gated", ["**Git Name**: Jane Doe"]]] as const) {
+      const p = constructionProject(autonomy, true);
+      const reopened = run(p, [JUMP, "reopen", "--target", "code-generation", "--stages", "code-generation", "--units", "alpha", "--scope", "classic"]);
+      expect(reopened.rc, reopened.out).toBe(0);
+      const row = rows(p, "GATE_REJECTED").at(-1);
+      expect(row, reopened.out).toBeDefined();
+      expect(auditBlockField(row!.block, "Reopen")).toBe("jump");
+      expect(gitNameLines(row!.block)).toEqual([...named]);
+    }
   });
 
   test("an unattended run records no name: nobody is at the keyboard", () => {
