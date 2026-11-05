@@ -664,7 +664,10 @@ concurrent claimant succeeds.
 /aidlc unit claim user-profile-api --team "Alice"
 ```
 
-`--team` supplies the human-readable holder label. `--rhythm` optionally pins
+`--team` supplies the human-readable holder label. With `/aidlc --claim`, the
+command AI-DLC runs for the claim carries the label in a file it writes
+(`--request-file`), so no shell on the way changes it: `O'Brien` or `Ops & QA`
+is recorded as given in PowerShell, Git Bash and cmd.exe. `--rhythm` optionally pins
 this claim to `per-stage` or `unit-end`; when omitted, the workflow's affirmed
 Unit gate rhythm is used. Claims are refused until dependencies and any required
 walking skeleton are complete, and a checkout with a live claim routes only its

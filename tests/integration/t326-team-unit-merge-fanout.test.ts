@@ -120,7 +120,7 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
       fresh,
     );
     expect(claimStep.status, claimStep.out).toBe(0);
-    expect(JSON.parse(claimStep.stdout).message).toContain("--claim beta --team beta-team");
+    expect(JSON.parse(claimStep.stdout).message).toMatch(/--claim beta --request-file \S+`/);
     const claimed = runMergeTool(UNIT, ["claim", "beta", "--team", "beta-team"], fresh);
     expect(claimed.status, claimed.out).toBe(0);
     expect(JSON.parse(claimed.stdout)).toMatchObject({ claimed: true, unit: "beta", owner: "beta-team" });

@@ -11579,11 +11579,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
     const verb = flags.claim ? "claim" : "release";
     const unit = flags.claim ?? flags.release!;
-    // Quoted for the agent's shell: PowerShell splits a POSIX-quoted O'Brien,
-    // and the claim would record "O" as the team.
-    const teamArg = flags.claimTeam
-      ? ` --team ${quoteCommandArgument(flags.claimTeam)}`
-      : "";
+    // The team name is the person's, so it goes in a file the claim reads
+    // (wordsForNextStep's transport): no one quoting serves every shell the
+    // agent may run it in (PowerShell splits a POSIX-quoted O'Brien, Git Bash
+    // drops the apostrophe from a PowerShell-quoted O'Brien & QA).
+    const teamFile = flags.claimTeam ? requestFileFor(resolveProjectDir(projectDir), `claim-${unit}`, flags.claimTeam) : null;
+    const teamArg = !flags.claimTeam
+      ? ""
+      : teamFile !== null
+      ? ` --request-file ${teamFile}`
+      : ` --team ${quoteCommandArgument(flags.claimTeam)}`;
     const rhythmArg = flags.claimRhythm
       ? ` --rhythm ${quoteCommandArgument(flags.claimRhythm)}`
       : "";

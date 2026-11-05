@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -230,10 +230,14 @@ describe("step 2: another clone takes a Unit", () => {
     expect(commandFor(nextDirective(mate), "Take alpha")).toMatch(/ next --claim alpha$/);
     const take = runMergeTool(ORCH, ["next", "--claim", "alpha", "--team", "Payments team"], mate);
     expect(take.status, take.out).toBe(0);
-    expect(String(JSON.parse(take.stdout).message)).toContain("--claim alpha --team 'Payments team'");
-    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--team", "Payments team"], mate);
+    // The name goes in a file the claim reads, which the claim spends.
+    const file = String(JSON.parse(take.stdout).message).match(/--claim alpha --request-file (\S+)`/)?.[1];
+    expect(file, take.stdout).toBeDefined();
+    expect(readFileSync(join(mate, file as string), "utf-8")).toBe("Payments team");
+    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--request-file", file as string], mate);
     expect(claimed.status, claimed.out).toBe(0);
     expect(JSON.parse(claimed.stdout)).toMatchObject({ owner: "Payments team" });
+    expect(existsSync(join(mate, file as string))).toBe(false);
     const offer = nextDirective(clone(remote, "late"));
     expect(labels(offer), JSON.stringify(offer)).toEqual(["Take beta", "Not now"]);
     expect(String(offer.question)).toContain("alpha is with Payments team");
