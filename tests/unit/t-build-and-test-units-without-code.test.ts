@@ -32,7 +32,7 @@ afterEach(() => {
 
 const STAGES = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
 const CHAT = "01995000-7a11-7000-8000-0000000000d4";
-const LINE = "Code Generation has not finished for units beta and gamma, so Build and Test has only the output of unit alpha to work from.";
+const LINE = "Code Generation has not finished for units beta and gamma, so their code may be missing from Build and Test.";
 
 // The host session's own markers stay out; commands run in the person's chat.
 function env(): Record<string, string | undefined> {
@@ -164,6 +164,15 @@ describe("t-build-and-test-units-without-code: Build and Test names the Units wi
     expect(approvedBuildAndTest(p)).toHaveLength(1);
   });
 
+  test("a typed approve that opens Build and Test's gate and asks to stop for now says it with the pause", () => {
+    const p = atBuildAndTest(["alpha"]);
+    says(p, "approve, and let's stop here for today");
+    const parked = report(p, ["--result", "approved", "--stage", "build-and-test", "--user-input", "Approve", "--park"]);
+    expect(parked.kind, JSON.stringify(parked)).toBe("parked");
+    expect(lines(parked)[0]).toBe(LINE);
+    expect(approvedBuildAndTest(p)).toHaveLength(1);
+  });
+
   test("classic: the approval that completes the work says it", () => {
     const p = atBuildAndTest(["alpha"], "classic");
     says(p, "approve");
@@ -175,11 +184,11 @@ describe("t-build-and-test-units-without-code: Build and Test names the Units wi
   test("one Unit missing, and none built, are said in the same plain words", () => {
     const one = atBuildAndTest(["alpha", "gamma"]);
     expect(lines(report(one, ["--result", "awaiting-approval"]))).toContain(
-      "Code Generation has not finished for unit beta, so Build and Test has only the output of units alpha and gamma to work from.",
+      "Code Generation has not finished for unit beta, so its code may be missing from Build and Test.",
     );
     const none = atBuildAndTest([]);
     expect(lines(report(none, ["--result", "awaiting-approval"]))).toContain(
-      "Code Generation has not finished for units alpha, beta and gamma, so Build and Test has no Unit's output to work from.",
+      "Code Generation has not finished for units alpha, beta and gamma, so their code may be missing from Build and Test.",
     );
   });
 

@@ -7318,13 +7318,13 @@ export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: str
       names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
     const units = (names: readonly string[]): string => `unit${names.length === 1 ? "" : "s"} ${and(names)}`;
     const stageName = stageLabel(stage, stage.slug) ?? stage.slug;
-    return gaps.map(({ producer, units: all, missing }) => {
-      const kept = all.filter((name) => !missing.includes(name));
+    // What the record backs: the stage has not finished for them, so some of
+    // their work may not be there (a Unit can have its source but not its
+    // summary).
+    return gaps.map(({ producer, missing }) => {
       const from = stageLabel(findStageBySlug(producer), producer) ?? producer;
-      const left = kept.length === 0
-        ? `${stageName} has no Unit's output to work from`
-        : `${stageName} has only the output of ${units(kept)} to work from`;
-      return `${from} has not finished for ${units(missing)}, so ${left}.`;
+      return `${from} has not finished for ${units(missing)}, so ${missing.length === 1 ? "its" : "their"} code ` +
+        `may be missing from ${stageName}.`;
     }).join(" ");
   } catch {
     return null;

@@ -21495,19 +21495,26 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // The transition committed. Emit a terminal `done` directive naming the move
   // — the loop driver reads this to know the report landed and the next `next`
   // will see fresh state. An approval that also asked to stop for now parks.
+  // A gate this report opened and approved at once was never shown, so what it
+  // would have said about Units with no work is said with the approval, or
+  // with the pause when the approval also asked to stop for now.
+  const openedHere = flags.result === "approved" &&
+    sequence.some((step) => step[0] === "gate-start" && step.includes("--recovered"));
+  const unbuilt = openedHere ? unitsWithoutInputsNotice(pd, node, null) : null;
   const parked = stopForNow && workflowContinues(pd).workflow_continues
     ? parkAfterApproval(pd, lastApproved, !isAutonomousConstructionGate(stateContent, node, pd))
     : null;
   if (parked) {
-    emit(withChangeNotices({ ...parked, reason: `${parked.reason}${keepNote}` }, changeNotices));
+    const parkedNarration = [unbuilt, parked.narration].filter(Boolean).join("\n");
+    emit(withChangeNotices({
+      ...parked,
+      reason: `${parked.reason}${keepNote}`,
+      ...(parkedNarration ? { narration: parkedNarration } : {}),
+    }, changeNotices));
     return;
   }
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
   const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
-  // A gate this report opened and approved at once was never shown, so what it
-  // would have said about Units with no work is said with the approval.
-  const openedHere = sequence.some((step) => step[0] === "gate-start" && step.includes("--recovered"));
-  const unbuilt = approvedState !== null && openedHere ? unitsWithoutInputsNotice(pd, node, null) : null;
   const narration = [unbuilt, progress].filter(Boolean).join("\n");
   emit(
     withChangeNotices(
