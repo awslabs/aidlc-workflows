@@ -16829,8 +16829,12 @@ export function forwardJumpUnitSteps(
   for (const stage of walk.block) {
     const before = targetIndex === -1 || graph.findIndex((node) => node.slug === stage.slug) < targetIndex;
     const finished = new Set(unitsWithStageWork(projectDir, stage, walk.context));
+    // A step a unit already does without (its kind needs none, or it was
+    // skipped for it in this attempt) is not one the jump skips.
+    const ledger = before ? unitLedgerFor(projectDir, stage.slug) : null;
     for (const unit of walk.context.units) {
-      const into = before && !finished.has(unit) ? skipped : !before && finished.has(unit) ? redone : null;
+      const exempt = ledger !== null && unitExempt(stage, unit, walk.context.kinds?.get(unit) ?? null, ledger);
+      const into = before && !finished.has(unit) && !exempt ? skipped : !before && finished.has(unit) ? redone : null;
       if (into) into.set(unit, [...(into.get(unit) ?? []), stage.slug]);
     }
   }

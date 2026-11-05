@@ -194,6 +194,24 @@ describe("t-forward-jump-names-units: the jump's own line names the Units it lea
     );
   });
 
+  test("a step already skipped for a Unit (it does not apply there) is not one the jump skips", () => {
+    const p = unitWalk(["alpha", "beta"]);
+    finish(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design"]);
+    appendAuditEntry("UNIT_SKIPPED", {
+      Stage: "infrastructure-design", Unit: "alpha", Reason: "No infrastructure is needed.",
+      "Run floor": latestMainWorkflowStageRunFloorForProject(p, "infrastructure-design", true, "alpha"),
+    }, p);
+    finish(p, "alpha", ["code-generation"]);
+    finish(p, "beta", ["functional-design"]);
+    next(p);
+    const step = next(p, ["--stage", "build-and-test"]);
+    expect(step.stage, JSON.stringify(step)).toBe("build-and-test");
+    expect(notices(step)).toContain(
+      "Moved to Build and Test. Skipped for unit beta: NFR Requirements, NFR Design, Infrastructure Design and " +
+        "Code Generation. Their files stay. You can go back to NFR Requirements any time.",
+    );
+  });
+
   test("Units with the same steps share a sentence, and a Unit that starts over is named with its approvals", () => {
     const stage = (slug: string) => findStageBySlug(slug)!;
     expect(forwardJumpNotice(stage("build-and-test"), [stage("functional-design"), stage("code-generation")], "code-generation", {
