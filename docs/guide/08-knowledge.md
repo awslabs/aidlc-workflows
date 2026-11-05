@@ -149,8 +149,8 @@ asked. A document you name when you start the work is filed for that work;
 `knowledge dissociate <id> --intent` makes it the whole space's again.
 
 A file in `documents/` that is not in the knowledge base yet, or is in it with
-no text it can read (a spreadsheet, a Word file, a PDF on a computer without
-`pdftotext`, a scanned page), is named by AI-DLC in one line when work starts
+no text it can read (a type it has no reader for, such as an old `.xls` or a slide
+deck, a PDF on a computer without `pdftotext`, a scanned page), is named by AI-DLC in one line when work starts
 or goes on, with what to do for each kind: add it with `sync`, or save a text
 copy (`.md`, `.txt` or `.csv`) beside it with the same name, then `sync`. Each
 file is named once in a piece of work, and the work goes on: carrying on

@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -22,6 +22,7 @@ import {
   cleanupTestProject,
   createTestProject,
   DEFAULT_SPACE,
+  FIXTURES_DIR,
   resetAidlcEnv,
   seedAidlcMemory,
   seedStateFile,
@@ -30,8 +31,11 @@ import {
   documentsDir,
   markUnreadDocumentsSaid,
   onboard,
+  readIndex,
   unreadDocuments,
   unreadDocumentsNotice,
+  WORD_DOCX_MIME,
+  writeIndex,
 } from "../../core/tools/aidlc-knowledge.ts";
 import { collectDoctorReport } from "../../core/tools/aidlc-utility.ts";
 
@@ -40,8 +44,8 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LEAD = "AI-DLC's knowledge base cannot read";
-// The zip signature and nothing an extractor knows: what onboard records for a spreadsheet.
-const XLSX_BYTES = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0xff, 0xfe, 0x00, 0x01]);
+// An old Excel (.xls) file: an OLE compound file, which the knowledge base has no reader for.
+const XLS_BYTES = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0x00, 0x00, 0xff, 0xfe, 0x00, 0x01]);
 
 let proj: string;
 
@@ -110,17 +114,37 @@ describe("t-knowledge-unread-line: documents the agents cannot read are named on
   test("an added spreadsheet with no reader is named once with what to do, and a new one later is named alone", () => {
     seedStateFile(proj, "state-mid-ideation.md");
     seedAidlcMemory(proj);
-    put("mapping.xlsx", XLSX_BYTES);
+    put("mapping.xls", XLS_BYTES);
     add();
-    expect(unreadDocuments(proj, DEFAULT_SPACE)).toEqual([{ path: "documents/mapping.xlsx", reason: "no-reader" }]);
+    expect(unreadDocuments(proj, DEFAULT_SPACE)).toEqual([{ path: "documents/mapping.xls", reason: "no-reader" }]);
     const first = unreadLine(nextDirective());
-    expect(first).toContain('"mapping.xlsx"');
+    expect(first).toContain('"mapping.xls"');
     expect(first).toContain(".csv");
     expect(unreadLine(nextDirective())).toBeUndefined();
-    put("codes.xlsx", Buffer.concat([XLSX_BYTES, Buffer.from([0x01])]));
+    put("codes.xls", Buffer.concat([XLS_BYTES, Buffer.from([0x01])]));
     const later = unreadLine(nextDirective());
-    expect(later).toContain('"codes.xlsx"');
-    expect(later).not.toContain('"mapping.xlsx"');
+    expect(later).toContain('"codes.xls"');
+    expect(later).not.toContain('"mapping.xls"');
+  });
+
+  test("a Word or Excel file added before AI-DLC read them is named as one the next sync reads", () => {
+    seedStateFile(proj, "state-mid-ideation.md");
+    seedAidlcMemory(proj);
+    put("spec.docx", readFileSync(join(FIXTURES_DIR, "documents", "spec.docx")));
+    put("mapping.xlsx", readFileSync(join(FIXTURES_DIR, "documents", "mapping.xlsx")));
+    add();
+    // What the index held for these before AI-DLC read them: Word recognised but not read, Excel not recognised.
+    const index = readIndex(proj, DEFAULT_SPACE);
+    for (const entry of index.documents) {
+      entry.extraction = { state: "unsupported_type", detectedType: entry.source.path.endsWith(".docx") ? WORD_DOCX_MIME : "application/octet-stream" };
+      delete entry.content;
+      delete entry.content_sha256;
+    }
+    writeIndex(proj, DEFAULT_SPACE, index);
+    expect(unreadDocuments(proj, DEFAULT_SPACE).map((file) => file.reason)).toEqual(["office", "office"]);
+    const line = unreadLine(nextDirective());
+    expect(line).toContain("were added before AI-DLC could read Word and Excel files.");
+    expect(line).toContain("knowledge sync` to add them.");
   });
 
   test("a folder where everything is readable says nothing, and doctor shows no row", async () => {
@@ -136,12 +160,12 @@ describe("t-knowledge-unread-line: documents the agents cannot read are named on
   test("doctor's row names the same files as the line, every time it is asked", async () => {
     seedStateFile(proj, "state-mid-ideation.md");
     seedAidlcMemory(proj);
-    put("mapping.xlsx", XLSX_BYTES);
+    put("mapping.xls", XLS_BYTES);
     add();
     put("rules.md", "# Refund rules\n");
     const line = unreadLine(nextDirective()) as string;
     const row = (await doctorRow()) as string;
-    for (const name of ['"mapping.xlsx"', '"rules.md"']) {
+    for (const name of ['"mapping.xls"', '"rules.md"']) {
       expect(line).toContain(name);
       expect(row).toContain(name);
     }
@@ -160,12 +184,12 @@ describe("t-knowledge-unread-line: documents the agents cannot read are named on
 
   test("a spreadsheet saved as .csv or .md beside it, as the line asks, is read through that copy", () => {
     seedStateFile(proj, "state-mid-ideation.md");
-    put("mapping.xlsx", XLSX_BYTES);
+    put("mapping.xls", XLS_BYTES);
     put("mapping-Rules.csv", "Section,Rule\n4.1,Second approver over 5000\n");
-    put("sub/codes.xlsx", Buffer.concat([XLSX_BYTES, Buffer.from([0x02])]));
+    put("sub/codes.xls", Buffer.concat([XLS_BYTES, Buffer.from([0x02])]));
     put("codes.md", "| Code |\n");
     add();
-    // The copy beside mapping.xlsx covers it; codes.md is in another folder, so sub/codes.xlsx is still named.
-    expect(unreadDocuments(proj, DEFAULT_SPACE)).toEqual([{ path: "documents/sub/codes.xlsx", reason: "no-reader" }]);
+    // The copy beside mapping.xls covers it; codes.md is in another folder, so sub/codes.xls is still named.
+    expect(unreadDocuments(proj, DEFAULT_SPACE)).toEqual([{ path: "documents/sub/codes.xls", reason: "no-reader" }]);
   });
 });
