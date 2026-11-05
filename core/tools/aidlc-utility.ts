@@ -3930,6 +3930,34 @@ function pluginCatalogueDoctorCheck(active: string | null): DoctorCheck | null {
   return { pass: true, label: `Plugin marketplace: ${path}` };
 }
 
+export function registeredRepoDoctorChecks(projectDir: string): DoctorCheck[] {
+  const rows: DoctorCheck[] = [];
+  let intent: string | null = null;
+  let space: string | undefined;
+  try {
+    const selection = resolveWorkflowSelection(projectDir, { bind: false });
+    intent = selection.intent;
+    space = selection.space;
+  } catch {
+    return rows;
+  }
+  if (intent === null) return rows;
+  const entry = readIntentRegistry(projectDir, space)
+    .find((candidate) => recordDirMatches(candidate, intent));
+  for (const repo of entry?.repos ?? []) {
+    const dir = repoDir(projectDir, repo);
+    if (isGitRepoDir(dir)) continue;
+    rows.push({
+      pass: false,
+      severity: "warn",
+      label:
+        `Registered repo "${repo}" is not a Git checkout on disk: Reverse Engineering would analyse the whole workspace under its name`,
+      fix: `restore the "${repo}" folder, or record the set that exists with \`${aidlcToolInvocation("intent")} set-repos ...\``,
+    });
+  }
+  return rows;
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -7181,6 +7209,7 @@ export async function collectDoctorReport(
   // severity:"warn" rows remain visible without changing the exit code.
   try {
     for (const row of workspaceManifestChecks(projectDir)) results.push(row);
+    for (const row of registeredRepoDoctorChecks(projectDir)) results.push(row);
   } catch {
     // Advisory only; a scan failure must not hide the main doctor report.
   }
