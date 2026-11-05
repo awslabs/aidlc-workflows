@@ -13354,7 +13354,7 @@ export async function main(
           const again = configRerunWith(input, projectDir, ["--yes"]);
           const stopped = `nothing changed; ${switchOccupant.harnessDir} stays on Kiro CLI (V2). ` +
             `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3); ` +
-            `to switch ${switchOccupant.harnessDir} to Kiro in place, run ${again ? `\`${again}\`` : "it again with --yes"}. ` +
+            `to switch ${switchOccupant.harnessDir} to Kiro in place, run ${again ? `\`${again}\`${sameMirror(input)}` : "it again with --yes"}. ` +
             "To keep Kiro CLI (V2):";
           // --quiet prints only a refusal's command, so the rest comes first.
           if (options.mode === "quiet") writeSwitchNote(stopped, options);

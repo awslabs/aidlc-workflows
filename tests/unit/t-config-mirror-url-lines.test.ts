@@ -132,6 +132,26 @@ describe("config's lines that name the command again never print the release mir
     expectNoMirror(again);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("--harness kiro on a Kiro CLI (V2) project with no terminal stops with a --yes line that asks for the same --release-base-url", () => {
+    const config = nativeConfig();
+    const dir = project("aidlc-mirror-lines-kiro-stop-");
+    const installed = config(dir, ["--project-dir", dir, "--harness", "kiro-v2", "--mcp", "none", "--yes"]);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    // Run from the project with `--project-dir .`, so the command it names
+    // carries a path that needs no quoting on any platform.
+    const stopped = config(dir, ["--project-dir", ".", "--harness", "kiro", "--mcp", "none", "--download", "--release-base-url", MIRROR]);
+    expect(stopped.status, stopped.stdout + stopped.stderr).toBe(2);
+    expectNoMirror(stopped);
+    const out = `${stopped.stdout}${stopped.stderr}`;
+    const named = /to switch \.kiro to Kiro in place, run `([^`]*)` with the same --release-base-url\./.exec(out)?.[1];
+    expect(named, out).toBe("aidlc config --project-dir . --harness kiro --mcp none --download --yes");
+    const switched = config(dir, withMirror(named ?? ""));
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    expectNoMirror(switched);
+    expect(JSON.parse(readFileSync(join(dir, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution)
+      .toBe("kiro-ide");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the Kiro switch's --dry-run line asks for the same --release-base-url", () => {
     const config = nativeConfig();
     const dir = project("aidlc-mirror-lines-kiro-");
