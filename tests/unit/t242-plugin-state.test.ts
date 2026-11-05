@@ -602,9 +602,9 @@ describe("t242 pure status comparator", () => {
     });
     expect(rows.find((row) => row.key === "version")?.message).toContain("upgrade");
     const missing = rows.find((row) => row.key === "missing")?.message ?? "";
-    expect(missing).toContain("composed from a folder");
+    expect(missing).toContain("composed it from its folder");
     expect(missing).toContain("keeps working");
-    expect(missing).toContain("stages, sensors and scopes");
+    expect(missing).toContain("everything it added to this project");
     // Config composes no plugin; each state a sync clears names the sync.
     const lines = renderPluginStatuses(rows).split("\n");
     for (const key of ["legacy", "new", "source", "version"]) {
