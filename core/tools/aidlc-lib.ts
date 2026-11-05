@@ -3212,7 +3212,7 @@ function unescapeUnquotedShellTextForEngagement(text: string): string {
   return result;
 }
 
-function sameDirectory(left: string, right: string): boolean {
+export function sameDirectory(left: string, right: string): boolean {
   const canonical = (directory: string): string => {
     let path = resolvePath(directory);
     try {
@@ -16262,7 +16262,7 @@ function sameArtifactIdentity(
   );
 }
 
-function pathContainedBy(root: string, candidate: string): boolean {
+export function pathContainedBy(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (
     rel !== ".." &&

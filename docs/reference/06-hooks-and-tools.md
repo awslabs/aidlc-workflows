@@ -80,6 +80,33 @@ their own registrations. Changing a registration changes what the host must
 trust: Codex asks the person to trust the project's hooks once more after the
 upgrade, and Claude Code picks the new row up at its next start.
 
+**AI-DLC's own command in another spelling (Claude Code).** The copy
+channel's settings allow AI-DLC's tool commands in their relative spelling
+(`Bash(bun .claude/tools/aidlc.ts engine *)`,
+`Bash(bun .claude/tools/aidlc-utility.ts *)` and the rest of the list), and
+Claude Code matches a Bash rule against the command text as written, so a helper that named
+the project's path in full was asked about a step AI-DLC runs for itself. When
+every check in the group passed and none printed anything, the group answers
+`"allow"` (with no reason text) for two spellings: a command whose relative
+form an exact or `<prefix> *` rule in the project's own `settings.json` allow
+list holds, with this project's `.claude/tools/` folder named by its absolute
+path (a POSIX path, or a Windows drive letter with either slash); and the one
+compound read of AI-DLC's record helpers were seen to run (`cat` of files in
+the project's `aidlc/` folder, `echo`, and `git -C <project> rev-parse HEAD`,
+joined by `;` or `&&`). Anything else gets no answer and Claude Code asks as
+before: another project's tools, an assignment or wrapper in front of `bun`, a
+`cd` first, a `--project-dir` naming another folder, a pipe, a redirect that
+writes, or any other part. Claude Code applies deny and ask rules over a
+hook's allow, but a Bash rule written for AI-DLC's own spelling never meets the
+absolute one, so a deny or ask rule that could be meant for these commands
+(one naming `aidlc`, a `Bash` rule naming `bun` or `.claude`, or for the read a
+`Read` rule)
+in the project's `settings.json` or `settings.local.json`, the user's
+`settings.json`, or a managed settings file also means no answer, and so does a
+team taking a rule out of the list. Policy that arrives by MDM, the Windows
+registry or the server cannot be read by a hook. The rule is
+`claudeAllowsOwnCommand` in `core/tools/aidlc-claude-own-command.ts`.
+
 Before probing `next` in a shared engine session, the Stop hook preserves a
 current guard-recovery question while the person selects a remedy or supplies
 required follow-up feedback. This wait also applies in autonomous Construction
