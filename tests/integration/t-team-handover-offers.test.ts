@@ -266,7 +266,7 @@ describe("step 2: another clone takes a Unit", () => {
         const dir = mkdtempSync(join(tmpdir(), "aidlc-claim-shell-"));
         tempDirs.push(dir);
         const words = [process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts")];
-        const [file, argv] = shell === "bash"
+        const [file, argv]: [string, string[]] = shell === "bash"
           ? [join(dir, "claim.sh"), [process.platform === "win32" ? gitBashPath() : "bash"]]
           : shell === "PowerShell"
           ? [join(dir, "claim.ps1"), ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]]
@@ -294,7 +294,7 @@ describe("step 2: another clone takes a Unit", () => {
         expect(JSON.parse(claimed.stdout).owner, printed).toBe(name);
       });
       const offer = nextDirective(clone(remote, "late"));
-      names.forEach((name, i) => expect(String(offer.question)).toContain(`${units[i]} is with ${name}`));
+      for (const [i, name] of names.entries()) expect(String(offer.question)).toContain(`${units[i]} is with ${name}`);
     });
   }
 
