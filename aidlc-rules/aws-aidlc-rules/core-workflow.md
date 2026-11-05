@@ -47,7 +47,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Non-compliance with any applicable enabled extension rule is a **blocking finding** — do NOT present stage completion until resolved
 - When presenting stage completion, include a summary of extension rule compliance (compliant/non-compliant/N/A per rule, with brief rationale for N/A determinations)
 
-**Conditional Enforcement**: Extensions may be conditionally enabled/disabled. See `inception/requirements-analysis.md` for the opt-in mechanism. Before enforcing any extension at ANY stage, check its `Enabled` status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`. Skip disabled extensions and log the skip in audit.md. Default to enforced if no configuration exists. 
+**Conditional Enforcement**: Extensions may be conditionally enabled/disabled. See `inception/requirements-analysis.md` for the opt-in mechanism. Before enforcing any extension at ANY stage, check its `Enabled` status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`. Skip disabled extensions and log the skip in the per-user audit file. Default to enforced if no configuration exists. 
 
 ## MANDATORY: Content Validation
 **CRITICAL**: Before creating ANY file, you MUST validate content according to `common/content-validation.md` rules:
@@ -97,7 +97,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 ## Workspace Detection (ALWAYS EXECUTE)
 
-1. **MANDATORY**: Log initial user request in audit.md with complete raw input
+1. **MANDATORY**: Log initial user request in the per-user audit file with complete raw input
 2. Load all steps from `inception/workspace-detection.md`
 3. Execute workspace detection:
    - Check for existing aidlc-state.md (resume if found)
@@ -105,7 +105,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
    - Determine if brownfield or greenfield
    - Check for existing reverse engineering artifacts
 4. Determine next phase: Reverse Engineering (if brownfield and no artifacts) OR Requirements Analysis
-5. **MANDATORY**: Log findings in audit.md
+5. **MANDATORY**: Log findings in the per-user audit file
 6. Present completion message to user (see workspace-detection.md for message formats)
 7. Automatically proceed to next phase
 
@@ -120,7 +120,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Previous reverse engineering artifacts exist
 
 **Execution**:
-1. **MANDATORY**: Log start of reverse engineering in audit.md
+1. **MANDATORY**: Log start of reverse engineering in the per-user audit file
 2. Load all steps from `inception/reverse-engineering.md`
 3. Execute reverse engineering:
    - Analyze all packages and components
@@ -134,7 +134,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
    - Generate dependencies documentation
 
 4. **Wait for Explicit Approval**: Present detailed completion message (see reverse-engineering.md for message format) - DO NOT PROCEED until user confirms
-5. **MANDATORY**: Log user's response in audit.md with complete raw input
+5. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ## Requirements Analysis (ALWAYS EXECUTE - Adaptive Depth)
 
@@ -144,7 +144,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - **Comprehensive**: Complex, high-risk - detailed requirements with traceability
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: Log any user input during this phase in the per-user audit file
 2. Load all steps from `inception/requirements-analysis.md`
 3. Execute requirements analysis:
    - Load reverse engineering artifacts (if brownfield)
@@ -155,7 +155,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
    - Generate requirements document
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Follow approval format from requirements-analysis.md detailed steps - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ## User Stories (CONDITIONAL)
 
@@ -215,7 +215,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 2. **Part 2 - Generation**: Execute approved plan to generate stories and personas
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: Log any user input during this phase in the per-user audit file
 2. Load all steps from `inception/user-stories.md`
 3. **MANDATORY**: Perform intelligent assessment (Step 1 in user-stories.md) to validate user stories are needed
 4. Load reverse engineering artifacts (if brownfield)
@@ -224,11 +224,11 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 7. **PART 1 - Planning**: Create story plan with questions, wait for user answers, analyze for ambiguities, get approval
 8. **PART 2 - Generation**: Execute approved plan to generate stories and personas
 9. **Wait for Explicit Approval**: Follow approval format from user-stories.md detailed steps - DO NOT PROCEED until user confirms
-10. **MANDATORY**: Log user's response in audit.md with complete raw input
+10. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ## Workflow Planning (ALWAYS EXECUTE)
 
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: Log any user input during this phase in the per-user audit file
 2. Load all steps from `inception/workflow-planning.md`
 3. **MANDATORY**: Load content validation rules from `common/content-validation.md`
 4. Load all prior context:
@@ -243,7 +243,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
    - Generate workflow visualization (VALIDATE Mermaid syntax before writing)
 6. **MANDATORY**: Validate all content before file creation per content-validation.md rules
 7. **Wait for Explicit Approval**: Present recommendations using language from workflow-planning.md Step 9, emphasizing user control to override recommendations - DO NOT PROCEED until user confirms
-8. **MANDATORY**: Log user's response in audit.md with complete raw input
+8. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ## Application Design (CONDITIONAL)
 
@@ -259,12 +259,12 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Pure implementation changes
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: Log any user input during this phase in the per-user audit file
 2. Load all steps from `inception/application-design.md`
 3. Load reverse engineering artifacts (if brownfield)
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Present detailed completion message (see application-design.md for message format) - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ## Units Generation (CONDITIONAL)
 
@@ -279,12 +279,12 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Straightforward single-component implementation
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: Log any user input during this phase in the per-user audit file
 2. Load all steps from `inception/units-generation.md`
 3. Load reverse engineering artifacts (if brownfield)
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Present detailed completion message (see units-generation.md for message format) - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ---
 
@@ -323,12 +323,12 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - No new business logic
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: Log any user input during this stage in the per-user audit file
 2. Load all steps from `construction/functional-design.md`
 3. Execute functional design for this unit
 4. **MANDATORY**: Present standardized 2-option completion message as defined in functional-design.md - DO NOT use emergent 3-option behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ### NFR Requirements (CONDITIONAL, per-unit)
 
@@ -343,12 +343,12 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Tech stack already determined
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: Log any user input during this stage in the per-user audit file
 2. Load all steps from `construction/nfr-requirements.md`
 3. Execute NFR assessment for this unit
 4. **MANDATORY**: Present standardized 2-option completion message as defined in nfr-requirements.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ### NFR Design (CONDITIONAL, per-unit)
 
@@ -361,12 +361,12 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - NFR Requirements was skipped
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: Log any user input during this stage in the per-user audit file
 2. Load all steps from `construction/nfr-design.md`
 3. Execute NFR design for this unit
 4. **MANDATORY**: Present standardized 2-option completion message as defined in nfr-design.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ### Infrastructure Design (CONDITIONAL, per-unit)
 
@@ -380,12 +380,12 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Infrastructure already defined
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: Log any user input during this stage in the per-user audit file
 2. Load all steps from `construction/infrastructure-design.md`
 3. Execute infrastructure design for this unit
 4. **MANDATORY**: Present standardized 2-option completion message as defined in infrastructure-design.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ### Code Generation (ALWAYS EXECUTE, per-unit)
 
@@ -396,19 +396,19 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 2. **Part 2 - Generation**: Execute approved plan to generate code, tests, and artifacts
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: Log any user input during this stage in the per-user audit file
 2. Load all steps from `construction/code-generation.md`
 3. **PART 1 - Planning**: Create code generation plan with checkboxes, get user approval
 4. **PART 2 - Generation**: Execute approved plan to generate code for this unit
 5. **MANDATORY**: Present standardized 2-option completion message as defined in code-generation.md - DO NOT use emergent behavior
 6. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-7. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ---
 
 ## Build and Test (ALWAYS EXECUTE)
 
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: Log any user input during this phase in the per-user audit file
 2. Load all steps from `construction/build-and-test.md`
 3. Generate comprehensive build and test instructions:
    - Build instructions for all units
@@ -418,7 +418,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
    - Additional test instructions as needed (contract tests, security tests, e2e tests)
 4. Create instruction files in build-and-test/ subdirectory: build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, build-and-test-summary.md
 5. **Wait for Explicit Approval**: Ask: "**Build and test instructions complete. Ready to proceed to Operations stage?**" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Log user's response in the per-user audit file with complete raw input
 
 ---
 
@@ -452,10 +452,13 @@ The Operations stage will eventually include:
 - **Transparent Planning**: Always show execution plan before starting
 - **User Control**: User can request stage inclusion/exclusion
 - **Progress Tracking**: Update aidlc-state.md with executed and skipped stages
-- **Complete Audit Trail**: Log ALL user inputs and AI responses in audit.md with timestamps
+- **Complete Audit Trail**: Log ALL user inputs and AI responses in per-user audit files with timestamps
+  - **File path**: `aidlc-docs/audit/audit-{username}.md` where `{username}` is determined from `git config user.name`, `$USER`, or IDE identity
+  - **CRITICAL**: Create the `aidlc-docs/audit/` directory and per-user file if they don't exist
   - **CRITICAL**: Capture user's COMPLETE RAW INPUT exactly as provided
   - **CRITICAL**: Never summarize or paraphrase user input in audit log
   - **CRITICAL**: Log every interaction, not just approvals
+  - **Multi-user**: Each developer gets their own audit file — eliminates merge conflicts in team environments
 - **Quality Focus**: Complex changes get full treatment, simple changes stay efficient
 - **Content Validation**: Always validate content before file creation per content-validation.md rules
 - **NO EMERGENT BEHAVIOR**: Construction phases MUST use standardized 2-option completion messages as defined in their respective rule files. DO NOT create 3-option menus or other emergent navigation patterns.
@@ -474,16 +477,27 @@ The Operations stage will eventually include:
 - **Update immediately**: All progress updates in SAME interaction where work is completed
 
 ## Prompts Logging Requirements
-- **MANDATORY**: Log EVERY user input (prompts, questions, responses) with timestamp in audit.md
+- **MANDATORY**: Log EVERY user input (prompts, questions, responses) with timestamp in the per-user audit file
+- **MANDATORY**: Determine the current username at session start (from `git config user.name`, `$USER`, or IDE identity) and use `aidlc-docs/audit/audit-{username}.md` for all logging
+- **MANDATORY**: Create `aidlc-docs/audit/` directory and the per-user file if they don't exist
 - **MANDATORY**: Capture user's COMPLETE RAW INPUT exactly as provided (never summarize)
 - **MANDATORY**: Log every approval prompt with timestamp before asking the user
 - **MANDATORY**: Record every user response with timestamp after receiving it
-- **CRITICAL**: ALWAYS append changes to EDIT audit.md file, NEVER use tools and commands that completely overwrite its contents
-- **CRITICAL**: NEVER use file writing tools and commands that overwrite the entire contents of audit.md, as this causes duplication
+- **CRITICAL**: ALWAYS append changes to the per-user audit file, NEVER use tools and commands that completely overwrite its contents
+- **CRITICAL**: NEVER use file writing tools and commands that overwrite the entire contents of the audit file, as this causes duplication
 - Use ISO 8601 format for timestamps (YYYY-MM-DDTHH:MM:SSZ)
 - Include stage context for each entry
 
-### Audit Log Format:
+### Per-User Audit File Header (auto-created on first entry):
+```markdown
+# AI-DLC Audit Log — {username}
+**Started**: {ISO timestamp}
+**Project**: {repo/project name}
+
+---
+```
+
+### Audit Log Entry Format:
 ```markdown
 ## [Stage Name or Interaction Type]
 **Timestamp**: [ISO timestamp]
@@ -494,17 +508,27 @@ The Operations stage will eventually include:
 ---
 ```
 
-### Correct Tool Usage for audit.md
+### Multi-User Merge Strategy
+
+Per-user audit files eliminate merge conflicts in team environments. For additional safety, projects SHOULD include a `.gitattributes` file:
+
+```gitattributes
+# Union merge keeps both sides if conflicts occur on shared files
+aidlc-docs/audit/*.md merge=union
+aidlc-docs/aidlc-state.md merge=union
+```
+
+### Correct Tool Usage for Audit Files
 
 ✅ CORRECT:
 
-1. Read the audit.md file
-2. Append/Edit the file to make changes
+1. Read the per-user audit file (or confirm it doesn't exist yet)
+2. Append/Edit the file to add new entries
 
 ❌ WRONG:
 
-1. Read the audit.md file
-2. Completely overwrite the audit.md with the contents of what you read, plus the new changes you want to add to it
+1. Read the audit file
+2. Completely overwrite it with the contents of what you read, plus new changes
 
 ## Directory Structure
 
@@ -529,8 +553,10 @@ The Operations stage will eventually include:
 │   │   │   └── code/               # Markdown summaries only
 │   │   └── build-and-test/
 │   ├── operations/                 # 🟡 OPERATIONS PHASE (placeholder)
-│   ├── aidlc-state.md
-│   └── audit.md
+│   ├── audit/                      # 📝 PER-USER AUDIT LOGS
+│   │   ├── audit-{username}.md     # One file per developer
+│   │   └── .gitkeep
+│   └── aidlc-state.md
 ```
 
 **CRITICAL RULE**:
