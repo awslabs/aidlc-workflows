@@ -10,7 +10,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationStepOnRecord } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
@@ -27,6 +27,7 @@ import {
   parallelDependencyBody,
   prepareCandidate,
   runMergeTool,
+  tempDirs,
 } from "../harness/team-unit-merge.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -117,6 +118,27 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(shared.out).toContain("pull main, then share again");
     expect(git(lead, ["rev-parse", "HEAD"])).not.toBe(before);
     expect(git(lead, ["status", "--porcelain"])).toBe("");
+    const again = nextDirective(lead);
+    expect(isHandover(again, "share"), JSON.stringify(again)).toBe(true);
+  });
+
+  test("share whose commit git refuses (the team's own pre-commit hook): next offers share again and starts no Unit here", () => {
+    const { seed: lead, remote } = makeSeed();
+    const hooks = join(lead, "..", `${lead.split(/[\\/]/).pop()}-hooks`);
+    mkdirSync(hooks, { recursive: true });
+    tempDirs.push(hooks);
+    writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\necho \"the team's pre-commit check said no\" >&2\nexit 1\n");
+    chmodSync(join(hooks, "pre-commit"), 0o755);
+    git(lead, ["config", "core.hooksPath", hooks]);
+    asLeadsOwnCheckout(lead);
+    expect(isHandover(nextDirective(lead), "share")).toBe(true);
+    const before = git(lead, ["rev-parse", "HEAD"]);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.out).toContain("the team's pre-commit check said no");
+    expect(shared.out).toContain("Then share again.");
+    expect(git(lead, ["rev-parse", "HEAD"])).toBe(before);
+    expect(git(remote, ["rev-parse", "main"])).toBe(before);
     const again = nextDirective(lead);
     expect(isHandover(again, "share"), JSON.stringify(again)).toBe(true);
   });
@@ -280,6 +302,9 @@ describe("step 5: main is pushed after a land", () => {
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
     expect(git(remote, ["merge-base", "--is-ancestor", land.git_commit_oid, "main"])).toBe("");
+    // What the push committed first, if anything, is named for the landing, never as the plan.
+    expect(git(lead, ["log", "-1", "--format=%s"])).not.toBe("Share the plan with the teams");
+    expect(git(lead, ["status", "--porcelain"])).toBe("");
   });
 
   test("a land already on origin is not offered", () => {

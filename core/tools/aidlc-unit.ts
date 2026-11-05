@@ -2028,7 +2028,16 @@ function publishUnit(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const stamp = requireLiveClaimForTeamUnit(pd, unit);
   if (!stamp) fail("Unit publication requires a scoped team checkout.");
-  if (commitFirst) commitWorkHere(pd, `Complete the ${unit} Unit`);
+  if (commitFirst) {
+    // A commit git refused leaves HEAD where it was, so the offer to publish
+    // at this HEAD is due again.
+    try {
+      commitWorkHere(pd, `Complete the ${unit} Unit`);
+    } catch (error) {
+      clearTeamHandoverMarks(pd, ["publish"]);
+      fail(`${errorMessage(error)} Then publish again.`);
+    }
+  }
   const changed = worktreeChanges(pd, "no", "Cannot inspect candidate worktree");
   const own = aidlcOwnRootParts(pd, changed);
   if (changed.some((path) => !own.has(path))) {
@@ -4544,11 +4553,10 @@ function commitWorkHere(projectDir: string, message: string): number {
     if (NO_GIT_IDENTITY.test(committed.stderr)) {
       fail(
         "Git has no name and email for your commits yet. Set them with " +
-          'git config --global user.name "Your Name" and git config --global user.email "you@example.com", ' +
-          "then run the command again.",
+          'git config --global user.name "Your Name" and git config --global user.email "you@example.com".',
       );
     }
-    fail(`git commit failed: ${(committed.stderr || committed.stdout).trim()}`);
+    fail(`git did not commit: ${(committed.stderr || committed.stdout).trim()}.`);
   }
   return paths.length;
 }
@@ -4582,15 +4590,26 @@ export function shareBlocker(projectDir: string): string | null {
 
 // `aidlc unit share`: commit the work here and push the integration branch to
 // the remote, so the teams can take Units (after Inception) or see a landed
-// one. A plain push, never forced. A refused push keeps the commit and leaves
-// both offers due again (their marks cleared), so the next step asks again
-// instead of building here.
+// one. A plain push, never forced. A share that did not happen (a commit git
+// refused, a push the remote refused) keeps what it committed and leaves both
+// offers due again (their marks cleared), so the next step asks again instead
+// of building here.
 function shareMain(projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const blocker = shareBlocker(pd);
   if (blocker !== null) fail(blocker);
   const { remote, branch } = shareTarget(pd)!;
-  const committed = commitWorkHere(pd, "Share the plan with the teams");
+  const landed = landedNotOnRemote(pd).map((row) => row.unit);
+  let committed: number;
+  try {
+    committed = commitWorkHere(
+      pd,
+      landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams",
+    );
+  } catch (error) {
+    clearTeamHandoverMarks(pd, ["share", "push"]);
+    fail(`${errorMessage(error)} Then share again.`);
+  }
   const pushed = git(pd, ["push", remote, `HEAD:refs/heads/${branch}`], { GIT_TERMINAL_PROMPT: "0" });
   if (!pushed.ok) {
     clearTeamHandoverMarks(pd, ["share", "push"]);

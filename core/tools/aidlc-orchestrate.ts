@@ -5243,11 +5243,12 @@ function teamShareOffer(
   const target = shareTarget(projectDir);
   if (target === null) return null;
   const work = workToCommitWords(projectDir);
-  const plural = unitsLeft === 1 ? "The plan's last Unit is" : `The plan's ${unitsLeft} Units are`;
+  const plural = unitsLeft === 1 ? "The plan's last Unit is ready for the teams. Share it now?" :
+    `The plan's ${unitsLeft} Units are ready for the teams. Share them now?`;
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
-    question: `${plural} ready for the teams. Share them now? I'd ${work === null ? "" : `commit ${work} and `}` +
+    question: `${plural} I'd ${work === null ? "" : `commit ${work} and `}` +
       `push ${target.branch} to ${target.remote}, so each team can take a Unit by opening its own clone and running ` +
       `${entrySkillInvocation()}.`,
     choices: [
@@ -5345,13 +5346,15 @@ function teamPushOffer(projectDir: string): AskDirective | null {
   const target = shareTarget(projectDir);
   if (target === null) return null;
   const units = landed.map((row) => row.unit);
+  const work = workToCommitWords(projectDir);
   return teamHandoverAsk(projectDir, {
     handovers: ["push"],
     marks: fresh.map((row) => teamHandoverMarkName("push", row.commit.slice(0, 12))),
-    question: `Push ${target.branch} to ${target.remote} now so the other teams see ${units.join(" and ")} landed?`,
+    question: `Push ${target.branch} to ${target.remote} now so the other teams see ${units.join(" and ")} landed?` +
+      (work === null ? "" : ` I'd commit ${work} first.`),
     choices: [{
       label: `Push ${target.branch}`,
-      detail: "A plain push; nothing is forced.",
+      detail: work === null ? "A plain push; nothing is forced." : "A commit, then a plain push; nothing is forced.",
       command: `${aidlcInvocation()} unit share`,
     }],
   });
