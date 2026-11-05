@@ -372,7 +372,7 @@ record holds into its composition stamp (`plugin-compose-<plugin>.json`,
 `compositionIsCurrent` compares them, so a project composed before the field
 records them at its next sync.
 
-`pluginCommandTable` in `aidlc-lib.ts` is the one owner of which command runs:
+`pluginCommandTable` in `aidlc-plugin-commands.ts` is the one owner of which command runs:
 it reads the stamps, the enabled set (`pluginsEnabled()`, the set doctor uses)
 and the plan names, takes plugins in name order, and skips a name AI-DLC's own
 commands use (`CORE_COMMAND_WORDS` in `aidlc-command.ts`), a plan's name, or a

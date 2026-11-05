@@ -33,7 +33,7 @@ import {
   validScopes,
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
-import { pluginCommandTable, type PluginCommandSkip } from "./aidlc-plugin-commands.ts";
+import { type PluginCommandSkip, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import {
   aidlcInvocation,
   compiledExecutable,
@@ -1239,19 +1239,7 @@ function recordSkippedCommands(
   stagedData: string,
   evidence: ProjectEvidence,
 ): string[] {
-  let enabled: ReadonlySet<string> | null;
-  try {
-    enabled = pluginsEnabled();
-  } catch {
-    return [];
-  }
-  let plans: ReadonlySet<string> = new Set();
-  try {
-    plans = validScopes();
-  } catch {
-    // No stage graph yet: no plan names.
-  }
-  const table = pluginCommandTable(stagedData, enabled, plans);
+  const table = projectPluginCommands({ pluginsEnabled, validScopes }, stagedData);
   const lines: string[] = [];
   for (const plugin of plugins) {
     const path = join(stagedData, `plugin-compose-${plugin.key}.json`);

@@ -99,14 +99,18 @@ export function pluginCommandTable(
 }
 
 /**
- * The command table of the project this process runs for, from the readers
- * aidlc-lib.ts owns; none when its plugin selection cannot be read, and no plan
- * names in a tree with no stage graph.
+ * The command table of the project this process runs for (or of `dataDir`, a
+ * sync's staged copy of it), from the readers aidlc-lib.ts owns; none when its
+ * plugin selection cannot be read, and no plan names in a tree with no stage
+ * graph.
  */
-export function projectPluginCommands(reads: {
-  pluginsEnabled: () => ReadonlySet<string> | null;
-  validScopes: () => ReadonlySet<string>;
-}): PluginCommandTable {
+export function projectPluginCommands(
+  reads: {
+    pluginsEnabled: () => ReadonlySet<string> | null;
+    validScopes: () => ReadonlySet<string>;
+  },
+  dataDir = resolveHarnessPath(["tools", "data"]),
+): PluginCommandTable {
   let enabled: ReadonlySet<string> | null;
   try {
     enabled = reads.pluginsEnabled();
@@ -119,7 +123,7 @@ export function projectPluginCommands(reads: {
   } catch {
     // No stage graph: no plan names.
   }
-  return pluginCommandTable(resolveHarnessPath(["tools", "data"]), enabled, plans);
+  return pluginCommandTable(dataDir, enabled, plans);
 }
 
 /**

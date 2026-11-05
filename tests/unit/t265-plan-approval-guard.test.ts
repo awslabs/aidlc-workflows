@@ -549,6 +549,8 @@ function scratchProject(): string {
     "aidlc-git.ts",
     // The config sections the hook sorts while a plan waits, and what that imports.
     "aidlc-command.ts",
+    // aidlc-lib.ts reads a plugin command leading a line with this.
+    "aidlc-plugin-commands.ts",
     "aidlc-color.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));

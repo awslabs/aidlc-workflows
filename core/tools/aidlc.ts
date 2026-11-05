@@ -4186,7 +4186,12 @@ export async function main(rawArgv: string[]): Promise<void> {
   }
   configureColor(argv);
   const projectDirOption = projectDirFlag(argv.slice(0, ourFlagLimit(argv)));
-  if (projectDirOption.error) {
+  // A word that may be a plugin command: the words after it are its script's,
+  // so a mistake of ours found only there is said only if it names none.
+  const pluginHead = pluginCommandHead(argv);
+  const scriptsProjectDirError = projectDirOption.error !== undefined && pluginHead !== null &&
+    projectDirFlag(argv.slice(0, pluginHead.at)).error === undefined;
+  if (projectDirOption.error && !scriptsProjectDirError) {
     process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
     return;
   }
@@ -4223,11 +4228,10 @@ export async function main(rawArgv: string[]): Promise<void> {
       return;
     }
   }
-  // A word that may be a plugin command: only the words before it name the
-  // project, so a --project-dir of the script's own never picks it, here or in
-  // the harness discovery just below.
-  const pluginHead = route ? null : pluginCommandHead(argv);
-  if (pluginHead !== null) {
+  // Only the words before a plugin command name the project, so a
+  // --project-dir of the script's own never picks it, here or in the harness
+  // discovery just below.
+  if (!route && pluginHead !== null) {
     process.env.AIDLC_RUNTIME_PROJECT_DIR = runtimeProjectDirFrom(argv.slice(0, pluginHead.at));
   }
   if (isCompiledExecutable()) {
@@ -4360,6 +4364,10 @@ export async function main(rawArgv: string[]): Promise<void> {
     const pluginCode = await runPluginCommand(argv, pluginHead);
     if (pluginCode !== null) {
       process.exitCode = pluginCode;
+      return;
+    }
+    if (scriptsProjectDirError && projectDirOption.error) {
+      process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
       return;
     }
   }

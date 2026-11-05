@@ -248,6 +248,10 @@ describe("aidlc <name> on a copy install", () => {
     expect(seen.harness).toBe(".claude");
     expect(seen.beBun).toBeNull();
     expect(realpathSync(seen.project)).toBe(realpathSync(main));
+    // Forms of ours that we would refuse are the script's words after the name.
+    const own = aidlc(main, [COMMAND, "--project-dir=x", "--project-dir"]);
+    expect(own.status, own.stderr).toBe(0);
+    expect(JSON.parse(own.stdout.trim()).argv).toEqual(["--project-dir=x", "--project-dir"]);
   });
 
   test("our own --project-dir before the name names the project, and the script runs where the person is", () => {
