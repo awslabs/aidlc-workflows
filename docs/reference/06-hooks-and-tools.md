@@ -402,7 +402,9 @@ again is refused, and the hook tells the agent to ask the same question again
 in its reply rather than in the box. A box that comes back with an answer, on
 Codex or Claude Code, also records one `QUESTION_REPLIED` row per question,
 with the question as shown and the reply as given, and the `Question Id` of the
-open question in that chat whose exact text the box showed. That row decides
+open question in that chat whose exact text the box showed; when a label the
+box showed ends in the "(Recommended)" mark, the row also keeps that choice,
+the mark cut, as `Recommended` (`recommendedChoices`). That row decides
 nothing and spends no turn. Each `HUMAN_TURN` also carries the ids of the
 questions open where the person replied (`Open Questions`) and a digest of
 each entry of the stage's questions file with its answers blanked (`Questions
@@ -2150,7 +2152,10 @@ permits both commands before approval; neither engages the forwarding loop.
 
 `log answers` returns `stage`, `answered`, `open`, and `ambiguous`. Questions
 carry `question`, `options`, and `askedAt`; pairs also carry `answer` and
-`answeredAt`. Optional `unit`, `attemptGeneration`, and `workflow` preserve
+`answeredAt`. Optional `recommended` lists the choices the question's row keeps
+as `Recommended` (the labels it was logged with that carry the "(Recommended)"
+mark, the mark cut); a row without the field lists none. Optional `unit`,
+`attemptGeneration`, and `workflow` preserve
 the interaction scope. A `DECISION_RECORDED` pairs only with a later
 `QUESTION_ANSWERED` in the same Stage, Unit, Attempt Generation, and Workflow,
 including agreement on absent fields. Every row carrying a `Checkpoint`

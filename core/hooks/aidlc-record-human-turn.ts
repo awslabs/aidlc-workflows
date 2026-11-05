@@ -115,7 +115,7 @@ import {
 import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
 import { boxQuestionId, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/aidlc-questions.ts";
-import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
+import { aidlcEntryWords, isAidlcCommandPrompt, recommendedChoices } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, type NewMessage, saveMessage } from "../tools/aidlc-message-store.ts";
 
 // The one parse of a typed line, for the message record (aidlc-message-store.ts)
@@ -978,12 +978,14 @@ try {
               // The question it answered, by its id, when the box asked one
               // open here in the question's own words.
               const id = boxQuestionId(projectDir, sessionId, question);
+              const recommended = options === undefined ? [] : recommendedChoices(options);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
                 Question: question,
                 ...(id !== null ? { [QUESTION_ID_FIELD]: id } : {}),
                 Reply: reply,
                 ...(options !== undefined ? { Options: JSON.stringify(options) } : {}),
+                ...(recommended.length > 0 ? { Recommended: JSON.stringify(recommended) } : {}),
               }, projectDir);
             }
           }
