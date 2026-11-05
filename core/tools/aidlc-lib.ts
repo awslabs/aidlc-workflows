@@ -1070,8 +1070,8 @@ function shippedRulesSubdir(): string | null {
  *
  * STRICT: a malformed block throws here rather than being silently ignored,
  * because the value becomes a process invocation and a half-parsed extractor is
- * worse than none. Absent is the normal case — the tool then probes `pdftotext`
- * on PATH and degrades to `extractor_unavailable`.
+ * worse than none. Absent is the normal case: the tool then probes `pdftotext`
+ * on PATH and, where it is missing, reads a PDF with AI-DLC's own reader.
  */
 export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec> | null {
   return readShippedHarnessData().documentExtractors;
