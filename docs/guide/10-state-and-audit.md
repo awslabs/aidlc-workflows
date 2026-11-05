@@ -244,9 +244,10 @@ Neither command changes files or takes a lock.
 When the agent marks one of a question's choices "(Recommended)", the record
 keeps that choice as `Recommended`: on the question's `Decision Recorded`
 entry when the logged choices carry the mark, and on the `Question Replied`
-entry when you answer in Claude Code's or Codex's question box. `log answers`
-lists it as `recommended` beside the question's `options` and your answer, so
-you can see whether you went with it. Entries written before this have no
+entry when you answer in Claude Code's or Codex's question box, beside the
+box's `Options` and your `Reply`, so you can see whether you went with it.
+`log answers` lists a logged question's `Recommended` as `recommended` beside
+its `options` and your answer. Entries written before this have no
 `Recommended`, and read as they always did.
 
 ### Keys and passwords you type
