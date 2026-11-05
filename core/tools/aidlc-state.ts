@@ -97,6 +97,7 @@ import {
   extractMarkdownSection,
   filterProducesByKind,
   findStageBySlug,
+  isPerUnitStage,
   findAllEvents,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
@@ -296,7 +297,9 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
 import {
+  stageLabel,
   stageValidationAuditFields,
+  unitInputGaps,
   VALIDATION_WARNING_FIELD,
 } from "./aidlc-validity.ts";
 import {
@@ -7290,6 +7293,37 @@ export function leftOutNotice(pd: string, stage: GateStage, unit: string | null 
   if (stage.workspace_requires !== true) return null;
   try {
     return leftOutLine(declaredOutputsForGate(pd, stage, unit).filter((path) => basename(path) === "traceability.json"));
+  } catch {
+    return null;
+  }
+}
+
+// Which Units have nothing from the per-Unit stage a later stage reads every
+// Unit's work from (#3531), counted from the files its Validation Basis
+// records (unitInputGaps). Said with the gate, and with an approval that
+// opened the gate in the same step, by the stage that reads that per-Unit
+// stage's work first (its `requires_stage` names it), so a stage after it does
+// not say it again. A per-Unit gate, or nothing missing, says nothing. Said
+// with Sensors off too: it is the record, not a check.
+export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: string | null = null): string | null {
+  if (unit !== null || isPerUnitStage(stage)) return null;
+  try {
+    const gaps = unitInputGaps(pd, stage, readStateFile(pd))
+      .filter((gap) => gap.missing.length > 0 && (stage.requires_stage ?? []).includes(gap.producer));
+    if (gaps.length === 0) return null;
+    const and = (names: readonly string[]): string =>
+      names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    const units = (names: readonly string[]): string => `unit${names.length === 1 ? "" : "s"} ${and(names)}`;
+    const stageName = stageLabel(stage, stage.slug) ?? stage.slug;
+    return gaps.map(({ producer, units: all, missing }) => {
+      const kept = all.filter((name) => !missing.includes(name));
+      const from = stageLabel(findStageBySlug(producer), producer) ?? producer;
+      const has = missing.length === 1 ? "has" : "have";
+      const left = kept.length === 0
+        ? `${stageName} has none to work from`
+        : `${stageName} has only the output of ${units(kept)} to work from`;
+      return `${units(missing).replace(/^u/, "U")} ${has} no ${from} output, so ${left}.`;
+    }).join(" ");
   } catch {
     return null;
   }
