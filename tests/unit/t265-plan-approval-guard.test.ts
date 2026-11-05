@@ -502,6 +502,7 @@ function scratchProject(): string {
   for (const t of [
     "aidlc.ts",
     "aidlc-lib.ts",
+    "aidlc-review-granularity.ts",
     "aidlc-settings.ts",
     "aidlc-markdown.ts",
     "aidlc-locks.ts",

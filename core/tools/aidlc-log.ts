@@ -9,10 +9,11 @@
 import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { resolveReviewGranularity } from "./aidlc-review-granularity.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   askedQuestionFields,
@@ -121,6 +122,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   filterProducesByKind,
+  auditShardDir,
   getField,
   guardAttemptState,
   guardRefusalOutput,
@@ -3627,6 +3629,33 @@ function completionChecksHold(pd: string, stage: string, unit: string | undefine
   }
 }
 
+// Lightweight review measurement: one JSONL line per request and per terminal
+// verdict, beside the audit shards (`audit/review-metrics.jsonl`), stamped with
+// the effective review granularity so a workshop can compare stage- and
+// phase-granularity runs (duration = a verdict row's `at` minus its matching
+// request row's). Advisory only: a failed append never blocks a receipt, and
+// nothing reads the file back.
+function appendReviewMetric(
+  pd: string,
+  intent: string | undefined,
+  space: string | undefined,
+  entry: Record<string, unknown>,
+): void {
+  try {
+    const dir = auditShardDir(pd, intent, space);
+    if (dir === null) return;
+    mkdirSync(dir, { recursive: true });
+    const state = intent ? readStateFile(pd, intent, space) : "";
+    const scope = getField(state, "Scope") ?? "";
+    appendFileSync(
+      join(dir, "review-metrics.jsonl"),
+      `${JSON.stringify({ at: isoTimestamp(), granularity: resolveReviewGranularity(scope, state), ...entry })}\n`,
+    );
+  } catch {
+    // Advisory measurement only.
+  }
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -4668,6 +4697,14 @@ function handleReview(args: string[]): void {
     // The reviewer is told which files another open piece of work in this
     // folder claims, as the build was, so it raises no finding about them.
     const otherWork = workspaceStage ? otherOpenWorkClaims(pd, flags.stage) : [];
+    appendReviewMetric(pd, intent, space, {
+      event: "request",
+      stage: flags.stage,
+      ...(flags.unit ? { unit: flags.unit } : {}),
+      reviewer: flags.reviewer,
+      iteration,
+      ...(retried ? { retry: true } : {}),
+    });
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -4721,6 +4758,9 @@ function handleReview(args: string[]): void {
   const reviewFileFlag = flags["review-file"];
   let recordPath: string | null = null;
   let reviewMarkdown: string | null = null;
+  // Findings counts for the review-metrics line, taken from the record's own
+  // findings list while it is in scope.
+  let metricFindings: Record<string, number> | null = null;
   const verdictChangeNotices: string[] = [];
   // What the verdict was recorded against, for the step it hands the agent.
   const recorded: {
@@ -5251,6 +5291,11 @@ function handleReview(args: string[]): void {
           ),
         ];
       }
+      metricFindings = {
+        findings_new: findings.filter((finding) => finding.status === "New" || finding.introducedInReview).length,
+        findings_resolved: findings.filter((finding) => finding.resolvedByReviewer || finding.status === "Resolved").length,
+        findings_total: findings.length,
+      };
       const record: ReviewRecord = {
         version: 1,
         stage: flags.stage,
@@ -5400,6 +5445,15 @@ function handleReview(args: string[]): void {
       personAsked: false,
       recovery: false,
     });
+  appendReviewMetric(pd, intent, space, {
+    event: "verdict",
+    stage: flags.stage,
+    ...(flags.unit ? { unit: flags.unit } : {}),
+    reviewer: flags.reviewer,
+    iteration,
+    verdict,
+    ...(metricFindings ?? {}),
+  });
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,

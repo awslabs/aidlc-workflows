@@ -140,9 +140,9 @@ You can override scope at any time during a workflow:
 
 ## Intent Configuration
 
-The nine intent settings are `depth`, `test-strategy`, `review`,
-`guard-policy`, `sensors`, `learnings`, `summary-confirmation`,
-`plan-approval`, and `collaborators`, in that order. Three more keys, `guard.review-freeze`,
+The ten intent settings are `depth`, `test-strategy`, `review`,
+`review-granularity`, `guard-policy`, `sensors`, `learnings`,
+`summary-confirmation`, `plan-approval`, and `collaborators`, in that order. Three more keys, `guard.review-freeze`,
 `guard.state-transition`, and `guard.reviewer-scope`, switch one guard off or
 back on for a single piece of work, and `guard.plan-approval` is another name
 for `plan-approval`. The CLI routes share one atomic setter,
@@ -158,8 +158,8 @@ Mix the settings in one command rather than chaining separate updates:
 ```
 
 The native equivalent is `aidlc engine config set <key> <value>` followed by
-the remaining `--key value` flags. `config get <key>` accepts all thirteen keys,
-and `config list` (optionally `--json`) returns all thirteen, including effective
+the remaining `--key value` flags. `config get <key>` accepts all fourteen keys,
+and `config list` (optionally `--json`) returns all fourteen, including effective
 values and sources for Guard Policy, the switchable fences, and the ceremonies
 (`guard.plan-approval` is another name for `plan-approval` and reads the same):
 
@@ -292,6 +292,67 @@ the main intent's ceremony overrides. That scope is recorded on the synthetic
 stage-start event and remains fixed through completion; resume with a different
 scope is refused. Legacy isolated starts without a recorded scope retain
 summary confirmation and do not enforce this scope comparison.
+
+### Review granularity
+
+By default every reviewer-bearing stage gets its own agent review pass before
+its approval gate (`review-granularity: stage`). Setting it to `phase` defers
+the Ideation and Inception reviews and runs them grouped instead: each
+reviewer's deferred reviews run together at that reviewer's last in-plan stage
+of the phase, covering all of its stages' artifacts in one pass. On the `mvp`
+scope that turns eight review dispatches into three (one in Ideation, two in
+Inception — one per reviewer). Construction reviews are per-Unit and entangled
+with convergence checkpoints and loop-back, so they always run per stage, and
+`--single` isolated runs are unaffected.
+
+Enable it per piece of work, or as a team default in a custom scope:
+
+```
+/aidlc config set review-granularity phase
+```
+
+Typed on work already under way it applies from the next stage on; typed
+before any work exists it is kept and applied to the work this chat starts
+next, like any other setting.
+
+```yaml
+# a custom scope's frontmatter
+review_granularity: phase
+```
+
+What changes and what does not:
+
+- **Human approval gates are untouched.** Every stage still ends at its gate;
+  intermediate gates just carry no reviewer findings brief. All grouped
+  findings reach you at the anchor stage's gate, tagged per artifact.
+- **Receipts stay per stage.** The grouped pass records each covered stage's
+  own review receipt, so write-freeze, staleness, and recovery behave exactly
+  as per-stage reviews do. Editing a reviewed artifact later invalidates that
+  stage's receipt, not the whole phase's.
+- **The review level still applies.** `review_cap` and `--review` decide
+  whether and how strongly reviews run; granularity only decides where. A
+  scope with `review_cap: none` (such as `express`) stays reviewless either way.
+
+**When to use `phase`:** cost- and speed-sensitive work on smaller scopes —
+workshops, POCs, MVPs — where fewer, broader review passes are worth the
+trade. Reviewing a phase's artifacts together also gives the reviewer
+cross-artifact context (a story that drops a requirement, a design that drifts
+from the contract). **The trade-off:** a defect in an early artifact is caught
+at the end of the phase instead of at that stage's gate, after later artifacts
+were built on it; the fix is the normal backward jump and forward replay, which
+reuses unaffected artifacts, but it costs more than catching it early. Keep
+`stage` for larger scopes or work whose requirements are still moving.
+
+One boundary to know: skipping the anchor stage, or switching back to `stage`
+before the anchor has run, drops that phase's deferred agent reviews — the
+stages' human-approved gates stand, exactly as skipping a reviewed stage does
+today, and you can still ask for a review of any stage in plain words at any
+time.
+
+Each review request and verdict is also logged to
+`audit/review-metrics.jsonl` in the intent's record (timestamp, stage,
+granularity, iteration, verdict, findings counts), so the two modes can be
+compared on real runs.
 
 ### Plan approval
 

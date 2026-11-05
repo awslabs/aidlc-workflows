@@ -3497,6 +3497,7 @@ export const CONFIG_KEYS = [
   "depth",
   "test-strategy",
   "review",
+  "review-granularity",
   "guard-policy",
   "sensors",
   "learnings",
@@ -36748,6 +36749,12 @@ interface ScopeMetadata {
    *  dispatch at all). Absent = adversarial (no cap). Resolution lives in
    *  resolveReviewClass. */
   reviewCap?: "adversarial" | "advisory" | "none";
+  /** Where the agent review passes run under this scope: "stage" (after every
+   *  reviewer-bearing stage, the default) or "phase" (ideation/inception
+   *  reviews are deferred to one grouped pass per reviewer at that reviewer's
+   *  last in-plan stage of the phase; Construction is unaffected). Resolution
+   *  lives in resolveReviewGranularity. */
+  reviewGranularity?: "stage" | "phase";
   /** When true, this scope is the enabled plugin's freeform/default fallback
    *  (plugin-only installs where the core `classic` default is
    *  deselected). At most one enabled scope should set this. */
@@ -36906,6 +36913,15 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       }
       meta.reviewCap = reviewCap;
     }
+    const reviewGranularity = scalarField(fm, "review_granularity");
+    if (reviewGranularity) {
+      if (reviewGranularity !== "stage" && reviewGranularity !== "phase") {
+        throw new Error(
+          `Scope file ${filePath} has invalid review_granularity value "${reviewGranularity}". Expected "stage" or "phase".`
+        );
+      }
+      meta.reviewGranularity = reviewGranularity;
+    }
     // `guard_policy` is the key; `change_control` is its retired spelling, read
     // for one release. A file naming both must agree.
     const guardPolicyRaw = scalarField(fm, "guard_policy");
@@ -36991,6 +37007,7 @@ export function resolveReviewClass(
   const cap = override ?? loadScopeMetadata()[scope]?.reviewCap;
   return cap && REVIEW_RANK[cap] < REVIEW_RANK[declared] ? cap : declared;
 }
+
 
 export function loadScopeMetadata(): Record<string, ScopeMetadata> {
   if (_scopeMetadata !== null) return _scopeMetadata;
