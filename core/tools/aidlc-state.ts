@@ -7298,18 +7298,21 @@ export function leftOutNotice(pd: string, stage: GateStage, unit: string | null 
   }
 }
 
-// Which Units have nothing from the per-Unit stage a later stage reads every
-// Unit's work from (#3531), counted from the files its Validation Basis
-// records (unitInputGaps). Said with the gate, and with an approval that
-// opened the gate in the same step, by the stage that reads that per-Unit
-// stage's work first (its `requires_stage` names it), so a stage after it does
-// not say it again. A per-Unit gate, or nothing missing, says nothing. Said
-// with Sensors off too: it is the record, not a check.
+// Which Units a per-Unit stage that runs for every Unit (Code Generation) has
+// not finished, said by the stage that reads its work first (#3531): its
+// `requires_stage` names it, so a stage after it does not say it again.
+// Counted from the files the stage's Validation Basis records
+// (unitInputGaps). A design stage runs for a Unit only when its condition
+// holds, so a Unit without its documents is the plan, not a gap, and is not
+// said. Said with the gate, and with an approval that opened the gate in the
+// same step. A per-Unit gate, or nothing missing, says nothing. Said with
+// Sensors off too: it is the record, not a check.
 export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: string | null = null): string | null {
   if (unit !== null || isPerUnitStage(stage)) return null;
   try {
-    const gaps = unitInputGaps(pd, stage, readStateFile(pd))
-      .filter((gap) => gap.missing.length > 0 && (stage.requires_stage ?? []).includes(gap.producer));
+    const gaps = unitInputGaps(pd, stage, readStateFile(pd)).filter((gap) =>
+      gap.missing.length > 0 && (stage.requires_stage ?? []).includes(gap.producer) &&
+      findStageBySlug(gap.producer)?.execution === "ALWAYS");
     if (gaps.length === 0) return null;
     const and = (names: readonly string[]): string =>
       names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;

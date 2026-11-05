@@ -18,6 +18,7 @@ import {
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { artifactFilename, findStageBySlug, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { unitsWithoutInputsNotice } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 
 // The fixture's documents are not written for the stage checks.
 process.env.AIDLC_DISABLE_SENSORS = "1";
@@ -185,6 +186,18 @@ describe("t-build-and-test-units-without-code: Build and Test names the Units wi
   test("a Unit with only its code plan has not finished, and the Units come in their own order", () => {
     const p = atBuildAndTest(["alpha"], "feature", ["beta"]);
     expect(lines(report(p, ["--result", "awaiting-approval"]))).toContain(LINE);
+  });
+
+  // A design stage runs for a Unit only when its condition holds, so a Unit
+  // with none of its documents is the plan, not a gap: the Operation stages
+  // that read them say nothing, and Build and Test is the one that says it.
+  test("a stage reading a design stage some Units skip on its own condition says nothing", () => {
+    const p = atBuildAndTest(["alpha"]);
+    for (const slug of ["deployment-pipeline", "environment-provisioning", "observability-setup", "performance-validation"]) {
+      expect(unitsWithoutInputsNotice(p, findStageBySlug(slug)!, null), slug).toBeNull();
+    }
+    expect(unitsWithoutInputsNotice(p, findStageBySlug("build-and-test")!, null)).toBe(LINE);
+    expect(unitsWithoutInputsNotice(p, findStageBySlug("ci-pipeline")!, null)).toBeNull();
   });
 
   test("every Unit built: nothing is said", () => {
