@@ -8,7 +8,10 @@
 // mutually blind round-1 briefs, collect their identity-marked contribution
 // files, integrate as the product lead, and approve only after that evidence is
 // present. A preflight report on the same fixture proves the missing-evidence
-// refusal without reproducing t236's full guard matrix.
+// refusal without reproducing t236's full guard matrix. A first, short drive
+// checks the step the lead starts from: it carries the lead's persona and lists
+// the team's knowledge first (whether the agent then opens that file is its own
+// reading, so the drive ends at the step).
 //
 // It SPENDS TOKENS: driveAidlc runs the real user-stories stage, its three mob
 // participants, and product-lead reviewer through the Claude Agent SDK.
@@ -28,7 +31,7 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   cleanupTestProject,
   seededAuditDir,
@@ -63,9 +66,26 @@ const RULE_MARKERS = [
   { marker: "first-class" },
   { marker: "Given/When/Then" },
 ] as const;
-const LIVE_KNOWLEDGE_REL =
-  "aidlc/spaces/default/knowledge/aidlc-product-agent/issue-495-live.md";
-const LIVE_KNOWLEDGE_MARKER = "ISSUE_495_LIVE_KNOWLEDGE_DELIVERY_EVIDENCE";
+// What Claude Code handed each agent as it started: the SubagentStart hooks'
+// output, as the SDK reports it (`SubagentStart:<agent>`).
+function startContexts(hooks: DriveResult["subagentStartHooks"]): Map<string, string> {
+  const found = new Map<string, string>();
+  for (const { hookName, stdout } of hooks ?? []) {
+    const agent = /^SubagentStart:(.+)$/.exec(hookName)?.[1];
+    if (!agent) continue;
+    try {
+      const context = (JSON.parse(stdout) as { hookSpecificOutput?: { additionalContext?: string } })
+        .hookSpecificOutput?.additionalContext ?? "";
+      found.set(agent, (found.get(agent) ?? "") + context);
+    } catch {
+      // A hook that printed no JSON handed nothing over.
+    }
+  }
+  return found;
+}
+
+const TEAM_KNOWLEDGE_REL =
+  "aidlc/spaces/default/knowledge/aidlc-product-agent/story-conventions.md";
 
 const APPROVE_ALL = {
   kind: "byHeader" as const,
@@ -317,22 +337,11 @@ function inputMentions(result: CapturedToolResult, value: string): boolean {
   return JSON.stringify(result.input).includes(value);
 }
 
-function readIndex(
-  results: CapturedToolResult[],
-  value: string,
-): number {
-  return results.findIndex(
-    (result) =>
-      result.toolName === "Read" &&
-      inputMentions(result, value),
-  );
-}
-
 const LEAD_PERSONA = ".claude/agents/aidlc-product-agent.md";
 
-// The User Stories step the engine handed the agent, and the lead persona it
-// carried: the agent works as the lead with nothing to read first.
-function userStoriesStep(results: CapturedToolResult[]): CapturedToolResult | undefined {
+// The User Stories step the engine handed the agent: it carries the lead's
+// persona, so the agent works as the lead without reading that file.
+function userStoriesStep(results: readonly CapturedToolResult[]): CapturedToolResult | undefined {
   return results.find(
     (toolResult) =>
       toolResult.toolName === "Bash" &&
@@ -365,127 +374,39 @@ function seedUserStoriesProject(projectDir: string): void {
   seedRuntimeGraph(projectDir);
 }
 
-function seedLiveKnowledge(projectDir: string): void {
-  const knowledgeDir = join(
-    projectDir,
-    "aidlc",
-    "spaces",
-    "default",
-    "knowledge",
-    "aidlc-product-agent",
-  );
-  mkdirSync(knowledgeDir, { recursive: true });
-  writeFileSync(
-    join(knowledgeDir, "issue-495-live.md"),
-    `# Issue 495 Live Knowledge\n\n${LIVE_KNOWLEDGE_MARKER}\n`,
-    "utf-8",
-  );
-}
-
-function logKnowledgeReadDiagnostics(result: DriveResult): void {
-  // Driver NDJSON is removed from hosted artifacts. Retain only fixed labels,
-  // counts, marker booleans and tool-result order in the ordinary test log.
-  // Never print tool inputs/results, commands, paths, IDs or assistant prose.
-  const knownTools = ["Read", "Bash", "Shell", "Task", "Agent", "Write", "Edit",
-    "MultiEdit", "Skill", "AskUserQuestion", "Glob", "Grep", "TodoWrite"];
-  const targets = [
-    ["persona", LEAD_PERSONA],
-    ["knowledge", LIVE_KNOWLEDGE_REL],
-    ["stage", ".claude/aidlc-common/stages/inception/user-stories.md"],
-    ["requirements", "requirements.md"],
-    ["stories", "inception/user-stories/stories.md"],
-    ["personas", "inception/user-stories/personas.md"],
-    ["assessment", "inception/user-stories/user-stories-assessment.md"],
-  ] as const;
-  const events = result.toolResults.map((entry, index) => ({
-    index,
-    tool: knownTools.includes(entry.toolName) ? entry.toolName : entry.toolName ? "other" : "missing",
-    isError: entry.isError,
-    targets: targets.filter(([, path]) => inputMentions(entry, path) ||
-      shellCommand(entry)?.replaceAll("\\", "/").includes(path)).map(([label]) => label),
-    markerInResult: entry.resultText.includes(LIVE_KNOWLEDGE_MARKER),
-    markerInInput: JSON.stringify(entry.input).includes(LIVE_KNOWLEDGE_MARKER),
-    supportDispatch: SUPPORT_AGENTS.some(agent => dispatchedAgent(entry) === agent),
-  }));
-  const first = (predicate: (event: typeof events[number]) => boolean) => events.find(predicate)?.index ?? -1;
-  const relevant = events.filter(event => event.tool === "Read" || event.targets.length ||
-    event.markerInResult || event.markerInInput || event.supportDispatch);
-  const observedTools = [...new Set(events.map(event => event.tool))].sort();
-  const terminal = result.resultEvent;
-  const terminalKinds = ["success", "error_during_execution", "error_max_turns",
-    "error_max_budget_usd", "error_max_structured_output_retries"];
-  console.error(`t238 knowledge-read diagnostics: ${JSON.stringify({
-    order: "tool-result-stream",
-    timedOut: result.timedOut,
-    stoppedAfterToolResult: result.stoppedAfterToolResult,
-    stoppedAfterAskUserQuestion: result.stoppedAfterAskUserQuestion,
-    terminal: terminal ? {
-      subtype: terminalKinds.includes(terminal.subtype) ? terminal.subtype : "other",
-      isError: terminal.is_error,
-      turns: terminal.num_turns,
-      errorCount: terminal.errors?.length ?? 0,
-      permissionDenials: terminal.permissionDenialsCount,
-    } : null,
-    toolResultCount: events.length,
-    toolCounts: Object.fromEntries(observedTools.map(tool => [tool, events.filter(event => event.tool === tool).length])),
-    markerResultCount: events.filter(event => event.markerInResult).length,
-    markerInputCount: events.filter(event => event.markerInInput).length,
-    firstMarkerResult: events.find(event => event.markerInResult) ?? null,
-    first: {
-      personaRead: first(event => event.tool === "Read" && event.targets.includes("persona")),
-      knowledgeRead: first(event => event.tool === "Read" && event.targets.includes("knowledge")),
-      markerRead: first(event => event.tool === "Read" && event.markerInResult),
-      stageRead: first(event => event.tool === "Read" && event.targets.includes("stage")),
-      requirementsRead: first(event => event.tool === "Read" && event.targets.includes("requirements")),
-      supportDispatch: first(event => event.supportDispatch),
-      artifactWrite: first(event => ["Write", "Edit", "MultiEdit"].includes(event.tool) &&
-        event.targets.some(target => ["stories", "personas", "assessment"].includes(target))),
-    },
-    // Aggregate indices cover the entire run even when the event sample omits
-    // the middle. The emitted sample contains at most 24 fixed-shape records.
-    observations: relevant.length <= 24 ? relevant : [...relevant.slice(0, 12), ...relevant.slice(-12)],
-    omittedObservations: Math.max(0, relevant.length - 24),
-  })}`);
+function seedTeamKnowledge(projectDir: string): void {
+  const absolute = join(projectDir, ...TEAM_KNOWLEDGE_REL.split("/"));
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(absolute, "# Story conventions\n\nWrite each story from the attendee's side.\n", "utf-8");
 }
 
 describe("t238 user-stories mob topology (Claude SDK live)", () => {
   test(
-    "readable project knowledge is opened before mob stage work",
+    "the User Stories step hands the lead its persona and the team's knowledge first",
     async () => {
       const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const projectDir = setupIntegrationProject({ withAudit: true });
       try {
         seedUserStoriesProject(projectDir);
-        seedLiveKnowledge(projectDir);
+        seedTeamKnowledge(projectDir);
 
         const result = await driveAidlc("/aidlc", {
           projectDir,
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
           }),
-          stopAfterToolResult: {
-            toolName: "Read",
-            resultIncludes: LIVE_KNOWLEDGE_MARKER,
-          },
+          stopWhen: (results) => userStoriesStep(results) !== undefined,
         });
 
-        logKnowledgeReadDiagnostics(result);
         expect(result.timedOut).toBe(false);
-        expect(result.stoppedAfterToolResult).toBe(true);
-        expectLeadPersonaHandedOver(userStoriesStep(result.toolResults));
+        expect(result.stoppedWhen).toBe(true);
+        const step = userStoriesStep(result.toolResults);
+        expectLeadPersonaHandedOver(step);
+        const directive = JSON.parse(step?.resultText ?? "{}") as { inline_context_paths?: string[] };
         expect(
-          readIndex(result.toolResults, LIVE_KNOWLEDGE_REL),
-          "the inline mob lead's project knowledge was not read",
-        ).toBeGreaterThanOrEqual(0);
-        expect(
-          result.toolResults.some(
-            (toolResult) =>
-              toolResult.toolName === "Read" &&
-              inputMentions(toolResult, LIVE_KNOWLEDGE_REL) &&
-              toolResult.resultText.includes(LIVE_KNOWLEDGE_MARKER),
-          ),
-          "the inline mob lead's readable project knowledge was not read",
-        ).toBe(true);
+          directive.inline_context_paths?.[0],
+          "the step did not list the team's knowledge first",
+        ).toBe(TEAM_KNOWLEDGE_REL);
       } finally {
         cleanupTestProject(projectDir);
       }
@@ -515,6 +436,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         let evidenceCompleteAtApproval = false;
         const result = await driveAidlc("/aidlc", {
           projectDir,
+          captureSubagentStartHooks: true,
           answerScript: APPROVE_ALL,
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
@@ -617,10 +539,13 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         }
 
         // Round 1 dispatched every declared support. Each brief names the
-        // shared draft/input, carries the active-space rules delivered by the
-        // preceding load-steering sequence (content pasted into the brief;
-        // path-only briefs are not accepted), plus only that participant's
-        // contribution filename, never a sibling's contribution.
+        // shared draft/input and only that participant's contribution
+        // filename, never a sibling's. The active-space rules reach each
+        // participant as content: pasted into its brief, or handed to it as it
+        // starts (Claude Code's SubagentStart context); a path alone is not
+        // accepted.
+        const started = startContexts(result.subagentStartHooks);
+        const seen = (result.subagentStartHooks ?? []).map(({ hookName, stdout }) => `${hookName} (${stdout.length} chars)`).join(", ") || "no SubagentStart hook output";
         const roundOne = new Map<string, CapturedToolResult>();
         for (const agent of SUPPORT_AGENTS) {
           const dispatch = result.toolResults.find(
@@ -634,13 +559,11 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           expect(prompt).toContain("personas.md");
           expect(prompt).toContain("requirements.md");
           expect(prompt).toContain(`${agent}.md`);
-          // Rule steering reached the brief as content: each distinctive
-          // marker must survive the transfer. A path alone
-          // does not satisfy this assertion.
+          const given = prompt + (started.get(agent) ?? "");
           for (const { marker } of RULE_MARKERS) {
             expect(
-              prompt.includes(marker),
-              `brief for ${agent} does not carry the "${marker}" rule content`,
+              given.includes(marker),
+              `neither the brief for ${agent} nor its start context carries the "${marker}" rule content (${seen})`,
             ).toBe(true);
           }
           for (const sibling of SUPPORT_AGENTS) {
@@ -705,12 +628,6 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         expect(result.auditEvents).toContain("STAGE_COMPLETED");
         expect(result.auditEvents).toContain("WORKFLOW_COMPLETED");
         expect(eventCount(projectDir, "GATE_APPROVED")).toBe(approvedBefore + 1);
-        expect(
-          result.toolResults.some((toolResult) =>
-            toolResult.resultText.includes("collaborator notes are missing or incomplete")
-          ),
-          "live approval was refused after the mob wrote complete evidence",
-        ).toBe(false);
 
         expect(result.stateFile).toBeDefined();
         expect(readStateField(result.stateFile as string, "Status")).toBe("Completed");

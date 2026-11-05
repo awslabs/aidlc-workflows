@@ -1,6 +1,7 @@
 /** Human review of a completed native swarm batch, independent of its driver. */
 import { createHash } from "node:crypto";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   checkpointRecordForms, loadConstructionEvidence, type ApprovalFindingDispositions, type ConstructionEvidence,
   type RejectedFindingDispositions,
@@ -449,6 +450,7 @@ export function approveSwarmCheckpoint(
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...theirs,
       ...findingDispositions?.([STAGE], after.result.units, humanRequired ? "person" : "nobody"),
+      ...(humanRequired ? personGitNameField(pd) : {}),
     }, pd, selection.intent, selection.space);
     if (humanRequired) consumeProtectedQuestion(pd, session);
     const result = snapshot(pd, batch, units).result;
@@ -477,6 +479,7 @@ export function rejectSwarmCheckpoint(
     const after = recheck(pd, batch, units, current, selection.root, false);
     // One decision for the batch: each Unit's row carries it.
     const dispositions = rejectedFindings?.([STAGE], after.result.units);
+    const gitName = personGitNameField(pd);
     appendAuditEntries(after.result.units.map((unit) => ({
       eventType: "GATE_REJECTED",
       fields: {
@@ -485,6 +488,7 @@ export function rejectSwarmCheckpoint(
         "User Input": userInput, Reason: reason, Feedback: reason,
         ...protectedResponseFields(response),
         ...dispositions,
+        ...gitName,
       },
     })), pd, selection.intent, selection.space);
     consumeProtectedQuestion(pd, session);

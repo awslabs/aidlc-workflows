@@ -24,7 +24,8 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro IDE or Kiro CLI v3: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro Read Denials](#kiro-read-denials)) |
 | Kiro IDE: AI-DLC's reviews and helpers do not run, the chat shows **Approval needed in agent-aidlc-...** panels, or `/aidlc` is handed to a Kiro workflow | Kiro's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-workflows off --yes`, then **Developer: Reload Window** (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
 | Kiro CLI: AI-DLC's reviews and helpers do not run, and the agent says it has no tool to hand work to | Kiro CLI's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-cli-workflows off --yes`, then quit Kiro CLI and start `kiro-cli --v3` again in this project (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
-| Kiro IDE on Windows: command results end at an `AI-DLC reply:` line and steps take extra turns, or every command shows exit code -1 | Kiro's terminal is Command Prompt. Ask the agent to set it to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
+| Kiro IDE on Windows, Kiro's terminal is Command Prompt: command results end at an `AI-DLC reply:` line or are cut off after it and steps take extra turns, or every command shows exit code -1 | Ask the agent to set Kiro's terminal to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
+| Kiro IDE on Windows, Kiro's terminal is PowerShell: every command shows exit code -1 although the folder is trusted, and results end at an `AI-DLC reply:` line or are cut off | Kiro's shell integration did not load, for example because PowerShell's execution policy is `Restricted` or `AllSigned`; `aidlc doctor` run in Kiro's terminal (not `/aidlc --doctor` in the chat, which cannot see it) names the cause in its `Kiro terminal` row. In Kiro's PowerShell terminal (Windows PowerShell and PowerShell 7 keep separate policies) run `Get-ExecutionPolicy -List` and `$ExecutionContext.SessionState.LanguageMode`; when `MachinePolicy` or `UserPolicy` is set, or the language mode is not `FullLanguage`, ask your IT team; when `Process` is set, start Kiro from the Start menu; when the policy in effect comes from `CurrentUser` or `LocalMachine` and is `Restricted` or `AllSigned`, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` there and restart Kiro. Kiro's `terminal.integrated.shellIntegration.enabled` turned off, or a PowerShell profile with extra arguments, has the same symptom (see [PowerShell without Kiro's shell integration](harnesses/kiro-ide.md#powershell-without-kiros-shell-integration-on-windows)) |
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
@@ -1032,7 +1033,7 @@ code. The row is absent when the records are visible, outside a Git repository,
 or when Git is unavailable.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only your Claude Code administrator can lift that policy. When that policy is not set and heartbeats are still absent after workflow progress, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`; it works in the same chat.
-When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
+When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
 
 See [CLI Commands](12-cli-commands.md#aidlc-doctor-health-check) for full details on what each check validates and how to fix failures.
 
@@ -1055,19 +1056,18 @@ report directory and tells you to compress it yourself. Share that archive (or
 directory) — it carries the diagnosis and redacted evidence, **not your work
 product**. No workspace source, raw state/audit/runtime-graph files, or
 artifact/contribution/question/memory bodies are included; paths are normalized,
-intent ids are hashed, and secret-like values are scrubbed.
+intent ids and Unit names are hashed, and secret-like values are scrubbed.
 
 The report reconstructs the workflow timeline from the audit trail and runs
 deterministic condition→remedy rules. The two most common causes it catches:
 
 - **Unresolved approval gates** — a stage whose gate never resolved is the single
   most common "it will not advance" cause.
-- **Stale or missing runtime graph / cold hooks** — a runtime graph older than its
-  authored inputs (or absent), or a hook that last fired more than a day before
-  the newest stage or approval step recorded on the intent, points at a
-  recompile that did not run. Opening a chat, a prompt and doctor's own audit
-  rows are not counted as work, so an intent nobody is working on does not read
-  as having cold hooks.
+- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or a
+  hook that last fired more than a day before the newest stage or approval step
+  recorded on the intent, points at a recompile that did not run. Opening a chat,
+  a prompt and doctor's own audit rows are not counted as work, so an intent
+  nobody is working on does not read as having cold hooks.
 
 `report.md` inside the report lists every finding with a remedy; a remedy that
 names a recovery bypass (such as an `AIDLC_DISABLE_*` env var) is flagged

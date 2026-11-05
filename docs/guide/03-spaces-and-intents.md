@@ -174,7 +174,9 @@ before starting a second intent alongside the first:
 
 Saying only that the work should go on (`/aidlc carry on`, "proceed", "keep
 going", in your own words) asks nothing: AI-DLC reads your words and carries on
-with the active work. With work in the project but none selected yet, it asks
+with the active work. Asking where the work stands (`/aidlc how far along are
+we?`, in your own words) asks nothing either: AI-DLC answers your question from
+the status. With work in the project but none selected yet, it asks
 which piece to pick up; name the piece with your words (`/aidlc continue auth`)
 and it picks that piece up and carries on with it at once.
 
@@ -251,8 +253,15 @@ intent record. A session bound by an earlier version keeps working its intent wh
 cursor names the same record; otherwise it is offered a rebind to that intent. A
 session an earlier version stamped but never bound follows its stamp when it
 resumes, so a chat left open across an upgrade continues its own intent.
-A plain `git worktree` created without AI-DLC's worktree command has no local
-evidence either, so it also selects its intent with `/aidlc intent <slug>`. A Unit
+A plain `git worktree` created without AI-DLC's worktree command (or one a host
+makes for each chat) starts without cursors of its own, so it reads the ones its
+main checkout holds on this machine: it opens the space the main checkout is on,
+and the intent too when the worktree has that intent's record, so a chat there is
+on that work as the next paragraph says. Switching intent in the worktree gives it
+an intent cursor of its own, and the main checkout's no longer moves it; archiving
+the intent it is on stops that intent resolving there, as in a main checkout. When
+the main checkout has no cursor either, it selects its intent with
+`/aidlc intent <slug>`. A Unit
 claimed on this machine counts for that Unit's intent; the Unit participant marker
 is checkout-wide and names no intent, so it does not count as joining a
 particular record.

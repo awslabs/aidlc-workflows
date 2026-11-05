@@ -60,8 +60,8 @@ plugins/<name>/
   scopes/<plugin>-<name>.md              # ✅ NEW scopes (stem == frontmatter name)
   knowledge/<agent-slug>/…               # ✅ per-agent METHODOLOGY knowledge
   tests/                                 # the plugin's own content validation (integration tier)
-  memory/{org,team,project}.md           # ⏳ method/rule additions → default-space seed (§7)
-  memory/phases/<phase>.md               # ⏳
+  memory/rules.md                        # house rules, one section at the plugin's level (section 7)
+  memory/phases/<phase>.md               # phase rules, one section in that phase's rule file (section 7)
 ```
 
 Core scope files use the `aidlc-` filename prefix; plugin scope files replace it
@@ -80,6 +80,7 @@ frontmatter `name`. Plugin agent files follow the same rule:
   "dependencies": ["core", "compliance@^1.2.0"],  // core plus at most one base plugin (§8)
   "aidlc": {
     // "marketplace": "acme-aidlc-plugins",  // a plugin someone else builds: its catalogue (section 9)
+    // "rulesLevel": "team",           // memory/rules.md lands in team.md unless an install sets another (section 7)
     "contributes": {                  // which subtrees this plugin ships
       "stages": "stages/", "agents": "agents/", "scopes": "scopes/",
       "sensors": "sensors/", "knowledge": "knowledge/",
@@ -143,7 +144,7 @@ drop-free first pass, a clean post-compose graph containing the plugin stages
 and scopes, and a byte-stable second pass. Shared harness leaves require
 `--harness`. `--with` composes the base's checkout into the candidate first. `--dist` is not supported; the tool refuses it.
 
-Contribution paths are plugin-relative and may not escape the plugin root. The top level is **lenient** (unknown keys preserved, for forward-compat and cross-tool tolerance); the `aidlc` block is **strict** (unknown keys rejected, to catch authoring typos). Projection still discovers content by directory convention (`stages/`, `sensors/`, `tools/`, `contributions/`, `scopes/`, `agents/`, `knowledge/`), so each declared value must equal its canonical directory; configurable routing is deferred. `memory` declarations are rejected until that subtree can be projected. Stage numbers are display-only, so a plugin claims no number range in the manifest. `overlays` is the manifest name for canonical `contributions/`, consumed by the merge rather than copied.
+Contribution paths are plugin-relative and may not escape the plugin root. The top level is **lenient** (unknown keys preserved, for forward-compat and cross-tool tolerance); the `aidlc` block is **strict** (unknown keys rejected, to catch authoring typos). Projection still discovers content by directory convention (`stages/`, `sensors/`, `tools/`, `contributions/`, `scopes/`, `agents/`, `knowledge/`), so each declared value must equal its canonical directory; configurable routing is deferred. `memory` must be `memory/`, and a plugin that ships `memory/rules.md` names the level it lands at in `aidlc.rulesLevel` (`org`, `team` or `project`). Stage numbers are display-only, so a plugin claims no number range in the manifest. `overlays` is the manifest name for canonical `contributions/`, consumed by the merge rather than copied.
 
 ## 4. Composition model
 
@@ -161,7 +162,7 @@ The steps (identical regardless of trigger):
 1. **Discover and validate** the host-provided installed roots, manifest
    identities/versions, and project selection, and put the bases first:
    a plugin composes after the one base plugin it builds on (§8).
-2. **Copy new primitives** — each plugin's `stages`/`agents`/`scopes`/`knowledge`/`sensors`/`tools` subtrees into the corresponding harness roots, substituting the `{{HARNESS_DIR}}` token to the harness's actual dir; `memory` remains deferred (§7).
+2. **Copy new primitives**: each plugin's `stages`/`agents`/`scopes`/`knowledge`/`sensors`/`tools` subtrees into the corresponding harness roots, substituting the `{{HARNESS_DIR}}` token to the harness's actual dir; a plugin's `memory/` is not copied: plugin sync writes it into the rule files (section 7).
 3. **Merge contributions** — every active contribution to a stage is folded into the target stage's source (§6): structural surfaces set-unioned, prose fragments spliced at their anchors.
 4. **Compile** — `aidlc-graph compile` regenerates `stage-graph.json` + `scope-grid.json`; the orchestrator routes entirely off those, so a plugin stage runs the moment it is composed — no prose or skill edit needed.
 
@@ -359,15 +360,70 @@ roots are configured but none carries `hooks/compose.ts`, it exits 1 and names
 each root and reason; with a mixed set it warns for each skipped root, composes
 the valid roots, and exits 0.
 
+### Plugin commands
+
+A plugin names commands in its manifest, `aidlc.commands`, each name mapped to
+one `.ts` script directly in its `tools/` and a one-line description
+(`readPluginCommands` in `aidlc-plugin-validate.ts` is the one reading;
+`VALIDATE` and `BUILD` refuse a bad entry under rule `manifest-commands`, an
+AI-DLC name included). Compose lands the script with the plugin's other tools;
+`plugin sync` writes the declared commands whose script the plugin's ownership
+record holds into its composition stamp (`plugin-compose-<plugin>.json`,
+`commands`), so a name never runs a file core or another plugin owns.
+`compositionIsCurrent` compares them, so a project composed before the field
+records them at its next sync.
+
+`pluginCommandTable` in `aidlc-plugin-commands.ts` is the one owner of which command runs:
+it reads the stamps, the enabled set (`pluginsEnabled()`, the set doctor uses)
+and the plan names, takes plugins in name order, and skips a name AI-DLC's own
+commands use (`CORE_COMMAND_WORDS` in `aidlc-command.ts`), a plan's name, or a
+name an earlier plugin took; an off plugin's free names are kept as off. The
+winner depends only on what is installed and on, never on which sync ran first.
+The sync says each skip once, in one line naming both
+(`skippedCommandLine`), and records it in the stamp (`skippedCommands`) so a
+later sync stays silent; doctor shows every skip as a passing row.
+
+- **Terminal:** `aidlc <name> [args]`. The dispatcher (`runPluginCommand` in
+  `aidlc.ts`) takes the first word after its own launcher flags; a word that is
+  one of AI-DLC's own resolves as before. Only the words before the name pick
+  the project (`runtimeProjectDirFrom`), and every token after it is the
+  script's, `--json` and `--project-dir` included. It starts the script through
+  `pluginScriptLaunch`, with the person's working directory and stdio, no
+  timeout, and passes the exit code through. An off plugin's name prints one
+  line with the `config project --plugins` command that turns it on (or its
+  base, when it is paused); any other word is the unknown-command error as
+  before.
+- **Chat:** `/aidlc <name> [args]` reaches the engine unchanged (no harness
+  skill names plugin commands). `readNextLine` reads a leading table name, an
+  off plugin's included, after every core leading form and before `next`'s own
+  flags: alone or with flags or one word it is exact, and `routeNext` prints the
+  command for the agent to run, as for `--doctor`; followed by a sentence it is
+  the `command` reading step, as for a noun of the engine's own, and the agent
+  reads which the person meant. `isReadOnlyNextArgv` answers true for that
+  line (no workflow work) and `classifyTerminalCommand` answers null, so no
+  harness seam runs a plugin's code off-band. Kiro IDE's one-argument line is
+  read by its opening word.
+- **Help:** `aidlc --help` lists the enabled commands under `PLUGIN COMMANDS`,
+  by plugin, with their descriptions; a project without them gets the help it
+  had, and the engine library is not loaded for it.
+- The host's own permission prompt applies: no plugin command is on an
+  install's pre-approved list.
+- Plugin management (`aidlc plugin validate|build|test`, and any later
+  marketplace verbs) and plugin commands sit apart: `plugin` is AI-DLC's own
+  word, management verbs never run a plugin's code, and a plugin command never
+  manages plugins.
+
 ### Plugin doctor checks
 
 An enabled plugin may ship `tools/<plugin>-doctor.ts`. `/aidlc --doctor`
 discovers that script in the composed harness tools directory and runs it
 directly with Bun, no shell, with `AIDLC_PROJECT_DIR`, `AIDLC_HARNESS_DIR`, and
 `AIDLC_PLUGIN_NAME` set. On a native install that Bun is the `aidlc` binary
-run with `BUN_BE_BUN=1`, which the script inherits, so an `aidlc` command the
-script runs would start Bun instead: check with Bun APIs, not by running
-`aidlc`. A disabled plugin's script remains inert. When
+run with `BUN_BE_BUN=1`; the preload shipped beside the binary
+(`aidlc-plugin-script-preload.ts`) takes the variable out before the script
+runs, so an `aidlc` command the script runs reaches the engine. The launch is
+one function, `pluginScriptLaunch` in `aidlc-plugin-script.ts`, which plugin
+commands use too (below). A disabled plugin's script remains inert. When
 `harness.json` has no `plugins` selection, every installed plugin is eligible:
 one that owns a stage or scope, or one whose composition left a sidecar under
 `tools/data/` (`plugin-contrib-`, `plugin-owned-`, or `plugin-compose-<plugin>.json`).
@@ -545,7 +601,7 @@ fragments:                    # PROSE — spliced into the stage body
 | Add a consume edge | `adds.consumes` | ✅ implemented |
 | Add a `requires_stage` edge | `adds.requires_stage` | ✅ implemented (the dependency must compile before the target — a lower full pinned number, or an earlier phase for a stage not yet pinned; violations are dropped-with-log) |
 | Put an existing stage under a plugin scope | `adds.scopes` for a core stage (own-plugin scopes only; installed identity file required); `include_stages:` on the scope for a stage of the plugin's base (section 7) | ✅ implemented |
-| Inject phase policy / guardrails | ship `memory/phases/<p>.md` into the default-space seed (§7) | ⏳ deferred (not yet projected) |
+| Inject house rules or phase policy | `memory/rules.md` (every stage) and `memory/phases/<p>.md` (one phase), each one section the plugin owns in every space's rule file (section 7) | implemented |
 | Enrich a core persona (a collaboration bullet, a mandatory anchor) | `contributions/agents/<agent>.md` with `fragments` at `in:<H2>`, `after-preflight` or `end-of-body` | ✅ implemented (prose only; `adds.*` is refused with an advisory drop) |
 
 ## 7. Method/rules, agents, knowledge, scopes, and activation
@@ -553,7 +609,7 @@ fragments:                    # PROSE — spliced into the stage body
 This section describes the surfaces beyond new stages + the contribution seam,
 with status called out so an author is not misled:
 
-**Method/rules → the memory seed** *(⏳ deferred).* The framework's rule layer is the per-space **memory** tree (`aidlc/spaces/<space>/memory/{org,team,project}.md`, `phases/<phase>.md`), seeded from `core/memory/`. The design is that a plugin contributes a `memory/phases/<p>.md` that set-unions into that seed. The packager does not yet project a plugin's `memory/` tree, so this has no effect today.
+**Method/rules: a plugin's house rules.** A plugin ships practice rules in words: `memory/rules.md` for every stage, and `memory/phases/<phase>.md` (ideation, inception, construction or operation) for one phase. Its manifest names the level `rules.md` belongs to, `aidlc.rulesLevel` (`org`, `team` or `project`). An install can choose another with `--rules-level <plugin>=<level>` on `aidlc engine plugin sync` or on `aidlc engine plugin select` (with no plugin names, select changes only the level); there is no question, and an unattended install keeps the default. The choice is kept in `aidlc/plugin-rules/<plugin>.json`: one record for the project, which every harness in it reads and the team's clones share. Plugin sync writes each file as one section the plugin owns at the end of the matching rule file of every space (`aidlc/spaces/<space>/memory/<level>.md`, `phases/<phase>.md`): a `## Rules from the <plugin> plugin` heading, the fragment markers stage contributions use, a line saying the section is the plugin's and the team's own rules go in `team.md`, then the rules, with the plugin's own headings written one level down (never above `###`). The team's writers (practices discovery's section rewrite, the learning loop's append) stop at that heading, so they never write inside it; a hand edit inside it is replaced at the next sync. The section reaches the agent with the rest of its file at every stage, and strict-additive holds: nothing overrides anything. Validate refuses `## Guard Policy` and the setting fields AI-DLC reads from a rule file (`Mode`, `Methodology`, `Ordering`): a plugin ships rules, never a lock. Turning the plugin off (plugin select or `aidlc config project --plugins`) takes its sections out of every space and keeps its level; turned on, they come back at the next compose (session start, or `plugin sync` on Kiro CLI and opencode). A new space starts with them. A copy-channel refresh replaces the default space's `org.md` and phase files, so doctor's Composed plugin surface row names the missing sections until the next compose writes them again. The first placement, or a move, says once where the rules went; from a session start that line waits for the next step the agent speaks from. Doctor's rule-drift row names a plugin's section `(plugin <name>)`.
 
 **Agents** *(✅ projected + composed).* A plugin ships new personas under
 `agents/<plugin>-<role>-agent.md`, with frontmatter `name` equal to the filename
@@ -664,7 +720,7 @@ checks the base's against the `--with` checkout of the base.
 
 **Composer screening (`ars:`).** The adaptive composer's expected-value screen reads its per-stage cost priors from `tools/data/ars-priors.json`, which names every core stage and nothing else, so a plugin stage used to land in `aidlc-graph ars` output as a `no-prior` row ("not screenable"). A plugin stage declares the same four facts in an `ars:` block in its own frontmatter (`targets` and `cost`, optional `role` and `project_types`), validated by the stage schema (and therefore by `aidlc-plugin-validate`), compiled onto its graph node verbatim, and read by the `ars` subcommand whenever the priors file has no entry for the slug. A shipped entry always wins, so core screening is unchanged; each screen row carries a `priorSource` (`shipped` | `stage` | `null`). See [Stage Definition](15-stage-definition.md) § `ars`.
 
-**`plugin.json` `aidlc.contributes`.** VALIDATE reads the block, rejects unknown keys, and requires exact canonical values for every currently projected subtree. BUILD and TEST stop on the same findings, and direct emission asserts the path contract again before replacing output. The emitter still discovers bytes by directory convention rather than routing through arbitrary manifest paths; configurable routing remains deferred. `memory` is rejected until its projection exists. There is no `aidlc.lock.json` read either; the composer resolves nothing from a lockfile today.
+**`plugin.json` `aidlc.contributes`.** VALIDATE reads the block, rejects unknown keys, and requires exact canonical values for every currently projected subtree. BUILD and TEST stop on the same findings, and direct emission asserts the path contract again before replacing output. The emitter still discovers bytes by directory convention rather than routing through arbitrary manifest paths; configurable routing remains deferred. `memory` is accepted at `memory/` (section 7). There is no `aidlc.lock.json` read either; the composer resolves nothing from a lockfile today.
 
 ## 8. Multi-tenant guards
 

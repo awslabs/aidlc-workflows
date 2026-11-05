@@ -521,9 +521,15 @@ it to PowerShell on the same kinds of answer (`--kiro-terminal powershell`) and
 keeps it in the `kiro-ide-terminal` marker. In that terminal (TERM_PROGRAM=kiro
 and the shell the chat's hook recorded) each tool entry also runs the tool as a
 child behind an `AI-DLC reply:` pointer line and keeps the reply under
-`aidlc/.aidlc-sessions/replies/`, and rejoins the single-quote pair cmd.exe left
-on the arguments, since the engine writes its reply straight to fd 1 and Kiro
-reads the terminal one second after sending the command.
+`aidlc/.aidlc-sessions/replies/` (the agent goes on from that file when the
+result stops at the pointer or is cut off after it), and rejoins the
+single-quote pair cmd.exe left on the arguments, since the engine writes its
+reply straight to fd 1 and Kiro reads the terminal one second after sending the
+command. A Kiro terminal whose
+shell integration script did not run (its `VSCODE_NONCE` is still set) gets the
+same reply file when that terminal is both ends of the command (a hook, a pipe
+or a tool reading its child's output never is), and doctor run in that terminal
+warns; the chat's hooks run outside the terminal and cannot see it.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary
@@ -1060,7 +1066,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run at the end of Ideation, Inception and Construction (the Initialization->Ideation transition has none), written by the phase's last stage to `<record>/verification/`. This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 131-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 132-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

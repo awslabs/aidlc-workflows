@@ -1063,8 +1063,10 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     for (let round = 0; round < 2; round++) {
       expect(runReport(proj, requestChanges).kind).toBe("print");
       let step = runNext(proj);
+      const redone: string[] = [];
       while (step.kind === "run-stage" && !step.gate) {
         const { stage, unit } = step;
+        redone.push(stage!);
         expect(runState(proj, ["unit", "start", "--stage", stage!, "--unit", unit!]).rc).toBe(0);
         coverUnit(proj, unit!, stage!);
         expect(runState(proj, ["unit", "complete", "--stage", stage!, "--unit", unit!]).rc).toBe(0);
@@ -1072,6 +1074,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
         step = runNext(proj);
       }
       expect(step.kind, JSON.stringify(step)).toBe("print");
+      // A Unit that ran Code Generation has it reopened with the rest.
+      expect(redone).toContain("code-generation");
       expect(step.message).toContain("--stage code-generation --unit alpha --result revised");
       expect(runReport(proj, [...args, "--result", "revised"]).kind).toBe("print");
       expect(runNext(proj)).toMatchObject({ stage: "code-generation", unit: "alpha", gate: true, unit_gate: "unit-end" });
@@ -1786,8 +1790,6 @@ describe("t324 doctor stage drift against the engine (#1190)", () => {
       recordAbsDir: null,
       hooksHealth: { dirExists: true, heartbeats: [], degradedDrops: [] },
       runtimeGraphExists: true,
-      runtimeGraphMtimeMs: null,
-      authoredInputsNewestMtimeMs: null,
       markers: {
         planExists: false,
         planParseable: null,

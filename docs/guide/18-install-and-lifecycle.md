@@ -357,6 +357,12 @@ Otherwise a copied project's line says to get that release's copy runtime file
 first, because `--download` on a copied harness that is already installed
 fetches the release it already has, and a native project's line names the
 `aidlc config --pin` that installs that release.
+A git worktree of a checkout that is registered on the machine is the same
+project: its pinned commands run the release its own `.aidlc-version` names,
+when the machine holds it, and register it, so a worktree a host makes per
+session never asks for `config --pin` again, even when its branch pins a
+different release than the checkout. The main checkout itself, and another
+clone, register a changed pin only through `config --pin`, as before.
 
 After a successful scaffold or refresh, config runs a cheap installed-result
 sweep. It checks only the non-interactive hook PATH, host trust files, and
@@ -1161,9 +1167,15 @@ Refresh preserves:
   Kiro upgrades it again by itself at its next 3.0 start (its auto-upgrade is
   on: `chat.enableAutoAgentUpgrade` is true in your own Kiro settings, as
   **Enable auto-upgrade** at Kiro's first 3.0 start saves it), that file is
-  the one AI-DLC wrote there, and Kiro's copy keeps its other fields; otherwise it keeps Kiro's copy and says, in one line,
+  the one AI-DLC wrote there, and nobody changed Kiro's copy since Kiro wrote it
+  (the `kiroUpgrade` stamp Kiro writes into the file still matches it; for a
+  copy Kiro did not stamp, every field but `tools`, `hooks` and `permissions`
+  is still the file's own); otherwise it keeps Kiro's copy and says, in one line,
   that the file still allows what an older release allowed and that `--force`
-  takes the release's version
+  takes the release's version. When the release no longer ships such a file,
+  the file Kiro upgraded from is the one AI-DLC wrote there and its stamp still
+  matches, the refresh removes it like any file the release no longer ships,
+  keeps Kiro's backups of it, and says so in one line
 
 Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
 sessions, engine health, and other per-machine state are never copied from the
@@ -1286,6 +1298,11 @@ a Kiro CLI (V2) project passes `--harness kiro-v2`. The switch is a
 refresh planned from the installed row's ownership baseline: it removes the files
 only that row shipped, keeps `aidlc/`, reports a locally modified file it would
 replace or remove as a conflict, and, like any refresh, is done while work is open.
+An agent file in `.kiro/agents` that Kiro CLI upgraded for its 3.0 engine is not
+a local change when the file Kiro upgraded from is the one AI-DLC wrote and
+nobody changed Kiro's copy since (its `kiroUpgrade` stamp still matches it):
+switching to Kiro removes it with the rest, keeps Kiro's `.json.bak`
+backups, and says so in one line. A copy Kiro did not stamp stays a conflict.
 Switching to Kiro names every `.kiro/hooks/*.json` file AI-DLC does not
 own: Kiro runs those on its v3 engine (`kiro-cli --v3`) and in Kiro IDE. When there is one, the switch applies
 only with your approval of that exact set of files: answer the prompt in a

@@ -148,6 +148,26 @@ export const PINNED_TOP_LEVEL_ROUTES = [
 
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
 
+/**
+ * The words AI-DLC's own commands answer to as the first word of `aidlc <word>`
+ * or `/aidlc <word>`: the dispatcher's public verbs and nouns, its namespaces,
+ * and the chat's own leading words (aidlc-lib.ts WORKSPACE_VERBS,
+ * ORCHESTRATOR_VERBS, the knowledge, plugin and unit nouns). A plugin command
+ * with one of these names is skipped, so core's command always keeps it. A
+ * literal list, as aidlc-lib.ts imports this module; t-plugin-named-commands
+ * pins it against ROUTES and those sets.
+ */
+export const CORE_COMMAND_WORDS: ReadonlySet<string> = new Set([
+  "next", "continue", "report", "park", "unpark", "team-board", "compose",
+  "doctor", "version", "help", "config", "update", "use", "uninstall", "status",
+  "unit", "attest", "plugin", "knowledge", "engine", "system",
+  "space", "space-create", "intent",
+]);
+
+/** A plugin command's name, and its script: one .ts file directly in tools/. */
+export const PLUGIN_COMMAND_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
+export const PLUGIN_COMMAND_SCRIPT_RE = /^tools\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts$/;
+
 // The sections `aidlc config <section>` takes (aidlc-init.ts reads them).
 export const CONFIG_SECTIONS = ["models", "runtime", "providers", "trust", "flags", "project"] as const;
 
@@ -164,6 +184,7 @@ export const NEXT_VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--continue",
   "--change",
   "--every-unit",
+  "--unit-plan",
   // Retired, still taken so the token never becomes task text.
   "--init",
   "--force",
@@ -193,6 +214,7 @@ export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
   ["pin", true],
   ["publish", true],
   ["release", true],
+  ["share", false],
   ["status", false],
 ]);
 

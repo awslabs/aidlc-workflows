@@ -28,6 +28,7 @@ import { PersonTurnLedger } from "./person-turns.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import kiroManifest from "../../harness/kiro/manifest.ts";
+import { LAUNCHER_ENV, LAUNCHER_PATH } from "../../core/tools/aidlc-launcher-voucher.ts";
 
 const KIRO_HOOK_SUFFIX = kiroManifest.hookCommandSuffix ?? "";
 
@@ -305,6 +306,11 @@ export class ScopeHost {
     const [first, ...rest] = commandWords(command);
     if (first === "bun" && this.launcher === null) return [process.execPath, ...rest];
     if (first === "aidlc" && this.launcher !== null) return [...this.launcher, ...rest];
+    // Copilot CLI's line for AI-DLC's own launcher runs the engine under the
+    // launcher's name, as the shipped file does (t-copilot-engine-launcher.test.ts).
+    if (first === LAUNCHER_PATH && process.platform !== "win32") {
+      return ["/usr/bin/env", `${LAUNCHER_ENV}=${first}`, ...(this.launcher ?? [process.execPath, `${this.dir}/tools/aidlc.ts`]), "engine", ...rest];
+    }
     throw new Error(`the stand-in runs only ${this.launcher === null ? "bun" : "aidlc"} commands, got: ${line}`);
   }
 
@@ -1535,9 +1541,11 @@ export class AgentStandIn {
       const revising = new RegExp(`^- \\[R\\] ${stage} `, "m").test(readFileSync(activeRecord(this.host.proj).state, "utf-8"));
       const opened = this.report(stage, "--result", revising ? "revised" : "awaiting-approval");
       // The gate does not open over a units block the engine cannot read: the
-      // agent repairs it and runs the same report again.
+      // agent repairs it and runs the same report again, following the step the
+      // stage's checks may hand it first, so the gate opens before the person is
+      // asked.
       if (opened.kind === "print" && this.repairUnitsBlockIfNamed(String(opened.message ?? ""), "gate")) {
-        this.actOnPrint(opened as Directive);
+        this.report(stage, "--result", revising ? "revised" : "awaiting-approval");
       }
     }
     this.hooks.atGate?.(stage, typeof d.unit === "string" ? d.unit : null, this);

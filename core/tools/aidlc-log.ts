@@ -315,8 +315,10 @@ import {
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   APPROVAL_GATE_CHOICES,
+  recommendedChoices,
   SUMMARY_CONFIRMATION_CHOICES,
 } from "./aidlc-reply-reader.ts";
 
@@ -1126,6 +1128,12 @@ function keptMessageRefusal(pd: string): string | null {
     `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
+// Choices written in the grammar optionsList reads: the `|` form when one holds
+// a comma, else commas. The one writer of that list form here.
+function optionsText(choices: readonly string[]): string {
+  return choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+}
+
 // A question's choices given one --option each, so a choice may hold a comma
 // with no separator on the command line for a shell to read: they join any
 // --options list in the grammar optionsList reads.
@@ -1134,8 +1142,7 @@ function withEachOption(args: string[], flags: Record<string, string>): void {
   for (let i = 0; i < args.length - 1; i++) if (args[i] === "--option") each.push(args[++i]);
   delete flags.option;
   if (each.length === 0) return;
-  const choices = [...(flags.options === undefined ? [] : optionsList(flags.options)), ...each];
-  flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+  flags.options = optionsText([...(flags.options === undefined ? [] : optionsList(flags.options)), ...each]);
 }
 
 function handleDecision(args: string[]): void {
@@ -1236,6 +1243,8 @@ function handleDecision(args: string[]): void {
           )
         ? "[protected exact choices]"
         : flags.options;
+    const recommended = recommendedChoices(optionsList(fields.Options));
+    if (recommended.length > 0) fields.Recommended = optionsText(recommended);
   }
   if (flags.rationale) fields.Rationale = flags.rationale;
   // Which of the engine's own questions this is, as the step note's command
@@ -1418,9 +1427,12 @@ function sameInteractionScope(a: AuditShardEvent, b: AuditShardEvent): boolean {
 }
 
 function questionView(row: AuditShardEvent) {
+  // Only a row that kept the field lists it: an older row reads as it did.
+  const recommended = auditBlockField(row.block, "Recommended");
   return {
     question: auditBlockField(row.block, "Decision") ?? "",
     options: optionsList(auditBlockField(row.block, "Options")).filter(Boolean),
+    ...(recommended === null ? {} : { recommended: optionsList(recommended).filter(Boolean) }),
     ...interactionScope(row),
     askedAt: row.timestamp,
   };
@@ -2437,7 +2449,7 @@ function handleAnswer(args: string[]): void {
       }, namedProtectedReply(pd, flags.stage, fields.Session, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
-      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
+      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", { ...fields, ...personGitNameField(pd) });
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage, command_sha256: verificationCommand.sha256 }));
@@ -2456,7 +2468,7 @@ function handleAnswer(args: string[]): void {
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.
-      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);
+      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", { ...fields, ...personGitNameField(pd) });
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "construction-policy", stage: flags.stage }));
@@ -2612,7 +2624,7 @@ function handleAnswer(args: string[]): void {
         );
       }
       try {
-        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", fields);
+        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", { ...fields, ...personGitNameField(pd) });
       } catch (e) {
         // Restore the registry to its exact prior bytes (or absence) so no
         // authorization exists without the receipt that minted it. A restore
@@ -2727,6 +2739,7 @@ function handleAnswer(args: string[]): void {
               Fingerprint: planEvidence!.fingerprint,
               ...(personReply?.words ? { "Person Reply": personReply.words } : {}),
               ...(personReply ? { "Message Id": personReply.messageId } : {}),
+              ...personGitNameField(pd),
             });
           },
         );
@@ -2736,6 +2749,7 @@ function handleAnswer(args: string[]): void {
       }
       const changeNotices = [...planEvidence!.changeNotices, ...recorded.changeNotices];
       if (recorded.overridden) fields.Override = "yes";
+      Object.assign(fields, personGitNameField(pd));
       try {
         emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
       } catch (e) {
@@ -2782,6 +2796,7 @@ function handleAnswer(args: string[]): void {
       }
       try {
         if (flags.details === "Approve Plan") {
+          Object.assign(fields, personGitNameField(pd));
           emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
         } else {
           emitAudit(pd, "QUESTION_ANSWERED", fields);
@@ -3998,6 +4013,7 @@ function handleReview(args: string[]): void {
     if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
       error("Starting a review requires --iteration <positive integer>.");
     }
+    let planLifted = false;
     // Construction walks its Units from Units Generation's units block, so a
     // block the engine cannot read is fixed before the review, while the
     // document can still change. Writing it is the agent's step, so it comes
@@ -4005,7 +4021,28 @@ function handleReview(args: string[]): void {
     // would have the agent tell the person a step to take.
     if (flags.stage === "units-generation" && flags.single !== "true") {
       const dag = resolveBoltDag(pd, intent, space);
-      if (dag.state === "malformed") {
+      // A team's revised plan is read against the Units it already landed or
+      // claimed (unitPlanRefusal) once the block itself reads. Dropping such a
+      // Unit is the person's call: the message they asked in (--person-asked
+      // --message, proved as the review-pass lift proves it) lifts that check,
+      // and the lift goes on the row.
+      let plan: { message: string | null; liftable: boolean; lifted: boolean } | null = null;
+      if (dag.state === "ok") {
+        let personAsked = false;
+        if (flags["person-asked"] === "true" && flags.message !== undefined) {
+          const proof = proveMessage(pd, flags.message, "request", { request: true });
+          if ("refusal" in proof) error(proof.refusal);
+          personAsked = messageSinceReviewRequest(
+            pd, flags.stage, flags.reviewer as string, flags.unit, proof.message, intent, space,
+          );
+        }
+        // Loaded only here: no other review request pays for the Unit tool.
+        const { unitPlanRefusal } = require("./aidlc-unit.ts") as typeof import("./aidlc-unit.ts");
+        plan = unitPlanRefusal(pd, personAsked);
+        planLifted = plan.lifted;
+      }
+      const repair = dag.state === "malformed" ? unitsBlockRepair(dag.reason, dag.detail) : plan?.message ?? null;
+      if (repair !== null) {
         const again = renderReviewRequestCommand({
           projectDir: pd,
           stage: flags.stage,
@@ -4013,9 +4050,12 @@ function handleReview(args: string[]): void {
           iteration: Number(flags.iteration),
           ...(retryPending ? { retryPending: true } : {}),
         });
+        const lift = plan?.liftable
+          ? ` If the person asked for this plan themselves, run it with --person-asked --message <id>${messageFill(pd)}.`
+          : "";
         console.log(JSON.stringify({
           kind: "print",
-          message: `${unitsBlockRepair(dag.reason, dag.detail)} Then run \`${again}\` again.`,
+          message: `${repair} Then run \`${again}\` again.${lift}`,
         }));
         return;
       }
@@ -4596,7 +4636,7 @@ function handleReview(args: string[]): void {
         fields["Artifact Fingerprint"] = snapshot.fingerprint;
         requestId = mintReviewRequestId();
         fields["Request Id"] = requestId;
-        if (lifted) {
+        if (lifted || planLifted) {
           fields["Person Asked"] = "true";
           const reply = personsGateReply(pd, invokingChat(pd), flags.stage as string);
           if (reply.words) fields["Person Reply"] = reply.words;
@@ -5525,9 +5565,10 @@ function error(msg: string, changeNotices: readonly string[] = []): never {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

@@ -74,6 +74,7 @@ import {
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 import { listMessages } from "../../core/tools/aidlc-message-store.ts";
+import { withoutCommentBlocks } from "../../core/tools/aidlc-markdown.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
 import kiroManifest from "../../harness/kiro/manifest.ts";
 
@@ -2004,7 +2005,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       });
       expect(shared.code, shared.stderr).toBe(0);
       const delivered = JSON.parse(shared.stdout).hookSpecificOutput.updatedInput.prompt;
-      expect(delivered).toContain(readFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "utf-8"));
+      expect(delivered).toContain(withoutCommentBlocks(readFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "utf-8")));
 
       const payload = { cwd: dir, tool_name: "invoke_sub_agent", tool_input: { name: agent, prompt } };
       const blocked = runAdapter(dir, "deliver-stage-rules", payload);

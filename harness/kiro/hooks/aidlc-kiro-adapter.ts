@@ -72,6 +72,7 @@ import {
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { SAY_ONCE_BEFORE_THEY_REPLY } from "../tools/aidlc-directive.ts";
 import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
+import { HOOK_PRE_DISPATCH_ENV } from "../tools/aidlc-locks.ts";
 import { aidlcInvocation, typedHarnessName } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -688,7 +689,7 @@ if (target === "verb-intercept") {
             ];
         const run = Bun.spawnSync(
           command,
-          { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
+          { cwd, stdout: "pipe", stderr: "pipe", env: { ...projectEnv, [HOOK_PRE_DISPATCH_ENV]: "1" } },
         );
         const directive = new TextDecoder("utf-8").decode(
           run.stdout ?? new Uint8Array(),

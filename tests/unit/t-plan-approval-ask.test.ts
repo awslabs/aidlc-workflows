@@ -3249,6 +3249,27 @@ describe("what the engine names while a plan waits", () => {
     expect(auditText(proj)).toContain("**Person Reply**: approve the plan, but let's stop there for today");
   });
 
+  // From a live Codex run: "approve the plan. and skip build and test" at the
+  // plan question. The skip's step ended the turn, so the approval in the same
+  // message was dropped and nothing was built until the person asked.
+  test("approve and skip in one reply while the plan waits: the skip is made, then the approval, and the build starts", () => {
+    const proj = waitingPlan();
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const words = "approve the plan. and skip build and test, I will run npm test myself";
+    reply(proj, words);
+    const named = next(proj, ["--skip", "build-and-test"]);
+    expect(named.message, JSON.stringify(named)).toContain("answer --stage code-generation --checkpoint plan-approval");
+    expect(named.message).not.toContain("Then stop.");
+    const recompose = namedCommands(named).find((command) => command.includes("engine recompose"));
+    expect(recompose, JSON.stringify(named)).toBeDefined();
+    expect(guardBash(proj, recompose as string).code).toBe(0);
+    runInstalled(proj, recompose as string);
+    const said = answer(proj, "Approve Plan");
+    expect(said.code, said.message).toBe(0);
+    expect(auditText(proj)).toContain(`**Person Reply**: ${words}`);
+    expect(next(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+  });
+
   // Skipping Code Generation itself while its plan waits: the skip the engine
   // names gets through and runs, the plan question goes with the stage, and the
   // work goes on to Build and Test without asking about the plan again.
@@ -3307,7 +3328,11 @@ describe("what the engine names while a plan waits", () => {
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
     reply(proj, typed);
     const named = next(proj, [...args]);
-    const commands = namedCommands(named);
+    // A skip's step also names the plan question's answer, for a reply that
+    // gave one; this reply gave none, so the agent does not run it.
+    const answerStep = namedCommands(named).filter((command) => command.includes("--checkpoint plan-approval"));
+    expect(answerStep.length, JSON.stringify(named)).toBe((args as readonly string[]).includes("--skip") ? 1 : 0);
+    const commands = namedCommands(named).filter((command) => !answerStep.includes(command));
     expect(commands.length, JSON.stringify(named)).toBeGreaterThan(0);
     for (const command of commands) {
       const verdict = guardBash(proj, command);

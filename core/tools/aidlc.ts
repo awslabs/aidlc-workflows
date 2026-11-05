@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, realpathSync, writeSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CONFIG_SECTIONS,
+  CORE_COMMAND_WORDS,
   dispatcherWorkspaceUtilityArgv,
   type HookGroupMember,
   hookGroupMembers,
@@ -13,6 +14,7 @@ import {
   nextFlagTakesFollowing,
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
+  PLUGIN_COMMAND_NAME_RE,
   type RouteNamespaceName,
   TRUSTED_ROUTE_NAMESPACE,
   UNIT_VERBS,
@@ -34,9 +36,11 @@ import {
   kiroTreeLayout,
   packagedDistributionRoot,
   discoverableRuntimeHarnessDir,
+  resolveHarnessPath,
   runtimeHarnessDir,
   hookSessionProjectDir,
   runtimeProjectDir,
+  runtimeProjectDirFrom,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 
@@ -263,8 +267,9 @@ export const ROUTES: readonly Route[] = [
       "unit merge-status <unit>",
       "unit participate",
       "unit pin <unit>",
-      "unit publish <unit>",
+      "unit publish <unit> [--commit]",
       "unit release <unit>",
+      "unit share",
       "unit status",
     ],
   },
@@ -1499,6 +1504,7 @@ export function renderHumanHelp(): string {
     row("version", "Print binary and runtime versions"),
     row("uninstall", "Remove aidlc from this machine"),
     "",
+    ...pluginCommandsHelp(out),
     heading("EXAMPLES", out),
     `  ${cmd(`${invoke} config`, out)}                     guided setup in the current project`,
     `  ${cmd(`${invoke} config models --show`, out)}       see which model each agent uses, and why`,
@@ -1510,6 +1516,34 @@ export function renderHumanHelp(): string {
     dim(`  Agents: workflows run through '${invoke} engine' - see '${invoke} engine --help'.`, out),
     "",
   ].join("\n");
+}
+
+// The commands this project's plugins add, under each plugin, when it has any.
+// The plugins' stamps are looked for first, so a project without them, or no
+// project, gets the same help as before without loading the engine library.
+function pluginCommandsHelp(out: NodeJS.WriteStream): string[] {
+  try {
+    const dataDir = resolveHarnessPath(["tools", "data"]);
+    if (!readdirSync(dataDir).some((file) => /^plugin-compose-[a-z][a-z0-9-]*\.json$/.test(file))) return [];
+  } catch {
+    return [];
+  }
+  const { pluginsEnabled, validScopes } = require("./aidlc-lib.ts") as typeof import("./aidlc-lib.ts");
+  const { projectPluginCommands } = require("./aidlc-plugin-commands.ts") as typeof import("./aidlc-plugin-commands.ts");
+  const rows = [...projectPluginCommands({ pluginsEnabled, validScopes }).commands.values()];
+  if (rows.length === 0) return [];
+  const width = Math.max(12, ...rows.map((row) => row.name.length + 2));
+  const plugins = [...new Set(rows.map((row) => row.plugin))].sort();
+  return [
+    heading("PLUGIN COMMANDS", out),
+    ...plugins.flatMap((plugin) => [
+      `  ${plugin}`,
+      ...rows.filter((row) => row.plugin === plugin)
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((row) => `    ${cmd(row.name, out)}${" ".repeat(width - row.name.length)}${row.description}`),
+    ]),
+    "",
+  ];
 }
 
 // One-line meanings for every option the public commands accept, in the
@@ -3899,15 +3933,20 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "aidlc",
   ].some((entry) => existsSync(join(projectDir, entry))) ||
     discoverProjectHarnesses(projectDir).length > 0;
-  // Config there would set up a new project, so the line names the steps that
-  // reach the person's project. Our options are read only before the person's
-  // own words, so the flag goes right after the tool.
-  return recognized
-    ? null
-    : `${route.id} requires an installed project harness or recognized project directory; ` +
-      `run it from the project folder, or add --project-dir <path> right after ${
-        aidlcInvocation() === "aidlc" ? "aidlc" : "aidlc.ts"
-      }`;
+  if (recognized) return null;
+  // Config there sets that folder up as a new project: the step when it is the
+  // person's project before setup, the wrong one when they meant another. So
+  // the line names config for that exact folder, then the steps that reach
+  // another one, and whether it is their project stays their call. Claude Code
+  // cuts a tool call's hook line at about 200 characters, so the step comes
+  // before the folder, whose path can be long. The copy channel has no aidlc
+  // command, and its hooks run only where its own tool is. Our options are
+  // read only before the person's own words, so the flag goes right after the
+  // tool.
+  const native = aidlcInvocation() === "aidlc";
+  return `${route.id} requires an installed project harness or recognized project directory; ` +
+    (native ? `run aidlc config in ${projectDir} if that folder is your project; otherwise ` : "") +
+    `run it from the project folder, or add --project-dir <path> right after ${native ? "aidlc" : "aidlc.ts"}`;
 }
 
 // A project inside a machine root is never acceptable. The reverse (a machine
@@ -4032,6 +4071,88 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
   }
 }
 
+// `aidlc <name>` for a command a plugin names (pluginCommandTable): the first
+// word after our own launcher flags, never one of AI-DLC's own words, so core's
+// routes are untouched. Every token after the name is the script's.
+function pluginCommandHead(argv: readonly string[]): { at: number } | null {
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--project-dir") {
+      index++;
+      continue;
+    }
+    if (LAUNCHER_GLOBAL_FLAGS.has(token) || token === "--no-color") continue;
+    return PLUGIN_COMMAND_NAME_RE.test(token) && !CORE_COMMAND_WORDS.has(token) ? { at: index } : null;
+  }
+  return null;
+}
+
+/**
+ * Runs a plugin's command with AI-DLC's own runtime and returns its exit code;
+ * says in one line that its plugin is off; or null when the word names no
+ * plugin command here, which leaves the unknown-command error as it was.
+ */
+async function runPluginCommand(
+  argv: readonly string[],
+  head: { at: number } | null,
+): Promise<number | null> {
+  if (head === null) return null;
+  const projectDir = runtimeProjectDir();
+  // Loaded only here, so the dispatcher's own start keeps its import graph.
+  const lib = await import("./aidlc-lib.ts");
+  const { projectPluginCommands } = await import("./aidlc-plugin-commands.ts");
+  const { pluginScriptLaunch } = await import("./aidlc-plugin-script.ts");
+  const name = argv[head.at];
+  const table = projectPluginCommands({ pluginsEnabled: lib.pluginsEnabled, validScopes: lib.validScopes });
+  const row = table.commands.get(name);
+  const invoke = aidlcInvocation();
+  if (row === undefined) {
+    const plugin = table.off.get(name);
+    if (plugin === undefined) return null;
+    const selected = [...(lib.pluginsSelected() ?? [])];
+    const base = lib.pausedPlugins().get(plugin);
+    text(
+      2,
+      base === undefined
+        ? `aidlc: '${name}' is a command of the ${plugin} plugin, which is off in this project; ` +
+          `turn it on with ${invoke} config project --plugins ${[...selected, plugin].join(",")}\n`
+        : `aidlc: '${name}' is a command of the ${plugin} plugin, which is paused until ${base} is on again; ` +
+          `turn ${base} on with ${invoke} config project --plugins ${[...selected, base].join(",")}\n`,
+    );
+    return 1;
+  }
+  // The script's own engine calls name their project the person's way.
+  const { AIDLC_RUNTIME_PROJECT_DIR: _pinned, ...env } = process.env;
+  const launch = pluginScriptLaunch({
+    projectDir,
+    harnessDir: runtimeHarnessDir(projectDir),
+    plugin: row.plugin,
+    file: row.script.slice("tools/".length),
+    env,
+  });
+  if (!launch.ok) {
+    text(
+      2,
+      `aidlc: ${row.plugin}'s command '${name}' cannot run: ${launch.script} ` +
+        `${launch.reason === "missing" ? "is missing" : `is not inside ${launch.toolsDir}`}\n`,
+    );
+    return 1;
+  }
+  try {
+    const run = Bun.spawnSync([launch.command, ...launch.args, ...argv.slice(head.at + 1)], {
+      cwd: process.cwd(),
+      env: launch.env,
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    return run.exitCode ?? 1;
+  } catch (error) {
+    text(2, `aidlc: ${row.plugin}'s command '${name}' could not start: ${errorMessage(error)}\n`);
+    return 1;
+  }
+}
+
 export async function main(rawArgv: string[]): Promise<void> {
   if (
     rawArgv[0] === "--internal-aidlc-record-human-turn" &&
@@ -4066,7 +4187,12 @@ export async function main(rawArgv: string[]): Promise<void> {
   }
   configureColor(argv);
   const projectDirOption = projectDirFlag(argv.slice(0, ourFlagLimit(argv)));
-  if (projectDirOption.error) {
+  // A word that may be a plugin command: the words after it are its script's,
+  // so a mistake of ours found only there is said only if it names none.
+  const pluginHead = pluginCommandHead(argv);
+  const scriptsProjectDirError = projectDirOption.error !== undefined && pluginHead !== null &&
+    projectDirFlag(argv.slice(0, pluginHead.at)).error === undefined;
+  if (projectDirOption.error && !scriptsProjectDirError) {
     process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
     return;
   }
@@ -4102,6 +4228,12 @@ export async function main(rawArgv: string[]): Promise<void> {
           : renderDispatcherFailure(argv, 1, route.namespace === "engine" ? machineRootStep(argv) : overlapError);
       return;
     }
+  }
+  // Only the words before a plugin command name the project, so a
+  // --project-dir of the script's own never picks it, here or in the harness
+  // discovery just below.
+  if (!route && pluginHead !== null) {
+    process.env.AIDLC_RUNTIME_PROJECT_DIR = runtimeProjectDirFrom(argv.slice(0, pluginHead.at));
   }
   if (isCompiledExecutable()) {
     // Compiled, no explicit harness: discover the project install from its
@@ -4229,6 +4361,16 @@ export async function main(rawArgv: string[]): Promise<void> {
       process.exitCode = renderDispatcherFailure(argv, 1, error);
       return;
     }
+  } else {
+    const pluginCode = await runPluginCommand(argv, pluginHead);
+    if (pluginCode !== null) {
+      process.exitCode = pluginCode;
+      return;
+    }
+    if (scriptsProjectDirError && projectDirOption.error) {
+      process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
+      return;
+    }
   }
   const action = resolveAction(argv);
   if (
@@ -4260,9 +4402,10 @@ if (import.meta.main) {
 }
 
 function startDispatcher(): void {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
@@ -4278,11 +4421,27 @@ function startDispatcher(): void {
   }
 }
 
+// Copilot CLI's `.aidlc/bin/aidlc-engine` runs only the words AI-DLC's Copilot
+// hooks vouched for (aidlc-launcher-voucher.ts); anything else is refused with
+// the plain command, which Copilot then asks about. Loaded only from the launcher.
+async function launcherGate(args: string[]): Promise<boolean> {
+  const launcher = process.env.AIDLC_ENGINE_LAUNCHER;
+  if (launcher === undefined) return true;
+  delete process.env.AIDLC_ENGINE_LAUNCHER;
+  const voucher = await import("./aidlc-launcher-voucher.ts");
+  if (voucher.spendLauncherVoucher(launcher, args)) return true;
+  const { aidlcInvocation, quoteCommandArgument } = await import("./aidlc-runtime-paths.ts");
+  const words = args.map((word) => quoteCommandArgument(word, "posix"));
+  process.stderr.write(`${voucher.LAUNCHER_PATH} runs only the commands AI-DLC's Copilot hooks pass to it, so this did not run. Run \`${[aidlcInvocation(), ...words].join(" ")}\` instead.\n`);
+  process.exitCode = 1;
+  return false;
+}
+
 function run(args: string[]): void {
   // Keep pending stdin and async dispatch alive, while leaving this module
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);
-  void main(args).catch((error) => {
+  void launcherGate(args).then((go) => go ? main(args) : undefined).catch((error) => {
     // Recorded before the message is rendered, so a failing stderr write
     // still leaves the reason in the trace. Only hook routes are traced.
     if (tracedHookRoute(canonicalizeLegacyCopilotHookArgv(process.argv.slice(2))) !== undefined) {

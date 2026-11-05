@@ -421,6 +421,12 @@ function selectCommandForPlugin(): string {
     : `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${selection}`;
 }
 
+// The engine command that adds this plugin's rules to the rule files.
+function syncCommandForPlugin(): string {
+  const sync = NATIVE_CHANNEL ? "aidlc engine plugin sync" : `bun ${HARNESS_LEAF}/tools/aidlc-plugin.ts sync`;
+  return HARNESS_NAME === "kiro" || HARNESS_NAME === "opencode" ? `${sync} --plugin-root ${PLUGIN_ROOT}` : sync;
+}
+
 function installedToolCommand(tool: "utility" | "graph" | "runner", args: string[]): string[] {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE?.trim();
   if (!executable) {
@@ -2573,6 +2579,29 @@ try {
     recordDrop(
       `contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)} is unreadable or invalid (${contribManifestLoadError}); refusing to replace provenance from an already-composed stage - refresh the stock dist/<harness>/ engine, remove the invalid sidecar, then run plugin sync`,
     );
+  }
+  // A plugin's rules are written by the installed engine's plugin sync, which
+  // runs this hook and then writes them. Run without sync, compose asks the
+  // installed engine to write them; an engine without that leaves them.
+  if (
+    pluginEnabledBySelection() && existsSync(join(PLUGIN_ROOT, "memory")) &&
+    process.env.AIDLC_PLUGIN_RULES_BY_SYNC !== "1"
+  ) {
+    // In its own process, so an engine tool that fails cannot stop compose.
+    const tool = join(HARNESS_DIR, "tools", "aidlc-plugin.ts");
+    const run = existsSync(tool)
+      ? spawnSync(process.execPath, [tool, "rules", "--plugin-root", PLUGIN_ROOT], {
+        cwd: PROJECT_DIR,
+        encoding: "utf-8",
+        // A person at a terminal reads the line as compose prints it.
+        env: { ...installedToolEnv(), AIDLC_HARNESS_DIR: HARNESS_LEAF, ...(process.stdout.isTTY ? { AIDLC_PERSON_AT_TERMINAL: "1" } : {}) },
+      })
+      : null;
+    if (run?.status === 0) {
+      if (run.stdout.trim()) process.stdout.write(run.stdout);
+    } else {
+      recordDrop(`${PLUGIN_NAME}'s rules are not in the rule files yet: run ${syncCommandForPlugin()} to add them`, "advisory");
+    }
   }
   const contribPhases =
     !contribManifestLoadError && pluginEnabledBySelection() && existsSync(contribRoot)

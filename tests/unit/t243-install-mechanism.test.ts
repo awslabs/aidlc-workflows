@@ -71,6 +71,7 @@ import {
   activate,
   reserveDispatchedVersion,
   resolvePinnedDispatch,
+  windowsShimHelperFor,
 } from "../../core/tools/aidlc-lifecycle.ts";
 import {
   TRUSTED_COMMAND_TOKENS,
@@ -4546,6 +4547,49 @@ describe("t243 project initialization", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A settings.json that is not valid JSON names its fix with the person's own
+  // config command; a mirror URL can carry its credential, so that command
+  // asks for it back and never prints it.
+  test("a not-valid-JSON settings.json's fix asks for the mirror back and never prints it", () => {
+    const machine = temp("aidlc-t243-settings-mirror-machine-");
+    const launcher = join(temp("aidlc-t243-settings-mirror-launcher-"), INSTALLED_EXECUTABLE);
+    try {
+      linkSync(BUN, launcher);
+    } catch {
+      cpSync(BUN, launcher);
+    }
+    const MIRROR = "https://user:tok@mirror.example/releases";
+    const project = temp("aidlc-t243-settings-mirror-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      ...process.env,
+      AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const config = (args: string[]) =>
+      spawnSync(launcher, [INIT, "config", ...args], {
+        cwd: project,
+        env,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+    const source = ["--download", "--release-base-url", MIRROR];
+    const installed = config(["--project-dir", project, ...source, "--harness", "claude", "--mcp", "none", "--yes"]);
+    expect(installed.status, `${installed.stdout}${installed.stderr}`).toBe(0);
+    writeFileSync(join(project, ".claude", "settings.json"), '{ "hooks": { broken\n');
+    const human = config([...source, "--yes"]);
+    const json = config([...source, "--yes", "--json"]);
+    for (const refused of [human, json]) {
+      expect(refused.status, `${refused.stdout}${refused.stderr}`).toBe(4);
+      expect(refused.stdout + refused.stderr).toContain(".claude/settings.json is not valid JSON");
+      expect(refused.stdout + refused.stderr).not.toContain("tok@");
+    }
+    expect((human.stdout + human.stderr).replace(/\s+/g, " ")).toContain(
+      "fix: correct .claude/settings.json, then run `aidlc config --download --yes` with the same --release-base-url again",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // A first install's conflict names no other harness's tool: a first Codex
   // install never points at .claude.
   test("a first install's conflict names no other harness's command", () => {
@@ -7179,6 +7223,124 @@ describe("t243 release lifecycle", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a git worktree of a registered checkout runs the release its own pin names", () => {
+    const machine = temp("aidlc-t243-pin-worktree-machine-");
+    const project = temp("aidlc-t243-pin-worktree-project-");
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const git = (cwd: string, ...args: string[]): string => {
+      const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], {
+        cwd,
+        encoding: "utf-8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return (result.stdout ?? "").trim();
+    };
+    const commitPin = (cwd: string, version: string): void => {
+      writeFileSync(join(cwd, ".aidlc-version"), `${version}\n`);
+      git(cwd, "add", ".aidlc-version");
+      git(cwd, "commit", "-q", "-m", `pin ${version}`);
+    };
+    git(project, "init", "-q", "-b", "main");
+    commitPin(project, NEXT_VERSION);
+    for (const version of [NEXT_VERSION, AIDLC_VERSION]) {
+      expect(run(LIFECYCLE, [
+        "versions", "install", version, "--from", fixtureReleaseBytes(version),
+      ], project, env).status).toBe(0);
+    }
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    // The dispatcher's own call, which every pinned command and hook makes.
+    const dispatch = (dir: string) => {
+      const result = resolvePinnedDispatch(
+        ["engine", "status", "--project-dir", dir],
+        undefined,
+        { reserve: true },
+      );
+      if (result.kind !== "execute") return result;
+      result.release?.();
+      const { release: _release, ...rest } = result;
+      return rest;
+    };
+    const runsNext = {
+      kind: "execute",
+      executable: join(machine, "versions", NEXT_VERSION, INSTALLED_EXECUTABLE),
+      version: NEXT_VERSION,
+    } as const;
+    const notRegistered = (version: string) => expect.objectContaining({
+      kind: "failure",
+      message: `this project's ${version} pin is not registered on this machine`,
+    });
+    const registeredFor = (dir: string): string | undefined => {
+      const pins = JSON.parse(readFileSync(join(machine, "pins.json"), "utf-8")) as Record<string, string>;
+      const key = Object.keys(pins).find((path) => existsSync(path) && realpathSync(path) === realpathSync(dir));
+      return key && pins[key];
+    };
+    try {
+      const pinned = run(INIT, ["config", "--pin", NEXT_VERSION, "--project-dir", project], project, env);
+      expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+      // A worktree carries the committed pin and no registration of its own:
+      // it is the same project, registered on first use.
+      const worktree = join(temp("aidlc-t243-pin-worktree-"), "wt");
+      git(project, "worktree", "add", "-q", worktree, "-b", "feature");
+      // config's read-only probe makes the same call without reserving: it
+      // registers nothing before config's question is answered.
+      const registry = readFileSync(join(machine, "pins.json"), "utf-8");
+      expect(resolvePinnedDispatch(["engine", "status", "--project-dir", worktree]))
+        .toEqual(notRegistered(NEXT_VERSION));
+      expect(readFileSync(join(machine, "pins.json"), "utf-8")).toBe(registry);
+      expect(existsSync(projectPinTargetPath(worktree))).toBe(false);
+      expect(dispatch(worktree)).toEqual(runsNext);
+      expect(registeredFor(worktree)).toBe(NEXT_VERSION);
+      expect(existsSync(projectPinTargetPath(worktree))).toBe(true);
+
+      // The checkout is registered for another release: a worktree cut from a
+      // branch whose pin moved on still runs the release its own file names.
+      const moved = run(INIT, ["config", "--pin", AIDLC_VERSION, "--project-dir", project], project, env);
+      expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+      git(project, "add", "-A");
+      git(project, "commit", "-q", "-m", "back");
+      git(project, "branch", "ahead");
+      git(project, "switch", "-q", "ahead");
+      commitPin(project, NEXT_VERSION);
+      git(project, "switch", "-q", "main");
+      const ahead = join(temp("aidlc-t243-pin-worktree-ahead-"), "wt");
+      git(project, "worktree", "add", "-q", ahead, "ahead");
+      expect(dispatch(ahead)).toEqual(runsNext);
+      expect(registeredFor(ahead)).toBe(NEXT_VERSION);
+
+      // A worktree registered before its pin moved follows the file too.
+      const before = join(temp("aidlc-t243-pin-worktree-before-"), "wt");
+      git(project, "worktree", "add", "-q", before, "-b", "before");
+      expect(dispatch(before)).toEqual({ kind: "none" });
+      expect(registeredFor(before)).toBe(AIDLC_VERSION);
+      writeFileSync(join(before, ".aidlc-version"), `${NEXT_VERSION}\n`);
+      expect(dispatch(before)).toEqual(runsNext);
+      expect(registeredFor(before)).toBe(NEXT_VERSION);
+
+      // The main checkout itself still registers a moved pin only through
+      // config --pin, and another clone is another project.
+      writeFileSync(join(project, ".aidlc-version"), `${NEXT_VERSION}\n`);
+      expect(dispatch(project)).toEqual(notRegistered(NEXT_VERSION));
+      expect(registeredFor(project)).toBe(AIDLC_VERSION);
+      const clone = temp("aidlc-t243-pin-clone-");
+      git(clone, "init", "-q", "-b", "main");
+      writeFileSync(join(clone, ".aidlc-version"), `${NEXT_VERSION}\n`);
+      expect(dispatch(clone)).toEqual(notRegistered(NEXT_VERSION));
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+  });
+
   test("fresh-clone pins require target and registry reconciliation before dispatch", () => {
     const release = fixtureReleaseBytes(NEXT_VERSION);
     const machine = temp("aidlc-t243-pin-reconcile-machine-");
@@ -8447,6 +8609,116 @@ describe("t243 release lifecycle", () => {
         join(machine, "versions", AIDLC_VERSION, INSTALLED_EXECUTABLE),
       );
       expect(existsSync(join(machine, "rollback-version"))).toBe(false);
+    } finally {
+      if (priorInstallRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = priorInstallRoot;
+      if (priorBinDir === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = priorBinDir;
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")("a failed version probe says what the command printed on stderr", () => {
+    const machine = temp("aidlc-t243-probe-stderr-machine-");
+    const bin = join(machine, "bin");
+    const project = temp("aidlc-t243-probe-stderr-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: bin };
+    const stopping = join(temp("aidlc-t243-probe-stderr-binary-"), "aidlc");
+    writeFileSync(stopping, "#!/bin/sh\necho 'aidlc: the launcher stopped' >&2\nexit 4\n", { mode: 0o755 });
+    const stoppingRelease = temp("aidlc-t243-probe-stderr-release-");
+    writeReleaseFixture({
+      root: stoppingRelease, repoRoot: REPO_ROOT, version: NEXT_VERSION, binaryFrom: stopping, distributions: ["claude"],
+    });
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", fixtureRelease(),
+    ], project, env).status).toBe(0);
+    const staged = run(LIFECYCLE, ["versions", "install", NEXT_VERSION, "--from", stoppingRelease], project, env);
+    expect(staged.status, staged.stdout + staged.stderr).toBe(0);
+    const priorInstallRoot = process.env.AIDLC_INSTALL_ROOT;
+    const priorBinDir = process.env.AIDLC_BIN_DIR;
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = bin;
+    try {
+      expect(() => activate(NEXT_VERSION)).toThrow(`version probe returned 4 "": aidlc: the launcher stopped`);
+      expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(AIDLC_VERSION);
+    } finally {
+      if (priorInstallRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = priorInstallRoot;
+      if (priorBinDir === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = priorBinDir;
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Windows PowerShell 5.1 reads a .ps1 without a BOM in the ANSI code page,
+  // so a non-ASCII letter in the install path reached aidlc-shim.ps1 garbled.
+  test("the launcher helper has a BOM only for a non-ASCII install path, and an older release keeps the text it accepts", () => {
+    const saved = process.env.AIDLC_INSTALL_ROOT;
+    const ascii = join(temp("aidlc-t243-helper-bom-"), "aidlc");
+    const accented = join(temp("aidlc-t243-helper-bom-"), "Jos\u00e9", "aidlc");
+    // Older than this binary and than the first release with the BOM helper.
+    const older = "2.11.2";
+    try {
+      process.env.AIDLC_INSTALL_ROOT = ascii;
+      const plain = windowsShimHelperFor(AIDLC_VERSION);
+      expect(plain.startsWith("\uFEFF")).toBe(false);
+      expect(windowsShimHelperFor(NEXT_VERSION)).toBe(plain);
+      expect(windowsShimHelperFor(older)).toBe(plain);
+
+      process.env.AIDLC_INSTALL_ROOT = accented;
+      const own = windowsShimHelperFor(AIDLC_VERSION);
+      expect(own.startsWith("\uFEFF")).toBe(true);
+      // `aidlc update` runs in the binary it replaces.
+      expect(windowsShimHelperFor(NEXT_VERSION)).toBe(own);
+      expect(windowsShimHelperFor(older)).toBe(own.slice(1));
+    } finally {
+      if (saved === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved;
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("an install under a folder with a non-ASCII letter starts aidlc through aidlc.cmd", () => {
+    const machine = join(temp("aidlc-t243-accented-machine-"), "Jos\u00e9", "aidlc");
+    const bin = join(machine, "bin");
+    const project = temp("aidlc-t243-accented-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: bin };
+    // The update's version probe runs bin\aidlc.cmd, which starts the helper.
+    const installed = run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", fixtureRelease(),
+    ], project, env);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    expect([...readFileSync(join(machine, "aidlc-shim.ps1")).subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+
+    const older = "2.11.2";
+    expect(run(LIFECYCLE, [
+      "versions", "install", older, "--from", fixtureRelease(older),
+    ], project, env).status).toBe(0);
+    const acp = /ACP\s+REG_SZ\s+(\d+)/.exec(spawnSync("reg", [
+      "query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage", "/v", "ACP",
+    ], { encoding: "utf-8" }).stdout)?.[1];
+    const priorInstallRoot = process.env.AIDLC_INSTALL_ROOT;
+    const priorBinDir = process.env.AIDLC_BIN_DIR;
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = bin;
+    try {
+      // What an earlier release left on a machine whose code page is UTF-8 is
+      // still the installer's, and the next activation gives it the BOM.
+      const helperPath = join(machine, "aidlc-shim.ps1");
+      writeFileSync(helperPath, readFileSync(helperPath, "utf-8").slice(1));
+      activate(AIDLC_VERSION);
+      expect([...readFileSync(helperPath).subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+
+      if (acp === "65001") {
+        activate(older);
+        expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(older);
+      } else {
+        // That release's own helper has no BOM, so it cannot start here: the
+        // switch stops at the probe, says why, and the machine stays as it was.
+        expect(() => activate(older)).toThrow(
+          `version probe returned 4 "": ${older} did not start from `,
+        );
+        expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(AIDLC_VERSION);
+      }
     } finally {
       if (priorInstallRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = priorInstallRoot;

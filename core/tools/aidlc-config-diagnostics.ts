@@ -19,6 +19,8 @@ import {
   KIRO_TERMINAL_ISSUE_ID,
   kiroTerminalApplies,
   kiroTerminalFix,
+  kiroTerminalIntegrationFix,
+  kiroTerminalIntegrationGap,
   kiroTerminalIssueMessage,
   readKiroIdeTerminal,
   readKiroTerminalAnswer,
@@ -3287,18 +3289,19 @@ type InstructionState = {
   path: string;
   kind: "managed-block" | "whole-file" | "json-entries";
   state: "intact" | "missing" | "conflict";
+  // Codex's override holds a well-formed AI-DLC block that is not the current
+  // one: older after an update, or edited; doctor cannot tell which.
+  notCurrent?: true;
 };
 
-// AGENTS.md in a copy config never ran in: AI-DLC's part is the marked block
-// the engine adds at session start, by the same rule config uses. A file that
-// rule cannot take (unmarked AI-DLC text the team changed, broken markers) is
-// a conflict, so the person hears what to fix instead of nothing.
+// Root guidance in a copy config never ran in: AI-DLC's part is the marked
+// block the engine adds at session start, by the same rule config uses.
 function copiedAgentsState(
   projectDir: string,
   harnessDir: string,
   integration: RootIntegration,
+  path: string,
 ): InstructionState {
-  const path = "AGENTS.md";
   let shipped: string;
   let current: string;
   try {
@@ -3308,16 +3311,25 @@ function copiedAgentsState(
   } catch {
     return { path, kind: "whole-file", state: "intact" };
   }
-  // The Cursor installer keeps AI-DLC's part under its own markers.
-  if (/^<!-- BEGIN AIDLC [A-Z]+ -->/m.test(current)) return { path, kind: "managed-block", state: "intact" };
+  // The Cursor installer keeps AGENTS.md's part under its own markers.
+  if (path === "AGENTS.md" && /^<!-- BEGIN AIDLC [A-Z]+ -->/m.test(current)) {
+    return { path, kind: "managed-block", state: "intact" };
+  }
   const merged = mergeBlock(
     path,
     current,
     shipped,
     integration.marker ?? "agents",
-    integration.legacySignatures?.wholeFileHashes ?? [],
+    path === "AGENTS.md" ? integration.legacySignatures?.wholeFileHashes ?? [] : [],
   );
   if (merged.error) return { path, kind: "managed-block", state: "conflict" };
+  // Config and session start do not refresh Codex's override.
+  if (
+    path === "AGENTS.override.md" && merged.currentHash !== undefined &&
+    merged.currentHash !== merged.nextHash
+  ) {
+    return { path, kind: "managed-block", state: "conflict", notCurrent: true };
+  }
   return {
     path,
     kind: "managed-block",
@@ -3330,6 +3342,15 @@ function instructionStates(
   harnessDir: string,
   harness: ModelHarness,
 ): InstructionState[] {
+  const override = "AGENTS.override.md";
+  const instructionFileStat = (path: string) =>
+    (path === override ? statSync : lstatSync)(join(projectDir, path), { throwIfNoEntry: false });
+  const agentsPath = harness === "codex" && instructionFileStat(override)?.isFile()
+    ? override
+    : "AGENTS.md";
+  // Config still owns AGENTS.md; only its conflicts matter when Codex reads the override.
+  const relevantState = (item: InstructionState): boolean =>
+    agentsPath === "AGENTS.md" || item.path !== "AGENTS.md" || item.state === "conflict";
   let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
   let agentsBlock: RootIntegration | undefined;
   try {
@@ -3368,21 +3389,26 @@ function instructionStates(
   );
   if (!existsSync(baselinePath)) {
     const instructionPaths = harness === "claude" ? [] : ["AGENTS.md"];
+    if (agentsPath !== "AGENTS.md") instructionPaths.push(agentsPath);
     if (onboardingPath && !instructionPaths.includes(onboardingPath)) {
       instructionPaths.push(onboardingPath);
     }
-    return instructionPaths.map((path) => {
+    return instructionPaths.map<InstructionState>((path) => {
       if (path === onboardingPath && onboardingConflict) {
         return { path, kind: "whole-file", state: "conflict" };
       }
-      const target = join(projectDir, path);
-      if (!existsSync(target) || !lstatSync(target).isFile()) {
-        return { path, kind: "whole-file", state: "missing" };
+      const file = instructionFileStat(path);
+      if (!file?.isFile()) {
+        return {
+          path,
+          kind: "whole-file",
+          state: path === "AGENTS.md" && agentsPath !== path && file ? "conflict" : "missing",
+        };
       }
-      return path === "AGENTS.md" && agentsBlock
-        ? copiedAgentsState(projectDir, harnessDir, agentsBlock)
+      return (path === "AGENTS.md" || path === override) && agentsBlock
+        ? copiedAgentsState(projectDir, harnessDir, agentsBlock, path)
         : { path, kind: "whole-file", state: "intact" };
-    });
+    }).filter(relevantState);
   }
   const baseline = JSON.parse(
     readFileSync(baselinePath, "utf-8"),
@@ -3399,6 +3425,14 @@ function instructionStates(
       (path === "opencode.json" && (contribution.policy === "whole-file" || contribution.policy === "json-entries"))
     ) {
       tracked.push({ path, contribution });
+      if (path === "AGENTS.md" && agentsPath !== path) {
+        tracked.push({
+          path: agentsPath,
+          contribution: contribution.policy === "managed-block"
+            ? { ...contribution, marker: contribution.marker || path }
+            : contribution,
+        });
+      }
     }
   }
   const onboardingHash = onboardingPath ? baseline.files?.[onboardingPath] : undefined;
@@ -3423,11 +3457,12 @@ function instructionStates(
       return { path, kind: "whole-file", state: "conflict" };
     }
     const target = join(projectDir, path);
-    if (!existsSync(target) || !lstatSync(target).isFile()) {
+    const file = instructionFileStat(path);
+    if (!file?.isFile()) {
       return {
         path,
         kind: contribution.policy,
-        state: existsSync(target) ? "conflict" : "missing",
+        state: (harness === "codex" ? file !== undefined : existsSync(target)) ? "conflict" : "missing",
       };
     }
     const content = readFileSync(target);
@@ -3481,12 +3516,14 @@ function instructionStates(
       return { path, kind: contribution.policy, state: "conflict" };
     }
     const block = text.slice(beginAt, endAt + markers.end.length);
+    if (holdsRecordedWrite(block, contribution.hash) || ownTitleOnly(block, contribution.hash)) {
+      return { path, kind: contribution.policy, state: "intact" };
+    }
     return {
       path,
       kind: contribution.policy,
-      state: holdsRecordedWrite(block, contribution.hash) || ownTitleOnly(block, contribution.hash)
-        ? "intact"
-        : "conflict",
+      state: "conflict",
+      ...(path === "AGENTS.override.md" ? { notCurrent: true as const } : {}),
     };
   });
   if (onboardingPath && !onboardingHash) {
@@ -3496,7 +3533,7 @@ function instructionStates(
       state: onboardingConflict ? "conflict" : "missing",
     });
   }
-  return states;
+  return states.filter(relevantState);
 }
 
 export function instructionFileDoctorCheck(
@@ -3526,35 +3563,76 @@ export function instructionFileDoctorCheck(
       fix: error instanceof Error ? error.message : String(error),
     };
   }
+  const override = "AGENTS.override.md";
+  const loadedFile = states.some((item) => item.path === override)
+    ? `; Codex reads ${override} instead of AGENTS.md`
+    : "";
+  const fixFor = (items: InstructionState[]): string => {
+    const fixes: string[] = [];
+    const overrideIssue = items.find((item) => item.path === override);
+    if (overrideIssue) {
+      const action = overrideIssue.state === "conflict"
+        ? `replace the existing AI-DLC block and any unmatched or duplicate AI-DLC:agents markers in ${override} ` +
+          "with the current block from AGENTS.md"
+        : `copy the current AI-DLC:agents block from AGENTS.md into ${override}`;
+      fixes.push(
+        `${action}, preserving your own text; ` +
+          `if needed, refresh AGENTS.md with \`${invoke} config\` first (config does not update ${override})`,
+      );
+    }
+    const others = items.filter((item) => item.path !== override);
+    if (others.length > 0) {
+      const rootConflict = loadedFile && others.some((item) => item.path === "AGENTS.md" && item.state === "conflict");
+      if (rootConflict) {
+        fixes.push(`to keep your version, move AGENTS.md somewhere else, then run \`${invoke} config\` to recreate it`);
+      }
+      const conflicts = others.filter((item) => item.state === "conflict" && (!rootConflict || item.path !== "AGENTS.md"));
+      if (conflicts.length > 0) {
+        fixes.push(keepOrTakeShipped(conflicts.map((item) => item.path), invoke));
+      } else if (!rootConflict) {
+        fixes.push(`run \`${invoke} config\``);
+      }
+    }
+    return fixes.join("; ");
+  };
   const conflicts = states.filter((item) => item.state === "conflict");
+  const missing = states.filter((item) => item.state === "missing");
+  const conflictWords = (items: InstructionState[]): string => {
+    const modified = items.filter((item) => !item.notCurrent).map((item) => item.path);
+    return [
+      ...(modified.length > 0 ? [`hand-modified - conflict (${modified.join(", ")})`] : []),
+      ...items.filter((item) => item.notCurrent).map((item) => `the AI-DLC block in ${item.path} is not the current one`),
+    ].join("; ");
+  };
   if (conflicts.length > 0) {
+    const missingNote = loadedFile && missing.length > 0
+      ? `; block or file missing (${missing.map((item) => item.path).join(", ")})`
+      : "";
     return {
       pass: false,
       severity: "warn",
-      label:
-        `Instruction file: hand-modified - conflict (${conflicts.map((item) => item.path).join(", ")})`,
-      fix: keepOrTakeShipped(conflicts.map((item) => item.path), invoke),
+      label: `Instruction file: ${conflictWords(conflicts)}${missingNote}${loadedFile}`,
+      fix: fixFor(loadedFile ? [...conflicts, ...missing] : conflicts),
     };
   }
-  const missing = states.filter((item) => item.state === "missing");
   if (missing.length > 0) {
     return {
       pass: false,
       severity: "warn",
       label:
-        `Instruction file: block or file missing (${missing.map((item) => item.path).join(", ")})`,
-      fix: `run \`${invoke} config\``,
+        `Instruction file: block or file missing (${missing.map((item) => item.path).join(", ")})${loadedFile}`,
+      fix: fixFor(missing),
     };
   }
   const managed = states.some((item) => item.kind === "managed-block" || item.kind === "json-entries");
   const whole = states.some((item) => item.kind === "whole-file");
   return {
     pass: true,
-    label: managed && whole
+    label: (managed && whole
       ? "Instruction file: block present, user content preserved; framework-owned file intact"
       : managed
       ? "Instruction file: block present, user content preserved"
-      : "Instruction file: framework-owned file intact",
+      : "Instruction file: framework-owned file intact") + loadedFile,
   };
 }
 
@@ -3717,6 +3795,19 @@ export function kiroIdeTerminalDoctorCheck(
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (selected?.harness !== "kiro-ide") return null;
   if (!kiroTerminalApplies(env, platform)) return null;
+  // Seen only when doctor runs in Kiro's terminal; doctor typed in a chat runs
+  // in Kiro's own environment and gets the profile rows below.
+  const gap = kiroTerminalIntegrationGap(env, platform);
+  if (gap !== null) {
+    return {
+      pass: false,
+      severity: "warn",
+      label:
+        "Kiro terminal: this terminal runs without Kiro's shell integration, so every command shows exit code -1 and " +
+        "output after its first second is cut off (AI-DLC keeps its own replies in a file)",
+      fix: kiroTerminalIntegrationFix(gap),
+    };
+  }
   const state = readKiroIdeTerminal(env, platform);
   if (!state.readable) {
     return {

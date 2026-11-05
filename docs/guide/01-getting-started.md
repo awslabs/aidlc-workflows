@@ -586,10 +586,6 @@ Review outcome: Concerns remain for your decision.
   metric is sufficient, or ask a follow-up to add a data-accuracy or reliability metric before
   inception begins.
 
-Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
-single, binary success metric ("at least one real...) as risk; you can also approve and ask for
-one to be fixed, or reject one as not applying, saying why.
-
 Decision options:
 - Approve - continue.
 - Request Changes - return to the listed artifacts so the required actions can be addressed.
@@ -599,6 +595,10 @@ Review: aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-c
 The two wording points (R-01, R-02) are things I added that you didn't confirm, and they're easy
 to remove. R-03 is your call: one success measure is enough, or you may want to add one for stock
 accuracy. After you approve, the next step is Feasibility & Constraints.
+
+Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
+single, binary success metric ("at least one real...) as risk; you can also approve and ask for
+one to be fixed, or reject one as not applying, saying why.
 
  Approval
  Intent Capture & Framing complete. How would you like to proceed?

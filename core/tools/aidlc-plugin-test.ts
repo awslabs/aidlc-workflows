@@ -44,6 +44,7 @@ import {
   validatePluginRoot,
   walkPluginFiles,
 } from "./aidlc-plugin-validate.ts";
+import { mergePluginRulesFromRoot } from "./aidlc-plugin.ts";
 
 const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> --install <project-root> [--harness <name>] [--with <base-root>] [--json]";
@@ -606,8 +607,14 @@ export function testPluginComposition(
       // The candidate is a copy, so the select line a compose drop names works
       // in the project only for a plugin installed there; compose says so.
       const installedThere = new Set(discoverInstalledPluginNames(installRoot, target.harnessLeaf));
-      const composeEnv = (name: string): NodeJS.ProcessEnv =>
-        installedThere.has(name) ? {} : { AIDLC_PLUGIN_TEST_NOT_INSTALLED: "1" };
+      // The plugin's rules go in as sync puts them, right after each compose.
+      const composeEnv = (name: string): NodeJS.ProcessEnv => ({
+        AIDLC_PLUGIN_RULES_BY_SYNC: "1",
+        ...(installedThere.has(name) ? {} : { AIDLC_PLUGIN_TEST_NOT_INSTALLED: "1" }),
+      });
+      const mergeRules = (root: string): void => {
+        mergePluginRulesFromRoot(candidateRoot, target.harnessLeaf, root);
+      };
       const templateHooksDir =
         options.templateHooksDir ?? bundledPluginHookTemplatesDir();
       const { pluginRoot: builtRoot } = buildPluginProjection({
@@ -631,6 +638,7 @@ export function testPluginComposition(
           pluginBuilt: baseBuilt,
           env: composeEnv(pluginName(baseRoot)),
         });
+        if (base.status === 0) mergeRules(baseBuilt);
         if (base.status !== 0) {
           addTestError(
             validation,
@@ -658,6 +666,7 @@ export function testPluginComposition(
         pluginBuilt: builtRoot,
         env: composeEnv(logicalPluginName),
       });
+      if (first.status === 0) mergeRules(builtRoot);
       if (first.status !== 0) {
         addTestError(
           validation,
@@ -727,6 +736,7 @@ export function testPluginComposition(
         pluginBuilt: builtRoot,
         env: composeEnv(logicalPluginName),
       });
+      if (second.status === 0) mergeRules(builtRoot);
       const secondDrops = readPluginDropEntries(
         candidateRoot,
         logicalPluginName,

@@ -100,6 +100,9 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_UNPARKED",
   "WORKFLOW_ARCHIVED",
   "WORKFLOW_UNARCHIVED",
+  // A record an earlier State Version wrote, brought up in place by the
+  // engine's state read (aidlc-state-upgrade.ts).
+  "STATE_UPGRADED",
   "INTENT_REPOS_CHANGED",
   "INTENT_CHECKOUTS_CHANGED",
   // Session events (hook-owned)
@@ -359,6 +362,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_UNPARKED: "Workflow Unparked",
   WORKFLOW_ARCHIVED: "Workflow Archived",
   WORKFLOW_UNARCHIVED: "Workflow Unarchived",
+  STATE_UPGRADED: "State Upgraded",
   INTENT_REPOS_CHANGED: "Intent Repos Changed",
   INTENT_CHECKOUTS_CHANGED: "Intent Checkouts Changed",
   SESSION_STARTED: "Session Start",
@@ -565,6 +569,8 @@ export interface AuditEntryInput {
 // idiom as AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS in aidlc-state.ts).
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
+  // Its Stages added sends `next` back to a stage the work just passed over.
+  "STATE_UPGRADED",
   "STAGE_DEFINITION_CHANGED",
   "STAGE_OUTPUT_AMENDED",
   // The check's own record of a first refusal opens the gate on the next

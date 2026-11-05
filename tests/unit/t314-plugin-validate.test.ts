@@ -237,7 +237,7 @@ describe("t314 standalone plugin validator", () => {
     expect(rules).toContain("manifest-shape");
   });
 
-  test("manifest contribution paths must be canonical and memory remains unsupported", () => {
+  test("manifest contribution paths must be canonical; memory/ is one of them", () => {
     const root = fixture();
     renameSync(join(root, "stages"), join(root, "custom-stages"));
     const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
@@ -245,7 +245,7 @@ describe("t314 standalone plugin validator", () => {
       aidlc: { contributes: Record<string, string> };
     };
     manifest.aidlc.contributes.stages = "custom-stages/";
-    manifest.aidlc.contributes.memory = "memory/";
+    manifest.aidlc.contributes.memory = "rules/";
     writeFileSync(
       manifestPath,
       `${JSON.stringify(manifest, null, 2)}\n`,
@@ -267,8 +267,41 @@ describe("t314 standalone plugin validator", () => {
         file: ".aidlc-plugin/plugin.json",
         rule: "manifest-shape",
         message:
-          "aidlc.contributes.memory is not supported by the current plugin projection",
+          'aidlc.contributes.memory must be "memory/" until configurable contribution paths are supported',
       }),
+    );
+  });
+
+  test("a plugin's rules name their level and carry no lock and no setting; their own headings are fine", () => {
+    const root = fixture();
+    const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      aidlc: { rulesLevel?: string; contributes: Record<string, string> };
+    };
+    manifest.aidlc.contributes.memory = "memory/";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    write(join(root, "memory", "rules.md"), "# Testing\n\n## Habits\n\n- Write the failing test first.\n");
+    write(join(root, "memory", "phases", "inception.md"), "- Every requirement has a checkable criterion.\n");
+    const errors = () => validatePluginRoot(root).errors;
+    expect(errors()).toContainEqual(expect.objectContaining({ rule: "memory-level", file: ".aidlc-plugin/plugin.json" }));
+
+    manifest.aidlc.rulesLevel = "team";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    expect(errors()).toEqual([]);
+
+    write(join(root, "memory", "rules.md"), "## Guard Policy\n\nMode: strict\n\n- Methodology: TDD\n");
+    expect(errors().map((finding) => `${finding.file} ${finding.rule} ${finding.message}`).sort()).toEqual([
+      'memory/rules.md memory-lock ## Guard Policy is a lock the team sets; a plugin ships rules only',
+      'memory/rules.md memory-setting "Methodology:" is a setting AI-DLC reads from a rule file; a plugin ships rules in words only',
+      'memory/rules.md memory-setting "Mode:" is a setting AI-DLC reads from a rule file; a plugin ships rules in words only',
+    ]);
+
+    // A setting written inside a code example is not a setting line.
+    write(join(root, "memory", "rules.md"), "- Show the posture as code:\n\n```\nMode: strict\n```\n");
+    expect(errors()).toEqual([]);
+    write(join(root, "memory", "notes.md"), "- stray\n");
+    expect(validatePluginRoot(root).warnings).toContainEqual(
+      expect.objectContaining({ rule: "memory-file", file: "memory/notes.md" }),
     );
   });
 

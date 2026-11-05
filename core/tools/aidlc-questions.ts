@@ -50,8 +50,8 @@ export const QUESTION_SHOWN = "QUESTION_SHOWN";
 // step at a time, so a newer one, or another step, takes its place.
 export const ENGINE_ASK_TYPES: ReadonlySet<string> = new Set([
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "new-work-routing", "project-type",
-  "construction-staffing", "repo-scope", "units-repos", "guard-recovery", "unit-claim",
-  "legacy-plan-approval-recovery",
+  "construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "guard-recovery", "unit-claim",
+  "legacy-plan-approval-recovery", "team-handover",
 ]);
 
 // The questions a stage asks of its own (logged by the agent); they stay listed

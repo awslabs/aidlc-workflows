@@ -54,6 +54,7 @@ import {
   readFileSync,
   readdirSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -434,6 +435,126 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(frozenFindings(bundleDir!)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("2h: the evidence shows autonomy, walk order, jumps and each Unit's progress, with Unit names hashed", () => {
+    const proj = freshProject();
+    // The shipped graph keeps core stage slugs readable, as in test 11.
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const recDir = seededRecordDir(proj);
+    mkdirSync(join(recDir, "audit"), { recursive: true });
+    const UNIT = "ledger-sync";
+    const DOTTED_UNIT = "pay.v2"; // a legacy name the token scan cannot see whole
+    const WORDS = "carry on with the ledger please"; // the person's words: never emitted
+    writeFileSync(
+      join(recDir, "aidlc-state.md"),
+      [
+        "# AI-DLC State Tracking",
+        "",
+        "## Project Information",
+        "- **Status**: Running",
+        "- **Current Stage**: functional-design",
+        "- **Construction Autonomy Mode**: autonomous",
+        "- **Construction Iteration**: unit-major",
+        `- **Active Unit**: ${UNIT}`,
+        "- **State Version**: 8",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const block = (fields: Record<string, string>): string =>
+      `${Object.entries(fields).map(([k, v]) => `**${k}**: ${v}`).join("\n")}\n`;
+    writeFileSync(
+      join(recDir, "audit", "seed.md"),
+      [
+        block({ Timestamp: "2026-05-19T10:00:00Z", Event: "AUTONOMY_MODE_SET", Mode: "autonomous", "Message Id": "m0000001" }),
+        block({
+          Timestamp: "2026-05-19T10:01:00Z", Event: "CONSTRUCTION_POLICY_SET", Field: "Construction Iteration",
+          Value: "unit-major", "Previous Value": "stage-major", "Person Reply": WORDS, "Message Id": "m0000002",
+        }),
+        block({ Timestamp: "2026-05-19T10:02:00Z", Event: "UNIT_STARTED", Stage: "functional-design", Unit: UNIT, "Run floor": "STAGE_STARTED:2026-05-19T10:00:00Z#1" }),
+        block({ Timestamp: "2026-05-19T10:03:00Z", Event: "UNIT_COMPLETED", Stage: "functional-design", Unit: UNIT, "Run floor": "STAGE_STARTED:2026-05-19T10:00:00Z#1" }),
+        block({ Timestamp: "2026-05-19T10:04:00Z", Event: "UNIT_PAUSED", Stage: "functional-design", Unit: DOTTED_UNIT, Reason: WORDS }),
+        block({ Timestamp: "2026-05-19T10:05:00Z", Event: "GATE_APPROVED", Stage: "functional-design", Unit: UNIT }),
+        block({
+          Timestamp: "2026-05-19T10:06:00Z", Event: "STAGE_JUMPED", Direction: "FORWARD", Source: "functional-design",
+          Target: "build-and-test", Scope: "classic", Details: `FORWARD jump ${WORDS}`,
+        }),
+        block({
+          Timestamp: "2026-05-19T10:06:00Z", Event: "STAGE_SKIPPED", Stage: "nfr-requirements",
+          Reason: `Skipped by jump ${WORDS}`, "Skip Kind": "jump",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    const normalized = JSON.parse(readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8"));
+    const unitId = `<id:${shortHash(UNIT)}>`;
+    const dottedId = `<id:${shortHash(DOTTED_UNIT)}>`;
+    expect(normalized.state).toMatchObject({
+      "Construction Autonomy Mode": "autonomous",
+      "Construction Iteration": "unit-major",
+      "Active Unit": unitId,
+    });
+    const rows = (event: string): Array<Record<string, string>> =>
+      normalized.auditEvents.filter((row: Record<string, string>) => row.Event === event);
+    expect(rows("AUTONOMY_MODE_SET")).toEqual([{ Event: "AUTONOMY_MODE_SET", Timestamp: "2026-05-19T10:00:00Z", Mode: "autonomous" }]);
+    expect(rows("CONSTRUCTION_POLICY_SET")).toEqual([{
+      Event: "CONSTRUCTION_POLICY_SET", Timestamp: "2026-05-19T10:01:00Z",
+      Field: "Construction Iteration", Value: "unit-major", "Previous Value": "stage-major",
+    }]);
+    expect(rows("UNIT_STARTED")).toEqual([{ Event: "UNIT_STARTED", Timestamp: "2026-05-19T10:02:00Z", Stage: "functional-design", Unit: unitId }]);
+    expect(rows("UNIT_COMPLETED")).toEqual([{ Event: "UNIT_COMPLETED", Timestamp: "2026-05-19T10:03:00Z", Stage: "functional-design", Unit: unitId }]);
+    expect(rows("UNIT_PAUSED")).toEqual([{ Event: "UNIT_PAUSED", Timestamp: "2026-05-19T10:04:00Z", Stage: "functional-design", Unit: dottedId }]);
+    expect(rows("GATE_APPROVED")).toEqual([{ Event: "GATE_APPROVED", Timestamp: "2026-05-19T10:05:00Z", Stage: "functional-design", Unit: unitId }]);
+    expect(rows("STAGE_JUMPED")).toEqual([{
+      Event: "STAGE_JUMPED", Timestamp: "2026-05-19T10:06:00Z",
+      Direction: "FORWARD", Source: "functional-design", Target: "build-and-test",
+    }]);
+    expect(rows("STAGE_SKIPPED")).toEqual([{ Event: "STAGE_SKIPPED", Timestamp: "2026-05-19T10:06:00Z", Stage: "nfr-requirements", "Skip Kind": "jump" }]);
+    // The Unit names and the person's words leave nothing in any file.
+    for (const file of walkFiles(bundleDir!)) {
+      const body = readFileSync(file, "utf-8");
+      for (const raw of [UNIT, DOTTED_UNIT, WORDS]) expect(body, `${raw} leaked into ${file}`).not.toContain(raw);
+    }
+    const manifest = JSON.parse(readFileSync(join(bundleDir!, "manifest.json"), "utf-8"));
+    expect(manifest.redactionsApplied).toContain("unit-name");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("2i: a paused Unit's reason and next action stay on the machine", () => {
+    const proj = freshProject();
+    const recDir = seededRecordDir(proj);
+    const REASON = "waiting for the vendor contract terms";
+    const NEXT = "ask the finance lead for sign-off";
+    writeFileSync(
+      join(recDir, "aidlc-state.md"),
+      [
+        "# AI-DLC State Tracking",
+        "",
+        "## Runtime State",
+        "- **Status**: Running",
+        "- **Unit Stage**: functional-design",
+        "- **Unit State**: paused",
+        `- **Unit Pause Reason**: ${REASON}`,
+        `- **Unit Next Action**: ${NEXT}`,
+        "- **State Version**: 8",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    const normalized = JSON.parse(readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8"));
+    // That a Unit is paused, and where, still leaves; the agent's words for why do not.
+    expect(normalized.state).toMatchObject({ "Unit Stage": "functional-design", "Unit State": "paused" });
+    expect(Object.keys(normalized.state)).not.toContain("Unit Pause Reason");
+    expect(Object.keys(normalized.state)).not.toContain("Unit Next Action");
+    for (const file of walkFiles(bundleDir!)) {
+      const body = readFileSync(file, "utf-8");
+      for (const raw of [REASON, NEXT]) expect(body, `${raw} leaked into ${file}`).not.toContain(raw);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);
@@ -570,8 +691,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       recordAbsDir: null,
       hooksHealth: { dirExists: false, heartbeats: [], degradedDrops: [] },
       runtimeGraphExists: true,
-      runtimeGraphMtimeMs: 1,
-      authoredInputsNewestMtimeMs: 0,
       markers: { planExists: false, planParseable: null, stopHookDirExists: false },
       ...over,
     };
@@ -1109,6 +1228,26 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(() => JSON.parse(readFileSync(join(run.bundleDir!, "report.json"), "utf-8"))).not.toThrow();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("19b: a refresh that rewrites the stage files does not call the compiled runtime graph out of date", () => {
+    // `aidlc config` after an update rewrites <harness>/aidlc-common/stages/*.md
+    // while work is open. The runtime compile never reads those files, so a
+    // graph older than them is not out of date, and recompiling changes nothing.
+    const proj = createTestProject();
+    created.push(proj);
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const rec = seededRecordDir(proj);
+    mkdirSync(join(rec, "audit"), { recursive: true });
+    writeFileSync(join(rec, "aidlc-state.md"), "- **Status**: In-Progress\n", "utf-8");
+    const graph = join(rec, "runtime-graph.json");
+    writeFileSync(graph, JSON.stringify({ workflow_id: "", scope: "", started_at: "", stages: [] }), "utf-8");
+    const beforeRefresh = new Date(Date.now() - 60 * 60 * 1000);
+    utimesSync(graph, beforeRefresh, beforeRefresh);
+    const run = runExport(proj);
+    expect(run.bundleDir, run.out).not.toBeNull();
+    const report = JSON.parse(readFileSync(join(run.bundleDir!, "report.json"), "utf-8"));
+    expect(report.findings.map((f: { id: string }) => f.id)).not.toContain("runtime-graph-stale");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("20: withinProjectRoot boundary uses the platform separator (Arden r3 #3)", () => {
     // The POSIX-observable half of the Windows fix: the containment check must
     // still admit a real nested input and reject a sibling-prefix sibling. A
@@ -1160,27 +1299,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(withWf.some((f) => f.id === "runtime-graph-missing")).toBe(true);
   });
 
-  test("23b: both runtime-graph remedies name the compiler that writes the file", () => {
+  test("23b: the missing-graph remedy names the compiler that writes the file", () => {
     // aidlc-graph.ts compiles stage-graph.json + scope-grid.json and never
     // writes runtime-graph.json; aidlc-runtime.ts does. A remedy naming the
     // former is a no-op for the finding that printed it.
     const missing = runDiagnosis(
       diagInput({ runtimeGraphExists: false, stateContent: "- **Status**: In-Progress\n" }),
     ).find((f) => f.id === "runtime-graph-missing");
-    const stale = runDiagnosis(
-      diagInput({ runtimeGraphMtimeMs: 1, authoredInputsNewestMtimeMs: 2 }),
-    ).find((f) => f.id === "runtime-graph-stale");
-    for (const finding of [missing, stale]) {
-      expect(finding).toBeDefined();
-      expect(finding?.remedy, "remedy names the runtime compiler")
-        .toContain(`${aidlcToolInvocation("runtime")} compile`);
-      expect(finding?.remedy, "remedy must not send the user to the stage-graph compiler")
-        .not.toContain(aidlcToolInvocation("graph"));
-      // What the person reads names their next step, not AI-DLC's hook names.
-      expect(finding?.remedy).toContain("AI-DLC's hooks are not running here: doctor's hooks check says what to do.");
-      for (const internal of ["rebuild-stage-graph", "harness", "heartbeat"]) {
-        expect(finding?.remedy).not.toContain(internal);
-      }
+    expect(missing).toBeDefined();
+    expect(missing?.remedy, "remedy names the runtime compiler")
+      .toContain(`${aidlcToolInvocation("runtime")} compile`);
+    expect(missing?.remedy, "remedy must not send the user to the stage-graph compiler")
+      .not.toContain(aidlcToolInvocation("graph"));
+    // What the person reads names their next step, not AI-DLC's hook names.
+    expect(missing?.remedy).toContain("AI-DLC's hooks are not running here: doctor's hooks check says what to do.");
+    for (const internal of ["rebuild-stage-graph", "harness", "heartbeat"]) {
+      expect(missing?.remedy).not.toContain(internal);
     }
   });
 

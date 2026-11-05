@@ -382,6 +382,10 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(proj, ".claude", "tools", "aidlc-learned-date.ts"),
     );
     copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-git-name.ts"),
+      join(proj, ".claude", "tools", "aidlc-git-name.ts"),
+    );
+    copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-unit-landing.ts"),
       join(proj, ".claude", "tools", "aidlc-unit-landing.ts"),
     );
@@ -428,6 +432,11 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-command.ts"),
       join(proj, ".claude", "tools", "aidlc-command.ts"),
+    );
+    // aidlc-lib.ts reads a plugin command leading a line with this.
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-plugin-commands.ts"),
+      join(proj, ".claude", "tools", "aidlc-plugin-commands.ts"),
     );
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-color.ts"),

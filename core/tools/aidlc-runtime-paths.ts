@@ -425,12 +425,11 @@ export function aidlcToolInvocation(
   return `bun ${path}`;
 }
 
-function explicitRuntimeProjectDir(): string | null {
+function explicitRuntimeProjectDir(argv: readonly string[] = process.argv.slice(1)): string | null {
   const internal = process.env.AIDLC_RUNTIME_PROJECT_DIR;
   if (internal) {
     return isAbsolute(internal) ? internal : resolve(process.cwd(), internal);
   }
-  const argv = process.argv.slice(1);
   const index = argv.indexOf("--project-dir");
   if (index >= 0 && argv[index + 1] && !argv[index + 1].startsWith("--")) {
     return isAbsolute(argv[index + 1])
@@ -561,6 +560,11 @@ function samePath(left: string, right: string): boolean {
 
 export function runtimeProjectDir(): string {
   return explicitRuntimeProjectDir() ?? process.cwd();
+}
+
+/** The project a command names with only `args`, the words before its own (a plugin command's words are its script's). */
+export function runtimeProjectDirFrom(args: readonly string[]): string {
+  return explicitRuntimeProjectDir(args) ?? process.cwd();
 }
 
 export function runtimeHarnessDir(projectDir = runtimeProjectDir()): string {

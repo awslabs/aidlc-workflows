@@ -29,7 +29,7 @@
 //
 // FIXTURE DISCIPLINE - replicate the .sh's make_project (t91) EXACTLY:
 // a fresh temp project under aidlc-docs/ + a self-contained .claude/ skeleton
-// with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-lib.ts,
+// with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-stage-diary.ts, aidlc-lib.ts,
 // aidlc-settings.ts, aidlc-install-paths.ts, aidlc-distribution.ts,
 // aidlc-channel.ts, aidlc-version.ts,
 // aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-guard-fences.ts,
@@ -131,6 +131,10 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-runtime.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-stage-diary.ts"),
+    join(proj, ".claude", "tools", "aidlc-stage-diary.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-lib.ts"),
     join(proj, ".claude", "tools", "aidlc-lib.ts"),
   );
@@ -157,6 +161,10 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-learned-date.ts"),
     join(proj, ".claude", "tools", "aidlc-learned-date.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-git-name.ts"),
+    join(proj, ".claude", "tools", "aidlc-git-name.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-unit-landing.ts"),
@@ -205,6 +213,11 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-command.ts"),
     join(proj, ".claude", "tools", "aidlc-command.ts"),
+  );
+  // aidlc-lib.ts reads a plugin command leading a line with this.
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-plugin-commands.ts"),
+    join(proj, ".claude", "tools", "aidlc-plugin-commands.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-color.ts"),
