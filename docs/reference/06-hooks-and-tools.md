@@ -1633,11 +1633,13 @@ command, or any write in a command that spells a backslash `\audit\` path,
 which a PowerShell host would resolve) is refused whenever the word names an
 `audit` directory, so `cd <record> && ... >> audit/<shard>.md` cannot forge a
 `HUMAN_TURN` row. A script the model writes is read as text before it ever
-runs, so there only a word that names the trail's own layout
-(`aidlc/spaces/<space>/intents/<record>/audit/`) is refused: a deploy helper
-that copies a report into a bucket's `audit/` prefix, or tees a log inside an
-`audit` folder while another path in it cannot be placed, passes, and its text
-is read again as a command when it runs. Before any of this the command's
+runs, so there a word it cannot place is refused only when it names the
+trail's own layout (`aidlc/spaces/<space>/intents/<record>/audit/`); a
+backslash `\audit\` spelling and a relative `audit/` word after a `cd` it
+cannot decide still fail closed. A deploy helper that copies a report into a
+bucket's `audit/` prefix, or tees a log inside an `audit` folder while another
+path in it cannot be placed, passes, and its text is read again as a command
+when it runs. Before any of this the command's
 backslash-newline continuations are joined, as the shell joins them. Literal
 assignments are dequoted by the shell's rules and expanded over every value the
 command gives a variable, and relative words are resolved against every
