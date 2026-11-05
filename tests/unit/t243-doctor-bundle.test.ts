@@ -455,8 +455,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
         "- **Construction Autonomy Mode**: autonomous",
         "- **Construction Iteration**: unit-major",
         `- **Active Unit**: ${UNIT}`,
-        // A mention in a kept free-text field is hashed by the seeded name.
-        `- **Unit Pause Reason**: waiting on ${UNIT} review`,
         "- **State Version**: 8",
         "",
       ].join("\n"),
@@ -497,7 +495,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       "Construction Autonomy Mode": "autonomous",
       "Construction Iteration": "unit-major",
       "Active Unit": unitId,
-      "Unit Pause Reason": `waiting on ${unitId} review`,
     });
     const rows = (event: string): Array<Record<string, string>> =>
       normalized.auditEvents.filter((row: Record<string, string>) => row.Event === event);
@@ -522,6 +519,40 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     }
     const manifest = JSON.parse(readFileSync(join(bundleDir!, "manifest.json"), "utf-8"));
     expect(manifest.redactionsApplied).toContain("unit-name");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("2i: a paused Unit's reason and next action stay on the machine", () => {
+    const proj = freshProject();
+    const recDir = seededRecordDir(proj);
+    const REASON = "waiting for the vendor contract terms";
+    const NEXT = "ask the finance lead for sign-off";
+    writeFileSync(
+      join(recDir, "aidlc-state.md"),
+      [
+        "# AI-DLC State Tracking",
+        "",
+        "## Runtime State",
+        "- **Status**: Running",
+        "- **Unit Stage**: functional-design",
+        "- **Unit State**: paused",
+        `- **Unit Pause Reason**: ${REASON}`,
+        `- **Unit Next Action**: ${NEXT}`,
+        "- **State Version**: 8",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    const normalized = JSON.parse(readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8"));
+    // That a Unit is paused, and where, still leaves; the agent's words for why do not.
+    expect(normalized.state).toMatchObject({ "Unit Stage": "functional-design", "Unit State": "paused" });
+    expect(Object.keys(normalized.state)).not.toContain("Unit Pause Reason");
+    expect(Object.keys(normalized.state)).not.toContain("Unit Next Action");
+    for (const file of walkFiles(bundleDir!)) {
+      const body = readFileSync(file, "utf-8");
+      for (const raw of [REASON, NEXT]) expect(body, `${raw} leaked into ${file}`).not.toContain(raw);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
