@@ -590,8 +590,8 @@ its own process under the same extraction budget and the same 50-page and
 that needs a password to open is `extraction_failed` with that reason. Known
 limits, where pdftotext does better: words in Thai, Hindi and other scripts whose
 letters combine can come out with spaces inside them, a PDF encrypted with AES-256
-is `extraction_failed`, and a PDF whose fonts carry no text mapping gives
-unreadable text. A scanned PDF has no text for either reader (`no_extractable_text`;
+or with its text compressed the older LZW or RunLength way is `extraction_failed`
+with the reason, and a PDF whose fonts carry no text mapping gives unreadable text. A scanned PDF has no text for either reader (`no_extractable_text`;
 there is no OCR).
 
 A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
