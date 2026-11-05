@@ -1530,6 +1530,42 @@ function withClaimReviewRecords(
 }
 
 const OUTSIDE_UNIT_RECORD_TREE = "outside claimed Unit record tree";
+const OUTSIDE_UNIT_SUFFIX = ` (${OUTSIDE_UNIT_RECORD_TREE})`;
+
+function outsideUnitTreePaths(violations: string[]): string[] {
+  return violations
+    .filter((violation) => violation.endsWith(OUTSIDE_UNIT_SUFFIX))
+    .map((violation) => violation.slice(0, -OUTSIDE_UNIT_SUFFIX.length));
+}
+
+// The one text publish, pin and land give for a record outside the Unit's
+// tree, so the three cannot drift apart. It starts mid-sentence: publish puts
+// it after "Pin will refuse this candidate:", pin and land after their refusal.
+// Pin and land run in the main checkout, so they name the owner's checkout
+// where publish, run in that checkout, says "this branch".
+function outsideUnitTreeNextStep(unit: string, integrationRef: string, owner?: string): string {
+  const where = owner === undefined
+    ? "Take these out of this branch"
+    : `In the checkout where ${owner} claimed ${unit} (not this one), take these out of its branch`;
+  return "a claimed Unit lands only " +
+    `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
+    `such as contract-summary.md, or a stage-level file) is changed on main. ${where} ` +
+    "(git rm a file main does not have, or " +
+    `git checkout ${integrationRef.replace(/^refs\/(remotes|heads)\//, "")} -- <path> for one it does), commit, and ` +
+    "publish again.";
+}
+
+function refuseWithNextStep(
+  message: string,
+  violations: string[],
+  unit: string,
+  integrationRef: string,
+  owner: string,
+): string {
+  if (outsideUnitTreePaths(violations).length === 0) return message;
+  const step = outsideUnitTreeNextStep(unit, integrationRef, owner);
+  return `${message} ${step[0].toUpperCase()}${step.slice(1)}`;
+}
 
 // `candidateOid` may be a tree: publish asks before it has a commit to ask about.
 function candidateBoundary(
@@ -1767,9 +1803,15 @@ function candidateEvidence(
   }
   if (boundary.violations.length > 0) {
     fail(
-      `Pinned candidate violates claimed Unit ownership at: ${
-        boundary.violations.join(", ")
-      }.`,
+      refuseWithNextStep(
+        `Pinned candidate violates claimed Unit ownership at: ${
+          boundary.violations.join(", ")
+        }.`,
+        boundary.violations,
+        claim.unit,
+        claim.payload.integration_ref,
+        claim.owner,
+      ),
     );
   }
   const changedAudit = boundary.changedAudit;
@@ -2099,21 +2141,14 @@ function publishUnit(args: string[], projectDir?: string): void {
   // Pin refuses any other record outside the Unit's tree, so publish names
   // them now, beside the review records, rather than leaving the team to learn
   // it at pin; the change is theirs to take out, so publish still publishes.
-  const outsideSuffix = ` (${OUTSIDE_UNIT_RECORD_TREE})`;
-  const outside = candidateBoundary(
+  const outside = outsideUnitTreePaths(candidateBoundary(
     pd, publicationBaseOid, headTree, recordPrefix, unit, current.generation, auditShard,
-  ).violations.filter((violation) => violation.endsWith(outsideSuffix))
-    .map((violation) => violation.slice(0, -outsideSuffix.length));
+  ).violations);
   const outsideTree = outside.length > 0
     ? {
       records_outside_unit_tree: outside,
       records_outside_unit_tree_note:
-        "Pin will refuse this candidate: a claimed Unit lands only " +
-        `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
-        "such as contract-summary.md, or a stage-level file) is changed on main. Take these out of " +
-        "this branch (git rm a file main does not have, or " +
-        `git checkout ${publicationIntegrationRef.replace(/^refs\/(remotes|heads)\//, "")} -- <path> for one it does), commit, and ` +
-        "publish again.",
+        `Pin will refuse this candidate: ${outsideUnitTreeNextStep(unit, publicationIntegrationRef)}`,
     }
     : {};
   if (
@@ -3161,10 +3196,19 @@ function assertLandCandidateBoundary(
     transaction.audit_shard,
   );
   if (boundary.violations.length > 0) {
+    const remote = repositoryRemote(projectDir);
     fail(
-      `Unit "${transaction.unit}" landing violates claimed Unit ownership at: ${
-        boundary.violations.join(", ")
-      }.`,
+      refuseWithNextStep(
+        `Unit "${transaction.unit}" landing violates claimed Unit ownership at: ${
+          boundary.violations.join(", ")
+        }.`,
+        boundary.violations,
+        transaction.unit,
+        remote
+          ? `refs/remotes/${remote}/${transaction.integration_branch}`
+          : transaction.integration_branch,
+        transaction.owner,
+      ),
     );
   }
 }
