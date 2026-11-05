@@ -65,6 +65,34 @@ function olderToolCopy(tools: string, into: string): string {
   return join(into, "aidlc.ts");
 }
 
+// The words of a printed command whose quoted words are single-quoted, with
+// '' for a quote on Windows: the paths these cases print. It does not read
+// quoteCommandArgument's double quotes or POSIX '"'"' (a path with a quote).
+function printedWords(printed: string): string[] {
+  const words: string[] = [];
+  let word: string | null = null;
+  for (let index = 0; index < printed.length; index++) {
+    const character = printed[index];
+    if (/\s/.test(character)) {
+      if (word !== null) words.push(word);
+      word = null;
+      continue;
+    }
+    word ??= "";
+    if (character !== "'") {
+      word += character;
+      continue;
+    }
+    for (index++; index < printed.length; index++) {
+      if (printed[index] !== "'") word += printed[index];
+      else if (process.platform === "win32" && printed[index + 1] === "'") word += printed[++index];
+      else break;
+    }
+  }
+  if (word !== null) words.push(word);
+  return words;
+}
+
 const stamp = (dir: string): string =>
   JSON.parse(readFileSync(join(dir, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution;
 
@@ -290,13 +318,14 @@ describe("Kiro harness names a person types", () => {
     const scratch = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-kiro-typed-handing-"));
     temporary.push(scratch);
     const tool = olderToolCopy(join(dir, ".kiro", "tools"), join(scratch, ".kiro", "tools"));
-    const handed = config(dir, ["--harness", "kiro-ide", "--yes"], { AIDLC_CONFIG_HANDOFF: tool });
+    const handed = config(dir, ["--harness", "kiro-ide", "--yes"], { AIDLC_CONFIG_HANDOFF: tool, NO_COLOR: "1" });
     expect(handed.status, handed.out).toBe(4);
     // What the person reads keeps this release's names; only the command for the older tool uses its ids.
     expect(handed.out).toContain("switching .kiro to kiro lets Kiro run hook files AI-DLC does not own");
-    const printed = handed.out.match(/bun (\S+) config (--project-dir \S+ --from \S+ --mcp none --harness kiro-ide --yes --dry-run)/);
-    expect(printed?.[1], handed.out).toBe(tool);
-    const planned = spawnSync(process.execPath, [tool, "config", ...printed![2].split(" ")], {
+    // Paths in it may be quoted (always on Windows), so it is read word by word.
+    const printed = printedWords(/^fix: (bun .* --harness kiro-ide --yes --dry-run)$/m.exec(handed.out)?.[1] ?? "");
+    expect(printed.slice(0, 5), handed.out).toEqual(["bun", tool, "config", "--project-dir", dir]);
+    const planned = spawnSync(process.execPath, [tool, "config", ...printed.slice(3)], {
       cwd: dir,
       encoding: "utf-8",
       timeout: NATIVE_STARTUP_TIMEOUT_MS,
