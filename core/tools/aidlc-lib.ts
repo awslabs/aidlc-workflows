@@ -3359,7 +3359,7 @@ function legacyEngineEngagementSegment(seg: string): boolean {
     return /\b(approve|advance|finalize|complete-workflow|gate-start|checkbox|park|unpark|set|skip|reject|revise|resume)\b/.test(seg);
   }
   if (/aidlc-unit\b/.test(seg)) {
-    return !/\b(status|merge-status)\b/.test(seg);
+    return !/\b(status|merge-status|preflight)\b/.test(seg);
   }
   // aidlc-jump / aidlc-bolt / aidlc-swarm: a read-only query (--help/--status)
   // is not engagement; anything else mutates (jump moves the pointer, bolt forks/
@@ -3929,7 +3929,7 @@ export function isEngineEngagementSegment(
     return true;
   }
   if (/\baidlc\s+unit\b/.test(seg)) {
-    return !/\baidlc\s+unit\s+(?:status|merge-status)\b/.test(seg);
+    return !/\baidlc\s+unit\s+(?:status|merge-status|preflight)\b/.test(seg);
   }
 
   return false;

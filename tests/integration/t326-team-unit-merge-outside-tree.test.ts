@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin
+// covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:preflight
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -46,6 +46,16 @@ describe("t326 pinned team Unit merge: a record outside the Unit's tree", () => 
     writeFileSync(summary, "# contract-summary\n\nchanged by alpha\n");
     git(candidate.checkout, ["add", "-A"]);
     git(candidate.checkout, ["commit", "-m", "alpha edits the contract summary"]);
+
+    // Preflight, in the claimed checkout, says pin's refusal the way publish
+    // does: this branch is the one to change.
+    const checked = runMergeTool(UNIT, ["preflight", "alpha"], candidate.checkout);
+    expect(checked.status, checked.out).toBe(0);
+    const preflight = JSON.parse(checked.stdout) as { land_ready: boolean; blockers: string[] };
+    expect(preflight.land_ready).toBe(false);
+    expect(preflight.blockers.join(" ")).toContain("Pin will refuse this candidate: Pinned candidate violates claimed Unit ownership");
+    expect(preflight.blockers.join(" ")).toContain("Take these out of this branch");
+    expect(preflight.blockers.join(" ")).not.toContain("not this one");
 
     const warned = runMergeTool(UNIT, ["publish", "alpha"], candidate.checkout);
     expect(warned.status, warned.out).toBe(0);

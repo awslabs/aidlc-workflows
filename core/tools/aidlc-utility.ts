@@ -871,6 +871,7 @@ Utilities:
   unit adopt <unit>  Adopt the checked-out live claim branch in a fresh clone
   unit participate  Mark this checkout for the guided Unit-claim picker
   unit publish <unit>  Publish this scoped checkout's committed candidate
+  unit preflight <unit>  Check in the claimed checkout whether main would land the Unit as it stands
   unit pin <unit>   Pin and validate a completed candidate from main
   unit gate <unit>  Record approve/reject against the pinned candidate
   unit land <unit>  Land pinned content, fold state, and finalize receipts (explicit post-git release recovery supported)

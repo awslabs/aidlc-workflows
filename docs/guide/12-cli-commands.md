@@ -51,6 +51,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
+| `/aidlc unit preflight <unit>` | In the claimed checkout, check whether main would land the Unit as it stands: pin's checks and a trial merge with main |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
 | `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
@@ -789,6 +790,27 @@ Unit's evidence that pin accepts. So the candidate is the commit as it is, and
 after the Unit lands, a plain pull of main in the claiming checkout
 fast-forwards with every row it wrote kept.
 
+### `/aidlc unit preflight <unit>` — Check that main would land the Unit
+
+Run from the scoped team checkout, before publishing:
+
+```bash
+/aidlc unit preflight user-profile-api
+```
+
+It builds the candidate `publish` would publish from the committed work, runs
+pin's evidence check on it, and tries the merge with the fetched integration
+branch (`git merge-tree`, which moves no checkout, index or ref). It prints
+`land_ready` and two lists. `blockers` are what pin or land would refuse, in
+their words: a file that conflicts with main, a review that no longer stands
+for a stage's documents (after a merge of main changed them, say), a missing
+receipt or approval, a record outside the Unit's folder. `notes` block nothing:
+main has commits the Unit has not merged but merges cleanly with, or the branch
+holds commits of the local main that the remote does not have yet (a Unit
+landed but not pushed), which pin would read as this Unit's own change.
+Nothing is published, pinned or recorded. The merge needs git 2.38 or later;
+an older git gets a note and land checks the merge itself.
+
 ### `/aidlc unit pin <unit>` — Pin candidate evidence
 
 Run from unscoped main:
@@ -800,8 +822,11 @@ Run from unscoped main:
 Pinning fetches the claim ref, records its exact OID/generation and a fresh pin
 transaction ID, and reads
 artifacts, Unit receipts, team gates, reviewer verdicts, Plan Approval, state,
-and audit-shard transport directly from that commit. It does not merge or create
-a worktree. The claim-bound team shard may carry only that Unit's attempt
+and audit-shard transport directly from that commit. It does not merge into main
+or create a worktree; it tries the merge with `git merge-tree`, and a candidate
+that conflicts with main is refused before the merge question, with the files
+and the step for the Unit's owner (merge main in the claimed checkout, resolve,
+check with `unit preflight`, publish again). The claim-bound team shard may carry only that Unit's attempt
 receipts; main-authority rows, another Unit's record/receipt paths, extra shards,
 and other workflow-record paths are refused. Pin also compares the candidate
 base's entry for the Unit (its kind and dependencies) and the active per-Unit
