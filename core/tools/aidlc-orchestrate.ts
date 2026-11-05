@@ -16091,7 +16091,7 @@ function emitTeamUnitMajorRunStage(
       handoverFollowUps.set(
         line,
         `When the person asks to publish it, run \`${aidlcInvocation()} unit publish ${quoteCommandArgument(scopeStamp.unit)} ` +
-          "--commit\` and tell them in plain words what it reports.",
+          "--commit` and tell them in plain words what it reports.",
       );
       sayWithStepOnce(projectDir, line);
     }
