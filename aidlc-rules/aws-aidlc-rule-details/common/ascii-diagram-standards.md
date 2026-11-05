@@ -15,7 +15,7 @@
 ### CRITICAL: Character Width Rule
 **Every line in a box MUST have EXACTLY the same character count (including spaces)**
 
-✅ CORRECT (all lines = 67 chars):
+✅ CORRECT (all lines = 65 chars):
 ```
 +---------------------------------------------------------------+
 |                      Component Name                           |

@@ -13,7 +13,7 @@ A **blocking resiliency finding** means:
 3. The model MUST present only the "Request Changes" option with a clear explanation of what needs to change
 4. The finding MUST be logged in `aidlc-docs/audit.md` with the RESILIENCY rule ID, description, and stage context
 
-If a RESILIENCY rule is not applicable to the current project (e.g., RESILIENCY-07 when no stateful data exists), mark it as **N/A** in the compliance summary — this is not a blocking finding.
+If a RESILIENCY rule is not applicable to the current project (e.g., RESILIENCY-12 when no persistent data exists), mark it as **N/A** in the compliance summary — this is not a blocking finding.
 
 ### Default Enforcement
 All rules in this document are **blocking** by default. If any rule's verification criteria are not met, it is a blocking resiliency finding — follow the blocking finding behavior defined above.
