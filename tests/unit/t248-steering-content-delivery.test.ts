@@ -41,6 +41,7 @@ import {
 } from "../../scripts/agent-knowledge.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import { validateDirective } from "../../core/tools/aidlc-directive.ts";
+import { withoutCommentBlocks } from "../../core/tools/aidlc-markdown.ts";
 import {
   stageValidationAuditFields,
   type StageValidityNode,
@@ -458,7 +459,7 @@ describe("t248 deterministic steering delivery", () => {
     for (const rel of ["org.md", "phases/ideation.md"]) {
       const path = `aidlc/spaces/default/memory/${rel}`;
       expect(reconstructed(result.contents, path)).toBe(
-        readFileSync(join(memory, rel), "utf-8"),
+        withoutCommentBlocks(readFileSync(join(memory, rel), "utf-8")),
       );
     }
     expect(result.contents.some((entry) => entry.path.endsWith("team.md"))).toBe(false);
@@ -487,7 +488,7 @@ describe("t248 deterministic steering delivery", () => {
         result.contents,
         "aidlc/spaces/default/memory/team.md",
       ),
-    ).toBe(readFileSync(teamPath, "utf-8"));
+    ).toBe(withoutCommentBlocks(readFileSync(teamPath, "utf-8")));
     expect(result.final.rules_in_context).toContain(
       "aidlc/spaces/default/memory/team.md",
     );
@@ -1258,7 +1259,7 @@ describe("t248 deterministic steering delivery", () => {
     );
     for (const path of first.directive.rules_in_context ?? []) {
       expect(reconstructed(content, path)).toBe(
-        readFileSync(join(proj, path), "utf-8"),
+        withoutCommentBlocks(readFileSync(join(proj, path), "utf-8")),
       );
     }
     expect(first.directive).not.toHaveProperty("receipt");
@@ -1305,7 +1306,7 @@ describe("t248 deterministic steering delivery", () => {
     );
     for (const path of result.final.rules_in_context ?? []) {
       expect(reconstructed(result.contents, path)).toBe(
-        readFileSync(join(proj, path), "utf-8"),
+        withoutCommentBlocks(readFileSync(join(proj, path), "utf-8")),
       );
     }
     const marker = readMarker(statefulMarkerPath(proj));
@@ -1509,7 +1510,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(directive).not.toHaveProperty("rules_content");
     for (const path of directive.rules_in_context ?? []) {
       expect(reconstructed(contents, path)).toBe(
-        readFileSync(join(proj, path), "utf-8"),
+        withoutCommentBlocks(readFileSync(join(proj, path), "utf-8")),
       );
     }
     expect(existsSync(statefulMarkerPath(proj))).toBe(false);
@@ -2142,7 +2143,7 @@ describe("t248 deterministic steering delivery", () => {
       "utf-8",
     );
 
-    expect(prompt).toContain(org);
+    expect(prompt).toContain(withoutCommentBlocks(org));
     expect(prompt).toContain(inception);
     expect(prompt).toContain("first-class");
     expect(prompt).toContain("Given/When/Then");
@@ -2175,7 +2176,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(output.hookSpecificOutput?.hookEventName).toBe("SubagentStart");
     const context = String(output.hookSpecificOutput?.additionalContext ?? "");
     const memory = join(proj, "aidlc", "spaces", "default", "memory");
-    expect(context).toContain(readFileSync(join(memory, "org.md"), "utf-8"));
+    expect(context).toContain(withoutCommentBlocks(readFileSync(join(memory, "org.md"), "utf-8")));
     expect(context).toContain(readFileSync(join(memory, "phases", "inception.md"), "utf-8"));
     expect(context).toContain("stage:requirements-analysis");
     expect(context.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
