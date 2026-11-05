@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:merged, audit:UNIT_PUSHED, audit:UNIT_MERGED, function:checkTeamResults, function:renderUnitBoard, function:teamsAcrossReposLine
+// covers: subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:merged, audit:UNIT_PUSHED, audit:UNIT_MERGED, function:checkTeamResults, function:renderUnitBoard, function:teamsAcrossReposLine, function:homeResultsPastUnitStages
 //
 // A Unit's build goes home (#2410, item 5). Teams build Units across repos when
 // the workspace is in git. At the build's end the person is offered the push;
@@ -47,6 +47,8 @@ import {
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 
 afterEach(cleanupTeamBuild);
 
@@ -559,6 +561,33 @@ describe("at the home", () => {
     writeFileSync(join(home.dir, "services", "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
     writeFileSync(join(home.dir, "package.json"), '{ "name": "platform" }\n');
     expect(next(home.dir).ask_type).not.toBe("project-type");
+  });
+
+  test("a home moved on past the Unit stages records no Unit: the result stays on its claim, said once, and is recorded back on the Unit stages", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    // The lead moves the work on to Build and Test, skipping every Unit stage.
+    const jumped = run(JUMP, ["execute", "--target", "build-and-test", "--direction", "forward"], home.dir);
+    expect(jumped.status, jumped.out).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-push-past-unit-stages" };
+    const step = next(home.dir, chat);
+    const said = ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("refunds (from payments) is back but not recorded yet"));
+    expect(said, JSON.stringify(step)).toEqual([
+      "refunds (from payments) is back but not recorded yet: main skipped the Unit stages (functional-design to " +
+        "code-generation) when it moved on to build-and-test, so there is nothing on main to record the Unit in. " +
+        "This work takes it in once it is back on functional-design, and going back starts the Unit stages again here.",
+    ]);
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
+    // Back on the Unit stages, the walk checks the result and records it.
+    const back = run(JUMP, ["execute", "--target", "functional-design", "--direction", "backward"], home.dir);
+    expect(back.status, back.out).toBe(0);
+    next(home.dir, chat);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("refunds");
   });
 
   test("the board names the agent's commands for the lead's words: a repo turned it down, or merged it where the check cannot see", () => {

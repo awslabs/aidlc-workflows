@@ -3643,16 +3643,16 @@ function landGit(
 
 // Why main has no Unit stages left to record a landed Unit in, or null while
 // it has: a forward jump on main skips every Unit stage (functional-design to
-// code-generation, say) for every Unit at once.
+// code-generation, say) for every Unit at once. `stages`: the Unit's stages, as
+// its land or its home's done record names them.
 function unitStagesSkippedOnMain(
   projectDir: string,
-  transaction: UnitMergeTransaction,
+  stages: readonly string[],
 ): string | null {
   const state = readStateFile(projectDir);
   if (unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).length > 0) {
     return null;
   }
-  const stages = transaction.evidence.stages_expected;
   const span = stages.length > 1 ? `${stages[0]} to ${stages[stages.length - 1]}` : stages.join("");
   const at = getField(state, "Current Stage")?.trim();
   return `main skipped the Unit stages (${span})${at ? ` when it moved on to ${at}` : ""}, ` +
@@ -3877,7 +3877,7 @@ function landUnit(args: string[], projectDir?: string): void {
     // The state step records the Unit in main's Unit stages; with none left
     // (a forward jump on main skipped them), merging would leave a merge on
     // main that nothing records, so nothing is merged.
-    const skipped = unitStagesSkippedOnMain(pd, transaction);
+    const skipped = unitStagesSkippedOnMain(pd, transaction.evidence.stages_expected);
     if (skipped) {
       fail(
         `Unit "${unit}" was not merged: ${skipped}. Its pin and your merge approval stay as they are; ` +
@@ -3938,7 +3938,7 @@ function landUnit(args: string[], projectDir?: string): void {
       transaction.git_commit_oid,
       target,
     );
-    const skipped = unitStagesSkippedOnMain(pd, transaction);
+    const skipped = unitStagesSkippedOnMain(pd, transaction.evidence.stages_expected);
     if (skipped) {
       fail(
         `Unit "${unit}" is merged into main at ${transaction.git_commit_oid}, but not recorded yet: ${skipped}. ` +
@@ -6287,6 +6287,32 @@ function checkTeamResultsQuietly(
     found.set(unit, { team: live.owner, verdicts, done });
   }
   return found;
+}
+
+// At a home teams build for, once a forward jump skipped every Unit stage: a
+// team's result that came back has nothing here to be recorded in, so it stays
+// on its claim, said once in land's words; the Unit walk records it once the
+// work is back on the first Unit stage (checkTeamResults runs only there). The
+// claims are fetched once per chat and again after the person speaks.
+export function homeResultsPastUnitStages(projectDir: string, stateContent: string, sessionId?: string): string | null {
+  if (homeLocation(stateContent) === null || !hasAnyUnitClaimRefs(projectDir)) return null;
+  // The Unit stages as the scope plans them: with no state, no skip is read.
+  const stages = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", "", true);
+  const skipped = unitStagesSkippedOnMain(projectDir, stages);
+  if (skipped === null || stages.length === 0) return null;
+  let back: UnitClaimView[];
+  try {
+    if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { sessionId, sincePerson: true });
+    back = [...cachedClaims(projectDir).values()]
+      .filter((claim) => claim.status === "claimed" && claim.payload.result !== undefined && !claim.payload.done);
+  } catch {
+    return null;
+  }
+  if (back.length === 0) return null;
+  const one = back.length === 1;
+  return `${joinNames(back.map((claim) => `${claim.unit} (from ${claim.owner})`))} ${one ? "is" : "are"} back but not ` +
+    `recorded yet: ${skipped}. This work takes ${one ? "it" : "them"} in once it is back on ${stages[0]}, ` +
+    "and going back starts the Unit stages again here.";
 }
 
 // Once per Unit and attempt: its outputs written into the home's record, then UNIT_MERGED.
