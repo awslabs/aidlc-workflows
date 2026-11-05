@@ -16746,11 +16746,11 @@ function unitMajorReopen(
 // plain routing lands there and skips nothing ("route"). A target among the
 // later per-unit steps, once a unit has finished work, moves only the unit in
 // flight on: `execute --units` skips that unit's steps up to the target and
-// every other unit keeps its finished, approved work. Otherwise the jump runs
-// as it does anywhere, marking the steps it passes skipped for every unit.
-// Either way this returns the execute flags and the sentence naming what is
-// skipped, so the agent can say what was skipped and how to reopen it. Null
-// outside such a walk.
+// every other unit keeps its finished, approved work; this returns the execute
+// flags and the sentence naming what is skipped, so the agent can say what was
+// skipped and how to reopen it. Otherwise null: the jump runs as it does
+// anywhere, marking the steps it passes skipped for every unit, and its own
+// line names, per unit, what it skips (forwardJumpUnitSteps).
 function unitMajorForwardJump(
   projectDir: string,
   scope: string,
@@ -16803,10 +16803,27 @@ function unitMajorForwardJump(
       };
     }
   }
+  return null;
+}
+
+// What a forward jump over a solo unit-major walk's per-unit steps does to each
+// unit, read from the state before the jump writes it: the steps before the
+// target a unit has not finished are skipped, and the steps from the target on
+// that a unit finished start a new attempt, so the walk takes that unit
+// through them again and asks their approvals again. Units in walk order, steps
+// in block order. Null outside such a walk. The jump tool says it in its own
+// line (forwardJumpNotice), so this reads and never writes.
+export function forwardJumpUnitSteps(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  targetSlug: string,
+): { skipped: [string, string[]][]; redone: [string, string[]][] } | null {
+  const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (!walk) return null;
+  const graph = loadGraph();
   const targetIndex = graph.findIndex((stage) => stage.slug === targetSlug);
-  // Steps before the target that a unit has not finished are skipped; steps
-  // from the target on that a unit finished start a new attempt, so the walk
-  // takes that unit through them again.
   const skipped = new Map<string, string[]>();
   const redone = new Map<string, string[]>();
   for (const stage of walk.block) {
@@ -16817,31 +16834,12 @@ function unitMajorForwardJump(
       if (into) into.set(unit, [...(into.get(unit) ?? []), stage.slug]);
     }
   }
-  const named = (steps: Map<string, string[]>): string => walk.context.units
-    .filter((unit) => steps.has(unit))
-    .map((unit) => `unit "${unit}" (${steps.get(unit)?.join(", ")})`)
-    .join(", ");
-  const said: string[] = [];
-  if (skipped.size > 0) {
-    said.push(`This skips the steps these units have not finished: ${named(skipped)}. Their files stay.`);
-  }
-  if (redone.size > 0) {
-    said.push(
-      `It also starts over what these units finished from "${targetSlug}" on, so each does it again ` +
-        `and needs its approvals again: ${named(redone)}.`,
-    );
-  }
-  if (said.length === 0) return { flags: "", said: "" };
-  // The jump back that reopens what was skipped starts at the earliest skipped step.
-  const earliestSkipped = walk.block
-    .find((stage) => [...skipped.values()].some((steps) => steps.includes(stage.slug)))?.slug ?? currentSlug;
-  return {
-    flags: "",
-    said: ` ${said.join(" ")} After the jump, tell the person in one line what was ` +
-      (skipped.size > 0
-        ? `skipped${redone.size > 0 ? " or started over" : ""} and that \`${entrySkillInvocation()} --stage ${earliestSkipped}\` reopens it.`
-        : "started over."),
-  };
+  const inWalkOrder = (steps: Map<string, string[]>): [string, string[]][] =>
+    walk.context.units.flatMap((unit) => {
+      const own = steps.get(unit);
+      return own ? [[unit, own] as [string, string[]]] : [];
+    });
+  return { skipped: inWalkOrder(skipped), redone: inWalkOrder(redone) };
 }
 
 // Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
@@ -18090,12 +18088,12 @@ function emitJumpDirective(
     }
     // Everywhere else the jump is named (print) for the conductor to run with
     // `execute`, then `next`: at Code Generation the plan-approval guard judges
-    // that command, a unit-major jump has steps or a line around it, and a
+    // that command, moving one unit on has steps and a line around it, and a
     // read-only probe never moves the work. The command carries the
     // tool-resolved direction so `execute` skips/resets the right stages, emits
     // STAGE_JUMPED, and pivots Current Stage.
     emit(printDirective(
-      // A unit-major forward jump already says how to go back for its Units.
+      // Moving one unit on already says how to go back for it.
       (direction === "forward" && !unitMajor?.said
         ? `Run ${unitMajor?.before ?? ""}\`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction}${unitMajor?.flags ?? ""} --scope ${scopeArg(scope)}\` to perform the jump. When its output carries \`notice\`, tell the person that line once, as written. Then re-run \`next\` to continue from the jump target.`
         : `Run ${unitMajor?.before ?? ""}\`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction}${unitMajor?.flags ?? ""} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`) +
