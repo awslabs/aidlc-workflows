@@ -2623,4 +2623,53 @@ describe("t242 state-transition ownership guard", () => {
       "{{INVOKE}} engine orchestrate next --add units-generation",
     );
   });
+
+  // The runtime-integrity walk must visit each script once per tool call.
+  // Before, it re-walked a script once per path that reached it, so a shared
+  // helper reached by many parents (a diamond, no cycle) or scripts that run
+  // each other hung the hook on an ordinary Bash command. See issue #3569.
+  test("runtime integrity walks shared and mutually-running scripts once (no blowup)", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const scripts = join(project, "scripts");
+    mkdirSync(scripts, { recursive: true });
+    const write = (name: string, body: string) => writeFileSync(join(scripts, name), `#!/bin/bash\n${body}\n`);
+    const verdict = (command: string) =>
+      violatesRuntimeIntegrity({ cwd: project, tool_name: "Bash", tool_input: { command } });
+
+    // A strict acyclic DAG (every script runs only deeper-layer scripts, no
+    // cycle). A re-walk per path is width**layers; a walk per script is
+    // layers*width. The 5s bound is generous so it is not flaky on a slow box.
+    const layers = 8;
+    const width = 4;
+    for (let i = 0; i < layers; i++) {
+      for (let w = 0; w < width; w++) {
+        const next = i + 1 < layers
+          ? Array.from({ length: width }, (_, c) => `bash scripts/l${i + 1}_${c}.sh`).join("\n")
+          : "echo leaf";
+        write(`l${i}_${w}.sh`, next);
+      }
+    }
+    let start = performance.now();
+    expect(verdict("bash scripts/l0_0.sh")).toBe(false);
+    expect(performance.now() - start).toBeLessThan(5000);
+
+    // Six scripts that each run the other five (mutual cycles): termination
+    // here previously leaned on the depth cap.
+    const ring = ["a", "b", "c", "d", "e", "f"];
+    for (const self of ring) {
+      write(`${self}.sh`, ring.filter((o) => o !== self).map((o) => `bash scripts/${o}.sh`).join("\n"));
+    }
+    start = performance.now();
+    expect(verdict("bash scripts/a.sh")).toBe(false);
+    expect(performance.now() - start).toBeLessThan(5000);
+
+    // Caching a clean walk must not hide a protected target reached through a
+    // shared child: two parents both run a leaf that writes a runtime record.
+    write("leaf.sh", "rm -rf aidlc/.aidlc-sessions");
+    write("p1.sh", "bash scripts/leaf.sh");
+    write("p2.sh", "bash scripts/leaf.sh");
+    write("diamond.sh", "bash scripts/p1.sh\nbash scripts/p2.sh");
+    expect(verdict("bash scripts/diamond.sh")).toBe(true);
+  });
 });
