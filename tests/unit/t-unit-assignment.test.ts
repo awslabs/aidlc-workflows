@@ -24,6 +24,7 @@ import {
   homeState,
   makeHome,
   next,
+  ORCH,
   run,
   STATE,
   stateOf,
@@ -224,6 +225,37 @@ describe("the home walks only the Units no team holds", () => {
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("checkout-ui");
+  });
+
+  test("at a home with nothing of its own to build now, a skip is never put as a skip of a team's Unit", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    expect(next(home.dir).kind).toBe("print");
+    // The person's skip of a step: not offered for the web team's checkout-ui.
+    const asked = run(ORCH, ["next", "--skip", "functional-design"], home.dir);
+    expect(asked.status, asked.out).toBe(0);
+    expect(String(asked.json?.message), asked.out).not.toContain("checkout-ui");
+    expect(String(asked.json?.message), asked.out).not.toContain("--unit refunds");
+    // The agent's own skip report names no team's Unit as the step in progress.
+    const reported = run(ORCH, [
+      "report", "--stage", "functional-design", "--unit", "reporting", "--result", "skipped", "--reason", "no domain logic",
+    ], home.dir);
+    expect(reported.out).not.toContain("checkout-ui");
+  });
+
+  test("a skip of the step the home hands out is that Unit's: the walk the skip reads holds the same Units", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments", "reporting=data"], home.dir).status).toBe(0);
+    const step = next(home.dir);
+    expect(step.unit, JSON.stringify(step)).toBe("checkout-ui");
+    const stage = String(step.stage);
+    const skipped = run(ORCH, [
+      "report", "--stage", stage, "--unit", "checkout-ui", "--result", "skipped", "--reason", "checkout-ui has no domain logic",
+    ], home.dir);
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(JSON.parse(skipped.stdout).reason, skipped.out).toBe(`Skipped "${stage}" for unit "checkout-ui". Run next to continue.`);
   });
 });
 

@@ -16781,6 +16781,25 @@ function teamHomeClaims(
 
 // The Units merged at a team home, read from the audit too when no progress
 // model was derived (a read-only probe, the route check of `unit start`).
+// The Units the home's own walk works: none a team holds, and none that waits,
+// directly or through another, on a Unit a team still builds. The walk and the
+// skip report read the same list.
+function homeWalkUnits(
+  units: readonly string[],
+  heldElsewhere: ReadonlySet<string>,
+  mergedHere: ReadonlySet<string>,
+  dependencies: ReadonlyMap<string, string[]>,
+): string[] {
+  const waitsOnTeam = (unit: string, seen = new Set<string>()): boolean =>
+    (dependencies.get(unit) ?? []).some((dep) => {
+      if (heldElsewhere.has(dep) && !mergedHere.has(dep)) return true;
+      if (seen.has(dep)) return false;
+      seen.add(dep);
+      return waitsOnTeam(dep, seen);
+    });
+  return units.filter((unit) => !heldElsewhere.has(unit) && !waitsOnTeam(unit));
+}
+
 function homeMergedUnits(projectDir: string, model: TeamUnitProgressModel | null, auditRows: readonly AuditShardEvent[], finalStage: string): Set<string> {
   return model?.mergedUnits ?? new Set([...unitMergedReceipts(projectDir, auditRows), ...unitsBuiltBeforeTeams(auditRows, finalStage)]);
 }
@@ -16924,18 +16943,9 @@ function emitTeamUnitMajorRunStage(
   // The Units merged here, read from the audit too when this run derives no
   // progress model (a read-only probe, the route check of `unit start`).
   const mergedHere = homeMergedUnits(projectDir, model, auditRows, finalStage?.slug ?? "");
-  // A Unit of the home's that waits, directly or through another, on a Unit a
-  // team still builds is not started here yet.
   const dependencies = heldElsewhere.size > 0 ? unitDependencies(projectDir) : new Map<string, string[]>();
-  const waitsOnTeam = (unit: string, seen = new Set<string>()): boolean =>
-    (dependencies.get(unit) ?? []).some((dep) => {
-      if (heldElsewhere.has(dep) && !mergedHere.has(dep)) return true;
-      if (seen.has(dep)) return false;
-      seen.add(dep);
-      return waitsOnTeam(dep, seen);
-    });
   const step = teamUnitMajorWalkStep(
-    projectDir, refreshedState, block, units.filter((unit) => !waitsOnTeam(unit)), kinds, ledgers,
+    projectDir, refreshedState, block, homeWalkUnits(units, heldElsewhere, mergedHere, dependencies), kinds, ledgers,
     mergedHere,
     rhythm, auditRows, recordPrefix, codekbCtx,
   );
@@ -17320,7 +17330,6 @@ function teamUnitMajorWalkBeat(
   const block = constructionUnitMajorBlock(scope, stateContent, true);
   if (!block.some((stage) => stage.slug === currentSlug)) return null;
   const scopeStamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
-  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat();
   const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
     if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
     if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
@@ -17332,6 +17341,16 @@ function teamUnitMajorWalkBeat(
   } catch {
     return null;
   }
+  // At a home teams build for, the Units its own walk works, from the claims
+  // as this clone last fetched them.
+  const heldElsewhere = !scopeStamp && homeLocation(stateContent) !== null && hasAnyUnitClaimRefs(projectDir)
+    ? new Set(cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed.map((row) => row.unit))
+    : new Set<string>();
+  const units = scopeStamp
+    ? [scopeStamp.unit]
+    : heldElsewhere.size === 0
+      ? resolution.batches.flat()
+      : homeWalkUnits(resolution.batches.flat(), heldElsewhere, model.mergedUnits, unitDependencies(projectDir));
   const recordPrefix = engineRelativeRecordDir(projectDir);
   const codekbCtx = codekbCtxFor(projectDir);
   const step = teamUnitMajorWalkStep(
