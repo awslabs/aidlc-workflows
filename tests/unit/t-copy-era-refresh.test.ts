@@ -9,8 +9,8 @@
 // settings with a hook this release retired, and 2.6.18's own settings with
 // its guard registrations. Unchanged, the first is refreshed and the others
 // removed and listed, each once, and the old registrations become the native
-// ones with every allow entry kept; changed by the person, a file is kept and
-// named, never overwritten.
+// ones with every allow entry kept and no note that they had been changed;
+// changed by the person, a file is kept and named, never overwritten.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -90,6 +90,8 @@ describe("t-copy-era-refresh", () => {
     const after = readFileSync(join(project, ".claude", "settings.json"), "utf-8");
     expect(after).not.toContain('bun \\"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-');
     expect(after).toContain('"aidlc engine hook guard-tool-call"');
+    // The old release wrote those registrations; nobody changed them.
+    expect(r.out).not.toContain("they had been changed");
     const allowAfter = (JSON.parse(after) as { permissions: { allow: string[] } }).permissions.allow;
     for (const entry of allowBefore) expect(allowAfter).toContain(entry);
   });
