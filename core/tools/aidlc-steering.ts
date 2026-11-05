@@ -123,6 +123,55 @@ export function restoreSpacePhaseRules(entries: RuleEntry[], memoryDir: string):
   }
 }
 
+export function stripRuleComments(text: string): string {
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  let inFence = false;
+  let inComment = false;
+  for (const line of lines) {
+    if (!inComment && /^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      kept.push(line);
+      continue;
+    }
+    if (inFence) {
+      kept.push(line);
+      continue;
+    }
+    let rest = line;
+    let out = "";
+    let cut = false;
+    for (;;) {
+      if (inComment) {
+        const end = rest.indexOf("-->");
+        if (end < 0) {
+          rest = "";
+          cut = true;
+          break;
+        }
+        rest = rest.slice(end + 3);
+        inComment = false;
+        cut = true;
+        continue;
+      }
+      const start = rest.indexOf("<!--");
+      if (start < 0) {
+        out += rest;
+        rest = "";
+        break;
+      }
+      out += rest.slice(0, start);
+      rest = rest.slice(start + 4);
+      inComment = true;
+      cut = true;
+    }
+    if (cut) out = out.replace(/[ \t]+$/, "");
+    if (cut && out.trim() === "" && line.trim() !== "") continue;
+    kept.push(out);
+  }
+  return kept.join("\n");
+}
+
 export function readRuleBundle(
   entries: RuleEntry[],
 ): { content: RuleContent[]; error: string | null } {
@@ -159,7 +208,7 @@ export function readRuleBundle(
       }
       text = seeded;
     }
-    if (isSubstantiveRuleText(text)) content.push({ path: entry.rel, text });
+    if (isSubstantiveRuleText(text)) content.push({ path: entry.rel, text: stripRuleComments(text) });
   }
   return { content, error: null };
 }
