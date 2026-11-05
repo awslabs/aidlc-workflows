@@ -1,9 +1,9 @@
 // covers: subcommand:aidlc-orchestrate:next
 //
-// When a claimed Unit is complete and approved in the checkout that claimed it,
-// the notice says where each step left is taken: publish there, then pin, gate
-// and land from a checkout of the project that holds no Unit claim (pin refuses
-// a claimed checkout), then pull main there to free it. Both shapes of a
+// When a claimed Unit is complete, approved and published in the checkout that
+// claimed it, the notice says it waits for review on main and how this checkout
+// is freed, with no command to type: what is left is offered where it is due
+// (the review on a checkout with no claim, which pin needs). Both shapes of a
 // claimed checkout read the same words, and neither is sent to "unscoped main"
 // or "the main checkout": in the project's own checkout that claimed the Unit
 // (#3282) the person is already in the project's main checkout.
@@ -29,9 +29,8 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
 
 const DONE =
-  'Unit "alpha" is complete and approved in this checkout. Commit the completed candidate and run ' +
-  "`aidlc unit publish alpha` here; then pin, gate and land it from a checkout of this project that holds no " +
-  "Unit claim (a fresh clone of it). Once it lands, pull main here and this checkout is free again.";
+  'Unit "alpha" is complete and approved in this checkout, and published for review on main. ' +
+  "Once it lands on main, pull main here and this checkout is free again.";
 
 // The claimed checkout with alpha worked through every stage and published,
 // Current Stage where the walk leaves it (the Unit's last stage).

@@ -181,9 +181,15 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
       const second = nextDirective(seed);
       expect(second.stage, String(second.message ?? second.kind)).toBe("delivery-planning");
 
-      // From the per-Unit block on, the board is main's step again, with the claim on it.
+      // From the per-Unit block on, the board is main's step again, with the claim on it;
+      // a published claim is offered for review first.
       approveDeliveryPlanning(seed);
-      const board = boardOf(nextDirective(seed));
+      let step = nextDirective(seed);
+      if (published) {
+        expect(step, JSON.stringify(step)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["review"] });
+        step = nextDirective(seed);
+      }
+      const board = boardOf(step);
       expect(board.text).toContain("**Claimed:** beta");
       expect(board.text).toContain("## Claimable Units");
     });

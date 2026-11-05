@@ -60,15 +60,14 @@ const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do yo
   "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units: teams each owning a Unit is " +
   "not available yet for work across repos.";
-// How a team takes a Unit, said while none has (#3363). This install's own
-// command: the copy channel's dispatcher in the projected tree.
+// How a team takes a Unit, said while none has (#3363), in a project with no
+// remote to share the work with: a team's own clone offers it the Units.
 const HANDOUT_LINE = "No team has taken a Unit yet, so this session builds them here, starting with the alpha " +
-  "Unit. To hand Units to teams instead, share this work through git; then each team runs " +
-  "`bun .claude/tools/aidlc.ts unit participate` in its own clone and `/aidlc` to take one.";
+  "Unit. To hand Units to teams instead, share this work through git; each team then runs `/aidlc` in its own " +
+  "clone to take one.";
 const SKELETON_HANDOUT_LINE = "No team has taken a Unit yet, so this session builds them here, starting with the " +
   "alpha Unit, the walking skeleton the others build on. To hand the others to teams, share this work through " +
-  "git once it is built and approved; then each team runs `bun .claude/tools/aidlc.ts unit participate` in its " +
-  "own clone and `/aidlc` to take one.";
+  "git once it is built and approved; each team then runs `/aidlc` in its own clone to take one.";
 const saysHandout = (d: Directive) =>
   (d.change_notices ?? []).some((line) => line === HANDOUT_LINE || line === SKELETON_HANDOUT_LINE);
 

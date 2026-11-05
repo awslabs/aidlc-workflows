@@ -332,7 +332,14 @@ export function makeSeed(
   git(seed, ["remote", "add", "origin", remote]);
   git(seed, ["push", "-u", "origin", "main"]);
   git(remote, ["symbolic-ref", "HEAD", "refs/heads/main"]);
-  return { seed: clone(remote, "main"), remote };
+  // The lead's own checkout: the plan's approval in its own shard, pushed, so
+  // every other clone of the remote is another checkout of the plan.
+  const lead = clone(remote, "main");
+  asLeadsOwnCheckout(lead);
+  git(lead, ["add", "-A"]);
+  git(lead, ["commit", "-m", "the lead's plan"]);
+  git(lead, ["push", "origin", "main"]);
+  return { seed: lead, remote };
 }
 
 export function clone(remote: string, label: string): string {
@@ -989,6 +996,26 @@ export function appendMainHumanTurn(projectDir: string): void {
   );
 }
 
+/** The lead's own checkout: this clone made the plan, so its own shard holds
+ *  the plan's approval (Inception's last gate here), and the walk that builds
+ *  Units here is its step, never the board another clone of the work shows
+ *  (planMadeElsewhere). makeSeed's checkout is one already. */
+export function asLeadsOwnCheckout(projectDir: string): void {
+  const shard = join(seededAuditDir(projectDir), auditShardName(projectDir));
+  const existing = existsSync(shard) ? readFileSync(shard, "utf-8") : "";
+  writeFileSync(
+    shard,
+    `${existing}## Gate Approved
+**Timestamp**: 2026-08-19T23:00:00Z
+**Event**: GATE_APPROVED
+**Stage**: units-generation
+**User Input**: Approve
+
+---
+`,
+  );
+}
+
 /** The person's reply to the merge gate the pin showed: a main-shard human
  *  turn stamped after the pin (both are second-precision), so it is the turn
  *  the gate counts and the turn that ran the pin is not. */
@@ -1084,6 +1111,14 @@ export function nextDirective(projectDir: string): Record<string, unknown> {
     directive = JSON.parse(continued.stdout) as Record<string, unknown>;
   }
   return directive;
+}
+
+/** The step after a landing the remote does not have yet is the offer to push
+ *  it (team-handover push); its "Not now" runs `next`, whose step this returns. */
+export function nextPastPushOffer(projectDir: string): Record<string, unknown> {
+  const offer = nextDirective(projectDir);
+  expect(offer, JSON.stringify(offer)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["push"] });
+  return nextDirective(projectDir);
 }
 
 export function unitProgressRow(projectDir: string, unit: string): string {
