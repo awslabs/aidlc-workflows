@@ -24,6 +24,7 @@ import {
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const SCRIPT = join(import.meta.dir, "../../core/tools/aidlc-sensor-traceability.ts");
+const STAGE_GRAPH = join(import.meta.dir, "../../dist/claude/.claude/tools/data/stage-graph.json");
 const STAGES = join(import.meta.dir, "../../core/aidlc-common/stages");
 const projects: string[] = [];
 
@@ -109,7 +110,7 @@ function run(
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
-    env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_STAGE_GRAPH: STAGE_GRAPH },
   });
   const stdout = spawned.stdout ?? "";
   expect(stdout.trim().split(/\r?\n/)).toHaveLength(1);
@@ -689,6 +690,187 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const out = run(proj, "code-generation", file);
     expect(out.result.pass).toBe(false);
     expect(out.result.invalid_targets).toContain("AC1.1.2: target file does not exist: src/missing.ts");
+  });
+
+  function seedExperience(proj: string): void {
+    seedUserStories(proj);
+    seedUnits(proj);
+    const source = join(proj, "src", "auth.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const auth = true;\n");
+  }
+
+  function experienceTable(proj: string, unit: string, ids: string[]): string {
+    return trace(proj, `construction/${unit}/code-generation/traceability.json`, {
+      stage: "code-generation",
+      unit,
+      upstream_ids: ids,
+      coverage: ids.map((id) => ({ id, status: "OK", target: "src/auth.ts" })),
+    });
+  }
+
+  test("code-generation owes a Unit the experience decisions of its own stories", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.1.2 A failed sign-in keeps the email and focuses the password [Q4]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1", "UX1.1.2"]);
+
+    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "code-generation", experienceTable(proj, "u2-profile", ["AC1.2.1"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.2.1"]);
+  });
+
+  test("code-generation asks for no experience decision without an interaction spec, or from a Unit whose stories own none", () => {
+    const proj = project();
+    seedExperience(proj);
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n");
+    out = run(proj, "code-generation", experienceTable(proj, "u2-profile", ["AC1.2.1"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
+  function kindUnits(proj: string, auth: string, profile: string): void {
+    write(proj, "inception/units-generation/unit-of-work-dependency.md", [
+      "```yaml",
+      "units:",
+      "  - name: u1-auth",
+      `    kind: ${auth}`,
+      "    depends_on: []",
+      "  - name: u2-profile",
+      `    kind: ${profile}`,
+      "    depends_on: [u1-auth]",
+      "```",
+    ].join("\n"));
+  }
+
+  function designTable(proj: string, unit: string, coverage: Array<{ id: string; status: string; target?: string }>): string {
+    return trace(proj, `construction/${unit}/functional-design/traceability.json`, {
+      stage: "functional-design",
+      unit,
+      upstream_ids: coverage.map((row) => row.id),
+      coverage,
+    });
+  }
+
+  test("code-generation owes a spec Unit its stories' decisions, such as an API's error shape", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 A failed sign-in returns one error object per field [Q2]\n");
+    kindUnits(proj, "spec", "packaging");
+    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1"]);
+  });
+
+  test("code-generation owes every rendered UX ID, whatever its form, and none in code, a comment, or a link definition", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "**UX1.1.1** Sign in on one page, not a wizard [Q2]",
+      "",
+      "| Component | Decision | States |",
+      "|---|---|---|",
+      "| LoginForm | UX1.1.2 A failed sign-in keeps the email [Q4] | error |",
+      "",
+      "## LoginForm states",
+      "",
+      "- UX1.1.1 default",
+      "- UX1.1.2 error",
+      "",
+      "| ID | Built by |",
+      "|---|---|",
+      "| UX1.1.1 | LoginForm |",
+      "",
+      "```",
+      "UX1.1.3 an example in code",
+      "```",
+      "<!-- UX1.1.4 a draft left in a comment -->",
+      "",
+      "[UX1.1.5]: https://example.com/a-link-reference-definition",
+      "",
+      "<div>",
+      "UX1.1.6 A decision written in an HTML block [Q5]",
+      "</div>",
+      "",
+      "- A list item with <!-- UX1.1.7 an inline comment --> in it",
+    ].join("\n"));
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1", "UX1.1.2", "UX1.1.6"]);
+
+    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2", "UX1.1.6"]));
+    expect(out.result.pass, "an ID mentioned again is the same decision, not a duplicate").toBe(true);
+  });
+
+  test("code-generation reports a decision naming a story stories.md lacks", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n- UX1.9.1 A story nobody wrote [assumption]\n");
+    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("interaction-spec.md's UX1.9.1 names story US1.9, which stories.md does not have");
+  });
+
+  test("functional-design owes a Unit that writes frontend-components.md the decisions of its stories, cited there", () => {
+    const proj = project();
+    seedExperience(proj);
+    kindUnits(proj, "ui", "ui");
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
+    // A ui Unit writes no rules.md: its criteria are designed in components too.
+    const criteria = [
+      { id: "AC1.1.1", status: "OK", target: "frontend-components.md" },
+      { id: "AC1.1.2", status: "OK", target: "frontend-components.md" },
+    ];
+    let out = run(proj, "functional-design", designTable(proj, "u1-auth", criteria));
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1"]);
+
+    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "construction/u1-auth/functional-design/rules.md" }]));
+    expect(out.result.invalid_targets).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
+
+    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\nOne page (UX1.1.1), AC1.1.1, AC1.1.2.\n");
+    for (const target of ["bogus/frontend-components.md", "bogus/construction/u1-auth/functional-design/frontend-components.md", "construction/u2-profile/functional-design/frontend-components.md"]) {
+      out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target }]));
+      expect(out.result.invalid_targets, target).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
+    }
+    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "construction/u1-auth/functional-design/frontend-components.md" }]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\n## LoginForm\n\nAccepts valid credentials (AC1.1.1) and rejects invalid ones (AC1.1.2).\n");
+    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "frontend-components.md" }]));
+    expect(out.result.invalid_targets).toContain("UX1.1.1: frontend-components.md does not cite UX1.1.1");
+
+    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\n## LoginForm\n\nOne page, not a wizard (UX1.1.1); AC1.1.1, AC1.1.2.\n");
+    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "frontend-components.md" }]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
+  test("functional-design asks a Unit that writes no frontend-components.md for no experience decision", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n");
+    write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n- BR1.1 Credentials must match\n");
+    const out = run(proj, "functional-design", designTable(proj, "u1-auth", [
+      { id: "AC1.1.1", status: "OK", target: "BR1.1" },
+      { id: "AC1.1.2", status: "OK", target: "BR1.1" },
+    ]));
+    expect(out.result.pass, out.result.reason).toBe(true);
   });
 
   // A zero-Unit directive (no Unit DAG: poc, bugfix, refactor, security-patch,
@@ -1722,6 +1904,85 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     expect(row(out, "FR1.1")?.covered).toBe(true);
   });
 
+  test("reports every owed experience decision as built or not", () => {
+    const proj = project();
+    const tables = seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
+
+    const auth = JSON.parse(readFileSync(tables.auth, "utf-8"));
+    auth.upstream_ids.push("UX1.1.1");
+    auth.coverage.push({ id: "UX1.1.1", status: "OK", target: "src/auth/login.ts" });
+    writeFileSync(tables.auth, JSON.stringify(auth));
+
+    let out = runFinal(proj);
+    expect(out.uncovered).toEqual(["UX1.2.1"]);
+    expect(row(out, "UX1.1.1")).toEqual({ id: "UX1.1.1", covered: true, built_in: ["u1-auth: src/auth/login.ts"] });
+    expect(row(out, "UX1.2.1")).toEqual({ id: "UX1.2.1", covered: false });
+
+    const profile = JSON.parse(readFileSync(tables.profile, "utf-8"));
+    profile.upstream_ids.push("UX1.2.1");
+    profile.coverage.push({ id: "UX1.2.1", status: "OK", target: "src/profile/reset.ts" });
+    writeFileSync(tables.profile, JSON.stringify(profile));
+
+    out = runFinal(proj);
+    expect(out.pass, out.reason).toBe(true);
+    expect(out.uncovered).toEqual([]);
+    expect(row(out, "UX1.2.1")).toEqual({ id: "UX1.2.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
+  });
+
+  test("reports a decision a spec Unit builds, and one naming a story stories.md lacks", () => {
+    const proj = project();
+    const tables = seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
+    write(proj, "inception/units-generation/unit-of-work-dependency.md", [
+      "```yaml",
+      "units:",
+      "  - name: u1-auth",
+      "    kind: service",
+      "    depends_on: []",
+      "  - name: u2-profile",
+      "    kind: spec",
+      "    depends_on: [u1-auth]",
+      "```",
+    ].join("\n"));
+    const auth = JSON.parse(readFileSync(tables.auth, "utf-8"));
+    auth.upstream_ids.push("UX1.1.1");
+    auth.coverage.push({ id: "UX1.1.1", status: "OK", target: "src/auth/login.ts" });
+    writeFileSync(tables.auth, JSON.stringify(auth));
+
+    let out = runFinal(proj);
+    expect(out.uncovered).toEqual(["UX1.2.1"]);
+
+    const profile = JSON.parse(readFileSync(tables.profile, "utf-8"));
+    profile.upstream_ids.push("UX1.2.1");
+    profile.coverage.push({ id: "UX1.2.1", status: "OK", target: "src/profile/reset.ts" });
+    writeFileSync(tables.profile, JSON.stringify(profile));
+    out = runFinal(proj);
+    expect(out.pass, out.reason).toBe(true);
+    expect(row(out, "UX1.2.1")).toEqual({ id: "UX1.2.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
+
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+      "- UX9.9.1 A decision for a story nobody wrote [assumption]",
+    ].join("\n"));
+    out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.reason).toContain("interaction-spec.md's UX9.9.1 names story US9.9, which stories.md does not have");
+  });
+
   test("without stories (security-patch shape), FR leaves are built by their own rows and NFR1 through NFR1.1", () => {
     const proj = project();
     writeRequirements(proj, GROUPED);
@@ -2215,15 +2476,22 @@ describe("t281 the table the tool starts (--write-upstream)", () => {
     expect(readFileSync(path, "utf-8")).toBe(bytes);
   });
 
-  test("a Unit's table lists the Unit's own criteria, rules and NFR detail, with the Unit named", () => {
+  test("a Unit's table lists its criteria, experience decisions, rules and NFR detail, with the Unit named", () => {
     const proj = project();
     seedUserStories(proj);
     seedUnits(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.1.2 A failed sign-in keeps the email and focuses the password [Q4]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
     write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n");
     write(proj, "construction/u1-auth/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n");
     const path = join(seededRecordDir(proj), "construction", "u1-auth", "code-generation", "traceability.json");
     const started = start(proj, "code-generation", path);
-    expect(started.reply.upstream_ids).toEqual(["AC1.1.1", "AC1.1.2", "NFR1.1", "BR1.1"]);
+    expect(started.reply.upstream_ids).toEqual(["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2", "NFR1.1", "BR1.1"]);
     const table = JSON.parse(readFileSync(path, "utf-8"));
     expect(table.stage).toBe("code-generation");
     expect(table.unit).toBe("u1-auth");

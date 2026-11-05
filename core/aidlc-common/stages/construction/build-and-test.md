@@ -24,6 +24,14 @@ consumes:
     required: true
   - artifact: code-summary
     required: true
+  - artifact: mockups
+    required: false
+  - artifact: interaction-spec
+    required: false
+  - artifact: design-system-mapping
+    required: false
+  - artifact: accessibility-checklist
+    required: false
 requires_stage:
   - code-generation
 sensors:
@@ -63,6 +71,13 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 
 - every artifact under `nfr-requirements/`
 - every artifact under `nfr-design/`
+- the approved `mockups.md`, `interaction-spec.md`, `design-system-mapping.md`,
+  and `accessibility-checklist.md` under `<record>/inception/refined-mockups/`
+  when they exist, to test what they decided where a test fits. Their `UX`
+  decisions and accessibility checks are not targets in this inventory: Step
+  10's coverage lines report each decision built or not built, and Step 12
+  names every decision and every measurable accessibility check no test
+  exercised, so neither is silently dropped and neither is a failure here.
 - every current `## Testing Contract` in `code-generation-plan.md`, including
   postapproval edits permitted by Code Generation Step 3's lowered-fence rule;
   do not describe those edits as human-approved.
@@ -291,8 +306,9 @@ the Build and Test Summary with a successful readiness result.
 
 This is a stage-level gate, not the Construction phase boundary. Run
 `{{INVOKE}} engine sensor-traceability --stage build-and-test`: it prints every
-requirement and acceptance criterion this run traced, whether it is built or
-marked `N/A` with its reason, and the Units and files that build it. Write
+requirement, acceptance criterion, and owed `UX` experience decision this run
+traced, whether it is built or marked `N/A` with its reason, and the Units and
+files that build it. Write
 `<record>/construction/build-and-test/cross-unit-traceability.md` from that
 output with a pass/fail verdict, per-ID coverage, owning stage/Unit, target
 file, and every uncovered element. Any uncovered ID is a build-and-test finding
@@ -319,6 +335,14 @@ in a browser was checked only in Node or a DOM emulator, say so once, in one
 line, naming what and where it ran, for example: "The transfer journey was
 checked in Happy DOM, not a real browser." The person decides at the gate with
 that in front of them.
+
+When Refined Mockups ran, say in one line which `UX` decisions no test
+exercised, in one line which measurable checks of `accessibility-checklist.md`
+(keyboard, contrast, screen reader) no test exercised, and in one line which
+built screens or API responses to compare with
+`<record>/inception/refined-mockups/mockups-preview.html`. Whether the build
+matches the experience they approved, brand and feel included, is the person's
+judgement at this gate; the tests cannot settle it.
 
 ```
 **Review:** `<record>/construction/build-and-test/`

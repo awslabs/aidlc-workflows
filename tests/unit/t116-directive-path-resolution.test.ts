@@ -486,6 +486,48 @@ describe("t116 per-unit {unit-name} injection", () => {
       `${RP}/inception/contract-design/contract-summary.md`,
     );
   });
+
+  test("13: a fresh code-generation worker receives every approved Refined Mockups artifact", () => {
+    const artifacts = [
+      "mockups.md",
+      "interaction-spec.md",
+      "design-system-mapping.md",
+      "accessibility-checklist.md",
+    ];
+    const { directive } = emitForWithProject(
+      "state-construction.md",
+      "code-generation",
+      (proj) => {
+        const dir = join(proj, RP, "inception", "refined-mockups");
+        mkdirSync(dir, { recursive: true });
+        for (const artifact of artifacts) writeFileSync(join(dir, artifact), `# ${artifact}\n`);
+      },
+    );
+    for (const artifact of artifacts) {
+      expect(directive.consumes).toContain(`${RP}/inception/refined-mockups/${artifact}`);
+    }
+  });
+
+  test("13b: a code-generation worker is pointed at the Unit's frontend-components.md", () => {
+    const { directive } = emitForWithProject("state-construction.md", "code-generation");
+    expect(allConsumePaths(directive)).toContain(
+      `${RP}/construction/{unit-name}/functional-design/frontend-components.md`,
+    );
+  });
+
+  test("14: brownfield Refined Mockups reads the code's UI inventory and writes its HTML preview", () => {
+    const { directive, projectDir } = emitForWithProject(
+      "state-brownfield-feature.md",
+      "refined-mockups",
+      (proj) => {
+        const abs = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", basename(proj), "component-inventory.md");
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, "# Components\n\n## User Interface\n", "utf-8");
+      },
+    );
+    expect(directive.consumes).toContain(`aidlc/spaces/${DEFAULT_SPACE}/codekb/${basename(projectDir)}/component-inventory.md`);
+    expect(directive.produces).toContain(`${RP}/inception/refined-mockups/mockups-preview.html`);
+  });
 });
 
 // ============================================================================

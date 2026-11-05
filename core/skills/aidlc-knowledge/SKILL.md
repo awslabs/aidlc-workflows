@@ -52,8 +52,8 @@ bun {{HARNESS_DIR}}/tools/aidlc-knowledge.ts <verb> [args]
 |---|---|
 | `onboard [path]` | Index one file, or every not-yet-indexed file under `documents/` when no path is given |
 | `sync` | Reconcile the catalog with what is actually on disk; rebuild an index that was deleted |
-| `list [--json]` | The catalog — every row, with its state visible |
-| `show <id>` | One document's full record plus its extracted text |
+| `list [--json]` | The catalog — every row, with its state visible; `--intent [slug]` keeps the space-wide rows and the ones scoped to that intent |
+| `show <id>` | One document's full record plus its extracted text; `--brief` returns the summary, or a 2,000-character excerpt when there is none, instead of the text; `--brief --part <n>` returns part n of the text |
 | `associate <id> --intent [slug]` | Scope a document to one intent |
 | `dissociate <id> --intent [slug]` | Remove that scoping |
 | `rebind <id> --to <path>` | Repair a row whose original was moved *and* edited |
