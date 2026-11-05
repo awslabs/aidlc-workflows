@@ -27,7 +27,6 @@ import {
   clone,
   prepareCandidate,
   gateAndLand,
-  nextDirective,
   nextPastPushOffer,
 } from "../harness/team-unit-merge.ts";
 
