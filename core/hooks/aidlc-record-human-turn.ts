@@ -114,6 +114,7 @@ import {
 } from "../tools/aidlc-testing-posture.ts";
 import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
 import { claudeTurnKey, noteClaudeTurnPending } from "../tools/aidlc-claude-turn-origin.ts";
+import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
 import { boxQuestionId, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/aidlc-questions.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt, recommendedChoices } from "../tools/aidlc-reply-reader.ts";
@@ -559,6 +560,9 @@ async function respond(
 ): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
+  // A turn Claude Code started itself before this one is settled first, so
+  // nothing below reads it as the person's (aidlc-claude-turn-origin.ts).
+  settleClaudeTurnsFirst([], projectDir);
   let sessionId = "";
   let promptSubmitted = false;
   let humanResponseText = "";
