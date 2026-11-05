@@ -889,7 +889,6 @@ gateEventMatchesUnit
 gateOutputWriting
 gatePresentationStart
 gateRejectionMatchesAttempt
-gateStagesFromBlock
 gateWordsDir
 gateWordsPath
 gateWordsSinceUnitReview
@@ -988,7 +987,6 @@ humanAuthorityState
 humanPresenceGuardDisabled
 humanRepliedSinceGate
 humanTurnMarkerPath
-humanTurnMintAllowed
 humanTurnState
 identityScopedUnitPath
 ignoredPathClaimable

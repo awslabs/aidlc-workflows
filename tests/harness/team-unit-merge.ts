@@ -7,9 +7,9 @@
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import {
   artifactFilename,
   auditShardName,
@@ -38,6 +38,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "./fixtures.ts";
+import { FILE_ATTEMPT_ENV } from "../lib/file-retry.ts";
 
 // Git 2.47 and later start `git maintenance run --auto` in the background
 // after a command writes objects, and from 2.54 that run repacks, deleting
@@ -100,7 +101,14 @@ export function runMergeTool(
   const reviewOperation = tool === UNIT && (args[0] === "gate" || args[0] === "land");
   const windowsClaimOrPin = process.platform === "win32" && tool === UNIT &&
     (args[0] === "claim" || args[0] === "pin");
-  const traceNeeded = reviewOperation || windowsClaimOrPin;
+  // On Windows the trace costs about a quarter of each of these calls, so a
+  // file's first attempt under a runner that retries goes without it; the
+  // retry of a failed file, a run that does not retry and a run outside the
+  // runner trace again. The retry
+  // rule (tests/lib/file-retry.ts) does not retry a file whose first attempt
+  // ran long, so the pinned-merge diagnostics below print untraced too.
+  const windowsFirstAttempt = process.platform === "win32" && process.env[FILE_ATTEMPT_ENV] === "1";
+  const traceNeeded = (reviewOperation || windowsClaimOrPin) && !windowsFirstAttempt;
   const traceDir = traceNeeded && extraEnv.GIT_TRACE2_EVENT === undefined
     ? mkdtempSync(join(tmpdir(), "aidlc-inc3-git-trace-"))
     : null;
@@ -125,7 +133,7 @@ export function runMergeTool(
   );
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   const reviewUnit = reviewOperation ? args[1] : undefined;
-  if (result.status !== 0 && reviewUnit && tracePath &&
+  if (result.status !== 0 && reviewUnit &&
       (out.includes("has no review that stands for") || out.includes("candidate-exact"))) {
     console.error(`t326 merge validation failed:\n${JSON.stringify({
       args, status: result.status, signal: result.signal, error: result.error?.message, out,
@@ -324,7 +332,14 @@ export function makeSeed(
   git(seed, ["remote", "add", "origin", remote]);
   git(seed, ["push", "-u", "origin", "main"]);
   git(remote, ["symbolic-ref", "HEAD", "refs/heads/main"]);
-  return { seed: clone(remote, "main"), remote };
+  // The lead's own checkout: the plan's approval in its own shard, pushed, so
+  // every other clone of the remote is another checkout of the plan.
+  const lead = clone(remote, "main");
+  asLeadsOwnCheckout(lead);
+  git(lead, ["add", "-A"]);
+  git(lead, ["commit", "-m", "the lead's plan"]);
+  git(lead, ["push", "origin", "main"]);
+  return { seed: lead, remote };
 }
 
 export function clone(remote: string, label: string): string {
@@ -340,6 +355,60 @@ export function clone(remote: string, label: string): string {
   writeFileSync(join(dir, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`);
   writeFileSync(join(intentsDirOf(dir), "active-intent"), `${DEFAULT_RECORD_DIR}\n`);
   return dir;
+}
+
+// A world (a remote and the checkouts made from it) that several cases of a
+// file start from is built once, and each case gets its own copy. Building it
+// goes through the engine's own claim, publish, pin, gate and land, about a
+// thousand git processes, which is most of a case on Windows; a copy of its
+// few hundred small files is under a second. No engine record of a world
+// names one of its folders (only git's origin, FETCH_HEAD and reflogs name
+// the remote), so a copy is the same world once each checkout's origin points
+// at the copied remote and its index has the new files' stats. The built
+// folders stay until cleanupWorlds, which a file registers with afterAll.
+const worlds: Array<{ remote: string; refs: string; dirs: string[] }> = [];
+
+export function builtOnce<W extends { remote: string }>(build: () => W): () => W {
+  let built: W | undefined;
+  return () => {
+    if (!built) {
+      const mark = tempDirs.length;
+      built = build();
+      worlds.push({ remote: built.remote, refs: git(built.remote, ["for-each-ref"]), dirs: tempDirs.splice(mark) });
+    }
+    const remote = copyFolder(built.remote);
+    const copy: Record<string, unknown> = { ...built, remote };
+    for (const [key, value] of Object.entries(built)) {
+      if (key === "remote" || typeof value !== "string" || !isAbsolute(value) || !existsSync(join(value, ".git"))) continue;
+      const checkout = copyFolder(value);
+      git(checkout, ["remote", "set-url", "origin", remote]);
+      // --unmerged: a world can hold a checkout stopped mid-rebase.
+      git(checkout, ["update-index", "-q", "--unmerged", "--refresh"]);
+      copy[key] = checkout;
+    }
+    return copy as W;
+  };
+}
+
+// Beside the original with its name's prefix (mkdtemp adds six characters), so
+// the copy has the path shape its original had.
+function copyFolder(dir: string): string {
+  const to = mkdtempSync(join(dirname(dir), basename(dir).slice(0, -6)));
+  tempDirs.push(to);
+  // Kept mtimes: the engine compares some of its files' times.
+  cpSync(dir, to, { recursive: true, preserveTimestamps: true });
+  return to;
+}
+
+/** Removes the built worlds, after checking that no case pushed into one. */
+export function cleanupWorlds(): void {
+  const moved: string[] = [];
+  for (const world of worlds.splice(0)) {
+    tempDirs.push(...world.dirs);
+    if (git(world.remote, ["for-each-ref"]) !== world.refs) moved.push(world.remote);
+  }
+  cleanupTempDirs();
+  expect(moved, "a case pushed into a built world instead of its copy").toEqual([]);
 }
 
 export function auditBlock(
@@ -417,7 +486,7 @@ export function reviewAuditExtras(
 export function reportPinnedMergeFailure(
   projectDir: string,
   unit: string,
-  tracePath: string,
+  tracePath: string | null,
   failureOutput: string,
 ): void {
   try {
@@ -495,6 +564,10 @@ export function reportPinnedMergeFailure(
   } catch (error) {
     console.error(`t326 pinned merge diagnostics unavailable: ${String(error)}`);
   }
+  if (!tracePath) {
+    console.error("t326 landing Git trace: off on a Windows first attempt; a retry of this file traces it");
+    return;
+  }
   try {
     console.error(`t326 landing Git trace:\n${readFileSync(tracePath, "utf-8")}`);
   } catch (error) {
@@ -533,6 +606,8 @@ export function prepareCandidate(
     /** Runs after the Unit's commit, right before publish: what a session
      *  writes into the checkout between the two. */
     beforePublish?: (checkout: string) => void;
+    /** Leave the work committed in the checkout and do not publish it. */
+    publish?: boolean;
     /** Runs once the stage documents and receipts are written, before the
      *  Unit's work is committed and published: a case drives the engine on
      *  the worked checkout there (a skip of the step it hands out, say). */
@@ -782,6 +857,7 @@ export function prepareCandidate(
   git(checkout, ["add", "-A"]);
   git(checkout, ["commit", "-m", `complete ${unit}`]);
   options.beforePublish?.(checkout);
+  if (options.publish === false) return { checkout, candidateOid: "", generation, auditShard };
   const published = runMergeTool(UNIT, ["publish", unit], checkout);
   expect(published.status, published.out).toBe(0);
   return {
@@ -920,6 +996,26 @@ export function appendMainHumanTurn(projectDir: string): void {
   );
 }
 
+/** The lead's own checkout: this clone made the plan, so its own shard holds
+ *  the plan's approval (Inception's last gate here), and the walk that builds
+ *  Units here is its step, never the board another clone of the work shows
+ *  (planMadeElsewhere). makeSeed's checkout is one already. */
+export function asLeadsOwnCheckout(projectDir: string): void {
+  const shard = join(seededAuditDir(projectDir), auditShardName(projectDir));
+  const existing = existsSync(shard) ? readFileSync(shard, "utf-8") : "";
+  writeFileSync(
+    shard,
+    `${existing}## Gate Approved
+**Timestamp**: 2026-08-19T23:00:00Z
+**Event**: GATE_APPROVED
+**Stage**: units-generation
+**User Input**: Approve
+
+---
+`,
+  );
+}
+
 /** The person's reply to the merge gate the pin showed: a main-shard human
  *  turn stamped after the pin (both are second-precision), so it is the turn
  *  the gate counts and the turn that ran the pin is not. */
@@ -1015,6 +1111,14 @@ export function nextDirective(projectDir: string): Record<string, unknown> {
     directive = JSON.parse(continued.stdout) as Record<string, unknown>;
   }
   return directive;
+}
+
+/** The step after a landing the remote does not have yet is the offer to push
+ *  it (team-handover push); its "Not now" runs `next`, whose step this returns. */
+export function nextPastPushOffer(projectDir: string): Record<string, unknown> {
+  const offer = nextDirective(projectDir);
+  expect(offer, JSON.stringify(offer)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["push"] });
+  return nextDirective(projectDir);
 }
 
 export function unitProgressRow(projectDir: string, unit: string): string {

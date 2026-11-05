@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { proveMessage } from "./aidlc-message-store.ts";
 import { spawnSync } from "node:child_process";
@@ -58,7 +59,7 @@ import {
   kiroAllowChanged,
   kiroUpgradeBackup,
   kiroUpgradedAgentFile,
-  kiroUpgradeKeptFields,
+  kiroUpgradeIntact,
   legacyAidlcHookTarget,
   mergeBlock,
   mergeJsonEntries,
@@ -157,6 +158,7 @@ import {
   pausedBySelection,
   pausedLine,
   resolveInvokingSessionId,
+  resolveProjectDir,
   resumedLine,
   sameFileIdentity,
   withAuditLock,
@@ -167,6 +169,7 @@ import {
   editTomlInstructions,
   nextCompose,
   personaTwinRels,
+  pluginRulesStripWrites,
   type StageContribRecord,
   stripRecordedAdds,
 } from "./aidlc-plugin.ts";
@@ -179,6 +182,7 @@ import {
   canonicalStageTableRegion,
   renderScopeTable,
   renderStageTable,
+  pluginsTurnedOff,
   stripPluginsTurnedOff,
 } from "./aidlc-utility.ts";
 import {
@@ -442,6 +446,8 @@ type PreparedRefreshSource = {
   unproven?: ReadonlySet<string>;
   /** Contribution sidecars the refresh retired: their last record, or their plugin is off. */
   emptiedSidecars?: Set<string>;
+  /** The team's rule files without the rules of a plugin the refresh turns off. */
+  ruleStrips?: Array<{ rel: string; content: string }>;
   /** What to record for each composed file it carried over: the file without the plugin's additions. */
   composedRecords?: ReadonlyMap<string, string>;
   /** Composed files this row no longer ships whose record proves them AI-DLC's. */
@@ -2856,8 +2862,19 @@ function configInvocationFor(projectDir = process.cwd()): string {
   return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
 }
 
+// A release mirror's path can be its credential, so a command printed again
+// leaves --release-base-url and its URL out, and its line asks for the same
+// one back with sameMirror.
+function withoutReleaseMirror(args: readonly string[]): string[] {
+  return args.filter((arg, index) => arg !== "--release-base-url" && args[index - 1] !== "--release-base-url");
+}
+
+function sameMirror(argv: readonly string[]): string {
+  return argv.includes("--release-base-url") ? " with the same --release-base-url" : "";
+}
+
 // The command the user ran, printed again with the flags that resolve it, so
-// it runs as shown from where they are.
+// it runs from where they are; a mirror it named is asked for, not printed.
 function configRerunWith(
   input: readonly string[],
   projectDir: string,
@@ -2865,7 +2882,7 @@ function configRerunWith(
   dropValueFlags: readonly string[] = [],
 ): string | undefined {
   const invocation = configInvocationFor(projectDir);
-  const args = stripVerb([...input]).filter((arg, index, all) =>
+  const args = withoutReleaseMirror(stripVerb([...input])).filter((arg, index, all) =>
     !dropValueFlags.includes(arg) && !dropValueFlags.includes(all[index - 1] ?? "")
   );
   if (args.some(hasControlCharacters) || hasControlCharacters(projectDir)) return undefined;
@@ -2879,12 +2896,23 @@ function configRerunWith(
   ].join(" ") + target;
 }
 
+// The same, with the ask, for a line that prints the command on its own.
+function configRerunAsking(
+  input: readonly string[],
+  projectDir: string,
+  extra: readonly string[],
+  dropValueFlags: readonly string[] = [],
+): string | undefined {
+  const rerun = configRerunWith(input, projectDir, extra, dropValueFlags);
+  return rerun === undefined ? undefined : `${rerun}${sameMirror(input)}`;
+}
+
 function configMutationRerun(
   section: "models" | "runtime" | "providers" | "trust" | "flags" | "project",
   argv: readonly string[],
 ): string {
-  const args = argv.filter((arg) => arg !== "--yes").map(commandToken);
-  return configCommand([section, ...args, "--yes"].join(" "));
+  const args = withoutReleaseMirror(argv).filter((arg) => arg !== "--yes").map(commandToken);
+  return `${configCommand([section, ...args, "--yes"].join(" "))}${sameMirror(argv)}`;
 }
 
 function configCommandForHarness(harnessDir: string, args = ""): string {
@@ -5386,6 +5414,7 @@ function preserveClaudeProviderFields(
   prior: Baseline | null,
   notes: string[],
   providersAnswered: boolean,
+  descriptor?: ProjectionDescriptor,
 ): Set<string> {
   const retiredManagedFiles = new Set<string>();
   const relative = `${harnessDir}/settings.json`;
@@ -5419,7 +5448,9 @@ function preserveClaudeProviderFields(
     const hookPath = join(projectDir, hookRelative);
     if (!regularFile(hookPath)) return false;
     const released = RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target];
-    return released?.has(sha256FileMatching(hookPath, [...(released ?? [])])) ?? false;
+    if (released?.has(sha256FileMatching(hookPath, [...released]))) return true;
+    // A registration a copy-era release wrote for its own hook file, unchanged.
+    return descriptor !== undefined && copyEraOwnFile(descriptor, hookRelative, hookPath);
   });
   const ownedHookTargets = new Set([
     ...Object.keys(incomingHookHashes),
@@ -5443,12 +5474,15 @@ function preserveClaudeProviderFields(
       projectDir,
     );
     const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
+    // With no install record, registrations for an earlier release's own hook
+    // files are that release's: the difference is the release's change.
     const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
       ? currentOwnedHash !== priorEntries.hooksAidlc
       : priorEntries?.hooks !== undefined
       ? currentOwnedHash !== priorEntries.hooks
-      : canonical(currentOwnedHooks) !==
-        canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
+      : !(prior === null && attributableLegacyTargets.length > 0) &&
+        canonical(currentOwnedHooks) !==
+          canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
     if (hadLocalHookDrift) {
       // A settings file the project wrote before AI-DLC has none of its hooks yet.
       notes.push(Object.keys(currentOwnedHooks).length === 0
@@ -6702,6 +6736,7 @@ function preserveUserProviderFields(
   retiredManagedFiles: Set<string>,
   unproven: Set<string>,
   providersAnswered: boolean,
+  descriptor?: ProjectionDescriptor,
 ): boolean {
   if (harness === "claude") {
     // Claude settings merge per entry, so the refreshed file always applies.
@@ -6715,6 +6750,7 @@ function preserveUserProviderFields(
       prior,
       notes,
       providersAnswered,
+      descriptor,
     )) retiredManagedFiles.add(rel);
     return true;
   } else if (harness === "codex") {
@@ -6816,6 +6852,14 @@ function prepareRefreshSource(
     : descriptor.distribution === "codex"
     ? join(currentHarness, "config.toml")
     : null;
+  if (descriptor.distribution === "claude" && currentConfiguration && regularFile(currentConfiguration)) {
+    try {
+      JSON.parse(withoutBom(readFileSync(currentConfiguration, "utf-8")));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new ProjectSettingsError(`${descriptor.harnessDir}/settings.json`, reason);
+    }
+  }
   // Kiro CLI always stages: its MCP servers are merged and granted per project.
   if (
     descriptor.distribution !== "kiro" &&
@@ -7014,6 +7058,7 @@ function prepareRefreshSource(
     retiredManagedFiles,
     unproven,
     diagnosticsOverride !== undefined && Object.hasOwn(diagnosticsOverride, "providers"),
+    descriptor,
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
@@ -7101,6 +7146,7 @@ function prepareRefreshSource(
       if (
         existsSync(staged) ||
         (prior?.shippedOnly && prior.files[rel]) ||
+        (prior === null && copyEraOwnFile(descriptor, rel, join(projectDir, rel))) ||
         rel === `${descriptor.harnessDir}/tools/data/aidlc-manifest.json` ||
         !generatedOverlayCandidate(rel, descriptor.harnessDir)
       ) continue;
@@ -7255,6 +7301,7 @@ function prepareRefreshSource(
     composedRecords.set(rel, sha256Bytes(stripRecordedContributions(asRead, { ...record, requires_stage: replayedEdges })));
   }
   const emptiedSidecars = new Set<string>();
+  const ruleStrips: Array<{ rel: string; content: string }> = [];
   if (retiredEdges.size > 0 && pathPresent(dataDir) && lstatSync(dataDir).isDirectory()) {
     for (const file of readdirSync(dataDir).filter((name) => /^plugin-contrib-.+\.json$/.test(name))) {
       const rel = `${descriptor.harnessDir}/tools/data/${file}`;
@@ -7345,6 +7392,9 @@ function prepareRefreshSource(
         : [];
     const recorded = sidecars();
     stripPluginsTurnedOff();
+    // The team's rule files are not in this staged tree: a plugin turned off
+    // loses its rules sections there through the refresh's own writes.
+    for (const plugin of pluginsTurnedOff()) ruleStrips.push(...pluginRulesStripWrites(projectDir, plugin));
     const kept = new Set(sidecars());
     for (const file of recorded.filter((name) => !kept.has(name))) {
       const rel = `${descriptor.harnessDir}/tools/data/${file}`;
@@ -7437,6 +7487,7 @@ function prepareRefreshSource(
     projectOverlays,
     unproven,
     emptiedSidecars,
+    ruleStrips,
     composedRecords,
     provenRetired,
     modelWritten,
@@ -7472,9 +7523,10 @@ function kiroUpgradedNote(count: number, harnessDir: string, force: string): str
 }
 
 // When the release changes what such a file allows, config puts the release's
-// file back where Kiro upgrades it again by itself (kiroAutoUpgradeOn), the
-// file Kiro upgraded from is provably the one AI-DLC wrote and Kiro's copy
-// keeps its fields; otherwise it keeps Kiro's copy and says what that leaves.
+// file back where Kiro upgrades it again by itself (kiroAutoUpgradeOn) and
+// Kiro's copy is its untouched upgrade of the file AI-DLC wrote
+// (kiroUpgradeOfOwnFile); otherwise it keeps Kiro's copy and says what that
+// leaves.
 const KIRO_KEPT_CHANGED_DETAIL = "upgraded by Kiro for its 3.0 engine: kept with an older release's allows";
 
 function kiroKeptChangedNote(count: number, harnessDir: string, force: string): string {
@@ -7482,6 +7534,18 @@ function kiroKeptChangedNote(count: number, harnessDir: string, force: string): 
   return `${count} agent ${one ? "file" : "files"} in ${harnessDir}/agents that Kiro upgraded for its 3.0 engine ` +
     `${one ? "was kept and still allows" : "were kept and still allow"} what an older release allowed; ` +
     `\`${force}\` takes this release's ${one ? "version" : "versions"}.`;
+}
+
+// A run that removes agent files Kiro upgraded leaves the backups Kiro kept of
+// them: AI-DLC never recorded those, and they are the person's way back to the
+// files from before the upgrade. The line counts only those files; a backup of
+// an upgraded file that stays is what shows it is Kiro's upgrade of AI-DLC's
+// file, so the line says the backups stay and leaves them to the person.
+function kiroBackupsKeptNote(count: number, harnessDir: string, dryRun: boolean): string {
+  return `Kiro's backups of the ${count === 1 ? "agent file" : `${count} agent files`} this run ${
+    dryRun ? "would remove" : "removes"
+  } stay in ` +
+    `${harnessDir}/agents (\`<name>.json.bak\`, \`<name>.json.bak.1\` and on); AI-DLC does not use them.`;
 }
 
 // A run that writes a model or effort value into a Kiro agent file that
@@ -7969,6 +8033,14 @@ function selectSource(
 class ProjectLinkError extends Error {
   constructor(readonly path: string, link: boolean) {
     super(`${shownValue(path)} is ${link ? "a link" : "not a regular file"}`);
+  }
+}
+
+// The person's .claude/settings.json does not parse. Config merges into it, so
+// it stops before any read of it, naming the file; the file is left as it is.
+class ProjectSettingsError extends Error {
+  constructor(readonly path: string, reason: string) {
+    super(`${shownValue(path)} is not valid JSON (${reason})`);
   }
 }
 
@@ -9945,6 +10017,34 @@ function ownedFileHash(path: string, known: readonly (string | undefined)[]): { 
   return ownedHash(readFileSync(path), known);
 }
 
+// An agent file's JSON, or undefined when it does not parse.
+function agentJson(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return undefined;
+  }
+}
+
+// Whether the agent file at `rel` is Kiro's upgrade of a file AI-DLC wrote
+// there with nothing changed since: the backup Kiro upgraded from holds one of
+// `known`, and Kiro's stamp still matches (kiroUpgradeUntouched). Such a file
+// holds nothing of the person's, so a refresh may replace it and a switch may
+// remove it like the file it came from. A refresh also takes an upgrade Kiro
+// did not stamp by its kept fields (`unstampedByKeptFields`, kiroUpgradeIntact);
+// a switch, which removes the file, takes only a stamped one.
+function kiroUpgradeOfOwnFile(
+  projectDir: string,
+  rel: string,
+  known: readonly (string | undefined)[],
+  unstampedByKeptFields: boolean,
+): boolean {
+  if (!kiroUpgradedAgentFile(projectDir, rel)) return false;
+  const backup = kiroUpgradeBackup(projectDir, rel);
+  if (backup === null || !known.includes(ownedFileHash(backup, known).hash)) return false;
+  return kiroUpgradeIntact(agentJson(join(projectDir, rel)), agentJson(backup), unstampedByKeptFields);
+}
+
 function ownedHash(bytes: Buffer, known: readonly (string | undefined)[]): { hash: string } {
   const hash = sha256Matching(bytes, known);
   if (known.includes(hash)) return { hash };
@@ -9972,6 +10072,9 @@ function planManagedFiles(
   provenRetired: ReadonlySet<string> = new Set(),
   modelWritten: ReadonlyMap<string, string> = new Map(),
   modelStamped: ReadonlySet<string> = new Set(),
+  // Filled with each retired agent file removed as Kiro's untouched upgrade of
+  // AI-DLC's file, for kiroBackupsKeptNote.
+  kiroUpgradesRemoved: Set<string> = new Set(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -10094,30 +10197,20 @@ function planManagedFiles(
       // The person ran Kiro's upgrade for its 3.0 engine: the agent file stays
       // as Kiro left it, and the rest of the release lands around it, unless this
       // release changes what it allows, Kiro upgrades it again by itself and the
-      // file Kiro upgraded from is provably AI-DLC's; then the release's file
-      // goes back. A kept file's record stays what AI-DLC last wrote there, so a
-      // later refresh can still prove that.
+      // file is Kiro's untouched upgrade of one AI-DLC wrote; then the release's
+      // file goes back. A kept file's record stays what AI-DLC last wrote there,
+      // so a later refresh can still prove that.
       if (!force && kiroUpgradedAgentFile(projectDir, rel)) {
         const recordedAsCopied = nextHashes[rel];
         if (recordedAsCopied !== undefined && priorHash !== undefined) nextHashes[rel] = priorHash;
         const backup = kiroUpgradeBackup(projectDir, rel);
-        const parsed = (path: string): unknown => {
-          try {
-            return JSON.parse(readFileSync(path, "utf-8"));
-          } catch {
-            return undefined;
-          }
-        };
-        const was = backup === null ? undefined : parsed(backup);
-        if (was === undefined || !kiroAllowChanged(was, parsed(source))) {
+        const was = backup === null ? undefined : agentJson(backup);
+        if (was === undefined || !kiroAllowChanged(was, agentJson(source))) {
           actions.push({ path: rel, action: "preserve", detail: KIRO_UPGRADED_DETAIL });
           continue;
         }
         const known = [priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])];
-        const aidlcWroteIt = priorHash !== undefined && known.includes(ownedFileHash(backup!, known).hash);
-        if (
-          !kiroAutoUpgradeOn() || !aidlcWroteIt || !kiroUpgradeKeptFields(parsed(target), was)
-        ) {
+        if (!kiroAutoUpgradeOn() || priorHash === undefined || !kiroUpgradeOfOwnFile(projectDir, rel, known, true)) {
           actions.push({ path: rel, action: "preserve", detail: KIRO_KEPT_CHANGED_DETAIL });
           continue;
         }
@@ -10171,14 +10264,40 @@ function planManagedFiles(
     ) continue;
     const target = join(projectDir, rel);
     if (!pathPresent(target)) continue;
-    const owned = regularFile(target) && (provenRetired.has(rel) || sha256FileMatching(target, [priorHash]) === priorHash);
-    if (!owned && !force) {
+    // An agent file Kiro upgraded from the one AI-DLC wrote, untouched since,
+    // goes with the rest; its backups stay (kiroBackupsKeptNote).
+    const regular = regularFile(target);
+    const recorded = regular && (provenRetired.has(rel) || sha256FileMatching(target, [priorHash]) === priorHash);
+    const kiroUpgrade = !recorded && kiroUpgradeOfOwnFile(projectDir, rel, [priorHash], false);
+    if (!recorded && !kiroUpgrade && !force) {
       actions.push({ path: rel, action: "conflict", detail: "removed upstream but locally modified" });
       continue;
     }
+    if (kiroUpgrade) kiroUpgradesRemoved.add(rel);
     operations.push({ kind: "remove", path: rel, expected: expected(target) });
     actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
   }
+  // A copied tree no `aidlc config` recorded: a file a copy-era release shipped
+  // that this one no longer ships, unchanged, goes the way a recorded one does.
+  if (prior === null) {
+    for (const rel of Object.keys(descriptor.retiredCopyFileHashes ?? {})) {
+      if (shipped.has(rel) || workspaceState(rel) || hostToolPath(rel)) continue;
+      const target = join(projectDir, rel);
+      if (!pathPresent(target) || !copyEraOwnFile(descriptor, rel, target)) continue;
+      operations.push({ kind: "remove", path: rel, expected: expected(target) });
+      actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
+    }
+  }
+}
+
+// A file a release shipped at this path for copying, unchanged (this
+// release's own copy tree and the copy-era releases', scripts/copy-era-files.ts;
+// a path this release no longer ships has its own list). In a project no
+// `aidlc config` recorded it is AI-DLC's own; a file that matches none stays
+// the person's.
+function copyEraOwnFile(descriptor: ProjectionDescriptor, rel: string, path: string): boolean {
+  const known = descriptor.legacyManagedFileHashes?.[rel] ?? descriptor.retiredCopyFileHashes?.[rel];
+  return known !== undefined && regularFile(path) && known.includes(ownedFileHash(path, known).hash);
 }
 
 // A refresh names every file it removes because the release no longer ships
@@ -12819,6 +12938,8 @@ export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
 ): Promise<void> {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(input)));
   // A setup walk's own sections run inside the walk, for the harness it set up.
   if (!internal.setupWalkChild) configTargetHarnessDir = null;
   let argv = stripVerb(input);
@@ -13625,6 +13746,7 @@ export async function main(
     // A copied project is not a release: whenever its own files are the source,
     // keep the baseline it already has instead of adopting its current bytes.
     const retainBaseline = Boolean(selected.projectProjection) && prior !== null;
+    const kiroUpgradesRemoved = new Set<string>();
     planManagedFiles(
       projectDir,
       prepared.root,
@@ -13642,10 +13764,12 @@ export async function main(
       prepared.provenRetired,
       prepared.modelWritten,
       prepared.modelStamped,
+      kiroUpgradesRemoved,
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);
-      if (!pathPresent(target)) continue;
+      // A copy-era file planManagedFiles already removes is that one removal.
+      if (!pathPresent(target) || operations.some((operation) => operation.path === rel)) continue;
       operations.push({ kind: "remove", path: rel, expected: expected(target) });
       actions.push({
         path: rel,
@@ -13658,6 +13782,12 @@ export async function main(
       if (!regularFile(target) || operations.some((operation) => operation.path === rel)) continue;
       operations.push({ kind: "remove", path: rel, expected: expected(target) });
       actions.push({ path: rel, action: "remove", detail: "plugin contribution record no longer needed" });
+    }
+    for (const strip of prepared.ruleStrips ?? []) {
+      const target = join(projectDir, strip.rel);
+      if (!regularFile(target) || operations.some((operation) => operation.path === strip.rel)) continue;
+      operations.push(writeOperation(strip.rel, strip.content, expected(target)));
+      actions.push({ path: strip.rel, action: "update", detail: "rules of a plugin turned off taken out" });
     }
     // An explicit Bedrock choice for OpenCode owns the region and profile leaves
     // of the team's opencode.json from now on, and says so once when it changes
@@ -13783,7 +13913,7 @@ export async function main(
       const force = section
         ? `run \`${
           configRerunWith(["config", ...sourceArgs], projectDir, ["--force"]) ?? configCommand("--force")
-        }\`${argv.includes("--release-base-url") ? " with the same --release-base-url" : ""}, then the same command again`
+        }\`${sameMirror(argv)}, then the same command again`
         : `run it again with --force${downloaded ? " --download" : ""}`;
       // A dry run stops on the same conflict, so the line names none.
       const forward = broken.length === 0
@@ -13878,6 +14008,9 @@ export async function main(
     if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
     const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
     if (kiroKeptChanged > 0) prepared.notes.push(kiroKeptChangedNote(kiroKeptChanged, descriptor.harnessDir, kiroForce));
+    if (kiroUpgradesRemoved.size > 0) {
+      prepared.notes.push(kiroBackupsKeptNote(kiroUpgradesRemoved.size, descriptor.harnessDir, argv.includes("--dry-run")));
+    }
     const kiroPins = stamp.distribution === "kiro-ide"
       ? kiroAgentPinsNote(
         projectDir,
@@ -14093,7 +14226,7 @@ export async function main(
         emitResult(failure(
           `switching ${descriptor.harnessDir} to ${stamp.distribution} lets Kiro run hook files AI-DLC does not own ${framedHooks}; review them, then apply this plan with the --plan-token its dry run prints`,
           EXIT.integrity,
-          configRerunWith(input, projectDir, ["--dry-run"]),
+          configRerunAsking(input, projectDir, ["--dry-run"]),
         ), options);
         return;
       }
@@ -14479,7 +14612,7 @@ export async function main(
   } catch (error) {
     // A question with no answer is not a failure to report as one.
     if (error instanceof FirstRunCancelled) {
-      process.stdout.write(noAnswerLines(error, configRerunWith(input, projectDir, []) ?? configCommand(projectTarget(projectDir))));
+      process.stdout.write(noAnswerLines(error, configRerunAsking(input, projectDir, []) ?? configCommand(projectTarget(projectDir))));
       process.exitCode = EXIT.usage;
       return;
     }
@@ -14541,7 +14674,7 @@ export async function main(
         downloadFailed ? EXIT.unavailable : EXIT.integrity,
         downloadFailed
           ? undefined
-          : configRerunWith(
+          : configRerunAsking(
             input,
             projectDir,
             ["--download"],
@@ -14563,8 +14696,19 @@ export async function main(
         rawMessage,
         EXIT.integrity,
         `put the file itself at ${shownValue(error.path)}, then run ${
-          rerun ? `\`${rerun}\`` : "the same command"
+          rerun ? `\`${rerun}\`${sameMirror(input)}` : "the same command"
         } again`,
+      ), options);
+      return;
+    }
+    if (error instanceof ProjectSettingsError) {
+      // A mirror URL can carry its credential: the line asks for it back.
+      const rerun = configRerunWith(input, projectDir, [], ["--release-base-url"]);
+      const mirror = input.includes("--release-base-url") ? " with the same --release-base-url" : "";
+      emitResult(failure(
+        rawMessage,
+        EXIT.integrity,
+        `correct ${shownValue(error.path)}, then run ${rerun ? `\`${rerun}\`` : "the same command"}${mirror} again`,
       ), options);
       return;
     }
@@ -14608,7 +14752,7 @@ export async function main(
           }${projectTarget(projectDir)}`
         : from
         ? `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/${requestedHarness ?? copiedHarness?.distribution ?? "claude"}/; or fetch them with ${
-          configRerunWith(input, projectDir, ["--download"], ["--from"]) ?? configCommand(`--download${projectTarget(projectDir)}`)
+          configRerunAsking(input, projectDir, ["--download"], ["--from"]) ?? configCommand(`--download${projectTarget(projectDir)}`)
         }`
         : selected?.projectProjection && copiedHarness
         ? `re-copy the complete runtime/${copiedHarness.distribution}/ root from aidlc-copy-runtime-X.Y.Z.tar.gz (or a checkout's dist/${copiedHarness.distribution}/ tree) over the project, or install the native aidlc command`

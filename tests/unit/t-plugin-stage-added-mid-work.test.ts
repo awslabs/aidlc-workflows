@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:checkbox, function:withStageProgressRow
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:checkbox, function:withStageProgressRow, subcommand:aidlc-utility:recompose
 //
 // A stage a plugin adds after the work started has no row in the state file's
 // Stage Progress. The work reaches it (the next stage walks the graph), but a
@@ -6,6 +6,8 @@
 // and its report failed: "Stage "probe-intent-check" is not present in the
 // state file - cannot commit its transition." The stage's first transition now
 // writes its row, after its phase's rows that come before it in the graph.
+// A skip or an add the person asks for before the work reaches the stage
+// writes the row first, so the plan keeps it.
 //
 // Mechanism: cli. Each case copies the built Claude install into a temp
 // project, adds the plugin stage the way a plugin's compose does, compiles the
@@ -107,14 +109,23 @@ interface Install {
   tool: (name: string) => string;
 }
 
+// A plugin stage the feature scope skips (it runs only under enterprise), so
+// the person adds it to the plan.
+const ENTERPRISE_ONLY: Record<string, string> = {
+  "probe-extra-check": PLUGIN_STAGES["probe-intent-check"]
+    .replaceAll("probe-intent-check", "probe-extra-check")
+    .replace("name: Probe Intent Check", "name: Probe Extra Check")
+    .replace("  - feature", "  - enterprise"),
+};
+
 // A project with its own copy of the install, the plugin stages composed in.
-function probeProject(units: string[]): Install {
+function probeProject(units: string[], stages: Record<string, string> = PLUGIN_STAGES): Install {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
   const harness = join(proj, ".claude");
   cpSync(AIDLC_SRC, harness, { recursive: true });
-  for (const [slug, body] of Object.entries(PLUGIN_STAGES)) {
+  for (const [slug, body] of Object.entries(stages)) {
     writeFileSync(join(harness, "aidlc-common", "stages", "construction", `${slug}.md`), body);
   }
   const tool = (name: string) => join(harness, "tools", `${name}.ts`);
@@ -230,6 +241,40 @@ describe("a stage a plugin adds after the work started", () => {
     expect(report(install, ["--stage", "probe-intent-check", "--result", "approved", "--user-input", "Approve"]).kind)
       .toBe("done");
     expect(state(install)).toContain(`- [x] probe-intent-check ${SEP} EXECUTE`);
+  });
+
+  test("a skip asked for before the work reaches it is recorded, and the work does not run it", () => {
+    const install = probeProject(["alpha"]);
+    const recomposed = run(install, "aidlc-utility", [
+      "recompose", "--skip", "probe-intent-check", "--reason", "the person asked to skip it",
+    ]);
+    expect(recomposed.rc, recomposed.out).toBe(0);
+    expect(recomposed.out).toContain("Recomposed: 1 skipped (probe-intent-check)");
+    expect(rowsFrom(install, "ci-pipeline")).toEqual([
+      `- [-] ci-pipeline ${SEP} EXECUTE`,
+      `- [ ] probe-intent-check ${SEP} SKIP`,
+    ]);
+
+    const skipped = report(install, ["--stage", "ci-pipeline", "--result", "skipped", "--reason", "no pipeline for this test"]);
+    expect(skipped.kind, JSON.stringify(skipped)).toBe("done");
+    expect(state(install)).not.toContain("- **Current Stage**: probe-intent-check");
+  });
+
+  test("an add asked for before the work reaches it is recorded, and the work runs it", () => {
+    const install = probeProject(["alpha"], ENTERPRISE_ONLY);
+    const recomposed = run(install, "aidlc-utility", [
+      "recompose", "--add", "probe-extra-check", "--reason", "the person asked to add it",
+    ]);
+    expect(recomposed.rc, recomposed.out).toBe(0);
+    expect(recomposed.out).toContain("Recomposed: 0 skipped (none), 1 added (probe-extra-check)");
+    expect(rowsFrom(install, "ci-pipeline")).toEqual([
+      `- [-] ci-pipeline ${SEP} EXECUTE`,
+      `- [ ] probe-extra-check ${SEP} EXECUTE`,
+    ]);
+
+    const skipped = report(install, ["--stage", "ci-pipeline", "--result", "skipped", "--reason", "no pipeline for this test"]);
+    expect(skipped.kind, JSON.stringify(skipped)).toBe("done");
+    expect(state(install)).toContain("- **Current Stage**: probe-extra-check");
   });
 
   test("a cursor an older engine already moved onto it commits its gate", () => {

@@ -488,7 +488,7 @@ function windowsLauncherOwnedByInstaller(): boolean {
   try {
     const helper = readFileSync(windowsShimPath(), "utf-8");
     return readFileSync(commandPath(), "utf-8") === windowsShim() &&
-      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper);
+      installerWindowsShimHelpers().includes(helper);
   } catch {
     return false;
   }
@@ -1218,9 +1218,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   if (
     windows &&
     existsSync(windowsShimPath()) &&
-    ![windowsShimHelper(), ...previousWindowsShimHelpers()].includes(
-      readFileSync(windowsShimPath(), "utf-8"),
-    )
+    !installerWindowsShimHelpers().includes(readFileSync(windowsShimPath(), "utf-8"))
   ) {
     commandError("existing aidlc-shim.ps1 is not owned by this AI-DLC install", EXIT.integrity);
   }
@@ -1321,10 +1319,20 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
           });
           const output = Buffer.from(probe.stdout ?? new Uint8Array()).toString("utf-8").trim();
           if (probe.exitCode !== 0 || output !== `aidlc ${version} (runtime ${version})`) {
+            // The helper says why it stopped on stderr, in one aidlc: line. A
+            // release's helper without the BOM, beside a path that needs one,
+            // reads its own paths garbled, so its reason would name the wrong file.
+            const unreadable = command === commandPath() && probe.exitCode === 4 &&
+              shimHelper === bomlessWindowsShimHelper() && shimHelper !== windowsShimHelper();
+            const said = unreadable
+              ? `${version} did not start from ${installRoot()}: Windows PowerShell read the launcher written for it in the system code page, which cannot spell a letter in that path${
+                  previous ? `; ${previous} stays active` : ""
+                }`
+              : Buffer.from(probe.stderr ?? new Uint8Array()).toString("utf-8").replace(/\s+/g, " ").trim();
             throw new Error(
               `command pointer validation failed for ${version}: version probe returned ${
                 probe.exitCode ?? "no exit"
-              } ${JSON.stringify(output)}`,
+              } ${JSON.stringify(output)}${said ? `: ${said}` : ""}`,
             );
           }
         }
@@ -1597,7 +1605,15 @@ export { windowsPosixShim };
 // 4. Arguments reach the executable through --% and AIDLC_SHIM_ARGS, quoted
 // with the Windows C runtime rules, because Windows PowerShell 5.1 drops empty
 // arguments and strips embedded double quotes when it forwards @args itself.
+// Windows PowerShell 5.1 reads a .ps1 without a BOM in the ANSI code page, so
+// a non-ASCII letter in an install path needs one; an ASCII helper keeps the
+// bytes every release since FIRST_RELEASE_WITH_CURRENT_HELPER wrote.
 function windowsShimHelper(): string {
+  const helper = bomlessWindowsShimHelper();
+  return /[\u0080-\uffff]/.test(helper) ? `\uFEFF${helper}` : helper;
+}
+
+function bomlessWindowsShimHelper(): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const versionPointer = activeVersionPath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
@@ -1677,8 +1693,10 @@ function predatesCurrentHelper(version: string): boolean {
   }
 }
 
-function windowsShimHelperFor(version: string): string {
-  if (!predatesCurrentHelper(version)) return windowsShimHelper();
+export function windowsShimHelperFor(version: string): string {
+  if (!predatesCurrentHelper(version)) {
+    return predatesBomHelper(version) ? bomlessWindowsShimHelper() : windowsShimHelper();
+  }
   try {
     if (compareVersions(version, FIRST_RELEASE_WITH_SHARED_MARKER_HELPER) < 0) {
       return renderSilentWindowsShimHelper(STABLE_ONLY_HELPER_PATTERN);
@@ -1687,6 +1705,28 @@ function windowsShimHelperFor(version: string): string {
     // An unparsable version is not treated as older than 2.8.2.
   }
   return renderSilentWindowsShimHelper(VERSION_ID_PATTERN);
+}
+
+// 2.11.3 and every release before it accept the current helper only without a
+// BOM. The first release that writes it is a 2.11.4 preview, whose id was not
+// known here, so the rule has two halves: a release older than both this binary
+// and the first stable with the BOM helper gets the helper without it, and any
+// newer one gets the BOM (`aidlc update` runs in the binary it replaces, which
+// writes the new release's helper).
+const FIRST_STABLE_WITH_BOM_HELPER = "2.11.4";
+
+function predatesBomHelper(version: string): boolean {
+  try {
+    return compareVersions(version, AIDLC_VERSION) < 0 &&
+      compareVersions(version, FIRST_STABLE_WITH_BOM_HELPER) < 0;
+  } catch {
+    return false;
+  }
+}
+
+// Every helper an installer wrote, this binary's own first.
+function installerWindowsShimHelpers(): string[] {
+  return [windowsShimHelper(), bomlessWindowsShimHelper(), ...previousWindowsShimHelpers()];
 }
 
 // The helper every installer wrote before refusals carried a reason.
@@ -1910,7 +1950,7 @@ function olderReleaseHelperRepair(): string | null {
     const installed = readFileSync(windowsShimPath(), "utf-8");
     const wanted = windowsShimHelperFor(target);
     if (installed === wanted) return null;
-    return [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(installed) ? wanted : null;
+    return installerWindowsShimHelpers().includes(installed) ? wanted : null;
   } catch {
     return null;
   }

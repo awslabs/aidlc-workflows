@@ -37,6 +37,7 @@
 // the sibling primitives already own (Bolt Refs, Worktree Path) — this is
 // the t48 emitter-pairing rule.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -1564,6 +1565,8 @@ function boltUsage(subcommand: string | undefined): string {
 let projectDir: string | undefined;
 
 export async function main(argv: string[]): Promise<void> {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   const filteredArgs: string[] = [];

@@ -216,42 +216,50 @@ describe("t295 MIME detection reads the BYTES, not the extension", () => {
   });
 });
 
-// A minimal, REAL zip container carrying the two OOXML markers this repo's
-// detector requires -- not a hand-typed fixture standing in for one, so this
-// exercises the actual byte layout a real .docx produces (entry names in the
-// zip local file headers, uncompressed store method, valid EOCD).
-function fakeDocxBytes(): Buffer {
-  function localHeader(name: string, data: Buffer): Buffer {
+// A real zip: local headers, a central directory and its end record, as a
+// writer produces them (stored unless an entry names another method).
+function zipWithDirectory(entries: ReadonlyArray<{ name: string; data: Buffer; method?: number }>): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const { name, data, method = 0 } of entries) {
     const nameBuf = Buffer.from(name, "ascii");
     const header = Buffer.alloc(30);
     header.writeUInt32LE(0x04034b50, 0); // local file header signature
     header.writeUInt16LE(20, 4); // version needed
-    header.writeUInt16LE(0, 6); // flags
-    header.writeUInt16LE(0, 8); // method: STORE (no compression)
-    header.writeUInt16LE(0, 10); // mod time
-    header.writeUInt16LE(0, 12); // mod date
-    header.writeUInt32LE(0, 14); // crc32 (unchecked by our reader)
+    header.writeUInt16LE(method, 8);
     header.writeUInt32LE(data.length, 18);
     header.writeUInt32LE(data.length, 22);
     header.writeUInt16LE(nameBuf.length, 26);
-    header.writeUInt16LE(0, 28);
-    return Buffer.concat([header, nameBuf, data]);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(method, 10);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(header, nameBuf, data);
+    centrals.push(central, nameBuf);
+    offset += 30 + nameBuf.length + data.length;
   }
-  const entries: { name: string; data: Buffer }[] = [
-    { name: "[Content_Types].xml", data: Buffer.from("<Types/>") },
-    { name: "word/document.xml", data: Buffer.from("<document/>") },
-  ];
-  const parts = entries.map((e) => localHeader(e.name, e.data));
-  const body = Buffer.concat(parts);
-  // A minimal End Of Central Directory record with zero central-directory
-  // entries. Real zip readers would reject this as malformed, but our
-  // detector never parses the central directory -- it only scans local
-  // headers for the two marker names -- so this is sufficient for the
-  // property under test and deliberately does not claim to be a fully valid
-  // zip.
+  const directory = Buffer.concat(centrals);
   const eocd = Buffer.alloc(22);
   eocd.writeUInt32LE(0x06054b50, 0);
-  return Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), body.slice(4), eocd]);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(directory.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, directory, eocd]);
+}
+
+// A zip whose central directory names the two Word parts: detection reads the
+// directory (the one listing the reader also uses), never an entry's data.
+function fakeDocxBytes(): Buffer {
+  return zipWithDirectory([
+    { name: "[Content_Types].xml", data: Buffer.from("<Types/>") },
+    { name: "word/document.xml", data: Buffer.from("<document/>") },
+  ]);
 }
 
 describe("t295 Word (.docx) detection — Finding 3", () => {
@@ -320,30 +328,15 @@ describe("t295 Word (.docx) detection — Finding 3", () => {
   });
 
   test("a real DEFLATE-compressed docx (compressed entry data, not stored) is still detected", () => {
-    // Guards against a walker that only handles STORE (method 0): a genuine
-    // Word/LibreOffice writer deflates its parts, so compressedSize governs
-    // how far to skip regardless of the method field.
-    const nameBuf1 = Buffer.from("[Content_Types].xml", "ascii");
-    const data1 = Buffer.from("deflated-in-reality-but-irrelevant-to-this-walker".repeat(20));
-    const h1 = Buffer.alloc(30);
-    h1.writeUInt32LE(0x04034b50, 0);
-    h1.writeUInt16LE(8, 8); // method: DEFLATE (declared; content itself is not actually deflated here)
-    h1.writeUInt16LE(nameBuf1.length, 26);
-    h1.writeUInt32LE(data1.length, 18);
-    const entry1 = Buffer.concat([h1, nameBuf1, data1]);
-
-    const nameBuf2 = Buffer.from("word/document.xml", "ascii");
-    const data2 = Buffer.from("more filler content representing compressed xml".repeat(20));
-    const h2 = Buffer.alloc(30);
-    h2.writeUInt32LE(0x04034b50, 0);
-    h2.writeUInt16LE(8, 8);
-    h2.writeUInt16LE(nameBuf2.length, 26);
-    h2.writeUInt32LE(data2.length, 18);
-    const entry2 = Buffer.concat([h2, nameBuf2, data2]);
-
-    const buf = Buffer.concat([entry1, entry2]);
+    // A genuine Word or LibreOffice writer deflates its parts: detection reads
+    // the names from the directory whatever the method, and inflates nothing.
+    const buf = zipWithDirectory([
+      { name: "[Content_Types].xml", data: Buffer.from("deflated-in-reality-but-irrelevant-to-detection".repeat(20)), method: 8 },
+      { name: "word/document.xml", data: Buffer.from("more filler content representing compressed xml".repeat(20)), method: 8 },
+    ]);
     expect(hasWordOoxmlSignature(buf)).toBe(true);
   });
+
 
   test("having only ONE of the two markers is not enough (attack: partial spoof)", () => {
     const onlyContentTypes = Buffer.concat([
@@ -358,21 +351,21 @@ describe("t295 Word (.docx) detection — Finding 3", () => {
     expect(hasWordOoxmlSignature(onlyDocXml)).toBe(false);
   });
 
-  test("a docx with NO configured extractor is still catalogued and citable, never an error", () => {
-    // Adding Word detection must not turn a catalogued, unsupported_type docx
-    // into a hard failure when nothing is configured for its MIME.
+  test("a docx with NO configured extractor is read by AI-DLC itself, catalogued and citable, never an error", () => {
+    // With nothing configured for Word, the built-in reader reads it; this one
+    // has no text, which is a state, not a failure.
     const p = scratchProject();
     doc(p, "report.docx", fakeDocxBytes());
     const { indexed, refused } = onboard(p, SPACE, undefined, NOW);
     expect(refused).toBeUndefined();
     expect(indexed.length).toBe(1);
     const row = readIndex(p, SPACE).documents[0];
-    expect(row.extraction.state).toBe("unsupported_type");
-    expect((row.extraction as { detectedType?: string }).detectedType).toBe(WORD_DOCX_MIME);
+    expect(row.extraction.state).toBe("no_extractable_text");
+    expect(row.extraction.extractor?.name).toBe("builtin-ooxml");
   });
 
-  test("extractorArgvFor returns null for the Word MIME when nothing is configured (no built-in default)", () => {
-    // Unlike PDF, Word has no default argv -- a project must opt in.
+  test("extractorArgvFor returns null for the Word MIME when nothing is configured (read in-process, no program)", () => {
+    // Unlike PDF, Word has no default program: AI-DLC reads it itself (builtin-ooxml).
     expect(extractorArgvFor(WORD_DOCX_MIME)).toBeNull();
   });
 });
@@ -424,15 +417,15 @@ describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
     expect(out.record.extractor?.version).toBeTruthy();
   });
 
-  test("a missing extractor is extractor_unavailable with NAME ONLY", () => {
-    // Nothing ran, so there is no version -- recording one would be a fabricated
-    // fact about a program that never executed.
+  test("a missing pdftotext hands the PDF to AI-DLC's own reader, which records what it found", () => {
+    // The default PDF extractor is missing, so the built-in reader runs instead
+    // of recording `extractor_unavailable`; this file is not a PDF it can open.
     const p = scratchProject();
     const abs = doc(p, "a.pdf", "%PDF-1.4\n");
     const out = extractWithoutPdfTool(p, abs);
-    expect(out.record.state).toBe("extractor_unavailable");
-    expect(out.record.extractor?.name).toBe("pdftotext");
-    expect(out.record.extractor?.version).toBeUndefined();
+    expect(out.record.state).toBe("extraction_failed");
+    expect(out.record.extractor).toEqual({ name: "builtin-pdf", version: "1" });
+    expect(out.record.reason).toStartWith("AI-DLC could not read it as a PDF:");
   });
 
   // `extractor_unavailable` records `detectedType`. Without it,
@@ -442,11 +435,11 @@ describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
   // installing a Word extractor later had no mime to re-probe against, because
   // the row's guessed mime was never
   // "application/...wordprocessingml.document" in the first place.
-  test("extractor_unavailable ALSO records detectedType -- the mime a retry needs to re-probe", () => {
+  test("the built-in reader's failure ALSO records detectedType -- the mime a retry needs to re-probe", () => {
     const p = scratchProject();
     const abs = doc(p, "a.pdf", "%PDF-1.4\n");
     const out = extractWithoutPdfTool(p, abs);
-    expect(out.record.state).toBe("extractor_unavailable");
+    expect(out.record.state).toBe("extraction_failed");
     expect(out.record.detectedType).toBe("application/pdf");
   });
 
@@ -991,9 +984,15 @@ describe("t295 Finding 5(c): a DOCX with no configured extractor becomes retryab
     const afterOnboard = JSON.parse(
       readFileSync(join(documentkbDir(projectDir, SPACE), "index.json"), "utf-8"),
     );
-    expect(afterOnboard.documents[0].extraction.state).toBe("unsupported_type");
-    expect(afterOnboard.documents[0].extraction.detectedType).toBe(WORD_DOCX_MIME);
+    // AI-DLC reads Word itself now; a row recorded before it did says unsupported_type.
+    expect(afterOnboard.documents[0].extraction.extractor?.name).toBe("builtin-ooxml");
+    const row = afterOnboard.documents[0];
+    row.extraction = { state: "unsupported_type", detectedType: WORD_DOCX_MIME };
+    delete row.content;
+    delete row.content_sha256;
+    writeFileSync(join(documentkbDir(projectDir, SPACE), "index.json"), `${JSON.stringify(afterOnboard, null, 2)}\n`);
 
+    // A configured extractor for the type wins over the built-in reader on the retry.
     setFileReaderExtractor();
     const synced = runKnowledge(["sync"], projectDir);
     expect(synced.status, synced.out).toBe(0);

@@ -51,8 +51,8 @@ function passThrough(): never {
   process.exit(0);
 }
 
-function main(): void {
-  const flags = parseFlags(process.argv.slice(2));
+export function main(argv: string[]): void {
+  const flags = parseFlags(argv);
   if (!flags.outputPath) fail("--output-path is required");
   // Only act on this sensor's own machine-readable file; any other write is a
   // clean pass-through (not a failure).
@@ -91,4 +91,4 @@ function main(): void {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-main();
+if (import.meta.main) main(process.argv.slice(2));

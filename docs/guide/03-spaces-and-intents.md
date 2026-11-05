@@ -174,7 +174,9 @@ before starting a second intent alongside the first:
 
 Saying only that the work should go on (`/aidlc carry on`, "proceed", "keep
 going", in your own words) asks nothing: AI-DLC reads your words and carries on
-with the active work. With work in the project but none selected yet, it asks
+with the active work. Asking where the work stands (`/aidlc how far along are
+we?`, in your own words) asks nothing either: AI-DLC answers your question from
+the status. With work in the project but none selected yet, it asks
 which piece to pick up; name the piece with your words (`/aidlc continue auth`)
 and it picks that piece up and carries on with it at once.
 

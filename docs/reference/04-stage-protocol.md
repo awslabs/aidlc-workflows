@@ -798,9 +798,10 @@ dynamic per workflow position.
    instead of `rules_content`, the chat already holds the bundle and the
    directive does not repeat it: paste nothing for the rules and name
    `directive.stage_file` in the brief, because every harness that sends
-   `rules_held` gives them to its registered agents itself (on Claude Code,
-   Codex and opencode the rule-delivery hook appends the exact bundle of the
-   stage that path names; Kiro CLI preloads it through `resources`; on Kiro
+   `rules_held` gives them to its registered agents itself (on Codex and
+   opencode the rule-delivery hook appends the exact bundle of the stage that
+   path names; on Claude Code it gives the agent the current stage's bundle
+   as the agent starts; Kiro CLI preloads it through `resources`; on Kiro
    IDE, and Kiro CLI v3 running the same tree, the always-included
    active-memory steering carries its text). Every brief still carries
    `directive.ceremony`, `directive.protocol_modules`, and the diary discipline

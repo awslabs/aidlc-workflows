@@ -226,12 +226,12 @@ export type HarnessManifest = {
     /**
      * The project JSON file this host reads AI-DLC's hook registrations from,
      * relative to the project, and the line the person is shown instead of
-     * `agentStep` while it is missing (`missing`) or is not valid JSON
-     * (`invalid`): no setting brings those hooks back. `<repair>` is doctor's
-     * command that puts the file back; `<entry>` and `<folder>` as in
-     * `agentStep`.
+     * `agentStep` while it is missing (`missing`), is not valid JSON
+     * (`invalid`) or registers none of AI-DLC's hooks (`unwired`): no setting
+     * brings those hooks back. `<repair>` is doctor's command that puts them
+     * back; `<entry>` and `<folder>` as in `agentStep`.
      */
-    registration?: { file: string; missing: string; invalid: string };
+    registration?: { file: string; missing: string; invalid: string; unwired: string };
     /**
      * The line the person is shown instead of `agentStep`, and doctor's fix
      * instead of `recovery` and `notRunYet`, when the host started this chat

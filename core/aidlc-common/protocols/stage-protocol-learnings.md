@@ -34,7 +34,7 @@ A `gate: false` iteration does not run the step. Bootstrap initialization stages
 
 ### The ritual
 
-1. **Maintain a per-stage memory file as you work.** Append entries to `directive.memory_path`: `<record>/<phase>/<stage>/memory.md`, or for a team-owned Unit's per-Unit stage the Unit's own `<record>/construction/<unit>/<stage>/memory.md` (created by the engine from the shipped template when it emits the run-stage directive, only when the learnings ritual is on). Treat this path as an output-only target: the orchestrator never reads, probes, creates, or initializes it, and follows the active harness's diary-write discipline when inserting entries. Use four standard H2 headings:
+1. **Maintain a per-stage memory file as you work.** Append entries to `directive.memory_path`: `<record>/<phase>/<stage>/memory.md`, or for a per-Unit stage the Unit's own `<record>/construction/<unit>/<stage>/memory.md` (created by the engine from the shipped template when it emits the run-stage directive, only when the learnings ritual is on). Treat this path as an output-only target: the orchestrator never reads, probes, creates, or initializes it, and follows the active harness's diary-write discipline when inserting entries. Use four standard H2 headings:
    - **Interpretations** — choices made where the stage prose was ambiguous
    - **Deviations** — places where you intentionally departed from the stage prose, and why
    - **Tradeoffs** — alternatives considered and why you picked what you did
@@ -44,8 +44,6 @@ A `gate: false` iteration does not run the step. Bootstrap initialization stages
    ```markdown
    - 2026-05-20T10:14:32Z — <one-line summary>; <2-3 sentences of context>
    ```
-
-   In a Unit's turn at a per-Unit stage (the directive names `unit`), write `[unit <directive.unit>]` right after the timestamp, so the record says which Unit a note is about.
 
    The memory file persists across sessions — a stage that halts and resumes keeps its log intact. On stage approval, the memory file stays in the artefact directory as part of the stage's permanent record (committed alongside other artefacts).
 

@@ -32,7 +32,10 @@ import {
   repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
+export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
+import { pluginCommandOnLine, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -119,9 +122,12 @@ import {
   attemptEventDefinitelyBefore,
   AUDIT_SHARD_FILE_RE,
   auditBlockField,
+  gateStagesFromBlock,
+  gateStagesReopened,
   auditFilePath,
   type AuditMark,
   auditShardBlocks,
+  auditShardTurnBlocks,
   type AuditShardEvent,
   auditShardName,
   auditShards,
@@ -209,6 +215,7 @@ import {
   validSessionId,
   windowsParentEdge,
   windowsSessionProcessIdentity,
+  withdrawnTurnPositions,
   type WorkflowParticipation,
   workflowParticipation,
   type WorkflowSelection,
@@ -225,6 +232,9 @@ export {
   ARCHIVED_INTENT_STATUS,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  GATE_SKIPPED_STAGES_FIELD,
+  gateStagesFromBlock,
+  gateStagesReopened,
   auditFilePath,
   type AuditMark,
   auditShardBlocks,
@@ -480,7 +490,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
-import { readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
+import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -763,10 +773,10 @@ function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
 }
 
 function registrationLines(value: unknown): Pick<HookActivation, "registration"> {
-  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown } | null | undefined;
+  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown; unwired?: unknown } | null | undefined;
   return typeof lines?.file === "string" && lines.file !== "" && typeof lines.missing === "string" &&
-      typeof lines.invalid === "string"
-    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid } }
+      typeof lines.invalid === "string" && typeof lines.unwired === "string"
+    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid, unwired: lines.unwired } }
     : {};
 }
 
@@ -794,7 +804,7 @@ export interface HookActivation {
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
-  registration?: { file: string; missing: string; invalid: string };
+  registration?: { file: string; missing: string; invalid: string; unwired: string };
   startedInsideProject?: string;
 }
 
@@ -1060,8 +1070,8 @@ function shippedRulesSubdir(): string | null {
  *
  * STRICT: a malformed block throws here rather than being silently ignored,
  * because the value becomes a process invocation and a half-parsed extractor is
- * worse than none. Absent is the normal case — the tool then probes `pdftotext`
- * on PATH and degrades to `extractor_unavailable`.
+ * worse than none. Absent is the normal case: the tool then probes `pdftotext`
+ * on PATH and, where it is missing, reads a PDF with AI-DLC's own reader.
  */
 export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec> | null {
   return readShippedHarnessData().documentExtractors;
@@ -1515,7 +1525,10 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   // stays one when the refusal becomes a reading step: either way the turn
   // carries no workflow work (Full Suite 36549553601).
   if (isRefusedModifierNextArgv(args)) return true;
-  if (readNextLine(args).kind !== "exact") return false;
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact") return false;
+  // A plugin command runs as itself, no workflow work.
+  if (reading.command !== undefined) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -2329,8 +2342,10 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string, ses
   // A line the engine would hand to the agent is never acted on here: a seam
   // that runs before any agent reads the line must stand back from it, which is
   // what readNextLine answers for both of us. Only an exact line is this
-  // engine's own command.
-  if (readNextLine(args).kind !== "exact") return null;
+  // engine's own command. A plugin command stays on the engine and conductor
+  // path, as park does: no seam runs a plugin's code off-band.
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact" || reading.command !== undefined) return null;
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
   // freeform intent text and the funnel offers to create an intent named
@@ -2593,12 +2608,15 @@ function entryText(content: unknown): string {
 
 // The newest `type: "user"` entry of a JSONL chat record whose text is exactly
 // this prompt and that `matches`; `entryOf` finds the entry in a line (Kiro
-// wraps each one). Null when there is none, or the record cannot be read.
+// wraps each one), `rowText` the prompt a row's text stands for (a host that
+// wraps a command in its own envelope). Null when there is none, or the record
+// cannot be read.
 function newestUserEntry(
   path: string,
   prompt: string,
   matches: (entry: Record<string, unknown>) => boolean,
   entryOf: (line: Record<string, unknown>) => unknown = (line) => line,
+  rowText: (text: string) => string = (text) => text,
 ): Record<string, unknown> | null {
   const text = tailText(path, 1 << 20);
   if (text === null) return null;
@@ -2622,7 +2640,7 @@ function newestUserEntry(
     const content = message !== null && typeof message === "object"
       ? (message as Record<string, unknown>).content
       : record.content;
-    if (entryText(content).trim() === want) return record;
+    if (rowText(entryText(content).trim()).trim() === want) return record;
   }
   return null;
 }
@@ -2840,17 +2858,27 @@ export function kiroTurnOrigin(options: {
 // row for this `prompt_id` with exactly this text. Claude Code names the turn's
 // origin on it (measured 2.1.280: `turnOrigin: "task_notification"`,
 // `promptSource: "system"`, `origin.kind: "task-notification"` for a
-// background task's notice; `human`/`typed` for a typed turn). A row with
+// background task's notice; `human`/`typed` for a typed turn; measured 2.1.278
+// and 2.1.318: `turnOrigin: "scheduled"` for a scheduled wake-up). A row with
 // neither mark decides nothing: the desktop app sends the person's messages and
 // its own notes alike as `sdk`, so its words decide (claudeHostTemplateOrigin
 // in the human-turn hook). A message the person sends while a turn runs has no
 // row of its own (it rides the running turn's prompt id), so no row means
-// nothing is known.
-const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification"]);
+// nothing is known. A slash command's row holds Claude Code's envelope of it
+// (`<command-message>`, `<command-name>`, `<command-args>`, captured live on
+// both builds): its command name and arguments are the prompt the hook got.
+const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification", "scheduled"]);
 export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknown, prompt: string): TurnOrigin | null {
   if (typeof transcriptPath !== "string" || !transcriptPath.endsWith(".jsonl") || !prompt.trim()) return null;
   const id = typeof promptId === "string" && promptId.trim() ? promptId.trim() : null;
-  const entry = newestUserEntry(transcriptPath, prompt, (row) => id === null || row.promptId === id);
+  const commandPrompt = (text: string): string => {
+    const envelope = /^<command-message>[^<]*<\/command-message>\s*<command-name>([^<]*)<\/command-name>(?:\s*<command-args>([\s\S]*)<\/command-args>)?\s*$/
+      .exec(text);
+    if (envelope === null) return text;
+    const args = (envelope[2] ?? "").trim();
+    return args ? `${envelope[1].trim()} ${args}` : envelope[1].trim();
+  };
+  const entry = newestUserEntry(transcriptPath, prompt, (row) => id === null || row.promptId === id, undefined, commandPrompt);
   if (entry === null) return null;
   const origin = entry.origin !== null && typeof entry.origin === "object"
     ? (entry.origin as Record<string, unknown>).kind
@@ -9333,7 +9361,7 @@ function readActiveDirectiveMarkerSnapshot(path: string): {
   }
 }
 
-function transactActiveDirective<T>(
+export function transactActiveDirective<T>(
   projectDir: string,
   update: (
     marker: ActiveDirectiveMarker | null,
@@ -10218,7 +10246,7 @@ export function normalizeGuardRecoveryText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function guardRecoveryTextSha256(text: string): string | null {
+export function guardRecoveryTextSha256(text: string): string | null {
   const normalized = normalizeGuardRecoveryText(text);
   return normalized.length === 0 ? null : contentSha256(normalized);
 }
@@ -12130,7 +12158,7 @@ export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean
     const shardPath = auditFilePath(projectDir);
     if (projectRelativePath(projectDir, shardPath) !== mark.shard) return false;
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    return auditShardTurnBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
   }
@@ -12162,7 +12190,7 @@ export function repliesAfter(projectDir: string, mark: AuditMark): Array<{ messa
     const shardPath = auditFilePath(projectDir);
     if (projectRelativePath(projectDir, shardPath) !== mark.shard) return [];
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardBlocks(after)
+    return auditShardTurnBlocks(after)
       .filter((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }))
       .map((block) => ({ messageId: auditBlockField(block, "Message Id"), at: auditBlockField(block, "Timestamp") ?? "" }));
   } catch {
@@ -12275,7 +12303,7 @@ function projectTypeTurnOnRecord(projectDir: string): boolean {
   if (personTurnStands(projectDir, "plain", { replies: true })) return true;
   try {
     const after = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").subarray(asked.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    return auditShardTurnBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
   }
@@ -12320,7 +12348,7 @@ function engineAskPassedOver(projectDir: string, name: string): boolean {
     const shardPath = auditFilePath(projectDir);
     if (projectRelativePath(projectDir, shardPath) !== asked.shard) return false;
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(asked.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    return auditShardTurnBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
   }
@@ -12363,8 +12391,9 @@ export function humanTurnState(
   for (let t = 0; t < texts.length; t++) {
     const s = texts[t].shardIndex;
     const blocks = auditShardBlocks(texts[t].content);
+    const withdrawn = withdrawnTurnPositions(blocks);
     for (let i = 0; i < blocks.length; i++) {
-      if (copied[t].has(i)) continue;
+      if (copied[t].has(i) || withdrawn.has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
       // A host's own turn (HOST_TURN) is neither a person's turn nor a decision:
@@ -19217,14 +19246,7 @@ export function reviewAttemptAccounting(
     }
     if (kept.has(entry)) continue;
     if (entry.event === "GATE_REJECTED" || sensorFixes.has(entry)) {
-      const gateStages = (
-        auditBlockField(entry.block, "Gate Stages") ??
-          auditBlockField(entry.block, "Stage") ??
-          ""
-      )
-        .split(",")
-        .map((value) => value.trim());
-      if (!gateStages.includes(stage.slug)) continue;
+      if (!gateStagesReopened(entry.block).includes(stage.slug)) continue;
       const rejectedUnits = rejectionUnits(entry, sensorFixes);
       // A rejection that names no Unit is a stage-wide Request Changes: outside
       // team or checkpoint ownership it starts a new attempt for every Unit.
@@ -27854,28 +27876,40 @@ export function projectSettingsRepair(distribution: string): string {
   return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
 }
 
-// Missing, or there and not valid JSON (read as doctor reads it); null for a
-// valid file and for one that cannot be opened for another reason, which the
-// lines would not describe. Never throws: both callers run it outside a try.
-function registrationFault(path: string): "missing" | "invalid" | null {
-  let text: string;
+/**
+ * The harness's line for its hook registration file when that file is
+ * missing, not valid JSON, or valid and running none of AI-DLC's hooks (read
+ * through doctor's walk), with doctor's repair in it and `<entry>` left for
+ * the caller; null for a file that runs them, whatever else switches them off,
+ * for one that cannot be opened for another reason, which the lines would not
+ * describe, and for a harness that declares none (only Claude Code does). No
+ * setting brings those hooks back, so this line comes first. Never throws.
+ */
+export function registrationFault(projectDir?: string): string | null {
+  const registration = hookActivation()?.registration;
+  if (!registration) return null;
+  const project = resolveProjectDir(projectDir);
+  let fault: "missing" | "invalid" | "unwired" | null = null;
   try {
-    text = readFileSync(path, "utf-8");
+    const parsed = JSON.parse(withoutBom(readFileSync(join(project, registration.file), "utf-8")));
+    // AI-DLC's status line is not a hook and writes no heartbeat.
+    if (claudeSettingsHookTargets(project, parsed).every((target) => target === "statusline")) fault = "unwired";
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : null;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") fault = "missing";
+    else if (error instanceof SyntaxError) fault = "invalid";
   }
-  try {
-    JSON.parse(withoutBom(text));
-    return null;
-  } catch {
-    return "invalid";
-  }
+  return fault === null
+    ? null
+    : registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
 }
 
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(projectDir?: string): string {
   const startedInside = startedInsideProjectStep(projectDir);
   if (startedInside !== null) return startedInside;
+  const faultLine = registrationFault(projectDir);
+  if (faultLine !== null) return fillHookActivationText(faultLine, projectDir);
   const declared = hookActivation()?.recovery;
   if (declared) return fillHookActivationText(declared, projectDir);
   return HOOK_EXECUTION_RECOVERY_OTHER;
@@ -27940,14 +27974,12 @@ export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () 
   // Started in a folder inside the project, no file or setting brings the
   // hooks back: the one step is to start the tool in the project folder.
   const startedInside = startedInsideProjectLine(project);
-  const registration = activation.registration;
-  const fault = startedInside === null && registration ? registrationFault(join(project, registration.file)) : null;
+  const faultLine = startedInside === null ? registrationFault(project) : null;
   let step: string;
   if (startedInside !== null) {
     step = `Show the person this line and end your turn: "${startedInside}"`;
-  } else if (registration && fault) {
-    const line = registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
-    step = `Show the person this line and end your turn: "${line}"`;
+  } else if (faultLine !== null) {
+    step = `Show the person this line and end your turn: "${faultLine}"`;
   } else {
     // Through a link the agent would change a file outside the project.
     const edits = activation.agentStepEdits;
@@ -27984,7 +28016,7 @@ export function commandAtPersonsTerminal(env: NodeJS.ProcessEnv = process.env): 
 
 // Both ends of this command are a terminal. On its own this says nothing about
 // who typed it: an IDE runs its agent's commands in a terminal too.
-function atATerminal(env: NodeJS.ProcessEnv): boolean {
+export function atATerminal(env: NodeJS.ProcessEnv = process.env): boolean {
   return (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
 }
 
@@ -28932,10 +28964,14 @@ export function gateWordsSinceUnitReview(
     .filter((message) => message.offset > floor && message.offset <= ceiling && !isNonAnswer(message.text));
   if (taken.length === 0) return null;
   const bytes = (at: number): number => Buffer.byteLength(content.slice(0, at), "utf-8");
-  return taken.map((message) => {
+  // Words kept for a turn a HOST_TURN took back (withdrawnTurnPositions) were never theirs.
+  const blocks = auditShardBlocks(content);
+  const takenBack = new Set([...withdrawnTurnPositions(blocks)].map((pos) => auditBlockField(blocks[pos], "Message Id")));
+  const replies = taken.map((message) => {
     const id = turns.findLast((span) => message.offset > bytes(span.start) && message.offset <= bytes(span.end))?.id;
     return { ...(id === undefined ? {} : { messageId: id }), words: message.text };
-  });
+  }).filter((reply) => reply.messageId === undefined || !takenBack.has(reply.messageId));
+  return replies.length === 0 ? null : replies;
 }
 
 // Whether the person replied to the stage's approval question as it was last
@@ -28956,7 +28992,7 @@ export function personRepliedSincePresentation(
   }
   const from = gatePresentationStart(content, gate, { answeredBy: true });
   if (from === null) return null;
-  return auditShardBlocks(content.slice(from))
+  return auditShardTurnBlocks(content.slice(from))
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
@@ -29000,7 +29036,7 @@ function turnSinceGateShown(
   }
   const from = gatePresentationStart(content, gate, { firstShowing: true });
   if (from === null) return null;
-  return auditShardBlocks(content.slice(from))
+  return auditShardTurnBlocks(content.slice(from))
     .some((block) => which({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
@@ -31362,13 +31398,6 @@ export function isAutonomousSwarmStage(
 // Persisted per-work settings cannot lower this guard.
 export function humanPresenceGuardDisabled(projectDir?: string): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD", process.env, projectDir) === "1";
-}
-
-// An unattended driver is the only component that knows its prompt-submit
-// event did not originate from a person. Withhold the authority-bearing ledger
-// mint while retaining non-authority turn markers used by forwarding hooks.
-export function humanTurnMintAllowed(): boolean {
-  return process.env.AIDLC_UNATTENDED !== "1";
 }
 
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
@@ -34868,18 +34897,6 @@ export type UnitGateStatus =
   | "revising"
   | "approved";
 
-export function gateStagesFromBlock(block: string): string[] {
-  const explicit = auditBlockField(block, "Gate Stages");
-  if (explicit) {
-    return explicit
-      .split(",")
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0);
-  }
-  const stage = auditBlockField(block, "Stage");
-  return stage ? [stage] : [];
-}
-
 export function gateEventMatchesUnit(
   block: string,
   slug: string,
@@ -34895,7 +34912,7 @@ function gateRejectionMatchesAttempt(
   slug: string,
   unit: string | undefined,
 ): boolean {
-  if (!gateStagesFromBlock(block).includes(slug)) return false;
+  if (!gateStagesReopened(block).includes(slug)) return false;
   const eventUnit = auditBlockField(block, "Unit");
   if (eventUnit === null) return true;
   return unit !== undefined && eventUnit === unit;
@@ -35151,7 +35168,7 @@ export function unitLifecycleRunFloorForProject(
     rows.some((row) =>
       row.event === "GATE_REJECTED" &&
       auditBlockField(row.block, "Unit") === name &&
-      gateStagesFromBlock(row.block).includes(slug));
+      gateStagesReopened(row.block).includes(slug));
   const floored = unit !== undefined && (unitScoped || ownReopen(unit)) ? unit : undefined;
   return latestMainWorkflowStageRunFloorFromRows(rows, slug, unitMajor, floored, true);
 }
@@ -38535,10 +38552,11 @@ export function addReachesPassedOver(
   return stagesPassedOverJustNow(added, workRecordDir).includes(slug);
 }
 
-// The stages the person put back on the plan after the work had just passed
-// over them: the ones stagesPassedOverJustNow names whose add the record holds
-// since the current stage started (a RECOMPOSED row naming it, as recompose
-// writes for an add addReachesPassedOver lets through). `next` goes back to
+// The stages put back on the plan after the work had just passed over them:
+// the ones stagesPassedOverJustNow names whose add the record holds since the
+// current stage started (a RECOMPOSED row naming it, as recompose writes for an
+// add addReachesPassedOver lets through, or the STATE_UPGRADED row of an older
+// record brought up, naming a stage the newer graph added). `next` goes back to
 // the first, as the work would have gone on to it had the add come before the
 // approval, and the jump it names is the engine's own move. A stage on the plan
 // behind the cursor with no such add (a plan whose rows say so from the start,
@@ -38554,7 +38572,7 @@ export function addedStagesPassedOver(content: string, projectDir: string, inten
     .sort()
     .at(-1) ?? "";
   const addedSince = new Set(rows
-    .filter((row) => row.event === "RECOMPOSED" && row.timestamp >= entered)
+    .filter((row) => (row.event === "RECOMPOSED" || row.event === "STATE_UPGRADED") && row.timestamp >= entered)
     .flatMap((row) => (auditBlockField(row.block, "Stages added") ?? "").split(",").map((slug) => slug.trim())));
   return passed.filter((slug) => addedSince.has(slug));
 }
@@ -39819,12 +39837,15 @@ export function nextTokenKind(token: string, following: string | undefined): "fl
  */
 export type NextLineReading =
   // `unit`: the Unit tool's argv, when the line is the person's Unit command (unitCommandArgv).
-  | { kind: "exact"; unit?: string[] }
+  // `command`: a plugin command leading the line, with its own arguments.
+  | { kind: "exact"; unit?: string[]; command?: { name: string; args: string[] } }
   | { kind: "words" }
   | { kind: "untaken-flag"; token: string; value?: string }
   | { kind: "value"; flag: string; value: string; valid: readonly string[] }
   | { kind: "plan-word"; scope: string }
-  | { kind: "noun"; noun: string };
+  | { kind: "noun"; noun: string }
+  // A plugin command's name opening a sentence of theirs.
+  | { kind: "command"; name: string; plugin: string };
 
 /**
  * One argument that is nothing but flags and their values is that command,
@@ -39975,6 +39996,13 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (head.includes("--config")) return { kind: "exact" };
   if (head[0] === "--statusline") return { kind: "exact" };
   if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
+  // A plugin command owns its argv, so nothing on it is read as next's own.
+  const command = pluginCommandOnLine(args, splitKiroCommandArgs, () => projectPluginCommands({ pluginsEnabled, validScopes }));
+  if (command !== null) {
+    return command.sentence
+      ? { kind: "command", name: command.name, plugin: command.plugin }
+      : { kind: "exact", command: { name: command.name, args: command.args } };
+  }
 
   const words: string[] = [];
   let took = false;
@@ -40308,9 +40336,10 @@ export function boxPicksAddANote(projectDir: string, messageId?: string): boolea
   try {
     const blocks = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8")
       .replace(/\r\n/g, "\n").split("\n---\n");
+    const withdrawn = withdrawnTurnPositions(blocks);
     const isTurn = (block: string) => auditBlockField(block, "Event") === "HUMAN_TURN";
     let turn = blocks.length - 1;
-    while (turn >= 0 && !(isTurn(blocks[turn]) &&
+    while (turn >= 0 && !(isTurn(blocks[turn]) && !withdrawn.has(turn) &&
       (messageId === undefined || auditBlockField(blocks[turn], "Message Id") === messageId))) turn--;
     if (turn < 0) return null;
     const replies: string[] = [];
@@ -41764,7 +41793,13 @@ export function recordAcceptedChanges(
         (row) => row.event === "CHANGE_ACCEPTED" && acceptedChangeMatchesRow(change, row.block),
       )) continue;
       try {
-        changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", acceptedChangeFields(change), selection);
+        // A change the person's message stands behind is theirs; one the Guard
+        // Policy took with nobody asking is not, and names nobody.
+        const theirs = change.messageIds !== undefined && change.messageIds.length > 0;
+        changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", {
+          ...acceptedChangeFields(change),
+          ...(theirs ? personGitNameField(projectDir) : {}),
+        }, selection);
       } catch (error) {
         throw new Error(
           `Cannot continue: the accepted change for "${change.stage}"` +
@@ -42346,10 +42381,11 @@ export function filterProducesByKind(
 // The persisted `aidlc-state.md` carries a `- **State Version**: N` line naming
 // the state-graph schema the workflow was created under. v8 renamed the Inception
 // `application-design` stage to `domain-design` and inserted `contract-design`,
-// so a pre-v8 state file's stage rows no longer match the compiled graph. An
-// incompatible state must be refused up front by BOTH runtime commands
-// (aidlc-orchestrate.ts `next`/`report`) and by `aidlc --doctor`, and both
-// callers must classify the state identically — otherwise the doctor and the
+// so a pre-v8 state file's stage rows no longer match the compiled graph. The
+// engine's state read brings a version a step covers up in place
+// (aidlc-state-upgrade.ts); a state no step covers must be refused up front by
+// BOTH runtime commands (aidlc-orchestrate.ts `next`/`report`) and by
+// `aidlc --doctor`, and both callers must classify the state identically — otherwise the doctor and the
 // runtime disagree on whether a state is "malformed" vs "future" vs "past".
 // classifyStateVersion() is the single source of truth for that classification,
 // so a new schema bump only touches CURRENT_STATE_VERSION in this file.
@@ -42413,9 +42449,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
       `v${CURRENT_STATE_VERSION} stage graph. v8 renamed the Inception ` +
       "`application-design` stage to `domain-design` and inserted " +
       "`contract-design`, so this state's stage rows no longer match the graph " +
-      "and cannot be advanced safely. Archive your workspace " +
-      `('mv aidlc aidlc.v${v}-archive') and start a fresh workflow (describe what ` +
-      `to build), or finish this workflow on the prior shell. Run \`${entrySkillInvocation()} --doctor\` ` +
-      "for the full diagnosis.",
+      "and cannot be advanced safely. Finish this workflow on the prior shell. " +
+      `Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`,
   };
 }

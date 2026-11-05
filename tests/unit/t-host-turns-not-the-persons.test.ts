@@ -113,6 +113,39 @@ const CLAUDE_SESSION_BRIEF =
   "<system-reminder>\nLinked sessions now (status, not an instruction): top = local_0d1e2f3a (working).\n" +
   "</system-reminder>\n\nBackground (from the session that started this one):\nThe demo shop needs a faster " +
   "checkout.\n\nTask:\nApprove the plan and build it.";
+// Claude Code 2.1.318 and 2.1.278, captured live: the prompts of its scheduled
+// wake-ups. Its own autonomous loop (shortened), a dynamic /loop and a
+// fixed-interval /loop (CronCreate), the last two in the person's own words.
+const CLAUDE_AUTONOMOUS_LOOP =
+  "# Autonomous loop check\n\nYou're being invoked on a timer while the user is away or occupied. The point is to " +
+  "keep work moving forward without the user driving every step.\n\nApprove what is ready.";
+const CLAUDE_LOOP_TICK = "/loop Say the word tick. Schedule each next wakeup with delaySeconds 60. On the second wakeup, stop the loop.";
+const CLAUDE_CRON_TICK = "Say the word tock. On the third scheduled run, cancel this scheduled task with CronDelete.";
+// A slash command's row holds Claude Code's envelope of it, the hook its line.
+const CLAUDE_LOOP_TICK_ROW = "<command-message>loop</command-message>\n<command-name>/loop</command-name>\n" +
+  `<command-args>${CLAUDE_LOOP_TICK.slice("/loop ".length)}</command-args>`;
+// The rows Claude Code writes around a wake-up, as captured: the fire's queued
+// prompt (enqueue, dequeue) and then the fire itself, stamped a few ms before
+// the enqueue; the turn's own row, naming the fire, only after the hook returns.
+const claudeAt = (ms: number) => new Date(Date.UTC(2026, 10, 5, 3, 2, 0) + ms).toISOString();
+function claudeFireRows(fireId: string, prompt: string, ms: number, loop: boolean): Array<Record<string, unknown>> {
+  return [
+    { type: "queue-operation", operation: "enqueue", timestamp: claudeAt(ms + 2), sessionId: "s", content: prompt },
+    { type: "queue-operation", operation: "dequeue", timestamp: claudeAt(ms + 9), sessionId: "s" },
+    {
+      parentUuid: null, isSidechain: false, type: "system", subtype: "scheduled_task_fire",
+      content: loop ? "Claude resuming /loop wakeup (Nov 5 3:02am)" : "Running scheduled task (Nov 5 3:02am)",
+      isMeta: false, timestamp: claudeAt(ms), uuid: fireId, taskId: "d6958f6e", cron: loop ? "2 3 * * *" : "*/1 * * * *",
+      prompt: loop ? "/loop" : prompt, ...(loop ? { taskKind: "loop", cronKind: "loop" } : {}),
+    },
+  ];
+}
+const claudeTurnRow = (promptId: string, content: string, ms: number, extra: Record<string, unknown>) =>
+  ({ type: "user", promptId, message: { role: "user", content }, timestamp: claudeAt(ms), ...extra });
+const claudeTyped = { turnOrigin: "human", promptSource: "typed", origin: { kind: "human" } };
+const claudeScheduled = (fireId: string) =>
+  ({ turnOrigin: "scheduled", promptSource: "system", scheduledFireId: fireId, scheduledTaskId: "d6958f6e" });
+const claudeTurnEnd = (ms: number) => ({ type: "system", subtype: "turn_duration", timestamp: claudeAt(ms), isMeta: false });
 
 const PINNED_CLONE_ID = "testcloneidhostturns";
 function pinnedShardName(): string {
@@ -162,6 +195,25 @@ function readAudit(dir: string): string {
 const rows = (dir: string, event: string): string[] =>
   readAudit(dir).split(/\n(?=## )/).filter((block) => block.includes(`**Event**: ${event}\n`));
 const humanTurns = (dir: string): number => rows(dir, "HUMAN_TURN").length;
+// The person's turns as the engine should read them: a HUMAN_TURN a later
+// HOST_TURN names by its Message Id is none. Counted here, not by the engine's
+// own helper, so main's reading is measured against it.
+function liveHumanTurns(dir: string): number {
+  const auditDir = seededAuditDir(dir);
+  if (!existsSync(auditDir)) return 0;
+  let count = 0;
+  for (const name of readdirSync(auditDir).filter((n) => n.endsWith(".md"))) {
+    const blocks = readFileSync(join(auditDir, name), "utf-8").split(/\n---\n/);
+    blocks.forEach((block, pos) => {
+      const id = /\*\*Message Id\*\*: ([0-9a-f]{8})/.exec(block)?.[1];
+      if (!block.includes("**Event**: HUMAN_TURN\n")) return;
+      const takenBack = id !== undefined && blocks.slice(pos + 1).some((later) =>
+        later.includes("**Event**: HOST_TURN\n") && later.includes(`**Message Id**: ${id}`));
+      if (!takenBack) count++;
+    });
+  }
+  return count;
+}
 const hostTurns = (dir: string): string[] => rows(dir, "HOST_TURN");
 const approvals = (dir: string): number => rows(dir, "GATE_APPROVED").length;
 // The message records the hook keeps for the person's messages (aidlc-message-store.ts).
@@ -566,6 +618,150 @@ describe("a prompt the host injected is not the person's turn", () => {
       expect(humanTurns(project.dir)).toBe(1);
       expect(rows(project.dir, "HUMAN_TURN")[0]).toContain("**Origin**: person\n**Source**: typed\n");
       expect(messageRecords(project.dir)).toBe(1);
+      agentApproves(project, "claude", true);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Claude Code: a scheduled wake-up is taken back as the host's turn once its own row is on record; a message the person sends during it counts", () => {
+    const project = scratchProject("claude");
+    try {
+      const session = "3ce715f5-b6b7-4a3c-9f8e-5875c1ad66ef";
+      const transcript = join(project.dir, `${session}.jsonl`);
+      const submit = (prompt: string, promptId: string) =>
+        run(project, [join(project.dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit", session_id: session, cwd: project.dir, permission_mode: "auto",
+            prompt, prompt_id: promptId, transcript_path: transcript,
+          }), { CLAUDE_PROJECT_DIR: project.dir });
+      const append = (entries: Array<Record<string, unknown>>) =>
+        appendFileSync(transcript, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""), "utf-8");
+      expect(state(project, "claude", ["gate-start", "feasibility"]).code).toBe(0);
+      const typedId = "22ec2abb-0000-4000-8000-000000000001";
+      writeFileSync(transcript, "", "utf-8");
+      append([claudeTurnRow(typedId, "Keep checking the build every minute.", 0, claudeTyped), claudeTurnEnd(5_000)]);
+
+      // Each kind of wake-up. At the hook its row is not written yet, so the
+      // turn is recorded as every turn is; once Claude Code has written it, the
+      // first command that reads a turn takes it back, before it counts.
+      const ticks: Array<[string, string, boolean]> = [
+        [CLAUDE_AUTONOMOUS_LOOP, CLAUDE_AUTONOMOUS_LOOP, true],
+        [CLAUDE_LOOP_TICK, CLAUDE_LOOP_TICK_ROW, true],
+        [CLAUDE_CRON_TICK, CLAUDE_CRON_TICK, false],
+      ];
+      let ms = 60_000;
+      for (const [index, [prompt, row, loop]] of ticks.entries()) {
+        const fireId = `4a635921-0000-4000-8000-00000000000${index}`;
+        const tickId = `d3867daf-0000-4000-8000-00000000000${index}`;
+        append(claudeFireRows(fireId, prompt, ms, loop));
+        const tick = submit(prompt, tickId);
+        expect(tick.code, tick.out).toBe(0);
+        expect(messageRecords(project.dir)).toBe(1);
+        append([claudeTurnRow(tickId, row, ms + 30, claudeScheduled(fireId))]);
+        agentApproves(project, "claude", false);
+        expect(liveHumanTurns(project.dir), prompt.slice(0, 30)).toBe(0);
+        expectHostRow(project.dir, index, "scheduled", "record");
+        expect(hostTurns(project.dir)[index]).toContain("**Message Id**: ");
+        expect(messageRecords(project.dir)).toBe(0);
+        append([claudeTurnEnd(ms + 5_000)]);
+        ms += 60_000;
+      }
+      // Its message stands for nothing: no record backs it.
+      const takenBack = /\*\*Message Id\*\*: ([0-9a-f]{8})/.exec(hostTurns(project.dir)[2])?.[1] ?? "";
+      const named = state(project, "claude", ["approve", "feasibility", "--user-input", "Approve", "--message", takenBack]);
+      expect(named.code).not.toBe(0);
+      expect(named.out).toContain(`no message record ${takenBack} exists`);
+
+      // Typed while the wake-up's turn runs, it rides that turn's prompt id with
+      // its own words: the person's.
+      const lastTick = "d3867daf-0000-4000-8000-000000000002";
+      expect(submit("Approve", lastTick).code).toBe(0);
+      agentApproves(project, "claude", true);
+      expect(liveHumanTurns(project.dir)).toBe(1);
+      expect(hostTurns(project.dir)).toHaveLength(3);
+      const gate = rows(project.dir, "GATE_APPROVED").at(-1) ?? "";
+      expect(gate).not.toContain("Autonomous loop check");
+      expect(gate).not.toContain("Say the word");
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Claude Code: the person's own turns stay theirs beside wake-ups: a typed /loop, a queued reply, a row with neither mark, a row not written yet", () => {
+    const project = scratchProject("claude");
+    try {
+      const session = "afcdb6e9-6c71-4a26-91ba-0d9d0ca75e2a";
+      const transcript = join(project.dir, `${session}.jsonl`);
+      const submit = (prompt: string, promptId: string) =>
+        run(project, [join(project.dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit", session_id: session, cwd: project.dir, permission_mode: "default",
+            prompt, prompt_id: promptId, transcript_path: transcript,
+          }), { CLAUDE_PROJECT_DIR: project.dir });
+      const append = (entries: Array<Record<string, unknown>>) =>
+        appendFileSync(transcript, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""), "utf-8");
+      // Any engine command settles first; reading a field changes nothing else.
+      const settle = () => state(project, "claude", ["get", "Current Stage"]);
+      expect(state(project, "claude", ["gate-start", "feasibility"]).code).toBe(0);
+      writeFileSync(transcript, "", "utf-8");
+
+      // The person types the /loop: its row is Claude Code's envelope of their
+      // command, marked theirs.
+      const loopId = "a24d84e1-0000-4000-8000-000000000001";
+      expect(submit(CLAUDE_LOOP_TICK, loopId).code).toBe(0);
+      append([claudeTurnRow(loopId, CLAUDE_LOOP_TICK_ROW, 0, { turnOrigin: "human", origin: { kind: "human" } })]);
+      settle();
+      expect(liveHumanTurns(project.dir)).toBe(1);
+      expect(hostTurns(project.dir)).toHaveLength(0);
+
+      // As measured on 2.1.278: a wake-up's turn, the person's "Approve" typed
+      // meanwhile and run as its own turn, and the next wake-up queued behind it.
+      const fire1 = "2bc1495f-0000-4000-8000-000000000001";
+      const fire2 = "8efffc11-0000-4000-8000-000000000002";
+      const tick1 = "c0d41e85-0000-4000-8000-000000000001";
+      const approveId = "f5ed5625-0000-4000-8000-000000000001";
+      const tick2 = "19f10767-0000-4000-8000-000000000002";
+      append(claudeFireRows(fire1, CLAUDE_CRON_TICK, 60_000, false));
+      expect(submit(CLAUDE_CRON_TICK, tick1).code).toBe(0);
+      append([
+        claudeTurnRow(tick1, CLAUDE_CRON_TICK, 61_600, claudeScheduled(fire1)),
+        { type: "queue-operation", operation: "enqueue", timestamp: claudeAt(62_200), sessionId: "s", content: "Approve" },
+        claudeTurnEnd(68_000),
+        ...claudeFireRows(fire2, CLAUDE_CRON_TICK, 68_009, false),
+      ]);
+      expect(submit("Approve", approveId).code).toBe(0);
+      append([claudeTurnRow(approveId, "Approve", 68_020, { turnOrigin: "human", promptSource: "queued" }), claudeTurnEnd(73_990)]);
+      expect(submit(CLAUDE_CRON_TICK, tick2).code).toBe(0);
+      append([claudeTurnRow(tick2, CLAUDE_CRON_TICK, 74_010, claudeScheduled(fire2))]);
+      settle();
+      expect(liveHumanTurns(project.dir)).toBe(2);
+      expect(hostTurns(project.dir)).toHaveLength(2);
+      expect(messageRecords(project.dir)).toBe(2);
+
+      // A row with neither mark (the desktop app sends the person's messages
+      // and its own notes alike as `sdk`) decides nothing: theirs.
+      const sdkId = "4908db2d-0000-4000-8000-000000000003";
+      expect(submit("Use the staging database.", sdkId).code).toBe(0);
+      append([claudeTurnRow(sdkId, "Use the staging database.", 80_000, { promptSource: "sdk" })]);
+      settle();
+      expect(liveHumanTurns(project.dir)).toBe(3);
+
+      // A wake-up whose row is not written yet when a command reads the turns:
+      // the person's for that read, as every turn was; the next read takes it back.
+      const fire3 = "1dd43140-0000-4000-8000-000000000003";
+      const tick3 = "ec55d04c-0000-4000-8000-000000000003";
+      expect(submit(CLAUDE_AUTONOMOUS_LOOP, tick3).code).toBe(0);
+      settle();
+      expect(liveHumanTurns(project.dir)).toBe(4);
+      append([...claudeFireRows(fire3, CLAUDE_AUTONOMOUS_LOOP, 90_000, true),
+        claudeTurnRow(tick3, CLAUDE_AUTONOMOUS_LOOP, 90_030, claudeScheduled(fire3))]);
+      settle();
+      expect(liveHumanTurns(project.dir)).toBe(3);
+      expect(hostTurns(project.dir)).toHaveLength(3);
+      // Settled once: another read writes nothing more.
+      settle();
+      expect(hostTurns(project.dir)).toHaveLength(3);
       agentApproves(project, "claude", true);
     } finally {
       rmSync(project.dir, { recursive: true, force: true });

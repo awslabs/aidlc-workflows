@@ -173,6 +173,14 @@ export function readMessage(projectDir: string, id: string): StoredMessage | nul
   return readStoredMessage(projectDir, id);
 }
 
+/**
+ * Remove the record of a message that turned out not to be the person's: a
+ * turn Claude Code started itself (settleClaudeTurns), so no proof finds it.
+ */
+export function forgetMessage(projectDir: string, id: string): void {
+  if (MESSAGE_ID.test(id)) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
+}
+
 function recordIds(projectDir: string): string[] {
   let names: string[];
   try {
