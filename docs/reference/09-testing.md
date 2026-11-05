@@ -1478,7 +1478,10 @@ The runner writes these additional artifacts under its timestamped log directory
   isolated-file runs): Windows Codex fixture retention
   after the coordinator verifies native process retirement. These fixtures move
   to `retained-fixtures/` even on success; the host owns final deletion of the
-  protected sandbox files. A cross-volume copy keeps the original too.
+  protected sandbox files. When the move is refused (another volume, or a file
+  under the folder still held), the fixtures are copied and the original is kept
+  too; if the copy fails as well, they stay where they are, the run log says so
+  in one line, and the file keeps the result its cases gave.
 - `failed-fixtures/<label>-<pid>-<n>/`: a bounded snapshot of a failed live SDK
   fixture (t183, t193), taken by `tests/harness/failed-fixture.ts` because the
   fixture itself lives under the OS temporary directory that a hosted runner
