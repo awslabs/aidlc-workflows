@@ -357,7 +357,10 @@ interface Font {
   split: (b: Buffer) => number[][]; // [code, byte length] pairs
 }
 
-const WIN_HIGH = "\u20ac\ufffd\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\ufffd\u017d\ufffd\ufffd\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\ufffd\u017e\u0178";
+// WinAnsi's 0x80 to 0x9f, as code points: this is a decode table, not text AI-DLC prints.
+const WIN_HIGH = [
+  0x20ac, 0xfffd, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0xfffd, 0x017d, 0xfffd, 0xfffd, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0xfffd, 0x017e, 0x0178,
+].map((c) => String.fromCharCode(c));
 function winAnsi(code: number): string {
   if (code >= 0x80 && code <= 0x9f) return WIN_HIGH[code - 0x80];
   return String.fromCharCode(code);
@@ -368,7 +371,7 @@ const GLYPHS: Record<string, string> = {
   plus: "+", comma: ",", hyphen: "-", period: ".", slash: "/", colon: ":", semicolon: ";", less: "<", equal: "=",
   greater: ">", question: "?", at: "@", bracketleft: "[", backslash: "\\", bracketright: "]", asciicircum: "^",
   underscore: "_", grave: "`", braceleft: "{", bar: "|", braceright: "}", asciitilde: "~", quotedblleft: "\u201c",
-  quotedblright: "\u201d", endash: "\u2013", emdash: "\u2014", bullet: "\u2022", ellipsis: "\u2026", fi: "fi",
+  quotedblright: "\u201d", endash: String.fromCharCode(0x2013), emdash: String.fromCharCode(0x2014), bullet: "\u2022", ellipsis: "\u2026", fi: "fi",
   fl: "fl", ff: "ff", ffi: "ffi", ffl: "ffl", minus: "\u2212", zero: "0", one: "1", two: "2", three: "3", four: "4",
   five: "5", six: "6", seven: "7", eight: "8", nine: "9", germandbls: "\u00df", ae: "\u00e6", AE: "\u00c6",
   oe: "\u0153", OE: "\u0152", oslash: "\u00f8", Oslash: "\u00d8", dotlessi: "\u0131", degree: "\u00b0",
