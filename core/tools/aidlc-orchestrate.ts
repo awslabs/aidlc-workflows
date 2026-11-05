@@ -4091,7 +4091,7 @@ function openGateReplyDirective(
       `--user-input "Request Changes"\`. Then follow what it returns. If it asks about what the stage found or ` +
       `produced, answer it from the files in ${folder ? `${folder}/` : "the stage's folder"}, then ask the approval ` +
       `question again. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(stage)}\` and ` +
-      "follow what it returns. If it is about something else, such as new " +
+      `follow what it returns. ${workQuestionReading(WORK_ITSELF)} If it is about something else, such as new ` +
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       `person in one short question and follow their answer.${named}`,
@@ -4223,7 +4223,8 @@ function openQuestionReplyDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet${asked}. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
       `\`${orchestrate} next\` the next time you need the engine. If it asks to skip this stage, run ` +
-      `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. If it is about something else, such as new work ` +
+      `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. ${workQuestionReading(WORK_ITSELF)} ` +
+      "If it is about something else, such as new work " +
       `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       `person in one short question and follow their answer.${replyIdsNote(replies, "`log answer`")}`,
@@ -4249,7 +4250,8 @@ function openRecoveryReplyDirective(marker: ActiveDirectiveMarker, requestId: st
     `The recovery question for "${marker.stage}" is open, and ${recoveryQuestionChoices(marker)}. The person's ` +
       "reply may answer it. Read it. If it picks one of those choices, run that choice's command and follow what it " +
       `returns. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(marker.stage)}\` and follow ` +
-      "what it returns. If it is about something else, such as new work or a change to the plan, run " +
+      `what it returns. ${workQuestionReading(WORK_ITSELF)} If it is about something else, such as new work or a ` +
+      "change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person once in plain words, with the " +
       "question's choices, and follow their answer.",
@@ -4468,7 +4470,8 @@ function openPlanQuestionReplyDirective(
       `${record}, then run bare \`${orchestrate} next\`.${typed}`;
   return printDirective(
     `${undo}${answer} If it asks to skip Code Generation, run \`${orchestrate} next --skip code-generation\` and ` +
-      "follow what it returns. If it is about something else, such as new work or a change to the plan, run " +
+      `follow what it returns. ${workQuestionReading(WORK_ITSELF)} If it is about something else, such as new work ` +
+      "or a change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
       `their answer.${replyIdsNote(replies, "`log answer`")}`,

@@ -4,7 +4,8 @@
 // t-question-at-an-open-decision: a question about where the work stands, typed with /aidlc while a decision is open
 // (a stage's approval gate, a stage's question, the code plan question, a guard's recovery question), gets that
 // decision's reading step with the status reading beside its other readings: answer from the status, run no other
-// command. Nothing is recorded, so the decision stays open for the person's next reply. Measured on #3543's head
+// command. Nothing is recorded, the same words again get the same decision's reading, and a bare `next` after it
+// returns the step any other non-answer leads to: the open decision is still the next thing the person is asked. Measured on #3543's head
 // bc550927f: the four readings had no reading for a question about the work, so its fit was the request reading
 // (`next --request`, which asks where the words belong) or one short question; live at a gate, Sonnet 4.5 ran the
 // routing command at main and showed the gate's choices without an answer at bc550927f's patch.
@@ -13,7 +14,7 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { cleanupTestProject } from "../harness/fixtures.ts";
-import { next } from "../harness/aidlc-input-corpus.ts";
+import { type Directive, next } from "../harness/aidlc-input-corpus.ts";
 import { CHOICE_EVENTS, choiceRowCount, projectAt, type Question, say, templateProjects } from "../harness/aidlc-answers-corpus.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -25,6 +26,7 @@ afterAll(() => {
 });
 
 const QUESTION = "how far along are we?";
+const OTHER = "what does this stage do?";
 const STATUS = /`[^`]*\bengine status`/;
 const NOTHING_ELSE = "run no other command";
 const REQUEST = /`[^`]* next --request [0-9a-f]{8}`/;
@@ -59,6 +61,19 @@ describe("t-question-at-an-open-decision: a question about the work is answered 
       expect(choiceRowCount(proj)).toBe(choices);
       const recorded = readAuditShardEvents(proj).slice(before).map((row) => row.event).filter((event) => CHOICE_EVENTS.includes(event));
       expect(recorded).toEqual([]);
+      // The decision is still open: the same words again get the same decision's reading.
+      const again = await next(proj, [QUESTION]);
+      expect(String(again.directive?.message), again.out).toContain(opens);
+      // And it is still what comes next: a bare `next` returns the step it returns after any other reply that does not
+      // answer the decision (a twin where the person asked about the stage instead).
+      const twin = await projectAt(question);
+      projects.push(twin);
+      expect((await say(twin, `/aidlc ${OTHER}`, "claude")).status).toBe(0);
+      await next(twin, [OTHER]);
+      const expected = await next(twin, []);
+      const after = await next(proj, []);
+      const shape = (d: Directive | null) => ({ kind: d?.kind, ask_type: d?.ask_type, stage: d?.stage });
+      expect(shape(after.directive), after.out).toEqual(shape(expected.directive));
     });
   }
 });
