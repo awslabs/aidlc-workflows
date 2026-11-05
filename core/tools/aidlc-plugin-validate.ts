@@ -20,11 +20,16 @@ import {
   sep,
 } from "node:path";
 import {
+  CHANGE_CONTROL_HEADING,
   frontmatterBlock,
+  GUARD_POLICY_HEADING,
   listField,
   parseStageFrontmatter,
   scalarField,
+  structuredField,
+  visibleMarkdownLines,
 } from "./aidlc-lib.ts";
+import { SETTING_FIELDS } from "./aidlc-learnings.ts";
 import {
   type StageFrontmatter,
   type ValidationContext,
@@ -78,7 +83,11 @@ export type PluginValidationRule =
   | "test-idempotency"
   | "test-live-mutation"
   | "create-target"
-  | "create-write";
+  | "create-write"
+  | "memory-level"
+  | "memory-lock"
+  | "memory-setting"
+  | "memory-file";
 
 export interface PluginValidationFinding {
   file: string;
@@ -146,6 +155,7 @@ const CANONICAL_CONTRIBUTION_PATHS: Record<string, string> = {
   sensors: "sensors/",
   knowledge: "knowledge/",
   tools: "tools/",
+  memory: "memory/",
 };
 const PLUGIN_SYMLINK_SCAN_DIRS = [
   ".aidlc-plugin",
@@ -156,6 +166,7 @@ const PLUGIN_SYMLINK_SCAN_DIRS = [
   "scopes",
   "agents",
   "knowledge",
+  "memory",
   "hooks",
 ] as const;
 
@@ -232,15 +243,6 @@ function contributionPathIssues(
         key,
         message: `aidlc.contributes.${key} must be a non-empty relative path`,
         fix: `Point "${key}" at the corresponding canonical plugin subtree.`,
-      });
-      continue;
-    }
-    if (key === "memory") {
-      issues.push({
-        key,
-        message:
-          "aidlc.contributes.memory is not supported by the current plugin projection",
-        fix: "Remove the memory contribution until memory projection ships.",
       });
       continue;
     }
@@ -978,6 +980,75 @@ function validateManifest(
   return { pluginName: declaredName, base };
 }
 
+// A plugin's rules are practice rules in words: the level they land at is
+// the manifest's (aidlc.rulesLevel), and they carry no lock (Guard Policy) and
+// no setting field (SETTING_FIELDS, the one list of fields AI-DLC's tools
+// read from a rule file). Their own headings are nested at compose, never
+// refused.
+const RULE_PHASE_FILES = ["ideation", "inception", "construction", "operation"].map((phase) => `phases/${phase}.md`);
+
+function validateMemory(root: string, findings: MutableFindings): void {
+  const memory = join(root, "memory");
+  if (!existsSync(memory)) return;
+  const files = scanPluginFiles(memory).files.map((file) => posixRelative(memory, file)).sort();
+  const manifestFile = MANIFEST_REL.split(sep).join("/");
+  let level: unknown;
+  try {
+    const manifest = JSON.parse(readFileSync(join(root, MANIFEST_REL), "utf-8")) as { aidlc?: { rulesLevel?: unknown } };
+    level = manifest.aidlc?.rulesLevel;
+  } catch {
+    return; // validateManifest names it
+  }
+  if (files.includes("rules.md") && !["org", "team", "project"].includes(level as string)) {
+    addError(
+      findings,
+      manifestFile,
+      "memory-level",
+      level === undefined
+        ? "memory/rules.md needs aidlc.rulesLevel, the rule file its rules land in by default"
+        : `aidlc.rulesLevel must be org, team or project; got ${JSON.stringify(level)}`,
+      'Set "aidlc": {"rulesLevel": "team"} (or "org", "project"); an install can choose another with --rules-level.',
+    );
+  }
+  const fieldNames = [...new Set([...SETTING_FIELDS.values()].flat())];
+  for (const rel of files) {
+    const display = `memory/${rel}`;
+    if (rel !== "rules.md" && !RULE_PHASE_FILES.includes(rel)) {
+      addWarning(
+        findings,
+        display,
+        "memory-file",
+        "a plugin's rules are memory/rules.md and memory/phases/<ideation|inception|construction|operation>.md; this file is not read",
+        "Move its rules into memory/rules.md or the phase file they belong to.",
+      );
+      continue;
+    }
+    const lines = visibleMarkdownLines(readFileSync(join(memory, rel), "utf-8"));
+    for (const heading of [GUARD_POLICY_HEADING, CHANGE_CONTROL_HEADING]) {
+      if (lines.some((line) => line.trimEnd() === heading)) {
+        addError(
+          findings,
+          display,
+          "memory-lock",
+          `${heading} is a lock the team sets; a plugin ships rules only`,
+          `Remove the ${heading} section; the team or project sets Guard Policy in its own team.md or project.md.`,
+        );
+      }
+    }
+    for (const field of fieldNames) {
+      if (structuredField(lines.join("\n"), field) !== null) {
+        addError(
+          findings,
+          display,
+          "memory-setting",
+          `"${field}:" is a setting AI-DLC reads from a rule file; a plugin ships rules in words only`,
+          `Reword the line so it does not start with "${field}:", or leave the setting to the team's own team.md or project.md.`,
+        );
+      }
+    }
+  }
+}
+
 function validateStages(
   root: string,
   pluginName: string,
@@ -1542,6 +1613,7 @@ export function validatePluginRoot(
   validateScopes(root, pluginName, findings, base, baseCheckout?.stages ?? null, options.coreStageSlugs);
   validateAgents(root, pluginName, findings);
   validateTools(root, findings);
+  validateMemory(root, findings);
   const composeHook = validateComposeHook(
     root,
     findings,

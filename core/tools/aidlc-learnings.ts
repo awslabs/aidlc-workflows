@@ -840,7 +840,7 @@ const DEFAULT_PRACTICE_HEADING = "## Corrections";
 // Posture's Methodology and Ordering, and Guard Policy's Mode under its current
 // or retired heading. A learning written as one of those fields there keeps its
 // date out of the value.
-const SETTING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
+export const SETTING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
   [TESTING_HEADING, ["Methodology", "Ordering"]],
   [GUARD_POLICY_HEADING, ["Mode"]],
   [CHANGE_CONTROL_HEADING, ["Mode"]],

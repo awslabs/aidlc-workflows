@@ -532,10 +532,17 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   contributionRecordError,
   contributionSources,
+  copyPluginRulesToSpace,
   copyProjectSurfaces,
   cutPluginFragment,
   hostListsPlugins,
+  mergePluginRulesFromRoot,
+  movePluginRules,
   nextCompose,
+  parseRulesLevels,
+  pluginRulesRecords,
+  refreshRulesCopy,
+  sayRulesPlacement,
   noPluginListLine,
   personaTwinRels,
   projectDiffPlan,
@@ -543,6 +550,8 @@ import {
   skippedCommandLine,
   type StageContribRecord,
   stripRecordedAdds,
+  rulesRecordGaps,
+  stripPluginRules,
   syncCommand,
   tomlFragmentText,
   withFileLineEndings,
@@ -1232,6 +1241,10 @@ function removePluginFragments(content: string, plugin: string): string {
 // source. The caller commits the resulting staged-project diff through the
 // shared transaction engine; consumed sidecars are deleted in staging and
 // compose recreates them when the plugin is re-enabled.
+// The plugins whose rules sections the last strip took out, for the line
+// select says.
+const rulesTakenOut = new Set<string>();
+
 function stripDisabledPluginContributions(
   plugins: readonly string[],
 ): string[] {
@@ -1291,6 +1304,10 @@ function stripDisabledPluginContributions(
       rmSync(sidecar, { force: true });
       pluginTouched = true;
     }
+    if (stripPluginRules(runtimeProjectDir(), plugin, true)) {
+      pluginTouched = true;
+      rulesTakenOut.add(plugin);
+    }
     if (pluginTouched) stripped.push(plugin);
   }
   return stripped;
@@ -1302,11 +1319,14 @@ function stripDisabledPluginContributions(
 // nor its record of it, so its compose merges it back once it is on again.
 // The implicit core plugin merges nothing.
 export function stripPluginsTurnedOff(): string[] {
+  return stripDisabledPluginContributions(pluginsTurnedOff());
+}
+
+// The plugins the selection leaves off or pauses.
+export function pluginsTurnedOff(): string[] {
   const active = pluginsEnabled();
   if (active === null) return [];
-  return stripDisabledPluginContributions(
-    knownPluginNames().filter((name) => name !== "aidlc" && !active.has(name)),
-  );
+  return knownPluginNames().filter((name) => name !== "aidlc" && !active.has(name));
 }
 
 // A selection change must not strand a live workflow: after disable, a state
@@ -1385,8 +1405,14 @@ export function activeWorkflowPluginDependencies(
   return violations;
 }
 
-function handleSelectPlugins(projectDir: string, positional: string[]): void {
-  if (positional.length === 1) {
+function handleSelectPlugins(projectDir: string, positional: string[], rulesLevelFlag?: string): void {
+  let rulesLevels: Map<string, "org" | "team" | "project">;
+  try {
+    rulesLevels = parseRulesLevels(rulesLevelFlag === undefined ? [] : ["--rules-level", rulesLevelFlag]);
+  } catch (error) {
+    die(errorMessage(error));
+  }
+  if (positional.length === 1 && rulesLevels.size === 0) {
     const selection = renderPluginSelection(pluginsSelected());
     process.stdout.write(
       `Current plugin selection: ${selection}\nKnown plugins: ${knownPluginNames().join(", ")}\n`,
@@ -1394,7 +1420,10 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     return;
   }
 
-  const parsedSelection = parsePluginSelectionArgs(positional);
+  const keepSelection = positional.length === 1;
+  const parsedSelection = keepSelection
+    ? { names: knownPluginNames().filter((name) => pluginsEnabled()?.has(name) ?? true), hasEmpty: false }
+    : parsePluginSelectionArgs(positional);
   if (parsedSelection.hasEmpty || parsedSelection.names.length === 0) {
     die("select-plugins requires at least one non-empty plugin name, or no arguments to print the current selection.");
   }
@@ -1410,7 +1439,7 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     // discover and validate identities only after entering the transaction.
     const known = knownPluginNames();
     const knownSet = new Set(known);
-    const unknown = names.filter((name) => !knownSet.has(name));
+    const unknown = [...new Set([...names, ...rulesLevels.keys()])].filter((name) => !knownSet.has(name));
     if (unknown.length > 0) {
       die(`Unknown plugin name(s): ${unknown.join(", ")}. Valid plugins: ${known.join(", ")}.`);
     }
@@ -1436,7 +1465,8 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     }
 
     const previousSelection = renderPluginSelection(pluginsSelected());
-    const newSelection = names.join(", ");
+    // --rules-level alone leaves the selection as it was, and the record says so.
+    const newSelection = keepSelection ? previousSelection : names.join(", ");
 
     const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-select-"));
     const stagedProject = join(stagingRoot, "project");
@@ -1451,6 +1481,7 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       ] as const;
       const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
       let strippedPlugins: string[] = [];
+      const rulesLines: string[] = [];
       try {
         process.env.AIDLC_RUNTIME_PROJECT_DIR = stagedProject;
         process.env.AIDLC_PROJECT_DIR = stagedProject;
@@ -1460,8 +1491,13 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
         // Strip what the new selection turns off in staging before recompiling.
         // The live project remains byte-untouched until the shared transaction
         // commits.
-        writePluginSelection(stagedProject, names);
+        if (!keepSelection) writePluginSelection(stagedProject, names);
+        rulesTakenOut.clear();
         strippedPlugins = stripPluginsTurnedOff();
+        for (const [plugin, level] of rulesLevels) {
+          const line = movePluginRules(stagedProject, selectedHarness, plugin, level);
+          if (line !== null) rulesLines.push(line);
+        }
         regenerateSelectionSurfaces(stagedProject, projectDir);
       } finally {
         for (const key of envKeys) {
@@ -1481,10 +1517,14 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
           appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
             "Previous Selection": previousSelection,
             "New Selection": newSelection,
+            ...(rulesLevels.size > 0
+              ? { "Rules Level": [...rulesLevels].map(([plugin, level]) => `${plugin}=${level}`).join(", ") }
+              : {}),
           });
         },
       });
       resetSelectionSensitiveCaches();
+      if (plan.operations.some((operation) => operation.path.startsWith("aidlc/spaces/"))) refreshRulesCopy(projectDir);
       // No record keeps the folder a plugin composed from, so a sync line names
       // it in words.
       const harnessName = runtimeHarnessName(projectDir, harnessDir());
@@ -1492,12 +1532,13 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       // again, not when it is: its pause line says so.
       for (const plugin of strippedPlugins.filter((name) => !pausedAfter.has(name))) {
         process.stdout.write(
-          `What ${plugin} added to other stages and agents is taken out; turn ${plugin} back on and it returns ${
+          `What ${plugin} added to other stages and agents${rulesTakenOut.has(plugin) ? ", and its rules," : ""} is taken out; turn ${plugin} back on and ${rulesTakenOut.has(plugin) ? "they return" : "it returns"} ${
             nextCompose(harnessName, plugin, null)
           }.\n`,
         );
       }
-      process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
+      if (!keepSelection) process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
+      for (const line of rulesLines) process.stdout.write(`${line}\n`);
       // Said once: at the select that pauses a plugin, never again after.
       for (const [plugin, base] of pausedAfter) {
         if (pausedBefore.get(plugin) === base) continue;
@@ -1723,9 +1764,11 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
     );
   }
 
+  const rulesLines: string[] = [];
   for (const item of composePaths) {
     const composeEnv: NodeJS.ProcessEnv = {
       ...process.env,
+      AIDLC_PLUGIN_RULES_BY_SYNC: "1",
       AIDLC_HARNESS_DIR: harnessDir(),
       AIDLC_HARNESS_NAME: runtimeHarnessName(projectDir, harnessDir()),
       AIDLC_PROJECT_DIR: projectDir,
@@ -1742,6 +1785,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
         "CLAUDE_PLUGIN_ROOT",
         "PLUGIN_ROOT",
         "AIDLC_COMPILED_EXECUTABLE",
+        "AIDLC_PLUGIN_RULES_BY_SYNC",
       ] as const;
       const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
       Object.assign(process.env, composeEnv, {
@@ -1764,6 +1808,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
           else process.env[key] = value;
         }
       }
+      rulesLines.push(...pluginSyncRules(projectDir, item.root));
       continue;
     }
 
@@ -1776,9 +1821,21 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
       const detail = (result.stderr || result.stdout || `exit ${result.status ?? 1}`).trim();
       die(`plugin-sync failed for ${item.root}: ${detail}`);
     }
+    rulesLines.push(...pluginSyncRules(projectDir, item.root));
   }
+  refreshRulesCopy(projectDir);
+  sayRulesPlacement(projectDir, rulesLines);
 
-  process.stdout.write(`plugin sync complete: ${composePaths.length} plugin(s)\n`);
+  process.stdout.write(`plugin sync complete: ${composePaths.length} plugin(s)\n${rulesLines.map((line) => `${line}\n`).join("")}`);
+}
+
+function pluginSyncRules(projectDir: string, root: string): string[] {
+  try {
+    const line = mergePluginRulesFromRoot(projectDir, harnessDir(), root, isPluginEnabled);
+    return line === null ? [] : [line];
+  } catch (error) {
+    die(`plugin-sync failed for ${root}: ${errorMessage(error)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -5041,6 +5098,10 @@ export async function collectDoctorReport(
           }
         }
       }
+    }
+    for (const plugin of pluginRulesRecords(projectDir)) {
+      if (!isPluginEnabled(plugin)) continue;
+      for (const gap of rulesRecordGaps(projectDir, plugin)) missingComposition.push(`${plugin}: ${gap}`);
     }
     results.push({
       pass: missingComposition.length === 0,
@@ -12049,6 +12110,8 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   // templates/ floor marker so the empty dir is tracked (mirrors SEED's floor).
   const floor = join(memoryDest, "templates", ".gitkeep");
   if (!existsSync(floor)) writeFileSync(floor, "", "utf-8");
+  // The plugins' rules sections come with it, from default as org.md does.
+  copyPluginRulesToSpace(projectDir, join(spacesRoot(projectDir), DEFAULT_SPACE, "memory"), memoryDest);
   // codekb/ + knowledge/ floors so the empty siblings track (both committed).
   const codekbFloor = join(dest, "codekb", ".gitkeep");
   if (!existsSync(codekbFloor)) writeFileSync(codekbFloor, "", "utf-8");
@@ -13922,7 +13985,7 @@ export async function main(argv: string[]): Promise<void> {
     case "select-plugins":
       // The install the person names changes, as `plugin sync` reads it.
       if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
-      handleSelectPlugins(projectDir, positional);
+      handleSelectPlugins(projectDir, positional, flags["rules-level"]);
       break;
     case "plugin-list":
       handlePluginList(flags);

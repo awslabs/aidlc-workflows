@@ -2404,7 +2404,10 @@ that list and doctor read), composes in staging and applies one
 `aidlc-transaction.ts` plan;
 `--prune-missing` additionally requires full inventory, `--yes` when
 non-interactive (at a terminal it names what it prunes and proceeds), and a
-hash-valid `plugin-owned-<key>.json` record. These paths never open a network
+hash-valid `plugin-owned-<key>.json` record. `--rules-level <plugin>=<org|team|project>`
+(also on `aidlc engine plugin select`) puts a plugin's house rules in that rule
+file, kept in `aidlc/plugin-rules/<key>.json` for the whole project; sync writes every plugin's rules into
+the rule files of every space after its compose. These paths never open a network
 connection.
 
 ## Transaction Tool
