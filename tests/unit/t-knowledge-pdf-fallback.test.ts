@@ -11,7 +11,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { deflateSync } from "node:zlib";
@@ -83,7 +83,7 @@ function minimalPdf(pages: string[], image?: number, filter?: string): Buffer {
 
 /** Runs `body` (with the knowledge module as `kb`) in a child whose PATH is empty, so no pdftotext is on it on
  *  any machine; returns what `body` returns. */
-function withoutPdftotext<T>(p: string, body: string): T {
+function withoutPdftotext<T>(p: string, body: string, extraEnv: Record<string, string> = {}): T {
   const empty = join(p, "empty-bin");
   mkdirSync(empty, { recursive: true });
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PATH"));
@@ -93,7 +93,7 @@ if (kb.probeExtractor("pdftotext").available) throw new Error("pdftotext is on t
 const out = (() => { ${body} })();
 console.log(JSON.stringify(out));`], {
     cwd: empty,
-    env: { ...env, PATH: empty },
+    env: { ...env, ...extraEnv, PATH: empty },
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
@@ -181,6 +181,25 @@ describe("t-knowledge-pdf-fallback: a PDF is read where pdftotext is missing", (
     expect(rows.second).toBe(0);
     expect(rows.state.state).toBe("extracted");
     expect(rows.state.extractor).toEqual({ name: "builtin-pdf", version: "1" });
+  });
+
+  test("a team's own pdftotext that is missing stays missing, and the line says to install it", () => {
+    const p = project();
+    put(p, "handbook.pdf", fixture("pdf-libreoffice.pdf"));
+    // The team's distribution configures pdftotext for PDFs: never replaced by AI-DLC's reader.
+    const root = join(p, "harness-root");
+    cpSync(join(DIST, "data"), join(root, "tools", "data"), { recursive: true });
+    const harness = join(root, "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(harness, "utf-8")) as Record<string, unknown>;
+    data.documentExtractors = { "application/pdf": { argv: ["pdftotext", "$IN", "-"] } };
+    writeFileSync(harness, JSON.stringify(data));
+    const out = withoutPdftotext<{ state: string; unread: unknown }>(p, `
+      const p = ${JSON.stringify(p)};
+      kb.onboard(p, "default", undefined, ${JSON.stringify(NOW)});
+      return { state: kb.readIndex(p, "default").documents[0].extraction.state, unread: kb.unreadDocuments(p, "default") };`,
+    { AIDLC_RUNTIME_HARNESS_ROOT: root, AIDLC_HARNESS_DIR: ".claude" });
+    expect(out.state).toBe("extractor_unavailable");
+    expect(out.unread).toEqual([{ path: "documents/handbook.pdf", reason: "no-extractor" }]);
   });
 
   test("the reader answers through the engine's own command, as a compiled binary runs it", () => {
