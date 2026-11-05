@@ -195,6 +195,7 @@ describe("everything else keeps the host's own prompt", () => {
     ["a relative record path", () => `cat ${RECORD.join("/")}; echo "---HEAD---"`],
     ["a relative path holding a separator in quotes", () => `cat "aidlc/x;rm -rf ~"`],
     ["a quote that never closes", (p) => `cat "${recordAt(p)}; rm -rf ~`],
+    ["an echo alone, which reads no record", () => `echo "---HEAD---"`],
   ];
   for (const [name, spell] of stays) {
     test(name, () => {
@@ -301,6 +302,21 @@ describe("the team's and the person's own rules about AI-DLC keep the host's pro
         permissions.deny = ["Edit(.claude/settings.json)", "Edit(.claude/settings.local.json)"];
       });
       expect(decide(project, command(project)).decision).toBe("allow");
+    });
+  });
+
+  test("a deny rule for AI-DLC in the organization's managed settings, wherever the repo's resolver finds them", () => {
+    withProjects((project) => {
+      const managedDir = mkdtempSync(join(tmpdir(), "own-command-managed-"));
+      try {
+        const managed = join(managedDir, "managed-settings.json");
+        editSettings(managed, (permissions) => {
+          permissions.deny = ["Bash(bun .claude/tools/aidlc.ts engine *)"];
+        });
+        expect(decide(project, command(project), { AIDLC_MANAGED_SETTINGS_PATH: managed }).decision).toBeNull();
+      } finally {
+        rmSync(managedDir, { recursive: true, force: true });
+      }
     });
   });
 
