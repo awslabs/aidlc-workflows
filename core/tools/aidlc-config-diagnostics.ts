@@ -3322,7 +3322,7 @@ function copiedAgentsState(
     path === "AGENTS.md" ? integration.legacySignatures?.wholeFileHashes ?? [] : [],
   );
   if (merged.error) return { path, kind: "managed-block", state: "conflict" };
-  // Config and session start do not refresh Codex's override.
+  // Without a record, doctor cannot treat an arbitrary edited block as shipped.
   if (
     path === "AGENTS.override.md" && merged.currentHash !== undefined &&
     merged.currentHash !== merged.nextHash
@@ -3347,9 +3347,11 @@ function instructionStates(
   const agentsPath = harness === "codex" && instructionFileStat(override)?.isFile()
     ? override
     : "AGENTS.md";
-  // Config still owns AGENTS.md; only its conflicts matter when Codex reads the override.
+  // A removed override no longer hides AGENTS.md. Its old ownership row is
+  // not a missing instruction file; conflicts in the shared file still matter.
   const relevantState = (item: InstructionState): boolean =>
-    agentsPath === "AGENTS.md" || item.path !== "AGENTS.md" || item.state === "conflict";
+    (item.path !== override || agentsPath === override) &&
+    (agentsPath === "AGENTS.md" || item.path !== "AGENTS.md" || item.state === "conflict");
   let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
   let agentsBlock: RootIntegration | undefined;
   try {
@@ -3421,10 +3423,11 @@ function instructionStates(
   )) {
     if (
       path === "AGENTS.md" ||
+      (harness === "codex" && path === override) ||
       (path === "opencode.json" && (contribution.policy === "whole-file" || contribution.policy === "json-entries"))
     ) {
       tracked.push({ path, contribution });
-      if (path === "AGENTS.md" && agentsPath !== path) {
+      if (path === "AGENTS.md" && agentsPath !== path && !baseline.rootContributions?.[agentsPath]) {
         tracked.push({
           path: agentsPath,
           contribution: contribution.policy === "managed-block"
@@ -3576,7 +3579,7 @@ export function instructionFileDoctorCheck(
         : `copy the current AI-DLC:agents block from AGENTS.md into ${override}`;
       fixes.push(
         `${action}, preserving your own text; ` +
-          `if needed, refresh AGENTS.md with \`${invoke} config\` first (config does not update ${override})`,
+          `run \`${invoke} config\` to keep the repaired block current in both files`,
       );
     }
     const others = items.filter((item) => item.path !== override);

@@ -36,6 +36,7 @@ import {
   mergeBlock,
   mergeJsonEntries,
   type ProjectionDescriptor,
+  projectRootIntegrations,
   readRootIntegrations,
   type RootIntegration,
   rootBlockPath,
@@ -447,7 +448,10 @@ export function aidlcRootParts(projectDir: string): AidlcRootParts {
     }
     const configured = existsSync(join(data, "aidlc-manifest.json"));
     const integrations = readRootIntegrations(descriptor.rootIntegrations);
-    for (const integration of (Array.isArray(integrations) ? integrations : []) as RootIntegration[]) {
+    for (const integration of projectRootIntegrations(projectDir, {
+      distribution: descriptor.distribution,
+      rootIntegrations: (Array.isArray(integrations) ? integrations : []) as RootIntegration[],
+    })) {
       if (integration?.policy === "json-entries" && jsonEntriesIsSafe(integration)) {
         const partPath = rootBlockPath(harness.root, integration);
         try {

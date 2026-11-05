@@ -33,15 +33,19 @@ precedence. A missing or changed AI-DLC block produces an advisory warning.
 It also reports damaged blocks in `AGENTS.md` that would stop config or refresh,
 even when Codex loads the override. Doctor does not edit either file.
 
-Config and project refresh still write the AI-DLC block to `AGENTS.md`, not the
-override. If your project keeps `AGENTS.override.md`, copy the current
-`<!-- BEGIN AI-DLC:agents -->` through `<!-- END AI-DLC:agents -->` block from
-`AGENTS.md` into it, preserving your own text. For a damaged or duplicate block,
-replace that block and its broken marker lines rather than adding another copy.
-Refresh `AGENTS.md` first if needed: use `aidlc config` on a native install, or
-`bun .codex/tools/aidlc.ts config` on a manual-copy install. Update the copied
-block after later refreshes. This does not change the native onboarding supplied
-through `developer_instructions`.
+When the project already has `AGENTS.override.md`, Codex config and project
+refresh maintain the `AI-DLC:agents` block there as well as in the shared
+`AGENTS.md`. They preserve the team's text outside the markers and never create
+an override that would hide existing guidance. Other harnesses keep using
+`AGENTS.md`. Run `aidlc config` on a native install, or
+`bun .codex/tools/aidlc.ts config` on a manual-copy install, after updating the
+runtime. A copy that has never been configured also adds the block to an
+existing override at session start, using the same managed-block rules.
+
+For a damaged or duplicate block, repair its marker lines rather than adding
+another copy; an edited block still receives the normal ownership-conflict
+handling. Symbolic links are not written through. This does not change the
+native guidance supplied through `developer_instructions`.
 
 ## Prerequisites
 

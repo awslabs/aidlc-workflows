@@ -679,6 +679,25 @@ export function rootIntegrationTarget(projectDir: string, path: string): string 
   return existsSync(join(projectDir, "opencode.jsonc")) ? "opencode.jsonc" : path;
 }
 
+// Codex ignores AGENTS.md when the team already keeps an override. Maintain
+// the same block there as well; AGENTS.md stays shared with other harnesses.
+// Never create an override, since that would hide the team's ordinary guidance.
+export function projectRootIntegrations(
+  projectDir: string,
+  descriptor: Pick<ProjectionDescriptor, "distribution" | "rootIntegrations">,
+): RootIntegration[] {
+  const integrations = descriptor.rootIntegrations;
+  if (descriptor.distribution !== "codex" || integrations.some((item) => item?.path === "AGENTS.override.md")) {
+    return integrations;
+  }
+  const override = lstatSync(join(projectDir, "AGENTS.override.md"), { throwIfNoEntry: false });
+  // Keep links in the plan so config's regular-file check refuses them instead
+  // of silently following one outside the project. The copy bootstrap skips it.
+  if (!override?.isFile() && !override?.isSymbolicLink()) return integrations;
+  const agents = integrations.find((item) => item?.path === "AGENTS.md" && item.policy === "managed-block");
+  return agents ? [...integrations, { ...agents, path: "AGENTS.override.md" }] : integrations;
+}
+
 // Where a projection holds the bytes it ships for a root integration: the root
 // file, or for one the copy runtime leaves out, its root-blocks copy.
 export function shippedRootIntegrationPath(

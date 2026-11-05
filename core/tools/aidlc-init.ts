@@ -66,6 +66,7 @@ import {
   ownTitleLine,
   type ProjectionDescriptor,
   projectionFiles,
+  projectRootIntegrations,
   readJsonFile,
   readRootIntegrations,
   removeJsonEntries,
@@ -10480,7 +10481,7 @@ function planRootIntegrations(
     sibling: ProjectHarness;
     descriptor: Pick<ProjectionDescriptor, "rootIntegrations"> | null;
   }> | undefined;
-  for (const integration of descriptor.rootIntegrations) {
+  for (const integration of projectRootIntegrations(projectDir, descriptor)) {
     // The shipped list a copy starts without travels in root-blocks; config run
     // from the project's own files merges it into the team's file, if any.
     const shippedCopy = ownBytes && copyStartsWithout(integration)
@@ -10525,7 +10526,12 @@ function planRootIntegrations(
         detail: `${targetRel} is not valid UTF-8; convert its encoding before config`,
       });
     };
-    const priorContribution = prior?.rootContributions[integration.path];
+    // A block the team copied into Codex's override can still be the exact
+    // block this install recorded in AGENTS.md before override support.
+    const priorContribution = prior?.rootContributions[integration.path] ??
+      (descriptor.distribution === "codex" && integration.path === "AGENTS.override.md"
+        ? prior?.rootContributions["AGENTS.md"]
+        : undefined);
     if (integration.policy === "managed-block") {
       const marker = integration.marker || basename(integration.path);
       let shipped = readFileSync(sourcePath, "utf-8");
@@ -11018,7 +11024,7 @@ function planRemovedRootIntegrations(
   operations: TransactionOperation[],
   actions: PlannedAction[],
 ): void {
-  const current = new Set(descriptor.rootIntegrations.map((item) => item.path));
+  const current = new Set(projectRootIntegrations(projectDir, descriptor).map((item) => item.path));
   for (const [path, contribution] of Object.entries(prior?.rootContributions ?? {})) {
     if (current.has(path)) continue;
     const targetRel = rootIntegrationTarget(projectDir, path);
@@ -13786,11 +13792,15 @@ export async function main(
       // Project choices from the project's own files change only .mcp.json. Its
       // managed .gitignore block is never planned from them: that copy is the
       // user's whole merged file, not the block a release ships.
+      const maintainingOverride = projectRootIntegrations(projectDir, descriptor)
+        .some((integration) => integration.path === "AGENTS.override.md");
       const presentRootIntegrations = descriptor.rootIntegrations.filter(
         (integration) =>
           (ownFilesProject
             ? integration.policy === "json-map"
-            : prior === null || preparedRegenerated.has(integration.path)) &&
+            : prior === null || preparedRegenerated.has(integration.path) ||
+              (maintainingOverride && integration.path === "AGENTS.md" &&
+                regularFile(rootBlockPath(join(preparedRoot, descriptor.harnessDir), integration)))) &&
           regularFile(shippedRootIntegrationPath(preparedRoot, descriptor.harnessDir, integration)),
       );
       if (presentRootIntegrations.length > 0) {
