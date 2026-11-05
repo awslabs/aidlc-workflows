@@ -147,6 +147,26 @@ describe("t-knowledge-unread-line: documents the agents cannot read are named on
     expect(line).toContain("knowledge sync` to add them.");
   });
 
+  test("a PDF added when this computer had no PDF reader is named as one the next sync reads", () => {
+    seedStateFile(proj, "state-mid-ideation.md");
+    seedAidlcMemory(proj);
+    put("handbook.pdf", readFileSync(join(FIXTURES_DIR, "documents", "pdf-libreoffice.pdf")));
+    add();
+    // What the index held for it before AI-DLC read a PDF itself: no pdftotext on the computer.
+    const index = readIndex(proj, DEFAULT_SPACE);
+    for (const entry of index.documents) {
+      entry.extraction = { state: "extractor_unavailable", extractor: { name: "pdftotext" }, detectedType: "application/pdf" };
+      delete entry.content;
+      delete entry.content_sha256;
+    }
+    writeIndex(proj, DEFAULT_SPACE, index);
+    expect(unreadDocuments(proj, DEFAULT_SPACE)).toEqual([{ path: "documents/handbook.pdf", reason: "pdf" }]);
+    const line = unreadLine(nextDirective());
+    expect(line).toContain("was added before AI-DLC could read a PDF without pdftotext.");
+    expect(line).not.toContain("install");
+    expect(line).toContain("knowledge sync` to add it.");
+  });
+
   test("a folder where everything is readable says nothing, and doctor shows no row", async () => {
     seedStateFile(proj, "state-mid-ideation.md");
     seedAidlcMemory(proj);
