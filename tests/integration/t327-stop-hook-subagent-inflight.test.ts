@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:humanTurnMintAllowed
+// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, hook:aidlc-session-start, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:humanTurnMintAllowed
 //
 // t327 - session-scoped background-subagent Stop-hook carve-out.
 //
@@ -6,7 +6,8 @@
 // session. Completion removes one matching entry, so overlapping workers and
 // concurrent sessions remain isolated. Stop honours only a fresh entry for its
 // own session, under autonomous Construction too while a person is there (an
-// unattended driver keeps the block), and prunes stale entries.
+// unattended driver keeps the block), and prunes stale entries. A resumed chat
+// clears the entries its earlier process left; a compaction keeps them.
 //
 // Mechanism: cli. Dispatch, completion, and Stop assertions spawn the real
 // shipped hooks; direct helper calls seed exact stale/autonomy states.
@@ -49,6 +50,7 @@ const HOOKS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "hooks");
 const STOP_HOOK = join(HOOKS_DIR, "aidlc-continue-workflow.ts");
 const LOG_SUBAGENT_HOOK = join(HOOKS_DIR, "aidlc-log-subagent.ts");
 const DELIVER_STAGE_RULES_HOOK = join(HOOKS_DIR, "aidlc-deliver-stage-rules.ts");
+const SESSION_START_HOOK = join(HOOKS_DIR, "aidlc-session-start.ts");
 
 const MOCK_ENGINE = `console.log(JSON.stringify({ kind: "run-stage", stage: "requirements-analysis" }));
 process.exit(0);
@@ -268,6 +270,45 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
     expect(runAttendedStopHook(proj, "session-a").out).toContain(
       '"decision":"block"',
     );
+  });
+
+  test("an entry left by a chat that quit while its helper worked is dropped when the chat resumes", () => {
+    const proj = makeProject();
+    seedActive(proj, { autonomy: "autonomous" });
+    bindSession(proj, "session-a");
+    // The person quit while a helper worked: no SubagentStop came for it.
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(runHook(SESSION_START_HOOK, proj, {
+      hook_event_name: "SessionStart",
+      source: "resume",
+      session_id: "session-a",
+    }).rc).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+
+    // In the resumed chat a new helper goes out and comes back.
+    const input = { subagent_type: "general-purpose", prompt: "Review the active stage." };
+    expect(confirmDispatch(proj, "session-a", input, "async_launched").rc).toBe(0);
+    expect(runAttendedStopHook(proj, "session-a")).toEqual({ rc: 0, out: "" });
+    expect(completeBackground(proj, "session-a", "a08bafd0cac349cb0").rc).toBe(0);
+    // Nothing is left over, so the work is handed back again.
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+    expect(runAttendedStopHook(proj, "session-a").out).toContain(
+      '"decision":"block"',
+    );
+  });
+
+  test("a compaction keeps the entry of a helper still at work", () => {
+    const proj = makeProject();
+    seedActive(proj, { autonomy: "autonomous" });
+    bindSession(proj, "session-a");
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(runHook(SESSION_START_HOOK, proj, {
+      hook_event_name: "SessionStart",
+      source: "compact",
+      session_id: "session-a",
+    }).rc).toBe(0);
+    expect(inspectSubagentInflight(proj).freshCount).toBe(1);
+    expect(runAttendedStopHook(proj, "session-a")).toEqual({ rc: 0, out: "" });
   });
 
   test("stale entry is pruned and does not authorize a stop", () => {
