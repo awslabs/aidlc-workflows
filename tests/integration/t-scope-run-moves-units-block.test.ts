@@ -85,6 +85,7 @@ describe("a units block the engine cannot read never reaches the person", () => 
       expect(agent.unitsBlockRepairs.map((repair) => repair.where)).toEqual(["gate"]);
       const approvals = agent.asked.filter((q) => q.what === "approval" && q.stage === "units-generation");
       expect(approvals).toHaveLength(1);
+      expect(agent.checksSteps.filter((step) => step.stage === "units-generation" && step.where === "gate")).toHaveLength(1);
       expect(agent.directives.filter((d) => d.kind === "error")).toEqual([]);
     }, SCOPE_RUN_TIMEOUT_MS);
   }
