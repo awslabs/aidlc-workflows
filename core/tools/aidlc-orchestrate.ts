@@ -9148,7 +9148,7 @@ function documentsCardEntry(ctx: CodekbCtx): InlineContextEntry | null {
     if (!isReadOnlyEngineProbe() && !engineUnjoined) {
       const card = documentsCard(ctx.projectDir, work.space, intentUuidForSelection(ctx.projectDir, work));
       const held = readBoundedRegularFile(abs, 1024 * 1024);
-      if (card === null && held !== null) writeEngineFileNoFollow(ctx.projectDir, DOCUMENTS_CARD_FILE, "", work.intent, work.space);
+      if (card === null && held) writeEngineFileNoFollow(ctx.projectDir, DOCUMENTS_CARD_FILE, "", work.intent, work.space);
       else if (card !== null && card !== held) {
         writeEngineFileNoFollow(ctx.projectDir, DOCUMENTS_CARD_FILE, card, work.intent, work.space);
       }
