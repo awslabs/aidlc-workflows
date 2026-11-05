@@ -6041,6 +6041,17 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (typeof remote === "object") {
       fail(`${name} has the remotes ${joinNames(remote.remotes)} and none is set for pushing: ask the person which one ${unit} goes to.`);
     }
+    // Files Code Generation wrote outside the repo it named (at the workspace
+    // root, say) are not in it: said in plain words, with the way back.
+    const outside = repo === "." ? [] : paths.filter((path) => !existsSync(join(dir, path)) && existsSync(join(pd, path)));
+    if (outside.length > 0) {
+      fail(
+        `${unit}'s Code Generation wrote ${outside[0]}${outside.length > 1 ? ` and ${outside.length - 1} more` : ""} outside ${name}, ` +
+          `so nothing was pushed. Ask the person whether to take ${unit} back to Code Generation to write ${outside.length === 1 ? "it" : "them"} ` +
+          `in ${name}; on their yes, run \`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` ` +
+          "and follow what it returns.",
+      );
+    }
     planned.push({ repo, dir, name, remote, paths });
   }
   // Then in each, onto the Unit's branch as their own hands would and its

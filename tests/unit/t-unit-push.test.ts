@@ -564,6 +564,27 @@ describe("at the home", () => {
     expect(next(home.dir).ask_type).not.toBe("project-type");
   });
 
+  test("code written outside the Unit's repo is said in plain words, with the way back to Code Generation, and nothing is pushed", () => {
+    const { hosts, alice, record } = refundsTaken();
+    // Code Generation put the file at the workspace root, not in checkout-api.
+    mkdirSync(join(alice, "src"), { recursive: true });
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const refunds = 1;\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ repo: "checkout-api", path: "src/refunds.ts" }],
+    })}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status).not.toBe(0);
+    const said = String(pushed.json?.error);
+    expect(said, pushed.out).toStartWith(
+      "refunds's Code Generation wrote src/refunds.ts outside checkout-api, so nothing was pushed. Ask the person whether to " +
+        "take refunds back to Code Generation to write it in checkout-api; on their yes, run `",
+    );
+    expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
+    expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
+  });
+
   test("a home moved on past the Unit stages records no Unit: the result stays on its claim, said once, and is recorded back on the Unit stages", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
