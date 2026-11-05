@@ -136,10 +136,10 @@ catalog row and state, and `show <id>` returns one citable record plus current
 extracted text when available. The `/aidlc-knowledge` skill guides the same
 workflow.
 
-Inception's stages read these documents. Each stage's reading list carries the
-documents in the knowledge base that have text (this piece of work's first,
-then the ones for the whole space), with each one's summary or the opening of
-its text. Before asking a question, the agent checks it against them: the
+Inception's stages read these documents. The reading list of each Inception
+stage worked in your chat carries the documents in the knowledge base that have
+text (this piece of work's first, then the ones for the whole space), with each
+one's summary or the opening of its text. Before asking a question, the agent checks it against them: the
 questions your documents already answer come together in one first question,
 each with its answer and the document it came from, for you to confirm or
 change; what no document says, or what two documents disagree on, is still
