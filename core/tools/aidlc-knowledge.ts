@@ -588,8 +588,8 @@ function extractOffice(absPath: string, kind: "word" | "excel", sourceRevision: 
         state: "extraction_failed",
         extractor: { ...BUILTIN_OOXML },
         reason: e instanceof OoxmlError
-          ? `AI-DLC could not read it as a ${kind === "word" ? "Word" : "Excel"} file: ${e.message}`
-          : `AI-DLC could not read it as a ${kind === "word" ? "Word" : "Excel"} file`,
+          ? `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file: ${e.message}`
+          : `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file`,
         detectedType: kind === "word" ? WORD_DOCX_MIME : XLSX_MIME,
         source_revision: sourceRevision,
       },
