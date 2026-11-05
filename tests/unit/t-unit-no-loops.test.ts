@@ -235,9 +235,9 @@ describe("no step of the build-out comes back after its own command ran", () => 
     // Progress, taken in by its path (the turn keeps the path for every step in it).
     expect(run(UNIT, ["progress"], partner).status).toBe(0);
     const progress = deliver(partner, "aidlc/handoff/fixture-reporting-progress.md");
-    const takeIn = next(home.dir, ENV, [progress]);
+    const takeIn = next(home.dir, ENV, ["--hand-file", progress]);
     expect(takeIn.kind, JSON.stringify(takeIn)).toBe("print");
-    const after = movesOn(home.dir, ENV, takeIn, printed(takeIn), [progress]);
+    const after = movesOn(home.dir, ENV, takeIn, printed(takeIn), ["--hand-file", progress]);
     expect(String(after.narration)).toContain("handed off by file, at");
     // The result, taken in by the command: the next step offers no take-in of it.
     const intents = join(partner, "aidlc", "spaces", "data", "intents");
@@ -250,7 +250,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     expect(run(UNIT, ["push"], partner).status).toBe(0);
     const result = deliver(partner, "aidlc/handoff/fixture-reporting-result.md");
     expect(run(UNIT, ["take-in", result], home.dir).status).toBe(0);
-    const later = next(home.dir, ENV, [result]);
+    const later = next(home.dir, ENV, ["--hand-file", result]);
     expect(String(later.message), JSON.stringify(later)).not.toContain("take-in");
   });
 

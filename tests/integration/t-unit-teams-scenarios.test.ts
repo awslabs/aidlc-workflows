@@ -336,7 +336,7 @@ describe("scenario 4: a team that cannot reach the home", () => {
       writeFileSync(path, readFileSync(join(from, ...rel.split("/")), "utf-8").replace(/\n/g, "\r\n"));
       return path;
     };
-    const ask = copilot.next(partner, [deliver(home.dir, file)]);
+    const ask = copilot.next(partner, ["--hand-file", deliver(home.dir, file)]);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-handoff");
     expect(run(copilot.unit, ["take", "--file", deliver(home.dir, file)], partner).status).toBe(0);
     expect(run(copilot.unit, ["progress"], partner).status).toBe(0);
@@ -352,7 +352,7 @@ describe("scenario 4: a team that cannot reach the home", () => {
     expect(again.status, again.out).toBe(0);
     // The lead gives the result file's path to /aidlc: that step takes it in.
     const result = deliver(partner, "aidlc/handoff/fixture-reporting-result.md");
-    const step = next(home.dir, undefined, [result]);
+    const step = next(home.dir, undefined, ["--hand-file", result]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(String(step.message)).toContain(`aidlc-unit.ts take-in '${result}'`);
     const taken = run(UNIT, ["take-in", result], home.dir);

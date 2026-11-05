@@ -115,7 +115,7 @@ describe("the team takes the file in", () => {
     const { home } = handedOff();
     const partner = partnerWorkspace();
     const path = deliver(home.dir, FILE);
-    const ask = next(partner.dir, undefined, [path]);
+    const ask = next(partner.dir, undefined, ["--hand-file", path]);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-handoff");
     expect(String(ask.question)).toMatch(/^Reporting is yours, handed off from fixture by its lead on \d{4}-\d\d-\d\d\. It likely changes ledger, already here\.$/);
     const took = run(UNIT, ["take", "--file", path], partner.dir);
@@ -131,7 +131,7 @@ describe("the team takes the file in", () => {
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("reporting");
     // Pointed at again, the file whose Unit is already being built here starts nothing new.
-    const again = next(partner.dir, undefined, [path]);
+    const again = next(partner.dir, undefined, ["--hand-file", path]);
     expect(again.kind, JSON.stringify(again)).toBe("run-stage");
     expect(again.unit).toBe("reporting");
   });
@@ -190,7 +190,7 @@ describe("progress and the result come back as files", () => {
     const progressFile = deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md");
     expect(readFileSync(progressFile, "utf-8")).toContain("Point AI-DLC at this file at the home and it takes it in.");
     // Its path given to the home's /aidlc is the step that takes it in.
-    const step = next(home.dir, undefined, [progressFile]);
+    const step = next(home.dir, undefined, ["--hand-file", progressFile]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(String(step.message)).toBe(
       `Run \`bun .claude/tools/aidlc-unit.ts take-in '${progressFile}'\`, then tell the person its notice line in one line ` +
@@ -200,7 +200,7 @@ describe("progress and the result come back as files", () => {
     expect(progressIn.status, progressIn.out).toBe(0);
     expect(progressIn.json?.notice).toBe("Took in reporting's progress from data: Functional Design.");
     // The turn's words still name the file: taken in, it is not offered again; the step is the work's own.
-    const pointedAgain = next(home.dir, undefined, [progressFile]);
+    const pointedAgain = next(home.dir, undefined, ["--hand-file", progressFile]);
     expect(pointedAgain.kind, JSON.stringify(pointedAgain)).toBe("print");
     expect(String(pointedAgain.narration)).toContain("- reporting, data: handed off by file, at Functional Design");
     expect(String(next(home.dir).narration)).toContain("- reporting, data: handed off by file, at Functional Design");
