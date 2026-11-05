@@ -299,7 +299,8 @@ class Doc {
       const plain = type instanceof PName && type.n === "XRef" ? raw : this.decrypt(raw, num, gen);
       data = this.decode(v, plain);
     } catch (e) {
-      if (e instanceof PdfError && /too large/.test(e.message)) throw e;
+      // A stream it cannot decode at all fails the file, with the reason; damaged Flate or AES data is skipped.
+      if (e instanceof PdfError) throw e;
       this.failedStreams++;
       data = Buffer.alloc(0);
     }
@@ -345,7 +346,9 @@ class Doc {
       } else if (name === "ASCIIHexDecode" || name === "AHx") data = hex(`<${data.toString("latin1")}`, 0)[0];
       else if (name === "ASCII85Decode" || name === "A85") data = a85(data);
       else if (name === "Crypt") continue;
-      else throw new PdfError(`filter ${name}`);
+      // Image codecs: such a stream holds no text.
+      else if (["DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBIG2Decode"].includes(name)) return Buffer.alloc(0);
+      else throw new PdfError(`it is compressed with ${name}, which AI-DLC's reader does not decode (pdftotext does)`);
     }
     return data;
   }
