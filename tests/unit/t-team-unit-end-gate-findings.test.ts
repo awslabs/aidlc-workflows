@@ -3,13 +3,13 @@
 //
 // A team Unit claimed with the unit-end rhythm is approved once, at its last
 // stage, and that one Approve decides every stage of the Unit's walk. The gate's
-// brief shows every gated stage's open findings, with the one line that says
-// Approve accepts them as risk and how to decide one differently, and the
-// approval records dispositions for exactly the findings the brief showed: the
-// person is never recorded accepting a finding the gate did not show. A gate
-// with no open findings reads as before, and a per-stage team gate is unchanged.
-// An earlier stage whose review did not finish (its reviewer stopped twice) is
-// named in the brief, and the line after Approve names that stage.
+// brief shows every gated stage's open findings, the step that opens the gate
+// says the one line that Approve accepts them as risk and how to decide one
+// differently, and the approval records dispositions for exactly the findings
+// the brief showed: the person is never recorded accepting a finding the gate
+// did not show. A gate with no open findings reads as before, and a per-stage
+// team gate is unchanged. An earlier stage whose review did not finish (its
+// reviewer stopped twice) is named in the brief, and the line names that stage.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -375,23 +375,30 @@ function gateReport(proj: string, result: string, extra: string[] = []): Directi
   return runReport(proj, ["--stage", "code-generation", "--unit", "alpha", "--result", result, ...extra]);
 }
 
+// The gate opened: the lines its step says that tell what Approve accepts.
+function acceptsLinesAtGate(proj: string): string[] {
+  const opened = gateReport(proj, "awaiting-approval");
+  expect(opened.kind, JSON.stringify(opened)).toBe("print");
+  return ((opened.change_notices ?? []) as string[]).filter((line) => line.startsWith("Approve accepts"));
+}
+
 describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its Approve decides", () => {
   test("a NOT-READY NFR Design review is shown at the end-of-Unit gate, and Approve records only what it showed", () => {
     const proj = seedProject("unit-end");
     const gate = walkToGate(proj, { "nfr-design": NFR_DESIGN_FINDINGS });
     expect(gate).toMatchObject({ stage: "code-generation", unit_gate: "unit-end" });
-    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
+    expect(acceptsLinesAtGate(proj)).toEqual([
+      "Approve accepts the open review findings R-01 (operability-design.md and testability-design.md do not exist) " +
+        "and R-02 (The traceability file uses ids the requirements do not define) as risk; you can also approve and " +
+        "ask for one to be fixed, or reject one as not applying, saying why.",
+    ]);
     const shown = brief(proj, "code-generation");
     expect(shown).toContain("**Stages:** NFR Design, Code Generation");
     expect(shown).toContain("**Review outcome:** Concerns remain for your decision.");
     expect(shown).toContain("construction/alpha/nfr-design/");
     expect(shown).toContain("> R-01 Finding: operability-design.md and testability-design.md do not exist");
     expect(shown).toContain("> R-02 Finding: The traceability file uses ids the requirements do not define");
-    expect(shown).toContain(
-      "Approve accepts the open review findings R-01 (operability-design.md and testability-design.md do not exist) " +
-        "and R-02 (The traceability file uses ids the requirements do not define) as risk; you can also approve and " +
-        "ask for one to be fixed, or reject one as not applying, saying why.",
-    );
+    expect(shown).not.toContain("Approve accepts");
     expect(shown).toContain("- **Approve** - continue.");
     expect(shown).not.toContain("No blocking concerns were found.");
     expect(shown).not.toContain("no findings are open");
@@ -413,14 +420,14 @@ describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its App
       "nfr-requirements": [{ id: "R-01", severity: "Minor", finding: "Name the latency budget's owner", action: "Add an owner" }],
       "nfr-design": [NFR_DESIGN_FINDINGS[0]],
     });
-    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
-    const shown = brief(proj, "code-generation");
-    expect(shown).toContain("**Stages:** NFR Requirements, NFR Design, Code Generation");
-    expect(shown).toContain(
+    expect(acceptsLinesAtGate(proj)).toEqual([
       "Approve accepts the open review findings NFR Requirements R-01 (Name the latency budget's owner) and " +
         "NFR Design R-01 (operability-design.md and testability-design.md do not exist) as risk; you can also " +
         "approve and ask for one to be fixed, or reject one as not applying, saying why.",
-    );
+    ]);
+    const shown = brief(proj, "code-generation");
+    expect(shown).toContain("**Stages:** NFR Requirements, NFR Design, Code Generation");
+    expect(shown).not.toContain("Approve accepts");
     expect(shownOpen(shown)).toHaveLength(2);
     const nfrDesign = recordedArtifact(proj, "nfr-design");
     expect(gateReport(proj, "approved", ["--user-input", "Approve", "--fix-finding", `${nfrDesign}#R-01`]).kind)
@@ -520,13 +527,13 @@ describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its App
       "nfr-requirements": [{ id: "R-01", severity: "Minor", finding: "Name the latency budget's owner", action: "Add an owner" }],
       "nfr-design": "stopped",
     });
-    expect(gateReport(proj, "awaiting-approval").kind).toBe("print");
-    const shown = brief(proj, "code-generation");
-    expect(shown).toContain("**Stages:** NFR Requirements, NFR Design, Code Generation");
-    expect(shown).toContain(
+    expect(acceptsLinesAtGate(proj)).toEqual([
       "Approve accepts the open review finding NFR Requirements R-01 (Name the latency budget's owner) as risk; you " +
         "can also approve and ask for it to be fixed, or reject it as not applying, saying why.",
-    );
+    ]);
+    const shown = brief(proj, "code-generation");
+    expect(shown).toContain("**Stages:** NFR Requirements, NFR Design, Code Generation");
+    expect(shown).not.toContain("Approve accepts");
     expect(gateReport(proj, "approved", ["--user-input", "Approve"]).kind).toBe("done");
     expect(recorded(proj)).toEqual([expect.stringMatching(/\/nfr-requirements\/[^#]+#R-01 Accepted risk$/)]);
   });

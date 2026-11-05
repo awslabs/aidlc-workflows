@@ -96,6 +96,7 @@ import {
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { appendAuditEntryAtPathUnlocked } from "./aidlc-audit.ts";
+import { officeText, ooxmlKind, OoxmlError } from "./aidlc-ooxml.ts";
 import {
   DOCUMENTKB_SCHEMA_VERSION,
   type DocumentIndex,
@@ -311,79 +312,21 @@ const BINARY_MAGICS_FIXED_OFFSET: readonly (readonly number[])[] = [
 export const WORD_DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-const OOXML_WORD_ENTRY = "word/document.xml";
-const OOXML_CONTENT_TYPES_ENTRY = "[Content_Types].xml";
-const ZIP_LOCAL_HEADER_SIG = 0x04034b50;
+/** The MIME `detectMimeType` reports for a modern (OOXML) Excel workbook. */
+export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /**
- * Whether `buf` is a ZIP container whose LOCAL FILE HEADERS -- not its raw
- * bytes -- declare both `[Content_Types].xml` and `word/document.xml` as
- * entries. A .docx is an ordinary ZIP (PK\x03\x04), indistinguishable from a
- * .xlsx or a .jar by magic alone, so the entry NAME is the only reliable
- * signal.
- *
- * ATTACK CLOSED HERE, not theoretical: an earlier version of this function
- * did `buf.includes(nameBytes)` -- a raw substring scan over the WHOLE
- * buffer. That treats file NAMES and file CONTENTS identically: a plain-text
- * file containing the two literal strings as ordinary prose (not as zip
- * entry names at all) was classified as Word. Measured:
- * `zipwrite("payload.txt", "word/document.xml [Content_Types].xml")` --
- * one entry, an unrelated name, content that merely mentions the markers --
- * passed the old check. This version walks the ACTUAL local file header
- * chain and only inspects the declared filename field of each entry, so a
- * marker string appearing in an entry's DATA is never confused with an
- * entry's NAME.
- *
- * Bounded and defensive: caps the entries walked, verifies every offset
- * before reading it, and returns false (never throws) on anything malformed,
- * truncated, or using a streamed local header (data-descriptor bit set,
- * declared size 0) that cannot be skipped without decompressing -- a real
- * docx, produced by an ordinary zip writer, never needs that case.
+ * Whether `buf` is a zip whose central directory names both
+ * `[Content_Types].xml` and `word/document.xml`. A .docx is an ordinary zip,
+ * indistinguishable from a .xlsx or a .jar by magic alone, so the part NAMES
+ * are the signal, read from the archive's directory and never from its data
+ * (a text file that merely mentions the names, or a part whose contents
+ * forge a header, is not Word). The walk is aidlc-ooxml.ts `listZip`, the one
+ * the reader uses, so detection and reading agree; anything malformed is
+ * "not Word", never an error.
  */
 export function hasWordOoxmlSignature(buf: Buffer): boolean {
-  const MAX_ENTRIES = 4096;
-  let offset = 0;
-  let sawContentTypes = false;
-  let sawWordDocument = false;
-  for (let i = 0; i < MAX_ENTRIES; i++) {
-    if (offset + 30 > buf.length) break;
-    if (buf.readUInt32LE(offset) !== ZIP_LOCAL_HEADER_SIG) break;
-    const flags = buf.readUInt16LE(offset + 6);
-    const compressedSize = buf.readUInt32LE(offset + 18);
-    const nameLen = buf.readUInt16LE(offset + 26);
-    const extraLen = buf.readUInt16LE(offset + 28);
-    const nameStart = offset + 30;
-    const nameEnd = nameStart + nameLen;
-    if (nameEnd > buf.length) break;
-    const name = buf.toString("utf-8", nameStart, nameEnd);
-    if (name === OOXML_CONTENT_TYPES_ENTRY) sawContentTypes = true;
-    if (name === OOXML_WORD_ENTRY) sawWordDocument = true;
-    if (sawContentTypes && sawWordDocument) return true;
-    // Bit 3 (streamed / data-descriptor) means compressedSize here is 0 and
-    // the real size trails the entry's DATA -- unrecoverable without
-    // decompressing, which this sniffer deliberately never does.
-    if ((flags & 0x0008) !== 0) break;
-    // Both size fields are attacker-controlled, and the walk's next offset is
-    // computed from `compressedSize` alone -- so a SELF-CONTRADICTORY pair
-    // (compressed 0, uncompressed non-zero) steps past only the header and
-    // lands inside the entry's own payload. A second review round measured
-    // exactly that: `innocent.txt` declaring compressedSize 0 / uncompressed
-    // 96, carrying two forged local headers named `[Content_Types].xml` and
-    // `word/document.xml`, which the walk then read as real entry names --
-    // reintroducing the NAME-versus-CONTENT confusion this function exists to
-    // prevent, one level down. A stored (uncompressed) entry has
-    // compressedSize === uncompressedSize, and a deflated one is non-zero for
-    // non-empty data, so "compressed 0 while uncompressed is not" is never a
-    // real zip writer's output. Refuse it, and require the offset to advance
-    // strictly, so a lying size can only ever end the walk early -- fail
-    // closed to "not Word" -- never redirect it into bytes the author chose.
-    const uncompressedSize = buf.readUInt32LE(offset + 22);
-    if (compressedSize === 0 && uncompressedSize !== 0) break;
-    const next = nameEnd + extraLen + compressedSize;
-    if (next <= offset) break;
-    offset = next;
-  }
-  return false;
+  return ooxmlKind(buf) === "word";
 }
 
 // PDF's `%PDF-` header is WINDOW-searched, because ISO 32000 permits a header
@@ -600,8 +543,10 @@ export interface ExtractionOutcome {
 }
 
 /** The argv for a MIME type: a harness-configured one, else the default when the
- *  type is one this release knows. Null means no extractor is CONFIGURED, which
- *  is `unsupported_type` rather than `extractor_unavailable`. */
+ *  type is one this release knows. Null means no extractor program, which is
+ *  `unsupported_type` rather than `extractor_unavailable` -- except for Word and
+ *  Excel, which `extractDocument` reads itself (builtin-ooxml) unless the
+ *  harness configured an extractor for that MIME, as text needs none. */
 export function extractorArgvFor(mime: string): readonly string[] | null {
   const configured = documentExtractors();
   const spec = configured?.get(mime);
@@ -616,6 +561,54 @@ export function extractorArgvFor(mime: string): readonly string[] | null {
 
 function configuredTimeoutFor(mime: string): number {
   return documentExtractors()?.get(mime)?.timeoutMs ?? EXTRACT_TIMEOUT_MS;
+}
+
+const BUILTIN_OOXML = Object.freeze({ name: "builtin-ooxml", version: "1" });
+const OFFICE_NAME = /\.(docx|xlsx)$/i;
+
+function builtinOfficeKind(mime: string): "word" | "excel" | null {
+  return mime === WORD_DOCX_MIME ? "word" : mime === XLSX_MIME ? "excel" : null;
+}
+
+/** Whether the built-in reader takes this row's document on a retry: its kind, or an Office name recorded as octet-stream before Excel was recognised. */
+function builtinReadsRow(row: DocumentRow): boolean {
+  const mime = detectMimeFromRow(row);
+  const office = builtinOfficeKind(mime) !== null || (mime === "application/octet-stream" && OFFICE_NAME.test(row.source.path));
+  return office && documentExtractors()?.get(mime) === undefined;
+}
+
+function extractOffice(absPath: string, kind: "word" | "excel", sourceRevision: string): ExtractionOutcome {
+  const buf = readRegularFileNoFollowOrThrow(absPath, "document");
+  let full: string;
+  try {
+    full = officeText(buf, kind);
+  } catch (e) {
+    return {
+      record: {
+        state: "extraction_failed",
+        extractor: { ...BUILTIN_OOXML },
+        reason: e instanceof OoxmlError
+          ? `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file: ${e.message}`
+          : `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file`,
+        detectedType: kind === "word" ? WORD_DOCX_MIME : XLSX_MIME,
+        source_revision: sourceRevision,
+      },
+    };
+  }
+  if (full.trim().length === 0) {
+    return { record: { state: "no_extractable_text", extractor: { ...BUILTIN_OOXML }, source_revision: sourceRevision } };
+  }
+  const truncated = full.length > EXTRACT_OUTPUT_CHAR_CAP;
+  return {
+    record: {
+      state: "extracted",
+      extractor: { ...BUILTIN_OOXML },
+      chars: Math.min(full.length, EXTRACT_OUTPUT_CHAR_CAP),
+      truncated,
+      source_revision: sourceRevision,
+    },
+    text: truncated ? full.slice(0, EXTRACT_OUTPUT_CHAR_CAP) : full,
+  };
 }
 
 /**
@@ -653,6 +646,25 @@ export function extractDocument(
     };
   }
 
+  // Word and Excel are read in-process unless the harness configured its own
+  // extractor for the MIME (the team's choice wins).
+  if (builtinOfficeKind(mime) !== null && documentExtractors()?.get(mime) === undefined) {
+    return extractOffice(absPath, builtinOfficeKind(mime)!, sourceRevision);
+  }
+  // A .docx or .xlsx name on bytes that are not an Office zip (a password-
+  // protected workbook is an OLE file, or the name is wrong): recorded once as
+  // not readable, which a later sync does not retry until the reader changes.
+  if (mime === "application/octet-stream" && OFFICE_NAME.test(absPath)) {
+    return {
+      record: {
+        state: "extraction_failed",
+        extractor: { ...BUILTIN_OOXML },
+        reason: "it is not a Word or Excel file AI-DLC can open (it may be password-protected or in an older format)",
+        detectedType: mime,
+        source_revision: sourceRevision,
+      },
+    };
+  }
   const argv = extractorArgvFor(mime);
   if (argv === null) {
     // Nothing is even configured for this type. Indexed and citable, not
@@ -763,14 +775,12 @@ export function detectMimeType(absPath: string, buf: Buffer): string {
   if (!looksBinary(buf)) {
     return absPath.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain";
   }
-  // Checked AFTER the PDF/text branches (a docx is binary, so it would
-  // otherwise fall to octet-stream) and BEFORE the octet-stream default: this
-  // is the only route by which a Word file can ever be classified as
-  // something a configured extractor can be selected for. No default argv is
-  // wired for this MIME (see extractorArgvFor) -- a project with no configured
-  // Word extractor still gets `unsupported_type`, never an error, exactly as
-  // an unrecognised binary always has.
-  if (hasWordOoxmlSignature(buf)) return WORD_DOCX_MIME;
+  // After the PDF and text branches (a docx or xlsx is binary) and before the
+  // octet-stream default: the only route by which a Word or Excel file reaches
+  // the built-in reader, or a configured extractor for its MIME.
+  const office = ooxmlKind(buf);
+  if (office === "word") return WORD_DOCX_MIME;
+  if (office === "excel") return XLSX_MIME;
   return "application/octet-stream";
 }
 
@@ -2549,6 +2559,75 @@ export function renderShow(d: ShownDocument): string {
   return out.join("\n") + "\n";
 }
 
+// --- The documents card ------------------------------------------------------
+//
+// What an Inception stage's reading list carries from the index: each document
+// with current text (this work's first, then the space's), its summary or the
+// opening of its text, and where its full text is, so the agent checks a
+// question against the team's documents before asking it. Text is read through
+// the same verified readers `show` uses, so a stale or torn derivative is left
+// out here exactly as it is there.
+
+const CARD_DOCUMENTS_MAX = 12;
+const CARD_OPENING_CHARS = 1500;
+
+// A fence longer than any backtick run in the text, so a document cannot close it.
+function fenced(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}text\n${text}\n${fence}`;
+}
+
+/** The card's Markdown, or null when no document this work may read has current text. */
+export function documentsCard(projectDir: string, space: string, intentUuid: string | null): string | null {
+  // A redirected knowledge root is refused here as every reader refuses it; the engine goes on without the card.
+  const rows = readIndex(projectDir, space).documents;
+  const mine = (row: DocumentRow): boolean => intentUuid !== null && (row.related_intent_ids ?? []).includes(intentUuid);
+  const listed = rows
+    .filter((row) => !isTombstoned(row) && (row.related_intent_ids === undefined || mine(row)))
+    .sort((a, b) => Number(mine(b)) - Number(mine(a)));
+  const knowledge = toPosix(relative(projectDir, knowledgeDir(projectDir, space)));
+  const entries: string[] = [];
+  let more = 0;
+  for (const row of listed) {
+    const content = verifiedContentBytes(projectDir, space, row);
+    if (content === null || row.content === undefined) continue;
+    if (entries.length >= CARD_DOCUMENTS_MAX) {
+      more++;
+      continue;
+    }
+    const chars = Array.from(content.toString("utf-8"));
+    const summary = verifiedSummaryBytes(projectDir, space, row)?.toString("utf-8");
+    const shown = summary ?? chars.slice(0, CARD_OPENING_CHARS).join("");
+    const lead = summary !== undefined
+      ? "Its summary:"
+      : chars.length > CARD_OPENING_CHARS ? `Its first ${CARD_OPENING_CHARS} characters:` : "Its text:";
+    entries.push([
+      `## ${JSON.stringify(row.source.path.replace(/^documents\//, ""))} (${mine(row) ? "this work's document" : "a document for the whole space"})`,
+      "",
+      `Full text: ${knowledge}/${row.content} (${chars.length} characters` +
+        `${row.extraction.truncated === true ? ", cut where the knowledge base stopped reading" : ""}).`,
+      lead,
+      "",
+      fenced(shown),
+    ].join("\n"));
+  }
+  if (entries.length === 0) return null;
+  return [
+    "# The team's documents",
+    "",
+    UNTRUSTED_PATH_NOTICE,
+    "",
+    UNTRUSTED_CONTENT_NOTICE,
+    "",
+    "These are the documents in this space's knowledge base that have text to read. Check each question you plan to " +
+      "ask against them before you ask it, and open a document's full text when a question bears on it.",
+    "",
+    ...entries.flatMap((entry) => [entry, ""]),
+    ...(more > 0 ? [`${more} more ${more === 1 ? "document is" : "documents are"} in the knowledge base.`, ""] : []),
+  ].join("\n");
+}
+
 // --- sync --------------------------------------------------------------------
 //
 // Reconcile the catalog with what is actually on disk. Five changes matter, and
@@ -3221,6 +3300,7 @@ export function syncDocuments(
 export function shouldRetryExtraction(row: DocumentRow): boolean {
   const rec = row.extraction;
   if (rec.state === "invalidated") return true;
+  if (rec.state === "unsupported_type" && builtinReadsRow(row)) return true;
   if (rec.state === "extractor_unavailable" || rec.state === "unsupported_type") {
     const argv = extractorArgvFor(detectMimeFromRow(row));
     if (argv === null) return false; // still nothing configured for this type

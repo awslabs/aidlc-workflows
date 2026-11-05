@@ -65,6 +65,9 @@ export type ProjectionDescriptor = {
   onboarding?: string;
   managedDirectories: string[];
   legacyManagedFileHashes?: Record<string, string[]>;
+  // Files a copy-era release shipped for copying that this release no longer
+  // ships, and the bytes each was shipped with (scripts/copy-era-files.ts).
+  retiredCopyFileHashes?: Record<string, string[]>;
   rootIntegrations: RootIntegration[];
 };
 
@@ -146,6 +149,41 @@ export function aidlcHookTarget(command: string, projectDir?: string): string | 
   const dispatcher = aidlcDispatcherTarget(command, false, projectDir);
   if (dispatcher !== null) return dispatcher;
   return legacyAidlcHookTarget(command);
+}
+
+/**
+ * The AI-DLC hook targets a parsed .claude/settings.json runs ("statusline" for
+ * AI-DLC's status line), with the status line the person keeps in their own
+ * settings.local.json. Doctor's hook contract and the hooks-off step both read
+ * the file through it.
+ */
+export function claudeSettingsHookTargets(projectDir: string, settings: unknown): string[] {
+  const commands: string[] = [];
+  const collectCommands = (value: unknown): void => {
+    if (Array.isArray(value)) return void value.forEach(collectCommands);
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "command" && typeof item === "string") commands.push(item);
+      else collectCommands(item);
+    }
+  };
+  collectCommands(settings);
+  // AI-DLC's status line lives in the person's own settings.local.json when
+  // they chose it, so the file it runs is checked from there too.
+  try {
+    const local = JSON.parse(withoutBom(readFileSync(join(projectDir, ".claude", "settings.local.json"), "utf-8")));
+    const statusLine = local && typeof local === "object" ? (local as { statusLine?: unknown }).statusLine : undefined;
+    const command = statusLine && typeof statusLine === "object" ? (statusLine as { command?: unknown }).command : undefined;
+    if (typeof command === "string") commands.push(command);
+  } catch {
+    // No personal file, or one Claude Code itself reports.
+  }
+  const targets = new Set<string>();
+  for (const command of commands) {
+    const target = aidlcDispatcherTarget(command, true, projectDir);
+    if (target !== null) targets.add(target);
+  }
+  return [...targets];
 }
 
 export function legacyAidlcHookTarget(command: string): string | null {
@@ -465,6 +503,19 @@ export function validateProjectionDescriptor(
         throw new Error(`${root}: legacy managed file is missing or invalid: ${safe}`);
       }
       validateHashes(hashes, `${root}: ${safe} legacy managed-file signatures`);
+    }
+  }
+  if (descriptor.retiredCopyFileHashes !== undefined) {
+    const retired = descriptor.retiredCopyFileHashes;
+    if (!retired || typeof retired !== "object" || Array.isArray(retired)) {
+      throw new Error(`${root}: retired copy-file signatures are invalid`);
+    }
+    for (const [file, hashes] of Object.entries(retired)) {
+      const safe = safeRelativePath(file, "retired copy file");
+      if (!descriptor.managedDirectories.some((directory) => safe.startsWith(`${directory}/`))) {
+        throw new Error(`${root}: retired copy file is outside managed directories: ${safe}`);
+      }
+      validateHashes(hashes, `${root}: ${safe} retired copy-file signatures`);
     }
   }
   for (const integration of descriptor.rootIntegrations) {

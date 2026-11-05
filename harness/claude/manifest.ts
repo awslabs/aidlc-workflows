@@ -53,7 +53,9 @@ const manifest: HarnessManifest = {
     agentStepEdits: ".claude/settings.local.json",
     // Measured live: Claude Code runs none of the hooks in a settings.json it
     // cannot parse as strict JSON, and config stops on such a file, so that
-    // case names the file. The restart matches what config itself says.
+    // case names the file. A file that registers none of AI-DLC's hooks gets
+    // them back from config, which keeps the person's own. The restart matches
+    // what config itself says.
     registration: {
       file: ".claude/settings.json",
       missing:
@@ -63,6 +65,10 @@ const manifest: HarnessManifest = {
       invalid:
         "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs " +
         "none of AI-DLC's hooks here. Correct the file, then exit Claude Code and start it again in this folder, " +
+        "and type <entry>.",
+      unwired:
+        ".claude/settings.json in this project does not register AI-DLC's hooks, so Claude Code runs none of them " +
+        "here. In a terminal in this folder, <repair>, then exit Claude Code and start it again in this folder, " +
         "and type <entry>.",
     },
     // The human-turn hook leaves a heartbeat on every message, before the

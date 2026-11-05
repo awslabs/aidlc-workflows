@@ -1,5 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
+import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -56,7 +57,7 @@ import {
   CONSTRUCTION_POLICY_RECOVERY,
   swarmNeedsStageMajor,
   leftOutLine,
-  PERSON_ASKED_SKIP_REASON,
+  isPersonAskedSkipReason,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -96,6 +97,7 @@ import {
   extractMarkdownSection,
   filterProducesByKind,
   findStageBySlug,
+  isPerUnitStage,
   findAllEvents,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
@@ -103,6 +105,7 @@ import {
   freshReviewReceipts,
   unchangedChangeRequest,
   REVIEW_KEPT_FIELD,
+  GATE_SKIPPED_STAGES_FIELD,
   getField,
   guardRecoveryAnswerAdmits,
   readActiveDirectiveMarker,
@@ -176,7 +179,6 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseCheckboxes,
-  parseMemoryEntries,
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
@@ -257,7 +259,6 @@ import {
   withWorkspaceSourceStateCache,
   writeStateFile,
   writeUnitScopeStamp,
-  writeFileAtomic,
   answerModeStageStartedFields,
   keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
@@ -286,16 +287,20 @@ import {
   UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
-import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
+import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
 import {
+  stageLabel,
   stageValidationAuditFields,
+  unitInputGaps,
   VALIDATION_WARNING_FIELD,
 } from "./aidlc-validity.ts";
 import {
@@ -2050,7 +2055,7 @@ function handleRefreshUnitProgress(
       ) {
         refuseUnitProgress(`Invalid Unit Progress stage: ${slug}`);
       }
-      content = setCheckbox(content, slug, state);
+      content = setCheckbox(withStageProgressRow(content, slug), slug, state);
       if (
         state === "completed" &&
         (
@@ -2081,7 +2086,7 @@ function handleRefreshUnitProgress(
         const nextAfter = nextInScopeStage(next.slug, workflowScope, content);
         const timestamp = isoTimestamp();
         phaseBoundary = finalStage.phase !== next.phase;
-        content = setCheckbox(content, next.slug, "in-progress");
+        content = setCheckbox(withStageProgressRow(content, next.slug), next.slug, "in-progress");
         content = setField(content, "Current Stage", next.slug);
         content = setField(content, "Lifecycle Phase", next.phase.toUpperCase());
         content = setField(content, "Next Stage", nextAfter?.slug ?? "none");
@@ -2414,7 +2419,7 @@ function handleSyncUnitScopeStage(args: string[]): void {
     content = setField(content, "In Progress", slug);
     content = setField(content, "Active Agent", stage.lead_agent);
     if (getSlugState(content, slug) !== "completed") {
-      content = setCheckbox(content, slug, "in-progress");
+      content = setCheckbox(withStageProgressRow(content, slug), slug, "in-progress");
     }
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(pd, content);
@@ -2984,10 +2989,6 @@ function handleUnit(args: string[]): void {
       }
     }
 
-    const memoryEntries =
-      action === "complete" && waveMode
-        ? fanInWaveUnitMemory(pd, slug, unit)
-        : 0;
     const waveFingerprint =
       action === "complete" && waveMode
         ? reviewArtifactFingerprint(pd, stage, unit, {
@@ -3021,7 +3022,6 @@ function handleUnit(args: string[]): void {
       ...(waveMode
         ? {
             Mode: "wave",
-            "Wave memory entries": String(memoryEntries),
             "Artifact Fingerprint": waveFingerprint ?? "",
           }
         : {}),
@@ -3072,7 +3072,7 @@ function handleUnit(args: string[]): void {
       stage: slug,
       unit,
       timestamp,
-      ...(waveMode ? { wave: true, memory_entries: memoryEntries } : {}),
+      ...(waveMode ? { wave: true } : {}),
     }));
   });
 }
@@ -3266,56 +3266,6 @@ function requireEngineRoutedWaveUnit(
   }
 }
 
-function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
-  const headings = [
-    "Interpretations",
-    "Deviations",
-    "Tradeoffs",
-    "Open questions",
-  ] as const;
-  const rec = recordDir(pd);
-  if (rec === null) {
-    error(
-      `Refusing wave completion for unit "${unit}" of "${stage}": no active intent record directory exists.`,
-    );
-  }
-  const unitPath = join(rec, "construction", unit, stage, "memory.md");
-  const parentPath = join(rec, "construction", stage, "memory.md");
-  const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
-  const entries = parseMemoryEntries(unitContent);
-  if (entries.length === 0 && !existsSync(parentPath)) return 0;
-
-  let parentContent = existsSync(parentPath)
-    ? readFileSync(parentPath, "utf-8")
-    : `${headings.map((heading) => `## ${heading}\n`).join("\n")}\n`;
-  for (const heading of headings) {
-    if (!new RegExp(`^## ${heading}$`, "m").test(parentContent)) {
-      parentContent = `${parentContent.trimEnd()}\n\n## ${heading}\n`;
-    }
-  }
-
-  let added = 0;
-  for (const entry of entries) {
-    const digest = createHash("sha256")
-      .update(`${stage}\0${unit}\0${entry.heading}\0${entry.raw}`, "utf-8")
-      .digest("hex");
-    const marker = `<!-- aidlc-wave-memory:${unit}:${digest} -->`;
-    if (parentContent.includes(marker)) continue;
-    parentContent = appendUnderHeading(
-      parentContent,
-      `## ${entry.heading}`,
-      `\n${entry.raw}\n${marker}\n`,
-    );
-    added++;
-  }
-
-  mkdirSync(dirname(parentPath), { recursive: true });
-  if (!existsSync(parentPath) || added > 0) {
-    writeFileAtomic(parentPath, parentContent.endsWith("\n") ? parentContent : `${parentContent}\n`);
-  }
-  return added;
-}
-
 // The unit's missing REQUIRED artifacts (kind-filtered like the engine's
 // unitCovered): resolved under <record>/construction/<unit>/<slug>/<name>.md.
 // Returns [] when everything applicable exists. Kind filtering reads the
@@ -3372,7 +3322,7 @@ function handleCheckbox(args: string[]): void {
   let content = readStateFile(pd);
 
   for (const { slug, state } of changes) {
-    content = setCheckbox(content, slug, state);
+    content = setCheckbox(withStageProgressRow(content, slug), slug, state);
   }
 
   // Sync Completed counter to actual [x] count
@@ -4462,32 +4412,6 @@ function isNonDocPath(p: string): boolean {
   if (rel.length === 0) return false;
   const firstSeg = rel.split("/")[0];
   return !HARNESS_DOC_DIRS.has(firstSeg);
-}
-
-// Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping. The person's
-// own git settings apply: this is their machine and their project, and git here
-// behaves as it does in their terminal. `outside` is a checkout outside the
-// project: --no-optional-locks keeps git from refreshing its index there, so
-// asking it writes nothing.
-function git(pd: string, args: string[], outside = false): string | null {
-  try {
-    const r = spawnSync("git", outside ? ["--no-optional-locks", ...args] : args, {
-      cwd: pd,
-      encoding: "utf-8",
-      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-    });
-    if (r.status !== 0 || typeof r.stdout !== "string") return null;
-    return r.stdout;
-  } catch {
-    return null;
-  }
-}
-
-// True when `pd` is inside a git work tree. (`--is-inside-work-tree` prints
-// "true"/"false"; a non-repo exits non-zero -> git() returns null -> false.)
-function isGitRepo(pd: string, outside = false): boolean {
-  return git(pd, ["rev-parse", "--is-inside-work-tree"], outside)?.trim() === "true";
 }
 
 // Git-aware "did this workspace get real source work?" signal (issue #366
@@ -6266,7 +6190,7 @@ function handleAdvance(
   content = setCheckbox(content, completedSlug, "completed");
 
   // 2. Mark next-slug → [-]
-  content = setCheckbox(content, nextSlug, "in-progress");
+  content = setCheckbox(withStageProgressRow(content, nextSlug), nextSlug, "in-progress");
 
   // 3. Update fields
   const nextAfterNext = nextInScopeStage(nextSlug, scope, content);
@@ -6633,6 +6557,7 @@ interface TeamGateContext {
   unit: string;
   scope: UnitGateScope;
   stages: NonNullable<ReturnType<typeof findStageBySlug>>[];
+  skipped?: string[];
 }
 
 function teamGateContext(
@@ -6680,7 +6605,18 @@ function teamGateContext(
         `"${final?.slug ?? "unknown"}", not "${stage.slug}".`,
     );
   }
-  return { unit, scope: "unit-end", stages };
+  // The gate covers the stages this Unit ran: one skipped for it (UNIT_SKIPPED
+  // in the current attempt) owes no artifacts and no review, and Request
+  // Changes must not reopen it, as a construction checkpoint's gate leaves out
+  // a stage skipped for every Unit. The final stage, where the gate sits,
+  // stays in its stages and is named skipped (GATE_SKIPPED_STAGES_FIELD).
+  const skipped = stages.filter((entry) => unitSkippedUnits(pd, entry.slug, undefined, content).has(unit));
+  return {
+    unit,
+    scope: "unit-end",
+    stages: stages.filter((entry) => entry === final || !skipped.includes(entry)),
+    skipped: skipped.filter((entry) => entry === final).map((entry) => entry.slug),
+  };
 }
 
 function applicableUnitProduces(
@@ -6745,7 +6681,13 @@ function verifyTeamUnitGateEvidence(
   personCall?: PersonApproval,
 ): void {
   for (const stage of context.stages) {
-    if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
+    // Only Code Generation, where the unit-end gate sits, can be skipped here:
+    // it stays in the gate's stages for pin's Gate Stages match, and a stage
+    // the Unit skipped owes no files, completion or review.
+    if (
+      applicableUnitProduces(pd, stage, context.unit).length === 0 ||
+      unitSkippedUnits(pd, stage.slug, undefined, content).has(context.unit)
+    ) continue;
     const missing = missingUnitArtifacts(pd, stage, context.unit);
     if (missing.length > 0) {
       const message =
@@ -7357,6 +7299,39 @@ export function leftOutNotice(pd: string, stage: GateStage, unit: string | null 
   }
 }
 
+// Which Units a per-Unit stage that runs for every Unit (Code Generation) has
+// not finished, said by the stage that reads its work first (#3531): its
+// `requires_stage` names it, so a stage after it does not say it again.
+// Counted from the files the stage's Validation Basis records
+// (unitInputGaps). A design stage runs for a Unit only when its condition
+// holds, so a Unit without its documents is the plan, not a gap, and is not
+// said. Said with the gate, and with an approval that opened the gate in the
+// same step. A per-Unit gate, or nothing missing, says nothing. Said with
+// Sensors off too: it is the record, not a check.
+export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: string | null = null): string | null {
+  if (unit !== null || isPerUnitStage(stage)) return null;
+  try {
+    const gaps = unitInputGaps(pd, stage, readStateFile(pd)).filter((gap) =>
+      gap.missing.length > 0 && (stage.requires_stage ?? []).includes(gap.producer) &&
+      findStageBySlug(gap.producer)?.execution === "ALWAYS");
+    if (gaps.length === 0) return null;
+    const and = (names: readonly string[]): string =>
+      names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    const units = (names: readonly string[]): string => `unit${names.length === 1 ? "" : "s"} ${and(names)}`;
+    const stageName = stageLabel(stage, stage.slug) ?? stage.slug;
+    // What the record backs: the stage has not finished for them, so some of
+    // their work may not be there (a Unit can have its source but not its
+    // summary).
+    return gaps.map(({ producer, missing }) => {
+      const from = stageLabel(findStageBySlug(producer), producer) ?? producer;
+      return `${from} has not finished for ${units(missing)}, so ${missing.length === 1 ? "its" : "their"} code ` +
+        `may be missing from ${stageName}.`;
+    }).join(" ");
+  } catch {
+    return null;
+  }
+}
+
 // A stage artifact may list the decisions only the person can make in a fenced
 // `aidlc-decisions` block (yaml: `decisions:` then `- id: <id>` items, with
 // `decision:`, `owner:` and `blocking:` beside each). The gate records the ids;
@@ -7431,6 +7406,7 @@ function teamGateFields(
     Unit: context.unit,
     "Gate Scope": context.scope,
     "Gate Stages": context.stages.map((entry) => entry.slug).join(","),
+    ...(context.skipped?.length ? { [GATE_SKIPPED_STAGES_FIELD]: context.skipped.join(",") } : {}),
     ...claimAttemptFields(resolveProjectDir(projectDir), context.unit),
   };
 }
@@ -7996,6 +7972,7 @@ function handleApprove(args: string[]): void {
             }
           : {}),
         ...(teamPersonCall.unfinishedReviews.length > 0 ? { Review: "not finished" } : {}),
+        ...personGitNameField(pd),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8176,6 +8153,7 @@ function handleApprove(args: string[]): void {
     } else if (!autonomousDecision) {
       Object.assign(gateFields, personsWordsFields(pd, slug, message), approvesTogetherFields(listedTogether));
     }
+    const theirs = together !== null || !autonomousDecision;
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
@@ -8183,6 +8161,7 @@ function handleApprove(args: string[]): void {
     if ((personCall?.unfinishedReviews.length ?? 0) > 0) gateFields.Review = "not finished";
     Object.assign(gateFields, briefDigestField(pd, stage, undefined), decisionsAcceptedOpenField(pd, slug, undefined));
     if (stage.workspace_requires) Object.assign(gateFields, sourceWorkFields());
+    if (theirs) Object.assign(gateFields, personGitNameField(pd));
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -8524,6 +8503,7 @@ function handleReject(args: string[]): void {
                 reviewFindingDispositions,
             }
           : {}),
+        ...personGitNameField(pd),
       });
       emitAudit(pd, "STAGE_REVISING", {
         ...fields,
@@ -8570,6 +8550,7 @@ function handleReject(args: string[]): void {
       rejFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
     }
+    if (!autonomousDecision) Object.assign(rejFields, personGitNameField(pd));
     emitAudit(pd, "GATE_REJECTED", rejFields);
     emitAudit(pd, "STAGE_REVISING", {
       Stage: slug,
@@ -8842,13 +8823,14 @@ function handleSkip(args: string[]): void {
           checkpoints,
         ),
         ...claimAttemptFields(pd, unit),
+        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     // A Unit's step the person asked to skip spends what they typed for it:
     // their words were the skip. The agent's own skip leaves them kept.
-    if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+    if (isPersonAskedSkipReason(reason)) clearGateWords(pd);
     // A team's Unit is skipped for itself only: the stage's own checkbox is
     // derived from every team's Units, so it is never marked or routed here.
     if (teamOwned) {
@@ -8900,6 +8882,7 @@ function handleSkip(args: string[]): void {
     try {
       const fields: Record<string, string> = { Stage: slug };
       if (reason) fields.Reason = reason;
+      if (isPersonAskedSkipReason(reason)) Object.assign(fields, personGitNameField(pd));
       emitAudit(pd, "STAGE_SKIPPED", fields);
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8918,7 +8901,7 @@ function handleSkip(args: string[]): void {
   // work is a new project) or the person asked to skip it, so the gate
   // closes as skipped, not approved.
   const personDecided = parseStateStageSuffixes(content).get(slug) === "SKIP" ||
-    reason === PERSON_ASKED_SKIP_REASON;
+    isPersonAskedSkipReason(reason);
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
@@ -8987,7 +8970,7 @@ function handleSkip(args: string[]): void {
     : false;
 
   if (nextStage) {
-    content = setCheckbox(content, nextStage.slug, "in-progress");
+    content = setCheckbox(withStageProgressRow(content, nextStage.slug), nextStage.slug, "in-progress");
     const nextAfterNext = nextInScopeStage(nextStage.slug, scope, content);
     content = setField(content, "Current Stage", nextStage.slug);
     content = setField(content, "Lifecycle Phase", nextStage.phase.toUpperCase());
@@ -9024,6 +9007,7 @@ function handleSkip(args: string[]): void {
         Stage: slug,
         Reason: reason,
         "Skip Kind": "conditional-runtime",
+        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
       });
     }
     if (nextStage) {
@@ -9084,7 +9068,7 @@ function handleSkip(args: string[]): void {
   }
   // The stage the person asked to skip spends what they typed for it, as a
   // Unit's step does.
-  if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+  if (isPersonAskedSkipReason(reason)) clearGateWords(pd);
 
   writeStateFile(pd, content);
   if (!nextStage) {
@@ -9331,6 +9315,51 @@ function handlePracticesEvent(args: string[]): void {
   );
 }
 
+// The rules Approve at Practices Discovery adds to project.md: the list items
+// under the draft's `## Mandated` and `## Forbidden`, a wrapped line joined to
+// its item (prose, a "None.", a nested list, a quote, code and comments are no
+// rule), less the rules that heading of project.md already holds. The gate
+// names these and practices-promote writes them, so the person approves
+// exactly what is written. A terminal `(affirmed <date>)` stamp is provenance,
+// not rule identity: an existing rule keeps its original date.
+export function practicesRulesToAdd(
+  discoveredRules: string,
+  projectMd: string,
+): { mandated: string[]; forbidden: string[] } {
+  const ruleText = (text: string): string => text.replace(/(?: \(affirmed \d{4}-\d{2}-\d{2}\))+$/, "");
+  const draftRules = (section: string): string[] => {
+    const blocks = markdownBlocks(section);
+    const visible = projectVisibleMarkdownLines(section, blocks, { preserveIndentedCode: true });
+    const items = new Map<number, string[]>();
+    blocks.lines.forEach((line, index) => {
+      const item = line.containers[0];
+      if (line.kind !== "paragraph" || line.containers.length !== 1 || item?.kind !== "listItem") return;
+      const text = visible[index].slice(line.contentStart).trim();
+      if (text !== "") items.set(item.id, [...(items.get(item.id) ?? []), text]);
+    });
+    return [...items.values()].map((parts) => ruleText(parts.join(" "))).filter((rule) => rule !== "");
+  };
+  // project.md as its writers have left it: one rule a line, with or without a
+  // list marker.
+  const heldRules = (section: string): string[] =>
+    section
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("<!--") && !l.startsWith("#"))
+      .map((l) => ruleText(l.replace(/^(?:[-*+]|\d+[.)])\s+/, "")));
+  const toAdd = (heading: string): string[] => {
+    const held = new Set(heldRules(extractMarkdownSection(projectMd, heading)));
+    const rules: string[] = [];
+    for (const rule of draftRules(extractMarkdownSection(discoveredRules, heading))) {
+      if (held.has(rule)) continue;
+      held.add(rule);
+      rules.push(rule);
+    }
+    return rules;
+  };
+  return { mandated: toAdd("## Mandated"), forbidden: toAdd("## Forbidden") };
+}
+
 // practices-promote --team-practices <path> --discovered-rules <path>
 //                   [--affirming-user <name>] [--target-dir <path>]
 //
@@ -9518,69 +9547,19 @@ function handlePracticesPromote(args: string[]): void {
     }
   }
 
-  // Step 4b: Build new project-guardrails.md by appending each rule under the
-  // matching heading with a date stamp. Rules are one-per-line in the draft;
-  // empty/blank lines and comment lines are skipped. The generated terminal
-  // date stamps are provenance, not rule identity; leave an existing rule and
-  // its original date untouched when the same text is affirmed again.
-  const parseRules = (sectionContent: string): string[] => {
-    return sectionContent
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith("<!--") && !l.startsWith("#"));
-  };
-  const mandatedDraft = extractMarkdownSection(
-    discoveredRulesDraft,
-    "## Mandated"
-  );
-  const forbiddenDraft = extractMarkdownSection(
-    discoveredRulesDraft,
-    "## Forbidden"
-  );
-  const mandatedRules = parseRules(mandatedDraft);
-  const forbiddenRules = parseRules(forbiddenDraft);
-  const ruleText = (line: string): string =>
-    line.replace(/(?: \(affirmed \d{4}-\d{2}-\d{2}\))+$/, "");
-
+  // Step 4b: Build new project-guardrails.md by appending, under the matching
+  // heading with a date stamp, exactly the rules the gate named.
+  const rulesToAdd = practicesRulesToAdd(discoveredRulesDraft, guardrailsMd);
   let newGuardrailsMd = guardrailsMd;
-  const existingMandatedRules = new Set(
-    parseRules(extractMarkdownSection(guardrailsMd, "## Mandated")).map(ruleText),
-  );
-  const existingForbiddenRules = new Set(
-    parseRules(extractMarkdownSection(guardrailsMd, "## Forbidden")).map(ruleText),
-  );
-  for (const rule of mandatedRules) {
-    const text = ruleText(rule);
-    if (existingMandatedRules.has(text)) continue;
-    const stampedLine = `${text} (affirmed ${today})`;
-    try {
-      newGuardrailsMd = appendUnderHeading(
-        newGuardrailsMd,
-        "## Mandated",
-        `${stampedLine}\n`
-      );
-      existingMandatedRules.add(text);
-      rulesAppended.mandated++;
-    } catch (e) {
-      fail(`appendUnderHeading failed on Mandated: ${errorMessage(e)}`);
-      return;
-    }
-  }
-  for (const rule of forbiddenRules) {
-    const text = ruleText(rule);
-    if (existingForbiddenRules.has(text)) continue;
-    const stampedLine = `${text} (affirmed ${today})`;
-    try {
-      newGuardrailsMd = appendUnderHeading(
-        newGuardrailsMd,
-        "## Forbidden",
-        `${stampedLine}\n`
-      );
-      existingForbiddenRules.add(text);
-      rulesAppended.forbidden++;
-    } catch (e) {
-      fail(`appendUnderHeading failed on Forbidden: ${errorMessage(e)}`);
-      return;
+  for (const [heading, kind] of [["## Mandated", "mandated"], ["## Forbidden", "forbidden"]] as const) {
+    for (const rule of rulesToAdd[kind]) {
+      try {
+        newGuardrailsMd = appendUnderHeading(newGuardrailsMd, heading, `- ${rule} (affirmed ${today})\n`);
+        rulesAppended[kind]++;
+      } catch (e) {
+        fail(`appendUnderHeading failed on ${heading.slice(3)}: ${errorMessage(e)}`);
+        return;
+      }
     }
   }
 

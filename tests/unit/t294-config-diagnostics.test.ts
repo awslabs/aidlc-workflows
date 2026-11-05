@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1831,6 +1832,53 @@ describe("t294 trust diagnostics", () => {
     '{"enabled":true,"name":"aidlc-left-over","when":{"type":"promptSubmit"},' +
     '"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-human-turn.ts"}}';
 
+  // Claude Code's row, as the installed aidlc command reads it. A bare Bash allow
+  // an early release shipped and a refresh keeps as the person's takes nothing
+  // from AI-DLC's own entry: the row passes and says once what it lets through.
+  test("claude: native trust passes beside a bare Bash allow entry and says it lets every command through", async () => {
+    const project = temp("aidlc-t294-trust-claude-bare-bash-");
+    cpSync(join(DIST_RELEASE, "claude"), project, { recursive: true });
+    const machine = temp("aidlc-t294-trust-claude-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".claude",
+      AIDLC_HARNESS_NAME: "claude",
+      AIDLC_RUNTIME_HARNESS_ROOT: join(project, ".claude"),
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const trustRow = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    try {
+      Object.assign(process.env, overrides);
+      const clean = await trustRow();
+      expect(clean.pass, clean.label).toBe(true);
+      expect(clean.label).not.toContain("every Bash command");
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions: { allow: string[] } };
+      settings.permissions.allow.push("Bash");
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const broad = await trustRow();
+      expect(broad.pass, broad.label).toBe(true);
+      expect(broad.label.match(/every Bash command/g)?.length).toBe(1);
+      expect((JSON.parse(readFileSync(settingsPath, "utf-8")) as typeof settings).permissions.allow).toContain("Bash");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   for (const harness of ["kiro-ide", "kiro"] as const) {
     test(`${harness}: Kiro native trust passes with a dropped plugin's compose hook, and still counts a leftover Bun entry`, async () => {
       const project = temp(`aidlc-t294-trust-kiro-plugin-${harness}-`);
@@ -1846,6 +1894,32 @@ describe("t294 trust diagnostics", () => {
       const leftover = await kiroNativeTrust(project, harness);
       expect(leftover.pass, leftover.label).toBe(false);
       expect(leftover.label).toBe(KIRO_TRUST_INCOMPLETE);
+    });
+
+    test(`${harness}: Kiro native trust counts a compose hook beside a plugin folder no build names`, async () => {
+      const project = temp(`aidlc-t294-trust-kiro-plugin-folder-${harness}-`);
+      cpSync(join(DIST_RELEASE, harness), project, { recursive: true });
+      cpSync(join(DIST, "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
+      const plugins = join(project, ".kiro", "aidlc-plugins");
+      const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+      const written = readFileSync(registration, "utf-8");
+      // The plugin's folder renamed, and its registration rewritten as a build
+      // would write it for that folder.
+      let folder = "aidlc-test-pro";
+      const moveTo = (name: string): void => {
+        renameSync(join(plugins, folder), join(plugins, name));
+        folder = name;
+        const text = written.replaceAll("aidlc-plugins/aidlc-test-pro", `aidlc-plugins/${name}`);
+        expect(text).not.toBe(written);
+        writeFileSync(registration, text);
+      };
+      // A build of a plugin someone else makes names the folder after the plugin alone.
+      moveTo("test-pro");
+      const ownName = await kiroNativeTrust(project, harness);
+      expect(ownName.pass, ownName.label).toBe(true);
+      moveTo("test-pro-copy");
+      const renamed = await kiroNativeTrust(project, harness);
+      expect(renamed.label).toBe(KIRO_TRUST_INCOMPLETE);
     });
 
     for (const earlier of EARLIER_KIRO_IDE_DROPS) {
@@ -2827,6 +2901,187 @@ describe("t294 post-apply outstanding actions", () => {
 });
 
 describe("t294 instruction-file doctor row", () => {
+  for (const setup of ["configured", "copy"] as const) {
+    function codexProject(): string {
+      if (setup === "configured") return install("codex");
+      const project = temp("aidlc-t294-copy-override-");
+      cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+      cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+      const part = readFileSync(join(project, ".codex", "tools", "data", "root-blocks", "agents"), "utf-8").trim();
+      writeFileSync(join(project, "AGENTS.md"), `# Shop\n\n<!-- BEGIN AI-DLC:agents -->\n${part}\n<!-- END AI-DLC:agents -->\n`);
+      return project;
+    }
+
+    test(`${setup}: Codex override without the block cannot pass on AGENTS.md's block`, () => {
+      const project = codexProject();
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      const overridePath = join(project, "AGENTS.override.md");
+      writeFileSync(overridePath, "# Team instructions\n\nKeep these instructions.\n");
+      const paths = ["AGENTS.md", "AGENTS.override.md", ".codex/config.toml", ".codex/onboarding.md"];
+      if (setup === "configured") paths.push(".codex/tools/data/aidlc-manifest.json");
+      const before = paths.map((path) => readFileSync(join(project, path)));
+
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(false);
+      expect(result.severity).toBe("warn");
+      expect(result.label).toContain("AGENTS.override.md");
+      expect(result.fix).toContain("AGENTS.md");
+      expect(result.fix).toContain("AGENTS.override.md");
+      expect(result.fix).toContain("copy");
+      expect(result.fix).not.toContain("--force");
+      expect(paths.map((path) => readFileSync(join(project, path)))).toEqual(before);
+    });
+
+    test(`${setup}: Codex override holds the block even without AGENTS.md`, () => {
+      const project = codexProject();
+      const agentsPath = join(project, "AGENTS.md");
+      const block = readFileSync(agentsPath, "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      const content = `# Team instructions\n\n${block}\nKeep this team's closing note.\n`;
+      writeFileSync(overridePath, content);
+      rmSync(agentsPath);
+
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(true);
+      expect(result.label).toContain("AGENTS.override.md");
+      expect(existsSync(agentsPath)).toBe(false);
+      expect(readFileSync(overridePath, "utf-8")).toBe(content);
+    });
+
+    test(`${setup}: Codex override validates its block rather than the hidden block`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      for (const content of [
+        block.replace("<!-- END AI-DLC:agents -->", "changed guidance\n<!-- END AI-DLC:agents -->"),
+        block.replace("<!-- END AI-DLC:agents -->", ""),
+        `${block}\n${block}`,
+      ]) {
+        writeFileSync(overridePath, content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("AGENTS.override.md");
+        expect(result.fix).toContain("replace");
+        expect(result.fix).toContain("markers");
+        expect(result.fix).not.toContain("--force");
+        expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      }
+      const repaired = `# Keep this team's instructions\n\n${block}\nKeep the closing note too.\n`;
+      writeFileSync(overridePath, repaired);
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      expect(readFileSync(overridePath, "utf-8")).toBe(repaired);
+    });
+
+    // What a copy holds once an update changed AI-DLC's block, or after an
+    // edit inside it: doctor cannot tell the two apart, so it says neither.
+    test(`${setup}: an earlier or edited block in the Codex override is not called hand-modified`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      writeFileSync(
+        join(project, "AGENTS.override.md"),
+        block.replace("<!-- END AI-DLC:agents -->", "Earlier guidance.\n<!-- END AI-DLC:agents -->"),
+      );
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(false);
+      expect(result.label).toContain("the AI-DLC block in AGENTS.override.md is not the current one");
+      expect(result.label).not.toContain("hand-modified");
+      expect(result.fix).toContain("with the current block from AGENTS.md");
+    });
+
+    test(`${setup}: empty Codex override still hides AGENTS.md`, () => {
+      const project = codexProject();
+      for (const content of ["", " \t\r\n"]) {
+        writeFileSync(join(project, "AGENTS.override.md"), content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("missing (AGENTS.override.md)");
+        expect(result.fix).toContain("copy");
+      }
+    });
+
+    test(`${setup}: a directory is not a Codex override file`, () => {
+      const project = codexProject();
+      const before = instructionFileDoctorCheck(project, ".codex");
+      mkdirSync(join(project, "AGENTS.override.md"));
+      expect(instructionFileDoctorCheck(project, ".codex")).toEqual(before);
+    });
+
+    // Windows file symlinks require privileges a contributor may not have.
+    test.skipIf(process.platform === "win32")(`${setup}: Codex override follows a file symlink`, () => {
+      const project = codexProject();
+      const before = instructionFileDoctorCheck(project, ".codex");
+      const target = join(project, "team-instructions.md");
+      cpSync(join(project, "AGENTS.md"), target);
+      symlinkSync(target, join(project, "AGENTS.override.md"));
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      expect(instructionFileDoctorCheck(project, ".codex").label).toContain("AGENTS.override.md");
+      writeFileSync(target, "");
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(false);
+      rmSync(target);
+      expect(instructionFileDoctorCheck(project, ".codex")).toEqual(before);
+    });
+
+    test(`${setup}: Codex override does not hide an AGENTS.md refresh conflict`, () => {
+      const project = codexProject();
+      const agentsPath = join(project, "AGENTS.md");
+      const block = readFileSync(agentsPath, "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      writeFileSync(overridePath, block);
+      const broken = block.replace("<!-- END AI-DLC:agents -->", "");
+      writeFileSync(agentsPath, broken);
+      const conflict = instructionFileDoctorCheck(project, ".codex");
+      expect(conflict.pass).toBe(false);
+      expect(conflict.label).toContain("conflict (AGENTS.md)");
+      expect(conflict.label).toContain("Codex reads AGENTS.override.md");
+      expect(conflict.fix).toContain("move AGENTS.md");
+      expect(conflict.fix).not.toContain("--force");
+      expect(readFileSync(agentsPath, "utf-8")).toBe(broken);
+
+      writeFileSync(overridePath, "# Team instructions\n");
+      const both = instructionFileDoctorCheck(project, ".codex");
+      expect(both.pass).toBe(false);
+      expect(both.label).toContain("AGENTS.md");
+      expect(both.label).toContain("missing (AGENTS.override.md)");
+      expect(both.fix).toContain("copy");
+      expect(both.fix).toContain("AGENTS.override.md");
+      writeFileSync(agentsPath, "# Personal instructions\n");
+      writeFileSync(overridePath, block);
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    });
+
+    if (setup === "copy") {
+      test("copy: Codex override cannot rely on automatic legacy adoption", () => {
+        const project = codexProject();
+        const descriptorPath = join(project, ".codex/tools/data/aidlc-projection.json");
+        const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+        const legacy = "# Earlier shipped AI-DLC guidance\n";
+        const integration = descriptor.rootIntegrations.find((item: { path: string }) => item.path === "AGENTS.md");
+        integration.legacySignatures.wholeFileHashes.push(sha256Bytes(legacy));
+        writeFileSync(descriptorPath, JSON.stringify(descriptor));
+        const overridePath = join(project, "AGENTS.override.md");
+        writeFileSync(overridePath, legacy);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("AGENTS.override.md");
+        expect(readFileSync(overridePath, "utf-8")).toBe(legacy);
+        rmSync(overridePath);
+        writeFileSync(join(project, "AGENTS.md"), legacy);
+        expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      });
+    }
+  }
+
+  test("non-Codex instruction checks ignore AGENTS.override.md", () => {
+    for (const harness of ["claude", "kiro", "kiro-ide", "cursor", "opencode", "copilot"]) {
+      const project = install(harness);
+      const harnessDir = runtimePaths.discoverProjectHarnesses(project)[0].harnessDir;
+      const before = instructionFileDoctorCheck(project, harnessDir);
+      expect(before.pass, harness).toBe(true);
+      writeFileSync(join(project, "AGENTS.override.md"), "# Unrelated Codex instructions\n");
+      expect(instructionFileDoctorCheck(project, harnessDir), harness).toEqual(before);
+    }
+  });
+
   test("copied Codex instructions require both root guidance and onboarding without config", () => {
     const project = temp("aidlc-t294-copy-instructions-");
     cpSync(join(DIST, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
@@ -4984,6 +5239,34 @@ process.exit(0);
     const release = JSON.parse(readFileSync(join(DIST_RELEASE, "claude", ".claude", "settings.json"), "utf-8"));
     expect(after.hooks).toEqual(release.hooks);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A hand edit or a merge left the person's settings.json unparseable. Config
+  // names the file and the step, and leaves the file as it is, whether or not
+  // a provider is recorded (each takes its own read of the file).
+  for (const providers of [false, true]) {
+    test(`a settings.json that is not valid JSON is named, with the step, and left as it is${providers ? " (provider recorded)" : ""}`, () => {
+      const project = install("claude");
+      if (providers) {
+        const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+        const data = JSON.parse(readFileSync(dataPath, "utf-8")) as Record<string, unknown>;
+        data.providers = { schemaVersion: 1, provider: "current" };
+        writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+      }
+      const settingsPath = join(project, ".claude", "settings.json");
+      const broken = '{ "hooks": { broken\n';
+      writeFileSync(settingsPath, broken);
+      const refresh = run([
+        "config", "--project-dir", project,
+        "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+      ], project, runtimeEnv());
+      const output = refresh.stdout + refresh.stderr;
+      expect(refresh.status, output).toBe(4);
+      expect(output).toContain("error: .claude/settings.json is not valid JSON (");
+      expect(output).toMatch(/fix: correct \.claude\/settings\.json, then run `[^`]*config [^`]*--harness claude[^`]*` again/);
+      expect(output).not.toContain("pass --from the release files");
+      expect(readFileSync(settingsPath, "utf-8")).toBe(broken);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 
   test("a release change to AI-DLC's hook entries is not reported as a local edit", () => {
     const env = runtimeEnv();

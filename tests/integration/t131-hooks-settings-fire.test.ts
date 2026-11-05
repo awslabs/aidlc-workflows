@@ -280,6 +280,7 @@ function makeProject(withState: boolean): string {
   mkdirSync(join(proj, ".claude", "hooks"), { recursive: true });
   for (const t of [
     "aidlc-runtime.ts",
+    "aidlc-stage-diary.ts",
     "aidlc-lib.ts",
     "aidlc-settings.ts",
     "aidlc-markdown.ts",
@@ -287,6 +288,7 @@ function makeProject(withState: boolean): string {
     "aidlc-review-records.ts",
     "aidlc-record-core.ts",
     "aidlc-learned-date.ts",
+    "aidlc-git-name.ts",
     "aidlc-unit-landing.ts",
     "aidlc-kiro-chat-record.ts",
     "aidlc-install-paths.ts",
@@ -299,6 +301,8 @@ function makeProject(withState: boolean): string {
     "aidlc-lock-line.ts",
     "aidlc-review-manifest.ts",
     "aidlc-command.ts",
+    // aidlc-lib.ts reads a plugin command leading a line with this.
+    "aidlc-plugin-commands.ts",
     "aidlc-color.ts",
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",

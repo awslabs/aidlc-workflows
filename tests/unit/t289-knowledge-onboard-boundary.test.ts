@@ -93,6 +93,7 @@ import {
   sha256Hex,
   spaceAuditShardPath,
   summarizeDocument,
+  documentsCard,
   walkDocuments,
   writeIndex,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
@@ -999,6 +1000,7 @@ const DISK_TOUCHING_CALLS: Record<string, (p: string) => unknown> = {
     rebindDocument(p, SPACE, "any-id", "documents/x.md", "2026-08-07T00:00:00Z"),
   summarizeDocument: (p) =>
     summarizeDocument(p, SPACE, "any-id", "a summary", "a".repeat(64)),
+  documentsCard: (p) => documentsCard(p, SPACE, null),
   journalDir: (p) => journalDir(p, SPACE),
   journalTxnDir: (p) => journalTxnDir(p, SPACE, "txn"),
   documentDir: (p) => documentDir(p, SPACE, "document-id"),

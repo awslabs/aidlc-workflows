@@ -213,13 +213,13 @@ Review outcome: Concerns remain for your decision.
 > R-03 Required action: Human should confirm at the gate that a single integration-adoption
   metric is sufficient, or ask a follow-up to add a data-accuracy or reliability metric ...
 
-Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
-single, binary success metric ("at least one real...) as risk; you can also approve and ask for
-one to be fixed, or reject one as not applying, saying why.
-
 Decision options:
 - Approve - continue.
 - Request Changes - return to the listed artifacts so the required actions can be addressed.
+
+Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
+single, binary success metric ("at least one real...) as risk; you can also approve and ask for
+one to be fixed, or reject one as not applying, saying why.
 
  Approval
  Intent Capture & Framing complete. How would you like to proceed?
@@ -227,11 +227,16 @@ Decision options:
    2. Request Changes
 ```
 
+In a project that is not in git, the first gate also says, once: "This project
+has no git, so AI-DLC can't undo the changes it makes to your files; to get an
+undo, run `git init` and commit them." Without a commit, a file of yours that the
+build changes cannot be put back.
+
 Each finding has an ID, a severity, where it is, and what would resolve it. The
 engine owns the stable finding list. Later checks report only what changed,
 while your decisions remain exactly as you made them. Choose **Approve** to
-continue with every open finding accepted as risk (the line under the findings
-names them), or **Request Changes** to return to the listed artifacts. To decide
+continue with every open finding accepted as risk (the line just above the
+question names them), or **Request Changes** to return to the listed artifacts. To decide
 one differently, say so in your own words: approving and asking for R-03 to
 be fixed records that you asked for the fix, so the next check looks at it
 again; rejecting R-03 as not applying records it that way, with your reason,
@@ -299,7 +304,8 @@ example "Left out of this build: AC2.1.1, AC2.1.2 and AC2.2.1." The Unit's
 `traceability.json` keeps each of those items as `Deferred`, with your words.
 
 Code Generation is told which files you had before the work started, and
-builds around them unless its plan changes one. When the build changes or
+builds around them, changing one only when you ask for it or the work cannot
+be built without it. When the build changes or
 deletes a file you had before the work started (a
 README, LICENSE, docs or configs; on existing code, any file it deletes and the
 changed files AI-DLC does not read as code or a build file by their name, so a

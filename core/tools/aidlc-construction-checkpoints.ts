@@ -10,6 +10,7 @@ import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdi
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import { proveMessage, readMessage } from "./aidlc-message-store.ts";
 import { askedQuestionFields, QUESTION_ID_FIELD, questionShows } from "./aidlc-questions.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
@@ -1856,6 +1857,7 @@ export function approveConstructionCheckpoint(
       ...findingDispositions?.(
         gate["Gate Stages"].split(", ").filter(Boolean), [unit], humanRequired ? "person" : "nobody",
       ),
+      ...(humanRequired ? personGitNameField(projectDir) : {}),
     }, projectDir);
     if (humanRequired) consumeProtectedQuestion(projectDir, session);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);
@@ -1925,6 +1927,7 @@ export function rejectConstructionCheckpoint(
       "User Input": userInput, Feedback: reason, Reason: reason,
       ...protectedResponseFields(response),
       ...rejectedFindings?.(gate["Gate Stages"].split(", ").filter(Boolean), [unit]),
+      ...personGitNameField(projectDir),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

@@ -17,6 +17,7 @@ const INPUT_FILES = [
   "scripts/manifest-types.ts",
   "scripts/agent-knowledge.ts",
   "scripts/earlier-release-regions.ts",
+  "scripts/copy-era-files.json",
   "scripts/harness-bindings.ts",
   "scripts/onboarding.ts",
 ];

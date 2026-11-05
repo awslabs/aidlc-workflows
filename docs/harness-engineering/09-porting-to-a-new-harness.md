@@ -109,11 +109,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   taken for Kiro IDE. `agentStepInHost` (`{ env, text }`) does the same for
   `agentStep`, so the agent gets only its own tool's line: given one line
   per tool, an agent showed the wrong one. `registration`
-  (`{ file, missing, invalid }`) names the project JSON file the host reads
-  AI-DLC's hook registrations from: while it is missing or is not valid JSON
-  no setting brings those hooks back, so the step is the line `missing` (its
-  `<repair>` is doctor's command that puts the file back) or `invalid` for the
-  person instead; Claude Code declares it for `.claude/settings.json`.
+  (`{ file, missing, invalid, unwired }`) names the project JSON file the host
+  reads AI-DLC's hook registrations from: while it is missing, is not valid
+  JSON or registers none of AI-DLC's hooks no setting brings those hooks back,
+  so the step is the line `missing` or `unwired` (its `<repair>` is doctor's
+  command that puts the hooks back) or `invalid` for the person instead, and
+  doctor gives the same line instead of `recovery` and `notRunYet`; Claude Code
+  declares it for `.claude/settings.json`.
   `startedInsideProject` is the line for a chat the host started in a folder
   inside the project, where no setting brings the hooks back: the person is
   shown it instead of `agentStep`, and doctor gives it instead of `recovery`

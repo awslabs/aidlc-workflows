@@ -1032,7 +1032,7 @@ code. The row is absent when the records are visible, outside a Git repository,
 or when Git is unavailable.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only your Claude Code administrator can lift that policy. When that policy is not set and heartbeats are still absent after workflow progress, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`; it works in the same chat.
-When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
+When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
 
 See [CLI Commands](12-cli-commands.md#aidlc-doctor-health-check) for full details on what each check validates and how to fix failures.
 
@@ -1055,19 +1055,18 @@ report directory and tells you to compress it yourself. Share that archive (or
 directory) — it carries the diagnosis and redacted evidence, **not your work
 product**. No workspace source, raw state/audit/runtime-graph files, or
 artifact/contribution/question/memory bodies are included; paths are normalized,
-intent ids are hashed, and secret-like values are scrubbed.
+intent ids and Unit names are hashed, and secret-like values are scrubbed.
 
 The report reconstructs the workflow timeline from the audit trail and runs
 deterministic condition→remedy rules. The two most common causes it catches:
 
 - **Unresolved approval gates** — a stage whose gate never resolved is the single
   most common "it will not advance" cause.
-- **Stale or missing runtime graph / cold hooks** — a runtime graph older than its
-  authored inputs (or absent), or a hook that last fired more than a day before
-  the newest stage or approval step recorded on the intent, points at a
-  recompile that did not run. Opening a chat, a prompt and doctor's own audit
-  rows are not counted as work, so an intent nobody is working on does not read
-  as having cold hooks.
+- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or a
+  hook that last fired more than a day before the newest stage or approval step
+  recorded on the intent, points at a recompile that did not run. Opening a chat,
+  a prompt and doctor's own audit rows are not counted as work, so an intent
+  nobody is working on does not read as having cold hooks.
 
 `report.md` inside the report lists every finding with a remedy; a remedy that
 names a recovery bypass (such as an `AIDLC_DISABLE_*` env var) is flagged

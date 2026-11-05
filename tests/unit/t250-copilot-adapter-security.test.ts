@@ -65,6 +65,7 @@ const ADAPTER_SRC = join(
   "aidlc-copilot-adapter.ts",
 );
 const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
+const LAUNCHER_VOUCHER_SRC = join(REPO_ROOT, "core", "tools", "aidlc-launcher-voucher.ts");
 // The adapter reads AI-DLC's own command routes from the real dispatcher table.
 const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts"]
   .map((file) => join(REPO_ROOT, "core", "tools", file));
@@ -203,6 +204,7 @@ function scratch(): Scratch {
   writeFileSync(join(toolsDir, "aidlc-question-store.ts"), QUESTION_STORE_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
   copyFileSync(RUNTIME_PATHS_SRC, join(toolsDir, "aidlc-runtime-paths.ts"));
+  writeFileSync(join(toolsDir, "aidlc-launcher-voucher.ts"), `export * from ${JSON.stringify(LAUNCHER_VOUCHER_SRC)};\n`, "utf-8");
   for (const source of DISPATCHER_SRCS) copyFileSync(source, join(toolsDir, basename(source)));
   for (const hook of CORE_HOOKS) {
     writeFileSync(join(hooksDir, hook), stubHookBody(hook), "utf-8");

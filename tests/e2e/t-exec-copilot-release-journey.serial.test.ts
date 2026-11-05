@@ -7,43 +7,54 @@
 // "Approve" at Reverse Engineering.
 //
 //   case 1: the folder is trusted, the way Copilot's own trust dialog records
-//           it. Every line the person types has a message record (the hooks
-//           ran) and no other record holds words they never typed (a
-//           subagent's brief is no turn of theirs), the plan question waits
-//           for them, their files stay as they were until "1" starts the
-//           bugfix plan, Reverse Engineering asks for approval and "Approve"
-//           approves it, and doctor no longer says the hooks never ran or
-//           stopped beating while the workflow went on.
+//           it, and the person types each line at the prompt of Copilot's own
+//           interactive terminal (tests/harness/copilot-tui.ts): a `copilot -p`
+//           session tells the model it is non-interactive and must not stop to
+//           ask, which no person in the terminal meets. Every line the person
+//           types has a message record (the hooks ran) and no other record
+//           holds words they never typed (a subagent's brief is no turn of
+//           theirs), the plan question waits for them, their files stay as
+//           they were until "1" starts the bugfix plan, Reverse Engineering
+//           asks for approval and "Approve" approves it, and doctor no longer
+//           says the hooks never ran or stopped beating while the workflow
+//           went on. Copilot's permission dialogs get the preselected "Yes"
+//           and are counted in the report.
 //   case 2: the folder is NOT trusted. `copilot -p` then skips the project's
 //           hooks without a word, which is how a workshop lost a morning: no
 //           message record may appear, and doctor must tell the person the
-//           folder is not trusted and how to fix it.
+//           folder is not trusted and how to fix it. (The interactive terminal
+//           asks the person to trust the folder instead, so this path is -p's.)
 //
 // The model is Copilot's own-model mode (BYOK): in CI the Full Suite points it
 // at the credential broker, so no GitHub sign-in or Copilot seat is involved.
 // Pass/fail reads only what AI-DLC recorded, doctor and the person's files,
 // never the agent's prose.
-// The run's report (seconds per turn, hook runs by kind from Copilot's own
-// session record, tokens) lands in the test's log folder.
+// The run's report (seconds per turn, permission prompts by what drew them,
+// hook runs by kind from Copilot's own session record, tokens) lands in the
+// test's log folder.
 //
 // LIVE GATE: AIDLC_COPILOT_EXEC_LIVE=1, a copilot >= 1.0.95 binary on PATH (or
 // AIDLC_COPILOT_BIN), a model provider (BYOK variables, a GitHub token, or
 // AIDLC_COPILOT_ASSUME_AUTH=1) and the production guard profile
-// (--production-guards). Skips cleanly otherwise. SPENDS TOKENS. Serial.
+// (--production-guards); case 1 also needs the selected terminal backend.
+// Skips cleanly otherwise. SPENDS TOKENS. Serial.
 
-import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingCleanupTimeoutMs, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { CopilotTerminal, type CopilotPrompt, promptCounts } from "../harness/copilot-tui.ts";
 import { copilotTurn, trustCopilotFolder } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   checkReleaseJourneyTurn,
   doctorChecks,
+  evidenceOf,
   expectPersonFirstInJourney,
   hooksRanProblems,
+  journeyBudgets,
   RELEASE_JOURNEY_TURNS,
   type ReleaseJourneyReport,
   recordedPersonLines,
@@ -51,9 +62,19 @@ import {
   runReleaseJourney,
   setupReleaseJourneyProject,
 } from "../harness/release-journey.ts";
+import { tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+// The terminal journey's work keeps two minutes back for the screen a failed
+// report keeps, so a stall at startup or in a turn still shows what Copilot showed.
+const BUDGETS = journeyBudgets(() => caseDeadlineMs, TEST_TIMEOUT_MS, 120_000);
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, { deadlineMs: caseDeadlineMs, phase: "E2E terminal cleanup" });
+}
+const screenTail = (text: string) => text.split("\n").slice(-60).join("\n");
 
 function copilotVersion(): string | null {
   const result = spawnSync(COPILOT_BIN, ["--version"], {
@@ -84,6 +105,7 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
+const TERMINAL_SKIP_REASON = SKIP_REASON ?? tuiUnavailableReason();
 
 // Hook runs by kind, from Copilot's own session record of this home.
 function hookRuns(copilotHome: string): Record<string, number> {
@@ -105,57 +127,59 @@ function hookRuns(copilotHome: string): Record<string, number> {
   return counts;
 }
 
-function tokens(usageFile: string): Record<string, number> {
-  if (!existsSync(usageFile)) return {};
-  const usage = JSON.parse(readFileSync(usageFile, "utf8")) as {
-    modelMetrics?: Record<string, { usage?: { inputTokens?: number; outputTokens?: number } }>;
-  };
-  let input = 0;
-  let output = 0;
-  for (const metrics of Object.values(usage.modelMetrics ?? {})) {
-    input += metrics.usage?.inputTokens ?? 0;
-    output += metrics.usage?.outputTokens ?? 0;
-  }
-  return { "input tokens": input, "output tokens": output };
-}
-
 describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, before each release", () => {
-  test.skipIf(SKIP_REASON !== null)(
-    `trusted folder: every line recorded, the plan question asked, Reverse Engineering approved${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
+  test.skipIf(TERMINAL_SKIP_REASON !== null)(
+    `trusted folder, in Copilot's terminal: every line recorded, the plan question asked, Reverse Engineering approved${TERMINAL_SKIP_REASON ? ` [SKIP: ${TERMINAL_SKIP_REASON}]` : ""}`,
     () => {
-      const deadline = Date.now() + TEST_TIMEOUT_MS;
       const project = setupReleaseJourneyProject("copilot");
       const copilotHome = join(project.root, "copilot-home");
       trustCopilotFolder(copilotHome, project.proj);
       const env = { ...process.env, COPILOT_HOME: copilotHome };
-      const sessionId = randomUUID();
-      const usageFile = join(project.root, "usage.json");
       const report: ReleaseJourneyReport = {
         harness: "copilot", toolVersion: copilotVersion() ?? "?", turns: [], extra: {}, problems: [],
       };
-      let lastOut = "";
-      runReleaseJourney(report, () => {
-        for (const [index, line] of RELEASE_JOURNEY_TURNS.entries()) {
-          const started = Date.now();
-          const turn = copilotTurn(project.proj, line, {
-            copilotHome, sessionId, resume: index > 0, usageFile, timeoutMs: Math.max(1, deadline - Date.now()),
-          });
-          report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
-          lastOut = turn.out;
-          if (turn.rc !== 0) report.problems.push(`Copilot ended "${line}" with exit ${turn.rc}: ${turn.out.slice(-1500)}`);
-          checkReleaseJourneyTurn(report, project, index + 1, line);
-          if (report.problems.length) break;
-        }
-        // A subagent's brief reaches the hooks as a prompt too: only the lines
-        // the person typed may be on their record.
-        const typed: readonly string[] = RELEASE_JOURNEY_TURNS;
-        for (const line of recordedPersonLines(project.proj).filter((recorded) => !typed.includes(recorded))) {
-          report.problems.push(`a message record holds words the person never typed: "${line.slice(0, 120)}"`);
-        }
-        if (!report.problems.length) report.problems.push(...hooksRanProblems(doctorChecks(project, env)));
-        const runs = hookRuns(copilotHome);
-        report.extra = { "hook runs": Object.values(runs).reduce((sum, count) => sum + count, 0), ...tokens(usageFile), hooksByKind: runs };
-      }, () => ({ ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) }));
+      const terminal = new CopilotTerminal({
+        session: `aidlc_copilot_release_${process.pid}`, proj: project.proj, copilotHome, bin: COPILOT_BIN,
+        workMs: BUDGETS.workMs, cleanupMs: remainingCleanupMs,
+      });
+      const prompts: CopilotPrompt[] = [];
+      const spent = { input: 0, output: 0 };
+      let last: string | { unreadable: string } | undefined;
+      try {
+        runReleaseJourney(report, () => {
+          terminal.start();
+          for (const [index, line] of RELEASE_JOURNEY_TURNS.entries()) {
+            const started = Date.now();
+            const turn = terminal.turn(line);
+            report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
+            prompts.push(...turn.prompts);
+            spent.input += turn.tokens.input;
+            spent.output += turn.tokens.output;
+            if (!turn.ended) report.problems.push(`"${line}" had not ended: ${turn.stopped ?? "the time ran out"}`);
+            // Also after a turn that did not end: work started before the person answered is never retried.
+            checkReleaseJourneyTurn(report, project, index + 1, line);
+            if (report.problems.length) break;
+          }
+          // A subagent's brief reaches the hooks as a prompt too: only the lines
+          // the person typed may be on their record.
+          const typed: readonly string[] = RELEASE_JOURNEY_TURNS;
+          for (const line of recordedPersonLines(project.proj).filter((recorded) => !typed.includes(recorded))) {
+            report.problems.push(`a message record holds words the person never typed: "${line.slice(0, 120)}"`);
+          }
+          if (!report.problems.length) report.problems.push(...hooksRanProblems(doctorChecks(project, env)));
+          last = evidenceOf(() => terminal.screen(BUDGETS.screenMs()));
+          const runs = hookRuns(copilotHome);
+          report.extra = {
+            ...promptCounts(prompts), "hook runs": Object.values(runs).reduce((sum, count) => sum + count, 0),
+            "input tokens": spent.input, "output tokens": spent.output, hooksByKind: runs,
+          };
+        }, () => {
+          const final = last ?? evidenceOf(() => terminal.screen(BUDGETS.screenMs()));
+          return { ...releaseJourneyEvidence(project.proj), screen: typeof final === "string" ? screenTail(final) : final };
+        });
+      } finally {
+        terminal.kill();
+      }
       expectPersonFirstInJourney(report);
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });

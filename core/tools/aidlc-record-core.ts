@@ -16,7 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath }
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
-import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
+import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
 
@@ -44,15 +44,25 @@ export function canonicalPathKey(path: string): string {
 // The record the per-user `active-intent` cursor names, when it names a real
 // record — never the lone-record fallback. The cursor is gitignored and written
 // only by intent create and switch on this machine, so unlike a lone committed
-// record it is local evidence of a choice.
+// record it is local evidence of a choice. A git worktree with no cursor of its
+// own reads its main checkout's, as activeSpace does, when it names a record
+// this checkout has; an empty one of its own (an archive there leaves it) names none.
 export function readActiveIntentCursor(projectDir: string, space?: string): string | null {
-  const dir = intentsDir(projectDir, space ?? activeSpace(projectDir));
+  const sp = space ?? activeSpace(projectDir);
+  const dir = intentsDir(projectDir, sp);
+  let raw: string;
   try {
-    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
-    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
+    raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
   } catch {
-    // no cursor
+    const main = mainCheckoutOfWorktree(projectDir);
+    if (main === null) return null;
+    try {
+      raw = readFileSync(join(intentsDir(main, sp), ACTIVE_INTENT_POINTER), "utf-8").trim();
+    } catch {
+      return null;
+    }
   }
+  if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
   return null;
 }
 
@@ -1177,9 +1187,11 @@ function localWorktreeRecord(projectDir: string): string | null {
 
 // Whether this conversation's hooks may write into, or enforce, the record a
 // selection names. Resolution (which record the path helpers name) keeps the
-// lone-record fallback, because worktrees inherit no cursor; participation asks
-// for local evidence that this conversation chose the record. A lone committed
-// record is not such evidence: in a fresh clone it is a teammate's.
+// lone-record fallback, because a checkout may have no cursor (a fresh clone, a
+// worktree whose main checkout has none); participation asks for local evidence
+// that this conversation chose the record. The cursor is such evidence, and in a
+// git worktree with none of its own that is its main checkout's on this machine.
+// A lone committed record is not: in a fresh clone it is a teammate's.
 export function workflowParticipation(
   projectDir: string,
   selection: WorkflowSelection,
@@ -1692,6 +1704,29 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
+export function gateStagesFromBlock(block: string): string[] {
+  const explicit = auditBlockField(block, "Gate Stages");
+  if (explicit) {
+    return explicit
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+  }
+  const stage = auditBlockField(block, "Stage");
+  return stage ? [stage] : [];
+}
+
+// A unit-end gate's stages the Unit skipped. Gate Stages keeps a skipped final
+// stage, where the gate sits, so the gate's own rows and pin still find it.
+export const GATE_SKIPPED_STAGES_FIELD = "Skipped Stages";
+
+// The stages a gate row's Request Changes starts again: never one the Unit
+// skipped, so the person's skip stands.
+export function gateStagesReopened(block: string): string[] {
+  const skipped = (auditBlockField(block, GATE_SKIPPED_STAGES_FIELD) ?? "").split(",").map((value) => value.trim());
+  return gateStagesFromBlock(block).filter((stage) => !skipped.includes(stage));
+}
+
 // This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
 // clone identity (see cloneIdentity). The clone-id token (not the PID) is the
 // cross-clone disambiguator: stable across every process in a clone (so the
@@ -1717,6 +1752,20 @@ export function auditShardName(projectDir: string): string {
   const name = `${identity.host}-${identity.token}.md`;
   AUDIT_SHARD_NAMES.set(key, name);
   return name;
+}
+
+// The work's plan was made in another checkout: every stage or gate row of the
+// work's own (one that names no Unit, as Inception's do) is in another clone's
+// shard, or this clone has written none. A team's clone stays one after it
+// builds a Unit, whose rows name the Unit; the lead's own checkout, and a copy
+// of it, keep the plan's rows in their own shard. Team routing shows such a
+// clone the board or the Units it can take, never the walk the lead keeps.
+export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
+  const ownShard = knownAuditShardName(projectDir);
+  const plan = rows.filter((row) =>
+    (row.event.startsWith("STAGE_") || row.event.startsWith("GATE_")) && /^\*\*Unit\*\*:/m.test(row.block) === false
+  );
+  return plan.length > 0 && plan.every((row) => basename(row.shard) !== ownShard);
 }
 
 // This clone's shard name when it is already known, without minting a token or
@@ -2454,4 +2503,17 @@ export function setCheckbox(
 
 export function isoTimestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+// The reason the engine's skip step hands the agent for a stage the person
+// asked to skip where it stands (orchestrate's planChangeDirective). report
+// and the state tool read it back: that skip is the person's, so a stage that
+// must run, or one waiting at its own question, is skipped as they asked.
+export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
+
+// Whether a skip's reason is the person's: the engine's token, as the step
+// names it or with the agent's words after it (the person's why, which stays
+// in the record).
+export function isPersonAskedSkipReason(reason: string | null | undefined): boolean {
+  return reason?.startsWith(PERSON_ASKED_SKIP_REASON) === true;
 }

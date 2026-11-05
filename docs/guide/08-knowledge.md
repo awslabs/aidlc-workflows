@@ -52,7 +52,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 .claude/knowledge/
 +-- aidlc-shared/                       # Methodology loaded by every agent, plus format references
 |   +-- ai-dlc-principles.md        # Core methodology principles
-|   +-- audit-format.md             # 131-event audit taxonomy
+|   +-- audit-format.md             # 132-event audit taxonomy
 |   +-- brownfield.md               # Brownfield safeguards and reverse-engineering guidance
 |   +-- knowledge-readme-template.md # Optional README template a team can copy into Tier 2
 |   +-- memory-template.md          # The per-stage diary template
@@ -96,8 +96,10 @@ aidlc/knowledge/                  # empty at bootstrap; create the subdirs you n
 
 Team knowledge files are curated reference material. DocumentKB is the companion
 catalog for documents the team already owns: vision documents, PRDs,
-requirements briefs, policies, contracts, PDFs, Word files, Markdown, and plain
-text. See
+requirements briefs, policies, contracts, PDFs, Word and Excel files, Markdown,
+CSV, and plain text. AI-DLC reads Word and Excel files itself (a workbook's every
+sheet, as a table); a PDF needs `pdftotext` on the computer, which Windows does
+not have by default. See
 [Starting from an existing document](02-your-first-workflow.md#starting-from-an-existing-document)
 for ways to use one as workflow input.
 
@@ -135,6 +137,16 @@ Use `sync` after files are added, edited, moved, or deleted; `list` shows every
 catalog row and state, and `show <id>` returns one citable record plus current
 extracted text when available. The `/aidlc-knowledge` skill guides the same
 workflow.
+
+Inception's stages read these documents. The reading list of each Inception
+stage worked in your chat carries the documents in the knowledge base that have
+text (this piece of work's first, then the ones for the whole space), with each
+one's summary or the opening of its text. Before asking a question, the agent checks it against them: the
+questions your documents already answer come together in one first question,
+each with its answer and the document it came from, for you to confirm or
+change; what no document says, or what two documents disagree on, is still
+asked. A document you name when you start the work is filed for that work;
+`knowledge dissociate <id> --intent` makes it the whole space's again.
 
 A document can also carry a short **summary and tags**, so an agent can cite its
 gist without re-reading the whole file. The agent writes the summary itself and

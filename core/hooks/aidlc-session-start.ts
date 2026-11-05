@@ -90,6 +90,7 @@ import {
   SELECTION_NOTICE_FOLLOW,
   writeSessionSelectionNotice,
   clearSessionRebindOffer,
+  completeSubagentInflight,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
@@ -112,6 +113,20 @@ function switchOffContext(projectDir: string): string {
         backOnInstructions(projectDir).map((line) => `${line}\n`).join("");
   } catch {
     return "";
+  }
+}
+
+// A resumed chat runs in a new process, so no background helper its earlier
+// process sent is still at work, and a quit sends no SubagentStop to clear the
+// helper's in-flight entry. Left there, the entry would hold the Stop hook's
+// background wait open for helpers nobody runs (each later completion clears
+// the oldest entry). So the chat's entries are completed here; a compaction
+// keeps them, since its helpers run on. Never blocks startup.
+function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string): void {
+  try {
+    for (let i = 0; i < 256 && completeSubagentInflight(projectDir, sessionId); i++);
+  } catch {
+    // A malformed record stays for doctor to name; the Stop hook fails closed on it.
   }
 }
 
@@ -191,6 +206,8 @@ if (sessionId) {
     // Presence bypass bookkeeping must never break session startup.
   }
   writeSessionPidAncestry(projectDir, sessionId);
+  // Cursor's per-prompt rebind probe is no resume.
+  if (source === "resume" && !rebindCheckOnly) completeHelpersOfEarlierProcess(projectDir, sessionId);
 }
 
 // Resolve one session-local workflow target before any state read. An existing

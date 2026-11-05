@@ -1351,10 +1351,13 @@ describe("t230 dispatcher route parity", () => {
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   });
 
-  // Config there would set up a new project in that folder, so the refusal
-  // names the two steps that reach the person's project. Our own options are
-  // read before the person's words, so the flag goes right after the tool, on
-  // the copy channel and natively (Bun under the name aidlc stands in).
+  // Config in that folder sets it up as a new project: the step when it is the
+  // person's project before setup, the wrong one when they meant another. So
+  // natively the refusal names config for that exact folder, then the two steps
+  // that reach another one; the copy channel has no aidlc command. Our own
+  // options are read before the person's words, so the flag goes right after
+  // the tool (Bun under the name aidlc stands in for the native command). The
+  // hook is the first-run path: its registrations run before any setup there.
   test("a project-required command from a folder that is not a project names the step that works", () => {
     const project = makeProject();
     const outside = mkdtempSync(join(tmpdir(), "aidlc-t230-outside-"));
@@ -1368,17 +1371,33 @@ describe("t230 dispatcher route parity", () => {
       cpSync(BUN, launcher);
     }
     const env = { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR };
+    const payload = JSON.stringify({
+      session_id: "t230-outside",
+      cwd: outside,
+      tool_name: "bash",
+      tool_input: { command: "echo hi" },
+    });
     for (const [tool, after] of [[BUN, "aidlc.ts"], [launcher, "aidlc"]]) {
-      for (const command of [["engine", "plugin", "list"], ["next", "add", "a", "login", "page"]]) {
+      const config = after === "aidlc"
+        ? `run aidlc config in ${outside} if that folder is your project; otherwise `
+        : "";
+      for (
+        const command of [
+          ["engine", "plugin", "list"],
+          ["next", "add", "a", "login", "page"],
+          ["engine", "hook", "guard-tool-call"],
+        ]
+      ) {
         const label = `${after} ${command.join(" ")}`;
-        const refused = run([tool, DISPATCHER, ...command], outside, env);
+        const stdin = command[1] === "hook" ? payload : undefined;
+        const refused = run([tool, DISPATCHER, ...command], outside, env, stdin);
         expect(refused.exitCode, label).toBe(1);
         expect(refused.stderr.toString(), label).toContain(
           "requires an installed project harness or recognized project directory; " +
-            `run it from the project folder, or add --project-dir <path> right after ${after}\n`,
+            `${config}run it from the project folder, or add --project-dir <path> right after ${after}\n`,
         );
-        expect(refused.stderr.toString(), label).not.toContain("aidlc config");
-        const named = run([tool, DISPATCHER, "--project-dir", project, ...command], outside, env);
+        if (!config) expect(refused.stderr.toString(), label).not.toContain("aidlc config");
+        const named = run([tool, DISPATCHER, "--project-dir", project, ...command], outside, env, stdin);
         expect(named.exitCode, `${label}: ${named.stderr}`).toBe(0);
       }
     }

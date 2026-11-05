@@ -26,7 +26,7 @@
 // it never replaces the directory. All emissions are aidlc-prefixed so the
 // merge is collision-free.
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
 import {
@@ -34,6 +34,7 @@ import {
 } from "../../core/tools/aidlc-model-policy.ts";
 import { injectDelegatedKnowledgePreflight } from "../../scripts/agent-knowledge.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
+import { LAUNCHER_PATH, launcherBody } from "../../core/tools/aidlc-launcher-voucher.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring. PascalCase events; register ONLY events with a real core-hook
@@ -237,4 +238,10 @@ export default function emit(ctx: EmitContext): void {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content(), "utf-8");
   }
+  // AI-DLC's engine launcher, the command name the skill's rule allows. The
+  // native pass writes `aidlc` for the token.
+  const launcher = join(distRoot, LAUNCHER_PATH.replace(/^\.aidlc\//, `${harnessDir}/`));
+  mkdirSync(dirname(launcher), { recursive: true });
+  writeFileSync(launcher, substituteToken(launcherBody("{{INVOKE}}")), { encoding: "utf-8", mode: 0o755 });
+  chmodSync(launcher, 0o755);
 }

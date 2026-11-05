@@ -413,6 +413,10 @@ export function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   // Pin the per-clone audit-shard token so a spawned tool's shard is
   // deterministic (see FIXTURE_CLONE_ID / seededAuditShard).
   writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+  // A fixture has no git, so its first gate would say the no-git line: this
+  // project has already heard it (t-no-git-said-once removes the record).
+  mkdirSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-sessions", "no-git-said"), "2026-01-01T00:00:00Z\n", "utf-8");
   // The cursors (per-user, gitignored on a real project) + the canonical registry.
   writeFileSync(join(proj, "aidlc", "active-space"), `${space}\n`, "utf-8");
   writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");

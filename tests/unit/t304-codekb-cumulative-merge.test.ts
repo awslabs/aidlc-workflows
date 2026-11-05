@@ -255,7 +255,7 @@ describe("t304 cumulative CodeKB stage contract", () => {
       "`{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --mint --paths <analyzed.paths, comma-separated>`",
     );
     expect(facts).toContain("`shallow.paths` is a record for people; no tool hashes or compares it.");
-    expect(facts).toContain("write the intent's `slug` from `intents.json`");
+    expect(facts).toContain("write the `intent` that `{{INVOKE}} engine workspace codekb --repo <repo> --json` prints.");
     expect(facts).toContain("It does not read the Run Record.");
     expect(facts).toContain("A list with nothing in it is written `paths: []`.");
     expect(facts).toContain("AI-DLC ships no Mermaid validator, so there is none to look for");

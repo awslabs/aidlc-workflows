@@ -158,13 +158,13 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 131-event taxonomy
+### 132-event taxonomy
 
 Events are organized into 27 categories:
 
 | Category | Count | Events |
 |----------|------:|--------|
-| **Workflow Lifecycle** | 8 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `INTENT_REPOS_CHANGED`, `INTENT_CHECKOUTS_CHANGED` |
+| **Workflow Lifecycle** | 9 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `STATE_UPGRADED` (work an older AI-DLC recorded, brought up to this one when the engine first read it), `INTENT_REPOS_CHANGED`, `INTENT_CHECKOUTS_CHANGED` |
 | **Phase Lifecycle** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` |
 | **Stage Lifecycle** | 9 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED`, `STAGE_OUTPUT_AMENDED` (a stage's own document changed after you approved it and before your next message), `SOURCE_WORK_NOT_FOUND` (Code Generation found no new code where it looked, and what it did: told the agent, put the question to you, or stood aside under Guard Policy off) |
 | **Session** | 6 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted), `HOST_TURN` (hook-emitted, advisory: a prompt the host made for the agent, never a person's turn) |
@@ -241,6 +241,15 @@ logged for the menu it answered. Open questions and the rare ambiguous answer
 (no question before it, or writers tied at one second) are reported apart.
 Neither command changes files or takes a lock.
 
+When the agent marks one of a question's choices "(Recommended)", the record
+keeps that choice as `Recommended`: on the question's `Decision Recorded`
+entry when the logged choices carry the mark, and on the `Question Replied`
+entry when you answer in Claude Code's or Codex's question box, beside the
+box's `Options` and your `Reply`, so you can see whether you went with it.
+`log answers` lists a logged question's `Recommended` as `recommended` beside
+its `options` and your answer. Entries written before this have no
+`Recommended`, and read as they always did.
+
 ### Keys and passwords you type
 
 The state file, `project-description.json` and the audit shards are committed
@@ -260,6 +269,21 @@ the chat: the chat itself still received it, so change the key where it was
 issued if it is real. Masking goes by shape only, so a secret written another
 way (`my password is hunter2`) is kept as typed, and the doctor bundle masks
 the same shapes and more.
+
+### Who decided
+
+When you approve a stage, ask for changes, skip or jump to a stage, switch a
+check off or on, or let a changed input through, the audit row also records
+your git name, for example `**Git Name**: Jane Doe`. It is the name
+`git config user.name` gives for this project (the repo's own setting, then
+your global one), the same name the Unit board shows, so in a team clone each
+person's rows carry their own name. AI-DLC only reads it: it never sets it,
+asks for it, or records your email, and with no name in git it records
+nothing. It says who was at the keyboard as git reports it, not a signature or
+proof of identity. `/aidlc --status` names who approved the last completed
+stage, for example `Last Completed: Requirements Analysis (approved by Jane
+Doe)`. Which rows carry it is listed under "Git Name" in
+`knowledge/aidlc-shared/audit-format.md` in your harness folder.
 
 ### Audit event flow
 

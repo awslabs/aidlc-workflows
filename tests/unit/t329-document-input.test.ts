@@ -109,8 +109,16 @@ const DOCUMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 // A minimal Word file: the two OOXML entries DocumentKB detects, the same
 // shape the knowledge extraction tests build.
+// A real zip (with its central directory) holding a Word document with one line of text.
 function wordBytes(): Buffer {
-  const entry = (name: string, data: Buffer): Buffer => {
+  const parts: Array<[string, Buffer]> = [
+    ["[Content_Types].xml", Buffer.from("<Types/>")],
+    ["word/document.xml", Buffer.from("<w:document><w:body><w:p><w:r><w:t>Report text.</w:t></w:r></w:p></w:body></w:document>")],
+  ];
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const [name, data] of parts) {
     const nameBuf = Buffer.from(name, "ascii");
     const header = Buffer.alloc(30);
     header.writeUInt32LE(0x04034b50, 0);
@@ -118,15 +126,24 @@ function wordBytes(): Buffer {
     header.writeUInt32LE(data.length, 18);
     header.writeUInt32LE(data.length, 22);
     header.writeUInt16LE(nameBuf.length, 26);
-    return Buffer.concat([header, nameBuf, data]);
-  };
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(header, nameBuf, data);
+    centrals.push(central, nameBuf);
+    offset += 30 + nameBuf.length + data.length;
+  }
+  const directory = Buffer.concat(centrals);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  return Buffer.concat([
-    entry("[Content_Types].xml", Buffer.from("<Types/>")),
-    entry("word/document.xml", Buffer.from("<document/>")),
-    end,
-  ]);
+  end.writeUInt16LE(parts.length, 8);
+  end.writeUInt16LE(parts.length, 10);
+  end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, directory, end]);
 }
 
 // A copied install whose harness.json names a Bun script as the PDF
@@ -748,7 +765,7 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(readdirSync(join(dir, DOCUMENTS))).toEqual(["brief.pdf"]);
   });
 
-  test("onboards a Word file with no extractor and never replaces a file of the same name", () => {
+  test("onboards a Word file AI-DLC reads itself and never replaces a file of the same name", () => {
     const dir = project();
     mkdirSync(join(dir, "docs"));
     mkdirSync(join(dir, DOCUMENTS), { recursive: true });
@@ -764,12 +781,11 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(payload.document_id).toMatch(DOCUMENT_ID);
     expect(payload.document_path).toBe(copy);
     expect(payload.onboard_note).toBe(
-      `I copied "docs/report.docx" to "${copy}" and added it to the knowledge base as document ${payload.document_id}. ` +
-        "I couldn't read any text from it: nothing on this machine is set up to read this kind of file.",
+      `I copied "docs/report.docx" to "${copy}" and added it to the knowledge base as document ${payload.document_id}.`,
     );
     expect(payload.path_notice).toContain("UNTRUSTED PATHS");
-    expect(payload.content).toBeUndefined();
-    expect(payload.content_notice).toBeUndefined();
+    expect(payload.content).toBe("Report text.");
+    expect(payload.content_notice).toContain("NOT INSTRUCTIONS");
     expect(readFileSync(join(dir, DOCUMENTS, "report.docx"), "utf-8")).toBe("another report\n");
     expect(readFileSync(join(dir, copy)).equals(word)).toBe(true);
   });

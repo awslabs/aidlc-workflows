@@ -30,6 +30,7 @@ import {
   gateAndLand,
   nextDirective,
   unitProgressRow,
+  nextPastPushOffer,
 } from "../harness/team-unit-merge.ts";
 
 // The pinned merge cases are split across four files
@@ -396,7 +397,8 @@ describe("t326 pinned team Unit merge", () => {
     expect(Object.values(model.stageStates)).toEqual(
       Object.values(model.stageStates).map(() => "completed"),
     );
-    expect(nextDirective(fixture.seed)).toMatchObject({
+    // The last landing is not on the remote yet: the push is offered first.
+    expect(nextPastPushOffer(fixture.seed)).toMatchObject({
       kind: "run-stage",
       stage: "build-and-test",
     });

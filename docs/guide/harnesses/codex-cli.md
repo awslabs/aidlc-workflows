@@ -19,6 +19,30 @@ In a fresh Codex session ask for the AI-DLC commands for this harness — the an
 should name `$aidlc` and `.agents/skills/` without reading `.codex/onboarding.md`;
 `$aidlc --doctor` verifies the readable copy.
 
+### Root instruction overrides
+
+In each directory, Codex checks `AGENTS.override.md` before `AGENTS.md` and
+selects the first existing file (see
+[Codex's file selection](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/agents_md.rs)).
+An empty or whitespace-only override contributes no instructions; it does not
+fall back to `AGENTS.md`. A directory named `AGENTS.override.md` is not selected,
+while a symlink to an instruction file is.
+
+Doctor checks the root file Codex selects and names it when an override takes
+precedence. A missing or changed AI-DLC block produces an advisory warning.
+It also reports damaged blocks in `AGENTS.md` that would stop config or refresh,
+even when Codex loads the override. Doctor does not edit either file.
+
+Config and project refresh still write the AI-DLC block to `AGENTS.md`, not the
+override. If your project keeps `AGENTS.override.md`, copy the current
+`<!-- BEGIN AI-DLC:agents -->` through `<!-- END AI-DLC:agents -->` block from
+`AGENTS.md` into it, preserving your own text. For a damaged or duplicate block,
+replace that block and its broken marker lines rather than adding another copy.
+Refresh `AGENTS.md` first if needed: use `aidlc config` on a native install, or
+`bun .codex/tools/aidlc.ts config` on a manual-copy install. Update the copied
+block after later refreshes. This does not change the native onboarding supplied
+through `developer_instructions`.
+
 ## Prerequisites
 
 - **Codex CLI >= 0.145.0** - earlier releases defer compact-source
