@@ -344,6 +344,15 @@ describe("who takes what", () => {
 });
 
 describe("builds in one workspace", () => {
+  test("a change to the Units asked in a Unit's build keeps the composer: the Unit plan is the home's", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const alice = cloneOf(home.remote, "alice");
+    expect(take(alice, "refunds").status).toBe(0);
+    const step = next(alice, ENV, ["compose", "--unit-plan"]);
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-plan-change");
+    expect(String(step.message)).toContain("Dispatch the composer agent");
+  });
+
   test("two builds started at once in one space share no file: the second pull has no conflict", () => {
     const home = homeWithTeams(["refunds=payments", "checkout-ui=payments"]);
     const alice = cloneOf(home.remote, "alice");
