@@ -36,14 +36,21 @@ afterEach(() => {
 });
 
 describe("registeredRepoDoctorChecks", () => {
-  test("names a registered repo that is not a Git checkout on disk", () => {
+  test("names a registered repo that has no folder in the workspace", () => {
     const rows = registeredRepoDoctorChecks(projectWithRepos(["api"]));
     expect(rows).toHaveLength(1);
     expect(rows[0].pass).toBe(false);
     expect(rows[0].severity).toBe("warn");
-    expect(rows[0].label).toContain('Registered repo "api" is not a Git checkout on disk');
+    expect(rows[0].label).toContain('Registered repo "api" has no folder in the workspace');
     expect(rows[0].label).toContain("analyse the whole workspace under its name");
-    expect(rows[0].fix).toContain("set-repos");
+    expect(rows[0].fix).toContain('restore or clone "api" into the workspace folder');
+    expect(rows[0].fix).toContain("engine intent remove-repo api");
+  });
+
+  test("says nothing for a folder that is there without .git: Reverse Engineering reads that folder", () => {
+    const project = projectWithRepos(["api"]);
+    mkdirSync(join(project, "api"));
+    expect(registeredRepoDoctorChecks(project)).toEqual([]);
   });
 
   test("says nothing once the repo is a checkout there", () => {
@@ -60,7 +67,7 @@ describe("registeredRepoDoctorChecks", () => {
     const project = projectWithRepos(["api"]);
     const report = await collectDoctorReport(project);
     const row = report.checks.find((candidate) =>
-      candidate.label.startsWith('Registered repo "api" is not a Git checkout on disk'));
+      candidate.label.startsWith('Registered repo "api" has no folder in the workspace'));
     expect(row).toBeDefined();
     expect(row?.pass).toBe(false);
     expect(row?.severity).toBe("warn");

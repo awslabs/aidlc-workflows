@@ -3946,13 +3946,16 @@ export function registeredRepoDoctorChecks(projectDir: string): DoctorCheck[] {
     .find((candidate) => recordDirMatches(candidate, intent));
   for (const repo of entry?.repos ?? []) {
     const dir = repoDir(projectDir, repo);
-    if (isGitRepoDir(dir)) continue;
+    // codekbSourceRoot's own test for falling back to the whole workspace; it
+    // cannot be called here, since its repo read binds the chat.
+    if (existsSync(dir) && statSync(dir).isDirectory()) continue;
     rows.push({
       pass: false,
       severity: "warn",
       label:
-        `Registered repo "${repo}" is not a Git checkout on disk: Reverse Engineering would analyse the whole workspace under its name`,
-      fix: `restore the "${repo}" folder, or record the set that exists with \`${aidlcToolInvocation("intent")} set-repos ...\``,
+        `Registered repo "${repo}" has no folder in the workspace: Reverse Engineering would analyse the whole workspace under its name`,
+      fix: `restore or clone "${repo}" into the workspace folder; if this work no longer covers it, ` +
+        `\`${aidlcDispatcherInvocation(`intent remove-repo ${repo}`)}\``,
     });
   }
   return rows;
