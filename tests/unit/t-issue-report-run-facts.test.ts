@@ -333,25 +333,6 @@ console.log(JSON.stringify(s?.mixedSessions));`;
   expect(JSON.parse(r.stdout)).toBe(1);
 });
 
-test("a Claude subagent's engine call is tied to the person's reply before it, not the latest one read", () => {
-  const home = mkdtempSync(join(tmpdir(), "claude-order-"));
-  const project = join(home, "proj");
-  mkdirSync(project);
-  const key = resolve(project).replace(/[^A-Za-z0-9]/g, "-");
-  const dir = join(home, ".claude", "projects", key);
-  mkdirSync(join(dir, "s1", "subagents"), { recursive: true });
-  const user = (min: number, content: string) => ({ type: "user", cwd: project, sessionId: "s1", timestamp: at(min), message: { role: "user", content } });
-  const call = (min: number, command: string) => ({ type: "assistant", cwd: project, sessionId: "s1", timestamp: at(min), message: { role: "assistant", content: [{ type: "tool_use", id: `u${min}`, name: "Bash", input: { command } }] } });
-  writeFileSync(join(dir, "s1.jsonl"), [user(1, "run the next stage"), user(5, "thanks, that is all")].map((l) => JSON.stringify(l)).join("\n"));
-  writeFileSync(join(dir, "s1", "subagents", "a.jsonl"), JSON.stringify(call(3, "bun .claude/tools/aidlc.ts engine orchestrate next")));
-  const code = `const { claude } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
-const local = { prompts: [], refusals: [], errors: [] };
-claude(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, local);
-console.log(JSON.stringify(local.prompts.map((p) => p.engineAfter)));`;
-  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: "" } });
-  expect(JSON.parse(r.stdout)).toEqual([true, false]);
-});
-
 test("an empty state field is empty, not the next line", async () => {
   const { readState } = await import("../../core/skills/aidlc-issue-report/scripts/lib-audit.ts");
   const dir = mkdtempSync(join(tmpdir(), "state-"));
@@ -379,17 +360,20 @@ test("a run driven by AI-DLC's tool scripts directly counts as engine calls", ()
   const key = resolve(project).replace(/[^A-Za-z0-9]/g, "-");
   const dir = join(home, ".claude", "projects", key);
   mkdirSync(dir, { recursive: true });
+  const call = (min: number, command: string) => ({ type: "assistant", cwd: project, sessionId: "s1", timestamp: at(min), message: { role: "assistant", content: [{ type: "tool_use", id: `u${min}`, name: "Bash", input: { command } }] } });
   const lines = [
     { type: "user", cwd: project, sessionId: "s1", timestamp: at(1), message: { role: "user", content: "go on" } },
-    { type: "assistant", cwd: project, sessionId: "s1", timestamp: at(2), message: { role: "assistant", content: [{ type: "tool_use", id: "u2", name: "Bash", input: { command: "bun .claude/tools/aidlc-orchestrate.ts next" } }] } },
+    call(2, "bun .claude/tools/aidlc-orchestrate.ts next"),
+    { type: "user", cwd: project, sessionId: "s1", timestamp: at(3), message: { role: "user", content: "make an issue report" } },
+    call(4, "bun .claude/skills/aidlc-issue-report/scripts/collect.ts"),
   ];
   writeFileSync(join(dir, "s1.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
   const code = `const { claude } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
-const local = { prompts: [], refusals: [], errors: [] };
-claude(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, local);
-console.log(JSON.stringify(local.prompts.map((p) => p.engineAfter)));`;
+const s = claude(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] });
+console.log(JSON.stringify(s?.mixedSessions));`;
   const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: "" } });
-  expect(JSON.parse(r.stdout)).toEqual([true]);
+  // The session drove AI-DLC before the report began, so its part before is the run's.
+  expect(JSON.parse(r.stdout)).toBe(1);
 });
 
 test.skipIf(process.platform === "win32")("a dangling link among the intents or the hook health files stops nothing", async () => {
@@ -426,38 +410,6 @@ test("a Codex session whose folder name is stored decomposed (macOS) is this pro
     if (before === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = before;
   }
-});
-
-test("a Kiro or Copilot reply after which no engine call ran is marked as not about the work", () => {
-  const home = mkdtempSync(join(tmpdir(), "reply-home-"));
-  const project = join(home, "proj");
-  mkdirSync(project);
-  const kiro = join(home, ".kiro", "sessions", "ws", "sess_1");
-  mkdirSync(kiro, { recursive: true });
-  writeFileSync(join(kiro, "session.json"), JSON.stringify({ workspacePaths: [project], modelId: "auto", agentMode: "aidlc" }));
-  const k = [
-    { timestamp: at(1), payload: { type: "user", content: "start the feature" } },
-    { timestamp: at(2), payload: { type: "tool_call", toolName: "execute_bash", args: { command: "bun .kiro/tools/aidlc.ts engine orchestrate next" } } },
-    { timestamp: at(5), payload: { type: "user", content: "what does this error mean?" } },
-  ];
-  writeFileSync(join(kiro, "messages.jsonl"), k.map((l) => JSON.stringify(l)).join("\n"));
-  const copilot = join(home, ".copilot", "session-state", "s1");
-  mkdirSync(copilot, { recursive: true });
-  writeFileSync(join(copilot, "workspace.yaml"), `cwd: ${project}\n`);
-  const c = [
-    { type: "user.message", timestamp: at(1), data: { content: "start the feature" } },
-    { type: "tool.execution_start", timestamp: at(2), data: { arguments: { command: "bun .github/tools/aidlc.ts engine orchestrate next" } } },
-    { type: "user.message", timestamp: at(5), data: { content: "what does this error mean?" } },
-  ];
-  writeFileSync(join(copilot, "events.jsonl"), c.map((e) => JSON.stringify(e)).join("\n"));
-  const code = `const { kiroV3, copilotCli } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
-const kiro = { prompts: [], refusals: [], errors: [] };
-kiroV3(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, kiro);
-const copilot = { prompts: [], refusals: [], errors: [] };
-copilotCli(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, copilot);
-console.log(JSON.stringify([kiro.prompts.map((p) => p.engineAfter), copilot.prompts.map((p) => p.engineAfter)]));`;
-  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
-  expect(JSON.parse(r.stdout)).toEqual([[true, false], [true, false]]);
 });
 
 test("a Copilot CLI session that ran AI-DLC and then made this report counts as the run too", () => {
@@ -1088,6 +1040,42 @@ test("the event stream holds the run's calls, AI-DLC commands and replies in ord
     expect(new Set(events.map((e) => e.session))).toEqual(new Set(["t-stream"]));
     // The same call twice is the same input; safe.json shows it as one label.
     expect(events[1].input).toBe(events[3].input);
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+  }
+});
+
+test("a Codex reply taken into a turn still running says so on its person-turn event, and a repeat of the one before it too", async () => {
+  const { codex } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  const home = mkdtempSync(join(tmpdir(), "codex-in-turn-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const day = join(home, "sessions", "2026", "10", "29");
+  mkdirSync(day, { recursive: true });
+  const user = (text: string, min: number, turn: string) => ({
+    timestamp: at(min), type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text }], internal_chat_message_metadata_passthrough: { turn_id: turn } },
+  });
+  const lines = [
+    { timestamp: at(0), type: "session_meta", payload: { id: "t-turn", cwd: project } },
+    user("go on", 1, "turn-1"),
+    user("also add tests", 2, "turn-1"),
+    user("also add tests", 3, "turn-1"),
+    user("next", 4, "turn-2"),
+  ];
+  writeFileSync(join(day, "rollout-2026-10-29T01-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5f.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    const s = codex(project, 0, Date.parse(at(59)), { prompts: [], refusals: [], errors: [] });
+    const turns = (s?.events ?? []).filter((e) => e.kind === "person-turn");
+    expect(turns.map((e) => [e.inRunningTurn ?? null, e.sameAsBeforeInTurn ?? null])).toEqual([
+      [null, null],
+      [true, null],
+      [true, true],
+      [null, null],
+    ]);
   } finally {
     if (before === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = before;

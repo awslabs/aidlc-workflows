@@ -84,8 +84,9 @@ holds `aidlc/`; when unsure, the folder open in the tool):
 Do not pass `--out`: the script picks the folder. It prints a short JSON with `out` (the folder,
 `<project>/aidlc/diagnostics/issue-reports/<time>/`, in AI-DLC's own diagnostics folder, which git ignores), what it
 gathered, and `safeJsonHits`: the `safe.json` fields the check refuses (normally none). Replace each named value in
-`safe.json` with `<redacted>` — a label always passes. When `safe.json` `window.notes` says a time was left out, the
-default window was used: tell the person in one line. If it says `no-aidlc-project`, ask which folder they ran AI-DLC in.
+`safe.json` with `<redacted>` — a label always passes — or, where the reason says to remove it, delete that field (that key, for a key a part does not have). When `safe.json` `window.notes` says a time was left out, the
+default window was used: tell the person in one line. When `found.aidlcWords` is 0, AI-DLC's own words could not be read
+from this install, so every AI-DLC name in the folder is a label: tell the person in one line. If it says `no-aidlc-project`, ask which folder they ran AI-DLC in.
 
 ### 3. Missing tool versions
 

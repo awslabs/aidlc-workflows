@@ -68,9 +68,12 @@ export type TurnEvent = {
   exitCode?: number;
   timeoutMs?: number;
   interrupted?: true;
+  // A Codex reply taken into a turn still running, and the same text as the reply before it in that turn.
+  inRunningTurn?: true;
+  sameAsBeforeInTurn?: true;
   noTime?: boolean;
 };
-// A reply the person typed, as the tool logged it. Codex adds how it reached the tool.
+// A reply the person typed, as the tool logged it: read to tell the run's part from this report's own.
 export type Prompt = {
   tool: string;
   ts: string;
@@ -79,14 +82,9 @@ export type Prompt = {
   session?: string;
   // Typed while this skill made its report (from the person's message that asked for it): not part of the run.
   report?: boolean;
-  // An AI-DLC command ran after it, before the next reply, as the log shows it; kept beside a reply AI-DLC did not
-  // record (lib-audit.ts matchReplies). Undefined where the reader cannot tell.
-  engineAfter?: boolean;
-  turn?: string;
-  inRunningTurn?: boolean;
-  sameAsBeforeInTurn?: boolean;
-  // The log gave this reply no time of its own (Kiro CLI v2): `ts` is its session's last write, so it cannot be
-  // matched to AI-DLC's record by time.
+  // `session` is the tool's own id for the chat, which AI-DLC's row may not hold (Kiro): matched first, not required.
+  sessionLoose?: true;
+  // The log gave this reply no time of its own (Kiro CLI v2): `ts` is its session's last write.
   noTime?: boolean;
 };
 export type Local = { prompts: Prompt[]; refusals: object[]; errors: object[] };
@@ -377,11 +375,44 @@ function noteError(t: Tally, tool: string, local: Local, ts: string, text: strin
   ev(t, ts, { kind: "tool-error", ...facts });
 }
 
+// How a failed Claude Code call ended, from the line Claude Code writes before the output: `Exit code N`, or its own
+// `[Tool call interrupted: …]` for a call cut short (measured on Claude Code transcripts, 2.1.x). Nothing else is read.
+export function claudeErrorFacts(text: string): { exitCode?: number; interrupted?: true } {
+  const first = text.split(/\r?\n/, 1)[0].trim();
+  if (first.startsWith("[Tool call interrupted:")) return { interrupted: true };
+  const exit = first.match(/^Exit code (-?\d{1,10})$/);
+  return exit ? { exitCode: Number(exit[1]) } : {};
+}
+
+// How a failed Codex call ended, from the header Codex writes before `Output:` (`Process exited with code N`, or
+// `Exit code: N` beside `Wall time:`, measured on Codex rollouts, 0.16x). With no `Output:` line there is no header to
+// tell from the command's own output, and nothing is read.
+export function codexErrorFacts(raw: string): { exitCode?: number } {
+  // An output Codex logged as content items (`[{type: "input_text", text}]`) is read by its texts.
+  let text = raw;
+  if (/^\s*[[{]/.test(raw)) {
+    try {
+      const items = JSON.parse(raw);
+      text = (Array.isArray(items) ? items : [items]).map((x) => (x && typeof x.text === "string" ? x.text : "")).join("\n");
+    } catch {
+      // not JSON: read as written
+    }
+  }
+  const lines = text.split(/\r?\n/);
+  const end = lines.findIndex((l) => l.trim() === "Output:");
+  for (const l of end >= 0 ? lines.slice(0, end) : []) {
+    const m = l.trim().match(/^(?:Process exited with code|Exit code:) (-?\d{1,10})$/);
+    if (m) return { exitCode: Number(m[1]) };
+  }
+  return {};
+}
+
 // How a failed Kiro call ended, from the trailer Kiro writes after the command's output, as numbers and a flag only (the
 // text itself stays in local/): its last line `Exit Code: N`; Kiro's own time limit as `Command timed out after Nms`
 // right before an exit of -1, and Ctrl+C as a `^C` line right before an exit of 130; or a result that is Kiro's
 // `This tool was interrupted before it reported a result…` (shapes measured on Kiro IDE; Kiro CLI v3 keeps the same
 // store). A command's own last line pairs with its own exit code, so it is not taken for Kiro's.
+const BLOCK_FIELDS = new Set(["type", "status", "toolUseId", "tool_use_id", "id", "name", "kind"]);
 export function kiroErrorFacts(raw: string): { exitCode?: number; timeoutMs?: number; interrupted?: true } {
   let text = raw;
   if (/^\s*[[{"]/.test(raw)) {
@@ -389,7 +420,8 @@ export function kiroErrorFacts(raw: string): { exitCode?: number; timeoutMs?: nu
       const strings: string[] = [];
       const walk = (v: unknown) => {
         if (typeof v === "string") strings.push(v);
-        else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) if (k !== "type") walk(x);
+        // A block's own fields (its kind, status, ids) are not its text.
+        else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) if (!BLOCK_FIELDS.has(k)) walk(x);
       };
       walk(JSON.parse(raw));
       text = strings.join("\n");
@@ -441,9 +473,9 @@ class Tally {
 function ev(t: Tally, ts: string, e: Omit<TurnEvent, "ts" | "session">) {
   t.add(ts, (s, _calls, session) => s.events.push({ ts, session, ...e }));
 }
-function notePrompt(t: Tally, ts: string, text: string, noTime = false) {
+function notePrompt(t: Tally, ts: string, text: string, noTime = false, how: Pick<TurnEvent, "inRunningTurn" | "sameAsBeforeInTurn"> = {}) {
   t.add(ts, (x) => x.prompts++);
-  ev(t, ts, { kind: "person-turn", reply: text, ...(noTime ? { noTime: true } : {}) });
+  ev(t, ts, { kind: "person-turn", reply: text, ...how, ...(noTime ? { noTime: true } : {}) });
 }
 
 function finishRepeats(s: Summary, calls: Calls) {
@@ -612,7 +644,6 @@ export function claude(project: string, since: number, until: number, local: Loc
   const sessions = new Map<string, TimedFact[]>();
   const firstEngine = new Map<string, string>();
   const lastPrompt = new Map<string, string>();
-  const lastTyped = new Map<string, Prompt>();
   const reportFrom = new Map<string, string>();
   const checks = new Map<string, { ts: string; check: string }>();
   const tallies = new Map<string, Tally>();
@@ -672,9 +703,7 @@ export function claude(project: string, since: number, until: number, local: Loc
           const typed = command ? `${command[1]} ${command[2] ?? ""}`.trim() : text;
           if (typed.trim() && (command || !injectedBlock(text)) && !text.startsWith("[Request interrupted by user")) {
             notePrompt(t, ts, typed);
-            const prompt: Prompt = { tool: s.tool, ts, text: typed.slice(0, 2000), session: id, engineAfter: false };
-            local.prompts.push(prompt);
-            lastTyped.set(id, prompt);
+            local.prompts.push({ tool: s.tool, ts, text: typed.slice(0, 2000), session: id });
             if (!reportFrom.has(id)) lastPrompt.set(id, ts);
           }
         }
@@ -688,8 +717,6 @@ export function claude(project: string, since: number, until: number, local: Loc
                 noteCommand(t, ts, c.input.command);
                 if (ENGINE_CALL.test(c.input.command)) {
                   if (!firstEngine.has(id) || ts < (firstEngine.get(id) ?? ts)) firstEngine.set(id, ts);
-                  const last = lastTyped.get(id);
-                  if (last) last.engineAfter = true;
                 }
                 if (REPORT_RUN.test(c.input.command) && !reportFrom.has(id)) reportFrom.set(id, lastPrompt.get(id) ?? ts);
                 const check = checkName(c.input.command);
@@ -707,7 +734,7 @@ export function claude(project: string, since: number, until: number, local: Loc
                 t.add(ts, (x) => x.toolErrors++);
                 const hook = text.match(CLAUDE_HOOK_ERROR);
                 if (hook) noteHookBlock(t, s.tool, local, ts, hook[1] ?? null, text);
-                else noteError(t, s.tool, local, ts, text);
+                else noteError(t, s.tool, local, ts, text, claudeErrorFacts(text));
               }
             }
           }
@@ -805,7 +832,6 @@ export function codex(project: string, since: number, until: number, local: Loca
     // cut where its turn_context starts.
     let turnStart: string | null = null;
     let lastPrompt: string | null = null;
-    let lastTyped: Prompt | null = null;
     let reportFrom: string | null = null;
     const firstPrompt = local.prompts.length;
     const checks = new Map<string, { ts: string; check: string }>();
@@ -842,16 +868,17 @@ export function codex(project: string, since: number, until: number, local: Loca
         }
         if (text.trim() && !injected) {
           // A subagent's or reviewer's task message is the agent's, not a reply the person typed.
-          if (!copiedReplies) notePrompt(t, ts, text);
           const turn: string | undefined = p.internal_chat_message_metadata_passthrough?.turn_id;
           const before = turn ? lastInTurn.get(turn) : undefined;
           if (turn) lastInTurn.set(turn, text);
+          // Codex can take a reply into a turn still running (no turn of its own is started), sometimes the same
+          // text as the one before it: kept on the event as the log showed it.
+          if (!copiedReplies) notePrompt(t, ts, text, false, {
+            ...(before !== undefined ? { inRunningTurn: true as const } : {}),
+            ...(before !== undefined && before === text ? { sameAsBeforeInTurn: true as const } : {}),
+          });
           if (!reportFrom) lastPrompt = turnStart ?? ts;
-          lastTyped = {
-            tool: s.tool, ts, text: text.slice(0, 2000), inherited: copiedReplies, session: meta.payload?.id, engineAfter: false,
-            ...(turn ? { turn, inRunningTurn: before !== undefined, sameAsBeforeInTurn: before === text } : {}),
-          };
-          local.prompts.push(lastTyped);
+          local.prompts.push({ tool: s.tool, ts, text: text.slice(0, 2000), inherited: copiedReplies, session: meta.payload?.id });
         }
       } else if (l.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call")) {
         const copied = !!p.call_id && seen.has(`call ${p.call_id}`);
@@ -865,7 +892,6 @@ export function codex(project: string, since: number, until: number, local: Loca
         }
         if (ENGINE_CALL.test(inputText)) {
           firstEngineCall ??= ts;
-          if (lastTyped) lastTyped.engineAfter = true;
         }
         if (REPORT_RUN.test(inputText) && !reportFrom) reportFrom = lastPrompt ?? ts;
         const check = checkName(inputText);
@@ -875,10 +901,11 @@ export function codex(project: string, since: number, until: number, local: Loca
         if (p.call_id) seen.add(`output ${p.call_id}`);
         const text = typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? "");
         noteCheck(t, checks, p.call_id, text);
-        const exit = text.match(/(?:exit code|exited with code|Exit code:)\s*(\d+)/i);
+        // The exit code is Codex's own header's (codexErrorFacts), never a line the command printed.
+        const facts = codexErrorFacts(text);
         const failed = CODEX_CALL_FAILED.test(text);
         const hookBlock = CODEX_HOOK_BLOCK.test(text);
-        const isError = (!!exit && exit[1] !== "0") || failed || hookBlock;
+        const isError = (facts.exitCode !== undefined && facts.exitCode !== 0) || failed || hookBlock;
         if (isError) t.add(ts, (x) => x.toolErrors++);
         if (failed && CODEX_REVIEW_REJECTED.test(text)) {
           t.add(ts, (x) => {
@@ -888,7 +915,7 @@ export function codex(project: string, since: number, until: number, local: Loca
           ev(t, ts, { kind: "tool-denied", detail: "policy-denied" });
         }
         if (hookBlock) noteHookBlock(t, s.tool, local, ts, null, text);
-        else if (isError) noteError(t, s.tool, local, ts, text);
+        else if (isError) noteError(t, s.tool, local, ts, text, facts);
       }
     }
     markReport(local.prompts.slice(firstPrompt), reportFrom, () => true);
@@ -1032,7 +1059,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
             const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content ?? "");
             if (text.trim()) {
               notePrompt(t, ts, text);
-              local.prompts.push({ tool: s.tool, ts, text: text.slice(0, 2000) });
+              local.prompts.push({ tool: s.tool, ts, text: text.slice(0, 2000), session: sess, sessionLoose: true });
             }
           } else if (p.type === "tool_call") {
             t.add(ts, (x) => x.toolCalls++);
@@ -1068,13 +1095,6 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
           }
         }
       }
-      // A reply after which no engine call ran (before the next reply) was not about the work; the files are not in
-      // time order, so this is read once all are.
-      const typed = local.prompts.slice(firstPrompt).sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-      typed.forEach((prompt, i) => {
-        const next = typed[i + 1]?.ts;
-        prompt.engineAfter = engineCalls.some((t) => t >= prompt.ts && (!next || t < next));
-      });
       if (used) {
         s.sessions++;
         sessionIds.add(sess);
@@ -1211,7 +1231,6 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
     let used = false;
     let isReport = false;
     let reportFromPrompt: number | null = null;
-    let lastTyped: Prompt | null = null;
     // An engine call before the report began: the session held the run too.
     let ranBefore = false;
     const firstPrompt = local.prompts.length;
@@ -1230,15 +1249,11 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
       if (l.kind === "Prompt") {
         lastPromptAt = t.size;
         notePrompt(t, ts, JSON.stringify(l.data?.content ?? ""), !own);
-        lastTyped = {
-          tool: s.tool, ts, text: JSON.stringify(l.data?.content ?? "").slice(0, 2000), engineAfter: false, ...(own ? {} : { noTime: true }),
-        };
-        local.prompts.push(lastTyped);
+        local.prompts.push({ tool: s.tool, ts, text: JSON.stringify(l.data?.content ?? "").slice(0, 2000), ...(own ? {} : { noTime: true }) });
       } else if (l.kind === "AssistantMessage") {
         const content = l.data?.content;
         // v2 lines share the session's time: an engine call is the reply's when it comes after it in the file.
         if (ENGINE_CALL.test(JSON.stringify(content ?? ""))) {
-          if (lastTyped) lastTyped.engineAfter = true;
           if (!isReport) ranBefore = true;
         }
         // v2 lines share the session's time, so the report starts at the reply before the first call of
@@ -1296,7 +1311,7 @@ export function kiroV2(project: string, since: number, until: number, local: Loc
     if (s.unattributedHookBlocks) s.notes.push("Kiro CLI v2 records a hook's refusal without the hook's name: those count as unattributedHookBlocks.");
   }
   if (s.sessions && timeless) {
-    s.notes.push("Kiro CLI v2 lines carry no time of their own: a session last written in the window is read whole, its lines take that last time, and its replies are not matched to AI-DLC's record.");
+    s.notes.push("Kiro CLI v2 lines carry no time of their own: a session last written in the window is read whole, its lines take that last time, so its replies cannot be set beside AI-DLC's record by time.");
   }
   return s.sessions ? s : null;
 }
@@ -1316,7 +1331,6 @@ export function copilotCli(project: string, since: number, until: number, local:
     let isReport = false;
     let lastPrompt: string | null = null;
     let reportFrom: string | null = null;
-    let lastTyped: Prompt | null = null;
     let ranBefore = false;
     const firstPrompt = local.prompts.length;
     const t = new Tally(id);
@@ -1326,8 +1340,7 @@ export function copilotCli(project: string, since: number, until: number, local:
       touch(s, e.timestamp);
       if (e.type === "user.message") {
         notePrompt(t, e.timestamp, String(e.data?.content ?? ""));
-        lastTyped = { tool: s.tool, ts: e.timestamp, text: String(e.data?.content ?? "").slice(0, 2000), engineAfter: false };
-        local.prompts.push(lastTyped);
+        local.prompts.push({ tool: s.tool, ts: e.timestamp, text: String(e.data?.content ?? "").slice(0, 2000) });
         if (!reportFrom) lastPrompt = e.timestamp;
       } else if (e.type === "tool.execution_start") {
         t.add(e.timestamp, (x) => x.toolCalls++);
@@ -1335,7 +1348,6 @@ export function copilotCli(project: string, since: number, until: number, local:
         const args = JSON.stringify(e.data?.arguments ?? "");
         noteCommand(t, e.timestamp, args);
         if (ENGINE_CALL.test(args)) {
-          if (lastTyped) lastTyped.engineAfter = true;
           if (!isReport) ranBefore = true;
         }
         if (REPORT_RUN.test(args)) {

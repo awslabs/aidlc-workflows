@@ -37,13 +37,15 @@ test("the cover names a tool the person named, counts each label once, and passe
     transcripts: [],
     doctor: { ran: false, findings: [], note: "skipped (--no-doctor)" },
     hooks: { drops: [] },
-    knownGaps: [],
+    knownGaps: ["<project>"],
   });
   expect(run("cover.ts", out).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
   expect(cover).toContain("- kiro-ide: 1.4.13 (from the person) (named by the person; no chat log showed the run in it)");
   // `<unit-1>` (the redaction map's) and `<custom-unit-1>` (a row's) are two Units.
   expect(cover).toContain("- unit: 3");
+  // A label with no number stands for every value of its kind, so it has no count.
+  expect(cover).toContain("- project: one label for every value");
   const check = run("check.ts", out);
   expect([check.status, JSON.parse(check.stdout).hits]).toEqual([0, []]);
 });
@@ -63,6 +65,7 @@ test("a tool the person named whose chat log held only this report is not said t
   expect(run("cover.ts", out).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
   expect(cover).toContain("- kiro-ide: not found (named by the person; no chat log showed the run in it)");
+  expect(cover).toContain("- kiro (v3: Kiro IDE): 0 session(s) of the run, 1 that only made this report, 0 events");
   expect(cover).not.toContain("no chat log of it was read");
   const check = run("check.ts", out);
   expect([check.status, JSON.parse(check.stdout).hits]).toEqual([0, []]);

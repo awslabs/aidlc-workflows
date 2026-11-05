@@ -189,6 +189,32 @@ test("a report whose project moved is collected from only with the project's fol
   expect(map.some((e) => e.value === dir)).toBe(true);
 });
 
+test("an install whose AI-DLC words cannot be read says so, and its doctor severities still pass the check", () => {
+  const dir = project();
+  rmSync(join(dir, ".kiro", "tools", "data", "aidlc-manifest.json"));
+  const c = JSON.parse(bun("collect.ts", ["--project", dir, "--no-doctor", "--days", "1"]).stdout);
+  expect(c.found.aidlcWords).toBe(0);
+  const safe = JSON.parse(readFileSync(join(c.out, "safe.json"), "utf8"));
+  expect(safe.knownGaps.some((g: string) => g.startsWith("AI-DLC's own words could not be read"))).toBe(true);
+  safe.doctor = { ran: true, exit: 0, findings: [{ id: "<custom-doctor-finding-1>", severity: "warning" }, { id: "<custom-doctor-finding-2>", severity: "info" }], checksFailed: 0, note: "" };
+  writeFileSync(join(c.out, "safe.json"), JSON.stringify(safe, null, 2));
+  expect(bun("cover.ts", ["--out", c.out]).status).toBe(0);
+  expect(readFileSync(join(c.out, "aidlc-issue-report.md"), "utf8")).toContain("AI-DLC's own words could not be read");
+  expect(JSON.parse(bun("check.ts", ["--out", c.out]).stdout).hits).toEqual([]);
+});
+
+test("a line left out of the cover never holds a hidden name itself", () => {
+  const out = reportFolder();
+  useWords(out, []);
+  writeFileSync(join(out, "safe.json"), JSON.stringify({ environment: { tools: {} } }, null, 2));
+  const map = JSON.parse(readFileSync(join(out, "local", "redaction-map.json"), "utf8"));
+  map.entries.push({ value: "Paths And", label: "<org-1>", kind: "named" }, { value: "Here", label: "<org-2>", kind: "named" });
+  writeFileSync(join(out, "local", "redaction-map.json"), JSON.stringify(map));
+  expect(bun("cover.ts", ["--out", out]).status).toBe(0);
+  expect(readFileSync(join(out, "aidlc-issue-report.md"), "utf8")).toContain("- (...)");
+  expect(JSON.parse(bun("check.ts", ["--out", out]).stdout).hits.filter((h: { file: string }) => h.file === "aidlc-issue-report.md")).toEqual([]);
+});
+
 test("a hidden name that is also a label kind is kept out of the cover's label counts too", () => {
   const out = reportFolder();
   useWords(out, []);
@@ -197,8 +223,8 @@ test("a hidden name that is also a label kind is kept out of the cover's label c
   expect(bun("cover.ts", ["--out", out]).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
   expect(cover.replace(/<[^>]+>/g, "")).not.toMatch(/\bproduct\b|\bmode\b/i);
-  // A label that hiding put into a count line is counted too.
-  expect(cover).toMatch(/^- org: 1$/m);
+  // A count line whose kind word is a hidden name is left out, as any line of the cover.
+  expect(cover).not.toMatch(/^- mode: /m);
   expect(JSON.parse(bun("check.ts", ["--out", out]).stdout).hits.filter((h: { file: string }) => h.file === "aidlc-issue-report.md")).toEqual([]);
 });
 
@@ -219,10 +245,12 @@ test("the cover's own words never carry a hidden name, so the check never refuse
   const out = reportFolder();
   useWords(out, []);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ environment: { tools: {} } }, null, 2));
-  bun("hide.ts", ["--out", out, "--kind", "product", "--name", "Hook", "--kind", "product", "--name", "Safe", "--kind", "product", "--name", "Run Data"]);
+  bun("hide.ts", ["--out", out, "--kind", "product", "--name", "Hook", "--kind", "product", "--name", "Safe", "--kind", "product", "--name", "Run Data", "--kind", "org", "--name", "Paths And"]);
   expect(bun("cover.ts", ["--out", out]).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
-  expect(cover).not.toMatch(/\bhook\b|safe\.json|run data/i);
+  expect(cover).not.toMatch(/\bhook\b|safe\.json|run data|paths\s+and/i);
+  // A name the check finds across a line end takes those lines out.
+  expect(cover).toContain("(A line here held a name the person hid, so it was left out.)");
   // The labels the cover's own words got are counted too.
   expect(cover).toContain("- product: 3");
   const hits = JSON.parse(bun("check.ts", ["--out", out]).stdout).hits.filter((h: { file: string }) => h.file === "aidlc-issue-report.md");
@@ -237,7 +265,7 @@ test("a hidden name that is a key of a data map in safe.json is replaced too", (
   expect(Object.keys(safe.audit.counts)).toEqual(["<customer-1>"]);
 });
 
-test("a name the person hid that is only part of AI-DLC's words is refused in the report, and safe.json keeps AI-DLC's word", () => {
+test("a name the person hid that is only part of AI-DLC's words is refused in the report wherever it stands, and safe.json keeps AI-DLC's word", () => {
   const out = reportFolder();
   useWords(out, ["acme-aidlc-plugins", "BOLT_FAILED"]);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
@@ -246,7 +274,11 @@ test("a name the person hid that is only part of AI-DLC's words is refused in th
   writeFileSync(join(out, "aidlc-issue-report.md"), "The Acme team saw the hook fail; acme-aidlc-plugins was on.\n");
   const hits = JSON.parse(bun("check.ts", ["--out", out]).stdout).hits;
   expect(hits.map((h: { line: number; reason: string }) => h.line)).toEqual([1]);
-  writeFileSync(join(out, "aidlc-issue-report.md"), "The <customer-1> team saw it; acme-aidlc-plugins was on.\n");
+  // In the cover a name is found as the person's name is (the pattern hide.ts sorted it by), AI-DLC's word too, and a
+  // name run into another word.
+  writeFileSync(join(out, "aidlc-issue-report.md"), "The <customer-1> team saw it; acme-aidlc-plugins was on; AcmeProbe ran.\n");
+  expect(JSON.parse(bun("check.ts", ["--out", out]).stdout).hits.length).toBeGreaterThan(0);
+  writeFileSync(join(out, "aidlc-issue-report.md"), "The <customer-1> team saw it.\n");
   expect(bun("check.ts", ["--out", out]).status).toBe(0);
 });
 

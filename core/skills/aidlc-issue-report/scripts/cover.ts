@@ -6,7 +6,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { flagValue, refuse, reportFolder } from "./lib-cli.ts";
-import { hideInWords, loadDictionary } from "./redact.ts";
+import { gateContext, hiddenAnyway, keptVocab, withoutHidden } from "./lib-check.ts";
+import { runSessions } from "./lib-tools.ts";
+import { namesIn } from "./lib-gate.ts";
+import { hideInWords, LABEL, labelKind, loadDictionary } from "./redact.ts";
+
+const LEFT_OUT = "- (A line here held a name the person hid, so it was left out.)";
 
 type Safe = {
   window?: { since?: string; until?: string; lastAidlcActivity?: string | null; notes?: string[] };
@@ -21,7 +26,7 @@ type Safe = {
   trees?: { dir?: string; row?: string | null; stampVersion?: string | null; channel?: string }[];
   intents?: unknown[];
   audit?: { rowsInWindow?: number; rows?: { event?: string; fields?: [string, unknown][] }[] };
-  transcripts?: { tool?: string; sessions?: number; events?: unknown[]; error?: string; notes?: string[] }[];
+  transcripts?: { tool?: string; sessions?: number; reportSessions?: number; mixedSessions?: number; events?: unknown[]; error?: string; notes?: string[] }[];
   doctor?: { ran?: boolean; findings?: unknown[]; note?: string };
   hooks?: { drops?: unknown[] };
   knownGaps?: string[];
@@ -63,7 +68,12 @@ lines.push(`- AI-DLC's record: ${safe.audit?.rows?.length ?? 0} rows in the wind
 lines.push(`- Intents: ${safe.intents?.length ?? 0}, with their state as it is now (\`intents\`).`);
 for (const t of safe.transcripts ?? []) {
   if (t.error) lines.push(`- ${or(t.tool)}: the reader failed.`);
-  else lines.push(`- ${or(t.tool)}: ${t.sessions ?? 0} session(s), ${t.events?.length ?? 0} events (\`transcripts\` → \`events\`).`);
+  else {
+    // The sessions that only made this report are counted apart: their events are not the run's.
+    const run = runSessions(t);
+    const own = Math.max(0, (t.sessions ?? 0) - run);
+    lines.push(`- ${or(t.tool)}: ${run} session(s) of the run${own ? `, ${own} that only made this report` : ""}, ${t.events?.length ?? 0} events (\`transcripts\` → \`events\`).`);
+  }
 }
 lines.push(
   safe.doctor?.ran
@@ -99,25 +109,36 @@ lines.push("", "Each part of `safe.json` is described in the data guide among th
 // A name the person hid is kept out of the cover's own words too.
 const dict = loadDictionary(join(out, "local", "redaction-map.json"));
 const written = lines.map((l) => hideInWords(l, dict));
-// Each distinct label once, in safe.json and on the cover: `<unit-1>` (the redaction map's) and `<custom-unit-1>` (a
-// row's) are two Units. The count lines are hidden too; a label hiding puts in them joins the count, which only grows,
-// so it settles.
-const LABEL_N = /<(?:custom-)?([a-z]+(?:-[a-z]+)*?)-\d{1,6}>/g;
-const seen = new Map<string, Set<string>>();
-const add = (all: string) => {
-  let grew = false;
-  for (const m of all.matchAll(LABEL_N)) {
-    const set = seen.get(m[1]) ?? new Set<string>();
-    if (!set.has(m[0])) grew = true;
-    set.add(m[0]);
-    seen.set(m[1], set);
-  }
-  return grew;
-};
-add(`${text}\n${written.join("\n")}`);
-const countLines = () => (seen.size === 0 ? ["- none"] : [...seen].sort().map(([kind, set]) => `- ${kind}: ${set.size}`)).map((l) => hideInWords(l, dict));
-let inventory = countLines();
-while (add(inventory.join("\n"))) inventory = countLines();
+// Each distinct label once, in safe.json and on the cover, by its kind (redact.ts labelKind). A label with no number
+// (`<path>`, `<user>`, `<redacted>`) stands for every value of its kind, so it is listed without a count. The count
+// lines are not hidden: a hidden name that is also a kind word takes its line out below, as any line of the cover.
+const counted = new Map<string, Set<string>>();
+const uncounted = new Set<string>();
+for (const m of `${text}\n${written.join("\n")}`.matchAll(LABEL)) {
+  const { kind, numbered } = labelKind(m[0]);
+  if (!numbered) uncounted.add(kind);
+  else counted.set(kind, (counted.get(kind) ?? new Set<string>()).add(m[0]));
+}
+const kinds = [...new Set([...counted.keys(), ...uncounted])].sort();
+const inventory = kinds.flatMap((kind) => [
+  ...(counted.has(kind) ? [`- ${kind}: ${counted.get(kind)?.size}`] : []),
+  ...(uncounted.has(kind) ? [`- ${kind}: one label for every value`] : []),
+]);
+if (inventory.length === 0) inventory.push("- none");
 written.splice(inventoryAt, 0, ...inventory);
+// A hidden name the check would still find, across a line end or the cover's own markup, takes its lines out.
+const ctx = gateContext(withoutHidden(keptVocab(out), hiddenAnyway(out)), dict);
+for (let pass = 0; pass < written.length; pass++) {
+  const hit = new Set(namesIn(ctx, written.join("\n")).flatMap((n) => n.lines));
+  if (hit.size === 0) break;
+  // The note itself may hold a hidden word (`line`, `here`): then a line with no words, then an empty line, so each
+  // line changes at most three times.
+  const before = written.join("\n");
+  for (const l of hit) {
+    const w = written[l - 1];
+    written[l - 1] = w === "" ? "" : w === LEFT_OUT ? "- (...)" : w === "- (...)" ? "" : LEFT_OUT;
+  }
+  if (written.join("\n") === before) break;
+}
 writeFileSync(join(out, "aidlc-issue-report.md"), written.join("\n"));
 console.log(JSON.stringify({ ok: true, cover: join(out, "aidlc-issue-report.md") }));

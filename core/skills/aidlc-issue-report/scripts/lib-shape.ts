@@ -104,6 +104,14 @@ const EVENT_KINDS = new Set([
   "call", "aidlc-command", "person-turn", "tool-error", "tool-denied", "approval-prompt", "stop-hook-feedback",
   "aidlc-hook-block", "other-hook-block", "hook-block",
 ]);
+// The severities a doctor finding keeps, and `other` for any else: this skill's own words, which the check accepts in
+// that field whatever AI-DLC's word list holds (lib-gate.ts).
+// The keys an event in the stream may hold: the ones transcript() below writes. lib-gate.ts refuses any other.
+export const EVENT_KEYS: ReadonlySet<string> = new Set([
+  "seq", "ts", "session", "kind", "tool", "input", "verb", "hook", "owner", "detail", "reply", "reason", "exitCode", "timeoutMs",
+  "interrupted", "inRunningTurn", "sameAsBeforeInTurn", "noTime",
+]);
+export const DOCTOR_SEVERITIES: ReadonlySet<string> = new Set(["error", "warning", "warn", "info", "other"]);
 // AI-DLC's harness rows.
 export const HARNESS_ROWS = new Set(["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]);
 
@@ -430,6 +438,8 @@ export class Shaper {
           // A time limit in milliseconds up to seven digits (Kiro's is 120000), for the same reason.
           ...(Number.isInteger(e.timeoutMs) && (e.timeoutMs as number) >= 0 && (e.timeoutMs as number) < 1e7 ? { timeoutMs: e.timeoutMs } : {}),
           ...(e.interrupted === true ? { interrupted: true } : {}),
+          ...(e.inRunningTurn === true ? { inRunningTurn: true } : {}),
+          ...(e.sameAsBeforeInTurn === true ? { sameAsBeforeInTurn: true } : {}),
           ...(e.noTime ? { noTime: true } : {}),
         })),
       reportModels: modelMap(s.reportModels),
@@ -438,6 +448,7 @@ export class Shaper {
 
   doctorFinding(f: { id: string; severity: string }) {
     const id = /^[a-z0-9][a-z0-9-]{0,60}$/.test(f.id) && this.v.words.has(f.id) ? f.id : this.labels.label("doctor-finding", f.id);
-    return { id, severity: /^(?:error|warning|warn|info)$/i.test(f.severity) ? f.severity.toLowerCase() : "other" };
+    const severity = f.severity.toLowerCase();
+    return { id, severity: DOCTOR_SEVERITIES.has(severity) ? severity : "other" };
   }
 }

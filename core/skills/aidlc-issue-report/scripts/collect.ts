@@ -21,7 +21,7 @@ import { platform } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { extractArchive, walkFiles } from "./lib-archive.ts";
 import {
-  hookHealthDirs, matchReplies, readAudit, readHooksHealth, readSessionsFolder, readState, rowEntries,
+  hookHealthDirs, readAudit, readHooksHealth, readSessionsFolder, readState, rowEntries,
   timeWindow, withoutReportTurns,
 } from "./lib-audit.ts";
 import {
@@ -225,9 +225,6 @@ const runRows = withoutReportTurns(winRows, local.prompts);
 const counts: Record<string, number> = {};
 for (const r of runRows) counts[r.event] = (counts[r.event] ?? 0) + 1;
 
-// ---- did each typed reply reach AI-DLC? ----
-const replies = matchReplies(local.prompts, runRows);
-
 // ---- doctor --export: read here, kept in local/, not sent ----
 // The export carries text people and agents wrote (a Unit's pause reason, check messages), which no
 // redaction can tell from a name it does not know; its finding ids and severities go into safe.json.
@@ -368,7 +365,6 @@ const safe = {
   hooks: shaper.hooks(health),
   sessionsFolder: readSessionsFolder(project),
   transcripts: transcripts.map((t) => shaper.transcript(t)),
-  replies: { ...replies, notRecorded: replies.notRecorded.map((n) => ({ ...n, ts: time((n as { ts?: string }).ts) })) },
   otherStores: editorStores(project),
   doctor: { ...doctor, findings: doctor.findings.map((f) => shaper.doctorFinding(f)) },
   // Where the secret rules came from (the project's AI-DLC install), or null: the check then reads with its own rules only.
@@ -381,6 +377,9 @@ const safe = {
     "Kiro CLI v3 and Kiro IDE keep hook names but not the refusal text.",
     "VS Code Copilot Chat and Cursor chat stores are not read by this version.",
     "Names that are not AI-DLC's own (a plugin's or the team's stage, agent, sensor, hook) are anonymous labels.",
+    // AI-DLC's words come only from the install's files its own file list vouches for (lib-vocab.ts): a tree copied by
+    // hand, or one whose list is gone, gives none, and every AI-DLC name is then a label.
+    ...(vocab.words.size === 0 ? ["AI-DLC's own words could not be read from this install (no file list it can trust), so every AI-DLC name here is a label."] : []),
   ],
 };
 // The tools and versions the person gave (set-version.ts), given again to a report collected from an earlier one.
@@ -410,10 +409,10 @@ console.log(
       local: localDir,
       window: safe.window,
       found: {
+        aidlcWords: vocab.words.size,
         auditRows: safe.audit.rows.length,
         events: transcripts.reduce((n, t) => n + ("events" in t ? t.events.length : 0), 0),
         hookDrops: health.drops.length,
-        repliesNotRecorded: replies.notRecorded.length,
         toolsUsed: usedTools,
         versionsMissing,
         transcripts: transcripts.map((t) => `${t.tool}: ${"sessions" in t ? t.sessions : 0} session(s)`),

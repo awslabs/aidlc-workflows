@@ -147,6 +147,7 @@ describe("other fields", () => {
         { ts: "2026-10-29T01:01:00Z", session: "sess-acme-9", kind: "person-turn", reply: "approve it for ContosoPay" },
         { ts: "2026-10-29T01:03:00Z", session: "sess-acme-9", kind: "call", tool: "mcp__contoso_crm__lookup", input: "k1" },
         { ts: "2026-10-29T01:04:00Z", session: "sess-acme-9", kind: "made-up-kind", reply: "approve it for ContosoPay" },
+        { ts: "2026-10-29T01:05:00Z", session: "sess-acme-9", kind: "person-turn", reply: "go on", inRunningTurn: true, sameAsBeforeInTurn: true },
       ],
     }) as { events: Record<string, unknown>[] };
     expect(t.events).toEqual([
@@ -154,6 +155,7 @@ describe("other fields", () => {
       { seq: 2, ts: "2026-10-29T01:02:00.000Z", session: "<custom-session-1>", kind: "call", tool: "exec_command", input: "<custom-id-1>" },
       { seq: 3, ts: "2026-10-29T01:03:00.000Z", session: "<custom-session-1>", kind: "call", tool: "mcp", input: "<custom-id-1>" },
       { seq: 4, ts: "2026-10-29T01:04:00.000Z", session: "<custom-session-1>", kind: "other", reply: "<custom-text-1>" },
+      { seq: 5, ts: "2026-10-29T01:05:00.000Z", session: "<custom-session-1>", kind: "person-turn", reply: "<custom-text-2>", inRunningTurn: true, sameAsBeforeInTurn: true },
     ]);
     expect(JSON.stringify(t.events)).not.toMatch(/acme|Contoso/i);
   });
@@ -315,6 +317,19 @@ test("AI-DLC's message text is taken from its installed tools: the fixed parts, 
   expect([...loadVocab(project, [".kiro"]).phrases].some((p) => p.includes("Contoso"))).toBe(false);
 });
 
+test("a failed Claude Code or Codex call keeps how it ended from the tool's own line, never the command's", async () => {
+  const { claudeErrorFacts, codexErrorFacts } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
+  // Shapes measured on Claude Code and Codex transcripts.
+  expect(claudeErrorFacts("Exit code 1\nnpm ERR! missing script")).toEqual({ exitCode: 1 });
+  expect(claudeErrorFacts("[Tool call interrupted: the session ended before this call's result was recorded]")).toEqual({ interrupted: true });
+  expect(claudeErrorFacts("Error: Exit code 2 somewhere")).toEqual({});
+  expect(codexErrorFacts("Chunk ID: 855927\nWall time: 7.9 seconds\nProcess exited with code 2\nOutput:\nProcess exited with code 0")).toEqual({ exitCode: 2 });
+  expect(codexErrorFacts("Chunk ID: 1\nOutput:\nProcess exited with code 9")).toEqual({});
+  expect(codexErrorFacts("Exit code: 1\nWall time: 0.2 seconds\nOutput:\nboom")).toEqual({ exitCode: 1 });
+  expect(codexErrorFacts("Process exited with code 4321\nno header here")).toEqual({});
+  expect(codexErrorFacts(JSON.stringify([{ type: "input_text", text: "Exit code: 1\nWall time: 0.2 seconds\nOutput:\nboom" }]))).toEqual({ exitCode: 1 });
+});
+
 test("a failed Kiro call keeps how it ended as numbers and a flag: exit code, time limit, cut short; never its text", async () => {
   const { kiroErrorFacts } = await import("../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts");
   // Kiro's own trailer (measured on a Kiro IDE run, 2026-11-04).
@@ -329,6 +344,8 @@ test("a failed Kiro call keeps how it ended as numbers and a flag: exit code, ti
   expect(kiroErrorFacts("Output:\nThis tool was interrupted before it reported a result, so it may or may not have taken effect.")).toEqual({ interrupted: true });
   expect(kiroErrorFacts(JSON.stringify([{ type: "text", text: "Output:\n\nExit Code: 2" }]))).toEqual({ exitCode: 2 });
   expect(kiroErrorFacts(JSON.stringify([{ type: "text", text: "This tool was interrupted before it reported a result." }]))).toEqual({ interrupted: true });
+  // A block's own fields after its text are not read as the text's last line.
+  expect(kiroErrorFacts(JSON.stringify([{ text: "Output:\n\nExit Code: 2", status: "error", toolUseId: "t1" }]))).toEqual({ exitCode: 2 });
   const v = loadVocab(install(), [".kiro"]);
   const t = new Shaper(v, new Labels()).transcript({
     tool: "kiro (v3: Kiro IDE)", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 1, toolErrors: 1, denials: {}, aidlcHookBlocks: {},
@@ -344,6 +361,17 @@ test("a failed Kiro call keeps how it ended as numbers and a flag: exit code, ti
   expect(t.events[0]).toMatchObject({ kind: "tool-error", exitCode: -1, timeoutMs: 120000 });
   expect(t.events[1]).toMatchObject({ exitCode: 130, interrupted: true });
   expect(t.events[2].exitCode).toBeUndefined();
+  // The check holds the same bounds the shaper keeps.
+  const bad = { transcripts: [{ events: [{ ...t.events[0], exitCode: 12345 }, { ...t.events[0], timeoutMs: 12345678 }] }] };
+  expect(safeHits(gateContext(v, { entries: [] }), bad).map((h) => h.field)).toEqual(["safe.transcripts[0].events[0].exitCode", "safe.transcripts[0].events[1].timeoutMs"]);
+  // An event holds the shaper's fields and no other.
+  const extra = { transcripts: [{ events: [{ ...t.events[0], note: "ok" }] }] };
+  expect(safeHits(gateContext(v, { entries: [] }), extra).map((h) => `${h.field}: ${h.reason}`)).toContain(`safe.transcripts[0].events[0] (its key number ${Object.keys(extra.transcripts[0].events[0]).indexOf("note") + 1}): a key this part does not have (remove that key)`);
+  // A key is named by its place, never by itself, in one hit only.
+  const odd = { transcripts: [{ events: [{ ts: t.events[0].ts, session: t.events[0].session, kind: "tool-error", exit_code: 1 }] }] };
+  expect(safeHits(gateContext(v, { entries: [] }), odd).map((h) => `${h.field}: ${h.reason}`)).toEqual([
+    "safe.transcripts[0].events[0] (its key number 4): a key this part does not have (remove that key)",
+  ]);
   expect(t.events[2].timeoutMs).toBeUndefined();
   expect(safeHits(gateContext(v, { entries: [] }), { transcripts: [t] })).toEqual([]);
 });

@@ -18,7 +18,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Dictionary, findSecrets, KNOWN_FILE, KNOWN_SUB, keepsKey, LABEL, namesAt, onlyLabels, PUBLIC_URL, redact, smallLabel, TOOL_DIRS } from "./redact.ts";
-import { isOsLine, isVersion, KERNEL_RELEASE, OWN, PUBLIC_MODEL } from "./lib-shape.ts";
+import { DOCTOR_SEVERITIES, EVENT_KEYS, isOsLine, isVersion, KERNEL_RELEASE, OWN, PUBLIC_MODEL } from "./lib-shape.ts";
 import { fieldNameOk, type RowVocab, valueOk } from "./lib-rows.ts";
 
 export type GateContext = {
@@ -553,6 +553,28 @@ function visible(text: string): { text: string; lineOf: (at: number) => number }
 
 const lineAt = (text: string, at: number) => text.slice(0, at).split(/\r?\n/).length;
 
+// Where a name in the redaction map stands in a text, as the check finds it: as written (AI-DLC's message text exempts
+// one only when it covers the whole of it), and in the visible text (markup and line ends read through), where a name
+// can run across lines (`lines`: each line it touches). cover.ts leaves out a line of its own words that holds one.
+export function namesIn(ctx: GateContext, raw: string): { line: number; lines: number[]; label: string }[] {
+  const text = raw.normalize("NFC");
+  const fixed = phraseSpans(ctx, text);
+  const out: { line: number; lines: number[]; label: string }[] = [];
+  for (const { entry, at, length } of namesAt(text, ctx.dict)) {
+    if (inside(fixed, [at, at + length])) continue;
+    const a = lineAt(text, at);
+    const b = lineAt(text, at + length - 1);
+    out.push({ line: a, lines: Array.from({ length: b - a + 1 }, (_, i) => a + i), label: entry.label });
+  }
+  const shown = visible(maskFixed(text, fixed));
+  for (const { entry, at, length } of namesAt(shown.text, ctx.dict)) {
+    const a = shown.lineOf(at);
+    const b = shown.lineOf(at + length - 1);
+    out.push({ line: a, lines: Array.from({ length: b - a + 1 }, (_, i) => a + i), label: entry.label });
+  }
+  return out;
+}
+
 // The cover, or any other text: every line refused for each reason that holds in it.
 export function textHits(ctx: GateContext, raw: string): GateHit[] {
   const text = raw.normalize("NFC");
@@ -569,15 +591,10 @@ export function textHits(ctx: GateContext, raw: string): GateHit[] {
   });
   // Credentials and names, as written: AI-DLC's message text exempts one only when it covers the whole of it.
   for (const span of credentialSpans(labelled)) if (!inside(fixed, span)) hits.push({ line: lineAt(text, span[0]), reason: "a credential" });
-  for (const { entry, at, length } of namesAt(text, ctx.dict)) {
-    if (!inside(fixed, [at, at + length])) hits.push({ line: lineAt(text, at), reason: `a name in the redaction map (write ${entry.label})` });
-  }
+  for (const n of namesIn(ctx, raw)) hits.push({ line: n.line, reason: `a name in the redaction map (write ${n.label})` });
   // The same on the visible text, with AI-DLC's message text left out.
   const shown = visible(masked);
   for (const [at] of credentialSpans(shown.text)) hits.push({ line: shown.lineOf(at), reason: "a credential" });
-  for (const { entry, at } of namesAt(visible(maskFixed(text, fixed)).text, ctx.dict)) {
-    hits.push({ line: shown.lineOf(at), reason: `a name in the redaction map (write ${entry.label})` });
-  }
   // AI-DLC's own secret rules, when the install has them, find what the shapes above do not.
   for (const s of findSecrets(maskFixed(text, fixed))) hits.push({ line: s.line, reason: "a secret, by AI-DLC's own rules" });
   return dedupe(hits);
@@ -674,6 +691,8 @@ function rowHits(ctx: GateContext, rows: unknown, hits: GateHit[], start: number
   return n;
 }
 
+const CLOSED: [RegExp, ReadonlySet<string>][] = [[/^safe\.transcripts\[\d+\]\.events\[\d+\]$/, EVENT_KEYS]];
+
 // safe.json, decoded: each string checked by its field, each key that is data (not one of this skill's field
 // names) checked as a value. `line` is the field's place among the leaves.
 export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
@@ -687,6 +706,16 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
       return;
     }
     if (v && typeof v === "object") {
+      // A tool event holds the fields the shaper writes and no other (lib-shape.ts transcript): an extra key is
+      // refused, whatever its value.
+      const closed = CLOSED.find(([re]) => re.test(path))?.[1];
+      const stray = new Set<string>();
+      for (const [i, k] of Object.keys(v).entries()) {
+        if (!closed || closed.has(k)) continue;
+        stray.add(k);
+        // Named by its place, never by the key itself (a key is data: it can be a name), so the one key is removed.
+        hits.push({ line: n + 1, field: `${path} (its key number ${i + 1})`, reason: "a key this part does not have (remove that key)" });
+      }
       for (const [k, x] of Object.entries(v)) {
         const own = keepsKey(parent, k);
         // A data key and its value read together, as `name=value`: a secret's name in the key, its value beside it.
@@ -701,7 +730,8 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
           n = rowHits(ctx, x, hits, n, names);
           continue;
         }
-        if (!own) {
+        // A key refused above is to be removed: one hit for it, not a second asking for other words.
+        if (!own && !stray.has(k)) {
           n++;
           if (!atomOk(ctx, k, parent)) hits.push({ line: n, field: `${path} (a key)`, reason: "not one of AI-DLC's words, a label or a known shape" });
           for (const reason of names(k)) hits.push({ line: n, field: `${path} (a key)`, reason });
@@ -712,13 +742,18 @@ export function safeHits(ctx: GateContext, value: unknown): GateHit[] {
     }
     n++;
     // A count holds up to nine digits; a longer number can be an account or a phone number.
-    if (typeof v === "number" && Math.abs(v) >= 1e9) hits.push({ line: n, field: path, reason: "a long number (replace it with <redacted>)" });
+    if (typeof v === "number" && Math.abs(v) >= 1e9 && field !== "exitCode" && field !== "timeoutMs") hits.push({ line: n, field: path, reason: "a long number (replace it with <redacted>)" });
+    // How a failed call ended, as the shaper keeps it (lib-shape.ts): four digits for an exit code, seven for a limit.
+    if (field === "exitCode" && !(typeof v === "number" && Number.isInteger(v) && Math.abs(v) <= 9999)) hits.push({ line: n, field: path, reason: "not what this field's rule writes (remove it)" });
+    if (field === "timeoutMs" && !(typeof v === "number" && Number.isInteger(v) && v >= 0 && v < 1e7)) hits.push({ line: n, field: path, reason: "not what this field's rule writes (remove it)" });
     if (typeof v !== "string") return;
     // A tool event's refusal text passes only as an audit row's `Reason` is written (lib-rows.ts).
     if (field === "reason" && /^safe\.transcripts\[\d+\]\.events\[\d+\]\.reason$/.test(path)) {
       if (!valueOk(ctx.rows ?? NO_ROW_WORDS, "", "Reason", v)) hits.push({ line: n, field: path, reason: "not what this field's rule writes (replace it with <redacted>)" });
     } else if (PROSE_FIELDS.has(field)) {
       if (!ownSentence(ctx, v)) hits.push({ line: n, field: path, reason: "not one of this skill's own sentences (replace it with <redacted>)" });
+    } else if (field === "severity" && /^safe\.doctor\.findings\[\d+\]\.severity$/.test(path) && DOCTOR_SEVERITIES.has(v)) {
+      // a doctor finding's severity, as the shaper writes it
     } else if (!atomOk(ctx, v, field)) {
       hits.push({ line: n, field: path, reason: "not one of AI-DLC's words, a label or a known shape (replace it with <redacted>)" });
     }

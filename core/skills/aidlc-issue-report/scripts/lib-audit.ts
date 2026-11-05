@@ -282,60 +282,40 @@ export function timeWindow(o: { since?: string; until?: string; days?: string; r
   return { since, until, lastActivity, notes };
 }
 
-// The HUMAN_TURN rows AI-DLC's prompt hook wrote for this report's own messages are the report's, not the run's: they
-// would stand in for the replies the run did not record. A row a few seconds around a report message is its, from the
-// same session when both name one, as matchReplies reads them (another chat's turn at that time stays the run's).
-// Kiro's and Copilot's replies carry no session: Kiro's folder id often equals the row's Session, but the Kiro IDE
-// adapter can record a remembered or derived id instead (aidlc-kiro-adapter.ts terminalSessionId), so a strict compare
-// could mark recorded replies as not. They are matched by time alone.
+// The HUMAN_TURN rows AI-DLC's prompt hook wrote while this report was made are the report's, not the run's. In a
+// session a report message names, every row of that session from two seconds before its first report message on (the
+// part of the session the chat-log readers count as the report's too). A row with no session, or a report message
+// with none, is read by time only: a row from two seconds before to ten seconds after such a message (another chat's
+// turns later on stay the run's), except a row of a session the run's own replies name. A Kiro message carries its
+// session folder's name (`sessionLoose`), which the Kiro IDE adapter may not record as the row's Session
+// (aidlc-kiro-adapter.ts terminalSessionId): when no HUMAN_TURN row names it, it is read by time only. Which reply took
+// which row is not decided here: replies and rows both keep their time and session label for the reader.
 export function withoutReportTurns(rows: AuditRow[], prompts: Prompt[]): AuditRow[] {
+  const turns = rows.filter((r) => r.event === "HUMAN_TURN");
+  const named = new Set(turns.map((r) => rowSession.get(r)).filter(Boolean));
+  const starts = new Map<string, number>();
+  const loose: number[] = [];
+  const all: number[] = [];
   // A reply with no time of its own (Kiro CLI v2) carries its session's last write, which says nothing about its turn.
-  const report = prompts.filter((p) => p.report && !p.noTime).map((p) => ({ t: Date.parse(p.ts), session: p.session }));
-  return rows.filter((r) => {
-    if (r.event !== "HUMAN_TURN") return true;
-    const session = rowSession.get(r);
-    return !report.some((p) => Math.abs(Date.parse(r.ts) - p.t) <= 10_000 && (!session || !p.session || session === p.session));
-  });
-}
-
-// Did each reply the person typed reach AI-DLC's record? Each one typed after the first HUMAN_TURN should
-// have its own HUMAN_TURN a few seconds around it, from the same session when both name one (a second chat
-// open at the same time cannot answer for it). A reply without one is listed with how it reached the tool
-// (Codex: inside a turn still running, the same text as the reply before it) — times and flags only.
-export function matchReplies(prompts: Prompt[], rows: AuditRow[]) {
-  const turns = rows
-    .filter((r) => r.event === "HUMAN_TURN")
-    .map((r) => ({ t: Date.parse(r.ts), session: rowSession.get(r) }))
-    .sort((a, b) => a.t - b.t);
-  const typed = prompts
-    // Every reply is checked, whatever ran after it: whether an AI-DLC command followed (engineAfter) is kept beside
-    // a reply not recorded, as the log showed it, for the reader to weigh. Replies are checked from the first
-    // HUMAN_TURN on (before it the prompt hook may not have been set up); with none in the window, every reply is.
-    .filter((p) => !p.inherited && !p.report && !p.noTime && (!turns.length || Date.parse(p.ts) >= turns[0].t - 10_000))
-    .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
-  const used = new Set<number>();
-  const notRecorded: object[] = [];
-  for (const p of typed) {
+  for (const p of prompts) {
+    if (!p.report || p.inherited || p.noTime) continue;
     const t = Date.parse(p.ts);
-    const k = turns.findIndex(
-      (h, i) => !used.has(i) && Math.abs(h.t - t) <= 10_000 && (!h.session || !p.session || h.session === p.session),
-    );
-    if (k >= 0) used.add(k);
-    else
-      notRecorded.push({
-        ts: p.ts,
-        tool: p.tool,
-        ...(p.engineAfter !== undefined ? { engineAfter: p.engineAfter } : {}),
-        ...(p.turn ? { inRunningTurn: p.inRunningTurn, sameAsBeforeInTurn: p.sameAsBeforeInTurn } : {}),
-      });
+    all.push(t);
+    if (p.session && (!p.sessionLoose || named.has(p.session))) {
+      if (t < (starts.get(p.session) ?? Number.POSITIVE_INFINITY)) starts.set(p.session, t);
+    } else loose.push(t);
   }
-  const noTime = prompts.filter((p) => p.noTime && !p.inherited && !p.report).length;
-  return {
-    checked: typed.length,
-    recorded: typed.length - notRecorded.length,
-    notRecorded,
-    inRunningTurn: typed.filter((p) => p.inRunningTurn).length,
-    // Replies the tool logged with no time of their own: not checked.
-    ...(noTime ? { noTime } : {}),
-  };
+  if (!all.length) return rows;
+  const runChats = new Set(prompts.filter((p) => !p.report && p.session).map((p) => p.session));
+  const near = (t: number, at: number[]) => at.some((m) => t >= m - 2_000 && t <= m + 10_000);
+  const drop = new Set(
+    turns.filter((r) => {
+      const t = Date.parse(r.ts);
+      const session = rowSession.get(r);
+      if (!session) return near(t, all);
+      const own = starts.get(session);
+      return (own !== undefined && t >= own - 2_000) || (!runChats.has(session) && near(t, loose));
+    }),
+  );
+  return rows.filter((r) => !drop.has(r));
 }

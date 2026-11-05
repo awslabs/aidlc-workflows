@@ -1,8 +1,8 @@
-// The Claude Code reader counts the person's typed replies; collect.ts matches
-// each to an AI-DLC HUMAN_TURN and lists the rest as "not recorded". Claude
-// Code also writes user-typed lines nobody typed: the compaction summary that
-// opens a continued session and the "[Request interrupted by user]" marker.
-// Counted as replies, each becomes a false "your answer did not reach AI-DLC".
+// The Claude Code reader counts the person's typed replies and keeps each as a
+// person-turn event. Claude Code also writes user-typed lines nobody typed: the
+// compaction summary that opens a continued session and the "[Request
+// interrupted by user]" marker. Counted as replies, each reads as an answer the
+// person gave.
 
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -124,7 +124,7 @@ test("a report asked for in the run's own session keeps the run's model apart fr
   }
 });
 
-test("a slash command is a typed reply; a reply no AI-DLC command followed is not about the work", () => {
+test("a slash command is a typed reply, as the person typed it", () => {
   const root = mkdtempSync(join(tmpdir(), "claude-replies-"));
   const project = join(root, "proj");
   mkdirSync(project);
@@ -151,10 +151,7 @@ test("a slash command is a typed reply; a reply no AI-DLC command followed is no
   try {
     const local: Local = { prompts: [], refusals: [], errors: [] };
     claude(project, Date.parse(at(0)) - 3_600_000, Date.parse(at(59)), local);
-    expect(local.prompts.map((p) => [p.text, p.engineAfter])).toEqual([
-      ["/aidlc start the shop", true],
-      ["what is a monad?", false],
-    ]);
+    expect(local.prompts.map((p) => p.text)).toEqual(["/aidlc start the shop", "what is a monad?"]);
   } finally {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = before;

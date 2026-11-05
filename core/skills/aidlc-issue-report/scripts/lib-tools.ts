@@ -15,9 +15,13 @@ const USED_BY_LABEL: [RegExp, ToolKey][] = [
 
 type Read = { tool?: string; sessions?: number; reportSessions?: number; mixedSessions?: number; error?: string };
 
+// The sessions of the run: a session that only made this report is not one (one that held the run first is).
+export function runSessions(t: Read): number {
+  return Math.max(0, (t.sessions ?? 0) - (t.reportSessions ?? 0) + (t.mixedSessions ?? 0));
+}
 // A tool whose only sessions made this report is not a tool the run used.
 export function toolsUsed(transcripts: Read[]): ToolKey[] {
-  return toolsOf(transcripts, (t) => !t.error && (t.sessions ?? 0) - (t.reportSessions ?? 0) + (t.mixedSessions ?? 0) > 0);
+  return toolsOf(transcripts, (t) => !t.error && runSessions(t) > 0);
 }
 function toolsOf(transcripts: Read[], keep: (t: Read) => boolean): ToolKey[] {
   const used = new Set<ToolKey>();

@@ -13,7 +13,7 @@
 // run again after a fix.
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import { platform } from "node:os";
 import { join, resolve } from "node:path";
 import { flagValue, refuse, reportFolder } from "./lib-cli.ts";
@@ -40,7 +40,14 @@ if (process.argv.includes("--discard")) {
     rmSync(join(out, "safe.json"), { recursive: true, force: true });
   } catch {
     // Once the map is gone the folder is no report folder any more, so it is deleted by hand, not by running this again.
-    const hint = existsSync(map) ? "Close what has the folder open, then run it again." : "Close what has the folder open, then delete it by hand: it holds no names any more.";
+    // The map is gone only when the system says so: an unreadable folder may still hold it.
+    let mapLeft = true;
+    try {
+      lstatSync(map);
+    } catch (e) {
+      mapLeft = (e as NodeJS.ErrnoException).code !== "ENOENT";
+    }
+    const hint = mapLeft ? "Close what has the folder open, then run it again." : "Close what has the folder open, then delete it by hand: it holds no names any more.";
     console.log(JSON.stringify({ ok: false, reason: "folder-in-use", hint, folder: out }));
     process.exit(1);
   }

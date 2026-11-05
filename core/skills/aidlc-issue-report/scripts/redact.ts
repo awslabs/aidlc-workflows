@@ -36,6 +36,15 @@ export const LABEL =
 // digits, aidlc-doctor-bundle.ts shortHash), and a serial of four digits (a dictionary label, `<customer-12>`) or six
 // (this skill's own counter, `<custom-id-12345>`) at most, since a longer number could be an account. onlyLabels and
 // lib-gate.ts labelMask (the cover's lines) read labels by it.
+// A label's kind, and whether it is numbered (one value each) or stands for every value of its kind (`<path>`).
+// `<unit-1>` (the redaction map's) and `<custom-unit-1>` (a row's) are both Units; `<id:…>` (doctor's short hash) is
+// not an id the redaction or a row's rule wrote.
+export function labelKind(label: string): { kind: string; numbered: boolean } {
+  if (label.startsWith("<id:")) return { kind: "short-id", numbered: true };
+  const inner = label.slice(1, -1).replace(/^custom-/, "");
+  const numbered = /-\d+$/.test(inner);
+  return { kind: numbered ? inner.replace(/-\d+$/, "") : inner, numbered };
+}
 export function smallLabel(label: string): boolean {
   if (label.startsWith("<id:")) return /^<id:[0-9a-f]{8}>$/.test(label);
   const serial = label.match(/-(\d+)>$/)?.[1];
@@ -232,14 +241,12 @@ function entryRe(e: Entry): RegExp {
       );
     }
     else if (e.kind === "git-remote") re = new RegExp(body, "gi");
-    // A name the person hid that is also part of AI-DLC's own words (`Acme` in `acme-aidlc-plugins`): a whole word
-    // outside those words, read in the report only.
-    else if (e.kind === "report-only") re = new RegExp(`(?<![\\p{L}\\p{N}_-])${body}(?![\\p{L}\\p{N}_-])`, "giu");
     // A name the person hid starts at a word or a case change (`SAPClient`, `myContoso`, `contoso2026`), so a short
     // one is not found inside an ordinary word (`Dan` in `guidance`). It may go on into a longer word when it has
     // five letters or more (`Contosoland`); a shorter one takes a plural only (`SAPs`, not `Danish`), and ends where a
-    // word of capitals would go on (`SK` is not in `STAGE_SKIPPED`; it is in `SKClient`).
-    else if (e.kind === "named") {
+    // word of capitals would go on (`SK` is not in `STAGE_SKIPPED`; it is in `SKClient`). A name left in AI-DLC's own
+    // words (`report-only`) is found the same way: hide.ts sorted it by this pattern, and only the cover reads it.
+    else if (e.kind === "named" || e.kind === "report-only") {
       const v = e.value.normalize("NFC");
       re = new RegExp(`(?:(?<![\\p{L}\\p{N}])|(?<=\\p{Ll})(?=\\p{Lu}))${caseless(v)}${[...v].length >= 5 ? "" : "(?:e?s)?(?!\\p{Ll})(?!\\p{Lu}(?!\\p{Ll}))"}`, "gu");
     }
@@ -492,19 +499,19 @@ const DATA_MAPS = new Set([
 const SAFE_FIELDS = new Set([
   "kiro-ide", "kiro-cli",
   "agentEngine", "agents", "aidlcCommands", "aidlcHookBlocks", "approvalModes", "approvalPrompts", "audit",
-  "buildVersion", "bun", "channel", "check", "checked", "checksFailed", "claude", "codex", "completed", "copilot", "count",
+  "buildVersion", "bun", "channel", "check", "checksFailed", "claude", "codex", "completed", "copilot", "count",
   "counts", "currentStage", "degraded", "denials", "depth", "detail", "dir", "dispatches", "doctor", "drops", "efforts",
   "engine", "environment", "error", "event", "exe", "exists", "exit", "file", "findings", "firstTs", "generatedAt",
   "guardPolicy", "guardsOff", "guardsOn", "handRunChecks", "hook", "hooks", "id", "inProgress", "inRunningTurn", "intent",
   "intents", "kind", "kiroEngine", "kiroHomeEngine", "kiroIdePending", "knownGaps", "last", "lastAidlcActivity", "lastTs",
-  "lastUpdated", "mixedSessions", "models", "native", "nextStage", "noTime", "notRecorded", "note", "notes", "openQuestions", "os",
+  "lastUpdated", "mixedSessions", "models", "native", "nextStage", "noTime", "note", "notes", "openQuestions", "os",
   "otherHookBlocks", "otherStores", "pass", "phase", "pin", "planApproval", "prompts", "questionsAsked", "ran", "reason",
-  "recorded", "repeats", "replies", "reportModels", "reportSessions", "revisionCount", "row", "rowsInWindow", "rowsTotal",
+  "repeats", "reportModels", "reportSessions", "revisionCount", "row", "rowsInWindow", "rowsTotal",
   "sameAsBeforeInTurn", "schema", "scope", "secretRules", "sensors", "sessions", "sessionsFolder", "severity", "since",
   "source", "sourceRef", "stage", "stages", "stampVersion", "status", "stopFeedback", "subagents", "testStrategy",
   "timeline", "tool", "toolCalls", "toolErrors", "toolVersions", "tools", "toolsUsed", "totalStages", "transcriptCursors",
   "transcripts", "trees", "ts", "unattributedHookBlocks", "unboundApprovals", "until", "version", "versionsMissing", "window",
-  "rows", "seq", "fields", "events", "session", "input", "verb", "owner", "reply", "toolsNamed", "engineAfter",
+  "rows", "seq", "fields", "events", "session", "input", "verb", "owner", "reply", "toolsNamed",
   "exitCode", "timeoutMs", "interrupted",
 ]);
 
