@@ -260,7 +260,7 @@ describe("a stage change typed at a composed plan's gate is never dropped unsaid
     expect(commandIn(created, "intent create")).not.toContain("--skip");
   });
 
-  test("a list that is the kept plan's, in any order, a plan the composer did not keep, or a list kept from the request creates at once", () => {
+  test("a list that is the kept plan's, in any order, or a list kept from the request creates at once", () => {
     const proj = installedProject();
     const request = tailor(proj);
     const grid = stockGrid("bugfix");
@@ -272,10 +272,7 @@ describe("a stage change typed at a composed plan's gate is never dropped unsaid
     const kept = echoed.plan_changes as { skip: string[]; add: string[] };
     const reordered = next(proj, ["--scope", base, ...lists({ skip: [...kept.skip].reverse(), add: [...kept.add].reverse() }), "--request", request]);
     expect(commandIn(reordered, "intent create")).toContain(`--skip ${kept.skip.join(",")}`);
-    // Another plan, after a Reject: what was typed stands.
-    const other = base === "feature" ? "classic" : "feature";
-    expect(commandIn(next(proj, ["--scope", other, "--skip", "code-generation", "--request", request]), "intent create"))
-      .toContain("--skip code-generation");
+    // Another plan picked after a Reject: "said once", below.
 
     // A skip the person typed with the request rides the plan's answers as its
     // settings, not as a list typed at the gate: the approval creates at once.
