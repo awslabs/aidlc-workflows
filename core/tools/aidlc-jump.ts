@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import { beforePerUnitBlock } from "./aidlc-graph.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
@@ -327,6 +328,7 @@ function handleReopen(args: string[]): void {
       ...(change?.messageId ? { "Message Id": change.messageId } : {}),
       ...(change ? windowMessageIds(change) : {}),
       ...(movedFrom ? { "Moved From": movedFrom } : {}),
+      ...personGitNameField(pd),
     });
     // A redo answers the re-use question for this Unit's step too: recorded
     // here, so the reopened step redoes it without asking again.
@@ -823,6 +825,7 @@ function handleExecute(args: string[]): void {
         : {}),
       ...(keepsTeamUnitWork ? { "Unit Work": "kept" } : {}),
       ...jumpSourceBaseline,
+      ...personGitNameField(pd),
     });
 
     // Target enters Active state — emit STAGE_STARTED so audit reflects the

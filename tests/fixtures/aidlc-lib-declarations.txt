@@ -988,7 +988,6 @@ humanAuthorityState
 humanPresenceGuardDisabled
 humanRepliedSinceGate
 humanTurnMarkerPath
-humanTurnMintAllowed
 humanTurnState
 identityScopedUnitPath
 ignoredPathClaimable

@@ -357,6 +357,7 @@ import {
   splitSlugList,
   readAllAuditShards,
   readAuditShardEvents,
+  sortAttemptEvents,
   resolveBoltDag,
   ACCEPT_AS_IS_REVISION_CYCLES,
   stageRevisionCycles,
@@ -563,6 +564,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   activeVersion,
@@ -1996,7 +1998,21 @@ To get started:
   const lastName = lastStage === undefined || lastStage.phase === "initialization" ? null : stageLabel(lastStage, lastStage.slug);
   const nextName = nextNode === undefined ? null : stageLabel(nextNode, nextNode.slug);
   const agentLine = agentName === null ? "" : `Active Agent:   ${agentName}\n`;
-  const lastLine = lastName === null ? "" : `Last Completed: ${lastName}\n`;
+  // Who approved it, as their git named them at the keyboard (the approval's
+  // Git Name); nothing more when the approval recorded no name.
+  let approvedBy = "";
+  if (lastName !== null && lastStage !== undefined) {
+    try {
+      const approval = sortAttemptEvents(readAuditShardEvents(projectDir, flags.intent, flags.space)).reverse()
+        .find((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Stage") === lastStage.slug &&
+          auditBlockField(row.block, "Unit") === null);
+      const name = approval === undefined ? null : auditBlockField(approval.block, "Git Name");
+      if (name) approvedBy = ` (approved by ${name})`;
+    } catch {
+      // An unreadable record leaves the line as it was.
+    }
+  }
+  const lastLine = lastName === null ? "" : `Last Completed: ${lastName}${approvedBy}\n`;
   const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
   const plan = getField(content, PLAN_FIELD);
   // A plan composed for this work runs on a stock scope the person never
@@ -12417,6 +12433,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
             "Stages added": "none",
             "Stages in Scope": String(executeStages.length),
             Reason: PERSON_ASKED_SKIP_REASON,
+            ...personGitNameField(projectDir),
           },
         }]),
       );
@@ -12934,8 +12951,20 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
+    // The person's approval at the in-flight compose question: its step runs
+    // this before deleting the question's marker and names nothing after it,
+    // so the work goes on from here, as after their approval at a stage's gate.
+    // The engine's other plan-change steps say what comes after themselves.
+    let approvedAtCompose = false;
+    try {
+      approvedAtCompose = composeGateOpen(projectDir);
+    } catch {
+      // An unreadable marker names no step and nobody; the plan change still lands.
+    }
+
     // Audit first, as config-change does, in one batch: a failed append leaves
-    // the plan and its settings untouched and records none of them.
+    // the plan and its settings untouched and records none of them. A skip the
+    // person asked for, or their approval at the compose question, is theirs.
     appendAuditEntries([
       {
         eventType: "RECOMPOSED",
@@ -12945,6 +12974,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
           "Stages added": addList.length > 0 ? addList.join(", ") : "none",
           "Stages in Scope": String(executeStages.length),
           ...(reason ? { Reason: reason } : {}),
+          ...(isPersonAskedSkipReason(reason) || approvedAtCompose ? personGitNameField(projectDir) : {}),
         },
       },
       ...settingsUpdate.audit,
@@ -12958,16 +12988,6 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     }
 
     const droppedUnitWork = droppedUnitWorkLine(projectDir, before, content, flags.intent, flags.space);
-    // The person's approval at the in-flight compose question: its step runs
-    // this before deleting the question's marker and names nothing after it,
-    // so the work goes on from here, as after their approval at a stage's gate.
-    // The engine's other plan-change steps say what comes after themselves.
-    let approvedAtCompose = false;
-    try {
-      approvedAtCompose = composeGateOpen(projectDir);
-    } catch {
-      // An unreadable marker names no step; the plan change itself has landed.
-    }
     process.stdout.write(
       `Recomposed: ${skipList.length} skipped (${skipList.join(", ") || "none"}), ` +
         `${addList.length} added (${addList.join(", ") || "none"})\n` +

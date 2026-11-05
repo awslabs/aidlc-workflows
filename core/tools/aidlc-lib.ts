@@ -32,6 +32,8 @@ import {
   repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
+export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import {
   type EngineInvocation,
@@ -31374,13 +31376,6 @@ export function humanPresenceGuardDisabled(projectDir?: string): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD", process.env, projectDir) === "1";
 }
 
-// An unattended driver is the only component that knows its prompt-submit
-// event did not originate from a person. Withhold the authority-bearing ledger
-// mint while retaining non-authority turn markers used by forwarding hooks.
-export function humanTurnMintAllowed(): boolean {
-  return process.env.AIDLC_UNATTENDED !== "1";
-}
-
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
 // or gate event and no heartbeat at all, with no link on the way to the
 // status files. Anything unreadable proves nothing.
@@ -41774,7 +41769,13 @@ export function recordAcceptedChanges(
         (row) => row.event === "CHANGE_ACCEPTED" && acceptedChangeMatchesRow(change, row.block),
       )) continue;
       try {
-        changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", acceptedChangeFields(change), selection);
+        // A change the person's message stands behind is theirs; one the Guard
+        // Policy took with nobody asking is not, and names nobody.
+        const theirs = change.messageIds !== undefined && change.messageIds.length > 0;
+        changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", {
+          ...acceptedChangeFields(change),
+          ...(theirs ? personGitNameField(projectDir) : {}),
+        }, selection);
       } catch (error) {
         throw new Error(
           `Cannot continue: the accepted change for "${change.stage}"` +

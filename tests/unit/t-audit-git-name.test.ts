@@ -56,12 +56,11 @@ function env(p: Project, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     AIDLC_SESSION_OVERRIDE: SESSION,
     GIT_CONFIG_GLOBAL: p.globalConfig,
     GIT_CONFIG_NOSYSTEM: "1",
-    ...extra,
   };
   delete e.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   delete e.AIDLC_UNATTENDED;
   delete e.GIT_CONFIG_SYSTEM;
-  return e;
+  return { ...e, ...extra };
 }
 
 function run(p: Project, cmd: string[], extra: NodeJS.ProcessEnv = {}) {
