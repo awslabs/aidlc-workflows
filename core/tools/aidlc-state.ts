@@ -286,6 +286,7 @@ import {
   UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
@@ -7935,6 +7936,7 @@ function handleApprove(args: string[]): void {
             }
           : {}),
         ...(teamPersonCall.unfinishedReviews.length > 0 ? { Review: "not finished" } : {}),
+        ...personGitNameField(pd),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8115,6 +8117,7 @@ function handleApprove(args: string[]): void {
     } else if (!autonomousDecision) {
       Object.assign(gateFields, personsWordsFields(pd, slug, message), approvesTogetherFields(listedTogether));
     }
+    const theirs = together !== null || !autonomousDecision;
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
@@ -8122,6 +8125,7 @@ function handleApprove(args: string[]): void {
     if ((personCall?.unfinishedReviews.length ?? 0) > 0) gateFields.Review = "not finished";
     Object.assign(gateFields, briefDigestField(pd, stage, undefined), decisionsAcceptedOpenField(pd, slug, undefined));
     if (stage.workspace_requires) Object.assign(gateFields, sourceWorkFields());
+    if (theirs) Object.assign(gateFields, personGitNameField(pd));
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -8463,6 +8467,7 @@ function handleReject(args: string[]): void {
                 reviewFindingDispositions,
             }
           : {}),
+        ...personGitNameField(pd),
       });
       emitAudit(pd, "STAGE_REVISING", {
         ...fields,
@@ -8509,6 +8514,7 @@ function handleReject(args: string[]): void {
       rejFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
     }
+    if (!autonomousDecision) Object.assign(rejFields, personGitNameField(pd));
     emitAudit(pd, "GATE_REJECTED", rejFields);
     emitAudit(pd, "STAGE_REVISING", {
       Stage: slug,
@@ -8781,6 +8787,7 @@ function handleSkip(args: string[]): void {
           checkpoints,
         ),
         ...claimAttemptFields(pd, unit),
+        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8839,6 +8846,7 @@ function handleSkip(args: string[]): void {
     try {
       const fields: Record<string, string> = { Stage: slug };
       if (reason) fields.Reason = reason;
+      if (isPersonAskedSkipReason(reason)) Object.assign(fields, personGitNameField(pd));
       emitAudit(pd, "STAGE_SKIPPED", fields);
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8963,6 +8971,7 @@ function handleSkip(args: string[]): void {
         Stage: slug,
         Reason: reason,
         "Skip Kind": "conditional-runtime",
+        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
       });
     }
     if (nextStage) {

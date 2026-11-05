@@ -49,6 +49,30 @@ latest), so the row's words and its ids match. A row that stands on one
 message, or on the one the conductor named with `--message`, carries
 `Message Id` alone.
 
+**Git Name.** A row that records a decision of the person's carries `Git Name`:
+the name their git reports for this project (`git config user.name`, the repo's
+own setting first, then their global one), the same name the Unit board shows.
+It says who was at the keyboard as git reports it. It is not a signature or
+proof of identity: anyone can set any name in git. AI-DLC only reads it; it
+never sets it, asks for it, or records an email. With no name in git, or in an
+unattended run (`AIDLC_UNATTENDED=1`), the field is absent and the row is what
+it would be without it. The rows that carry it:
+- `GATE_APPROVED` and `GATE_REJECTED` the person decided: a stage gate, a team
+  Unit gate, a Unit or batch checkpoint, a Unit merge gate, and the reopen a
+  jump of theirs writes; never an autonomous Construction decision (its
+  Build and Test loop-back included) or the revision backstop's `Recovered`
+  row.
+- `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_OVERRIDDEN`,
+  `SUMMARY_CONFIRMATION_RECORDED`, `VERIFICATION_COMMAND_RECORDED` and
+  `CONSTRUCTION_POLICY_RECORDED`.
+- `STAGE_JUMPED`, except one that lands in Construction while it runs on its own;
+  `STAGE_SKIPPED` and `UNIT_SKIPPED` whose Reason starts with
+  `the person asked to skip it`; `RECOMPOSED` for a skip the person asked for
+  or their approval at the compose question.
+- `GUARD_POLICY_SET`, `CEREMONY_SET`, `GUARD_DISABLED` and `GUARD_RESTORED`
+  with `Source: you`.
+- `CHANGE_ACCEPTED` that carries the person's `Message Id`.
+
 ## Event Registry (131 events, 27 categories)
 
 ### Workflow Lifecycle (8 events)

@@ -79,6 +79,7 @@ import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, type StoredMessage } from "./aidlc-message-store.ts";
 import { backOnLine, quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 
 function throwSettingsError(message: string): never {
   throw new Error(message);
@@ -988,6 +989,11 @@ export function applyIntentSettings(
     lines.push(offer ? `${line} ${offer}` : line);
     checkOffInTheirName ||= !atTheirTerminal;
   }
+  // A setting the person asked for (Source `you`) records who was at the
+  // keyboard; one a command, a scope or a memory file set names nobody.
+  const theirRows = audit.filter((entry) => entry.fields.Source === "you");
+  const gitName = theirRows.length > 0 ? personGitNameField(projectDir) : {};
+  for (const entry of theirRows) Object.assign(entry.fields, gitName);
   return { content, audit, lines, checkOffInTheirName };
 }
 

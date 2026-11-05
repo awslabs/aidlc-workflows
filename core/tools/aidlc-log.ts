@@ -315,6 +315,7 @@ import {
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   APPROVAL_GATE_CHOICES,
   recommendedChoices,
@@ -2448,7 +2449,7 @@ function handleAnswer(args: string[]): void {
       }, namedProtectedReply(pd, flags.stage, fields.Session, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
-      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
+      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", { ...fields, ...personGitNameField(pd) });
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage, command_sha256: verificationCommand.sha256 }));
@@ -2467,7 +2468,7 @@ function handleAnswer(args: string[]): void {
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.
-      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);
+      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", { ...fields, ...personGitNameField(pd) });
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "construction-policy", stage: flags.stage }));
@@ -2623,7 +2624,7 @@ function handleAnswer(args: string[]): void {
         );
       }
       try {
-        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", fields);
+        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", { ...fields, ...personGitNameField(pd) });
       } catch (e) {
         // Restore the registry to its exact prior bytes (or absence) so no
         // authorization exists without the receipt that minted it. A restore
@@ -2738,6 +2739,7 @@ function handleAnswer(args: string[]): void {
               Fingerprint: planEvidence!.fingerprint,
               ...(personReply?.words ? { "Person Reply": personReply.words } : {}),
               ...(personReply ? { "Message Id": personReply.messageId } : {}),
+              ...personGitNameField(pd),
             });
           },
         );
@@ -2747,6 +2749,7 @@ function handleAnswer(args: string[]): void {
       }
       const changeNotices = [...planEvidence!.changeNotices, ...recorded.changeNotices];
       if (recorded.overridden) fields.Override = "yes";
+      Object.assign(fields, personGitNameField(pd));
       try {
         emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
       } catch (e) {
@@ -2793,6 +2796,7 @@ function handleAnswer(args: string[]): void {
       }
       try {
         if (flags.details === "Approve Plan") {
+          Object.assign(fields, personGitNameField(pd));
           emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
         } else {
           emitAudit(pd, "QUESTION_ANSWERED", fields);

@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
 import { scopeStampLanded, unitRowMerged } from "./aidlc-unit-landing.ts";
+import { gitUserName, personGitNameField } from "./aidlc-git-name.ts";
 import {
   managedBlockMarkers,
   markedPart,
@@ -2665,6 +2666,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
         ? { "User Input": userInput }
         : { Feedback: userInput }),
       ...(afterPin ? mergeGateReplyFields(pd, afterPin) : {}),
+      ...personGitNameField(pd),
     },
     pd,
   );
@@ -3950,7 +3952,7 @@ export function unitPlanRefusal(
 function claimOwnerLabel(projectDir: string, supplied?: string): string {
   const owner =
     supplied?.trim() ||
-    git(projectDir, ["config", "user.name"]).stdout.trim() ||
+    gitUserName(projectDir) ||
     "team";
   if (/[\r\n|]/.test(owner)) {
     fail("Team labels cannot contain pipes or newlines.");

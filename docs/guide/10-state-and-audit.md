@@ -270,6 +270,21 @@ issued if it is real. Masking goes by shape only, so a secret written another
 way (`my password is hunter2`) is kept as typed, and the doctor bundle masks
 the same shapes and more.
 
+### Who decided
+
+When you approve a stage, ask for changes, skip or jump to a stage, switch a
+check off or on, or let a changed input through, the audit row also records
+your git name, for example `**Git Name**: Jane Doe`. It is the name
+`git config user.name` gives for this project (the repo's own setting, then
+your global one), the same name the Unit board shows, so in a team clone each
+person's rows carry their own name. AI-DLC only reads it: it never sets it,
+asks for it, or records your email, and with no name in git it records
+nothing. It says who was at the keyboard as git reports it, not a signature or
+proof of identity. `/aidlc --status` names who approved the last completed
+stage, for example `Last Completed: Requirements Analysis (approved by Jane
+Doe)`. Which rows carry it is listed under "Git Name" in
+`knowledge/aidlc-shared/audit-format.md` in your harness folder.
+
 ### Audit event flow
 
 When a stage executes and produces artifacts, the audit trail captures the full sequence:
