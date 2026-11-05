@@ -1105,6 +1105,8 @@ describe("merge-queue retry of ordinary tiers through the public runner", () => 
     const result = fixture.run(["--integration", "--no-llm"], { AIDLC_RETRY_OBSERVER: observer });
     expect(result.status).toBe(1);
     expect(runs()).toEqual(["t-flaky"]);
+    // No retry can come, so the file is told no attempt (the team-unit harness then keeps its git trace).
+    expect(readFileSync(join(observer, "t-flaky.test.ts.attempt"), "utf8").trim()).toBe("undefined");
     expect(existsSync(join(result.stamp, "retries.json"))).toBe(false);
     expect(result.summary).not.toContain("Passed on retry");
   });
