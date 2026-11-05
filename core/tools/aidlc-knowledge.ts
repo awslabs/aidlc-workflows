@@ -2549,6 +2549,75 @@ export function renderShow(d: ShownDocument): string {
   return out.join("\n") + "\n";
 }
 
+// --- The documents card ------------------------------------------------------
+//
+// What an Inception stage's reading list carries from the index: each document
+// with current text (this work's first, then the space's), its summary or the
+// opening of its text, and where its full text is, so the agent checks a
+// question against the team's documents before asking it. Text is read through
+// the same verified readers `show` uses, so a stale or torn derivative is left
+// out here exactly as it is there.
+
+const CARD_DOCUMENTS_MAX = 12;
+const CARD_OPENING_CHARS = 1500;
+
+// A fence longer than any backtick run in the text, so a document cannot close it.
+function fenced(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}text\n${text}\n${fence}`;
+}
+
+/** The card's Markdown, or null when no document this work may read has current text. */
+export function documentsCard(projectDir: string, space: string, intentUuid: string | null): string | null {
+  // A redirected knowledge root is refused here as every reader refuses it; the engine goes on without the card.
+  const rows = readIndex(projectDir, space).documents;
+  const mine = (row: DocumentRow): boolean => intentUuid !== null && (row.related_intent_ids ?? []).includes(intentUuid);
+  const listed = rows
+    .filter((row) => !isTombstoned(row) && (row.related_intent_ids === undefined || mine(row)))
+    .sort((a, b) => Number(mine(b)) - Number(mine(a)));
+  const knowledge = toPosix(relative(projectDir, knowledgeDir(projectDir, space)));
+  const entries: string[] = [];
+  let more = 0;
+  for (const row of listed) {
+    const content = verifiedContentBytes(projectDir, space, row);
+    if (content === null || row.content === undefined) continue;
+    if (entries.length >= CARD_DOCUMENTS_MAX) {
+      more++;
+      continue;
+    }
+    const chars = Array.from(content.toString("utf-8"));
+    const summary = verifiedSummaryBytes(projectDir, space, row)?.toString("utf-8");
+    const shown = summary ?? chars.slice(0, CARD_OPENING_CHARS).join("");
+    const lead = summary !== undefined
+      ? "Its summary:"
+      : chars.length > CARD_OPENING_CHARS ? `Its first ${CARD_OPENING_CHARS} characters:` : "Its text:";
+    entries.push([
+      `## ${JSON.stringify(row.source.path.replace(/^documents\//, ""))} (${mine(row) ? "this work's document" : "a document for the whole space"})`,
+      "",
+      `Full text: ${knowledge}/${row.content} (${chars.length} characters` +
+        `${row.extraction.truncated === true ? ", cut where the knowledge base stopped reading" : ""}).`,
+      lead,
+      "",
+      fenced(shown),
+    ].join("\n"));
+  }
+  if (entries.length === 0) return null;
+  return [
+    "# The team's documents",
+    "",
+    UNTRUSTED_PATH_NOTICE,
+    "",
+    UNTRUSTED_CONTENT_NOTICE,
+    "",
+    "These are the documents in this space's knowledge base that have text to read. Check each question you plan to " +
+      "ask against them before you ask it, and open a document's full text when a question bears on it.",
+    "",
+    ...entries.flatMap((entry) => [entry, ""]),
+    ...(more > 0 ? [`${more} more ${more === 1 ? "document is" : "documents are"} in the knowledge base.`, ""] : []),
+  ].join("\n");
+}
+
 // --- sync --------------------------------------------------------------------
 //
 // Reconcile the catalog with what is actually on disk. Five changes matter, and

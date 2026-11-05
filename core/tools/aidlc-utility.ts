@@ -386,6 +386,7 @@ import {
   mintIntentRecord,
   selectIntentForSession,
   resolveWorkflowSelection,
+  intentUuidForSelection,
   readStateFile,
   keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
@@ -10565,7 +10566,15 @@ function onboardDocumentInput(
   try {
     const result = kb.onboard(projectRoot, space, target, new Date().toISOString());
     if (result.refused) failure = result.refused.reason;
-    else outcome = result.indexed[0];
+    else {
+      outcome = result.indexed[0];
+      // A document new to the knowledge base is filed for the work this chat is
+      // on; one already there keeps the scope it has (the whole space's, say).
+      const work = outcome?.status === "fresh"
+        ? intentUuidForSelection(projectRoot, resolveWorkflowSelection(projectRoot, { space }))
+        : null;
+      if (outcome !== undefined && work !== null) kb.setIntentAssociation(projectRoot, space, outcome.id, work, "associate");
+    }
   } catch (error) {
     failure = `${errorMessage(error)}; run document-input --onboard${input.includeIgnored ? " --include-ignored" : ""} again to finish`;
     mayHaveCommitted = true;
