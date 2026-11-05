@@ -2624,6 +2624,10 @@ function jsonEnvelope(
 }
 
 export async function main(argv: string[]): Promise<void> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write("usage: aidlc engine plugin <list|sync [--prune-missing]>\n");
+    return;
+  }
   const { positional, flags } = parseArgs(argv);
   const command = positional[0];
   const projectDir = resolveProjectDir(flags["project-dir"]);

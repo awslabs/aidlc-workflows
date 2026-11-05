@@ -1452,7 +1452,7 @@ export function main(argv: string[]): void {
     const { projectDirArg, rest: argsAfterStrip } = stripProjectDir(argv);
 
     const [cmd, ...subargs] = argsAfterStrip;
-    if (cmd === "--help" || cmd === "-h") {
+    if (cmd === "--help" || cmd === "-h" || subargs.includes("--help") || subargs.includes("-h")) {
       printHelp();
       return;
     }
