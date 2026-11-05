@@ -16,12 +16,14 @@
 // plan is changed is in t-team-unit-replan-claim-warns.test.ts.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
+  builtOnce,
   cleanupTempDirs,
+  cleanupWorlds,
   clone,
   gateAndLand,
   git,
@@ -46,6 +48,7 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
+afterAll(cleanupWorlds);
 
 // The plan the team starts with: delta waits on beta. gamma is added later,
 // after alpha, on a branch beta and delta do not touch.
@@ -70,9 +73,10 @@ function addUnitRow(main: string, unit: string, after: string): void {
 }
 
 /**
- * Main with a done Inception and the START plan, alpha landed and pushed.
+ * Main with a done Inception and the START plan, alpha landed and pushed;
+ * built once, and each case gets its own copy.
  */
-function world(): { seed: string; remote: string } {
+const world = builtOnce((): { seed: string; remote: string } => {
   const { seed, remote } = makeReplanSeed(dagBody(START));
   addUnitRow(seed, "delta", "beta");
   git(seed, ["add", "-A"]);
@@ -82,7 +86,14 @@ function world(): { seed: string; remote: string } {
   gateAndLand(seed, "alpha");
   git(seed, ["push", "origin", "main"]);
   return { seed, remote };
-}
+});
+
+/** The world with beta claimed and worked by beta-team, not published. */
+const betaClaimed = builtOnce((): { seed: string; remote: string } => {
+  const made = world();
+  prepareCandidate(made.remote, "beta", "beta-team", { publish: false });
+  return made;
+});
 
 function rebaseOntoMain(checkout: string): { status: number; out: string } {
   git(checkout, ["fetch", "origin"]);
@@ -120,8 +131,7 @@ function pull(main: string): void {
 
 describe("t-team-unit-replan-open-claims: a plan change while Units are claimed and mid-work", () => {
   test("the jump to Units Generation is allowed with a claim open; landed work and the claim stay", () => {
-    const { seed, remote } = world();
-    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    const { seed } = betaClaimed();
     pull(seed);
     const jump = reopenUnitsGeneration(seed);
     expect(jump.status, jump.out).toBe(0);
@@ -134,8 +144,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("the jump's step names the claimed Unit and its owner, and says the claim carries on", () => {
-    const { seed, remote } = world();
-    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    const { seed } = betaClaimed();
     pull(seed);
     const jump = reopenUnitsGeneration(seed);
     expect(jump.status, jump.out).toBe(0);
@@ -181,8 +190,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   }
 
   test("a teammate's fresh clone of main pushed back at Units Generation gets the board, not the lead's step", () => {
-    const { seed, remote } = world();
-    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    const { seed, remote } = betaClaimed();
     pull(seed);
     expect(reopenUnitsGeneration(seed).status).toBe(0);
     git(seed, ["add", "-A"]);
@@ -199,8 +207,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("a teammate's participant clone that pulls main back at Units Generation keeps the board", () => {
-    const { seed, remote } = world();
-    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    const { seed, remote } = betaClaimed();
     pull(seed);
     expect(reopenUnitsGeneration(seed).status).toBe(0);
     git(seed, ["add", "-A"]);
@@ -217,8 +224,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("after the revised plan is approved and pushed, unit status and the board name the same claimable Units", () => {
-    const { seed, remote } = world();
-    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    const { seed } = betaClaimed();
     pull(seed);
     replan(seed, WITH_GAMMA);
     // `unit status` reads the pushed integration ref and the board reads
@@ -231,8 +237,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("Units that landed before the jump stay landed: not claimable, not claimed, and their dependents open", () => {
-    const { seed, remote } = world();
-    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    const { seed } = betaClaimed();
     replan(seed, WITH_GAMMA);
     const status = unitStatus(seed);
     expect(status.claimed.map((claim) => claim.unit)).toEqual(["beta"]);
@@ -241,8 +246,7 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
   });
 
   test("the board shows a landed Unit's finished stages as done after the jump", () => {
-    const { seed, remote } = world();
-    prepareCandidate(remote, "beta", "beta-team", { publish: false });
+    const { seed } = betaClaimed();
     pull(seed);
     const before = boardOf(nextDirective(seed));
     expect(boardCells(before.text, "alpha"), before.text).toEqual(["[x]", "[x]", "[x]", "[x]", "[x]", "[x]"]);

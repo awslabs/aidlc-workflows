@@ -11,13 +11,15 @@
 // finished stages still count and it pins and lands.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { seededAuditDir, seededStateFile } from "../harness/fixtures.ts";
 import {
+  builtOnce,
   cleanupTempDirs,
+  cleanupWorlds,
   clone,
   gateAndLand,
   git,
@@ -37,6 +39,7 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
+afterAll(cleanupWorlds);
 
 // The plan the team starts with: delta waits on beta.
 const START: PlannedUnit[] = [
@@ -61,8 +64,12 @@ function addDeltaRow(main: string): void {
   writeFileSync(path, state.replace(/(\| beta \|.*\n)/, `$1| delta | - | ${stageCells} |\n`));
 }
 
-/** Main with a done Inception and the START plan, alpha landed and pushed. */
-function world(): { seed: string; remote: string } {
+/**
+ * Main with a done Inception and the START plan, alpha landed and pushed, and
+ * beta claimed, worked and published by beta-team; built once, and each case
+ * gets its own copy (beta's checkout included).
+ */
+const world = builtOnce(() => {
   const { seed, remote } = makeReplanSeed(dagBody(START));
   addDeltaRow(seed);
   git(seed, ["add", "-A"]);
@@ -71,8 +78,9 @@ function world(): { seed: string; remote: string } {
   prepareCandidate(remote, "alpha", "alpha-team");
   gateAndLand(seed, "alpha");
   git(seed, ["push", "origin", "main"]);
-  return { seed, remote };
-}
+  const beta = prepareCandidate(remote, "beta", "beta-team");
+  return { seed, remote, betaCheckout: beta.checkout, betaCandidateOid: beta.candidateOid };
+});
 
 /**
  * Rebases a Unit's checkout onto main. A conflict in the state file is resolved
@@ -132,8 +140,7 @@ function receiptCount(checkout: string, unit: string): number {
 
 describe("t-team-unit-replan-stale-candidate: a candidate is stale only when the plan changes its own Unit", () => {
   test("a Unit claimed before the plan adds an unrelated Unit pins and lands as it is; gamma stays claimable and delta opens", () => {
-    const { seed, remote } = world();
-    const beta = prepareCandidate(remote, "beta", "beta-team");
+    const { seed, remote, betaCandidateOid } = world();
     replan(seed, WITH_GAMMA);
     const gamma = clone(remote, "gamma-team");
     const claimed = runMergeTool(UNIT, ["claim", "gamma", "--team", "gamma-team"], gamma);
@@ -149,7 +156,7 @@ describe("t-team-unit-replan-stale-candidate: a candidate is stale only when the
     // No rebase and no new publish: the candidate is the one published before the plan changed.
     const { pinnedOid } = gateAndLand(seed, "beta");
     git(seed, ["push", "origin", "main"]);
-    expect(pinnedOid).toBe(beta.candidateOid);
+    expect(pinnedOid).toBe(betaCandidateOid);
 
     const row = unitProgressRow(seed, "beta").split("|").slice(1, -1).map((cell) => cell.trim());
     expect(row[0]).toBe("beta");
@@ -168,8 +175,7 @@ describe("t-team-unit-replan-stale-candidate: a candidate is stale only when the
   });
 
   test("a claim published before Units Generation reopened lands while the plan is unchanged", () => {
-    const { seed, remote } = world();
-    prepareCandidate(remote, "beta", "beta-team");
+    const { seed } = world();
     expect(reopenUnitsGeneration(seed).status).toBe(0);
     git(seed, ["add", "-A"]);
     git(seed, ["commit", "-m", "back to Units Generation"]);
@@ -179,8 +185,7 @@ describe("t-team-unit-replan-stale-candidate: a candidate is stale only when the
   });
 
   test("a plan that changes the claimed Unit's own entry makes pin refuse it as stale; after the rebase and a new publish it pins and lands with its finished stages counted", () => {
-    const { seed, remote } = world();
-    const beta = prepareCandidate(remote, "beta", "beta-team");
+    const { seed, betaCheckout } = world();
     replan(seed, BETA_WAITS_ON_ALPHA);
 
     const stale = runMergeTool(UNIT, ["pin", "beta"], seed);
@@ -188,12 +193,12 @@ describe("t-team-unit-replan-stale-candidate: a candidate is stale only when the
     expect(stale.out).toContain("stale Construction contract");
     expect(stale.out).toContain("rebase");
 
-    const receiptsBefore = receiptCount(beta.checkout, "beta");
-    rebaseOntoMain(beta.checkout, "beta");
-    const again = runMergeTool(UNIT, ["publish", "beta"], beta.checkout);
+    const receiptsBefore = receiptCount(betaCheckout, "beta");
+    rebaseOntoMain(betaCheckout, "beta");
+    const again = runMergeTool(UNIT, ["publish", "beta"], betaCheckout);
     expect(again.status, again.out).toBe(0);
     // Its stages were not run again: the receipts are the ones it had.
-    expect(receiptCount(beta.checkout, "beta")).toBe(receiptsBefore);
+    expect(receiptCount(betaCheckout, "beta")).toBe(receiptsBefore);
 
     gateAndLand(seed, "beta");
     git(seed, ["push", "origin", "main"]);
