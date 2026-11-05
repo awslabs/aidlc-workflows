@@ -103,6 +103,19 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(board).toContain("# Team Construction Dispatcher");
   });
 
+  // Share commits every path git shows, so the question names every new one:
+  // a key in the sixth file is seen before it is pushed.
+  test("the share question names every new file outside aidlc/, however many", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    for (const name of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]) {
+      writeFileSync(join(lead, name), "untracked\n");
+    }
+    const question = String(nextDirective(lead).question);
+    expect(question).toContain("z-deploy.env");
+    expect(question).not.toContain("more)");
+  });
+
   test("share refused: the commit is kept, next offers share again and starts no Unit here", () => {
     const { seed: lead, remote } = makeSeed();
     const other = clone(remote, "other");
@@ -232,6 +245,18 @@ describe("step 3: a team publishes its finished Unit", () => {
     expect(JSON.parse(published.stdout)).toMatchObject({ published: true, unit: "alpha" });
     expect(git(checkout, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
     expect(git(remote, ["rev-parse", claimRef])).not.toBe(claimBefore);
+  });
+
+  test("the publish question names every new file outside aidlc/, however many", () => {
+    const { remote } = makeSeed();
+    const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
+    for (const name of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]) {
+      writeFileSync(join(checkout, name), "untracked\n");
+    }
+    const offer = doneIn(checkout);
+    expect(isHandover(offer, "publish"), JSON.stringify(offer)).toBe(true);
+    expect(String(offer.question)).toContain("z-deploy.env");
+    expect(String(offer.question)).not.toContain("more)");
   });
 
   test("publish without --commit still refuses a dirty tree, as today", () => {

@@ -5214,15 +5214,14 @@ function handoverOffered(projectDir: string, mark: string): boolean {
 }
 
 // What a commit here takes, as the share and publish questions say it: the
-// count, and by path any file git does not track yet outside AI-DLC's record
-// (so an unignored secret is seen before it is pushed). Null when nothing.
+// count, and by path every file git does not track yet outside AI-DLC's
+// record, however many, since the commit takes them all (so an unignored
+// secret is seen before it is pushed). Null when nothing.
 function workToCommitWords(projectDir: string): string | null {
   const { paths, untracked } = workToCommit(projectDir);
   if (paths.length === 0) return null;
   const outside = untracked.filter((path) => path !== "aidlc" && !path.startsWith("aidlc/"));
-  const named = outside.length === 0 ? "" : outside.length <= 5
-    ? ` (new: ${outside.join(", ")})`
-    : ` (new: ${outside.slice(0, 5).join(", ")} and ${outside.length - 5} more)`;
+  const named = outside.length === 0 ? "" : ` (new: ${outside.join(", ")})`;
   return `the ${paths.length} changed file${paths.length === 1 ? "" : "s"} here${named}`;
 }
 
