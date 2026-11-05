@@ -4,7 +4,7 @@
 // record, so `aidlc config` tells AI-DLC's own unchanged files from the
 // person's by the bytes those releases shipped (scripts/copy-era-files.json,
 // merged into each harness's projection by scripts/package.ts). The fixtures
-// are the files as 2.6.18 and 2.3.0 shipped them: an agent this release still
+// are the files as 2.6.18, 2.6.20 and 2.3.0 shipped them: an agent this release still
 // ships, the Application Design stage it no longer ships, and 2.3.0's own
 // settings with a hook this release retired, and 2.6.18's own settings with
 // its guard registrations. Unchanged, the first is refreshed and the others
@@ -94,6 +94,20 @@ describe("t-copy-era-refresh", () => {
     expect(r.out).not.toContain("they had been changed");
     const allowAfter = (JSON.parse(after) as { permissions: { allow: string[] } }).permissions.allow;
     for (const entry of allowBefore) expect(allowAfter).toContain(entry);
+  });
+
+  // The copy channel was the v2 branch, so a project can hold a version no tag
+  // names: 2.6.20's own files are AI-DLC's too.
+  test("files a copy of an untagged version shipped (2.6.20) are refreshed, not called the person's", () => {
+    const project = copyEraProject();
+    const old = join(REPO_ROOT, "tests", "fixtures", "copy-era", "claude-2.6.20");
+    cpSync(join(old, ".claude"), join(project, ".claude"), { recursive: true });
+    const r = config(project);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).not.toContain("locally modified or unowned");
+    for (const rel of [".claude/tools/aidlc-version.ts", ".claude/skills/aidlc/SKILL.md"]) {
+      expect(readFileSync(join(project, rel))).toEqual(readFileSync(join(CLAUDE_RELEASE, rel)));
+    }
   });
 
   test("a copy-era file the person changed is kept and named, nothing overwritten", () => {
