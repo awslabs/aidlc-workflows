@@ -38,6 +38,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "./fixtures.ts";
+import { FILE_ATTEMPT_ENV } from "../lib/file-retry.ts";
 
 // Git 2.47 and later start `git maintenance run --auto` in the background
 // after a command writes objects, and from 2.54 that run repacks, deleting
@@ -100,7 +101,13 @@ export function runMergeTool(
   const reviewOperation = tool === UNIT && (args[0] === "gate" || args[0] === "land");
   const windowsClaimOrPin = process.platform === "win32" && tool === UNIT &&
     (args[0] === "claim" || args[0] === "pin");
-  const traceNeeded = reviewOperation || windowsClaimOrPin;
+  // On Windows the trace costs about a quarter of each of these calls, so a
+  // file's first attempt under the runner goes without it; the runner's retry
+  // of a failed file, and a run outside the runner, trace again. The retry
+  // rule (tests/lib/file-retry.ts) does not retry a file whose first attempt
+  // ran long, so the pinned-merge diagnostics below print untraced too.
+  const windowsFirstAttempt = process.platform === "win32" && process.env[FILE_ATTEMPT_ENV] === "1";
+  const traceNeeded = (reviewOperation || windowsClaimOrPin) && !windowsFirstAttempt;
   const traceDir = traceNeeded && extraEnv.GIT_TRACE2_EVENT === undefined
     ? mkdtempSync(join(tmpdir(), "aidlc-inc3-git-trace-"))
     : null;
@@ -125,7 +132,7 @@ export function runMergeTool(
   );
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   const reviewUnit = reviewOperation ? args[1] : undefined;
-  if (result.status !== 0 && reviewUnit && tracePath &&
+  if (result.status !== 0 && reviewUnit &&
       (out.includes("has no review that stands for") || out.includes("candidate-exact"))) {
     console.error(`t326 merge validation failed:\n${JSON.stringify({
       args, status: result.status, signal: result.signal, error: result.error?.message, out,
@@ -417,7 +424,7 @@ export function reviewAuditExtras(
 export function reportPinnedMergeFailure(
   projectDir: string,
   unit: string,
-  tracePath: string,
+  tracePath: string | null,
   failureOutput: string,
 ): void {
   try {
@@ -494,6 +501,10 @@ export function reportPinnedMergeFailure(
     }, null, 2)}`);
   } catch (error) {
     console.error(`t326 pinned merge diagnostics unavailable: ${String(error)}`);
+  }
+  if (!tracePath) {
+    console.error("t326 landing Git trace: not taken on this first attempt on Windows; the runner's retry takes it");
+    return;
   }
   try {
     console.error(`t326 landing Git trace:\n${readFileSync(tracePath, "utf-8")}`);
