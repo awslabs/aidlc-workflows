@@ -19,14 +19,16 @@
 // on.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { auditBlockField, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   approveMerge,
+  builtOnce,
   cleanupTempDirs,
+  cleanupWorlds,
   clone,
   git,
   ORCH,
@@ -52,15 +54,15 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
+afterAll(cleanupWorlds);
 
 const U = (name: string, ...dependsOn: string[]): PlannedUnit => ({ name, depends_on: dependsOn });
 const BASE = [U("skeleton"), U("alpha", "skeleton"), U("beta", "skeleton")];
 
 type Seed = { seed: string; remote: string };
 
-function seedWithParallelUnits(): Seed {
-  return makeReplanSeed(parallelDependencyBody());
-}
+// Each world below is built once, and each case gets its own copy.
+const seedWithParallelUnits = builtOnce((): Seed => makeReplanSeed(parallelDependencyBody()));
 
 /** What main's own steps wrote is committed and pushed, as the person commits it. */
 function settle(main: string): void {
@@ -190,7 +192,7 @@ function boardOf(main: string): string {
 }
 
 /** alpha landed on main before any plan change. */
-function alphaLanded(): Seed {
+const alphaLanded = builtOnce((): Seed => {
   const made = seedWithParallelUnits();
   prepareCandidate(made.remote, "alpha", "alpha-team");
   settle(made.seed);
@@ -198,7 +200,7 @@ function alphaLanded(): Seed {
   expect(landed.status, landed.out).toBe(0);
   settle(made.seed);
   return made;
-}
+});
 
 describe("t-team-unit-replan-plan-edits: shapes of a plan change", () => {
   describe("a Unit that nobody claimed is removed", () => {
@@ -225,11 +227,11 @@ describe("t-team-unit-replan-plan-edits: shapes of a plan change", () => {
 
   describe("a claimed Unit is removed, renamed or split", () => {
     // beta is claimed by beta-team with nothing done yet; main is the person's checkout.
-    const claimedBeta = (): Seed => {
+    const claimedBeta = builtOnce((): Seed => {
       const made = seedWithParallelUnits();
       claimOnly(made.remote, "beta", "beta-team");
       return made;
-    };
+    });
     const names = (seed: string, units: PlannedUnit[]): string => {
       reopenWithPlan(seed, units);
       return planRefusal(seed) ?? "";
@@ -396,7 +398,7 @@ describe("t-team-unit-replan-plan-edits: shapes of a plan change", () => {
     }
 
     // main moved on from the base both started from: gamma (after alpha) was approved and pushed.
-    function secondPlanBehindFirst(): { seed: string; remote: string; second: string; pushError: string; rebase: string; unmerged: string[] } {
+    const secondPlanBehindFirst = builtOnce((): { seed: string; remote: string; second: string; pushError: string; rebase: string; unmerged: string[] } => {
       const { seed, remote } = seedWithoutTrackedToken();
       const second = clone(remote, "second");
       replan(seed, [...BASE, U("gamma", "alpha")]);
@@ -419,7 +421,7 @@ describe("t-team-unit-replan-plan-edits: shapes of a plan change", () => {
       }
       const unmerged = git(second, ["diff", "--name-only", "--diff-filter=U"]).split("\n").filter(Boolean);
       return { seed, remote, second, pushError, rebase, unmerged };
-    }
+    });
 
     test("the second checkout's push is rejected and its rebase stops on the plan documents and the state file", () => {
       const run = secondPlanBehindFirst();

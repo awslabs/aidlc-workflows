@@ -15,12 +15,14 @@
 // and Test.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdirSync, readFileSync, } from "node:fs";
 import { join } from "node:path";
 import { seededAuditDir, seededStateFile } from "../harness/fixtures.ts";
 import {
+  builtOnce,
   cleanupTempDirs,
+  cleanupWorlds,
   clone,
   gateAndLand,
   git,
@@ -43,6 +45,7 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
+afterAll(cleanupWorlds);
 
 const CONSTRUCTION_STAGES = [
   "functional-design",
@@ -66,14 +69,15 @@ function replanSeed(): { seed: string; remote: string } {
   return makeReplanSeed();
 }
 
-// alpha claimed, worked and landed on main before the plan changes.
-function alphaLanded(): { seed: string; remote: string } {
+// alpha claimed, worked and landed on main before the plan changes; built
+// once, and each case gets its own copy.
+const alphaLanded = builtOnce((): { seed: string; remote: string } => {
   const made = replanSeed();
   prepareCandidate(made.remote, "alpha", "alpha-team");
   gateAndLand(made.seed, "alpha");
   git(made.seed, ["push", "origin", "main"]);
   return made;
-}
+});
 
 /** A Unit claimed, worked and published after the plan changed, as any Unit is. */
 function workAfterReplan(remote: string, unit: string): string {
