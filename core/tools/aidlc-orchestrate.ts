@@ -78,6 +78,7 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import {
   createHash,
   randomBytes,
@@ -22570,6 +22571,8 @@ function nextArgsWithRequestFile(
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
   // Every route answers for the workflow unless it is an isolated Code
   // Generation run (emitSingleRunStage, handleContinue say so).

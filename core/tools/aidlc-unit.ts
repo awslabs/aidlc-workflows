@@ -1,5 +1,6 @@
 // aidlc-unit.ts - atomic Unit claim registry and checkout-local scope binding.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -4741,6 +4742,8 @@ function participate(projectDir?: string): void {
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const args = [...argv];
   const projectIdx = args.indexOf("--project-dir");
   if (projectIdx !== -1 && projectIdx + 1 < args.length) {
