@@ -97,8 +97,10 @@
 //      (AIDLC_UNATTENDED=1) has nobody to answer the gate.
 //   6. An IN-FLIGHT BACKGROUND SUBAGENT is positively signalled by a fresh
 //      session-scoped ledger entry added after background dispatch acceptance
-//      and removed one-at-a-time on SubagentStop. Autonomous Construction
-//      remains guarded.
+//      and removed one-at-a-time on SubagentStop. Under autonomous Construction
+//      it allows the stop while a person is there (the helper's completion
+//      carries the work on); an unattended driver (AIDLC_UNATTENDED=1) keeps
+//      the loop alive.
 //   7. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
@@ -998,9 +1000,10 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
 // background result arrives. POSITIVE-CONFIRMATION: the dispatch hook adds one
 // session-scoped ledger entry only for an accepted `run_in_background: true`
 // call, or for a launch its PostToolUse response confirms as "async_launched",
-// and SubagentStop removes one entry for that same session. AUTONOMY
-// GUARD: never fires under autonomous Construction, where the unattended loop
-// must remain enforced.
+// and SubagentStop removes one entry for that same session. Under autonomous
+// Construction a person who is there sees the helper's completion resume the
+// agent, as in a gated run; only an unattended driver (AIDLC_UNATTENDED=1)
+// keeps the loop alive past the wait.
 //
 // STALENESS BOUND. A crashed session or missing SubagentStop can strand an
 // entry. The shared ledger helper prunes stale entries under the workspace lock
@@ -1012,8 +1015,8 @@ function isPendingSubagentStop(
   sessionId: unknown,
 ): boolean {
   try {
-    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
-      return false; // autonomy guard - keep the loop alive
+    if (!humanTurnMintAllowed() && getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      return false; // nobody waits with the helper - keep the loop alive
     }
     const match = matchSubagentInflight(projectDir, sessionId);
     if (match.malformed) {
@@ -2140,7 +2143,7 @@ if (isPendingComposeStop(projectDir, stateContent)) {
 // Pending-background-subagent carve-out (tier 2c): a background Agent/Task is
 // still running, so the conductor is correctly parked until its result arrives.
 // Positive-confirmation only (a matching ledger entry), session-isolated,
-// autonomy-guarded, freshness-bounded, and fail-closed (see
+// guarded for an unattended driver, freshness-bounded, and fail-closed (see
 // isPendingSubagentStop).
 if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
   recordHookTrace(
