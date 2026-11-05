@@ -149,6 +149,12 @@ describe("a plugin's command on a native install", () => {
     expect(native(["version"], project).stdout.trim()).toBe(`aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})`);
   });
 
+  test("native install: aidlc --help lists the command under its plugin", () => {
+    const help = native(["--help"], project);
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toMatch(new RegExp(`PLUGIN COMMANDS\n  test-pro\n {4}${COMMAND} +Say hello from test-pro\n`));
+  });
+
   test("native install: a plugin doctor script's own aidlc call reaches the engine", () => {
     const doctor = native(["doctor", "--verbose"], project, { HELLO_ENGINE: engineOnPath });
     expect(doctor.stdout + doctor.stderr).toContain(`engine answered: aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})`);
