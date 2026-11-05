@@ -8654,9 +8654,7 @@ function unitTakeLook(
 // the home it was sent to. A file already acted on here is "done": the words
 // asked for nothing more (the turn keeps them for every `next` in it). Null for
 // any other words.
-function handFileStep(projectDir: string, words: string): AskDirective | PrintDirective | "done" | null {
-  // The whole of their words, as one path: it may hold spaces.
-  const path = words.replace(/^["']|["']$/g, "");
+function handFileStep(projectDir: string, path: string): AskDirective | PrintDirective | "done" | null {
   if (path === "") return null;
   let file: ReturnType<typeof parseHandFile>;
   try {
@@ -12738,16 +12736,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
   }
-  // A file the person pointed at (the exact path the agent hands as
-  // --hand-file, or their words when they are just its path): a hand-off
-  // file's Unit to start as their own piece of work, or a team's result or
-  // progress file to take in.
-  const handFile = handFileStep(pd, flags.handFile ?? flags.intent?.trim() ?? "");
-  if (handFile === "done") flags.intent = undefined;
-  else if (handFile) {
+  // A file the person pointed at, as the exact path the agent hands as
+  // --hand-file: a hand-off file's Unit to start as their own piece of work,
+  // or a team's result or progress file to take in.
+  const handFile = flags.handFile === undefined ? null : handFileStep(pd, flags.handFile);
+  if (handFile !== null && handFile !== "done") {
     emit(handFile);
     return;
-  } else if (flags.handFile !== undefined) {
+  } else if (flags.handFile !== undefined && handFile === null) {
     emit(errorDirective(`${flags.handFile} is not a file AI-DLC wrote for a hand-off, its progress or its result.`));
     return;
   }

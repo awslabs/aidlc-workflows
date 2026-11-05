@@ -222,7 +222,7 @@ describe("progress and the result come back as files", () => {
     expect(again.status, again.out).toBe(0);
     expect(String(again.json?.notice)).toContain("The result file is aidlc/handoff/fixture-reporting-result.md; send it to the lead.");
     const resultFile = deliver(partner.dir, "aidlc/handoff/fixture-reporting-result.md");
-    expect(String(next(home.dir, undefined, [resultFile]).message)).toContain(`take-in '${resultFile}'`);
+    expect(String(next(home.dir, undefined, ["--hand-file", resultFile]).message)).toContain(`take-in '${resultFile}'`);
     const resultIn = run(UNIT, ["take-in", resultFile], home.dir);
     expect(resultIn.status, resultIn.out).toBe(0);
     expect(resultIn.json?.notice).toBe("Took in reporting's result from data.");
