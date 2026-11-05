@@ -501,8 +501,9 @@ is not asked on its own: put all of them in one question, first in the file,
 `## Q1. What your documents already answer`, with no trade. Its body lists
 each one as the question, the answer, and the document with a short quote; its
 options are `A. All correct`, `B. Some need changing (say which and how)` and
-`X. Other (please specify)`. When you show it, list the answers in the chat
-and keep the question's own text to one line. The person's reply is their
+`X. Other (please specify)`. When you show it, the question's own text is
+the list, one line per answer with the document it came from, so the person
+sees what they confirm. The person's reply is their
 answer to every question it lists: a change they ask for is recorded as that
 question's answer in their words, or as a follow-up question at the next
 number, and the quoted document text is never edited. A question no document
@@ -581,7 +582,7 @@ the later stages use it too.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches, each with the trade its heading names in front of its text (Step 1; none when the heading has none; batching limits are harness-specific — see the question-rendering annex)
-- A batch that holds `What your documents already answer` starts with its list said in the chat, one line per item (the question, the answer, the document and its quote), before any structured question is shown: the person confirms what they can see. Its structured question's own text stays one line.
+- `What your documents already answer` is shown with its list as the structured question's own text, one line per item (the answer and the document it came from), so the person confirms what they can see on the screen.
 - Where the tool shows questions as a numbered list, number every option and never ask for a file letter: a batch ends with "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." and a single question with "Reply with a number (or just tell me)."
 - A question from the questions file with more options than the harness's question tool takes (its question-rendering annex gives the limit) is still one question, asked once with every option: ask it on its own as a numbered list in one message, numbered and ended as the numbered-list bullet above says, never split across calls or into more questions. The file retains the full option set as the authoritative record.
 - Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch, naming the escape the way their tool labels it (Claude Code's picker: "Type something"; Codex's question tool: "None of the above"; a numbered list: "Other"; the question-rendering annex gives it too): "Pick "[the escape's label]" on any question to answer in your own words or talk it through."
