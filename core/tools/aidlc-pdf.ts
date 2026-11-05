@@ -177,6 +177,7 @@ const PAD = Buffer.from("28BF4E5E4E758A4164004E56FFFA01082E2E00B6D0683E802F0CA9F
 class Doc {
   readonly s: string;
   private offsets = new Map<number, number>();
+  private gens = new Map<number, number>();
   private cache = new Map<number, Val | Stream>();
   private inStream: Map<number, [number, number]> | null = null;
   private budget = PDF_TOTAL_INFLATE_MAX;
@@ -187,7 +188,10 @@ class Doc {
   constructor(readonly buf: Buffer) {
     this.s = buf.toString("latin1");
     if (!/%PDF-/.test(this.s.slice(0, 1024))) throw new PdfError("it is not a PDF");
-    for (const m of this.s.matchAll(/(?<![\d.])(\d+)\s+(\d+)\s+obj\b/g)) this.offsets.set(Number(m[1]), m.index! + m[0].length);
+    for (const m of this.s.matchAll(/(?<![\d.])(\d+)\s+(\d+)\s+obj\b/g)) {
+      this.offsets.set(Number(m[1]), m.index! + m[0].length);
+      this.gens.set(Number(m[1]), Number(m[2]));
+    }
     if (this.offsets.size === 0) throw new PdfError("it is damaged (no objects)");
     // The trailer: every classic trailer and every cross-reference stream, later ones winning.
     for (const m of this.s.matchAll(/trailer\s*<</g)) for (const [k, v] of parse(this.s, m.index! + 7)[0] as Dict) this.trailer.set(k, v);
@@ -284,8 +288,11 @@ class Doc {
       if (end < 0) end = this.buf.length;
       while (end > start && (this.s[end - 1] === "\n" || this.s[end - 1] === "\r")) end--;
     }
-    const gen = 0;
+    const gen = this.gens.get(num) ?? 0;
     const type = v.get("Type");
+    // An image holds no text: its data is never decrypted or inflated, so it never counts against the caps.
+    const subtype = v.get("Subtype");
+    if (subtype instanceof PName && subtype.n === "Image") return { dict: v, data: Buffer.alloc(0), num, gen };
     const raw = this.buf.subarray(start, end);
     let data: Buffer;
     try {
