@@ -63,9 +63,11 @@ const lookedAt = (dir: string, at: string) => {
 };
 
 // Solo work on machine A, one Unit at a time, refunds under way there (and,
-// with `refundsDone`, refunds finished and reporting under way), pushed.
+// with `refundsDone`, refunds finished and reporting under way), pushed. Its
+// code is the workspace's own repo: a teammate's take of solo work goes onto
+// the build-out on one repo too.
 function soloAtA(refundsDone = false) {
-  const home = makeHome();
+  const home = makeHome({ repos: {} });
   const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
   row("UNIT_STARTED", "functional-design", "refunds");
   if (refundsDone) {
@@ -181,7 +183,7 @@ describe("the lead's own chat hears a teammate's take that comes after it looked
   });
 
   test("before the session starts its next Unit: a Unit a teammate took meanwhile is never started here", () => {
-    const home = makeHome();
+    const home = makeHome({ repos: {} });
     appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
     appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: "refunds", "Run floor": "0" }, home.dir);
     git(home.dir, ["add", "-A"]);
@@ -211,7 +213,7 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     return { trace, env: { ...ENV, GIT_TRACE2_EVENT: trace, AIDLC_SESSION_OVERRIDE: "solo-chat" } };
   };
   const betweenUnits = () => {
-    const home = makeHome();
+    const home = makeHome({ repos: {} });
     appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
     appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: "refunds", "Run floor": "0" }, home.dir);
     git(home.dir, ["add", "-A"]);
@@ -222,6 +224,7 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
 
   test("at an Inception stage: two steps, no look", () => {
     const home = makeHome({
+      repos: {},
       state: homeState().replace("- [x] delivery-planning", "- [-] delivery-planning").replace("- [-] functional-design", "- [ ] functional-design")
         .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: delivery-planning"),
     });

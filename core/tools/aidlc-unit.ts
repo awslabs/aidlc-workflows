@@ -7130,7 +7130,7 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   const who = joinNames([...new Set(taken.map((claim) => claim.payload.taken_by!))]);
   const units = joinNames(taken.map((claim) => claim.unit));
   const rhythm = readUnitGateRhythm(state);
-  for (const setter of [["set-unit-ownership", "team"], ...(rhythm === "unit-end" ? [["set-unit-gate-rhythm", "unit-end"]] : [])]) {
+  for (const setter of [["set-unit-ownership", "team", "--teammate-took"], ...(rhythm === "unit-end" ? [["set-unit-gate-rhythm", "unit-end"]] : [])]) {
     const [command, ...args] = aidlcEngineCommand(
       "state",
       [...setter, "--project-dir", projectDir],

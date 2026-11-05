@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -73,10 +73,14 @@ describe("addresses", () => {
     const audit = readdirSync(join(record, "audit")).map((shard) => readFileSync(join(record, "audit", shard), "utf-8")).join("\n");
     expect(audit).not.toContain(TOKEN);
     expect(readFileSync(seededStateFile(home.dir), "utf-8")).not.toContain(TOKEN);
+    // The code repo's origin carries the token too, and repos.json is written
+    // from what is here.
+    git(join(home.dir, "app"), ["remote", "set-url", "origin", `https://lead:${TOKEN}@example.test/org/app.git`]);
+    rmSync(join(home.dir, "repos.json"));
     const written = run(join(AIDLC_SRC, "tools", "aidlc-workspace-sync.ts"), ["--write-manifest"], home.dir);
     expect(written.status, written.out).toBe(0);
     const manifest = readFileSync(join(home.dir, "repos.json"), "utf-8");
-    expect(manifest).toContain("https://example.test/org/ws.git");
+    expect(manifest).toContain("https://example.test/org/app.git");
     expect(manifest).not.toContain(TOKEN);
   });
 

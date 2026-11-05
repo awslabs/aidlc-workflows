@@ -14303,11 +14303,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     });
     return;
   }
-  const reposOffer = reposManifestAsk(pd, stateContent);
-  if (reposOffer) {
-    emit(reposOffer);
-    return;
-  }
   if (intentRepos(pd).length > 0) {
     for (const line of localRepoOverrideLines(pd)) sayWithStepOnce(pd, line);
   }
@@ -14320,8 +14315,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // swarm path, emitForSlug drives the engine's per-unit for_each loop for a
   // per-unit Construction stage (issue #368) and emits a single directive
   // otherwise.
+  // The one offer to write repos.json waits for the questions about this
+  // work's own step.
   const staffing = constructionStaffingAsk(pd, stateContent, next.slug, scope) ??
-    reverseEngineeringScopeAsk(pd, stateContent, next.slug) ?? unitsReposAsk(pd, stateContent);
+    reverseEngineeringScopeAsk(pd, stateContent, next.slug) ?? unitsReposAsk(pd, stateContent) ??
+    reposManifestAsk(pd, stateContent);
   if (staffing) {
     emit(staffing);
     return;

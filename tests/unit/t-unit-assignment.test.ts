@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:assign, subcommand:aidlc-state:set-unit-ownership, audit:UNITS_ASSIGNED, function:homeLocation, function:unitsAssignedSinceTeams
+// covers: subcommand:aidlc-unit:assign, subcommand:aidlc-state:set-unit-ownership, audit:UNITS_ASSIGNED, function:homeLocation, function:buildOutHomeLocation, function:unitsAssignedSinceTeams
 //
 // Who builds which Unit (#2410, item 3). Choosing teams records where the home
 // is (the workspace's own origin, read only); the home then asks once who
@@ -6,7 +6,8 @@
 // name for a team becomes a claim held for that team, with no scope stamp, so
 // the lead's checkout stays the home's; a Unit left out stays open; a Unit held
 // by one team is never given to another. The home walks only the Units no team
-// holds. One-Unit work is never asked.
+// holds. One-Unit work is never asked. Several teams on work whose code is
+// the workspace's own repo keep main's claim and land flow instead.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -69,6 +70,9 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(String(choices[1].command)).toEndWith("aidlc-unit.ts assign --open");
     expect(String(ask.assign_command)).toContain("assign <unit>=<team>");
     expect(String(ask.question_note)).toContain("run assign_command with one <unit>=<team>");
+    // The question is how Units go to teams here: main's line on taking one in
+    // a clone of this workspace is not said beside it.
+    expect(JSON.stringify(ask)).not.toContain("unit participate");
   });
 
   test("the lead's words become one claim per named Unit, held for that team, and the checkout stays the home's", () => {
@@ -231,6 +235,17 @@ describe("work that is never asked", () => {
     chooseTeams(home.dir);
     const step = next(home.dir);
     expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-assignment");
+  });
+
+  test("several teams on one repo (no code repos recorded) keep main's team flow: no home, no question, no repos.json offer", () => {
+    const home = makeHome({ repos: {} });
+    chooseTeams(home.dir);
+    expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
+    const step = next(home.dir);
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-assignment");
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
+    expect(existsSync(join(home.dir, "repos.json"))).toBe(false);
+    expect(((step.change_notices ?? []) as string[]).some((line) => line.includes("unit participate")), JSON.stringify(step)).toBe(true);
   });
 
   test("team work without a recorded home keeps the flow it started on", () => {

@@ -143,16 +143,20 @@ export function makeHome(options: { state?: string; dependencies?: string; repos
   mkdirSync(requirements, { recursive: true });
   writeFileSync(join(requirements, "requirements.md"), "# Requirements\n\nFR1 refunds.\n");
   // The work's code repos, by name and host: recorded for the work, cloned as
-  // the workspace's children, and left out of the workspace's own repo.
-  const repos = Object.keys(options.repos ?? {});
+  // the workspace's children, and left out of the workspace's own repo. Teams
+  // build Units as work of their own where the work records repos, so a home
+  // has one unless the test asks for none (`repos: {}`, main's team flow). A
+  // blank host is a repo the home has no address or copy of.
+  const hosts = options.repos ?? { app: codeHost("app") };
+  const repos = Object.keys(hosts);
   if (repos.length > 0) {
     const registryPath = join(dir, "aidlc", "spaces", "default", "intents", "intents.json");
     const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
     registry[0].repos = repos;
     writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
-    for (const [name, host] of Object.entries(options.repos ?? {})) cloneCode(host, dir, name);
+    for (const [name, host] of Object.entries(hosts)) if (host !== "") cloneCode(host, dir, name);
     // Committed, as a team keeps it, so every clone knows where its repos go.
-    writeFileSync(join(dir, "repos.json"), `${JSON.stringify({ repos: Object.entries(options.repos ?? {}).map(([name, url]) => ({ name, url })) }, null, 2)}\n`);
+    writeFileSync(join(dir, "repos.json"), `${JSON.stringify({ repos: Object.entries(hosts).map(([name, url]) => ({ name, url })) }, null, 2)}\n`);
   }
   writeFileSync(
     join(dir, ".gitignore"),

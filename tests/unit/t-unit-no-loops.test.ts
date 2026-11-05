@@ -212,7 +212,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
   test("a team by file starts from the file once, and its progress and result are taken in once, by path and by command", () => {
     const deps = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
       "  - name: reporting\n    repos: [ledger]\n    depends_on: []\n```\n";
-    const home = makeHome({ dependencies: deps });
+    const home = makeHome({ dependencies: deps, repos: { ledger: "" } });
     withTools(home.dir);
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);

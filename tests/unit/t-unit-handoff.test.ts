@@ -39,7 +39,7 @@ const OPEN = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    dep
 const FILE = "aidlc/handoff/fixture-reporting.md";
 
 function handedOff() {
-  const home = makeHome({ dependencies: OPEN });
+  const home = makeHome({ dependencies: OPEN, repos: { ledger: "" } });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
   expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
   const handed = run(UNIT, ["hand-off", "reporting", "--team", "data", "--person-words", "hand off reporting to the data team"], home.dir);

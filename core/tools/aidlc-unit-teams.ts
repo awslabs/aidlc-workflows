@@ -49,6 +49,17 @@ export function homeLocation(stateContent: string | null): string | null {
   return value ? value : null;
 }
 
+// Which team flow new team work takes, decided once as teams are chosen: the
+// build-out (assign, take, push, the team's own merge) for work whose code is
+// in repos of its own, recorded for the work, where main's landing cannot
+// carry it; main's claim, publish, pin, gate and land for work whose code is
+// the workspace's own repo. The Home Location to record, or null for main's
+// flow. `teammateTook`: a teammate took a Unit of solo work (switchSoloToTeams),
+// which only the build-out carries, so the home is recorded on one repo too.
+export function buildOutHomeLocation(projectDir: string, teammateTook = false): string | null {
+  return teammateTook || intentRepos(projectDir).length > 0 ? workspaceHomeLocation(projectDir) : null;
+}
+
 // What to record as the home's location for a workspace, or null when it is not
 // a git repo (teams then keep today's flow in one checkout).
 export function workspaceHomeLocation(projectDir: string): string | null {

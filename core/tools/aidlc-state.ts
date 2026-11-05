@@ -294,7 +294,7 @@ import {
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
-import { HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
+import { buildOutHomeLocation, HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
@@ -1705,7 +1705,11 @@ function hasCurrentTeamUnitActivity(
 }
 
 function handleSetUnitOwnership(given: string[]): void {
-  const { values: args, message } = withMessageArg(given);
+  const { values: passed, message } = withMessageArg(given);
+  // `--teammate-took`: the switch a teammate's take of solo work brings
+  // (switchSoloToTeams), which records the home in either layout.
+  const teammateTook = passed.includes("--teammate-took");
+  const args = passed.filter((arg) => arg !== "--teammate-took");
   const values = ["team", "solo"];
   if (args.length < 1) {
     error(`Usage: aidlc-state.ts set-unit-ownership <${values.join("|")}>`);
@@ -1781,7 +1785,7 @@ function handleSetUnitOwnership(given: string[]): void {
     // The home of team-built work, recorded once as teams are chosen: every copy
     // of the workspace then knows where its claims are.
     const home = value === "team" && current !== "team" && homeLocation(content) === null
-      ? workspaceHomeLocation(pd)
+      ? buildOutHomeLocation(pd, teammateTook)
       : null;
     if (home !== null) content = setOrInsertField(content, "## Runtime State", HOME_LOCATION_FIELD, home);
     if (value === "solo") content = removeUnitProgressSection(content);

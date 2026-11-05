@@ -2,10 +2,10 @@
 //
 // The six scenarios of the build-out (#2410, section 3), at the engine level,
 // each team on another tool's tree: one shared workspace with the repos side
-// by side; one big code repo beside the workspace and the workspace inside it;
-// a team keeping its own workspace repo, reaching the home by its address; a
-// team that cannot reach the home, by hand-off file (CRLF, a folder with a
-// space); solo work a second person joins; and what goes wrong (a turned-down
+// by side; one big code repo beside the workspace (a workspace inside it keeps
+// the team flow of one repo); a team keeping its own workspace repo, reaching
+// the home by its address; a team that cannot reach the home, by hand-off
+// file (CRLF, a folder with a space); solo work a second person joins; and what goes wrong (a turned-down
 // PR, a refused push, a Unit started early, a shared input changed mid-build).
 // Each team's stages are recorded built as the engine records them; the walk
 // through every stage on every tree is t-unit-teams-journeys.
@@ -214,34 +214,20 @@ describe("scenario 2: one big code repo", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
   });
 
-  test("the workspace inside it: the Unit's branch is the repo's own, and only its code is committed on it", () => {
-    const home = makeHome({ dependencies: MONOREPO_UNITS("") });
+  test("the workspace inside it: several teams there keep the team flow of one repo, so no home is recorded and no Unit is assigned", () => {
+    // The code is the workspace's own repo (repos.json names it "."), so the
+    // work records no code repo of its own and teams claim, publish and land
+    // their Units as one repo's teams do.
+    const home = makeHome({ repos: {}, dependencies: MONOREPO_UNITS("") });
     writeFileSync(join(home.dir, "repos.json"), `${JSON.stringify({ repos: [{ name: "platform", path: "." }] }, null, 2)}\n`);
     writeFileSync(join(home.dir, "README.md"), "# platform\n");
     commitAll(home.dir, "AI-DLC inside platform");
-    teamsChosen(home, ["refunds=payments", "checkout-ui=web"]);
-
-    const opencode = tree("opencode");
-    const alice = cloneOf(home.remote, "alice");
-    const took = run(opencode.unit, ["take", "refunds", "--home", HOME_RECORD], alice);
-    expect(took.status, took.out).toBe(0);
-    built(buildRecord(alice, "payments", "refunds"), "refunds", [
-      { folder: alice, path: "services/checkout-api/src/refunds.ts" },
-      { folder: alice, path: "services/billing/lib/refund.ts" },
-    ]);
-    const pushed = run(opencode.unit, ["push"], alice);
-    expect(pushed.status, pushed.out).toBe(0);
-    expect(pushed.json?.notice).toBe("Pushed branch refunds in the repo. Open a PR in it your usual way. You're on refunds now in the repo; your other " +
-      "changes are still yours, uncommitted. Switch back to main any time.");
-    // The commit on refunds is the code alone; the team's record stays theirs to commit.
-    expect(git(alice, ["show", "--name-only", "--format=", "refunds"]).split("\n").sort())
-      .toEqual(["services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);
-    expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/payments"])).not.toBe("");
-    expect(boardAt(home)).toContain("- refunds, payments: the repo not merged yet");
-    mergeOnHost(home.remote, "refunds", "merge");
-    git(home.dir, ["pull", "-q", "--ff-only", "origin", "main"]);
-    next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
+    expect(teams.status, teams.out).toBe(0);
+    expect(stateOf(home.dir)).not.toContain("**Home Location**");
+    const step = next(home.dir);
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-assignment");
+    expect(((step.change_notices ?? []) as string[]).some((line) => line.includes("unit participate")), JSON.stringify(step)).toBe(true);
   });
 });
 
@@ -314,7 +300,7 @@ describe("scenario 4: a team that cannot reach the home", () => {
   test("the hand-off file goes out, the build starts from it, progress and the result come back as files, and the Unit is done", () => {
     const OPEN = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
       "  - name: reporting\n    repos: [ledger]\n    depends_on: []\n```\n";
-    const home = makeHome({ dependencies: OPEN });
+    const home = makeHome({ dependencies: OPEN, repos: { ledger: "" } });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     const handed = run(UNIT, ["hand-off", "reporting", "--team", "data", "--person-words", "hand off reporting to the data team"], home.dir);
