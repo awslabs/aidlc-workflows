@@ -595,7 +595,7 @@ fragments:                    # PROSE — spliced into the stage body
 | Change | Mechanism | Status |
 |--------|-----------|--------|
 | Stage asks new questions | `fragments` of question prose | ✅ implemented |
-| Stage produces an extra artifact | `adds.produces` + a `fragments` step that emits it | ✅ implemented |
+| Stage produces an extra artifact | `adds.produces` + a `fragments` step that emits it | ✅ implemented (refused-with-log on a `unit-of-work` stage whose review target is kind-limited — see below) |
 | Stage requires new sections | `adds.required_sections` | ✅ merged (⚠️ declarative — not machine-enforced yet, §9) |
 | Add a verification to a stage | `adds.sensors` (+ ship the manifest and `tools/` script) | ✅ implemented |
 | Add a consume edge | `adds.consumes` | ✅ implemented |
@@ -603,6 +603,16 @@ fragments:                    # PROSE — spliced into the stage body
 | Put an existing stage under a plugin scope | `adds.scopes` for a core stage (own-plugin scopes only; installed identity file required); `include_stages:` on the scope for a stage of the plugin's base (section 7) | ✅ implemented |
 | Inject house rules or phase policy | `memory/rules.md` (every stage) and `memory/phases/<p>.md` (one phase), each one section the plugin owns in every space's rule file (section 7) | implemented |
 | Enrich a core persona (a collaboration bullet, a mandatory anchor) | `contributions/agents/<agent>.md` with `fragments` at `in:<H2>`, `after-preflight` or `end-of-body` | ✅ implemented (prose only; `adds.*` is refused with an advisory drop) |
+
+An added output carries no `produces_kinds` entry, so it applies to every Unit
+kind. On a `for_each: unit-of-work` stage whose `review_artifact` is kind-limited
+(`functional-design`, `infrastructure-design`), that widening leaves the review
+target pruned for a kind that now owes the output and graph compilation rejects
+the stage. Compose therefore refuses the `adds.produces` entry before writing
+anything — drop-logged with the stage, output and unit kind — and
+`aidlc plugin validate` reports the same cause before you install. Contribute
+the output to a stage whose review target covers every Unit kind
+(`nfr-requirements`, `nfr-design`), or drop it.
 
 ## 7. Method/rules, agents, knowledge, scopes, and activation
 

@@ -27,6 +27,7 @@ import {
   parseStageFrontmatter,
   scalarField,
   structuredField,
+  UNIT_KINDS,
   visibleMarkdownLines,
 } from "./aidlc-lib.ts";
 import { SETTING_FIELDS } from "./aidlc-learnings.ts";
@@ -618,6 +619,53 @@ function pluginAuthoringContext(): PluginAuthoringContext {
       .filter((file) => file.endsWith(".md"))
       .map((file) => basename(file, ".md"))
       .sort(),
+  };
+}
+
+function coreStageFrontmatter(slug: string): Record<string, unknown> | null {
+  const roots = [
+    resolveHarnessPath(["aidlc-common", "stages"]),
+    join(import.meta.dir, "..", "aidlc-common", "stages"),
+  ];
+  for (const root of roots) {
+    for (const phase of ["initialization", "ideation", "inception", "construction", "operation"]) {
+      const file = join(root, phase, `${slug}.md`);
+      if (!existsSync(file)) continue;
+      try {
+        return parseStageFrontmatter(readFileSync(file, "utf-8"));
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function addedProduceKindRefusal(
+  stage: Record<string, unknown>,
+  artifact: string,
+): { message: string; fix: string } | null {
+  if (stage.for_each !== "unit-of-work") return null;
+  const review = typeof stage.review_artifact === "string" ? stage.review_artifact : null;
+  if (!review) return null;
+  const kinds = isPlainRecord(stage.produces_kinds) ? stage.produces_kinds : null;
+  if (!kinds || Object.keys(kinds).length === 0) return null;
+  const produces = Array.isArray(stage.produces)
+    ? stage.produces.filter((name): name is string => typeof name === "string")
+    : [];
+  if (produces.includes(artifact)) return null;
+  if (produces.some((name) => !(name in kinds))) return null;
+  const reviewKindsRaw = kinds[review];
+  if (!Array.isArray(reviewKindsRaw)) return null;
+  const reviewKinds = reviewKindsRaw.filter((kind): kind is string => typeof kind === "string");
+  const missing = UNIT_KINDS.filter((kind) => !reviewKinds.includes(kind));
+  if (missing.length === 0) return null;
+  const missingList = missing.map((kind) => `"${kind}"`).join(", ");
+  const unit = missing.length === 1 ? "Unit" : "Units";
+  const stageName = typeof stage.slug === "string" ? stage.slug : "this stage";
+  return {
+    message: `adds.produces "${artifact}" has no produces_kinds entry, so it applies to every Unit kind, including ${missingList}. On stage "${stageName}" the review target "${review}" does not apply to ${missingList} (its kinds are ${reviewKinds.join(", ")}), so ${missingList} ${unit} would owe the new output with no review target and graph compilation would reject the stage, rolling back every contribution in the compose run.`,
+    fix: "Move the output to a contribution on a stage whose review target covers every Unit kind (nfr-requirements and nfr-design do), or drop it from this contribution.",
   };
 }
 
@@ -1277,15 +1325,19 @@ function validateContributions(
         `Set plugin: ${pluginName}.`,
       );
     }
+    const targetStage = isAgentContribution || !target ? null : coreStageFrontmatter(target);
     for (const artifact of nestedListField(frontmatter, "adds", "produces")) {
-      if (artifact.startsWith(`${pluginName}-`)) continue;
-      addError(
-        findings,
-        displayFile,
-        "artifact-namespace",
-        `produced artifact "${artifact}" must start with "${pluginName}-"`,
-        `Rename the artifact with the "${pluginName}-" prefix.`,
-      );
+      if (!artifact.startsWith(`${pluginName}-`)) {
+        addError(
+          findings,
+          displayFile,
+          "artifact-namespace",
+          `produced artifact "${artifact}" must start with "${pluginName}-"`,
+          `Rename the artifact with the "${pluginName}-" prefix.`,
+        );
+      }
+      const refusal = targetStage ? addedProduceKindRefusal(targetStage, artifact) : null;
+      if (refusal) addError(findings, displayFile, "contribution-adds", refusal.message, refusal.fix);
     }
   }
 }

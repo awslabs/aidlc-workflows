@@ -233,7 +233,14 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
 §5/§8 — implement or demote, never a silent no-op):
 
 - `adds.produces` / `adds.consumes` / `adds.sensors` — ✅ set-unioned into the
-  target stage's source frontmatter.
+  target stage's source frontmatter. An added output carries no `produces_kinds`
+  entry, so it applies to every Unit kind. On a `for_each: unit-of-work` stage
+  whose `review_artifact` is kind-limited, that widening leaves the review
+  target pruned for a kind that now owes the output, and graph compilation
+  rejects the stage — so compose refuses the entry (drop-logged, and reported
+  by `aidlc plugin validate`) and names the stage, output and unit kind. Use a
+  stage whose review target covers every Unit kind (`nfr-requirements`,
+  `nfr-design`) instead.
 - `adds.required_sections` — ✅ merged into the stage's `required_sections`. Note
   it is **not machine-enforced today**: the field is written and validates, but it
   does not reach the compiled graph node, and the shipped `required-sections`

@@ -2017,14 +2017,49 @@ function flowListValues(raw: string): string[] {
   return raw.split(",").map((item) => yamlScalarValue(item)).filter((value): value is string => Boolean(value));
 }
 
-// A stage's own `requires_stage:` entries, block or inline-flow form.
-function stageRequires(content: string): string[] {
+function stageListEntries(content: string, field: string): string[] {
   const fm = frontmatter(content.replace(/\r\n/g, "\n"));
-  const flow = fm.match(flowListRe("requires_stage"));
+  const flow = fm.match(flowListRe(field));
   if (flow) return flowListValues(flow[1]);
-  return [...(fm.match(/^requires_stage:\n((?:[ \t]+- .+\n?)*)/m)?.[1] ?? "").matchAll(/^[ \t]+- (.+)$/gm)]
+  return [...(fm.match(new RegExp(`^${field}:\\n((?:[ \\t]+- .+\\n?)*)`, "m"))?.[1] ?? "").matchAll(/^[ \t]+- (.+)$/gm)]
     .map((x) => yamlScalarValue(x[1]))
     .filter((value): value is string => Boolean(value));
+}
+
+const UNIT_KINDS = ["service", "spec", "ui", "packaging", "library"] as const;
+
+function stageProducesKinds(content: string): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  let inside = false;
+  for (const line of frontmatter(content.replace(/\r\n/g, "\n")).split("\n")) {
+    if (/^produces_kinds:\s*$/.test(line)) {
+      inside = true;
+      continue;
+    }
+    if (!inside) continue;
+    if (!/^[ \t]/.test(line)) break;
+    const entry = line.match(/^\s+([a-z][a-z0-9-]*)\s*:\s*\[([^\]]*)\]/);
+    if (entry) out[entry[1]] = flowListValues(entry[2]);
+  }
+  return out;
+}
+
+function addedProduceKindRefusal(stageContent: string, artifact: string, stage: string): string | null {
+  if (frontmatterScalar(stageContent, "for_each") !== "unit-of-work") return null;
+  const review = frontmatterScalar(stageContent, "review_artifact");
+  if (!review) return null;
+  const kinds = stageProducesKinds(stageContent);
+  if (Object.keys(kinds).length === 0) return null;
+  const produces = stageListEntries(stageContent, "produces");
+  if (produces.includes(artifact)) return null;
+  if (produces.some((name) => !(name in kinds))) return null;
+  const reviewKinds = kinds[review];
+  if (!reviewKinds) return null;
+  const missing = UNIT_KINDS.filter((kind) => !reviewKinds.includes(kind));
+  if (missing.length === 0) return null;
+  const missingList = missing.map((kind) => `"${kind}"`).join(", ");
+  const unit = missing.length === 1 ? "Unit" : "Units";
+  return `adds.produces "${artifact}" has no produces_kinds entry, so it applies to every Unit kind, including ${missingList}. On stage "${stage}" the review target "${review}" does not apply to ${missingList} (its kinds are ${reviewKinds.join(", ")}), so ${missingList} ${unit} would owe the new output with no review target and graph compilation rejects the stage, rolling back every contribution in this run. Move the output to a stage whose review target covers every Unit kind (nfr-requirements and nfr-design do), or drop it from this contribution.`;
 }
 
 // Remove items from a top-level list field (block or flow form), leaving
@@ -2645,7 +2680,7 @@ try {
       seen.add(slug);
       const file = findStageFile(slug);
       if (!file || pinnedNumber(slug) !== null || phasePrefix(file) !== prefix) continue;
-      queue.push(...stageRequires(readFileSync(file, "utf-8")));
+      queue.push(...stageListEntries(readFileSync(file, "utf-8"), "requires_stage"));
     }
     return false;
   };
@@ -2926,7 +2961,12 @@ try {
         if (refusal) recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" ${refusal}; dropped`);
         return refusal === null;
       });
-      stageContent = mergeListField(stageContent, "produces", listOf("produces"), target, addedProduces);
+      const mergeableProduces = listOf("produces").filter((artifact) => {
+        const refusal = addedProduceKindRefusal(stageContent, artifact, target);
+        if (refusal) recordDrop(`contribution to ${target}: ${refusal}`);
+        return refusal === null;
+      });
+      stageContent = mergeListField(stageContent, "produces", mergeableProduces, target, addedProduces);
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target, addedSensors);
       stageContent = mergeListField(stageContent, "scopes", mergeableScopes, target, addedScopes);
       stageContent = mergeConsumes(stageContent, consumes, target, addedConsumes);
