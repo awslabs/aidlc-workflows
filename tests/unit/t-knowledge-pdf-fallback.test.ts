@@ -14,11 +14,12 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { deflateSync } from "node:zlib";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { stubPdftotextPath } from "../harness/stub-pdftotext.ts";
 import { cleanupTestProject, createTestProject, DEFAULT_SPACE, FIXTURES_DIR, resetAidlcEnv } from "../harness/fixtures.ts";
 import { documentsDir, EXTRACT_PAGE_CAP, onboard, readIndex, shouldRetryExtraction, syncDocuments } from "../../core/tools/aidlc-knowledge.ts";
-import { PdfError, pdfText } from "../../core/tools/aidlc-pdf.ts";
+import { PDF_STREAM_INFLATE_MAX, PdfError, pdfText } from "../../core/tools/aidlc-pdf.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -49,23 +50,35 @@ function put(p: string, name: string, data: Buffer | string): string {
   return abs;
 }
 
-/** A PDF of one standard-font line per page, written here: no fixture needed. */
-function minimalPdf(pages: string[]): Buffer {
+/** A PDF of one standard-font line per page, written here: no fixture needed. With `image`, every page also
+ *  draws one Flate-compressed image of that many raw bytes. */
+function minimalPdf(pages: string[], image?: number): Buffer {
   const objs: string[] = [];
   const kids: number[] = [];
-  const first = 4;
+  const first = 5;
+  const xobject = image === undefined ? "" : " /XObject << /Im1 4 0 R >>";
   pages.forEach((line, k) => {
-    const content = line === "" ? "" : `BT /F1 12 Tf 72 720 Td (${line}) Tj ET`;
-    objs[first + 2 * k] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${first + 2 * k + 1} 0 R >>`;
+    const draw = image === undefined ? "" : "q 612 0 0 792 0 0 cm /Im1 Do Q ";
+    const content = line === "" ? draw : `${draw}BT /F1 12 Tf 72 720 Td (${line}) Tj ET`;
+    objs[first + 2 * k] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >>${xobject} >> /Contents ${first + 2 * k + 1} 0 R >>`;
     objs[first + 2 * k + 1] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
     kids.push(first + 2 * k);
   });
   objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
   objs[2] = `<< /Type /Pages /Kids [${kids.map((n) => `${n} 0 R`).join(" ")}] /Count ${pages.length} >>`;
   objs[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
-  let out = "%PDF-1.4\n";
-  for (let n = 1; n < objs.length; n++) out += `${n} 0 obj\n${objs[n]}\nendobj\n`;
-  return Buffer.from(`${out}trailer\n<< /Root 1 0 R /Size ${objs.length} >>\n%%EOF\n`, "latin1");
+  const parts: Buffer[] = [Buffer.from("%PDF-1.4\n", "latin1")];
+  for (let n = 1; n < objs.length; n++) {
+    if (n === 4) {
+      if (image === undefined) continue;
+      const data = deflateSync(Buffer.alloc(image));
+      parts.push(Buffer.from(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${image} /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${data.length} >>\nstream\n`, "latin1"), data, Buffer.from("\nendstream\nendobj\n", "latin1"));
+      continue;
+    }
+    parts.push(Buffer.from(`${n} 0 obj\n${objs[n]}\nendobj\n`, "latin1"));
+  }
+  parts.push(Buffer.from(`trailer\n<< /Root 1 0 R /Size ${objs.length} >>\n%%EOF\n`, "latin1"));
+  return Buffer.concat(parts);
 }
 
 /** Runs `body` (with the knowledge module as `kb`) in a child whose PATH is empty, so no pdftotext is on it on
@@ -233,6 +246,13 @@ describe("t-knowledge-pdf-fallback: the reader itself", () => {
     expect(r.truncated).toBe(true);
     expect(r.text).toContain("1 Introduction");
     expect(r.text).not.toContain("AMT_CENTS");
+  });
+
+  test("images are never inflated: a page of text with an image past the stream cap is read", () => {
+    // A handbook of full-size screenshots inflates far past the caps, but its images hold no text.
+    const { text } = pdfText(minimalPdf(["Screenshot page text", "Second page text"], PDF_STREAM_INFLATE_MAX + 1024));
+    expect(text).toContain("Screenshot page text");
+    expect(text).toContain("Second page text");
   });
 
   test("a file it cannot open is a PdfError in the person's terms", () => {
