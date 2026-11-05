@@ -1560,9 +1560,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(ask.remedies.map((remedy) => remedy.op)).not.toContain("redo-unit-step");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // An explicit jump goes through (#1411): the person drives. The jump names the
-  // steps units have not finished, so the agent can say what was skipped and how
-  // to reopen it; there is no confirmation question and no refusal.
+  // An explicit jump goes through (#1411): the person drives. The jump's own
+  // line names the steps units have not finished, and the way back (#3530);
+  // there is no confirmation question and no refusal.
   test("leaving Construction early goes through and names the steps it skips", () => {
     for (const args of [["--stage", "build-and-test"], ["--phase", "operation"]]) {
       const p = betaBuilding();
@@ -1570,16 +1570,19 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const jump = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
       expect(jump.kind, JSON.stringify(jump)).toBe("print");
       expect(jump.message).toContain("--direction forward");
-      expect(jump.message).toContain(
-        'This skips the steps these units have not finished: unit "beta" (code-generation). Their files stay.',
-      );
-      expect(jump.message).toContain("tell the person in one line what was skipped");
-      // The way back starts at the earliest step it skips, not the first per-unit stage.
-      expect(jump.message).toContain("--stage code-generation` reopens it");
-      // One way back only: the jump's generic notice is not relayed as well.
-      expect(jump.message).not.toContain("carries `notice`");
+      // The jump's own line is the one way back; the agent has none of its own to say.
+      expect(jump.message).toContain("carries `notice`");
+      expect(jump.message).not.toContain("tell the person in one line what was skipped");
       expect(jump.message).not.toContain("nothing needs skipping");
       expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+      const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(jump.message)?.[1];
+      const executed = tool(p, "jump", command!.split(" "));
+      expect(executed.status, executed.out).toBe(0);
+      const notice = String(JSON.parse(executed.stdout).notice);
+      expect(notice).toContain("Skipped for unit beta: Code Generation. Their files stay.");
+      // The way back starts at the earliest step it skips, not the first per-unit stage.
+      expect(notice).toEndWith("You can go back to Code Generation any time.");
+      expect(notice).not.toContain("alpha");
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -2255,12 +2258,18 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {
-    // A unit-major jump with a line to say about the steps it skips is named
-    // for the agent, line and all.
+    // Unit by unit, the jump's own line says what it skips for each Unit
+    // (#3530), so there is nothing to say or run around it: the `next` makes
+    // the jump itself and returns the step it lands on, with that line.
     const fresh = fixture();
     const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
-    expect(clear.kind, JSON.stringify(clear)).toBe("print");
-    expect(clear.message).toContain("--target code-generation --direction forward");
+    expect(clear.kind, JSON.stringify(clear)).not.toBe("print");
+    expect(clear.stage).toBe("code-generation");
+    expect(clear.change_notices).toContain(
+      "Moved to Code Generation. Skipped for units alpha and beta: Functional Design, NFR Requirements, NFR Design " +
+        "and Infrastructure Design. Their files stay. You can go back to Functional Design any time.",
+    );
+    expect(jumped(fresh)).toBe(1);
     // Stage by stage there is nothing to say or run around it, so the `next`
     // makes the jump itself and returns the step it lands on.
     const stageMajor = fixture({ iteration: "stage-major" });
