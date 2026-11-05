@@ -990,6 +990,8 @@ function firstLineIsMarker(file: string, agent: string): boolean {
 
 // Selected state fields needed for routing + gate diagnosis. Naming these
 // explicitly is the allowlist — a field not listed here never leaves the box.
+// A paused Unit's Reason and Next Action are the agent's own text, which can
+// quote the person, so they stay off it; Unit State says the Unit is paused.
 const STATE_ALLOWLIST = [
   "State Version",
   "Status",
@@ -1005,8 +1007,6 @@ const STATE_ALLOWLIST = [
   "Active Unit",
   "Unit Stage",
   "Unit State",
-  "Unit Pause Reason",
-  "Unit Next Action",
   "Construction Autonomy Mode",
   "Construction Iteration",
 ] as const;
