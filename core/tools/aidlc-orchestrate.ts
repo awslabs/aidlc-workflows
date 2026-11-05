@@ -335,8 +335,6 @@ import {
   listSpaces,
   auditShardName,
   clearEngineAskMark,
-  engineAskMark,
-  noteEngineAskMark,
   personRepliedAfter,
   DEFAULT_SPACE,
   finishedWork,
@@ -16985,7 +16983,9 @@ function emitTeamUnitMajorRunStage(
     );
     return;
   }
-  if (!scopeStamp && step.kind === "work") {
+  // The share question is main's claim flow's: a build-out home asked who
+  // builds which Unit once, and builds the Units no team holds.
+  if (!scopeStamp && step.kind === "work" && homeLocation(refreshedState) === null) {
     const merged = model?.mergedUnits ?? new Set<string>();
     let claimless = false;
     try {

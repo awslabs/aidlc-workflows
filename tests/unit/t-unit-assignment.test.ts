@@ -152,7 +152,13 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(open.status, open.out).toBe(0);
     expect(open.json?.open).toEqual(["refunds", "checkout-ui", "reporting"]);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
-    expect(next(home.dir).ask_type).not.toBe("unit-assignment");
+    const step = next(home.dir);
+    expect(step.ask_type).not.toBe("unit-assignment");
+    // Who builds which Unit was the one question: main's share question
+    // (Share them with the teams, Build them here for now) is its claim
+    // flow's, never put at this home.
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("team-handover");
+    expect(JSON.stringify(step)).not.toContain("unit share");
   });
 });
 
@@ -281,7 +287,7 @@ describe("work that is never asked", () => {
     expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-assignment");
   });
 
-  test("several teams on one repo (no code repos recorded) keep main's team flow: no home, no question, no repos.json offer", () => {
+  test("several teams on one repo (no code repos recorded) keep main's team flow: no home, no assignment question, no repos.json offer", () => {
     const home = makeHome({ repos: {} });
     chooseTeams(home.dir);
     expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
@@ -289,7 +295,9 @@ describe("work that is never asked", () => {
     expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-assignment");
     expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
     expect(existsSync(join(home.dir, "repos.json"))).toBe(false);
-    expect(((step.change_notices ?? []) as string[]).some((line) => line.includes("unit participate")), JSON.stringify(step)).toBe(true);
+    // Main's own next hand-over: the share question, with the remote to share to.
+    expect(step.ask_type, JSON.stringify(step)).toBe("team-handover");
+    expect(step.handovers, JSON.stringify(step)).toEqual(["share"]);
   });
 
   test("team work without a recorded home keeps the flow it started on", () => {

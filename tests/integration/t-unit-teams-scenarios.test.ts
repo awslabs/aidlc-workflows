@@ -227,7 +227,9 @@ describe("scenario 2: one big code repo", () => {
     expect(stateOf(home.dir)).not.toContain("**Home Location**");
     const step = next(home.dir);
     expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-assignment");
-    expect(((step.change_notices ?? []) as string[]).some((line) => line.includes("unit participate")), JSON.stringify(step)).toBe(true);
+    // Main's own next hand-over on one repo: the share question.
+    expect(step.ask_type, JSON.stringify(step)).toBe("team-handover");
+    expect(step.handovers, JSON.stringify(step)).toEqual(["share"]);
   });
 });
 
