@@ -5407,12 +5407,15 @@ function preserveClaudeProviderFields(
       projectDir,
     );
     const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
+    // With no install record, registrations for an earlier release's own hook
+    // files are that release's: the difference is the release's change.
     const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
       ? currentOwnedHash !== priorEntries.hooksAidlc
       : priorEntries?.hooks !== undefined
       ? currentOwnedHash !== priorEntries.hooks
-      : canonical(currentOwnedHooks) !==
-        canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
+      : !(prior === null && attributableLegacyTargets.length > 0) &&
+        canonical(currentOwnedHooks) !==
+          canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
     if (hadLocalHookDrift) {
       // A settings file the project wrote before AI-DLC has none of its hooks yet.
       notes.push(Object.keys(currentOwnedHooks).length === 0

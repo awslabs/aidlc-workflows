@@ -1630,6 +1630,10 @@ function rewriteNativeInvocations(
   const retiredCopyFileHashes: Record<string, string[]> = {};
   for (const [rel, hashes] of Object.entries(copyEra[m.name] ?? {})) {
     if (!descriptor.managedDirectories.some((directory) => rel.startsWith(`${directory}/`))) continue;
+    // The workspace's seeds are the team's once written (config preserves them,
+    // aidlc-init.ts workspaceSeed) and a copy runtime leaves them out
+    // (copyChannelOmits), so no signature is owed for them.
+    if (rel.startsWith("aidlc/")) continue;
     const release = join(outRoot, rel);
     if (!existsSync(release) || !lstatSync(release).isFile()) {
       retiredCopyFileHashes[rel] = [...hashes].sort();
