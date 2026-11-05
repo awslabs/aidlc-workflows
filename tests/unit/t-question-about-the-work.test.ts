@@ -11,11 +11,13 @@
 //
 // Spawns the real engine and the Claude Code human-turn hook, as tests/unit/t-resume-reads-the-words does.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { cleanupTestProject, createOrchestrationTestProject, intentsDirOf, seededStateFile } from "../harness/fixtures.ts";
-import { buildState, type Directive, next, type RunOptions, SECOND_SESSION, say } from "../harness/aidlc-input-corpus.ts";
+import { FIXTURES_DIR, cleanupTestProject, createOrchestrationTestProject, intentsDirOf, seededStateFile } from "../harness/fixtures.ts";
+import {
+  buildState, type Directive, exec, next, type RunOptions, SECOND_SESSION, say, UTILITY,
+} from "../harness/aidlc-input-corpus.ts";
 import { getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -104,6 +106,28 @@ describe("t-question-about-the-work: a question about where the work stands is a
     const message = String((await asked(proj))?.message);
     expect(message).toContain("it is not selected in this chat");
     expect(message).toMatch(STATUS_OF_PIECE);
+    expect(message).toContain(NOTHING_ELSE);
+  });
+
+  test("several finished pieces, none selected: the status that lists them all, so a question about all of them is answered", async () => {
+    const proj = await at("finished");
+    const second = await exec(
+      [process.execPath, UTILITY, "intent-create", "--scope", "bugfix", "--arguments", "fix the export timeout", "--label", "export",
+        "--project-dir", proj],
+      { cwd: proj, env: { ...process.env } },
+    );
+    expect(second.status, `${second.stdout}${second.stderr}`).toBe(0);
+    const intents = intentsDirOf(proj, "default");
+    const completed = readFileSync(join(FIXTURES_DIR, "state-completed.md"), "utf-8");
+    for (const dir of readdirSync(intents)) {
+      const state = join(intents, dir, "aidlc-state.md");
+      if (dir !== PIECE && existsSync(state)) writeFileSync(state, completed, "utf-8");
+    }
+    rmSync(join(intents, "active-intent"), { force: true });
+    const message = String((await asked(proj))?.message);
+    expect(message).toContain("finished work, none selected in this chat");
+    expect(message).toMatch(STATUS);
+    expect(message).not.toContain("engine status --intent");
     expect(message).toContain(NOTHING_ELSE);
   });
 });

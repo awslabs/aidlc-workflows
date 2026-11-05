@@ -6967,8 +6967,9 @@ function finishedWorkReading({ records, selected }: FinishedWorkHere, settings: 
   const named = records.map(({ label, record }) => label === record ? `\`${record}\`` : `\`${label}\` (record: \`${record}\`)`);
   const stage = `${settings}\`${aidlcToolInvocation("orchestrate")} next --stage <stage slug>\` (add \`--unit <unit>\` or ` +
     "`--every-unit` when they named a Unit or every Unit) and follow what it returns.";
-  // Work this chat has not selected is asked about by its record, which
-  // selects nothing: the status alone would show no work, or other work.
+  // One piece this chat has not selected is asked about by its record, which
+  // selects nothing and shows its stages; with several, the status alone lists
+  // each with where it stands, which answers a question about any or all.
   const status = readOnlyCommand("status");
   const asked = (about: string, record: string | null) =>
     workQuestionReading(about, record === null ? status : `${status} --intent ${record}`);
@@ -6981,7 +6982,7 @@ function finishedWorkReading({ records, selected }: FinishedWorkHere, settings: 
   return `This project's finished work, none selected in this chat: ${named.join(", ")}. Their words may ask to go ` +
     "back to a stage of one of them, or describe new work: read them. If they ask to go back to a stage of one, run " +
     `\`${aidlcDispatcherInvocation("intent")} <its record>\`, then ${stage} ` +
-    `${asked(`one of them ${FINISHED_ABOUT}`, "<its record>")} If their words fit more than one, ask them once in ` +
+    `${asked(`one of them ${FINISHED_ABOUT}`, null)} If their words fit more than one, ask them once in ` +
     "plain words which they meant, then stop.";
 }
 
