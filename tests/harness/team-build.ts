@@ -192,6 +192,12 @@ export function codeHost(label: string): string {
   return host;
 }
 
+/** A printed `bun ...` command as a bash line: this Bun, its path quoted with
+ * forward slashes, since bash on Windows reads a backslash as an escape. */
+export function bashLine(command: string): string {
+  return command.replace(/^bun /, `'${process.execPath.replace(/\\/g, "/")}' `);
+}
+
 /** A clone of a code host as a workspace's child repo. */
 export function cloneCode(host: string, workspace: string, name: string, user = "lead"): string {
   const dir = join(workspace, name);

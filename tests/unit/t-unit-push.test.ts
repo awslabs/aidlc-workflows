@@ -18,6 +18,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
+  bashLine,
   claimPayload,
   cleanupTeamBuild,
   cloneCode,
@@ -741,7 +742,7 @@ describe("at the home", () => {
       hook_event_name: "PreToolUse", session_id: "t-unit-push-turned-down", tool_name: "Bash", tool_input: { command: jump },
     });
     expect(guard.status, guard.out).toBe(0);
-    const ran = spawnSync("bash", ["-c", jump!.replace(/^bun /, `${process.execPath} `)], { cwd: alice, encoding: "utf-8", env: chat });
+    const ran = spawnSync("bash", ["-c", bashLine(jump!)], { cwd: alice, encoding: "utf-8", env: chat });
     expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
     const step = next(alice, chat);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");

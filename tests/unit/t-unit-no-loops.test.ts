@@ -34,6 +34,7 @@ import {
   seedAidlcMemory,
 } from "../harness/fixtures.ts";
 import {
+  bashLine,
   claimPayload,
   cleanupTeamBuild,
   cloneCode,
@@ -90,7 +91,7 @@ function runPrinted(dir: string, env: NodeJS.ProcessEnv, command: string): { sta
     mkdirSync(join(dir, match[1], ".."), { recursive: true });
     writeFileSync(join(dir, match[1]), "yes, go ahead\n");
   }
-  const line = command.replace(/^bun /, `${process.execPath} `).replace(/'<their team>'/g, "'payments'");
+  const line = bashLine(command).replace(/'<their team>'/g, "'payments'");
   const r = spawnSync("bash", ["-c", line], { cwd: dir, encoding: "utf-8", env });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
