@@ -580,8 +580,8 @@ that the document was read successfully. These time budgets do not change the
 byte, page, or output caps above.
 
 **Where pdftotext is missing** (Windows and macOS out of the box), AI-DLC reads a
-PDF itself, with nothing to install, and `list` and `show` name the reader
-`builtin-pdf`. pdftotext still runs first wherever it is on `PATH`, and a PDF
+PDF itself, with nothing to install (`show --json` names that reader
+`builtin-pdf`). pdftotext still runs first wherever it is on `PATH`, and a PDF
 AI-DLC read itself is read again by pdftotext on the next `sync` after you install
 it. A project's own configured PDF extractor is never replaced: when it is
 missing the document is `extractor_unavailable`, as above. AI-DLC's reader runs as

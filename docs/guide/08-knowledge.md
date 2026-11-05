@@ -169,8 +169,8 @@ instructions.
 
 **Reading PDFs.** A PDF is read by `pdftotext` (Poppler) where it is installed.
 Where it is not, as on Windows and macOS out of the box, AI-DLC reads the PDF
-itself with nothing to install, and `list` and `show` name the reader
-`builtin-pdf`; install pdftotext later and the next `sync` reads those PDFs again
+itself with nothing to install (`show --json` names that reader
+`builtin-pdf`); install pdftotext later and the next `sync` reads those PDFs again
 with it. AI-DLC's own reader has two known limits where pdftotext does better:
 words in Thai, Hindi and other scripts whose letters combine can come out with
 spaces inside them, and a PDF encrypted with AES-256 is not opened
