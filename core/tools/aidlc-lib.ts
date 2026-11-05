@@ -15830,6 +15830,7 @@ export interface FreshReviewReceipts {
   /** A terminal stage-level receipt existed in the current attempt but was
    *  invalidated by a later declared-artifact write or fingerprint mismatch. */
   stageStale: boolean;
+  stageWrittenPaths: string[];
   /** Last fresh verdict per unit. A later write to that unit's declared
    *  artifacts deletes the entry; an ambiguous matching path fails closed by
    *  clearing every unit entry. */
@@ -20012,6 +20013,7 @@ export function freshReviewReceipts(
   const empty: FreshReviewReceipts = {
     stageVerdict: null,
     stageStale: false,
+    stageWrittenPaths: [],
     unitVerdicts: new Map(),
     newestSourceFingerprint: null,
     newestSourceUnit: null,
@@ -20191,6 +20193,7 @@ export function freshReviewReceipts(
   let sourceRecoverySpent = false;
   let stageStale = false;
   let stageStaleProgress: StaleReviewProgress | null = null;
+  const stageWrittenPaths: string[] = [];
   let stageIteration: number | null = null;
   let stageReceiptRecovery = false;
   let stagePending: PendingReviewProgress | null = null;
@@ -20364,6 +20367,9 @@ export function freshReviewReceipts(
             nextIteration: (stageIteration ?? 0) + 1,
             recoverySpent: stageReceiptRecovery,
           };
+        }
+        if (stageStale) {
+          stageWrittenPaths.push(toPosix(relative(projectDir, resolveAuditProjectPath(projectDir, file))));
         }
         stageVerdict = null;
         stageIteration = null;
@@ -20550,6 +20556,8 @@ export function freshReviewReceipts(
       }
       continue;
     }
+    // A newer stage review covered every write before it, matching or not.
+    if (!unit) stageWrittenPaths.length = 0;
     if (!fingerprintMatches) {
       if (fingerprintUsable && recordedFingerprint !== null && currentFingerprint !== null && isRelaxed()) {
         // Reviewed content differs from the receipt. Under relaxed the verdict
@@ -21053,6 +21061,7 @@ export function freshReviewReceipts(
   return {
     stageVerdict,
     stageStale,
+    stageWrittenPaths: [...new Set(stageWrittenPaths)],
     unitVerdicts,
     newestSourceFingerprint,
     newestSourceUnit,
