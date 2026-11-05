@@ -43,6 +43,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
+import { hasStateUpgrade, stateUpgradeRecord } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -2338,6 +2339,12 @@ To get started:
   const alsoOpen = others.length === 0
     ? ""
     : `Also open:      ${others.join(", ")} (ask to switch to ${others.length === 1 ? "it" : "one"})\n`;
+  // Work an older AI-DLC recorded, brought up to this one in place: said here
+  // on purpose, never in chat.
+  const upgrade = stateUpgradeRecord(projectDir, selection.intent ?? undefined, selection.space);
+  const upgradedLine = upgrade === null
+    ? ""
+    : `Brought up:     from an older AI-DLC on ${upgrade.date} (the record as it was: ${upgrade.original})\n`;
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
@@ -2351,7 +2358,7 @@ Completion:     ${completed}/${total} stages (${pct}%)${skippedNote}
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}`;
+${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${upgradedLine}`;
   if (isTeamUnitOwnership(content)) {
     const selectorArgs = [
       ...(flags.intent ? ["--intent", flags.intent] : []),
@@ -5659,9 +5666,9 @@ export async function collectDoctorReport(
   // stage-progress rows keyed by slugs that no longer exist in the graph.
   // Advancing such a state hits `emitRunStageForSlug()` on a missing slug
   // (or silently no-ops a checkbox while `Current Stage` moves on, then
-  // fails in `report`). The framework ships no user-visible migration
-  // pre-1.0, so fail loud here with archive-and-reinit guidance rather than
-  // let a stale-graph state look healthy.
+  // fails in `report`). A version aidlc-state-upgrade.ts has a step for is
+  // brought up at the engine's next read, so it passes here and says so; one
+  // with no step fails loud rather than look healthy.
   if (existsSync(stateMdPath)) {
     try {
       const stateContent = readFileSync(stateMdPath, "utf-8");
@@ -5677,6 +5684,11 @@ export async function collectDoctorReport(
           label: "state version readable",
           fix: verdict.message,
         });
+      } else if (verdict.kind === "past" && hasStateUpgrade(verdict.version)) {
+        results.push({
+          pass: true,
+          label: `State Version: ${verdict.version} (AI-DLC brings this record up to ${CURRENT_STATE_VERSION} at its next step)`,
+        });
       } else if (verdict.kind === "past") {
         results.push({
           pass: false,
@@ -5690,9 +5702,12 @@ export async function collectDoctorReport(
           fix: verdict.message,
         });
       } else {
+        const upgrade = stateUpgradeRecord(projectDir, doctorIntent, doctorSelection.space);
         results.push({
           pass: true,
-          label: `State Version: ${CURRENT_STATE_VERSION}`,
+          label: `State Version: ${CURRENT_STATE_VERSION}${upgrade
+            ? ` (brought up from ${upgrade.from} on ${upgrade.date}; the record as it was is ${upgrade.original})`
+            : ""}`,
         });
       }
     } catch {

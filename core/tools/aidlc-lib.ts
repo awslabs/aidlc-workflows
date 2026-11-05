@@ -38532,10 +38532,11 @@ export function addReachesPassedOver(
   return stagesPassedOverJustNow(added, workRecordDir).includes(slug);
 }
 
-// The stages the person put back on the plan after the work had just passed
-// over them: the ones stagesPassedOverJustNow names whose add the record holds
-// since the current stage started (a RECOMPOSED row naming it, as recompose
-// writes for an add addReachesPassedOver lets through). `next` goes back to
+// The stages put back on the plan after the work had just passed over them:
+// the ones stagesPassedOverJustNow names whose add the record holds since the
+// current stage started (a RECOMPOSED row naming it, as recompose writes for an
+// add addReachesPassedOver lets through, or the STATE_UPGRADED row of an older
+// record brought up, naming a stage the newer graph added). `next` goes back to
 // the first, as the work would have gone on to it had the add come before the
 // approval, and the jump it names is the engine's own move. A stage on the plan
 // behind the cursor with no such add (a plan whose rows say so from the start,
@@ -38551,7 +38552,7 @@ export function addedStagesPassedOver(content: string, projectDir: string, inten
     .sort()
     .at(-1) ?? "";
   const addedSince = new Set(rows
-    .filter((row) => row.event === "RECOMPOSED" && row.timestamp >= entered)
+    .filter((row) => (row.event === "RECOMPOSED" || row.event === "STATE_UPGRADED") && row.timestamp >= entered)
     .flatMap((row) => (auditBlockField(row.block, "Stages added") ?? "").split(",").map((slug) => slug.trim())));
   return passed.filter((slug) => addedSince.has(slug));
 }
@@ -42359,10 +42360,11 @@ export function filterProducesByKind(
 // The persisted `aidlc-state.md` carries a `- **State Version**: N` line naming
 // the state-graph schema the workflow was created under. v8 renamed the Inception
 // `application-design` stage to `domain-design` and inserted `contract-design`,
-// so a pre-v8 state file's stage rows no longer match the compiled graph. An
-// incompatible state must be refused up front by BOTH runtime commands
-// (aidlc-orchestrate.ts `next`/`report`) and by `aidlc --doctor`, and both
-// callers must classify the state identically — otherwise the doctor and the
+// so a pre-v8 state file's stage rows no longer match the compiled graph. The
+// engine's state read brings a version a step covers up in place
+// (aidlc-state-upgrade.ts); a state no step covers must be refused up front by
+// BOTH runtime commands (aidlc-orchestrate.ts `next`/`report`) and by
+// `aidlc --doctor`, and both callers must classify the state identically — otherwise the doctor and the
 // runtime disagree on whether a state is "malformed" vs "future" vs "past".
 // classifyStateVersion() is the single source of truth for that classification,
 // so a new schema bump only touches CURRENT_STATE_VERSION in this file.
@@ -42426,9 +42428,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
       `v${CURRENT_STATE_VERSION} stage graph. v8 renamed the Inception ` +
       "`application-design` stage to `domain-design` and inserted " +
       "`contract-design`, so this state's stage rows no longer match the graph " +
-      "and cannot be advanced safely. Archive your workspace " +
-      `('mv aidlc aidlc.v${v}-archive') and start a fresh workflow (describe what ` +
-      `to build), or finish this workflow on the prior shell. Run \`${entrySkillInvocation()} --doctor\` ` +
-      "for the full diagnosis.",
+      "and cannot be advanced safely. Finish this workflow on the prior shell. " +
+      `Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`,
   };
 }
