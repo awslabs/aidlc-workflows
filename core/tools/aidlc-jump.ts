@@ -135,7 +135,7 @@ function stageReviewPaths(pd: string, stage: StageEntry): string[] {
 
 let projectDir: string | undefined;
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const rawArgs = [...argv];
 
   const filteredArgs: string[] = [];
@@ -156,7 +156,7 @@ export function main(argv: string[]): void {
         handleResolve(filteredArgs.slice(1));
         break;
       case "execute":
-        handleExecute(filteredArgs.slice(1));
+        await handleExecute(filteredArgs.slice(1));
         break;
       case "reopen":
         handleReopen(filteredArgs.slice(1));
@@ -254,7 +254,7 @@ export function reverseEngineeringRedoNotice(from: { slug: string; name: string;
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2));
+  void main(process.argv.slice(2));
 }
 
 // --- Parse named flags ---
@@ -701,7 +701,7 @@ function movedState(
 
 // --- Subcommand: execute ---
 
-function handleExecute(args: string[]): void {
+async function handleExecute(args: string[]): Promise<void> {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
@@ -765,11 +765,11 @@ function handleExecute(args: string[]): void {
   // A Construction that runs one unit at a time: what this jump does to each
   // unit, read before the jump writes the state, for the jump's own line.
   // The orchestrator owns the walk; it is loaded only here, so the jump's
-  // other commands start without it.
+  // other commands start without it (a compiled build takes no require() of it).
   let unitSteps: ForwardJumpUnitSteps | null = null;
   if (direction === "forward") {
     try {
-      const { forwardJumpUnitSteps } = require("./aidlc-orchestrate.ts") as typeof import("./aidlc-orchestrate.ts");
+      const { forwardJumpUnitSteps } = await import("./aidlc-orchestrate.ts");
       unitSteps = forwardJumpUnitSteps(pd, scope, content, targetSlug);
     } catch {
       // The line names the stages instead; the jump never fails for it.
