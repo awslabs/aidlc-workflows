@@ -47,11 +47,15 @@ export const QUESTION_SHOWN = "QUESTION_SHOWN";
 // has the agent ask for.
 
 // The engine's own asks other than the code plan question: one is the open
-// step at a time, so a newer one, or another step, takes its place.
+// step at a time, so a newer one, or another step, takes its place. The last
+// row is teams building their Units as work of their own, and the one offer to
+// write repos.json.
 export const ENGINE_ASK_TYPES: ReadonlySet<string> = new Set([
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "new-work-routing", "project-type",
   "construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "guard-recovery", "unit-claim",
   "legacy-plan-approval-recovery", "team-handover",
+  "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff", "unit-amend", "unit-signoff",
+  "unit-turned-down", "unit-propose", "unit-move-onto",
 ]);
 
 // The questions a stage asks of its own (logged by the agent); they stay listed
