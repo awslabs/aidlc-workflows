@@ -314,10 +314,14 @@ export function verifyReleaseProvenance(
   });
   if (result.exitCode !== 0) {
     const stderr = Buffer.from(result.stderr ?? new Uint8Array()).toString("utf-8").trim();
+    // Name what the release was checked against: a release published from
+    // another repository fails here with only gh's issuer line otherwise.
     throw new Error(
-      `release provenance verification failed${
-        stderr ? `: ${stderr.split(/\r?\n/)[0]}` : ""
-      }`,
+      `release provenance verification failed against ${trust.repository} ` +
+        `(signer workflow ${trust.workflow})${
+          stderr ? `: ${stderr.split(/\r?\n/)[0]}` : ""
+        }. A release from another repository needs ` +
+        "AIDLC_RELEASE_REPOSITORY=<owner>/<name> set where aidlc runs.",
     );
   }
   return "verified";
