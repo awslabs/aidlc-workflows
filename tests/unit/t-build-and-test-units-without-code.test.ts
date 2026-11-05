@@ -31,7 +31,7 @@ afterEach(() => {
 
 const STAGES = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
 const CHAT = "01995000-7a11-7000-8000-0000000000d4";
-const LINE = "Units beta and gamma have no Code Generation output, so Build and Test has only the output of unit alpha to work from.";
+const LINE = "Code Generation has not finished for units beta and gamma, so Build and Test has only the output of unit alpha to work from.";
 
 // The host session's own markers stay out; commands run in the person's chat.
 function env(): Record<string, string | undefined> {
@@ -43,8 +43,9 @@ function env(): Record<string, string | undefined> {
 }
 
 // Construction one Unit at a time, past the Units' steps and on Build and
-// Test, with Build and Test's documents written; `built` have Code Generation's.
-function atBuildAndTest(built: string[], scope = "feature"): string {
+// Test, with Build and Test's documents written; `built` have Code Generation's,
+// and `planned` only its code plan.
+function atBuildAndTest(built: string[], scope = "feature", planned: string[] = []): string {
   const p = createTestProject();
   projects.push(p);
   seedAidlcMemory(p);
@@ -89,6 +90,11 @@ ${STAGES.map((stage) => `- [x] ${stage} \u2014 EXECUTE`).join("\n")}
     const dir = join(seededRecordDir(p), "construction", unit, "code-generation");
     mkdirSync(dir, { recursive: true });
     for (const name of codeGeneration.produces ?? []) writeFileSync(join(dir, artifactFilename(name)), `# ${unit} ${name}\n`);
+  }
+  for (const unit of planned) {
+    const dir = join(seededRecordDir(p), "construction", unit, "code-generation");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, artifactFilename("code-generation-plan")), `# ${unit} plan\n`);
   }
   const buildAndTest = findStageBySlug("build-and-test")!;
   const dir = join(seededRecordDir(p), "construction", "build-and-test");
@@ -168,12 +174,17 @@ describe("t-build-and-test-units-without-code: Build and Test names the Units wi
   test("one Unit missing, and none built, are said in the same plain words", () => {
     const one = atBuildAndTest(["alpha", "gamma"]);
     expect(lines(report(one, ["--result", "awaiting-approval"]))).toContain(
-      "Unit beta has no Code Generation output, so Build and Test has only the output of units alpha and gamma to work from.",
+      "Code Generation has not finished for unit beta, so Build and Test has only the output of units alpha and gamma to work from.",
     );
     const none = atBuildAndTest([]);
     expect(lines(report(none, ["--result", "awaiting-approval"]))).toContain(
-      "Units alpha, beta and gamma have no Code Generation output, so Build and Test has none to work from.",
+      "Code Generation has not finished for units alpha, beta and gamma, so Build and Test has no Unit's output to work from.",
     );
+  });
+
+  test("a Unit with only its code plan has not finished, and the Units come in their own order", () => {
+    const p = atBuildAndTest(["alpha"], "feature", ["beta"]);
+    expect(lines(report(p, ["--result", "awaiting-approval"]))).toContain(LINE);
   });
 
   test("every Unit built: nothing is said", () => {

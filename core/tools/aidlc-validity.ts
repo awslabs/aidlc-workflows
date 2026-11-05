@@ -446,9 +446,9 @@ function captureInputBasis(
 
 /**
  * For each per-Unit stage that produces a required input of `stage`, the Units
- * its files are expected for and the ones whose file is not there, read the
- * way captureStageValidationBasis reads them (a Unit whose kind needs none is
- * not expected). Units in the order of their files.
+ * its files are expected for and the ones missing any of them, read the way
+ * captureStageValidationBasis reads them (a Unit whose kind needs none is not
+ * expected). Units in the order of their files.
  */
 export function unitInputGaps(
   projectDir: string,
@@ -468,7 +468,11 @@ export function unitInputGaps(
       gaps.set(input.owner.slug, gap);
     }
   }
-  return [...gaps].map(([producer, gap]) => ({ producer, units: [...gap.units], missing: [...gap.missing] }));
+  return [...gaps].map(([producer, gap]) => ({
+    producer,
+    units: [...gap.units],
+    missing: [...gap.units].filter((unit) => gap.missing.has(unit)),
+  }));
 }
 
 function captureOutputBasis(

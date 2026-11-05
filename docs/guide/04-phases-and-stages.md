@@ -403,7 +403,7 @@ Failures always stop Construction, even in autonomous mode. The Build-and-Test l
 - Ordinary completion follows the recorded autonomy policy. `completion_only` stage directives settle existing approvals without repeating bodies, reviewers, or human completion questions.
 - An autonomy answer does not choose swarm or change iteration order. Explicit stage-major/swarm selection supports guided or automatic batch checkpoints.
 - While Plan Approval is on for the work, each Unit's plan is approved; grouping its presentation never removes individual approval receipts. Enabled summary confirmation, verification command selection, and failures still require the human.
-- Build and Test reads every Unit's code. When some Units have none (a jump ahead skipped their Code Generation, say), it says which in one line, with its gate or with your approval when you approve before the gate is shown: "Units beta and gamma have no Code Generation output, so Build and Test has only the output of unit alpha to work from." It never stops the approval.
+- Build and Test reads every Unit's code. When Code Generation has not finished for some Units (a jump ahead skipped it, say), it says which in one line, with its gate or with your approval when you approve before the gate is shown: "Code Generation has not finished for units beta and gamma, so Build and Test has only the output of unit alpha to work from." It never stops the approval.
 
 ---
 

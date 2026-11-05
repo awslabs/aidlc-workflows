@@ -7318,11 +7318,10 @@ export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: str
     return gaps.map(({ producer, units: all, missing }) => {
       const kept = all.filter((name) => !missing.includes(name));
       const from = stageLabel(findStageBySlug(producer), producer) ?? producer;
-      const has = missing.length === 1 ? "has" : "have";
       const left = kept.length === 0
-        ? `${stageName} has none to work from`
+        ? `${stageName} has no Unit's output to work from`
         : `${stageName} has only the output of ${units(kept)} to work from`;
-      return `${units(missing).replace(/^u/, "U")} ${has} no ${from} output, so ${left}.`;
+      return `${from} has not finished for ${units(missing)}, so ${left}.`;
     }).join(" ");
   } catch {
     return null;
