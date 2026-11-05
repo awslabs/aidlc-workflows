@@ -785,6 +785,21 @@ try {
       return null;
     }
   };
+  // A Claude Code prompt still to be settled from its own row
+  // (aidlc-claude-turn-origin.ts) keeps Claude Code's key beside its message
+  // wherever the message is kept: before any work exists the message is the
+  // plan question's proof of a reply. `onRecord`: its HUMAN_TURN is on the work.
+  const keepClaudeKey = (messageId: string | null, onRecord: boolean): void => {
+    const key = claudeKey;
+    const session = sessionId;
+    if (key === null || !messageId || !session) return;
+    try {
+      withAuditLock(projectDir, () =>
+        noteClaudeTurnPending(projectDir, session, { message: messageId, ...key, ...(onRecord ? { onRecord: true as const } : {}) }));
+    } catch {
+      // Unsettled, the turn stays the person's, as every turn was.
+    }
+  };
   // The agent learns the id of the message it can name with --message, never
   // its words: a reply typed or given in a question box, or a check the person
   // asks in chat to change with nothing waiting on them (without the id, every
@@ -813,7 +828,11 @@ try {
     // A turn the host made (its notice or brief) is nobody's words here either:
     // kept, it would read as the person's prompt where their message is the
     // proof before any work exists (intent creation).
-    if (turnOrigin.kind !== "host") sayMessageId(keepMessage(), typedParse?.command === true, false);
+    if (turnOrigin.kind !== "host") {
+      const kept = keepMessage();
+      keepClaudeKey(kept, false);
+      sayMessageId(kept, typedParse?.command === true, false);
+    }
     sayIfKeyShaped();
     return 0;
   }
@@ -871,6 +890,7 @@ try {
   // The message record (keepMessage above). A setting typed on the line is in
   // it as the engine's own parser read it; nothing is applied here.
   const messageId = keepMessage();
+  if (!inRecord) keepClaudeKey(messageId, false);
   sayIfKeyShaped();
   if (inRecord) {
     // With a record it lands in the record, before the mint branch and
@@ -941,13 +961,7 @@ try {
             // moment, read from one small file. Nothing decides on them here.
             ...turnQuestionFields(projectDir, sessionId),
           }, projectDir);
-          if (claudeKey !== null && messageId && sessionId) {
-            try {
-              noteClaudeTurnPending(projectDir, sessionId, { message: messageId, ...claudeKey });
-            } catch {
-              // Unsettled, the turn stays the person's, as every turn was.
-            }
-          }
+          keepClaudeKey(messageId, true);
           // Keep what the person typed in this chat (recordGateWords in
           // aidlc-lib.ts). A command to AIDLC instructs the framework; the one
           // answer a single-choice box carried back counts, since the host

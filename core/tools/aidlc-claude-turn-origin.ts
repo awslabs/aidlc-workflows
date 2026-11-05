@@ -15,7 +15,9 @@
 // it, takes the turn back: one HOST_TURN naming its Message Id after the
 // HUMAN_TURN (readers skip that HUMAN_TURN: withdrawnTurnPositions in
 // aidlc-record-core.ts), the message record removed, and what the hook kept as
-// the turn's reply withdrawn through each record's own writer. Nothing waits;
+// the turn's reply withdrawn through each record's own writer. Before any work
+// exists, or in a chat outside it, the message is all the hook kept, and only
+// it goes (the plan question for new work reads it: noReplySince). Nothing waits;
 // the prompt is only the key to its own row. Any doubt leaves the turn the
 // person's, as today: no row, no transcript, a key the store's retention
 // dropped, a failure here.
@@ -41,15 +43,18 @@ import { forgetMessage, isMessageId, readMessage } from "./aidlc-message-store.t
 import { CLAUDE_TURNS_PENDING_DIR } from "./aidlc-claude-turn-pending.ts";
 import { auditShardBlocks } from "./aidlc-record-core.ts";
 
-/** A turn the hook recorded as the person's by default (a HUMAN_TURN on the work), with Claude Code's key for it. */
+/** A turn the hook kept as the person's by default (its message), with Claude Code's key for it. */
 export interface PendingClaudeTurn {
   message: string;
   transcript: string;
   promptId: string;
+  /** Its HUMAN_TURN is on the work's record, for a HOST_TURN to take back. */
+  onRecord?: true;
 }
 
 // One small file per chat, written under the audit lock of the work that chat
-// acts on (the lock its HUMAN_TURN was written under), so no two writers race.
+// acts on (the lock its HUMAN_TURN was written under, the space's own before
+// any work exists), so no two writers race.
 const PENDING_MAX = 200;
 const PENDING_MAX_BYTES = 256 * 1024;
 const TRANSCRIPT_TAIL_BYTES = 1 << 20;
@@ -69,7 +74,8 @@ function isPending(value: unknown): value is PendingClaudeTurn {
   const entry = value as Partial<PendingClaudeTurn> | null;
   return entry !== null && typeof entry === "object" && typeof entry.message === "string" &&
     isMessageId(entry.message) && typeof entry.transcript === "string" && entry.transcript.endsWith(".jsonl") &&
-    typeof entry.promptId === "string" && entry.promptId.length > 0;
+    typeof entry.promptId === "string" && entry.promptId.length > 0 &&
+    (entry.onRecord === undefined || entry.onRecord === true);
 }
 
 function readPending(projectDir: string, session: string): PendingClaudeTurn[] {
@@ -101,7 +107,7 @@ export function claudeTurnKey(transcriptPath: unknown, promptId: unknown): { tra
 
 /**
  * Keep a turn of `session` for settleClaudeTurns. The caller holds the audit
- * lock of the work this chat acts on (the hook, where it wrote the turn's row).
+ * lock of the work this chat acts on (the space's own before any work exists).
  */
 export function noteClaudeTurnPending(projectDir: string, session: string, entry: PendingClaudeTurn): void {
   if (!CHAT_FILE.test(session)) return;
@@ -199,7 +205,7 @@ export function settleClaudeTurns(projectDir: string): void {
             // either way the entry stays until that is done.
             left.push(entry);
             if (verdict.kind === "pending") continue;
-            if (!alreadyTakenBack(projectDir, entry.message)) {
+            if (entry.onRecord === true && !alreadyTakenBack(projectDir, entry.message)) {
               appendAuditEntryUnlocked("HOST_TURN", {
                 Session: chat,
                 Origin: "host",
