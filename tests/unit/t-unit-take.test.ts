@@ -234,6 +234,23 @@ describe("a Unit someone holds is not taken again", () => {
     expect(theirs.out).toContain("checkout-ui is held by the web team.");
   });
 
+  test("a Unit taken while the home is changing the Unit plan is taken on the plan as it stands, said once", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md");
+    const back = readFileSync(statePath, "utf-8")
+      .replace(/^- \[x\] units-generation /m, "- [-] units-generation ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: units-generation");
+    writeFileSync(statePath, back);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "units generation again"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const took = take(cloneOf(home.remote, "alice"), "refunds");
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toEndWith(
+      "The home is changing the Unit plan (Units Generation is open again there), so refunds is taken on the plan as it stands there.",
+    );
+  });
+
   test("a waiting Unit is not taken yet, and the line says when it opens", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const waiting = take(cloneOf(home.remote, "carol"), "reporting");

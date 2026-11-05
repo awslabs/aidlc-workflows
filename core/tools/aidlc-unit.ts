@@ -4289,6 +4289,16 @@ function adoptUnit(args: string[], projectDir?: string): void {
   console.log(JSON.stringify({ adopted: true, ...stamp }));
 }
 
+// The stage a work's Unit plan is being changed at, when its Current Stage is
+// back before the per-Unit block (Units Generation open again, say); null
+// otherwise. A claim, and a team's take of a Unit, go ahead on the plan as it
+// stands and say so once (#3408).
+function unitPlanChangingStage(state: string): string | null {
+  const stage = getField(state, "Current Stage")?.trim() ?? "";
+  const graph = loadStageGraph();
+  return beforePerUnitBlock(graph, stage) ? graph.find((node) => node.slug === stage)?.name ?? stage : null;
+}
+
 function claimUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
@@ -4335,10 +4345,9 @@ function claimUnit(args: string[], projectDir?: string): void {
   const integration = fetchIntegration(pd);
   // Main back before the per-Unit block is changing the Unit plan: the claim
   // goes ahead on the plan as it stands there, and its result says the risk once.
-  const integrationStage = getField(stateAtOid(pd, integration.oid), "Current Stage")?.trim() ?? "";
-  const graph = loadStageGraph();
-  const planWarning = beforePerUnitBlock(graph, integrationStage)
-    ? `Main is changing the Unit plan (${graph.find((node) => node.slug === integrationStage)?.name ?? integrationStage} ` +
+  const changing = unitPlanChangingStage(stateAtOid(pd, integration.oid));
+  const planWarning = changing !== null
+    ? `Main is changing the Unit plan (${changing} ` +
       `is open again on ${integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch}), ` +
       `so "${unit}" is claimed on the plan as it stands there: if the approved plan changes "${unit}"'s own entry, ` +
       "pin asks this checkout to rebase onto main and publish again."
@@ -5555,6 +5564,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   const current = currentClaim(pd, home.target, ref);
   const integration = fetchHomeIntegration(pd, home, current);
   const plan = homePlanAt(pd, home, integration.oid, integration.branch);
+  const planChanging = unitPlanChangingStage(plan.state);
   const solo = home.solo ? soloOpening(pd, home, plan) : null;
   const opening = solo ?? openingStatusFrom(plan.state, plan.dependencies);
   if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
@@ -5707,7 +5717,10 @@ function takeUnit(args: string[], projectDir?: string): void {
         ? ` You can read the home but not write to it, so the result of ${unit} goes back as a file when it is built.`
         : "") +
       earlyLines.map((line) => ` ${line}`).join("") +
-      missing.map((repo) => ` ${repoNotThereLine(pd, repo)}`).join(""),
+      missing.map((repo) => ` ${repoNotThereLine(pd, repo)}`).join("") +
+      (planChanging !== null
+        ? ` The home is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
+        : ""),
   }));
 }
 
