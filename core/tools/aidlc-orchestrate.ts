@@ -4550,6 +4550,24 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
     `prints, then run bare \`${aidlcToolInvocation("orchestrate")} next\`. Otherwise: `;
 }
 
+// The read-only utility a flag names (`--status` is `status`), as this
+// harness's dispatcher spells it: the flag's own step and the readings that
+// answer a question from it name the same command.
+function readOnlyCommand(sub: string): string {
+  return `${aidlcInvocation()} ${terminalDispatcherArgv({ subcommand: sub, source: "read-only-flag" }).join(" ")}`;
+}
+
+// Words that ask about the work (where it stands, what is left) are a question
+// for the agent to answer from the status: no reading below fits them, and the
+// request reading asked the person where their question belongs.
+function workQuestionReading(about: string, status = readOnlyCommand("status")): string {
+  return `If they ask about ${about}, run \`${status}\`, answer their question in plain words from what it prints, ` +
+    "and end your turn: run no other command.";
+}
+const WORK_ITSELF = "the work itself (where it stands, which stage comes next, how much remains)";
+const FINISHED_ABOUT = "(what it built, whether anything remains)";
+const FINISHED_WORK = `the finished work ${FINISHED_ABOUT}`;
+
 // Words while a workflow is active may ask to redo, jump to a stage, or start
 // fresh ("/aidlc take me back to requirements analysis"), or be new work or a
 // change to this work: the conductor reads which, the same split as
@@ -4575,7 +4593,8 @@ function reentryReplyDirective(requestId: string, pd: string, undo = "", work: s
       `"keep going"), run \`${orchestrate} next\` with nothing after it: the work continues where it stands. If they ` +
       `ask to redo, jump or start fresh, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with ` +
       "the choice you read from their words (add `--target <stage slug>` for the stage they named, and `--unit <unit>` " +
-      "or `--every-unit` when they named a Unit or said every Unit), then follow the print it returns. If they are " +
+      "or `--every-unit` when they named a Unit or said every Unit), then follow the print it returns. " +
+      `${workQuestionReading(WORK_ITSELF)} If they are ` +
       `about something else, such as new work or a change to this work, or you cannot tell which, run \`${orchestrate} ` +
       `next --request ${requestId}\` and follow what it returns: the engine kept their words and asks the person where ` +
       "that work belongs, and a redo or jump they say there is read the same way. When their words describe new work, " +
@@ -4592,8 +4611,9 @@ function teamWordsReplyDirective(requestId: string, pd: string): PrintDirective 
   return printDirective(
     "Work is in progress, and the person's words may only ask for it to go on, or be new work or a change to this " +
       "work. Read them. If they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
-      `\`${orchestrate} next\` with nothing after it: the work continues where it stands. Otherwise, or if you cannot ` +
-      `tell, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words ` +
+      `\`${orchestrate} next\` with nothing after it: the work continues where it stands. ` +
+      `${workQuestionReading(WORK_ITSELF)} Otherwise, or if you cannot tell, run ` +
+      `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words ` +
       "and asks the person where that work belongs. When their words describe new work, add `--propose <plan>` to " +
       `that command, the plan below that fits the work, so the question can name it. Plans: ${planChoicesLine(pd)}`,
   );
@@ -6947,16 +6967,22 @@ function finishedWorkReading({ records, selected }: FinishedWorkHere, settings: 
   const named = records.map(({ label, record }) => label === record ? `\`${record}\`` : `\`${label}\` (record: \`${record}\`)`);
   const stage = `${settings}\`${aidlcToolInvocation("orchestrate")} next --stage <stage slug>\` (add \`--unit <unit>\` or ` +
     "`--every-unit` when they named a Unit or every Unit) and follow what it returns.";
+  // Work this chat has not selected is asked about by its record, which
+  // selects nothing: the status alone would show no work, or other work.
+  const status = readOnlyCommand("status");
+  const asked = (about: string, record: string | null) =>
+    workQuestionReading(about, record === null ? status : `${status} --intent ${record}`);
   if (records.length === 1) {
     const select = selected ? "" : `\`${aidlcDispatcherInvocation("intent")} ${records[0].record}\`, then `;
     return `This project's work ${named[0]} is finished${selected ? "" : ", and it is not selected in this chat"}. ` +
       "Their words may ask to go back to one of its stages, or describe new work: read them. If they ask to go back " +
-      `to a stage of it, run ${select}${stage}`;
+      `to a stage of it, run ${select}${stage} ${asked(FINISHED_WORK, selected ? null : records[0].record)}`;
   }
   return `This project's finished work, none selected in this chat: ${named.join(", ")}. Their words may ask to go ` +
     "back to a stage of one of them, or describe new work: read them. If they ask to go back to a stage of one, run " +
-    `\`${aidlcDispatcherInvocation("intent")} <its record>\`, then ${stage} If their words fit more than one, ask ` +
-    "them once in plain words which they meant, then stop.";
+    `\`${aidlcDispatcherInvocation("intent")} <its record>\`, then ${stage} ` +
+    `${asked(`one of them ${FINISHED_ABOUT}`, "<its record>")} If their words fit more than one, ask them once in ` +
+    "plain words which they meant, then stop.";
 }
 
 // The workflow creation print for a resolved scope on a fresh workspace (no intent
@@ -11318,7 +11344,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
       ? ` ${flags.readOnlyArgs.join(" ")}`
       : "";
-    const command = `${aidlcInvocation()} ${terminalDispatcherArgv({ subcommand: sub, source: "read-only-flag" }).join(" ")}`;
+    const command = readOnlyCommand(sub);
     emit(turnEndingPrint(
       `Run \`${command}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));

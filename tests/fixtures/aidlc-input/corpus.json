@@ -3324,7 +3324,7 @@
         "words": "add a --status endpoint to the API",
         "settings": [],
         "never": [
-          "engine status"
+          "engine status`, print its output verbatim"
         ]
       },
       "end": {
@@ -3348,7 +3348,7 @@
         "words": "add a --status endpoint to the API",
         "settings": [],
         "never": [
-          "engine status"
+          "engine status`, print its output verbatim"
         ]
       },
       "end": {
@@ -7262,7 +7262,7 @@
         "words": "add a --status endpoint",
         "settings": [],
         "never": [
-          "engine status"
+          "engine status`, print its output verbatim"
         ]
       },
       "end": {
