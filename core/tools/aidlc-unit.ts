@@ -178,6 +178,7 @@ import {
   workspaceHomeLocation,
   writesByRepo,
   unitWordsArg,
+  TEAM_RHYTHM_OFFER,
 } from "./aidlc-unit-teams.js";
 import { repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -5015,8 +5016,7 @@ function assignUnits(args: string[], projectDir?: string): void {
   // and why, and gives the agent the command for the other choice.
   const perStage = readUnitGateRhythm(state) !== "unit-end";
   const rhythm = perStage
-    ? "Each team will approve its Unit after every stage. Do you want them to approve once at the end of each Unit " +
-      "instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens."
+    ? TEAM_RHYTHM_OFFER
     : "Each team approves its Unit once, at the end.";
   console.log(JSON.stringify({
     assigned,

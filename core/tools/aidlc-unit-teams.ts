@@ -49,6 +49,11 @@ export function homeLocation(stateContent: string | null): string | null {
   return value ? value : null;
 }
 
+// The offer to approve each team's Unit once at its end instead of after every
+// stage, said once as teams are chosen and in the lead's assign reply.
+export const TEAM_RHYTHM_OFFER = "Each team will approve its Unit after every stage. Do you want them to approve once " +
+  "at the end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
+
 // Which team flow new team work takes, decided once as teams are chosen: the
 // build-out (assign, take, push, the team's own merge) for work whose code is
 // in repos of its own, recorded for the work, where main's landing cannot

@@ -711,6 +711,7 @@ import {
   unknownLikelyReposLine,
   UNIT_WORDS_NOTE,
   unitWordsArg,
+  TEAM_RHYTHM_OFFER,
 } from "./aidlc-unit-teams.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import {
@@ -5310,11 +5311,7 @@ function constructionStaffingAsk(
   if (teams) {
     if (!speaks) return null;
     if (getField(stateContent, "Unit Gate Rhythm") === null) {
-      sayWithStepOnce(
-        projectDir,
-        "Each team will approve its Unit after every stage. Do you want them to approve once at the end of each " +
-          "Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.",
-      );
+      sayWithStepOnce(projectDir, TEAM_RHYTHM_OFFER);
     }
     const handout = teamHandoutLine(projectDir, stateContent, dag.batches.flat()[0]);
     if (handout !== null) sayWithStepOnce(projectDir, handout);
