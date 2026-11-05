@@ -25,6 +25,9 @@ export interface RetryEvidence {
   personTurnFailure?: boolean;
 }
 
+/** Which attempt of its file a test process is (1, or 2 on the retry), set by the runner for each file it runs. */
+export const FILE_ATTEMPT_ENV = "AIDLC_TEST_FILE_ATTEMPT";
+
 /** Isolated live files: one Bedrock-backed journey can take most of an hour. */
 export const ISOLATED_RETRY_MAX_MS = 25 * 60_000;
 /**
