@@ -5,7 +5,8 @@
 // (a stage's approval gate, a stage's question, the code plan question, a guard's recovery question), gets that
 // decision's reading step with the status reading beside its other readings: answer from the status, run no other
 // command. Nothing is recorded, the same words again get the same decision's reading, and a bare `next` after it
-// returns the step any other non-answer leads to: the open decision is still the next thing the person is asked. Measured on #3543's head
+// returns the step any other non-answer leads to: the open decision is still the next thing the person is asked. Words
+// with a setting typed beside them get the reading as before, so the setting keeps its way (the request reading). Measured on #3543's head
 // bc550927f: the four readings had no reading for a question about the work, so its fit was the request reading
 // (`next --request`, which asks where the words belong) or one short question; live at a gate, Sonnet 4.5 ran the
 // routing command at main and showed the gate's choices without an answer at bc550927f's patch.
@@ -17,6 +18,7 @@ import { cleanupTestProject } from "../harness/fixtures.ts";
 import { type Directive, next } from "../harness/aidlc-input-corpus.ts";
 import { CHOICE_EVENTS, choiceRowCount, projectAt, type Question, say, templateProjects } from "../harness/aidlc-answers-corpus.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { latestQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
@@ -27,6 +29,7 @@ afterAll(() => {
 
 const QUESTION = "how far along are we?";
 const OTHER = "what does this stage do?";
+const SETTING = ["--depth", "minimal"];
 const STATUS = /`[^`]*\bengine status`/;
 const NOTHING_ELSE = "run no other command";
 const REQUEST = /`[^`]* next --request [0-9a-f]{8}`/;
@@ -74,6 +77,27 @@ describe("t-question-at-an-open-decision: a question about the work is answered 
       const after = await next(proj, []);
       const shape = (d: Directive | null) => ({ kind: d?.kind, ask_type: d?.ask_type, stage: d?.stage });
       expect(shape(after.directive), after.out).toEqual(shape(expected.directive));
+    });
+
+    test(`${question}: with a setting typed beside the question, the reading is as before, so the setting keeps its way`, async () => {
+      const proj = await projectAt(question);
+      projects.push(proj);
+      const choices = choiceRowCount(proj);
+      expect((await say(proj, `/aidlc ${SETTING.join(" ")} ${QUESTION}`, "claude")).status).toBe(0);
+      const step = await next(proj, [...SETTING, ...QUESTION.split(" ")]);
+      expect(step.directive?.kind, step.out).toBe("print");
+      const message = String(step.directive?.message);
+      expect(message).toContain(opens);
+      // No status-only reading: "run no other command" would leave the setting unset. The request reading, which the
+      // setting rides, is still there.
+      expect(message).not.toMatch(STATUS);
+      expect(message).not.toContain(NOTHING_ELSE);
+      expect(message).toMatch(REQUEST);
+      // The setting still rides: the kept copy of their words carries it for the request reading's answer, and the
+      // code plan reading still names it for an answer to the plan question.
+      expect(JSON.stringify(latestQuestion(proj)?.settings ?? null)).toContain(SETTING[0]);
+      if (question === "code-plan") expect(message).toContain(`The line also carries \`${SETTING.join(" ")}\``);
+      expect(choiceRowCount(proj)).toBe(choices);
     });
   }
 });
