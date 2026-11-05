@@ -113,6 +113,7 @@ import {
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
+import { claudeTurnKey, noteClaudeTurnPending } from "../tools/aidlc-claude-turn-origin.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
 import { boxQuestionId, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/aidlc-questions.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt, recommendedChoices } from "../tools/aidlc-reply-reader.ts";
@@ -577,6 +578,9 @@ try {
   // `origin`; Claude Code's transcript is read here; anything unknown is a
   // person (kiroTurnOrigin, claudeTranscriptOrigin in aidlc-lib.ts).
   let turnOrigin: TurnOrigin = { kind: "person" };
+  // Claude Code's key for a turn recorded as the person's only because nothing
+  // said otherwise yet: settleClaudeTurns reads the turn's own row by it.
+  let claudeKey: { transcript: string; promptId: string } | null = null;
   // An adapter whose own prompt hook runs a command the person typed and hands
   // the agent its output (Kiro's) says so; the help is then left to it.
   let relaysTerminalOutput = false;
@@ -672,12 +676,14 @@ try {
       turnOrigin = supplied;
     } else if (promptSubmitted && typedPrompt && typeof parsed.transcript_path === "string") {
       // Claude Code hands its transcript to the hook: its row for this prompt
-      // names who started the turn. With no row (2.1.310 writes it only after
-      // this hook returns), only the host's whole notice or message block
-      // counts as the host's.
-      turnOrigin = claudeTranscriptOrigin(parsed.transcript_path, parsed.prompt_id, typedPrompt) ??
-        hostTemplateOrigin(typedPrompt, CLAUDE_HOST_TEMPLATES) ??
-        { kind: "person" };
+      // names who started the turn. With no row (Claude Code writes it only
+      // after this hook returns), only the host's whole notice or message block
+      // counts as the host's here, and the turn is settled from its row at the
+      // next engine entry (aidlc-claude-turn-origin.ts).
+      const decided = claudeTranscriptOrigin(parsed.transcript_path, parsed.prompt_id, typedPrompt) ??
+        hostTemplateOrigin(typedPrompt, CLAUDE_HOST_TEMPLATES);
+      turnOrigin = decided ?? { kind: "person" };
+      if (decided === null) claudeKey = claudeTurnKey(parsed.transcript_path, parsed.prompt_id);
     }
   } catch { /* presence still records without identity on legacy payloads */ }
   // A new prompt starts a new turn: a one-shot stop left from an earlier turn
@@ -931,6 +937,13 @@ try {
             // moment, read from one small file. Nothing decides on them here.
             ...turnQuestionFields(projectDir, sessionId),
           }, projectDir);
+          if (claudeKey !== null && messageId && sessionId) {
+            try {
+              noteClaudeTurnPending(projectDir, sessionId, { message: messageId, ...claudeKey });
+            } catch {
+              // Unsettled, the turn stays the person's, as every turn was.
+            }
+          }
           // Keep what the person typed in this chat (recordGateWords in
           // aidlc-lib.ts). A command to AIDLC instructs the framework; the one
           // answer a single-choice box carried back counts, since the host

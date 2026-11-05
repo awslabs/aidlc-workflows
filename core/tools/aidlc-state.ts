@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
@@ -286,7 +287,7 @@ import {
   swarmWorkerWorktreeMeta,
   UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
-import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { chatTookStepHere, withdrawnTurnPositions } from "./aidlc-record-core.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
@@ -748,7 +749,9 @@ function unrecordedRevisionSinceGateOpen(
     file: string | null;
     recovered: boolean;
   }[] = [];
+  const withdrawn = withdrawnTurnPositions(blocks);
   for (let i = 0; i < blocks.length; i++) {
+    if (withdrawn.has(i)) continue;
     const ev = auditField(blocks[i], "Event");
     if (!ev || !RELEVANT.has(ev)) continue;
     events.push({
@@ -937,6 +940,8 @@ function assertWorkflowNotArchived(content: string, operation: string): void {
 class UnitWaveRouteRefusalError extends StateCommandError {}
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(argv);
   const args = [...argv];
 
   // Extract --project-dir flag

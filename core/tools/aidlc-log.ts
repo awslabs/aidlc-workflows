@@ -6,6 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
+import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -5469,6 +5470,8 @@ let projectDir: string | undefined;
 let readOnlyCommand = false;
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(argv);
   const rawArgs = argv;
 
   // Extract --project-dir

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { existsSync, readdirSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -3339,12 +3340,15 @@ async function execute(action: Action): Promise<number> {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
+    // A turn Claude Code started itself is settled before the hook reads a turn.
+    settleClaudeTurnsFirst([], projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHook({ ...action, projectDir }));
   }
   if (action.type === "hook-group") {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
+    settleClaudeTurnsFirst([], projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHookGroup({ ...action, projectDir }));
   }
   if (action.type === "statusline") {
