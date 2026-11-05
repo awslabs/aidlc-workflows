@@ -1921,8 +1921,17 @@ function prepareEmission(directive: Directive): PreparedEmission {
     // the build changes them.
     if (directive.stage === "code-generation") {
       const pd = route.codekbCtx.projectDir;
-      const names = broughtFileNames(pd, loadStateFileIfPresent(pd), directive.single === true);
-      if (names !== null) directive.brought_files_note = broughtFilesNote(names);
+      const state = loadStateFileIfPresent(pd);
+      const names = broughtFileNames(pd, state, directive.single === true);
+      // A Unit's build writes its code in the Unit's repos here, which the
+      // listing above names files of as the person's.
+      const repos = state !== null && unitBuildOf(state) !== null ? intentRepos(pd) : [];
+      const where = repos.length > 0
+        ? `This Unit's code goes in ${joinRepoNames(repos)}: write each of its files inside ` +
+          `${repos.length === 1 ? "that repo's folder" : "the folder of the repo it belongs to"}, and name its repo in the source manifest.`
+        : null;
+      const note = [names !== null ? broughtFilesNote(names) : null, where].filter((line): line is string => line !== null).join(" ");
+      if (note !== "") directive.brought_files_note = note;
     }
   }
   // A refusal does not carry on: it says why, and the kept words (below); a

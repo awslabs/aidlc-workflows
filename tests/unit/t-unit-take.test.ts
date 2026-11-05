@@ -344,6 +344,27 @@ describe("who takes what", () => {
 });
 
 describe("builds in one workspace", () => {
+  test("the build's Code Generation is told its code goes in the Unit's repos, beside the files of theirs it leaves alone", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    expect(take(alice, "refunds").status).toBe(0);
+    const state = join(buildDir(alice, "payments", "refunds"), "aidlc-state.md");
+    writeFileSync(state, readFileSync(state, "utf-8")
+      .replace(/^- \[[ -]\] functional-design /m, "- [x] functional-design ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+    const step = next(alice);
+    expect(step.stage, JSON.stringify(step)).toBe("code-generation");
+    expect(String(step.brought_files_note)).toContain(
+      "This Unit's code goes in billing and checkout-api: write each of its files inside the folder of the repo it belongs to, and name its repo in the source manifest.",
+    );
+  });
+
   test("a change to the Units asked in a Unit's build keeps the composer: the Unit plan is the home's", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const alice = cloneOf(home.remote, "alice");
