@@ -420,6 +420,7 @@ import {
   inspectSubagentInflight,
   harnessDataPath,
   pluginsEnabled,
+  projectPluginCommands,
   pluginsSelected,
   pausedPlugins,
   pausedBySelection,
@@ -537,6 +538,7 @@ import {
   personaTwinRels,
   projectDiffPlan,
   recordedContributionGaps,
+  skippedCommandLine,
   type StageContribRecord,
   stripRecordedAdds,
   syncCommand,
@@ -5068,6 +5070,12 @@ export async function collectDoctorReport(
       label: "Plugin checks: discovery failed",
       fix: errorMessage(e),
     });
+  }
+
+  // 4e. A plugin command not added, which the sync said once: kept here so it
+  // can be found again. Nothing for the person to fix, so never a warning.
+  for (const skip of projectPluginCommands().skipped) {
+    results.push({ pass: true, label: `Plugin command: ${skippedCommandLine(skip)}` });
   }
 
   // 5. Workspace shell ready (P4: no --init artifact to check). With auto-create

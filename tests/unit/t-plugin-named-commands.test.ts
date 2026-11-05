@@ -308,6 +308,7 @@ describe("aidlc <name> on a copy install", () => {
     const doctor = aidlc(clash, ["doctor", "--verbose"], { HELLO_MARK: join(root, "clash-mark") });
     expect(existsSync(join(root, "clash-mark"))).toBe(false);
     expect(doctor.stdout + doctor.stderr).toContain("Plugin check (test-pro)");
+    expect(doctor.stdout).toContain("Plugin command: test-pro's command 'doctor' is not added: AI-DLC's own doctor command has that name.");
   });
 
   test("aidlc --help in the project lists the command under its plugin; outside a project help is unchanged", () => {
