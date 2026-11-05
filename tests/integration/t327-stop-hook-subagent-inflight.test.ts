@@ -153,7 +153,7 @@ function runAttendedStopHook(
   const result = runHook(STOP_HOOK, proj, {
     stop_hook_active: false,
     session_id: sessionId,
-  });
+  }, { AIDLC_UNATTENDED: "0" });
   return { rc: result.rc, out: result.out };
 }
 
