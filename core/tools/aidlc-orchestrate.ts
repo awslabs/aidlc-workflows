@@ -586,7 +586,9 @@ import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
   claimsOpenHere,
+  defaultTeamLabel,
   landedNotOnRemote,
+  namesInProse,
   localUnitClaimOverviewForIntent,
   publishedAtHead,
   refreshClaimRefs,
@@ -5320,7 +5322,7 @@ function teamShareOffer(
     choices: [
       {
         label: "Share them with the teams",
-        detail: `Pushes ${target.branch} to ${target.remote}; nothing is forced.`,
+        detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
         command: `${aidlcInvocation()} unit share`,
       },
     ],
@@ -5363,8 +5365,12 @@ function teamPublishOffer(projectDir: string, unit: string): AskDirective | null
 // On a checkout that holds no Unit claim: the Units a team published and that
 // wait for review here, and, in a fresh clone of the work that did not share
 // it, the Units it can take. One question for both, so neither the lead nor a
-// teammate meets a question that is only the other's. Each Unit is asked
-// about once per published commit, each set of Units to take once.
+// teammate meets a question that is only the other's; taking comes first, as
+// only a teammate's clone meets both. Each Unit is asked about once per
+// published commit, each set of Units to take once. The person picks from the
+// board's own facts (what waits on each Unit, who holds the others) and hears
+// the label their claim would carry; a name of theirs reaches the claim through
+// the agent's --team (withAgentNotes).
 function teamReviewOrJoinOffer(
   projectDir: string,
   overview: UnitClaimOverview,
@@ -5377,27 +5383,43 @@ function teamReviewOrJoinOffer(
   const join = joining && !handoverOffered(projectDir, joinMark) ? [...overview.claimable].sort(compareBoardKeys) : [];
   if (ready.length === 0 && join.length === 0) return null;
   const readyWords = ready.map((row) => `${row.unit} is ready from ${row.owner}`).join(", and ");
+  const holders = new Map<string, string[]>();
+  for (const row of overview.claimed) {
+    if (!ready.some((entry) => entry.unit === row.unit)) holders.set(row.owner, [...(holders.get(row.owner) ?? []), row.unit]);
+  }
+  const held = [...holders].map(([owner, units]) =>
+    `; ${namesInProse(units.sort(compareBoardKeys))} ${units.length === 1 ? "is" : "are"} with ${owner}`
+  );
   const joinWords = `${join.length === 1 ? "1 Unit is" : `${join.length} Units are`} open for a team to take: ` +
-    `${join.join(", ").replace(/, ([^,]*)$/, " and $1")}.`;
+    `${namesInProse(join)}${held.join("")}.`;
+  const label = `I'd label your team "${defaultTeamLabel(projectDir)}"; say another name to use it instead.`;
   const question = ready.length > 0 && join.length > 0
-    ? `${readyWords}, and ${joinWords} Review and merge, or take one for your team?`
+    ? `${joinWords} ${readyWords}. Take one for your team, or review and merge? ${label}`
     : ready.length > 0
     ? `${readyWords}: review and merge ${ready.length === 1 ? "it" : "them"}?`
-    : `${joinWords} Take one for your team?`;
+    : `${joinWords} Take one for your team? ${label}`;
+  const waitingOn = (unit: string): string[] =>
+    [...overview.waiting, ...overview.claimed].filter((row) => row.blockedBy?.includes(unit)).map((row) => row.unit)
+      .sort(compareBoardKeys);
   return teamHandoverAsk(projectDir, {
     handovers: [...(ready.length > 0 ? ["review" as const] : []), ...(join.length > 0 ? ["join" as const] : [])],
     marks: [...ready.map((row) => teamHandoverMarkName("review", row.key)), ...(join.length > 0 ? [joinMark] : [])],
     question,
     choices: [
+      ...join.map((unit) => {
+        const waiting = waitingOn(unit);
+        return {
+          label: `Take ${unit}`,
+          detail: waiting.length === 0
+            ? "No other Unit waits on it."
+            : `${namesInProse(waiting)} ${waiting.length === 1 ? "waits" : "wait"} on it.`,
+          command: `${aidlcToolInvocation("orchestrate")} next --claim ${shellArg(unit)}`,
+        };
+      }),
       ...ready.map((row) => ({
         label: `Review and merge ${row.unit}`,
-        detail: "Pins what the team published and shows it, then asks whether to merge it.",
+        detail: "Shows what the team built and its checks, then asks whether to merge it.",
         command: `${aidlcInvocation()} unit pin ${quoteCommandArgument(row.unit)}`,
-      })),
-      ...join.map((unit) => ({
-        label: `Take ${unit}`,
-        detail: "Claims it for your team; this clone then builds it.",
-        command: `${aidlcToolInvocation("orchestrate")} next --claim ${shellArg(unit)}`,
       })),
     ],
   });
@@ -5420,7 +5442,8 @@ function teamPushOffer(projectDir: string): AskDirective | null {
       (work === null ? "" : ` I'd commit ${work} first.`),
     choices: [{
       label: `Push ${target.branch}`,
-      detail: `${work === null ? "Pushes" : "Commits, then pushes"} ${target.branch} to ${target.remote}; nothing is forced.`,
+      detail: `${work === null ? "Pushes" : "Commits, then pushes"} ${target.branch} to ${target.remote} as a plain push; ` +
+        "it never overwrites what a team pushed.",
       command: `${aidlcInvocation()} unit share`,
     }],
   });

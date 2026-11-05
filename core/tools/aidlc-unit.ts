@@ -1236,7 +1236,7 @@ function candidateReviewCoverage(
   };
 }
 
-function namesInProse(names: string[]): string {
+export function namesInProse(names: string[]): string {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
@@ -3994,11 +3994,14 @@ export function unitPlanRefusal(
   return { message: null, liftable: false, lifted };
 }
 
+// The label a claim writes when the person gives none, as the Take question
+// says it.
+export function defaultTeamLabel(projectDir: string): string {
+  return gitUserName(projectDir) || "team";
+}
+
 function claimOwnerLabel(projectDir: string, supplied?: string): string {
-  const owner =
-    supplied?.trim() ||
-    gitUserName(projectDir) ||
-    "team";
+  const owner = supplied?.trim() || defaultTeamLabel(projectDir);
   if (/[\r\n|]/.test(owner)) {
     fail("Team labels cannot contain pipes or newlines.");
   }

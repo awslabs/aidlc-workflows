@@ -16,6 +16,7 @@ import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude
 import { codeGenerationStepOnRecord } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
+  ORCH,
   UNIT,
   approveMerge,
   asLeadsOwnCheckout as ranTheWorkHere,
@@ -50,6 +51,12 @@ function commandFor(directive: Record<string, unknown>, label: string): string {
   return command as string;
 }
 
+function detailFor(directive: Record<string, unknown>, label: string): string | undefined {
+  return choicesOf(directive).find((choice) => choice.label === label)?.detail;
+}
+
+const PLAIN_PUSH = "main to origin as a plain push; it never overwrites what a team pushed.";
+
 function isHandover(directive: Record<string, unknown>, kind?: string): boolean {
   if (directive.kind !== "ask" || directive.ask_type !== "team-handover") return false;
   return kind === undefined || ((directive.handovers ?? []) as string[]).includes(kind);
@@ -83,6 +90,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(labels(offer)).toEqual(["Share them with the teams", "Build them here for now"]);
     expect(commandFor(offer, "Share them with the teams")).toMatch(/ unit share$/);
     expect(commandFor(offer, "Build them here for now")).toMatch(/ next$/);
+    expect(detailFor(offer, "Share them with the teams")).toBe(`Pushes ${PLAIN_PUSH}`);
     // No self-loop: the reply that does not take it runs next, and the walk goes on.
     const walk = nextDirective(lead);
     expect(isHandover(walk), JSON.stringify(walk)).toBe(false);
@@ -187,6 +195,47 @@ describe("step 2: another clone takes a Unit", () => {
   // The live run: a team built its first Unit in its own clone (that Unit's
   // rows are in the clone's own shard), the lead merged and pushed it, and the
   // team pulled main: its next Unit is offered, never a typed claim.
+  test("each Take choice says what waits on it, and the question names the team's label once", () => {
+    const { remote } = makeSeed();
+    const mate = clone(remote, "mate");
+    const offer = nextDirective(mate);
+    expect(isHandover(offer, "join"), JSON.stringify(offer)).toBe(true);
+    expect(labels(offer)).toEqual(["Take alpha", "Not now"]);
+    expect(detailFor(offer, "Take alpha")).toBe("beta waits on it.");
+    const label = "I'd label your team \"mate\"; say another name to use it instead.";
+    expect(String(offer.question).split(label).length - 1, String(offer.question)).toBe(1);
+    expect(String(offer.question_note)).toContain("--team '");
+    // The label the question names is the one a claim with no name of theirs writes.
+    const claimed = runMergeTool(UNIT, ["claim", "alpha"], mate);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout)).toMatchObject({ unit: "alpha", owner: "mate" });
+  });
+
+  test("the question says once which Units other teams hold", () => {
+    const { remote } = makeSeed(parallelDependencyBody());
+    const held = runMergeTool(UNIT, ["claim", "beta", "--team", "team-b"], clone(remote, "other"));
+    expect(held.status, held.out).toBe(0);
+    const offer = nextDirective(clone(remote, "mate"));
+    expect(labels(offer), JSON.stringify(offer)).toEqual(["Take alpha", "Not now"]);
+    expect(detailFor(offer, "Take alpha")).toBe("No other Unit waits on it.");
+    expect(String(offer.question).split("beta is with team-b").length - 1, String(offer.question)).toBe(1);
+  });
+
+  test("a team name the person gives goes through --team onto the claim, and the other clones see it", () => {
+    const { remote } = makeSeed(parallelDependencyBody());
+    const mate = clone(remote, "mate");
+    expect(commandFor(nextDirective(mate), "Take alpha")).toMatch(/ next --claim alpha$/);
+    const take = runMergeTool(ORCH, ["next", "--claim", "alpha", "--team", "Payments team"], mate);
+    expect(take.status, take.out).toBe(0);
+    expect(String(JSON.parse(take.stdout).message)).toContain("--claim alpha --team 'Payments team'");
+    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--team", "Payments team"], mate);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout)).toMatchObject({ owner: "Payments team" });
+    const offer = nextDirective(clone(remote, "late"));
+    expect(labels(offer), JSON.stringify(offer)).toEqual(["Take beta", "Not now"]);
+    expect(String(offer.question)).toContain("alpha is with Payments team");
+  });
+
   test("a team's clone after its Unit lands and it pulls is offered the next Unit", () => {
     const { seed: lead, remote } = makeSeed(parallelDependencyBody());
     const { checkout } = prepareCandidate(remote, "alpha", "team-a");
@@ -318,7 +367,13 @@ describe("step 4: a published Unit is reviewed and merged", () => {
     const offer = nextDirective(fresh);
     expect(isHandover(offer, "review"), JSON.stringify(offer)).toBe(true);
     expect(isHandover(offer, "join")).toBe(true);
-    expect(labels(offer)).toEqual(["Review and merge alpha", "Take beta", "Not now"]);
+    expect(labels(offer)).toEqual(["Take beta", "Review and merge alpha", "Not now"]);
+    expect(String(offer.question)).toContain("Take one for your team, or review and merge?");
+    expect(String(offer.numbered_prose_question)).toContain("1. **Take beta**");
+    expect(detailFor(offer, "Review and merge alpha"))
+      .toBe("Shows what the team built and its checks, then asks whether to merge it.");
+    // No self-loop: Not now runs next, which never puts the same question again.
+    expect(commandFor(offer, "Not now")).toMatch(/ next$/);
     expect(isHandover(nextDirective(fresh))).toBe(false);
   });
 });
@@ -338,6 +393,7 @@ describe("step 5: main is pushed after a land", () => {
     expect(String(offer.question)).toContain("so the other teams see alpha");
     expect(labels(offer)).toEqual(["Push main", "Not now"]);
     expect(commandFor(offer, "Push main")).toMatch(/ unit share$/);
+    expect(["Pushes", "Commits, then pushes"].map((lead) => `${lead} ${PLAIN_PUSH}`)).toContain(String(detailFor(offer, "Push main")));
     expect(isHandover(nextDirective(lead), "push")).toBe(false);
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
