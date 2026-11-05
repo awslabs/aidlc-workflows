@@ -292,10 +292,7 @@ import {
   engineAskMark,
   hasAnyUnitClaimRefs,
   noteEngineAskMark,
-  teamHandoverMarkName,
-  teamSharedHere,
   teamSkeletonOn,
-  workRanElsewhere,
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
@@ -572,7 +569,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { chatTookStep } from "./aidlc-record-core.ts";
+import { chatTookStep, workRanElsewhere } from "./aidlc-record-core.ts";
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -594,6 +591,8 @@ import {
   refreshClaimRefs,
   shareBlocker,
   shareTarget,
+  teamHandoverMarkName,
+  teamSharedHere,
   type UnitClaimOverview,
   type UnitClaimView,
   workToCommit,

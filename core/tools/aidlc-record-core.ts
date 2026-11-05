@@ -1754,6 +1754,16 @@ export function auditShardName(projectDir: string): string {
   return name;
 }
 
+// The work was run from another checkout: every stage or gate row of it is in
+// another clone's shard, or this clone has written none (a fresh clone of it).
+// Doctor's hook check aims at this machine only when it is not; team routing
+// shows a fresh clone the board, never the walk the lead's checkout keeps.
+export function workRanElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
+  const ownShard = knownAuditShardName(projectDir);
+  const progress = rows.filter((row) => row.event.startsWith("STAGE_") || row.event.startsWith("GATE_"));
+  return progress.length > 0 && progress.every((row) => basename(row.shard) !== ownShard);
+}
+
 // This clone's shard name when it is already known, without minting a token or
 // upgrading the clone-id file: readers use it to prefer their own shard, or to
 // tell their own rows from other clones', and must not write. Null means this

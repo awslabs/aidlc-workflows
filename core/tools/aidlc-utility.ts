@@ -193,7 +193,6 @@ import {
   auditFilePath,
   auditShardHost,
   auditShards,
-  workRanElsewhere,
   assertChangeControlLedgerWritable,
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
@@ -515,7 +514,7 @@ import {
   declaredProjectType,
   installWithoutReplacing,
 } from "./aidlc-lib.ts";
-import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
+import { chatTookStep, relativeRecordDirForSelection, workRanElsewhere } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";

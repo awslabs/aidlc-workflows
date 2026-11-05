@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -40,7 +41,7 @@ import {
   type CachedUnitClaim,
   candidateReviewCoverageProjection,
   clearClaimGeneration,
-  clearTeamHandoverMarks,
+  clearEngineAskMark,
   clearUnitScopeStamp,
   committedTextBytes,
   ENGINE_DIR,
@@ -58,8 +59,10 @@ import {
   isTeamUnitOwnership,
   isoTimestamp,
   loadStageGraphAll,
-  noteTeamShared,
+  engineAskMark,
+  noteEngineAskMark,
   parseArgs,
+  recordDir,
   parseBoltDag,
   readAppendOnlyFileNoFollowOrThrow,
   readAuditShardEvents,
@@ -4516,6 +4519,40 @@ function clearUnitOwner(projectDir: string, unit: string): void {
     }).join("\n");
     if (changed) writeStateFile(projectDir, updated);
   });
+}
+
+// A team hand-over question (share, join, publish, review, push) is put once in
+// the state it is due in: its mark names the offer and that state, so a new
+// state is a new mark and the reply that does not take it never meets it again.
+export function teamHandoverMarkName(kind: string, key: string): string {
+  return `team-handover-${kind}-${key.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 120)}.json`;
+}
+
+const TEAM_SHARED = "team-shared.json";
+
+// This checkout shared the plan with the teams (`aidlc unit share`), so it
+// shows the board from then on, not the walk that builds the Units here.
+function noteTeamShared(projectDir: string): void {
+  noteEngineAskMark(projectDir, TEAM_SHARED);
+}
+
+export function teamSharedHere(projectDir: string): boolean {
+  return engineAskMark(projectDir, TEAM_SHARED) !== null;
+}
+
+// A hand-over that did not happen (a commit or a push refused) is due again.
+function clearTeamHandoverMarks(projectDir: string, kinds: readonly string[]): void {
+  const root = recordDir(projectDir);
+  if (root === null) return;
+  let names: string[];
+  try {
+    names = readdirSync(join(root, ".aidlc-engine"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (kinds.some((kind) => name.startsWith(`team-handover-${kind}-`))) clearEngineAskMark(projectDir, name);
+  }
 }
 
 // What a commit of the work here takes: every change git shows, files git does

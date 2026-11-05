@@ -1106,6 +1106,14 @@ export function nextDirective(projectDir: string): Record<string, unknown> {
   return directive;
 }
 
+/** The step after a landing the remote does not have yet is the offer to push
+ *  it (team-handover push); its "Not now" runs `next`, whose step this returns. */
+export function nextPastPushOffer(projectDir: string): Record<string, unknown> {
+  const offer = nextDirective(projectDir);
+  expect(offer, JSON.stringify(offer)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["push"] });
+  return nextDirective(projectDir);
+}
+
 export function unitProgressRow(projectDir: string, unit: string): string {
   return readFileSync(seededStateFile(projectDir), "utf-8")
     .split(/\r?\n/)
