@@ -16,6 +16,18 @@ function mappedRepoDirs(projectDir: string): string[] {
   return dirs;
 }
 
+// A real path with any Windows 8.3 short name expanded: Bun's realpathSync
+// keeps the short name, realpathSync.native expands it. Where native cannot
+// answer (some volumes, such as a RAM disk), the realpathSync answer stands;
+// no test can make native fail.
+function expandedRealPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return realpathSync(path);
+  }
+}
+
 // A repo the person mapped counts as the project, wherever it sits: the one
 // rule for every "only inside the project" check. A target is inside when the
 // path as written, or the real path of its deepest existing ancestor, lies under
@@ -32,7 +44,7 @@ export function insideProject(projectDir: string, target: string): boolean {
       const lexical = resolvePath(root);
       roots.push(lexical);
       try {
-        roots.push(realpathSync(lexical));
+        roots.push(expandedRealPath(lexical));
       } catch {
         // A mapped repo not cloned yet has only its lexical path.
       }
@@ -47,7 +59,7 @@ export function insideProject(projectDir: string, target: string): boolean {
       suffix.unshift(basename(cursor));
       cursor = parent;
     }
-    const real = join(realpathSync(cursor), ...suffix);
+    const real = join(expandedRealPath(cursor), ...suffix);
     return roots.some((root) => within(real, root));
   } catch {
     return true;

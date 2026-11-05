@@ -5,7 +5,7 @@
 // can read it without an import cycle.
 
 import { readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
 import { repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
 
@@ -347,8 +347,8 @@ export function workspaceGitignoreEntries(manifest: WorkspaceManifest): string[]
 // repos.json after `entry` joins it: one entry added in place, the file's
 // comments and layout kept, or a new file when there is none. Null when the
 // text has no `repos` array to add to.
-export function workspaceManifestWith(raw: string | null, org: string, entry: WorkspaceRepoEntry): string | null {
-  if (raw === null) return `${JSON.stringify({ org, repos: [entry] }, null, 2)}\n`;
+export function workspaceManifestWith(raw: string | null, org: string | undefined, entry: WorkspaceRepoEntry): string | null {
+  if (raw === null) return `${JSON.stringify({ ...(org === undefined ? {} : { org }), repos: [entry] }, null, 2)}\n`;
   return appendJsoncArrayItem(raw, "repos", entry);
 }
 

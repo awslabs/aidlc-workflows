@@ -1372,8 +1372,8 @@ export interface StagedWorkspaceRepo {
 }
 
 /** Clone `repo` (its `url`, else `org`'s address) into a staging folder on the volume its checkout goes to. Throws CloneFailure. */
-export function stageWorkspaceRepo(root: string, org: string, repo: WorkspaceRepoEntry): StagedWorkspaceRepo {
-  return { clones: stagePlan(root, { org, repos: [repo] }, [repo], () => {}), repo };
+export function stageWorkspaceRepo(root: string, org: string | undefined, repo: WorkspaceRepoEntry): StagedWorkspaceRepo {
+  return { clones: stagePlan(root, { ...(org === undefined ? {} : { org }), repos: [repo] }, [repo], () => {}), repo };
 }
 
 /**

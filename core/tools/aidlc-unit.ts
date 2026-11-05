@@ -139,7 +139,6 @@ import {
   sessionsDir,
   setActiveSpaceCursor,
   writeFileAtomic,
-  ENGINE_DIR,
   intentRepos,
   setField,
 } from "./aidlc-lib.js";
@@ -263,6 +262,7 @@ function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitRe
   const result = gitBytes(projectDir, args, env);
   return { ...result, stdout: result.stdout.toString("utf-8") };
 }
+
 function localGit(
   projectDir: string,
   args: string[],
@@ -5510,7 +5510,11 @@ function soloOpening(projectDir: string, home: HomeWork, plan: { state: string; 
   const finalStage = unitMajorConstructionStageSlugs(scope, plan.state, true).at(-1) ?? "code-generation";
   const progress = soloUnitsProgress(readAuditShardEvents(projectDir, home.dirName, home.space), finalStage);
   const blockers = new Map(parsed.units.map((edge) => [edge.name, edge.depends_on.filter((dep) => !progress.done.has(dep))]));
-  return { units: parsed.units.map((edge) => edge.name), blockers, completed: progress.done, skeleton: parsed.batches[0][0], started: progress.started };
+  // Solo work has no merge into main: a Unit its walk finished is landed.
+  return {
+    units: parsed.units.map((edge) => edge.name), blockers, completed: progress.done, landed: progress.done,
+    skeleton: parsed.batches[0][0], started: progress.started,
+  };
 }
 
 // Take a Unit of the home's work: hold it at the home (adopting the lead's

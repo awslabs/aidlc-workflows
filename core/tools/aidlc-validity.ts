@@ -1013,6 +1013,8 @@ export function stageOutputAmendedFields(
     "Message Id": message,
     Details: `changed before the person's next message after ${message}; receipt renewed`,
   };
+}
+
 /** The record of a stage's receipt renewed for an amended shared input. */
 export function sharedInputAmendedFields(stage: string, basis: StageValidationBasis, input: string): Record<string, string> {
   return { Stage: stage, [VALIDATION_BASIS_FIELD]: canonicalJson(basis), Input: input };

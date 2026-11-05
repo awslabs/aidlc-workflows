@@ -1011,18 +1011,6 @@ function inProjectSpelling(projectDir: string, target: string): string {
   }
 }
 
-// A real path with any Windows 8.3 short name expanded: Bun's realpathSync
-// keeps the short name, realpathSync.native expands it. Where native cannot
-// answer (some volumes, such as a RAM disk), the realpathSync answer stands;
-// no test can make native fail.
-function expandedRealPath(path: string): string {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    return realpathSync(path);
-  }
-}
-
 // A write outside the project is never the plan's business. The project is
 // the workspace and every repo the person mapped elsewhere (insideProject owns
 // that rule), so a build writing into a mapped repo waits for its plan as a

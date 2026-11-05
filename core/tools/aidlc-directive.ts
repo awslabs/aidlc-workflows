@@ -750,6 +750,10 @@ export interface RepoFacts {
 // carries on and records it; the other choice goes back to Units Generation.
 export interface UnitsReposAskDirective extends AskDirectiveBase {
   ask_type: "units-repos";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 // The one offer to write repos.json from the repos found here. Each choice is
 // one complete command.
 export interface ReposManifestAskDirective extends AskDirectiveBase {

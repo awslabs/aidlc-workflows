@@ -15,9 +15,7 @@ import {
   committedTextBytes,
   filterProducesByKind,
   getField,
-  type IntentRegistryEntry,
   intentRepos,
-  intentsDir,
   isPerUnitStage,
   isTeamUnitOwnership,
   listIntentDirs,
@@ -28,7 +26,6 @@ import {
   readStateFile,
   slugify,
   unitDependencyPath,
-  writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { gitAddressKey, recordableGitAddress } from "./aidlc-workspace-repos.ts";
 

@@ -142,6 +142,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   hostedAddressOwner,
   parseWorkspaceManifest,
+  repoNotThereLine,
   type WorkspaceManifest,
   workspaceManifestWith,
   type WorkspaceRepoEntry,
@@ -9775,7 +9776,7 @@ function plannedRepoClone(
   projectDir: string,
   name: string,
   url: string | undefined,
-): { repo: WorkspaceRepoEntry; org: string; manifest: { raw: string | null; next: string | null }; note: string | null } {
+): { repo: WorkspaceRepoEntry; org: string | undefined; manifest: { raw: string | null; next: string | null }; note: string | null } {
   const path = join(projectDir, "repos.json");
   const raw = existsSync(path) ? readFileSync(path, "utf-8") : null;
   let manifest: WorkspaceManifest | null = null;
@@ -9788,6 +9789,12 @@ function plannedRepoClone(
   }
   const entry = manifest?.repos.find((repo) => repo.name === name);
   if (manifest !== null && entry !== undefined) {
+    if (url === undefined && entry.url === undefined && manifest.org === undefined) {
+      die(
+        `${repoNotThereLine(projectDir, name)} repos.json gives it no "url" and no "org" to clone it from: ` +
+          "add its \"url\" in repos.json, or in repos.local.json for your own copy, or give it with --url. Nothing was changed.",
+      );
+    }
     return {
       repo: url === undefined ? entry : { ...entry, url },
       org: manifest.org,
