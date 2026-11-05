@@ -1126,6 +1126,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#jumpStepPrint`]: { use: "keeps", why: "as above, for a step that names one jump", from: [`${ORCH}#emitTypedResumeChoice`] },
   [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },
   [`${ORCH}#parkedDirective`]: { use: "keeps", why: "a step's narration, which may carry their words", from: [`${ORCH}#parkAfterApproval`] },
+  [`${ORCH}#lineEndingTurn`]: { use: "keeps", why: "a team step's narration (the home's board, a take's line), which may carry the lead's word on a repo's merge" },
   [`${ORCH}#parkAfterApproval`]: { use: "keeps", why: "as above" },
   [`${ORCH}#nextArgsAreOnlyWords`]: { use: "keeps", why: "the presence shape: next carries only words" },
   [`${ORCH}#planTypedAloneBesideWork`]: { use: "keeps", why: "the presence shape: a plan's name with no words after it" },
