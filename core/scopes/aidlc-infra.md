@@ -29,7 +29,11 @@ Guard Policy defaults to off: provisioning and deployment inputs that move after
 
 Infrastructure work is not about product features, so ideation,
 user-stories, domain-design, units-generation, and code-generation
-are skipped. It is about how the system is provisioned and run, so the
+are skipped: infrastructure-design writes the IaC in code-generation's
+place, into the workspace the deployment runs from, and its completion
+gate is where that IaC is approved — no Unit plan exists here, so there
+is no Code Generation plan approval — before environment-provisioning
+applies it. It is about how the system is provisioned and run, so the
 operation stages (deployment-pipeline, environment-provisioning,
 deployment-execution, observability-setup) plus the NFR and
 infrastructure design that feed them are EXECUTE. This is the only scope

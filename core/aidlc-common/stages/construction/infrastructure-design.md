@@ -66,7 +66,7 @@ outputs: "infrastructure-specification.md (deployment + services + shared, tabul
 
 ## Constraints
 
-This is a design stage — artifacts describe what infrastructure is needed and why, not implementation-ready code. Complete IaC (CDK constructs, Terraform modules, CloudFormation), full Lambda handlers, and IAM policy documents belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
+This is a design stage — artifacts describe what infrastructure is needed and why, not implementation-ready code. Complete IaC (CDK constructs, Terraform modules, CloudFormation), full Lambda handlers, and IAM policy documents belong in code-generation. The one exception is `infra`, which skips code-generation and units-generation both: no later stage writes the IaC there and no Unit plan exists to approve, so this stage writes it itself, in Step 5, following the Deployment table's *IaC approach* row, into the workspace the deployment runs from rather than the record directory — and its own completion gate is the approval that precedes environment-provisioning applying that IaC. Everywhere else, limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
 
 ## Steps
 
@@ -129,7 +129,7 @@ Design infrastructure across four areas:
 
 ### Step 5: Generate Artifacts
 
-Generate the following in `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content **tabular** — the deployment, services, and shared sections are tables, and monitoring is tabular wherever it can be. Prose is for rationale only, not for data a table can hold.
+Generate the following in `<record>/construction/{unit-name}/infrastructure-design/` — under `infra`, the IaC itself goes into the workspace instead, as the Constraints say. Keep the content **tabular** — the deployment, services, and shared sections are tables, and monitoring is tabular wherever it can be. Prose is for rationale only, not for data a table can hold.
 
 **1. `infrastructure-specification.md`** — the core infrastructure design: deployment, infrastructure services, and any shared resources, folded into one document. Structure it as:
 
