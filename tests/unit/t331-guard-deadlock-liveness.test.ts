@@ -2188,6 +2188,50 @@ describe("AttemptView projections and refusal streaks", () => {
     ).toBe(null);
   });
 
+  test("candidate coverage stands when only the Unit's stage diary changes after the review", () => {
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const attempt = { Unit: "alpha", "Attempt Generation": "1" };
+    const review = (verdict: string): AuditShardEvent[] => [
+      event("REVIEW_REQUESTED", "2026-08-28T00:00:01Z", {
+        ...attempt, Stage: "functional-design", Reviewer: "reviewer", Iteration: "1",
+        "Artifact Fingerprint": fingerprint,
+      }, "a.md", 0, 0),
+      event("REVIEW_COMPLETED", "2026-08-28T00:00:01Z", {
+        ...attempt, Stage: "functional-design", Reviewer: "reviewer", Iteration: "1",
+        Verdict: verdict, "Artifact Fingerprint": fingerprint,
+      }, "a.md", 0, 1),
+    ];
+    const approval = event("GATE_APPROVED", "2026-08-28T00:00:01Z", {
+      ...attempt, Stage: "functional-design", "Gate Scope": "per-stage",
+      "Gate Stages": "functional-design", "User Input": "Approve",
+    }, "a.md", 0, 2);
+    const written = (file: string): AuditShardEvent =>
+      event("ARTIFACT_UPDATED", "2026-08-28T00:00:01Z", {
+        File: `aidlc/construction/alpha/functional-design/${file}`,
+      }, "a.md", 0, 3);
+    const project = (rows: AuditShardEvent[]) =>
+      candidateReviewCoverageProjection(rows, {
+        unit: "alpha",
+        generation: 1,
+        stage: "functional-design",
+        reviewer: "reviewer",
+        artifactPrefix: "construction/alpha/functional-design/",
+        expectedFingerprint: fingerprint,
+      });
+    const coverage = (rows: AuditShardEvent[]) => project(rows)?.coverage ?? null;
+
+    // A team Unit keeps its stage diary in its own stage folder, and the
+    // learnings step writes it after the review: it is not reviewed work.
+    expect(coverage([...review("READY"), approval, written("memory.md")])).toBe("ready");
+    expect(project([...review("NOT-READY"), approval, written("memory.md")])).toEqual({
+      coverage: "approved",
+      approval: approval.block,
+    });
+    // A reviewed document changed after the review still undoes it.
+    expect(coverage([...review("READY"), approval, written("business-logic-model.md")])).toBe(null);
+    expect(coverage([...review("NOT-READY"), approval, written("business-logic-model.md")])).toBe(null);
+  });
+
   test("candidate coverage counts the person's approval after a NOT-READY review", () => {
     const fingerprint = `sha256:${"a".repeat(64)}`;
     const attempt = { Unit: "alpha", "Attempt Generation": "1" };

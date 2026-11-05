@@ -19809,6 +19809,11 @@ export function candidateReviewCoverageProjection(
     approvalAccepts?: (block: string) => boolean;
   },
 ): { coverage: "ready" | "approved"; approval: string | null } | null {
+  // A team Unit keeps its stage diary in this folder, and the learnings step
+  // writes it after the review: it is not reviewed work.
+  const reviewedWork = (file: string): boolean =>
+    file.includes(options.artifactPrefix) &&
+    !file.endsWith(`${options.artifactPrefix}memory.md`);
   const events = sortAttemptEvents(rows);
   const relevantByTimestamp = new Map<string, Set<string>>();
   for (const event of events) {
@@ -19816,7 +19821,7 @@ export function candidateReviewCoverageProjection(
     const relevant =
       event.event === "ARTIFACT_CREATED" ||
       event.event === "ARTIFACT_UPDATED"
-        ? file.includes(options.artifactPrefix)
+        ? reviewedWork(file)
         : (event.event === "REVIEW_REQUESTED" ||
             event.event === "REVIEW_COMPLETED" ||
             event.event === "GATE_APPROVED" ||
@@ -19849,7 +19854,7 @@ export function candidateReviewCoverageProjection(
       event.event === "ARTIFACT_UPDATED"
     ) {
       const file = auditBlockField(event.block, "File") ?? "";
-      if (file.includes(options.artifactPrefix)) {
+      if (reviewedWork(file)) {
         coverage = null;
         concernOpen = false;
         approval = null;
