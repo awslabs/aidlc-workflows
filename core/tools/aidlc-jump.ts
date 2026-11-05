@@ -191,9 +191,12 @@ export function forwardJumpNotice(
   const and = (names: readonly string[]): string =>
     names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   const label = (slug: string): string => stageLabel(stageOrNone(slug), slug) ?? slug;
-  // The per-unit steps are said per unit below.
+  // The per-unit steps are said per unit below. With no unit sentence to say
+  // (every unit finished them, at the one late question), the jump skips those
+  // stages' approval, and the stage list names them.
+  const perUnit = units !== null && units.skipped.length + units.redone.length > 0;
   const names = skipped
-    .filter((node) => units === null || !isPerUnitStage(node))
+    .filter((node) => !perUnit || !isPerUnitStage(node))
     .map((node) => stageLabel(node, node.slug))
     .filter((name): name is string => name !== null);
   const list = and(names);
@@ -207,7 +210,7 @@ export function forwardJumpNotice(
     return [...byWhat];
   };
   const who = (unitNames: string[]): string => `unit${unitNames.length === 1 ? "" : "s"} ${and(unitNames)}`;
-  const perUnit = units === null ? [] : [
+  const sentences = units === null ? [] : [
     ...groups(units.skipped).map(([what, unitNames]) => `Skipped for ${who(unitNames)}: ${what}.`),
     ...(units.skipped.length > 0 ? ["Their files stay."] : []),
     ...groups(units.redone).map(([what, unitNames]) =>
@@ -217,7 +220,7 @@ export function forwardJumpNotice(
   const back = earliest ?? cameFrom;
   return [
     `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}.`,
-    ...perUnit,
+    ...sentences,
     `You can go back to ${stageLabel(stageOrNone(back), back) ?? "where you were"} any time.`,
   ].join(" ");
 }

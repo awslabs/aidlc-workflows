@@ -212,6 +212,21 @@ describe("t-forward-jump-names-units: the jump's own line names the Units it lea
     );
   });
 
+  // With Unit checkpoints off, every Unit finished and the one late question
+  // open, the jump skips those stages' approval: the line still names them.
+  test("a jump from the late question, every Unit finished, names the stages whose approval it skips", () => {
+    const p = unitWalk(["alpha", "beta"]);
+    finish(p, "alpha", STAGES);
+    finish(p, "beta", STAGES);
+    next(p);
+    const step = next(p, ["--stage", "build-and-test"]);
+    expect(step.stage, JSON.stringify(step)).toBe("build-and-test");
+    expect(notices(step)).toContain(
+      "Moved to Build and Test; skipped Functional Design, NFR Requirements, NFR Design, Infrastructure Design and " +
+        "Code Generation. You can go back to Functional Design any time.",
+    );
+  });
+
   test("Units with the same steps share a sentence, and a Unit that starts over is named with its approvals", () => {
     const stage = (slug: string) => findStageBySlug(slug)!;
     expect(forwardJumpNotice(stage("build-and-test"), [stage("functional-design"), stage("code-generation")], "code-generation", {
@@ -221,6 +236,11 @@ describe("t-forward-jump-names-units: the jump's own line names the Units it lea
       "Moved to Build and Test. Skipped for units beta and delta: Code Generation. Skipped for unit gamma: " +
         "Functional Design and Code Generation. Their files stay. You can go back to Functional Design any time.",
     );
+    // No Unit sentence to say: the stage list names the per-Unit stages.
+    expect(forwardJumpNotice(stage("build-and-test"), [stage("nfr-design"), stage("code-generation")], "code-generation", {
+      skipped: [],
+      redone: [],
+    })).toBe("Moved to Build and Test; skipped NFR Design and Code Generation. You can go back to Code Generation any time.");
     expect(forwardJumpNotice(stage("code-generation"), [], "functional-design", {
       skipped: [],
       redone: [["alpha", ["code-generation"]]],
