@@ -1514,11 +1514,16 @@ function outsideUnitTreePaths(violations: string[]): string[] {
 // The one text publish, pin and land give for a record outside the Unit's
 // tree, so the three cannot drift apart. It starts mid-sentence: publish puts
 // it after "Pin will refuse this candidate:", pin and land after their refusal.
-function outsideUnitTreeNextStep(unit: string, integrationRef: string): string {
+// Pin and land run in the main checkout, so they name the owner's checkout
+// where publish, run in that checkout, says "this branch".
+function outsideUnitTreeNextStep(unit: string, integrationRef: string, owner?: string): string {
+  const where = owner === undefined
+    ? "Take these out of this branch"
+    : `In the checkout where ${owner} claimed ${unit} (not this one), take these out of its branch`;
   return "a claimed Unit lands only " +
     `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
-    "such as contract-summary.md, or a stage-level file) is changed on main. Take these out of " +
-    "this branch (git rm a file main does not have, or " +
+    `such as contract-summary.md, or a stage-level file) is changed on main. ${where} ` +
+    "(git rm a file main does not have, or " +
     `git checkout ${integrationRef.replace(/^refs\/(remotes|heads)\//, "")} -- <path> for one it does), commit, and ` +
     "publish again.";
 }
@@ -1528,9 +1533,10 @@ function refuseWithNextStep(
   violations: string[],
   unit: string,
   integrationRef: string,
+  owner: string,
 ): string {
   if (outsideUnitTreePaths(violations).length === 0) return message;
-  const step = outsideUnitTreeNextStep(unit, integrationRef);
+  const step = outsideUnitTreeNextStep(unit, integrationRef, owner);
   return `${message} ${step[0].toUpperCase()}${step.slice(1)}`;
 }
 
@@ -1777,6 +1783,7 @@ function candidateEvidence(
         boundary.violations,
         claim.unit,
         claim.payload.integration_ref,
+        claim.owner,
       ),
     );
   }
@@ -3160,6 +3167,7 @@ function assertLandCandidateBoundary(
         remote
           ? `refs/remotes/${remote}/${transaction.integration_branch}`
           : transaction.integration_branch,
+        transaction.owner,
       ),
     );
   }
