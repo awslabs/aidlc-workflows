@@ -5193,6 +5193,34 @@ process.exit(0);
     expect(after.hooks).toEqual(release.hooks);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A hand edit or a merge left the person's settings.json unparseable. Config
+  // names the file and the step, and leaves the file as it is, whether or not
+  // a provider is recorded (each takes its own read of the file).
+  for (const providers of [false, true]) {
+    test(`a settings.json that is not valid JSON is named, with the step, and left as it is${providers ? " (provider recorded)" : ""}`, () => {
+      const project = install("claude");
+      if (providers) {
+        const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+        const data = JSON.parse(readFileSync(dataPath, "utf-8")) as Record<string, unknown>;
+        data.providers = { schemaVersion: 1, provider: "current" };
+        writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+      }
+      const settingsPath = join(project, ".claude", "settings.json");
+      const broken = '{ "hooks": { broken\n';
+      writeFileSync(settingsPath, broken);
+      const refresh = run([
+        "config", "--project-dir", project,
+        "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+      ], project, runtimeEnv());
+      const output = refresh.stdout + refresh.stderr;
+      expect(refresh.status, output).toBe(4);
+      expect(output).toContain("error: .claude/settings.json is not valid JSON (");
+      expect(output).toMatch(/fix: correct \.claude\/settings\.json, then run `[^`]*config [^`]*--harness claude[^`]*` again/);
+      expect(output).not.toContain("pass --from the release files");
+      expect(readFileSync(settingsPath, "utf-8")).toBe(broken);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("a release change to AI-DLC's hook entries is not reported as a local edit", () => {
     const env = runtimeEnv();
     const claude = install("claude");
