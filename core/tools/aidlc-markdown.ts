@@ -1043,6 +1043,61 @@ export function projectVisibleMarkdownLines(
 	});
 }
 
+// Comments and whitespace only. Read left to right, never by a backtracking
+// pattern: a long line of comments would make one take exponential time.
+function onlyComments(text: string): boolean {
+  let rest = text.trimStart();
+  while (rest.startsWith("<!--")) {
+    const close = rest.indexOf("-->", 4);
+    if (close < 0) return false;
+    rest = rest.slice(close + 3).trimStart();
+  }
+  return rest === "";
+}
+
+// The text without its HTML comment blocks (CommonMark's HTML block type 2,
+// one that opens with `<!--`): the shipped rule templates write their notes for
+// the person who edits them that way, and a stage hands the agent the rest. A
+// block goes only when it holds comments and whitespace past each line's
+// container prefix; one that shows text after a comment closes stays whole, so
+// nothing visible goes and no comment is left open. Every other line stays
+// byte for byte with its own line ending: code (a comment-looking line there is
+// code), a comment on a line with text, headings. Where a removed run stood
+// between blank lines, or at the start or the end, one blank goes with it.
+export function withoutCommentBlocks(content: string): string {
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const lines = content.slice(bom.length).match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g) ?? [];
+  const blocks = markdownBlocks(content).lines;
+  const body = (index: number): string => lines[index].replace(/(?:\r\n|\r|\n)$/, "");
+  const removed = lines.map(() => false);
+  for (let start = 0; start < lines.length;) {
+    const block = blocks[start];
+    let end = start + 1;
+    if (block.kind === "htmlFlow" && block.htmlKind === 2) {
+      while (end < lines.length && blocks[end].block === block.block) end++;
+      const parts: string[] = [];
+      for (let index = start; index < end; index++) parts.push(body(index).slice(blocks[index].contentStart));
+      if (onlyComments(parts.join("\n"))) removed.fill(true, start, end);
+    }
+    start = end;
+  }
+  const blank = (index: number): boolean => blocks[index].kind === "blank" && body(index).trim() === "";
+  const kept: string[] = [];
+  let lastKept = -1;
+  for (let index = 0; index < lines.length;) {
+    if (!removed[index]) {
+      kept.push(lines[index]);
+      lastKept = index++;
+      continue;
+    }
+    while (index < lines.length && removed[index]) index++;
+    const blankBefore = lastKept < 0 || blank(lastKept);
+    if (index < lines.length && blankBefore && blank(index)) index++;
+    else if (index === lines.length && lastKept >= 0 && blank(lastKept)) kept.pop();
+  }
+  return bom + kept.join("");
+}
+
 export function appendUnderHeading(
   content: string,
   heading: string,
