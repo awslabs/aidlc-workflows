@@ -2183,6 +2183,9 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const stale = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(stale.rc).toBe(1);
     expect(stale.out).toContain("What changed: app.ts; a path that is not source");
+    expect(stale.out).toContain(
+      "A background sync client (Google Drive, iCloud Drive, OneDrive, Dropbox) rewriting files on its own",
+    );
     expect(stale.out).not.toContain(".jest-cache/");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 

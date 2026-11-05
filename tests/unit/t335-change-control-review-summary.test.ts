@@ -434,10 +434,15 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     const receipts = freshReviewReceipts(proj, state, stage());
     expect(receipts.stageVerdict).toBeNull();
     expect(receipts.stageStale).toBe(true);
+    expect(receipts.stageWrittenPaths).toEqual([artifactRelative(proj)]);
     expect(receipts.acceptedChanges).toEqual([]);
     const refused = run(STATE_TOOL, ["approve", STAGE], proj);
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain(`output document changed after ${REVIEWER} reviewed it`);
+    expect(refused.stderr).toContain(`Files written after that review: ${artifactRelative(proj)}.`);
+    expect(refused.stderr).toContain(
+      "A background sync client (Google Drive, iCloud Drive, OneDrive, Dropbox) rewriting files on its own",
+    );
     expect(acceptedRows(proj)).toHaveLength(0);
   });
 
