@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
@@ -2550,7 +2550,7 @@ function handleTurns(args: string[], projectDir: string): void {
 
 export function main(argv: string[]): void {
   // A turn Claude Code started itself is settled before this command reads a turn.
-  settleClaudeTurnsFirst(argv);
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   // Extract --project-dir before general parsing

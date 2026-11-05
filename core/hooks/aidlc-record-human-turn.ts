@@ -562,7 +562,7 @@ try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   // A turn Claude Code started itself before this one is settled first, so
   // nothing below reads it as the person's (aidlc-claude-turn-origin.ts).
-  settleClaudeTurnsFirst([], projectDir);
+  settleClaudeTurnsFirst(projectDir);
   let sessionId = "";
   let promptSubmitted = false;
   let humanResponseText = "";

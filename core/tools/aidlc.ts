@@ -3342,14 +3342,14 @@ async function execute(action: Action): Promise<number> {
       : action.projectDir;
     // A turn Claude Code started itself is settled before the hook reads a turn;
     // the human-turn hook settles in its own process, which loads the engine anyway.
-    if (action.name !== "record-human-turn") settleClaudeTurnsFirst([], projectDir ?? runtimeProjectDir());
+    if (action.name !== "record-human-turn") settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHook({ ...action, projectDir }));
   }
   if (action.type === "hook-group") {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
-    settleClaudeTurnsFirst([], projectDir ?? runtimeProjectDir());
+    settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHookGroup({ ...action, projectDir }));
   }
   if (action.type === "statusline") {

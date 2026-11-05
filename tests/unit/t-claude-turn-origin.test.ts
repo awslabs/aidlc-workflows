@@ -6,10 +6,15 @@
 // prompt, and its turn's own row (`turnOrigin: "scheduled"`, a slash command's
 // in Claude Code's own envelope) lands only after the hook returns.
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { CLAUDE_TURNS_PENDING_DIR, claudeTurnsPending, settleClaudeTurnsFirst } from "../../core/tools/aidlc-claude-turn-pending.ts";
+import {
+  CLAUDE_TURNS_PENDING_DIR,
+  claudeTurnsPending,
+  projectDirFlag,
+  settleClaudeTurnsFirst,
+} from "../../core/tools/aidlc-claude-turn-pending.ts";
 import {
   auditMark,
   claudeTranscriptOrigin,
@@ -135,15 +140,37 @@ describe("the pending folder", () => {
     try {
       expect(CLAUDE_TURNS_PENDING_DIR).toBe(relative(dir, join(sessionsDir(dir), "claude-turns")));
       expect(claudeTurnsPending(dir)).toBe(false);
-      settleClaudeTurnsFirst([], dir);
-      settleClaudeTurnsFirst(["approve", "feasibility", "--project-dir", join(dir, "nowhere")]);
+      settleClaudeTurnsFirst(dir);
+      settleClaudeTurnsFirst(join(dir, "nowhere"));
+      expect(projectDirFlag(["approve", "feasibility", "--project-dir", "/p"])).toBe("/p");
+      expect(projectDirFlag(["approve", "--project-dir=/q"])).toBe("/q");
+      expect(projectDirFlag(["approve", "feasibility"])).toBeUndefined();
       mkdirSync(join(dir, CLAUDE_TURNS_PENDING_DIR), { recursive: true });
       expect(claudeTurnsPending(dir)).toBe(false);
       writeFileSync(join(dir, CLAUDE_TURNS_PENDING_DIR, "not-json.json"), "{");
       expect(claudeTurnsPending(dir)).toBe(true);
-      settleClaudeTurnsFirst([], dir); // fail-open: an unreadable entry changes nothing and throws nothing
+      expect(() => settleClaudeTurnsFirst(dir)).not.toThrow(); // an unreadable entry decides nothing
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("every entry that reads a person's turns settles first", () => {
+  // The readers of a person's turns a tool's command can reach.
+  const READERS = /\b(humanRepliedSinceGate|humanActedSinceGate|personsGateReply|requireProtectedResponse|proveMessage|personRepliedAfter|repliesAfter|latestReplyAfter|personRepliedSinceGateShown|personAskedSinceGate|requestMessages|constructionStaffingPassedOver|repoScopePassedOver|gateWordsSinceUnitReview|humanTurnState|personTurnStands|readProtectedResponse|requireHumanConstructionPolicyChange)\b/;
+  test("each engine tool with its own entry that reads them calls settleClaudeTurnsFirst", () => {
+    const tools = join(REPO_ROOT, "core", "tools");
+    const skip = new Set(["aidlc-lib.ts", "aidlc-record-core.ts", "aidlc-message-store.ts", "aidlc-claude-turn-origin.ts", "aidlc-claude-turn-pending.ts"]);
+    const missing = readdirSync(tools)
+      .filter((name) => /^aidlc-[a-z-]+\.ts$/.test(name) && !skip.has(name))
+      .filter((name) => {
+        const text = readFileSync(join(tools, name), "utf-8");
+        return text.includes("import.meta.main") && READERS.test(text) && !text.includes("settleClaudeTurnsFirst(");
+      });
+    expect(missing).toEqual([]);
+    const hook = readFileSync(join(REPO_ROOT, "core", "hooks", "aidlc-record-human-turn.ts"), "utf-8");
+    expect(hook).toContain("settleClaudeTurnsFirst(projectDir)");
+    expect(readFileSync(join(tools, "aidlc.ts"), "utf-8")).toContain("settleClaudeTurnsFirst(");
   });
 });

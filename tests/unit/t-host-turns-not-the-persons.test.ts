@@ -42,7 +42,6 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { setGuardPolicyLine } from "../../core/tools/aidlc-lib.ts";
-import { auditShardBlocks, withdrawnTurnPositions } from "../../core/tools/aidlc-record-core.ts";
 import { kiroCliPrompt, kiroCliRecord, kiroCliToolResults, kiroCliToolUse, kiroCliSteerText } from "../harness/kiro-cli-record.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -196,17 +195,21 @@ function readAudit(dir: string): string {
 const rows = (dir: string, event: string): string[] =>
   readAudit(dir).split(/\n(?=## )/).filter((block) => block.includes(`**Event**: ${event}\n`));
 const humanTurns = (dir: string): number => rows(dir, "HUMAN_TURN").length;
-// The person's turns as the engine reads them: a HUMAN_TURN a later HOST_TURN
-// took back (withdrawnTurnPositions) is none.
+// The person's turns as the engine should read them: a HUMAN_TURN a later
+// HOST_TURN names by its Message Id is none. Counted here, not by the engine's
+// own helper, so main's reading is measured against it.
 function liveHumanTurns(dir: string): number {
   const auditDir = seededAuditDir(dir);
   if (!existsSync(auditDir)) return 0;
   let count = 0;
   for (const name of readdirSync(auditDir).filter((n) => n.endsWith(".md"))) {
-    const blocks = auditShardBlocks(readFileSync(join(auditDir, name), "utf-8"));
-    const withdrawn = withdrawnTurnPositions(blocks);
+    const blocks = readFileSync(join(auditDir, name), "utf-8").split(/\n---\n/);
     blocks.forEach((block, pos) => {
-      if (!withdrawn.has(pos) && block.includes("**Event**: HUMAN_TURN\n")) count++;
+      const id = /\*\*Message Id\*\*: ([0-9a-f]{8})/.exec(block)?.[1];
+      if (!block.includes("**Event**: HUMAN_TURN\n")) return;
+      const takenBack = id !== undefined && blocks.slice(pos + 1).some((later) =>
+        later.includes("**Event**: HOST_TURN\n") && later.includes(`**Message Id**: ${id}`));
+      if (!takenBack) count++;
     });
   }
   return count;

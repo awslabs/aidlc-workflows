@@ -38,7 +38,6 @@ import {
 } from "./aidlc-lib.ts";
 import { refuseEngineObserverWrite } from "./aidlc-locks.ts";
 import { forgetMessage, isMessageId, readMessage } from "./aidlc-message-store.ts";
-import { withdrawPlanApprovalReplies } from "./aidlc-plan-approval-ask.ts";
 import { CLAUDE_TURNS_PENDING_DIR } from "./aidlc-claude-turn-pending.ts";
 import { auditShardBlocks } from "./aidlc-record-core.ts";
 
@@ -54,6 +53,8 @@ export interface PendingClaudeTurn {
 const PENDING_MAX = 200;
 const PENDING_MAX_BYTES = 256 * 1024;
 const TRANSCRIPT_TAIL_BYTES = 1 << 20;
+// The message store keeps a day (MESSAGE_RETENTION_MS); a key older than that decides nothing more.
+const PENDING_RETENTION_MS = 24 * 60 * 60 * 1000;
 const CHAT_FILE = /^[A-Za-z0-9._-]{1,128}$/;
 
 function pendingDir(projectDir: string): string {
@@ -180,50 +181,81 @@ export function settleClaudeTurns(projectDir: string): void {
       refuseEngineObserverWrite("settleClaudeTurns");
       // The record that chat's turns were written to, pinned as the hook pinned it.
       const pinned = enterHookWorkflow(projectDir, chat);
-      const takenBack: Array<{ id: string; text: string }> = [];
       try {
-        withAuditLock(projectDir, () => {
+        const takenBack = withAuditLock(projectDir, () => {
           const left: PendingClaudeTurn[] = [];
+          const hosts: Array<{ id: string; text: string }> = [];
           for (const entry of readPending(projectDir, chat)) {
             const message = readMessage(projectDir, entry.message);
-            if (message === null) continue; // gone with the store's retention: nothing left to decide
-            // The prompt as the hook got it is only the key to its own row.
+            // Gone with the store's retention, or older than it: nothing left to decide.
+            if (message === null || Date.now() - Date.parse(message.at) > PENDING_RETENTION_MS) continue;
+            // The prompt as the hook got it is only the key to its own row. The
+            // store cuts it at MESSAGE_TEXT_MAX_CHARS, so a longer wake-up never
+            // matches its row and stays the person's, as every turn was.
             const prompt = personsWordsText(message.text);
             const verdict = verdictOf(entry, prompt, Date.parse(message.at));
-            if (verdict.kind === "pending") {
-              left.push(entry);
-              continue;
+            if (verdict.kind === "person") continue;
+            // Pending, or taken back with its kept replies still to withdraw:
+            // either way the entry stays until that is done.
+            left.push(entry);
+            if (verdict.kind === "pending") continue;
+            if (!alreadyTakenBack(projectDir, entry.message)) {
+              appendAuditEntryUnlocked("HOST_TURN", {
+                Session: chat,
+                Origin: "host",
+                Reason: verdict.reason,
+                Source: "record",
+                "Message Id": entry.message,
+              }, projectDir);
             }
-            if (verdict.kind === "host") {
-              if (!alreadyTakenBack(projectDir, entry.message)) {
-                appendAuditEntryUnlocked("HOST_TURN", {
-                  Session: chat,
-                  Origin: "host",
-                  Reason: verdict.reason,
-                  Source: "record",
-                  "Message Id": entry.message,
-                }, projectDir);
-              }
-              forgetMessage(projectDir, entry.message);
-              takenBack.push({ id: entry.message, text: prompt });
-            }
+            hosts.push({ id: entry.message, text: prompt });
           }
           writePending(projectDir, chat, left);
+          return hosts;
         });
         // What the hook kept for the turn as the person's reply goes too,
-        // through each record's own writer (as words routed to new work do).
+        // through each record's own writer (as words routed to new work do),
+        // and only then the message and its entry: a withdrawal that fails
+        // is tried again on the next run.
+        const done = new Set<string>();
         for (const { id, text } of takenBack) {
-          withdrawProtectedReplyWords(projectDir, { messageId: id });
-          withdrawPlanApprovalReplies(projectDir, { messageId: id });
-          withdrawGuardRecoveryReply(projectDir, text);
+          if (!withdrawKeptReplies(projectDir, id, text)) continue;
+          forgetMessage(projectDir, id);
+          done.add(id);
+        }
+        if (done.size > 0) {
+          withAuditLock(projectDir, () =>
+            writePending(projectDir, chat, readPending(projectDir, chat).filter((entry) => !done.has(entry.message))));
         }
       } finally {
         pinned.restore();
       }
     } catch {
-      // This chat's turns stay the person's, as they were recorded.
+      // This chat's turns stay as they are: the person's, or taken back with
+      // their replies withdrawn on a later run.
     }
   }
+}
+
+// Each record's own withdrawal, each tried even when another fails. True when all ran.
+function withdrawKeptReplies(projectDir: string, id: string, text: string): boolean {
+  const steps: Array<() => void> = [
+    () => withdrawProtectedReplyWords(projectDir, { messageId: id }),
+    // Typed by hand: a type import of the plan question module takes the tests' typecheck past its heap.
+    () => (require("./aidlc-plan-approval-ask.ts") as {
+      withdrawPlanApprovalReplies(projectDir: string, which: { messageId: string }): void;
+    }).withdrawPlanApprovalReplies(projectDir, { messageId: id }),
+    () => withdrawGuardRecoveryReply(projectDir, text),
+  ];
+  let all = true;
+  for (const step of steps) {
+    try {
+      step();
+    } catch {
+      all = false;
+    }
+  }
+  return all;
 }
 
 // The engine's guard-recovery question keeps the reply to it by the digest of

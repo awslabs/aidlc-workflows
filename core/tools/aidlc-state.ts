@@ -1,5 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
@@ -941,7 +941,7 @@ class UnitWaveRouteRefusalError extends StateCommandError {}
 
 export function main(argv: string[]): void {
   // A turn Claude Code started itself is settled before this command reads a turn.
-  settleClaudeTurnsFirst(argv);
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const args = [...argv];
 
   // Extract --project-dir flag

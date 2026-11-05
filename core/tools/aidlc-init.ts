@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { proveMessage } from "./aidlc-message-store.ts";
 import { spawnSync } from "node:child_process";
@@ -157,6 +158,7 @@ import {
   pausedBySelection,
   pausedLine,
   resolveInvokingSessionId,
+  resolveProjectDir,
   resumedLine,
   sameFileIdentity,
   withAuditLock,
@@ -12849,6 +12851,8 @@ export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
 ): Promise<void> {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(input)));
   // A setup walk's own sections run inside the walk, for the harness it set up.
   if (!internal.setupWalkChild) configTargetHarnessDir = null;
   let argv = stripVerb(input);
