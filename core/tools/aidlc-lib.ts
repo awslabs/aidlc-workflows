@@ -32,7 +32,14 @@ import {
   repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
-import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
+import {
+  CORE_COMMAND_WORDS,
+  NEXT_VALUELESS_FLAGS,
+  nextFlagTakesFollowing,
+  PLUGIN_COMMAND_NAME_RE,
+  PLUGIN_COMMAND_SCRIPT_RE,
+  unitCommandArgv,
+} from "./aidlc-command.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -1073,6 +1080,106 @@ export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().active;
 }
 
+/** A command a plugin adds: `aidlc <name>` runs `script` from the plugin's tools/. */
+export type PluginCommandRow = { name: string; plugin: string; script: string; description: string };
+
+/** A plugin command that is not added, and who already has its name. */
+export type PluginCommandSkip = {
+  plugin: string;
+  name: string;
+  by: { kind: "core" } | { kind: "plan"; name: string } | { kind: "plugin"; plugin: string };
+};
+
+export type PluginCommandTable = {
+  commands: ReadonlyMap<string, PluginCommandRow>;
+  /** The names a plugin that is installed but off would add, each with that plugin. */
+  off: ReadonlyMap<string, string>;
+  skipped: readonly PluginCommandSkip[];
+};
+
+/**
+ * Which plugin command runs, the one owner of it: the commands each plugin
+ * composed into `dataDir` declares in its stamp (plugin sync writes them), in
+ * plugin name order. A name AI-DLC's own commands or a plan already has, or an
+ * earlier plugin took, is skipped with who has it, so core always keeps its
+ * names and the winner never depends on which sync ran first. A plugin that is
+ * off keeps its free names as off. `enabled` null: every plugin is on.
+ */
+export function pluginCommandTable(
+  dataDir: string,
+  enabled: ReadonlySet<string> | null,
+  plans: ReadonlySet<string>,
+): PluginCommandTable {
+  const declared: Array<{ plugin: string; rows: PluginCommandRow[] }> = [];
+  let files: string[] = [];
+  try {
+    files = readdirSync(dataDir).sort();
+  } catch {
+    files = [];
+  }
+  for (const file of files) {
+    const plugin = file.match(/^plugin-compose-([a-z][a-z0-9-]*)\.json$/)?.[1];
+    if (plugin === undefined || plugin === "aidlc") continue;
+    let stamp: unknown;
+    try {
+      stamp = JSON.parse(readFileSync(join(dataDir, file), "utf-8"));
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(stamp) || stamp.name !== plugin || !isPlainObject(stamp.commands)) continue;
+    const rows: PluginCommandRow[] = [];
+    for (const [name, value] of Object.entries(stamp.commands).sort(([left], [right]) => left.localeCompare(right))) {
+      if (
+        !PLUGIN_COMMAND_NAME_RE.test(name) || !isPlainObject(value) ||
+        typeof value.script !== "string" || !PLUGIN_COMMAND_SCRIPT_RE.test(value.script) ||
+        typeof value.description !== "string"
+      ) continue;
+      rows.push({ name, plugin, script: value.script, description: value.description });
+    }
+    declared.push({ plugin, rows });
+  }
+  const isOn = (plugin: string): boolean => enabled === null || enabled.has(plugin);
+  const commands = new Map<string, PluginCommandRow>();
+  const off = new Map<string, string>();
+  const skipped: PluginCommandSkip[] = [];
+  const holder = (name: string): PluginCommandSkip["by"] | null => {
+    if (CORE_COMMAND_WORDS.has(name)) return { kind: "core" };
+    if (plans.has(name)) return { kind: "plan", name };
+    const taken = commands.get(name);
+    return taken ? { kind: "plugin", plugin: taken.plugin } : null;
+  };
+  for (const { plugin, rows } of declared) {
+    if (!isOn(plugin)) continue;
+    for (const row of rows) {
+      const by = holder(row.name);
+      if (by === null) commands.set(row.name, row);
+      else skipped.push({ plugin, name: row.name, by });
+    }
+  }
+  for (const { plugin, rows } of declared) {
+    if (isOn(plugin)) continue;
+    for (const row of rows) if (holder(row.name) === null && !off.has(row.name)) off.set(row.name, plugin);
+  }
+  return { commands, off, skipped };
+}
+
+/** The command table of the project this process runs for; none when its plugin selection cannot be read. */
+export function projectPluginCommands(): PluginCommandTable {
+  let enabled: ReadonlySet<string> | null;
+  try {
+    enabled = pluginsEnabled();
+  } catch {
+    return { commands: new Map(), off: new Map(), skipped: [] };
+  }
+  let plans: ReadonlySet<string> = new Set();
+  try {
+    plans = validScopes();
+  } catch {
+    // A tree with no stage graph names no plans.
+  }
+  return pluginCommandTable(resolveDataDir(), enabled, plans);
+}
+
 /** The person's selection exactly as they typed it, for showing it back. */
 export function pluginsSelected(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
@@ -1515,7 +1622,10 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   // stays one when the refusal becomes a reading step: either way the turn
   // carries no workflow work (Full Suite 36549553601).
   if (isRefusedModifierNextArgv(args)) return true;
-  if (readNextLine(args).kind !== "exact") return false;
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact") return false;
+  // A plugin command runs as itself, no workflow work.
+  if (reading.command !== undefined) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -2329,8 +2439,10 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string, ses
   // A line the engine would hand to the agent is never acted on here: a seam
   // that runs before any agent reads the line must stand back from it, which is
   // what readNextLine answers for both of us. Only an exact line is this
-  // engine's own command.
-  if (readNextLine(args).kind !== "exact") return null;
+  // engine's own command. A plugin command stays on the engine and conductor
+  // path, as park does: no seam runs a plugin's code off-band.
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact" || reading.command !== undefined) return null;
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
   // freeform intent text and the funnel offers to create an intent named
@@ -39829,12 +39941,35 @@ export function nextTokenKind(token: string, following: string | undefined): "fl
  */
 export type NextLineReading =
   // `unit`: the Unit tool's argv, when the line is the person's Unit command (unitCommandArgv).
-  | { kind: "exact"; unit?: string[] }
+  // `command`: a plugin command leading the line, with its own arguments.
+  | { kind: "exact"; unit?: string[]; command?: { name: string; args: string[] } }
   | { kind: "words" }
   | { kind: "untaken-flag"; token: string; value?: string }
   | { kind: "value"; flag: string; value: string; valid: readonly string[] }
   | { kind: "plan-word"; scope: string }
-  | { kind: "noun"; noun: string };
+  | { kind: "noun"; noun: string }
+  // A plugin command's name opening a sentence of theirs.
+  | { kind: "command"; name: string; plugin: string };
+
+/**
+ * A plugin command leading the line (pluginCommandTable, an off plugin's
+ * included, so the person hears that it is off): its name, its own arguments,
+ * and whether a sentence follows the name, which, as for a noun of this
+ * engine's own, only the agent can read. Kiro IDE hands the whole line over as
+ * one argument, so its opening word is read. Null for any other line.
+ */
+function pluginCommandOnLine(
+  args: readonly string[],
+): { name: string; plugin: string; args: string[]; sentence: boolean } | null {
+  const tokens = args.length === 1 && /\s/.test(args[0].trim()) ? splitKiroCommandArgs(args[0]) : [...args];
+  const name = tokens[0];
+  if (name === undefined || !PLUGIN_COMMAND_NAME_RE.test(name) || CORE_COMMAND_WORDS.has(name)) return null;
+  const table = projectPluginCommands();
+  const plugin = table.commands.get(name)?.plugin ?? table.off.get(name);
+  if (plugin === undefined) return null;
+  const rest = tokens.slice(1);
+  return { name, plugin, args: rest, sentence: rest.length > 1 && !rest[0].startsWith("-") };
+}
 
 /**
  * One argument that is nothing but flags and their values is that command,
@@ -39985,6 +40120,13 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (head.includes("--config")) return { kind: "exact" };
   if (head[0] === "--statusline") return { kind: "exact" };
   if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
+  // A plugin command owns its argv, so nothing on it is read as next's own.
+  const command = pluginCommandOnLine(args);
+  if (command !== null) {
+    return command.sentence
+      ? { kind: "command", name: command.name, plugin: command.plugin }
+      : { kind: "exact", command: { name: command.name, args: command.args } };
+  }
 
   const words: string[] = [];
   let took = false;

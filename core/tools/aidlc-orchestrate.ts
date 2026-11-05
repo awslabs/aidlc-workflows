@@ -6156,6 +6156,7 @@ export interface ParsedFlags {
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
   unitPlan?: boolean; // --unit-plan: a compose the agent read as adding, splitting or dropping a Unit
   orchestratorVerb?: "park" | "team-board"; // leading orchestrator verb: terminal print naming that command
+  namedCommand?: { name: string; args: string[] }; // a plugin command leading the line: terminal print naming that command
   orchestratorVerbArgs?: string[]; // allowlisted trailing args for team-board (--space <s>, --intent <i>, --snapshot)
   configCommand?: string[]; // leading `config set|get|list ...`: execute the terminal config route, never freeform intent text
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
@@ -6232,12 +6233,14 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // (unknownWorkspaceWordStep), so the command stays parsed and that step runs.
   // The seams read the same reading and stand back from the line either way.
   if (
-    reading.kind === "value" || reading.kind === "plan-word" ||
+    reading.kind === "value" || reading.kind === "plan-word" || reading.kind === "command" ||
     (reading.kind === "noun" && !isWorkspaceNoun(reading.noun))
   ) {
     const said = args.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
     return { readingStep: reading, ...(said.length > 0 ? { intent: said } : {}) };
   }
+  // A plugin command owns its whole argv; the dispatcher runs it.
+  if (reading.kind === "exact" && reading.command !== undefined) return { namedCommand: reading.command };
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently
@@ -10436,6 +10439,7 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
     !flags.configCommand &&
     !flags.workspaceCommand &&
     flags.orchestratorVerb !== "team-board" &&
+    !flags.namedCommand &&
     !isRefusedModifierNextArgv(args);
 }
 
@@ -10847,6 +10851,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    if (step.kind === "command") {
+      emit(printDirective(
+        `\`${step.name}\` is the name of the ${step.plugin} plugin's command and also the first word of what the ` +
+        `person typed, and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
+        `If they meant to run that command, run \`${aidlcInvocation()} ${step.name}\` with the arguments they gave it. ` +
+        `If \`${step.name}\` is their own word, ${theirs}. ${ask}`,
+      ));
+      return;
+    }
     emit(printDirective(
       `\`${step.noun}\` is one of this engine's own nouns and also the first word of what the person ` +
       `typed, and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
@@ -11187,7 +11200,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.config && !flags.configCommand && !flags.workspaceCommand && !flags.orchestratorVerb && !flags.pluginCommand && !flags.knowledgeCommand && !flags.unitCommand && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.config && !flags.configCommand && !flags.workspaceCommand && !flags.orchestratorVerb && !flags.pluginCommand && !flags.knowledgeCommand && !flags.unitCommand && !flags.namedCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
       !flags.depth && !flags.testStrategy && !flags.projectType && !flags.review &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report &&
@@ -11305,6 +11318,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const command = `${aidlcInvocation()} ${terminalDispatcherArgv({ subcommand: sub, source: "read-only-flag" }).join(" ")}`;
     emit(turnEndingPrint(
       `Run \`${command}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+    ));
+    return;
+  }
+
+  // A plugin command leading the line runs as itself: `aidlc <name>`, which
+  // starts the plugin's script, or says in one line that its plugin is off.
+  if (flags.namedCommand) {
+    const words = [flags.namedCommand.name, ...flags.namedCommand.args].map((word) => quoteCommandArgument(word)).join(" ");
+    emit(turnEndingPrint(
+      `Run \`${aidlcInvocation()} ${words}\`, show the person its output as it is, then stop. This is a plugin's own command, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
