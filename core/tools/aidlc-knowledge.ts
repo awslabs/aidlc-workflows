@@ -2676,7 +2676,7 @@ export type UnreadReason =
   | "changed"
   | "no-reader"
   | "office"
-  | "no-pdftotext"
+  | "pdf"
   | "no-extractor"
   | "failed"
   | "no-text";
@@ -2697,7 +2697,8 @@ function unreadReason(row: DocumentRow): UnreadReason | null {
       // A Word or Excel file added before AI-DLC read them is read on the next sync.
       return builtinReadsRow(row) ? "office" : "no-reader";
     case "extractor_unavailable":
-      return row.extraction.extractor?.name === DEFAULT_PDF_ARGV[0] ? "no-pdftotext" : "no-extractor";
+      // A PDF added when the computer had no PDF reader: AI-DLC reads it itself on the next sync.
+      return row.extraction.extractor?.name === DEFAULT_PDF_ARGV[0] ? "pdf" : "no-extractor";
     case "extraction_failed":
       return "failed";
     case "no_extractable_text":
@@ -2744,7 +2745,7 @@ export function unreadDocuments(projectDir: string, space: string): UnreadDocume
 }
 
 const UNREAD_ORDER: readonly UnreadReason[] = [
-  "new", "changed", "no-reader", "office", "no-pdftotext", "no-extractor", "failed", "no-text",
+  "new", "changed", "no-reader", "office", "pdf", "no-extractor", "failed", "no-text",
 ];
 // One sentence per kind, the files its subject, so the line reads the same
 // when it is passed on. `them` is "it" for one file, "each" for several.
@@ -2754,8 +2755,7 @@ const UNREAD_SENTENCES: Readonly<Record<UnreadReason, (names: string, one: boole
   "no-reader": (names, one) =>
     `The knowledge base has no reader for ${names}: save ${one ? "it" : "each"} as .md, .txt or .csv beside ${one ? "it" : "the original"}.`,
   office: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read Word and Excel files.`,
-  "no-pdftotext": (names, one) =>
-    `Reading ${names} needs pdftotext (part of Poppler), which this computer does not have: install it, or save ${one ? "the PDF" : "each"} as .md beside ${one ? "it" : "the original"}.`,
+  pdf: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read a PDF without pdftotext.`,
   "no-extractor": (names, one) =>
     `The program set up to read ${names} is not installed on this computer: install it, or save ${one ? "the file" : "each"} as .md beside ${one ? "it" : "the original"}.`,
   failed: (names, one) => `${names} could not be read: save ${one ? "it" : "each"} again, or as .md beside ${one ? "it" : "the original"}.`,
@@ -2791,7 +2791,7 @@ function unreadDocumentsLine(projectDir: string, space: string, files: readonly 
   const count = files.length === 1 ? "1 file" : `${files.length} files`;
   return `AI-DLC's knowledge base cannot read ${count} in ${documentsFolder(projectDir, space)} yet, so this work ` +
     `goes on without ${files.length === 1 ? "it" : "them"}. ${unreadGroups(files)} ` +
-    `Run \`${entrySkillInvocation()} knowledge sync\` ${files.every((file) => file.reason === "new" || file.reason === "changed" || file.reason === "office")
+    `Run \`${entrySkillInvocation()} knowledge sync\` ${files.every((file) => file.reason === "new" || file.reason === "changed" || file.reason === "office" || file.reason === "pdf")
       ? `to add ${files.length === 1 ? "it" : "them"}`
       : "after that"}.`;
 }
