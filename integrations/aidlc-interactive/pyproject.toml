@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools==75.8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aidlc-interactive"
+version = "0.1.0"
+description = "Agent-agnostic interactive questionnaires and reviews for AI-DLC"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+aidlc-interactive = "aidlc_interactive.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aidlc_interactive = ["resources/**/*.yaml", "resources/**/*.json", "resources/**/*.template"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
