@@ -212,6 +212,7 @@ describe("t-build-and-test-units-without-code: Build and Test names the Units wi
   test("every Unit built: nothing is said", () => {
     const p = atBuildAndTest(["alpha", "beta", "gamma"]);
     const gate = report(p, ["--result", "awaiting-approval"]);
-    expect(String(gate.narration ?? "")).not.toContain("Code Generation output");
+    expect(String(gate.narration ?? "")).not.toContain("has not finished");
+    expect(String(gate.narration ?? "")).not.toContain("may be missing");
   });
 });
