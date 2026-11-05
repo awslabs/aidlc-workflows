@@ -8601,7 +8601,7 @@ function unitTakeLook(
         // The claim is the one record of who holds a Unit.
         const holder = claim?.status === "claimed" ? claim.owner : null;
         if (built !== null) {
-          choices.push({ label: `Carry on ${unit}`, detail: `The ${built.space} team's build of it, here.`, command: take.replace("%s", shellArg(unit)) });
+          choices.push({ label: `Carry on ${unit}`, detail: `${theTeam(built.space).replace(/^the/, "The")}'s build of it, here.`, command: take.replace("%s", shellArg(unit)) });
           continue;
         }
         if (claim?.payload.taken_by !== undefined) {

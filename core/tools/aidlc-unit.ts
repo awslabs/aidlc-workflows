@@ -5238,7 +5238,7 @@ function createUnitBuild(
   const space = inSpace ?? teamSpaceOf(team);
   if (!listSpacesHere(projectDir).includes(space)) {
     const created = runEngineUtility(projectDir, isCompiledExecutable() ? ["space", "create", space] : ["space-create", space]);
-    if (!created.ok) fail(`The ${team} team's space could not be made: ${(created.stderr || created.stdout).trim()}`);
+    if (!created.ok) fail(`${theTeam(team).replace(/^the/, "The")}'s space could not be made: ${(created.stderr || created.stdout).trim()}`);
   }
   const scope = getField(plan.state, "Scope") ?? "";
   const grid = loadScopeMapping()[scope];
@@ -5578,7 +5578,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       unit,
       space: existing.space,
       record: existing.dirName,
-      notice: `Carrying on ${unit}, the ${existing.space} team's build here.`,
+      notice: `Carrying on ${unit}, ${theTeam(existing.space)}'s build here.`,
     }));
     return;
   }
@@ -7012,7 +7012,7 @@ function takeFromFile(pd: string, path: string): void {
     setActiveSpaceCursor(pd, existing.space);
     selectIntentForSession(pd, existing.dirName, existing.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
     console.log(JSON.stringify({ taken: true, resumed: true, unit, space: existing.space, record: existing.dirName,
-      notice: `Carrying on ${unit}, the ${existing.space} team's build here.` }));
+      notice: `Carrying on ${unit}, ${theTeam(existing.space)}'s build here.` }));
     return;
   }
   const state = file.files.get("aidlc-state.md");

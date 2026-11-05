@@ -344,6 +344,21 @@ describe("who takes what", () => {
 });
 
 describe("builds in one workspace", () => {
+  test("a team the lead calls the data team is named once when its build is carried on", () => {
+    const home = homeWithTeams(["refunds=data team"]);
+    const alice = cloneOf(home.remote, "alice");
+    expect(take(alice, "refunds").status).toBe(0);
+    commitAll(alice, "refunds build");
+    git(alice, ["push", "-q", "origin", "main"]);
+    const laptop = cloneOf(home.remote, "alice-laptop");
+    const offer = next(laptop);
+    const carry = (offer.choices as Array<{ label: string; detail?: string }>).find((choice) => choice.label === "Carry on refunds");
+    expect(carry?.detail, JSON.stringify(offer)).toBe("The data-team's build of it, here.");
+    const resumed = run(UNIT, ["take", "refunds", "--home", HOME], laptop);
+    expect(resumed.json?.notice, resumed.out).toBe("Carrying on refunds, the data-team's build here.");
+    expect(`${JSON.stringify(offer)}${resumed.out}`).not.toContain("team team");
+  });
+
   test("the build's Code Generation is told its code goes in the Unit's repos, beside the files of theirs it leaves alone", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
