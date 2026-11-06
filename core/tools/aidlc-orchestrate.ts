@@ -1544,6 +1544,12 @@ function keptRequest(projectDir: string, space: string): { args: string[]; resta
 // Steps whose narration the agent passes through without speaking, so it rides
 // the next step it speaks from (the print that creates the work).
 const carriesNarration = new WeakSet<Directive>();
+// The line of such a step that is true only before the work starts (the offer
+// of a clean chat for new work): the next stage step says it as its own line,
+// as that step comes, rather than in change_notices, said before they reply.
+// Kept apart from the rest by its words, which the engine writes alone.
+const saidAsStageComes = new WeakMap<Directive, string>();
+const CLEAN_CHAT_LEAD = "To start this in a clean chat instead, ";
 // Steps the agent speaks right after, with no line of their own (the print
 // that opens a stage's gate, before the gate is shown).
 const leadsToSpeech = new WeakSet<Directive>();
@@ -1670,7 +1676,14 @@ function sayPendingPersonLines(
   const sessionId = engineSessionId;
   if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return { directive: transported };
   if (carriesNarration.has(requested)) {
-    if (transported.narration && addPendingPersonLines(projectDir, sessionId, [transported.narration])) {
+    // A line true only before the work is kept as its own line, so the stage
+    // step can say it apart from the rest.
+    const lead = saidAsStageComes.get(requested);
+    const own = lead && transported.narration?.endsWith(` ${lead}`)
+      ? transported.narration.slice(0, -(lead.length + 1))
+      : transported.narration;
+    const lines = own && lead && own !== transported.narration ? [own, lead] : [own ?? ""];
+    if (own && addPendingPersonLines(projectDir, sessionId, lines)) {
       delete transported.narration;
     }
     return { directive: transported };
@@ -1681,12 +1694,24 @@ function sayPendingPersonLines(
   // even one with no line of its own (a waiting Unit checkpoint).
   const pickUp = (transported.kind === "run-stage" || transported.kind === "ask") &&
     pending.lines.some((line) => line.startsWith(PICK_UP_LEAD));
-  if (!pickUp && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) return { directive: transported };
-  const carried = withPersonLines(transported, pending.lines);
+  // The offer of a clean chat is true only before the work starts, so a stage
+  // step says it with its own line, as the step comes. In change_notices it
+  // was said with the first gate, after the stage had run in this chat.
+  const asItComes = transported.kind === "run-stage"
+    ? pending.lines.filter((line) => line.startsWith(CLEAN_CHAT_LEAD))
+    : [];
+  if (!pickUp && asItComes.length === 0 && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) {
+    return { directive: transported };
+  }
+  const beforeReply = pending.lines.filter((line) => !asItComes.includes(line));
+  const carried = beforeReply.length > 0 ? withPersonLines(transported, beforeReply) : transported;
   if (carried === null) return { directive: transported };
+  const spoken = asItComes.length > 0
+    ? { ...carried, narration: [carried.narration, ...asItComes].filter(Boolean).join(" ") } as Directive
+    : carried;
   const noted = withAgentNotes(
-    carried, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
-    switchBackOnFollowUps(carried),
+    spoken, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
+    switchBackOnFollowUps(spoken),
   );
   if (Buffer.byteLength(JSON.stringify(noted), "utf-8") > directiveMaxBytes()) return { directive: transported };
   return { directive: noted, said: pending.said };
@@ -7656,19 +7681,10 @@ function createPrintDirective(
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   // New work, like the first, carries on in this chat: the creation binds the
-  // chat to the new work, so the next `next` runs its first stage. Beside other
-  // work the chat still holds that work's conversation, so the person can start
-  // this one in a clean chat instead, said once, never as a stop: after the
-  // creation, so the new chat picks this work up, and before its first stage,
-  // while they can still take it. With the creation's narration it rode the
-  // first stage's change_notices, said only before they reply, with the gate.
-  const cleanChat = flags.newIntent ? cleanChatLine() : null;
+  // chat to the new work, so the next `next` runs its first stage.
   const directive = printDirective(
     `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}${unnamed ? messageFill(projectDir) : ""}, ` +
-      (cleanChat
-        ? `then tell the person in one line: "${cleanChat}" and re-run \`next\` to continue.`
-        : `then re-run \`next\` to continue.`) +
-      labelHint,
+      `then re-run \`next\` to continue.${labelHint}`,
   );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
@@ -7695,6 +7711,14 @@ function createPrintDirective(
     directive.narration += ` The folder "${name}" is not part of this work: its name ${repoNameProblem(name)}.`;
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
+  // Beside other work the chat still holds that work's conversation: the
+  // person can start this one in a clean chat instead, said once, never as a
+  // stop, and only while they can take it (sayPendingPersonLines).
+  const cleanChat = flags.newIntent ? cleanChatLine() : null;
+  if (cleanChat) {
+    directive.narration += ` ${cleanChat}`;
+    saidAsStageComes.set(directive, cleanChat);
+  }
   // The agent runs the creation and goes on, so the line rides the first step
   // it speaks from.
   carriesNarration.add(directive);
@@ -7827,7 +7851,7 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
 // newChatStep). A tree that names none offers nothing.
 function cleanChatLine(): string | null {
   const step = newChatStep();
-  return step ? `To start this in a clean chat instead, ${step}.` : null;
+  return step ? `${CLEAN_CHAT_LEAD}${step}.` : null;
 }
 
 // A new project leaves out Reverse Engineering when its plan runs it, and when

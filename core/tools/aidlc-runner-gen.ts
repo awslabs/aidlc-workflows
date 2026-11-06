@@ -760,7 +760,7 @@ preserving any \`--request\` id rather than rebuilding the request.
   (with the \`--label '<2-3 word kebab essence>'\` placeholder). Act on it exactly
   as the loop's \`print\` handling describes: create the intent, then re-run
   \`next\` and carry on into the new work's first stage in this chat. The line
-  it has you say about a clean chat is an option for the person, never a stop.
+  about starting it in a clean chat is an option for the person, never a stop.
 - **On DECLINE**, proceed with the active intent, the normal loop above.
 `;
 }

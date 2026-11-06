@@ -140,8 +140,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   also keeps that step in its orchestrator skill.
 - `newChatStep` (optional) - `{ text, inHost? }`: how the person starts a clean
   chat in this host, in its own words, with `<entry>` filled in. When new work
-  starts beside other work in a chat, the agent says once, after the creation
-  and before its first stage, "To start this in a clean chat instead, <text>.";
+  starts beside other work in a chat, its first stage step says once, as it
+  comes and before the stage's work, "To start this in a clean chat instead,
+  <text>.";
   without it nothing is said. `inHost` (`{ env, text }`) gives one host this
   tree runs in its own step, told apart as `missedReplyInHost` is: Kiro IDE uses
   it beside Kiro CLI's `/chat new`.

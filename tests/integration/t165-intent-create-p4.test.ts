@@ -647,9 +647,8 @@ describe("t164 done-on-completed carries the new-work hint", () => {
 // ============================================================
 // New work started beside other work carries on in the same chat, like the
 // first piece of work: the creation directive re-enters the loop ("re-run
-// `next` to continue"), and its message has the agent offer a clean chat once,
-// in the host's words, after the creation and before the first stage, never
-// as a stop.
+// `next` to continue"), and its narration offers a clean chat once, in the
+// host's words, never as a stop.
 // ============================================================
 describe("t164 --new-intent creation carries on in the same chat", () => {
   test("next --new-intent emits a creation print that continues, and offers a clean chat once", () => {
@@ -661,16 +660,15 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     expect(d.kind).toBe("print");
     // Names the creation move for the CONFIRMED scope (not the active intent's scope).
     expect(d.message).toContain("intent create --scope bugfix");
-    expect(d.message).toContain("re-run `next` to continue");
+    expect(d.message).toContain("then re-run `next` to continue");
     // Never a stop, a restart, or a fresh-session hand-off.
     for (const stale of ["STOP", "fresh session", "restart", "clean slate", "do NOT re-run"]) {
       expect(d.message).not.toContain(stale);
     }
-    // The clean chat is an option, said once, in the host's words, as the
-    // message's own step: the creation's narration is said with the first gate.
-    expect(d.message).toContain('then tell the person in one line: "To start this in a clean chat instead, ');
-    expect(d.message.split("clean chat").length - 1).toBe(1);
-    expect(d.narration).not.toContain("clean chat");
+    // The clean chat is an option, said once, in the host's words.
+    expect(d.narration).toContain("To start this in a clean chat instead, ");
+    expect(d.narration.split("clean chat").length - 1).toBe(1);
+    expect(d.narration).not.toContain("restart");
     // next is read-only: naming the creation move mutates nothing.
     expect(readIntentRegistry(proj).length).toBe(0);
   });
