@@ -985,7 +985,6 @@ humanTurnState
 identityScopedUnitPath
 ignoredPathClaimable
 ignoredSourceClaimReason
-inHostShell
 inertPath
 inspectArtifactPath
 inspectContinuationCursor

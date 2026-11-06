@@ -38,6 +38,8 @@ import {
   type DirectiveLimit,
   directiveLimitFor,
   discoverProjectHarnesses,
+  harnessIsAGuess,
+  inHostShell,
   isCompiledExecutable,
   type KiroLayout,
   kiroTreeLayout,
@@ -799,19 +801,6 @@ function registrationLines(value: unknown): Pick<HookActivation, "registration">
       typeof lines.invalid === "string" && typeof lines.unwired === "string"
     ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid, unwired: lines.unwired } }
     : {};
-}
-
-// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
-// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
-// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
-// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
-export function inHostShell(env: readonly string[] | undefined): boolean {
-  const entries = (env ?? []).map((entry) => {
-    const [name, value] = entry.split("=", 2);
-    return { value: value?.toLowerCase(), actual: process.env[name]?.trim().toLowerCase() };
-  });
-  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
-  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
 }
 
 /** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
@@ -28118,7 +28107,8 @@ const HOOKS_OFF_AGENT_RULES =
  */
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
-  if (!activation?.agentStep) return null;
+  // A tree the engine only guessed is the person's tool would name another tool's step.
+  if (!activation?.agentStep || harnessIsAGuess()) return null;
   const project = resolveProjectDir(projectDir);
   // Started in a folder inside the project, no file or setting brings the
   // hooks back: the one step is to start the tool in the project folder.
@@ -31507,7 +31497,7 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   // when a session starts), the file and a new session, never to the trust
   // step. A caller refusing for a reply not given yet (the summary choice the
   // person has not made) is not a lost reply: it hears nothing here either.
-  if (options.missedReply !== false && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
+  if (options.missedReply !== false && !harnessIsAGuess() && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
     return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
       "replies is switched off. Do not ask them to answer again. Tell them exactly this, with " +
       "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
@@ -31538,7 +31528,7 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   // could have missed (no heartbeat, or one the workflow left far behind) gets
   // the missed-reply line.
   if (promptHookRanRecently(projectDir)) return ` ${NOT_ANSWERED_YET_STEP}`;
-  const activation = hookActivation();
+  const activation = harnessIsAGuess() ? null : hookActivation();
   const host = activation?.missedReplyInHost;
   const missedReply = (inHostShell(host?.env) ? host?.text : activation?.missedReply) ??
     "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +

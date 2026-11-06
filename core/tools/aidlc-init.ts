@@ -5420,6 +5420,7 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "rulesSubdir",
   "statusLine",
   "agentFinishRecorded",
+  "hostShell",
 ]);
 
 const CLAUDE_SHIPPED_KEYS = [

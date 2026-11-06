@@ -75,7 +75,7 @@ import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
-  entrySkillInvocation,
+  treeEntrySkillInvocation,
   runtimeHarnessDir as harnessDir,
   refuseLinkOnTheWay,
   resolveHarnessPath,
@@ -226,7 +226,7 @@ that flag without this skill.
 // ships in dist/ and the engine auto-creates the first intent - this runner
 // just makes that explicit.
 export function renderInitRunner(): string {
-  const entrySkill = entrySkillInvocation();
+  const entrySkill = treeEntrySkillInvocation();
   return `---
 name: ${INIT_RUNNER_DIR}
 generated-by: aidlc-runner-gen
@@ -637,7 +637,7 @@ function scopeRunnerDirName(scope: string, front: Pick<ScopeFront, "plugin">): s
 export function renderRunner(scope: string, description: string): string {
   const front = discoverScopes()[scope];
   const dir = scopeRunnerDirName(scope, front ?? {});
-  const entrySkill = entrySkillInvocation();
+  const entrySkill = treeEntrySkillInvocation();
   // Normalise the scope's one-line description into a sentence (trailing period)
   // so it reads cleanly when stitched between the lead-in and the packaging note.
   const raw = (description || `Run the AI-DLC workflow with the ${scope} scope`).trim();

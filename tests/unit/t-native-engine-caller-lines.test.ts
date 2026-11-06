@@ -13,12 +13,11 @@
 // project with Claude Code and Kiro set up, `next` in a Kiro CLI chat before
 // any work, with no hook run yet, told the agent "Claude Code is not running
 // AI-DLC's hooks in this project" and to set disableAllHooks in
-// .claude/settings.local.json; the Kiro chat's own id was not read (the step
-// it returned was owned by no chat).
+// .claude/settings.local.json, and work that chat started was bound to no chat.
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize } from "node:path";
 import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
@@ -191,18 +190,14 @@ describe("t-native-engine-caller-lines: a native engine in a project with two to
     }
   });
 
-  test("a Kiro CLI command beside Claude Code's setup is owned by its Kiro chat, as with Kiro alone", () => {
-    const owner = (trees: string[]): string => {
+  test("work a Kiro CLI chat starts beside Claude Code's setup is bound to that Kiro chat, as with Kiro alone", () => {
+    const bound = (trees: string[]): boolean => {
       const proj = project(trees);
       aidlc(proj, ["engine", "intent", "create", "--scope", "poc", "--label", "lunch-poll", "--arguments", "build a lunch poll"], TREES["kiro-ide"].mark);
-      aidlc(proj, ["engine", "orchestrate", "next"], { ...TREES["kiro-ide"].mark, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
-      const intents = join(proj, "aidlc", "spaces", "default", "intents");
-      const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
-      const directive = join(intents, record, ".aidlc-engine", "active-directive.json");
-      return (JSON.parse(readFileSync(directive, "utf-8")) as { owner_session?: string }).owner_session ?? "";
+      return existsSync(join(proj, "aidlc", ".aidlc-sessions", `${KIRO_CHAT}.binding.json`));
     };
-    expect(owner(["kiro-ide"])).toBe(KIRO_CHAT);
-    expect(owner(["claude", "kiro-ide"])).toBe(KIRO_CHAT);
+    expect(bound(["kiro-ide"])).toBe(true);
+    expect(bound(["claude", "kiro-ide"])).toBe(true);
   });
 });
 
@@ -220,7 +215,7 @@ function linesIn(tree: string, proj: string, guessed: boolean, extra: Record<str
     "console.log(JSON.stringify({",
     "  hooksOff: lib.hooksOffAgentStep(proj),",
     "  reply: lib.unattendedHumanPresenceHint(proj),",
-    "  newChat: chat.newChatStep(proj),",
+    "  newChat: chat.newChatStep(),",
     "  entry: paths.entrySkillInvocation(),",
     "  runner: runners.renderInitRunner(),",
     "}));",
