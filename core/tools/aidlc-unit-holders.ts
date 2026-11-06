@@ -186,7 +186,7 @@ function claimedUnitsSeenHere(projectDir: string, first = false): Set<string> {
 
 // The Units a team checkout walks without a claim (#3610): the lead's own Unit,
 // begun in their checkout before the teams took the others, stays theirs. Each
-// Unit whose latest lifecycle row names no claim attempt (a claimed checkout's
+// Unit whose latest work row names no claim attempt (a claimed checkout's
 // rows carry claimAttemptFields), that no claim seen here holds and whose Unit
 // Progress row is not complete, with the audit shard that row is in, which
 // names the checkout that wrote it.
@@ -201,7 +201,7 @@ export function unitsWalkedWithoutClaim(projectDir: string): Map<string, string>
   if (!isTeamUnitOwnership(state)) return walked;
   const latest = new Map<string, AuditShardEvent>();
   for (const row of readAuditShardEvents(projectDir)) {
-    if (!UNIT_LIFECYCLE_ROW_EVENTS.has(row.event)) continue;
+    if (!UNIT_WORK_ROW_EVENTS.has(row.event)) continue;
     const unit = auditBlockField(row.block, "Unit");
     if (!unit) continue;
     const prior = latest.get(unit);
@@ -225,12 +225,14 @@ export function unitsWalkedWithoutClaim(projectDir: string): Map<string, string>
   return walked;
 }
 
-const UNIT_LIFECYCLE_ROW_EVENTS: ReadonlySet<string> = new Set([
+// The rows that say a checkout worked a Unit. A skip (UNIT_SKIPPED) records
+// that the Unit owes a stage nothing, not that anyone works it: a stage the
+// lead skipped for every Unit leaves them all the teams' to take.
+const UNIT_WORK_ROW_EVENTS: ReadonlySet<string> = new Set([
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
-  "UNIT_SKIPPED",
 ]);
 
 // The Units whose work this checkout holds (#3610), one reading for the open

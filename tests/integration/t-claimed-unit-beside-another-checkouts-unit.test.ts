@@ -355,6 +355,20 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
   });
 
+  test("a stage skipped for every Unit before sharing builds none of them: the teams can still take them", () => {
+    const { lead, remote } = leadsCheckout();
+    nextDirective(lead);
+    expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
+    const skipped = runMergeTool(ORCH, ["report", "--stage", FD, "--result", "skipped", "--reason", "the person asked to skip it for every Unit"], lead);
+    expect(skipped.status, skipped.out).toBe(0);
+    const skips = readAuditShardEvents(lead).filter((row) => row.event === "UNIT_SKIPPED").length;
+    expect(skips).toBeGreaterThan(1);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    const team = clone(remote, "team");
+    expect(claimable(team)).toEqual(["alpha", "beta"]);
+  });
+
   test("nobody is offered the lead's Unit while the lead walks it", () => {
     const { lead, remote } = leadsCheckout();
     leadStartsAlpha(lead);
