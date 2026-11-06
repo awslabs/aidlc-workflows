@@ -2657,6 +2657,8 @@ async function evaluate(
       codeGenerationStepOnRecord(projectDir, state, activeDirective) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
+    // Finished, read as the human-turn hook reads it (hookStandsOutside).
+    const finished = selectedRecordIsFinished(projectDir, workflow.selection);
     const knownMutationTool =
       toolName === "Bash" || WRITE_TOOLS.has(toolName);
     // A call to one of the person's own MCP servers, as the harness adapter
@@ -2675,8 +2677,7 @@ async function evaluate(
               jumpAdmitted: (jump) => {
                 const move = toolName === "Bash" &&
                   (jumpNextNamesBack(projectDir, state ?? "", jump) ||
-                    jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump,
-                      selectedRecordIsFinished(projectDir, workflow.selection)));
+                    jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump, finished));
                 if (typeof move === "object") jumpWayOn = move;
                 return move === true;
               },
@@ -2691,6 +2692,13 @@ async function evaluate(
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
       return 0;
     }
+    // Work that finished at Code Generation keeps Current Stage there, but
+    // nothing is built and no plan waits: what the person asks for afterwards
+    // (an edit, a shell command, the developer) goes through, under every Guard
+    // Policy, as once a walk is past Code Generation, where a handoff that names
+    // a plan is still judged. AI-DLC's own commands this guard holds (a jump
+    // nobody asked for, a switch) still wait.
+    if (finished && !mutation.engineRefused && !(guardedDispatch && explicitPlanDispatch)) return 0;
     // What the plan never governs, at any point of Code Generation and under
     // every Guard Policy: a command the lexer read whole that names no file it
     // writes and is not AI-DLC's own (a read, a scan, a test run), and a write

@@ -1811,6 +1811,13 @@ plan is still judged, and a system package install nobody asked for still waits
 for the person, as at every stage. When the notice goes out of date (a
 compaction), the refusal names `next`, which records it again.
 
+**Work that finished at Code Generation.** When Code Generation was the last stage that ran (the stages after it
+skipped), the finished work keeps Current Stage on it, but nothing is built there and no plan waits: what the
+person asks for afterwards, an edit, a shell command or the developer, passes this hook under every Guard Policy,
+as once a workflow's walk is past Code Generation, where a developer handoff that names a plan is still judged.
+AI-DLC's own commands this hook holds still wait: a jump passes as the person's move (above), so the agent's own
+redo, with no message of theirs since the work finished, is refused.
+
 **What the plan never governs.** At any point of Code Generation, under every
 Guard Policy and whatever the current step (the plan being written, the engine's
 plan question open, the rules still arriving, a swarm batch, a step gone out of

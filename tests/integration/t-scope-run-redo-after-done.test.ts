@@ -7,7 +7,8 @@
 // through the plan-approval guard, the code plan is asked about once, and the
 // redone build runs to its gate and back to done, with no refusal on the way.
 // Before, every redo here was refused and the refusal's `next` said the work
-// was finished, a loop with no way out.
+// was finished, a loop with no way out; so was every file the person asked to
+// change once the work was done.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
@@ -29,6 +30,10 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     expect(run.final.kind).toBe("done");
     const finishedRows = auditEvents(proj).filter((row) => row.event === "WORKFLOW_COMPLETED").length;
     host.fullHost = true;
+    // A change asked for after the finish goes in as past Code Generation.
+    person.say("Add a short note file under src, please.");
+    host.write("src/after-done-note.ts", "// A note the person asked for after the work finished.\n");
+    expect(agent.next().kind).toBe("done");
     const asked = agent.asked.length;
     person.say("Can you redo Code Generation? I'd like the code built again.");
     const print = agent.next("--stage", "code-generation");

@@ -231,3 +231,51 @@ describe("a redo of Code Generation the person asks for after their work finishe
     expect(afterRedo(proj).ask_type).toBe("plan-approval");
   });
 });
+
+// The same finished work is past Code Generation, though Current Stage stays
+// on it: nothing is built and no plan waits, so a change the person asks for
+// afterwards (a file edit, a shell command, the developer) goes through the
+// guard as it does once a walk is past Code Generation, under every Guard
+// Policy. Before, each was refused with a `next` that said the work was
+// finished. A jump stays at the door above.
+describe("a change the person asks for after their work finished at Code Generation", () => {
+  const TYPO = "Fix the typo in src/slugify.ts, please.";
+
+  test("every harness shape: their file edit is admitted", async () => {
+    const proj = finished("relaxed");
+    expect(reply(proj, TYPO).status).toBe(0);
+    const refused: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(proj);
+      for (const call of [
+        { tool: "Write" as const, path: join(proj, "src", "slugify.ts") },
+        { tool: "Edit" as const, path: join(proj, "src", "slugify.ts") },
+      ]) {
+        const verdict = await shape.call(proj, SESSION, call);
+        if (verdict.code !== 0) refused.push(`[${shape.name}] ${call.tool}: ${verdict.said}`);
+      }
+    }
+    expect(refused).toEqual([]);
+  });
+
+  test.each(["strict", "relaxed", "off"] as const)(
+    "%s: the agent's own redo still waits; their edit, a shell command that writes and the developer run; next stays done",
+    async (policy) => {
+      const proj = finished(policy);
+      const bound = runNamed(proj, "bun .claude/tools/aidlc-orchestrate.ts next", { AIDLC_SESSION_OVERRIDE: SESSION });
+      expect(bound.status, bound.stdout + bound.stderr).toBe(0);
+      const own = await claude.call(proj, SESSION, { tool: "Bash", command: jumpFor(proj, "code-generation") });
+      expect(own.code, "the agent's own redo was admitted").toBe(2);
+      expect(reply(proj, TYPO).status).toBe(0);
+      const before = blocked(proj);
+      const write = await claude.call(proj, SESSION, { tool: "Write", path: join(proj, "src", "slugify.ts") });
+      expect(write.code, write.said).toBe(0);
+      const shell = await claude.call(proj, SESSION, { tool: "Bash", command: "cp src/base.ts src/base-copy.ts" });
+      expect(shell.code, shell.said).toBe(0);
+      const dispatch = await claude.call(proj, SESSION, { tool: "Task", agent: DEVELOPER, prompt: "Fix the typo in src/slugify.ts." });
+      expect(dispatch.code, dispatch.said).toBe(0);
+      expect(blocked(proj)).toBe(before);
+      expect(next(proj).kind).toBe("done");
+    },
+  );
+});
