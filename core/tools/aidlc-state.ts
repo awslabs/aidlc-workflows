@@ -4353,14 +4353,19 @@ function enforceBlockingGateSensors(
   // At the stage gate the engine settles itself after every Unit's checkpoint,
   // the refusal is the agent's step, as the checkpoint's is.
   const stage = at.kind === "gate" ? findStageBySlug(slug) : undefined;
-  const refuse = stage !== undefined && engineSettlesLateGate(pd, stateContent, stage)
+  const late = stage !== undefined && engineSettlesLateGate(pd, stateContent, stage);
+  const refuse = late
     ? (message: string): never => {
       throw new BlockingCheckStepError(message);
     }
     : error;
+  // The person chose the Override and the agent's own next step is named
+  // (leave Continue automatically first, or the exact choice): it goes on in
+  // the same turn.
+  const refuseOwnStep = late ? (message: string): never => refuseForAgent(message, { personDecided: true }) : error;
   if (overrideRequested) {
     if (isAutonomousMode(stateContent)) {
-      refuse(
+      refuseOwnStep(
         `Refusing blocking sensor override for ${where}: Construction Autonomy Mode ` +
           "is autonomous. Unattended runs must halt on blocking sensor findings or " +
           "unavailable evaluations. When the person chooses the override, run " +
@@ -4369,7 +4374,7 @@ function enforceBlockingGateSensors(
       );
     }
     if (overrideInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
-      refuse(
+      refuseOwnStep(
         `Refusing blocking sensor override for ${where}: --user-input must be the ` +
           `exact offered choice "${BLOCKING_SENSOR_OVERRIDE_CHOICE}".`,
       );

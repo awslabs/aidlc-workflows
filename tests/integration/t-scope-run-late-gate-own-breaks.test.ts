@@ -287,6 +287,18 @@ describe("a team's blocking check at the late Code Generation gate", () => {
     expect(reviews).toEqual(["core"]);
   }, SCOPE_RUN_TIMEOUT_MS);
 
+  test("Guard Policy strict: a file changed after the Override opened the gate is checked again as the agent's step, never an error", () => {
+    const r = toLateGate({ policy: "strict" });
+    expect(JSON.stringify(overrideInOrder(r))).not.toMatch(BLOCKING);
+    // The person changes core's summary at the open gate, still without the team's line.
+    r.person.say("I added a note to core's summary myself");
+    const summary = `${activeRecord(r.proj).dir.slice(r.proj.length + 1)}/construction/core/code-generation/code-summary.md`;
+    r.host.write(summary, `${readFileSync(join(r.proj, summary), "utf-8")}\nA note from the person.\n`);
+    const step = r.agent.next();
+    expect(step.kind).not.toBe("error");
+    if (BLOCKING.test(JSON.stringify(step))) expect(step.ends_turn).toBe(true);
+  }, SCOPE_RUN_TIMEOUT_MS);
+
   for (const policy of ["strict", "relaxed", "off", "locked"] as const) {
     test(`Guard Policy ${policy}: an Override in own words is taken once and the gate settles with it`, () => {
       const words = toLateGate({ policy });

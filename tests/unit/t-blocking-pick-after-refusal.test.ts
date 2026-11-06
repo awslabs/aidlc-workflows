@@ -61,7 +61,10 @@ function rows(...list: Row[]): AuditShardEvent[] {
   }));
 }
 
-const fire = (event: "SENSOR_FAILED" | "SENSOR_COULD_NOT_RUN" | "SENSOR_PASSED" = "SENSOR_FAILED", unit?: string): Row =>
+const fire = (
+  event: "SENSOR_FAILED" | "SENSOR_COULD_NOT_RUN" | "SENSOR_BUDGET_OVERRIDE" | "SENSOR_PASSED" = "SENSOR_FAILED",
+  unit?: string,
+): Row =>
   [event, { "Stage slug": SLUG, "Sensor ID": CHECK, "Output path": "x/core/code-generation/code-summary.md", ...(unit ? { Unit: unit } : {}) }];
 const reply: Row = ["HUMAN_TURN"];
 const question = (unit?: string): Row => ["DECISION_RECORDED", {
@@ -76,6 +79,11 @@ describe("a pick recorded after the person's reply to the refusal", () => {
     expect(picks(rows(fire(), reply, question(), answer("Override blocking sensors")))).toEqual(["Override blocking sensors"]);
     expect(picks(rows(fire("SENSOR_COULD_NOT_RUN"), reply, question(), answer("Override blocking sensors"))))
       .toEqual(["Override blocking sensors"]);
+    // A check over its time budget, and a pass with a note (the tool was unavailable), refuse the gate too.
+    expect(picks(rows(fire("SENSOR_BUDGET_OVERRIDE"), reply, question(), answer("Override blocking sensors"))))
+      .toEqual(["Override blocking sensors"]);
+    const noted: Row = ["SENSOR_PASSED", { ...fire("SENSOR_PASSED")[1], Note: "tool unavailable" }];
+    expect(picks(rows(noted, reply, question(), answer("Override blocking sensors")))).toEqual(["Override blocking sensors"]);
     expect(picks(rows(fire(), reply, question(), answer("Fix findings")))).toEqual(["Fix findings"]);
     // At a checkpoint the fire names the Unit; a question logged without --unit is that Unit's.
     expect(picks(rows(fire("SENSOR_FAILED", "core"), reply, question("core"), answer("Override blocking sensors", "core"))))
@@ -89,6 +97,8 @@ describe("a pick recorded after the person's reply to the refusal", () => {
   test("does not count without a reply of the person's after the refusal", () => {
     // The reply that started the turn came before the fire.
     expect(picks(rows(reply, fire(), question(), answer("Override blocking sensors")))).toEqual([]);
+    // The reply was spent: routed to other work.
+    expect(picks(rows(fire(), reply, ["REQUEST_ROUTED", {}], question(), answer("Override blocking sensors")))).toEqual([]);
     // Another question took the reply.
     expect(picks(rows(fire(), ["DECISION_RECORDED", { Stage: SLUG, Decision: "Which file first?", Options: "core,extra" }],
       reply, answer("core"), question(), answer("Override blocking sensors")))).toEqual([]);

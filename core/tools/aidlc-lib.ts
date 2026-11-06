@@ -11844,9 +11844,10 @@ export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
 // unitCheckpointChecksApply names; the state is given), the refusal itself
 // puts the question to the person, so their reply may come before the agent
 // records it: a reply after the refusal's own fire (the stage's latest
-// failing blocking fire before the question, with no boundary between) backs
-// the pick too, when nothing else was asked or answered on the stage between
-// that reply and the question. Read from the order of the rows, never the words.
+// blocking result the gate refuses on before the question, with no boundary
+// between) backs the pick too, when nothing spent that reply and nothing else
+// was asked or answered between it and the question. Read from the order of
+// the rows, never the words.
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
   slug: string,
@@ -11863,11 +11864,15 @@ export function blockingSensorPicks(
       sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
     )
     : []);
-  // The fire whose refusal put the check's question, for a pick of `unit` (any Unit's when none is named).
+  // The fire whose refusal put the check's question, for a pick of `unit` (any Unit's when none is named):
+  // every result a blocking check refuses on (the gate's account of a check that gave no verified pass).
+  const refuses = (row: AuditShardEvent): boolean =>
+    row.event === "SENSOR_FAILED" || row.event === "SENSOR_COULD_NOT_RUN" || row.event === "SENSOR_BUDGET_OVERRIDE" ||
+    (row.event === "SENSOR_PASSED" && auditBlockField(row.block, "Note") !== null);
   const refusalFire = (decision: AuditShardEvent, unit: string | null): AuditShardEvent | undefined => {
     const before = rows.filter((row) => row.shard === decision.shard && row.pos < decision.pos);
     const fire = before.filter((row) =>
-      (row.event === "SENSOR_FAILED" || row.event === "SENSOR_COULD_NOT_RUN") &&
+      refuses(row) &&
       auditBlockField(row.block, "Stage slug") === slug && blocking.has(auditBlockField(row.block, "Sensor ID") ?? "") &&
       (unit === null || auditBlockField(row.block, "Unit") === unit)
     ).reduce<AuditShardEvent | undefined>((latest, row) => (latest === undefined || row.pos > latest.pos ? row : latest), undefined);
@@ -11925,9 +11930,10 @@ export function blockingSensorPicks(
     const fire = walk
       ? refusalFire(decision, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"))
       : undefined;
-    // A question or an answer between the reply and the question took the reply for itself.
+    // A row that spent the reply (MESSAGE_SPENDING_EVENTS), or another question or answer, between the
+    // reply and the question took the reply for itself.
     const answeredElse = (turn: AuditShardEvent): boolean => rows.some((other) =>
-      (other.event === "DECISION_RECORDED" || other.event === "QUESTION_ANSWERED") &&
+      (other.event === "DECISION_RECORDED" || other.event === "QUESTION_ANSWERED" || MESSAGE_SPENDING_EVENTS.has(other.event)) &&
       other.shard === turn.shard && other.pos > turn.pos && other.pos < decision.pos
     );
     if (!rows.some((turn) =>

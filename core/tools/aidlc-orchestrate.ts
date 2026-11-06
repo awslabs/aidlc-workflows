@@ -13763,8 +13763,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           // would show the gate as this stage's alone.
           const owesReport = !together && gateOwesItsReport(pd, stateContent, currentNode, scope);
           // A late gate the engine settles itself, already open (the person's
-          // Override opened it): its approval is recorded here and the walk
-          // goes on, so its checks are not run, or asked about, again.
+          // Override opened it, or an earlier report did): its approval is
+          // recorded here and the walk goes on, so its checks are not run, or
+          // asked about, again.
           if (!together && !owesReport && settleBookkeepingGate(pd, stateContent, directive)) return;
           if (owesReport) {
             const step = printDirective(
@@ -15800,8 +15801,10 @@ function settleBookkeepingGate(
       reported = null;
     }
     const after = result === "awaiting-approval" && reported?.kind === "print" ? loadStateFileIfPresent(projectDir) : null;
-    const stayedShut = result === "awaiting-approval" && reported?.kind === "print" &&
-      (after === null || checkboxForSlug(after, directive.stage)?.state !== "awaiting-approval");
+    const stayedShut = (result === "awaiting-approval" && reported?.kind === "print" &&
+      (after === null || checkboxForSlug(after, directive.stage)?.state !== "awaiting-approval")) ||
+      // The approval's own re-check of a file changed at the open gate refused it: the person's question.
+      (reported?.kind === "print" && reported.ends_turn === true);
     if (run.exitCode !== 0 || reported?.kind !== (result === "approved" ? "done" : "print") || stayedShut) {
       emit(reported !== null && (stayedShut || (reported.kind !== "print" && reported.kind !== "done"))
         ? reported
@@ -21807,8 +21810,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // At the late gate these refusals are the agent's step too, as the state tool's are.
-    const refusal = engineSettlesLateGate(pd, stateContent, node) ? blockingCheckStep : errorDirective;
+    // At the late gate these refusals name the agent's own next step, as the state tool's do.
+    const refusal = engineSettlesLateGate(pd, stateContent, node) ? printDirective : errorDirective;
     if (readAutonomyMode(stateContent) === "autonomous") {
       emit(refusal(
         `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
