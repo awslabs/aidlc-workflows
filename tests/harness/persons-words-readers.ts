@@ -120,8 +120,11 @@ const BOUNDARY: Record<string, "clean" | "words" | "object"> = {
 };
 /** Where the person's records are kept: a JSON.parse beside one of these reads a record, whose fields are known by name. */
 const RECORD_PATHS = new Set(["messageRel", "gateWordsPath", "gateWordsDir", "protectedResponsePath", "planApprovalRuntimeDir"]);
-/** Followed inside, but what they hand back is structure: the person's own `/aidlc` line taken as `next`'s flags. */
-const STRUCTURE_RESULT = new Set(["takePersonsOwnLine"]);
+/**
+ * Followed inside, but what they hand back is structure: the person's own `/aidlc` line taken as `next`'s flags, and
+ * the path of one existing file a request is only the name of, which handFileStep reads by the file's own structure.
+ */
+const STRUCTURE_RESULT = new Set(["takePersonsOwnLine", "bareHandFileRequest"]);
 
 const COMPARE_OPS = new Set([
   ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken,
@@ -1037,6 +1040,8 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
   [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#takePersonsOwnLine`]: { use: "keeps", why: "the /aidlc parse of the person's own line; already read is the message id" },
+  [`${ORCH}#bareHandFileRequest`]: { use: "decides", why: "a shape read: whether the whole request is the path of one existing file, which handFileStep then reads as --hand-file by the file's own structure; the words are never read for meaning" },
+  [`${ORCH}#takeBareHandFile`]: { use: "keeps", why: "a request that is only a hand-off file's path is that file, as --hand-file is, and is no longer a request: the words go no further than bareHandFileRequest's shape read" },
   [`${ORCH}#keptWordsStep`]: { use: "decides", why: "the pick step's command: the words a reading step kept from this message, handed on as kept (wordsForNextStep)" },
   [`${ORCH}#resumeWithWords`]: { use: "keeps", why: "a resume with words beside it: whether words are there, then the line read again without --resume" },
   [`${ORCH}#resumeAgain`]: { use: "decides", why: "the unpark step's re-run: the words typed with the resume, handed on as typed (wordsForNextStep)" },

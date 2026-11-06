@@ -8983,15 +8983,27 @@ function unitTakeLook(
   return { sentences, choices, homeHere, stale };
 }
 
-// A request that is only the path of a file AI-DLC wrote for a hand-off, its
-// progress or its result (`/aidlc <file>`) is that file, as `--hand-file` is:
-// read by the file's own structure, never by the words. Anything else is the
-// person's request as before.
-function bareHandFileRequest(flags: ParsedFlags, projectDir: string): void {
-  if (flags.handFile !== undefined || flags.intent === undefined) return;
+// A request that is only the path of one existing file (`/aidlc <file>`),
+// for handFileStep to read as --hand-file is read: what the file is, its own
+// structure says, never the words. Null for any other request.
+function bareHandFileRequest(flags: ParsedFlags, projectDir: string): string | null {
+  if (flags.handFile !== undefined || flags.intent === undefined) return null;
   const bare = flags.intent.trim().replace(/^(["'])(.+)\1$/, "$2");
-  if (bare === "" || handFileStep(projectDir, bare) === null) return;
-  flags.handFile = bare;
+  if (bare === "" || /[\r\n]/.test(bare)) return null;
+  try {
+    return statSync(resolve(projectDir, bare)).isFile() ? bare : null;
+  } catch {
+    return null;
+  }
+}
+
+// A file AI-DLC wrote for a hand-off, its progress or its result, named as the
+// whole request, is that file, as --hand-file is; any other file named so is
+// the person's request as before.
+function takeBareHandFile(flags: ParsedFlags, projectDir: string): void {
+  const path = bareHandFileRequest(flags, projectDir);
+  if (path === null || handFileStep(projectDir, path) === null) return;
+  flags.handFile = path;
   delete flags.intent;
 }
 
@@ -12214,7 +12226,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // Only the park branches still see a resume that carried words.
   const resuming = flags.resume === true || withoutResume !== null;
   handOutSettingsLine(flags, resolveProjectDir(projectDir));
-  bareHandFileRequest(flags, resolveProjectDir(projectDir));
+  takeBareHandFile(flags, resolveProjectDir(projectDir));
   pickingUp = flags.resume === true;
 
   // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
