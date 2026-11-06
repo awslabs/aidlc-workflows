@@ -778,8 +778,10 @@ read with CRLF too.
 Solo work built one Unit at a time on one machine can still take a teammate,
 whichever layout its code is in: a Unit they take is built as work of their
 own, as [across repos](#teams-across-repos).
-When they open it in their own clone, AI-DLC says it is being built from
-another machine, on which Unit and stage, and offers three things: **Carry on**
+When they open it in their own clone (a bare `/aidlc` or their own words,
+once in a chat, also after their words picked the work), AI-DLC says it is
+being built from another machine, on which Unit and stage while one is under
+way, and offers three things: **Carry on**
 the whole work here (for when the other person has stopped; today's pickup),
 **Take** an open Unit as their own (never the one the other machine is on), or
 **Follow along** (where it stands, read only). The same person opening their

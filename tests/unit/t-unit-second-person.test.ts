@@ -15,7 +15,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
@@ -29,6 +29,7 @@ import {
   makeHome,
   mergeOnHost,
   next,
+  personsChat,
   refundsTaken,
   run,
   stateOf,
@@ -49,16 +50,20 @@ const looks = (trace: string): number => existsSync(trace)
   : 0;
 
 // Solo work on machine A, one Unit at a time, refunds under way there (and,
-// with `refundsDone`, refunds finished and reporting under way), pushed. Its
-// code is the workspace's own repo: a teammate's take of solo work goes onto
-// the build-out on one repo too.
-function soloAtA(refundsDone = false) {
+// with `refundsDone`, refunds finished and reporting under way unless
+// `reportingStarted` is false), pushed. Its code is the workspace's own repo: a
+// teammate's take of solo work goes onto the build-out on one repo too.
+function soloAtA(refundsDone = false, reportingStarted = true) {
   const home = makeHome({ repos: {} });
   const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
   row("UNIT_STARTED", "functional-design", "refunds");
   if (refundsDone) {
     row("UNIT_COMPLETED", "code-generation", "refunds");
-    row("UNIT_STARTED", "functional-design", "reporting");
+    // Approved at its checkpoint, as the walk records it.
+    appendAuditEntry("GATE_APPROVED", {
+      Stage: "code-generation", Unit: "refunds", "Gate Scope": "unit-end", "User Input": "Approve", "Run floor": "0",
+    }, home.dir);
+    if (reportingStarted) row("UNIT_STARTED", "functional-design", "reporting");
   }
   git(home.dir, ["add", "-A"]);
   git(home.dir, ["commit", "-q", "-m", "solo work under way"]);
@@ -78,7 +83,47 @@ describe("a teammate opens solo work built from another machine", () => {
     const choices = ask.choices as Array<{ label: string; command: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Carry on fixture here", "Take checkout-ui", "Follow along"]);
     expect(choices[1].command).toEndWith(`take checkout-ui --home ${HOME_RECORD}`);
-    expect(choices[2].command).toContain(`status --space default --intent ${HOME_RECORD}`);
+    // Follow along is the dispatcher's own status, which every install has.
+    expect(choices[2].command).toContain(`aidlc.ts status --space default --intent ${HOME_RECORD}`);
+  });
+
+  test("between its Units, the offer names no Unit the other machine already finished", () => {
+    const home = soloAtA(true, false);
+    const ask = next(cloneOf(home.remote, "bob"));
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect(ask.question).toBe(
+      "fixture is being built from another machine. Carry on the whole work here, take an open Unit as your own, or follow along?",
+    );
+  });
+
+  test("their own words get the same offer, once in a chat, never the other person's step", () => {
+    const home = soloAtA();
+    const bob = cloneOf(home.remote, "bob");
+    const chat = personsChat("chat-bob-1");
+    const ask = next(bob, chat, ["I'd like to help Alice with the toolbox"]);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect(String(ask.question)).toStartWith("fixture is being built from another machine, on refunds");
+    // Asked once: their next words in this chat are read for what they mean.
+    expect(next(bob, chat, ["what is there to do?"]).ask_type).not.toBe("unit-take");
+  });
+
+  test("with the work selected in their chat before any offer, their next /aidlc puts the offer first, once", () => {
+    const home = soloAtA();
+    const bob = cloneOf(home.remote, "bob");
+    const chat = personsChat("chat-bob-1");
+    // Their pick of the work selects it in this chat, as its print says.
+    const picked = next(bob, chat, ["--pick", HOME_RECORD]);
+    const select = /`([^`]* intent switch [^`]*)`/.exec(String(picked.message))?.[1];
+    expect(select, JSON.stringify(picked)).toBeString();
+    const switched = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), ...select!.split(" ").slice(2)], {
+      cwd: bob, env: { ...chat, CLAUDE_PROJECT_DIR: bob, AIDLC_PROJECT_DIR: bob }, encoding: "utf-8",
+    });
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    const ask = next(bob, chat);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label))
+      .toEqual(["Carry on fixture here", "Take checkout-ui", "Follow along"]);
+    expect(next(bob, chat).ask_type).not.toBe("unit-take");
   });
 
   test("the same person on their own second machine is not asked: their work carries on as before", () => {

@@ -929,9 +929,12 @@ check at Build and Test reads of the Unit (`crossUnitCoverageReads`).
 Solo work built unit-major whose last per-Unit row is in another clone's audit
 shard (`builtFromAnotherMachine`), committed by another git identity
 (`lastCommittedByThisPerson`: `user.email`, else `user.name`), is offered, at a
-plain `next` with no work selected, as `ask_type: unit-take` with **Carry on**
+plain `next` with no work selected, at the person's words, and at a plain `next`
+or words over that work selected in this chat (`soloElsewhereAsk`; the words and
+the selected step once per chat, `take-offered-on-words.json`), as
+`ask_type: unit-take` with **Carry on**
 (`next --pick`), **Take <unit>** for each Unit not started and not waiting, and
-**Follow along** (`status` for that record); the same person's second machine
+**Follow along** (the dispatcher's `status` for that record); the same person's second machine
 gets today's pickup. `unit take` on such work claims the Unit at the
 workspace's `origin` and builds it in the home's space; it writes nothing of
 the home's state. At the start of every `next`, `switchSoloToTeams` switches

@@ -5213,8 +5213,9 @@ function teamCommandsNote(): string {
 // note in the workspace's sessions folder, where the person's heard lines,
 // which belong to a piece of work, cannot go.
 const OFFERS_PUT_FILE = "offers-put.json";
-// The take offer put to a teammate's words, once in a chat (no work is
-// selected there yet, so the chat's own sessions file keeps it).
+// The take offer put to a teammate once in a chat, at a bare /aidlc, at their
+// words, or at the step of solo work selected in their clone (the chat's own
+// sessions file keeps it, as no work may be selected there yet).
 const TAKE_ON_WORDS_FILE = "take-offered-on-words.json";
 
 function takeOfferedOnWords(projectDir: string): boolean {
@@ -9053,12 +9054,12 @@ function workLabel(projectDir: string): string {
 // Solo work being built from another machine, opened in a teammate's clone:
 // take an open Unit as their own, carry the whole work on here (the other
 // person stopped), or follow along. Null for any other work.
-function soloElsewhereAsk(projectDir: string): AskDirective | null {
+function soloElsewhereAsk(projectDir: string, selected?: { intent: IntentInfo; state: string }): AskDirective | null {
   const space = engineSelection(projectDir).space;
   const location = workspaceHomeLocation(projectDir);
   if (location === null || location === "local") return null;
   const own = auditShardName(projectDir);
-  for (const { intent, state } of workToPickUp(projectDir, space, null) ?? []) {
+  for (const { intent, state } of selected !== undefined ? [selected] : workToPickUp(projectDir, space, null) ?? []) {
     if (!intent.dirName) continue;
     const rows = readAuditShardEvents(projectDir, intent.dirName, space);
     const at = builtFromAnotherMachine(state, rows, own);
@@ -9078,11 +9079,13 @@ function soloElsewhereAsk(projectDir: string): AskDirective | null {
     const take = `${aidlcToolInvocation("unit")} take %s --home ${shellArg(intent.dirName)}` +
       (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
     const label = intentDisplayLabel(intent);
+    // The Unit under way there, never one it finished last.
+    const on = progress.done.has(at.unit) ? "" : `, on ${at.unit} (${stageLabel(nodeForSlug(at.stage), at.stage) ?? at.stage})`;
     return {
       kind: "ask",
       ask_type: "unit-take",
       response_route: "command",
-      question: `${label} is being built from another machine, on ${at.unit} (${stageLabel(nodeForSlug(at.stage), at.stage) ?? at.stage}). ` +
+      question: `${label} is being built from another machine${on}. ` +
         "Carry on the whole work here, take an open Unit as your own, or follow along?",
       choices: [
         { label: `Carry on ${label} here`, detail: "For when the other person has stopped.", command: selectCommands([intent.dirName])[0].command },
@@ -9091,7 +9094,7 @@ function soloElsewhereAsk(projectDir: string): AskDirective | null {
           detail: "It moves to you as a piece of work of its own here; everything done so far is kept.",
           command: take.replace("%s", shellArg(unit)),
         })),
-        { label: "Follow along", detail: "See where it stands, without changing anything.", command: `${aidlcToolInvocation("utility")} status --space ${shellArg(space)} --intent ${shellArg(intent.dirName)}` },
+        { label: "Follow along", detail: "See where it stands, without changing anything.", command: `${aidlcInvocation()} status --space ${shellArg(space)} --intent ${shellArg(intent.dirName)}` },
       ],
     };
   }
@@ -12769,6 +12772,23 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const switchedToTeams = switchSoloToTeams(pd, engineSessionId);
   const stateContent = loadStateFileIfPresent(pd);
   if (switchedToTeams !== null) sayWithStepOnce(pd, switchedToTeams);
+  // Solo work selected in a teammate's clone and still built from another
+  // machine: the person's bare /aidlc or their words get its offer first, once
+  // in a chat, as they do with no work selected, so the step never walks
+  // the other person's Unit beside them unasked.
+  const plainNext = Object.entries(flags).every(([key, value]) =>
+    key === "intent" || key === "markedWords" || value === undefined || value === false);
+  if (stateContent && plainNext && engineSessionId && !takeOfferedOnWords(pd) && !isReadOnlyEngineProbe()) {
+    const chosen = engineSelection(pd);
+    const intent = chosen.intent === null ? undefined
+      : listIntents(pd, chosen.space).find((entry) => entry.dirName === chosen.intent);
+    const offer = intent === undefined ? null : soloElsewhereAsk(pd, { intent, state: stateContent });
+    if (offer !== null) {
+      noteTakeOfferedOnWords(pd);
+      emit(offer);
+      return;
+    }
+  }
   activeRetiredGuardPolicyNotice = stateContent === null ? null : retiredGuardPolicyNotice(pd, stateContent);
   // Runtime state-version guard (see staleStateVersionError): refuse a state
   // this build cannot read (newer, unparseable, or older than any step brings
@@ -13751,7 +13771,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // "take u1 for payments"): the Units to take are what is theirs, put as a
     // bare `next` puts them, once in a chat; picking the work itself is the
     // lead's, and "Carry on ... here, as its home" stays among the choices.
-    const take = here !== null && here.selectable.length > 0 && !takeOfferedOnWords(pd) ? unitTakeAsk(pd) : null;
+    const take = here !== null && here.selectable.length > 0 && !takeOfferedOnWords(pd) ? unitTakeAsk(pd) ?? soloElsewhereAsk(pd) : null;
     if (take !== null) {
       noteTakeOfferedOnWords(pd);
       emit(take);
@@ -13867,6 +13887,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // work of their own here.
     const take = unitTakeAsk(pd) ?? soloElsewhereAsk(pd);
     if (take) {
+      if (take.kind === "ask") noteTakeOfferedOnWords(pd);
       emit(take);
       return;
     }
