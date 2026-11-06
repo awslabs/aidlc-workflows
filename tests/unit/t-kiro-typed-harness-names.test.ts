@@ -9,10 +9,12 @@
 // no terminal and no --yes, and said once with --yes, in --quiet and in the
 // --json result too. The Kiro CLI (V2) onboarding says that Kiro CLI on its
 // v3 engine is Kiro and names that switch. On a release install that switch
-// switches and keeps the team's records under aidlc/. With a team's own hook
+// switches and keeps the team's records under aidlc/, and turns Kiro IDE's
+// Workflows off when it is on, as the onboarding says. With a team's own hook
 // file it stops, and its dry run then its plan token switch, keeping that
-// file. On a copy install it stops and names the download. A copied tool's
-// hand-off carries ids, read as ids by every release.
+// file. On a copy install it stops and names the download, which the
+// onboarding runs at once. A copied tool's hand-off carries ids, read as ids
+// by every release.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -64,7 +66,7 @@ function projectTool(dir: string, args: string[]): Run {
 
 // The Kiro CLI (V2) onboarding's sentence that names the switch, up to the
 // code span holding its command.
-const SWITCH_LEAD = "When the person asks to switch this project to Kiro, run";
+const SWITCH_LEAD = "When the person asks to switch this project to Kiro, the switch is";
 
 // The arguments of the switch the Kiro CLI (V2) onboarding names, after its invocation.
 function switchArgs(onboarding: string, invoke: string): string[] | undefined {
@@ -80,7 +82,6 @@ function v2Project(invoke: string, from = RELEASE): { dir: string; onboarding: s
   expect(setup.status, setup.out).toBe(0);
   const onboarding = readFileSync(join(dir, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8");
   expect(onboarding).toContain(`${SWITCH_LEAD} \`${invoke} config `);
-  expect(onboarding).toContain("If it stops and names another step instead");
   const command = switchArgs(onboarding, invoke);
   expect(command).toEqual(["--harness", "kiro", "--yes"]);
   return { dir, onboarding, command: command ?? [] };
@@ -226,6 +227,14 @@ describe("Kiro harness names a person types", () => {
       "In a chat on the v3 engine this install as shipped cannot record the person's answers, so AI-DLC refuses every approval",
     );
     expect(onboarding).toContain(
+      "With `--yes` it also takes AI-DLC's recommended answer to each Kiro setting not yet answered on this machine, settings that apply to all the person's projects:",
+    );
+    expect(onboarding).toContain(
+      "So first tell them in one line that the switch may also turn Workflows off and, on Windows, set Kiro IDE's terminal to PowerShell, for all their projects, " +
+        "and run the switch only once they have agreed with that line in front of them;",
+    );
+    expect(onboarding).toContain("For any other step it names (a dry run whose plan is then applied with the `--plan-token` it prints)");
+    expect(onboarding).toContain(
       "in a Kiro CLI chat only the Kiro CLI part of its next step, which the person does after quitting this chat; " +
         "after that, run no other AI-DLC command in this chat.",
     );
@@ -238,6 +247,35 @@ describe("Kiro harness names a person types", () => {
     expect(readFileSync(memory, "utf-8")).toBe(memoryText);
     // The next step the onboarding points to has a Kiro CLI part.
     expect(switched.out).toMatch(/in Kiro CLI, start `kiro-cli --v3`/);
+  });
+
+  // The Kiro setting the onboarding says the switch also answers: with Kiro
+  // IDE's Workflows on and never answered on this machine, the switch it names
+  // turns it off and says so.
+  test("the switch the onboarding names also turns Kiro IDE's Workflows off when it is on, as the onboarding says", () => {
+    const { dir, onboarding, command } = v2Project("aidlc");
+    expect(onboarding).toContain("it turns Kiro IDE's and Kiro CLI's Workflows feature off when it is on");
+    const machine = `${dir}-machine`;
+    temporary.push(machine);
+    const settings = join(machine, "Kiro", "User", "settings.json");
+    mkdirSync(dirname(settings), { recursive: true });
+    writeFileSync(settings, `${JSON.stringify({ "kiroAgent.workflows.enabled": true })}\n`);
+    const switched = config(dir, command, {
+      entry: DISPATCHER,
+      // Not Windows, so Kiro IDE's terminal setting (read on Windows only) is not in play.
+      env: {
+        AIDLC_INSTALL_ROOT: join(machine, "aidlc"),
+        AIDLC_BIN_DIR: join(machine, "aidlc", "bin"),
+        AIDLC_TEST_KIRO_IDE_SETTINGS: settings,
+        AIDLC_TEST_KIRO_IDE_PLATFORM: "linux",
+      },
+    });
+    expect(switched.status, switched.out).toBe(0);
+    expect(stamp(dir)).toBe("kiro-ide");
+    expect(switched.out).toContain("Turned Kiro's Workflows feature off");
+    expect(JSON.parse(readFileSync(settings, "utf-8"))["kiroAgent.workflows.enabled"]).toBe(false);
+    // Answered once for the machine, so it is not asked again.
+    expect(readFileSync(join(machine, "aidlc", "kiro-ide-workflows"), "utf-8")).toBe("off\n");
   });
 
   // A hook file the team added is one Kiro would now run, so the switch the
@@ -271,12 +309,18 @@ describe("Kiro harness names a person types", () => {
   });
 
   // A copy install holds only its own tree, so the switch it names stops and
-  // names the command that fetches Kiro's files, which the onboarding says to
-  // run once the person agrees.
+  // names the same command with --download, which the onboarding says to run
+  // at once under the person's request.
   test("on a copy install the switch the onboarding names stops, names the download, and leaves Kiro CLI (V2)", () => {
-    const { dir, command } = v2Project("bun .kiro/tools/aidlc.ts", join(REPO_ROOT, "dist", "kiro"));
+    const { dir, onboarding, command } = v2Project("bun .kiro/tools/aidlc.ts", join(REPO_ROOT, "dist", "kiro"));
+    expect(onboarding).toContain(
+      "If the switch then stops saying that switching `.kiro` needs the release files (a copy install, which holds only its own tree), " +
+        "the `fix:` command it names adds `--download` to the same switch: run it at once.",
+    );
     const switched = projectTool(dir, ["config", ...command]);
     expect(switched.status, switched.out).not.toBe(0);
+    // The stop the onboarding's run-at-once rule names, in the tool's words.
+    expect(switched.out).toMatch(/switching \.kiro from kiro-v2 to kiro needs the \S+ release files/);
     expect(switched.out).toMatch(/^fix: bun \.kiro\/tools\/aidlc\.ts config --harness kiro --yes --download\r?$/m);
     expect(stamp(dir)).toBe("kiro");
   });
