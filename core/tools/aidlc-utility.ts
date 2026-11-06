@@ -578,6 +578,9 @@ import {
   runtimeHarnessName,
   runtimeProjectDir,
   typedHarnessName,
+  SYNC_FOLDER_STEP,
+  syncFolderLabel,
+  syncServiceHolding,
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
@@ -4014,6 +4017,10 @@ export async function collectDoctorReport(
   const hooksLastFired = firingHooksLastFired(projectDir);
   results.push(...runtimeDoctorChecks(projectDir, harnessDir(), hooksLastFired ? { hooksLastFired } : {}));
   results.push(instructionFileDoctorCheck(projectDir, harnessDir()));
+  const syncService = syncServiceHolding(projectDir);
+  if (syncService !== null) {
+    results.push({ pass: false, severity: "warn", label: syncFolderLabel(syncService), fix: SYNC_FOLDER_STEP });
+  }
   // The documents the agents cannot read yet, as the engine's step names them
   // (advisory: the exit code is unchanged).
   try {

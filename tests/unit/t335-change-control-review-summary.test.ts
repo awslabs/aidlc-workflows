@@ -66,6 +66,8 @@ import {
   seededRecordDir,
   seededStateFile,
   seedStateFile,
+  SYNC_FOLDER_WORDS,
+  syncedFolderEnv,
   WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
@@ -440,9 +442,13 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain(`output document changed after ${REVIEWER} reviewed it`);
     expect(refused.stderr).toContain(`Files written after that review: ${artifactRelative(proj)}.`);
-    expect(refused.stderr).toContain(
-      "A background sync client (Google Drive, iCloud Drive, OneDrive, Dropbox) rewriting files on its own",
-    );
+    expect(refused.stderr).not.toContain("sync can change files");
+    const home = createTestProject();
+    tempDirs.push(home);
+    const synced = run(STATE_TOOL, ["approve", STAGE], proj, { ...TEST_ENV, ...syncedFolderEnv(proj, home) });
+    expect(synced.status).not.toBe(0);
+    expect(synced.stderr).toContain(`${artifactRelative(proj)}. This project is in a`);
+    expect(synced.stderr).toContain(`${SYNC_FOLDER_WORDS} Run one recovery review pass`);
     expect(acceptedRows(proj)).toHaveLength(0);
   });
 
@@ -462,6 +468,15 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     const receipts = freshReviewReceipts(proj, readFileSync(seededStateFile(proj), "utf-8"), stage());
     expect(receipts.stageStale).toBe(true);
     expect(receipts.stageWrittenPaths).toEqual([relative(proj, trace).replaceAll("\\", "/")]);
+    const spent = run(STATE_TOOL, ["approve", STAGE], proj);
+    expect(spent.status).not.toBe(0);
+    expect(spent.stderr).toContain(`changed again after the one recovery review by ${REVIEWER}.`);
+    expect(spent.stderr).not.toContain("sync can change files");
+    const home = createTestProject();
+    tempDirs.push(home);
+    const synced = run(STATE_TOOL, ["approve", STAGE], proj, { ...TEST_ENV, ...syncedFolderEnv(proj, home) });
+    expect(synced.stderr).toContain(`changed again after the one recovery review by ${REVIEWER}.`);
+    expect(synced.stderr).toContain(SYNC_FOLDER_WORDS);
   });
 
   test("the review-freeze fence holds under strict and stands aside, logged, under relaxed and off", () => {
