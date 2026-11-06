@@ -324,6 +324,28 @@ const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
 const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
+// A Unit's build whose Code Generation is approved: the build stays open
+// until its push or Not now, so its stage still reads Code Generation, with
+// nothing left to approve (unitBuildPastCodeGeneration).
+const UNIT_BUILT_ASKED = "the Unit is built and approved, and its code changes only at the person's word";
+// Some hosts show the refusal to the person as written: only their sentence,
+// and no step to run, since the step is theirs.
+const UNIT_BUILT_SENTENCE = "Your Unit is built and approved: its code changes only when you ask for a change.";
+// An AI-DLC command whose spelling the shell reading refused, in such a build.
+const UNIT_BUILT_ENGINE_SPELLING = "Run AI-DLC's command exactly as the step gives it, as a command of its own (no " +
+  "`cd` before it, no pipe or second command after it).";
+
+// A Unit's build whose last stage, Code Generation, is approved ([x] in its
+// Stage Progress): it is past Code Generation until a redo starts it again.
+async function unitBuildPastCodeGeneration(state: string | null): Promise<boolean> {
+  if (state === null || !/^- \[x\] code-generation\s/m.test(state)) return false;
+  try {
+    const { unitBuildOf } = await import("../tools/aidlc-unit-teams.ts");
+    return unitBuildOf(state) !== null;
+  } catch {
+    return false;
+  }
+}
 // Under strict every landing of the stage checks the main checkout against the
 // stage's start (assertAggregateSourceBeforeMerge), so nothing else changes it
 // while a parallel batch is out but the files the person asked to change
@@ -750,6 +772,8 @@ function authorityRemedy(
   wayOn: EngineInvocation | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
+  if (reason === UNIT_BUILT_ASKED) return UNIT_BUILT_SENTENCE;
+  if (reason === UNIT_BUILT_ENGINE_SPELLING) return UNIT_BUILT_ENGINE_SPELLING;
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
     // The question is still open, so only an approval of these exact files is
     // the person's approval; any other answer they gave is carried out by `next`.
@@ -797,7 +821,10 @@ function authorityBlockReason(
   if (reason === SWARM_MAIN_CHECKOUT_HELD) {
     return `${authorityRemedy(reason, standing)} ${heldWayOn ?? SWARM_MAIN_CHECKOUT_LATER}`;
   }
-  if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
+  if (
+    reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN || reason === UNIT_BUILT_ASKED ||
+    reason === UNIT_BUILT_ENGINE_SPELLING
+  ) {
     return authorityRemedy(reason, standing, asked, editingReply);
   }
   return (
@@ -2731,7 +2758,21 @@ async function evaluate(
       besideTheBuild(projectDir, mutation, () => parkedBuildPlansNamedPaths(projectDir))
     ) return 0;
     rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
-    if (
+    if (await unitBuildPastCodeGeneration(state)) {
+      // A Unit's build ends at Code Generation, so once that stage is approved
+      // it is past it: open only for its push, or finished. What the person
+      // asks for then runs (a change, a commit, their redo), their turn
+      // standing behind it with no decision since (the turn that approved
+      // the code is spent by that approval); the agent's own change waits for
+      // their word. The refusal names no step to run: the step is theirs.
+      if (
+        !mutation.engineRefused && process.env.AIDLC_UNATTENDED !== "1" &&
+        personTurnStands(projectDir, "plain", { requests: true })
+      ) return 0;
+      rulesArriving = null;
+      authorityFailure = mutation.engineRefused ? UNIT_BUILT_ENGINE_SPELLING : UNIT_BUILT_ASKED;
+      verdict = { block: true, mentioned: [] };
+    } else if (
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE
     ) {
@@ -3046,8 +3087,9 @@ async function evaluate(
       // supplies a missing directive, target, or approval. Those refusals say
       // what they say with the fence on, so each names the step that ends it.
       if (authorityFailure && !swarmBatchOut) {
-        // The plan question is open: the same words as with the fence on.
-        const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN;
+        // The plan or push question is open: the same words as with the fence on.
+        const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN || authorityFailure === UNIT_BUILT_ASKED ||
+          authorityFailure === UNIT_BUILT_ENGINE_SPELLING;
         return refuseExecutionIneligible(
           authorityRemedy(authorityFailure, standing, asked, editingReply, jumpWayOn), !waiting, !waiting,
           planRefusalReason(),

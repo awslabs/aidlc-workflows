@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:push, subcommand:aidlc-state:approve, function:buildWaitsForPush
+// covers: subcommand:aidlc-unit:push, subcommand:aidlc-state:approve, function:buildWaitsForPush, function:unitBuildPastCodeGeneration
 //
 // A Unit's build ends with its push, and its record stays open until the push
 // or the person's Not now, so whatever the push asks of the person is still
@@ -12,7 +12,7 @@
 // neither pushed nor went back. Not now still ends the build, once.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, cpSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { type HostName, hostFor } from "../harness/scope-hosts.ts";
@@ -39,9 +39,9 @@ const DEPENDENCIES = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\
 
 // The home with refunds held for payments, and a payments member's clone on
 // `tool`, built to the push question.
-function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean) {
+function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, policy?: "strict" | "relaxed" | "off") {
   const hosts = { billing: codeHost("billing") };
-  const state = homeState().replace(/^- \[ \] (nfr-requirements|nfr-design|infrastructure-design) (\S+) EXECUTE$/gm, "- [ ] $1 $2 SKIP");
+  const state = homeState(policy === undefined ? [] : [`- **Guard Policy**: ${policy} (set by you)`]).replace(/^- \[ \] (nfr-requirements|nfr-design|infrastructure-design) (\S+) EXECUTE$/gm, "- [ ] $1 $2 SKIP");
   const home = makeHome({ repos: hosts, dependencies: DEPENDENCIES, state });
   cpSync(join(REPO_ROOT, "dist", "claude"), home.dir, { recursive: true, force: false, errorOnExist: false });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
@@ -146,4 +146,60 @@ describe("a Unit's push and its way back stay the person's moves", () => {
     expect(completions(record)).toBe(1);
     expect(agent.next().kind).toBe("done");
   });
+});
+
+// A live run: at the push question the teammate asked "add a line to the end of
+// checkout-api/README.md"; the agent's edit and commit were refused by the
+// plan-approval guard as if Code Generation had not started, and the way out
+// it named was refused too. Code Generation is approved there: what the
+// person asks for goes through, and the agent's own edit waits for their word.
+describe("at the push question the person's own ask goes through", () => {
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`Guard Policy ${policy}: their edit and commit run; the agent's own edit waits, and its refusal names no step that is refused`, () => {
+      const { host, person, agent, push, dir } = builtToPush("claude", false, policy);
+      const write = () => host.hook("plan-approval-guard", {
+        hook_event_name: "PreToolUse", tool_name: "Write",
+        tool_input: { file_path: join(dir, "billing", "README.md"), content: "# billing\n\nRefunds live here.\n" },
+      });
+      const own = write();
+      expect(own.status, own.stderr).toBe(2);
+      expect(own.stderr.trim()).toBe("Your Unit is built and approved: its code changes only when you ask for a change.");
+      person.say("add a line to the end of billing/README.md, then commit it with PAY-42");
+      const theirs = write();
+      expect(theirs.status, theirs.stderr).toBe(0);
+      const commit = host.hook("plan-approval-guard", {
+        hook_event_name: "PreToolUse", tool_name: "Bash",
+        tool_input: { command: "git -C billing commit -am 'PAY-42 note refunds in the README'" },
+      });
+      expect(commit.status, commit.stderr).toBe(0);
+      // Done as they asked, the push question moves on: Push sends the Unit, and is not asked again.
+      appendFileSync(join(dir, "billing", "README.md"), "Refunds live here.\n");
+      git(join(dir, "billing"), ["commit", "-qam", "PAY-42 note refunds in the README"]);
+      const pushed = choose(agent, person, push, "Push");
+      expect(pushed.status, pushed.out).toBe(0);
+      const after = agent.next();
+      expect(after.ask_type === "unit-push", JSON.stringify(after)).toBe(false);
+    });
+  }
+});
+
+// A live run on Codex: after the Unit was pushed, the person asked for a fix
+// to it, and their redo of Code Generation was refused by the plan-approval
+// guard, then the work read as finished. The Codex host fires the guard
+// before each command, as Codex does.
+test("after the push, the person's redo of Code Generation runs", () => {
+  const { host, person, agent, push } = builtToPush("codex", false);
+  const pushed = choose(agent, person, push, "Push");
+  expect(pushed.status, pushed.out).toBe(0);
+  const after = agent.next();
+  expect(after.ask_type === "unit-push", JSON.stringify(after)).toBe(false);
+  person.say("Fix the known stale-panel refund issue in refunds: take it back to Code Generation.");
+  const accepted = host.bash(`bun ${host.dir}/tools/aidlc-orchestrate.ts report --result resumed --choice redo --target code-generation`);
+  expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
+  const jump = /`([^`]*aidlc-jump\.ts execute --target code-generation --direction redo[^`]*)`/.exec(accepted.stdout)?.[1];
+  expect(jump, accepted.stdout).toBeString();
+  const moved = host.bash(jump!);
+  expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+  const step = agent.next();
+  expect(step, JSON.stringify(step).slice(0, 600)).toMatchObject({ stage: "code-generation", unit: "refunds" });
 });
