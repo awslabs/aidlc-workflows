@@ -345,9 +345,10 @@ describe("t304 source and store generation interleavings", () => {
   });
 
   // A workspace beside its code repos (#3595): the paths are outside the
-  // project folder, and the refusal says so, never a socket or pipe, with the
-  // step that includes such code; that step goes through.
-  test("paths outside the project say so, git or not, and the step for code kept outside goes through", () => {
+  // project folder, and the refusal says so, never a socket or pipe, and names
+  // no layout to bring that code in (a checkout nested in a Git project is
+  // fingerprinted at its commit only); naming a folder inside goes through.
+  test("paths outside the project say so, git or not, and naming a folder inside goes through", () => {
     for (const git of [true, false]) {
       const parent = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t304-outside-")));
       externalDirs.push(parent);
@@ -376,9 +377,7 @@ describe("t304 source and store generation interleavings", () => {
           `${paths.join(", ")} ${paths.length === 1 ? "is" : "are"} outside the project folder: ` +
             "run it again with --paths naming folders inside it.",
         );
-        expect(said).toContain(
-          "To scan code kept outside the project, put a checkout of it in a folder inside the project, then name that folder.",
-        );
+        expect(said).not.toContain("To scan code kept outside the project");
         expect(said).not.toContain("socket or named pipe");
         expect(said).not.toContain("not in the repository");
       }
@@ -424,9 +423,7 @@ describe("t304 source and store generation interleavings", () => {
     expect(elsewhere).toContain(
       "../../elsewhere is outside the api repository's folder: run it again with --paths naming folders inside it.",
     );
-    expect(elsewhere).toContain(
-      " intent add-repo <name> --url <address>`, which clones it into the project folder, then run it again with --repo <name> --paths ./.",
-    );
+    expect(elsewhere).not.toContain("add-repo");
     const missing = refusal("src/nothere");
     expect(missing).toContain("src/nothere is not in the repository");
     expect(missing).not.toContain("in the api repository");
@@ -437,6 +434,16 @@ describe("t304 source and store generation interleavings", () => {
     const other = refusal("../other");
     expect(other).toContain("../other is outside the api repository's folder");
     expect(other).not.toContain("shipping");
+    // Scanning that repo reads the project folder, and a checkout of it kept
+    // beside the project is outside: no add-repo step, which would find the
+    // name recorded and clone nothing.
+    const beside = runUtility(project, ["codekb-snapshot", "--repo", "shipping", "--paths", "../shipping"]);
+    expect(beside.status).not.toBe(0);
+    const besideSaid = refusalWords(beside);
+    expect(besideSaid).toContain(
+      "../shipping is outside the project folder: run it again with --paths naming folders inside it.",
+    );
+    expect(besideSaid).not.toContain("add-repo");
   });
 
   test("publish accepts a candidate whose paths differ from the snapshot only by a trailing slash (#2578)", () => {

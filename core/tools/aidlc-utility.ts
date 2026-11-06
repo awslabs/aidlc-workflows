@@ -11162,8 +11162,7 @@ function withCodekbLock<T>(
 // Where a --paths entry the snapshot could not read points, when that is
 // outside the folder being scanned: in another of the work's recorded repos
 // (the --repo that reads it, as resolveCodekbRepo resolves it, and the path
-// from that repo's folder), or outside, and whether outside the project too.
-// Null for a path inside the folder. Lexical, on the platform's own path
+// from that repo's folder), or outside. Null for a path inside the folder. Lexical, on the platform's own path
 // rules, so nothing outside the project is read.
 function codekbPathPlace(
   projectDir: string,
@@ -11171,7 +11170,7 @@ function codekbPathPlace(
   repoDir: string,
   recorded: readonly string[],
   path: string,
-): { repo: string; path: string } | { outsideProject: boolean } | null {
+): { repo: string; path: string } | "outside" | null {
   const at = resolve(repoDir, path);
   if (pathContainedBy(resolve(repoDir), at)) return null;
   for (const repo of recorded) {
@@ -11182,7 +11181,7 @@ function codekbPathPlace(
     const from = relative(root, at);
     return { repo, path: from === "" ? "./" : from.split(sep).join("/") };
   }
-  return { outsideProject: !pathContainedBy(resolve(projectDir), at) };
+  return "outside";
 }
 
 // Snapshot the two generations a scan is built from. The stage takes this
@@ -11209,20 +11208,18 @@ function handleCodekbSnapshot(
       }
       const inRepo = new Map<string, { named: string[]; from: string[] }>();
       const outside: string[] = [];
-      let outsideProject = false;
       const inside: string[] = [];
       for (const path of paths) {
         const place = codekbPathPlace(projectDir, space, repoDir, recorded, path);
         if (place === null) {
           inside.push(path);
-        } else if ("repo" in place) {
+        } else if (place === "outside") {
+          outside.push(path);
+        } else {
           const entry = inRepo.get(place.repo) ?? { named: [], from: [] };
           entry.named.push(path);
           entry.from.push(place.path);
           inRepo.set(place.repo, entry);
-        } else {
-          outside.push(path);
-          outsideProject ||= place.outsideProject;
         }
       }
       const absent = inside.filter((path) => {
@@ -11242,19 +11239,10 @@ function handleCodekbSnapshot(
       }
       if (outside.length > 0) {
         const folder = resolve(repoDir) === resolve(projectDir) ? "the project folder" : `the ${repo} repository's folder`;
+        // No way to bring outside code in is named: add-repo clones nothing
+        // for a name the work already records, and a checkout nested in a
+        // Git project is fingerprinted at its commit only.
         causes.push(`${outside.join(", ")} ${be(outside)} outside ${folder}: run it again with --paths naming folders inside it.`);
-        // Code outside the project is read once a checkout of it is in the
-        // project: add-repo clones one for work that records its repos, and
-        // refuses for work whose repo is the workspace folder itself.
-        if (outsideProject) {
-          causes.push(
-            recorded.length > 0
-              ? `To scan code kept outside the project, add it to this work with ` +
-                  `\`${aidlcDispatcherInvocation("intent add-repo <name> --url <address>")}\`, which clones it into ` +
-                  `the project folder, then run it again with --repo <name> --paths ./.`
-              : "To scan code kept outside the project, put a checkout of it in a folder inside the project, then name that folder.",
-          );
-        }
       }
       if (absent.length > 0) {
         causes.push(`${absent.join(", ")} ${be(absent)} not in the repository: run it again with --paths naming paths that exist.`);
