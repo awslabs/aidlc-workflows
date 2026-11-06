@@ -76,6 +76,7 @@ import {
   getField,
   hookStandsOutside,
   isolatedRunWithoutWork,
+  selectedRecordIsFinished,
   hostEnvelopeTurnText,
   planApprovalChallengeRelativePath,
   COMMAND_TURN_REPLY,
@@ -858,11 +859,12 @@ try {
   // asks in chat to change with nothing waiting on them (without the id, every
   // such request met the setter's refusal first, and a setting asked in a box
   // answer was recorded on the message typed before it). On the work, every
-  // such message gets it; outside the work or before any exists, only a reply
-  // to this chat's plan question for new work, so a setting asked beside the
-  // plan pick is recorded as theirs and no other prompt in a project with no
-  // AI-DLC work open carries the line. Once a turn. The setter's proof of the
-  // message still decides.
+  // such message gets it, and so does one in a chat that took part in work now
+  // finished, where the message is their turn (standingPersonTurn); outside the
+  // work or before any exists, only a reply to this chat's plan question for
+  // new work, so a setting asked beside the plan pick is recorded as theirs and
+  // no other prompt in a project with no AI-DLC work open carries the line.
+  // Once a turn. The setter's proof of the message still decides.
   let idSaid = false;
   const sayMessageId = (messageId: string | null, notAReply: boolean, onTheWork: boolean): void => {
     if (idSaid || !(promptSubmitted || pickerQuestion !== undefined) || !messageId || notAReply || contextMayReachPerson) {
@@ -884,7 +886,8 @@ try {
     if (turnOrigin.kind !== "host") {
       const kept = keepMessage();
       keepClaudeKey(kept, false);
-      sayMessageId(kept, typedParse?.command === true, false);
+      const tookPart = workflow.participation === "participant" && selectedRecordIsFinished(projectDir, workflow.selection);
+      sayMessageId(kept, typedParse?.command === true, tookPart);
     }
     sayIfKeyShaped();
     return 0;
