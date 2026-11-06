@@ -302,7 +302,10 @@ import {
   finishedWork,
   workStanding,
   listSpaces,
+  namedActiveSpace,
+  recordInferred,
   ARCHIVED_INTENT_STATUS,
+  READ_ONLY_COMMAND_ENV,
   clearActiveIntentCursor,
   intentStartedByQuestion,
   isAidlcAgentFile,
@@ -439,6 +442,7 @@ import {
   isScopeName,
   scopeArg,
   stateFilePath,
+  stateFilePathForSelection,
   commandAtPersonsTerminal,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
@@ -2001,24 +2005,42 @@ function codeScannedClause(projectDir: string, intent: string | undefined, space
 // clone, a chat that has not joined it): each piece by name and where it
 // stands, then the two ways on. Null when no record is here.
 function workHereStatus(projectDir: string, space: string): string | null {
-  const present = listIntents(projectDir, space, null).filter((intent) => intent.dirName !== null);
-  const shown = present.filter((intent) => !isArchivedIntent(intent));
-  if (shown.length === 0) return null;
-  const finished = new Set(finishedWork(projectDir, space, null).map((intent) => intent.dirName));
-  const states = new Map((workToPickUp(projectDir, space, null) ?? []).map(({ intent, state }) => [intent.dirName, state]));
-  const lines = shown.map((intent) => {
-    const record = isSafeIntentRecordName(intent.dirName) ? intent.dirName : JSON.stringify(intent.dirName);
-    const label = intentDisplayLabel(intent);
-    const where = finished.has(intent.dirName) ? "finished" : workStanding(states.get(intent.dirName) ?? "") || "in progress";
-    return `  ${label === record ? record : `${label} (record ${record})`}: ${where}\n`;
-  });
-  const archived = present.length - shown.length;
+  const spaces = [space, ...listSpaces(projectDir).map((entry) => entry.name).filter((name) =>
+    name !== space && listIntents(projectDir, name, null).some((intent) => intent.dirName !== null && !isArchivedIntent(intent)),
+  )];
+  const lines: string[] = [];
+  let archived = 0;
+  for (const sp of spaces) {
+    const present = listIntents(projectDir, sp, null).filter((intent) => intent.dirName !== null);
+    const shown = present.filter((intent) => !isArchivedIntent(intent));
+    archived += present.length - shown.length;
+    const finished = new Set(finishedWork(projectDir, sp, null).map((intent) => intent.dirName));
+    const states = new Map((workToPickUp(projectDir, sp, null) ?? []).map(({ intent, state }) => [intent.dirName, state]));
+    for (const intent of shown) {
+      const record = isSafeIntentRecordName(intent.dirName) ? intent.dirName : JSON.stringify(intent.dirName);
+      const label = intentDisplayLabel(intent);
+      const where = finished.has(intent.dirName) ? "finished" : workStanding(states.get(intent.dirName) ?? "") || "in progress";
+      const spaceNote = sp === space ? "" : ` (space ${sp})`;
+      lines.push(`  ${label === record ? record : `${label} (record ${record})`}: ${where}${spaceNote}\n`);
+    }
+  }
+  if (lines.length === 0) return null;
   const entry = entrySkillInvocation();
-  return `No work is selected in this conversation. Work in this project${space === DEFAULT_SPACE ? "" : ` (space "${space}")`}:\n` +
+  return `No work is selected in this conversation. Work in this project:\n` +
     lines.join("") +
     (archived > 0 ? `  (${archived} archived; ${entry} intent list --all shows ${archived === 1 ? "it" : "them"})\n` : "") +
     `\nTo carry on with one, or go back to one of its stages: ${entry} intent <record>\n` +
+    (spaces.length > 1 ? `To work in another space, choose it first: ${entry} space <name>\n` : "") +
     `To start new work: ${entry} "build the auth service"\n`;
+}
+
+function inferredRecordLine(projectDir: string, space: string, record: string): string {
+  const entry = listIntents(projectDir, space, null).find((intent) => intent.dirName === record);
+  const label = entry === undefined ? record : intentDisplayLabel(entry);
+  const finished = finishedWork(projectDir, space, null).some((intent) => intent.dirName === record);
+  const spaceNote = namedActiveSpace(projectDir) === null ? `, space ${space}` : "";
+  return `Nothing here names this workflow, so status shows the only work it holds: ${label} ` +
+    `(record ${record}${spaceNote})${finished ? ", finished" : ""}.\n\n`;
 }
 
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
@@ -2027,11 +2049,9 @@ function handleStatus(projectDir: string, flags: Record<string, string>): void {
   const selection = resolveWorkflowSelection(projectDir, {
     space: flags.space,
     intent: flags.intent,
+    bind: false,
   });
-  const sp =
-    selection.intent === null
-      ? join(intentsDir(projectDir, selection.space), "aidlc-state.md")
-      : stateFilePath(projectDir, selection.intent, selection.space);
+  const sp = stateFilePathForSelection(projectDir, selection);
   if (!existsSync(sp)) {
     process.stdout.write(
       (selection.intent === null ? workHereStatus(projectDir, selection.space) : null) ??
@@ -2044,6 +2064,9 @@ To get started:
 `
     );
     return;
+  }
+  if (flags.intent === undefined && recordInferred(projectDir, selection) && selection.intent !== null) {
+    process.stdout.write(inferredRecordLine(projectDir, selection.space, selection.intent));
   }
 
   const content = readFileSync(sp, "utf-8");
@@ -13931,6 +13954,7 @@ export async function main(argv: string[]): Promise<void> {
   errorArgs = [...rawArgs];
   const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
   const subcommand = positional[0];
+  if (subcommand === "status") process.env[READ_ONLY_COMMAND_ENV] = "1";
   if (
     (subcommand === "intent-create" || subcommand === "init") &&
     (flags.help === "true" || rawArgs.includes("-h"))
