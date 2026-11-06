@@ -188,9 +188,20 @@ describe("going back to change the Unit plan while teams hold Units", () => {
     const notices = (step.change_notices ?? []) as string[];
     expect(notices, JSON.stringify(step)).toContain(
       "Still with teams: refunds (being built by alice for payments), checkout-ui (held for web, not taken yet). " +
-        "A build under way carries on from the plan it took. A Unit not taken yet is taken on the plan as it stands then.",
+        "A Unit a team has started keeps the plan it took. A Unit not taken yet is taken on the plan as it stands then.",
     );
     expect(JSON.stringify(step)).not.toContain("Still claimed");
     expect(JSON.stringify(step)).not.toContain("publishes again");
+  });
+
+  test("a Unit whose team pushed it reads pushed and not merged yet, never as being built", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const step = next(home.dir, undefined, ["--stage", "units-generation"]);
+    const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));
+    expect(line, JSON.stringify(step)).toContain("refunds (pushed by alice for payments, not merged yet)");
+    expect(line).not.toContain("being built");
   });
 });

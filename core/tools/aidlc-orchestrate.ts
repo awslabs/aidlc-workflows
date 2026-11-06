@@ -11643,22 +11643,28 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
   const claimed = overview.claimed;
   if (claimed.length === 0) return null;
   // Teams across repos build each Unit as work of their own, and never publish
-  // or land here: a build under way keeps the plan it took, and a Unit only
-  // held is taken on the plan as it stands then (takeUnit).
+  // or land here: a Unit a team started keeps the plan it took, and a Unit
+  // only held is taken on the plan as it stands then (takeUnit). Each is named
+  // as the board has it (unitBoardRows); one done on its claim is not with them.
   if (homeLocation(stateContent) !== null) {
+    const payloadOf = (unit: string) => overview.claims.get(unit)?.payload;
+    const open = claimed.filter((claim) => payloadOf(claim.unit)?.done !== true);
+    if (open.length === 0) return null;
     const started = (unit: string) => {
-      const payload = overview.claims.get(unit)?.payload;
-      return payload?.taken_by !== undefined || payload?.by_file !== undefined;
+      const payload = payloadOf(unit);
+      return payload?.taken_by !== undefined || payload?.by_file !== undefined || payload?.result !== undefined;
     };
-    const named = claimed.map((claim) => {
-      const payload = overview.claims.get(claim.unit)?.payload;
+    const named = open.map((claim) => {
+      const payload = payloadOf(claim.unit);
+      if (payload?.turned_down) return `${claim.unit} (turned down in ${payload.turned_down.repo}, back with ${claim.owner})`;
+      if (payload?.result) return `${claim.unit} (pushed by ${payload.result.by ?? payload.taken_by ?? claim.owner} for ${claim.owner}, not merged yet)`;
       if (payload?.by_file) return `${claim.unit} (handed to ${claim.owner} by file)`;
       if (payload?.taken_by) return `${claim.unit} (being built by ${payload.taken_by} for ${claim.owner})`;
       return `${claim.unit} (held for ${claim.owner}, not taken yet)`;
     });
     return `Still with teams: ${named.join(", ")}.` +
-      (claimed.some((claim) => started(claim.unit)) ? " A build under way carries on from the plan it took." : "") +
-      (claimed.some((claim) => !started(claim.unit)) ? " A Unit not taken yet is taken on the plan as it stands then." : "");
+      (open.some((claim) => started(claim.unit)) ? " A Unit a team has started keeps the plan it took." : "") +
+      (open.some((claim) => !started(claim.unit)) ? " A Unit not taken yet is taken on the plan as it stands then." : "");
   }
   return `Still claimed: ${claimed.map((claim) => `${claim.unit} (${claim.owner})`).join(", ")}. Their work carries ` +
     "on and lands as it is; one whose own entry the revised plan changes brings in the new main and publishes " +
