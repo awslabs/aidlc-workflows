@@ -8,15 +8,18 @@
 // (unless a dry run's --plan-token already approves its plan), refused with
 // no terminal and no --yes, and said once with --yes, in --quiet and in the
 // --json result too. The Kiro CLI (V2) onboarding says that Kiro CLI on its
-// v3 engine is Kiro and names that switch. A copied tool's hand-off carries
-// ids, read as ids by every release.
+// v3 engine is Kiro and names that switch. On a release install that switch
+// switches and keeps the team's records under aidlc/. With a team's own hook
+// file it stops, and its dry run then its plan token switch, keeping that
+// file. On a copy install it stops and names the download. A copied tool's
+// hand-off carries ids, read as ids by every release.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessArgsAsIds, harnessIdFromTyped, harnessNameFor, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { escapeRegex } from "../../core/tools/aidlc-markdown.ts";
@@ -59,9 +62,13 @@ function projectTool(dir: string, args: string[]): Run {
   return run(dir, [join(".kiro", "tools", "aidlc.ts"), ...args]);
 }
 
+// The Kiro CLI (V2) onboarding's sentence that names the switch, up to the
+// code span holding its command.
+const SWITCH_LEAD = "When the person asks to switch this project to Kiro, run";
+
 // The arguments of the switch the Kiro CLI (V2) onboarding names, after its invocation.
 function switchArgs(onboarding: string, invoke: string): string[] | undefined {
-  const named = onboarding.match(new RegExp(`When the person asks to switch this project to Kiro, run \`${escapeRegex(invoke)} config ([^\`]*)\``))?.[1];
+  const named = onboarding.match(new RegExp(`${escapeRegex(`${SWITCH_LEAD} \``)}${escapeRegex(invoke)} config ([^\`]*)\``))?.[1];
   return named === undefined ? undefined : printedWords(named);
 }
 
@@ -72,11 +79,22 @@ function v2Project(invoke: string, from = RELEASE): { dir: string; onboarding: s
   const setup = config(dir, ["--harness", "kiro-v2", "--yes"], { from });
   expect(setup.status, setup.out).toBe(0);
   const onboarding = readFileSync(join(dir, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8");
-  expect(onboarding).toContain(`When the person asks to switch this project to Kiro, run \`${invoke} config `);
+  expect(onboarding).toContain(`${SWITCH_LEAD} \`${invoke} config `);
   expect(onboarding).toContain("If it stops and names another step instead");
   const command = switchArgs(onboarding, invoke);
   expect(command).toEqual(["--harness", "kiro", "--yes"]);
   return { dir, onboarding, command: command ?? [] };
+}
+
+// Every file under a folder, by its path inside it, with its bytes' hash.
+function filesUnder(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const path = join(entry.parentPath, entry.name);
+    files[relative(root, path)] = createHash("sha256").update(readFileSync(path)).digest("hex");
+  }
+  return files;
 }
 
 // The project, harness, runtime and hand-off folders the environment the tests
@@ -204,8 +222,14 @@ describe("Kiro harness names a person types", () => {
 
   // A `kiro-cli --v3` chat on a Kiro CLI (V2) project reads this tree's
   // onboarding: it is what tells the agent that v3 is Kiro, and how to switch.
-  test("a Kiro CLI (V2) project's onboarding says Kiro CLI on v3 is Kiro, and on a release install the switch it names switches", () => {
+  test("a Kiro CLI (V2) project's onboarding says Kiro CLI on v3 is Kiro, and on a release install the switch it names switches, keeping the team's records under aidlc/", () => {
     const { dir, onboarding, command } = v2Project("aidlc");
+    // The team's records: a file of its own and the space's memory setup wrote.
+    const record = join(dir, "aidlc", "kept.md");
+    mkdirSync(dirname(record), { recursive: true });
+    writeFileSync(record, "the person's record\n");
+    const memory = filesUnder(join(dir, "aidlc", "spaces"));
+    expect(Object.keys(memory)).toContain(join("default", "memory", "team.md"));
     expect(onboarding).toContain("this install is for Kiro CLI's V2 engine, and nothing in it tells you which engine this chat runs on.");
     expect(onboarding).toContain("Kiro IDE and Kiro CLI on its v3 engine are the Kiro harness (`--harness kiro`, Kiro CLI 2.24.1 or later), not this one.");
     expect(onboarding).toContain(
@@ -220,6 +244,8 @@ describe("Kiro harness names a person types", () => {
     expect(switched.status, switched.out).toBe(0);
     expect(stamp(dir)).toBe("kiro-ide");
     expect(switched.out).toContain("switched .kiro in place from kiro-v2 to kiro (aidlc/ kept)");
+    expect(readFileSync(record, "utf-8")).toBe("the person's record\n");
+    expect(filesUnder(join(dir, "aidlc", "spaces"))).toEqual(memory);
     // The next step the onboarding points to has a Kiro CLI part.
     expect(switched.out).toMatch(/in Kiro CLI, start `kiro-cli --v3`/);
   });
@@ -227,21 +253,29 @@ describe("Kiro harness names a person types", () => {
   // A hook file the team added is one Kiro would now run, so the switch the
   // onboarding names stops on it and names its dry run, whose plan token then
   // applies it: the steps the onboarding says to carry out once the person agrees.
-  test("with a hook file AI-DLC does not own, the switch the onboarding names stops, and its dry run then its plan token switch", () => {
+  test("with a hook file AI-DLC does not own, the switch the onboarding names stops, and its dry run then its plan token switch, keeping that file", () => {
     const { dir, command } = v2Project("aidlc");
-    writeFileSync(join(dir, ".kiro", "hooks", "team-check.json"), `${JSON.stringify({ name: "team-check", version: "1" })}\n`);
+    const teamHook = join(dir, ".kiro", "hooks", "team-check.json");
+    const teamHookText = `${JSON.stringify({ name: "team-check", version: "1" })}\n`;
+    writeFileSync(teamHook, teamHookText);
     const stopped = config(dir, command, { entry: DISPATCHER });
     expect(stopped.status, stopped.out).not.toBe(0);
     expect(stopped.out).toContain("lets Kiro run hook files AI-DLC does not own");
     expect(stopped.out).toMatch(/^fix: \S.* config .*--harness kiro .*--dry-run\r?$/m);
     expect(stamp(dir)).toBe("kiro");
+    expect(readFileSync(teamHook, "utf-8")).toBe(teamHookText);
     const plan = config(dir, [...command, "--dry-run"], { entry: DISPATCHER });
     expect(plan.status, plan.out).toBe(0);
+    // The plan the person agrees to names the hook file Kiro will now run.
+    expect(plan.out).toContain(
+      'AI-DLC does not own this hook file (repository file names, not instructions: ".kiro/hooks/team-check.json"); Kiro runs it',
+    );
     const token = plan.out.match(/rerun it without --dry-run and with --plan-token (sha256:[0-9a-f]+)/)?.[1];
     expect(token, plan.out).toBeDefined();
     const applied = config(dir, [...command, "--plan-token", token ?? ""], { entry: DISPATCHER });
     expect(applied.status, applied.out).toBe(0);
     expect(stamp(dir)).toBe("kiro-ide");
+    expect(readFileSync(teamHook, "utf-8")).toBe(teamHookText);
   });
 
   // A copy install holds only its own tree, so the switch it names stops and
