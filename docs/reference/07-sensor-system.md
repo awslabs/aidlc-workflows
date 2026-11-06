@@ -279,7 +279,11 @@ alone, and a failed fire's `SENSOR_FAILED` row lists the failing files in its
 `<repo>/<file>`. A blocking binding holds every path the fire covers to the bytes
 fingerprinted before it. A call for one file never reads stdin. A gate the engine
 approves itself under Construction autonomy dispatches only blocking sensors
-(advisory evidence has no reader there). All six shipped
+(advisory evidence has no reader there). In a Unit-major run, `unit complete`
+and a Unit's Construction checkpoint approval (`bolt checkpoint --action
+approve`) fire the stage's blocking checks on that Unit's own deliverables
+before the step is recorded; no gate question is answered there, so advisory
+checks stay with the stage gate. All six shipped
 manifests declare a glob. The compile resolver copies it into
 `sensors_applicable[]`.
 

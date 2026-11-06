@@ -96,6 +96,7 @@ import {
   resolveConstructionCheckpoint,
   verifyConstructionCheckpoint,
   type ApprovalFindingDispositions,
+  type ConstructionCheckpoint,
   type ConstructionCheckpointKind,
   type RejectedFindingDispositions,
 } from "./aidlc-construction-checkpoints.ts";
@@ -108,6 +109,12 @@ import {
   rejectSwarmCheckpoint,
   resolveSwarmCheckpoint,
 } from "./aidlc-swarm-checkpoints.ts";
+import {
+  enforceBlockingUnitSensors,
+  fireUnitStageGateSensors,
+  verifyGateSensorArtifactsUnchanged,
+  type GateSensorEvaluation,
+} from "./aidlc-state.ts";
 
 function resolveTeamUnitSlug(
   projectDir: string,
@@ -1439,12 +1446,28 @@ async function handleCheckpoint(args: string[]): Promise<void> {
         },
       );
       break;
-    case "approve":
+    case "approve": {
+      let pending: ConstructionCheckpoint | null = null;
+      try {
+        pending = resolveConstructionCheckpoint(pd, flags.unit, checkpointKind);
+      } catch {
+        pending = null;
+      }
+      if (pending?.enabled === true && pending.ready && pending.verified) {
+        const checks: Array<{ covered: string; evaluation: GateSensorEvaluation }> = [];
+        for (const covered of pending.stages) {
+          const evaluation = fireUnitStageGateSensors(pd, covered, flags.unit);
+          enforceBlockingUnitSensors(covered, flags.unit, evaluation.issues);
+          checks.push({ covered, evaluation });
+        }
+        for (const check of checks) verifyGateSensorArtifactsUnchanged(check.covered, check.evaluation);
+      }
       result = approveConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
         checkpointFindingDispositions(pd, flagArgs), flags.message,
       );
       break;
+    }
     case "reject":
       result = rejectConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true),

@@ -74,7 +74,23 @@ describe("a Fix findings pick at the late Code Generation gate in solo work buil
     expect(host.engine("graph", "compile").status).toBe(0);
     const person = new PersonScript(host);
     const isBlocking = (d: Directive) => /Blocking gate sensor/.test(JSON.stringify(d));
-    const agent = new AgentStandIn(host, person, { units: ["core", "extra", "third"], until: isBlocking });
+    const summary = (): string => `${activeRecord(proj).dir.slice(proj.length + 1)}/construction/core/code-generation/code-summary.md`;
+    const withErrorHandling = (text: string): string => `${text}\n## Error handling\n\nErrors are retried twice, then reported.\n`;
+    let lostAfterApproval = false;
+    const agent = new AgentStandIn(host, person, {
+      units: ["core", "extra", "third"],
+      until: isBlocking,
+      onCode: (unit) => {
+        if (unit === "core") host.write(summary(), withErrorHandling(readFileSync(join(proj, summary()), "utf-8")));
+        return [];
+      },
+      afterCheckpoint: (unit) => {
+        if (unit !== "core" || lostAfterApproval) return;
+        lostAfterApproval = true;
+        host.write(summary(), withErrorHandling(readFileSync(join(proj, summary()), "utf-8"))
+          .replace(/\n## Error handling\n[\s\S]*$/, "\n"));
+      },
+    });
     const stopped = agent.drive(agent.begin("build the classic work", [
       "--scope", "classic", "--skip", SKIPPED.join(","), "--plan-approval", "on",
     ]));
@@ -92,8 +108,7 @@ describe("a Fix findings pick at the late Code Generation gate in solo work buil
     agent.askPerson("blocking check", "code-generation", "A check failed on core's code summary. What next?",
       options, "Fix findings");
     agent.must("log", "answer", "--stage", "code-generation", "--details", "Fix findings");
-    const summary = `${activeRecord(proj).dir.slice(proj.length + 1)}/construction/core/code-generation/code-summary.md`;
-    host.write(summary, `${readFileSync(join(proj, summary), "utf-8")}\n## Error handling\n\nErrors are retried twice, then reported.\n`);
+    host.write(summary(), withErrorHandling(readFileSync(join(proj, summary()), "utf-8")));
 
     expect(agent.drive(agent.next())).toMatchObject({ kind: "done" });
     const reviews = rows().filter((r) => r.event === "REVIEW_REQUESTED").slice(reviewsBefore)

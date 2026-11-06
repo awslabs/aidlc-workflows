@@ -27,7 +27,10 @@ is yours in those documents, then run the command again. It goes on without
 checking again; the gate checks again and says what is left.
 Advisory outcomes emit their audit rows but do not stop the
 gate; a gate the engine approves itself under Construction autonomy runs only
-its blocking sensors, since advisory evidence has no reader there. A blocking gate sensor requires a verified pass: findings, unavailable
+its blocking sensors, since advisory evidence has no reader there. A Unit-major
+run records a stage per Unit, so `unit complete` and the Unit's Construction
+checkpoint approval run the stage's blocking checks on that Unit's deliverables
+first: a failing one refuses the completion or the approval. A blocking gate sensor requires a verified pass: findings, unavailable
 evaluation, malformed output, and timeouts refuse gate entry until the issue
 is fixed or the human-backed override flow above completes. Autonomous mode
 cannot override a blocking sensor.
