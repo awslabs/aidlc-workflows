@@ -688,7 +688,10 @@ Units of checkout-revamp:
 
 A Unit the lead's project builds itself reads where its Unit Progress has it:
 done once it is through its gate, the stage it is at, waiting for your
-approval while its gate is open, or not started yet.
+approval while its gate is open, or not started yet. A look at the board on its
+own (`/aidlc team-board`) records nothing: a Unit whose repos it sees merged reads
+"not recorded yet", and the next step at the lead's project records it and opens
+the Units waiting on it.
 
 A Unit is done when every repo it changed has merged, however it merged (when a
 repo merged it in a way the board cannot see, tell the lead's chat at the home and

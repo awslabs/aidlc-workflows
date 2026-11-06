@@ -17111,7 +17111,15 @@ function unitBoardRows(
       const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
         payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
       const waiting = leadSignOffOn(stateContent) && !payload.signoff ? ", waiting for your sign-off" : "";
-      return { unit, team, status: `${mergedStatus(verdicts)}${waiting}` };
+      // Every repo seen merged by a look that records nothing (`team-board`):
+      // the step records it, and the Units waiting only on it open then.
+      const opens = results.get(unit)?.done === true
+        ? [...dependencies].filter(([, deps]) => deps.includes(unit) && deps.every((dep) => dep === unit || done(dep)))
+          .map(([dependent]) => dependent)
+        : null;
+      const named = opens === null || opens.length === 0 ? "" : opens.length === 1 ? opens[0] : `${opens.slice(0, -1).join(", ")} and ${opens.at(-1)}`;
+      const unrecorded = opens === null ? "" : `, not recorded yet: the next step here records it${named ? ` and opens ${named}` : ""}`;
+      return { unit, team, status: `${mergedStatus(verdicts)}${waiting}${unrecorded}` };
     }
     if (payload.by_file) {
       const at = payload.progress?.stage ? stageLabel(findStageBySlug(payload.progress.stage), payload.progress.stage) : null;

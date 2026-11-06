@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:team-board, function:unitBoardRows, function:teamHomeBoardText, function:unitProgressStanding, function:unitTakeLook
+// covers: subcommand:aidlc-orchestrate:team-board, function:unitBoardRows, function:teamHomeBoardText, function:unitProgressStanding, function:unitTakeLook, function:checkTeamResults
 //
 // The board at the lead's project says only what the record says (#2410, the
 // board). A Unit no team holds reads where it stands in the Unit Progress the
@@ -7,12 +7,15 @@
 // too), and waiting only on a Unit that is not done; a Unit named for a team
 // that could not be held for them yet is theirs, never the lead's project's.
 // A teammate's take offer never names a Unit done on its claim as being built.
+// A look at the board (`team-board`) records nothing: a merge it sees that the
+// record does not have yet says so, and the next step records it.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript, type StandInOptions } from "../harness/scope-run.ts";
@@ -151,5 +154,27 @@ describe("a teammate's take offer", () => {
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
     expect(String(offer.question)).not.toContain("Being built: refunds");
     expect(String(offer.question)).toContain("Ready to take: checkout-ui (for web; likely checkout-web), reporting (open; likely billing).");
+  });
+});
+
+describe("a look at the board records nothing, and says so", () => {
+  test("a merge team-board sees is not recorded yet, the next step records it, and the board then reads done", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    expect(teamBoard(home.dir)).toContain(
+      "- refunds, payments: checkout-api merged, billing merged (2 of 2 merged), not recorded yet: " +
+        "the next step here records it and opens reporting",
+    );
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).not.toMatchObject({ done: true });
+    next(home.dir);
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
+    const after = teamBoard(home.dir);
+    expect(after).toContain("- refunds, payments: done");
+    expect(after).not.toContain("not recorded yet");
   });
 });
