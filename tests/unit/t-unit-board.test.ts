@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:team-board, function:unitBoardRows, function:teamHomeBoardText, function:unitProgressStanding
+// covers: subcommand:aidlc-orchestrate:team-board, function:unitBoardRows, function:teamHomeBoardText, function:unitProgressStanding, function:unitTakeLook
 //
 // The board at the lead's project says only what the record says (#2410, the
 // board). A Unit no team holds reads where it stands in the Unit Progress the
@@ -6,23 +6,29 @@
 // approval while its gate is open (a Unit built before teams were chosen
 // too), and waiting only on a Unit that is not done; a Unit named for a team
 // that could not be held for them yet is theirs, never the lead's project's.
+// A teammate's take offer never names a Unit done on its claim as being built.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript, type StandInOptions } from "../harness/scope-run.ts";
 import {
+  claimPayload,
   cleanupTeamBuild,
+  cloneOf,
+  codeGenerated,
   codeHost,
   git,
   GIT_ENV,
   makeHome,
+  mergeOnHost,
   next,
   ORCH,
+  refundsTaken,
   run,
   STATE,
   UNIT,
@@ -126,5 +132,24 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
     const board = teamBoard(home.dir);
     expect(board).toContain("- refunds, payments: kept for payments, not held yet");
     expect(board).not.toContain("- refunds, here:");
+  });
+});
+
+describe("a teammate's take offer", () => {
+  test("a fresh clone never names a Unit done on its claim as being built, and what waited on it is ready", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    // The lead's state as last pushed, before this record of the merge.
+    const bob = cloneOf(home.remote, "bob");
+    const offer = next(bob);
+    expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
+    expect(String(offer.question)).not.toContain("Being built: refunds");
+    expect(String(offer.question)).toContain("Ready to take: checkout-ui (for web; likely checkout-web), reporting (open; likely billing).");
   });
 });

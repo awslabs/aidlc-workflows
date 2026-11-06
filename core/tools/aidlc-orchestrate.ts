@@ -8780,9 +8780,10 @@ function unitTakeLook(
       const building: string[] = [];
       const others: string[] = [];
       for (const unit of unitsInPlanOrder(projectDir, opening.units)) {
-        if (opening.completed.has(unit) || unit === skeleton) continue;
-        const built = findUnitBuild(projectDir, intent.uuid, unit);
         const claim = overview.claims.get(unit);
+        // Done on its claim is the lead's project's word, before its Unit Progress here says so.
+        if (opening.completed.has(unit) || unit === skeleton || claim?.payload.done === true) continue;
+        const built = findUnitBuild(projectDir, intent.uuid, unit);
         // The claim is the one record of who holds a Unit.
         const holder = claim?.status === "claimed" ? claim.owner : null;
         if (built !== null) {
