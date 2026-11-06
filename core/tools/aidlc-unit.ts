@@ -6873,10 +6873,12 @@ function checkTeamResultsQuietly(
       const commit = createClaimCommit(pd, live.oid, payload);
       // Unwritten, the verdict stays here and the next step writes it again.
       const sent = updateClaimRef(pd, remote, live.ref, commit, live.oid);
+      // A team building by file reads nothing from here: nothing was told to
+      // it, and a claim not written leaves it nothing it missed.
       if (sent.ok) {
         invalidateLiveClaimPayloadCache(pd, unit);
-        told?.push({ unit, repos: newlyMerged, done });
-      } else unsent?.push({ to: remote ?? "the home", ...(sent.refused ? { refused: sent.refused } : {}) });
+        if (!live.payload.by_file) told?.push({ unit, repos: newlyMerged, done });
+      } else if (!live.payload.by_file) unsent?.push({ to: remote ?? "the home", ...(sent.refused ? { refused: sent.refused } : {}) });
     }
     found.set(unit, { team: live.owner, verdicts, done });
   }
