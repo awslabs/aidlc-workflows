@@ -119,6 +119,11 @@ describe("t-second-chat-batch-in-flight: a batch another chat is building is tha
     const pd = firstChatBuilds();
     isTheLine(next(pd, SECOND));
     const message = says(pd, SECOND, "build them here instead, my other window is closed");
+    // Live on Kiro CLI the agent had no id to name: the step names their message.
+    const unnamed = tool(pd, SECOND, "tools/aidlc-swarm.ts", ["take-over", "--batch", "1", "--project-dir", pd]);
+    expect(unnamed.code).not.toBe(0);
+    expect(unnamed.err).toContain(`If their message ${message}`);
+    expect(unnamed.err).toContain("swarm take-over --batch 1");
     const taken = tool(pd, SECOND, "tools/aidlc-swarm.ts", ["take-over", "--batch", "1", "--message", message, "--project-dir", pd]);
     expect(taken.code, `${taken.out}\n${taken.err}`).toBe(0);
     const row = readAuditShardEvents(pd).filter((r) => r.event === "SWARM_TAKEN_OVER").at(-1);

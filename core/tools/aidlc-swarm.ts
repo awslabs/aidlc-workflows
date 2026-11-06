@@ -188,7 +188,7 @@ import {
   committedTextSha256,
   currentFingerprintForm,
 } from "./aidlc-lib.ts";
-import { proveMessage } from "./aidlc-message-store.ts";
+import { proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { codeGenerationPlanNamedPaths } from "./aidlc-plan-approval-ask.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
 import { aidlcDispatcherInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -3894,7 +3894,11 @@ function handleTakeOver(rest: string[]): void {
   const projectDir = resolveProjectDir(flags["project-dir"]);
   resolveSwarmSelection(projectDir, flags);
   if (!flags.batch || !/^[1-9][0-9]*$/.test(flags.batch)) fail("take-over requires --batch <n>: the batch the person asked to build here");
-  if (!flags.message || flags.message === "true") fail("take-over requires --message <id>: the person's message that asked to build here");
+  if (!flags.message || flags.message === "true") {
+    // The agent has no other place to learn the id: the step names their messages.
+    fail(requestMessageStep(projectDir, "take-over requires --message <id>: the person's message that asked to build here.",
+      "any", `\`${aidlcDispatcherInvocation("swarm take-over")} --batch ${flags.batch}\``));
+  }
   const next = aidlcDispatcherInvocation("orchestrate next");
   const chat = hostNamesThisChat(projectDir) ? commandChat(projectDir) : null;
   if (chat === null) {
