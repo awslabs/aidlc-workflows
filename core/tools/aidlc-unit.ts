@@ -89,6 +89,11 @@ import {
   CEREMONY_FIELDS,
   formatCeremony,
   parseCeremonyStateLine,
+  AUTONOMY_MODE_FIELD,
+  formatGuardPolicy,
+  guardPolicyStateField,
+  parseGuardPolicyStateLine,
+  setGuardPolicyLine,
   removeField,
   shellArg,
   unattendedHumanPresenceHint,
@@ -5381,10 +5386,14 @@ function createUnitBuild(
       const setting = parseCeremonyStateLine(getField(plan.state, name));
       if (setting !== null) content = setOrInsertField(content, "## Runtime State", name, formatCeremony(setting.value, "the home's plan"));
     }
-    for (const name of ["Depth", "Test Strategy", "Review Override"]) {
+    for (const name of ["Depth", "Test Strategy", "Review Override", AUTONOMY_MODE_FIELD]) {
       const value = getField(plan.state, name)?.trim();
       if (value) content = setOrInsertField(content, "## Runtime State", name, value);
     }
+    // The Guard Policy the lead set; a lock in the team's own memory still wins where it is read.
+    const policyField = guardPolicyStateField(plan.state);
+    const policy = policyField === null ? null : parseGuardPolicyStateLine(getField(plan.state, policyField));
+    if (policy !== null) content = setGuardPolicyLine(content, formatGuardPolicy(policy.value, "the home's plan"));
     // The type the home settled; a later scan here does not ask about it again.
     const homeType = getField(plan.state, "Project Type")?.trim();
     if (homeType) {

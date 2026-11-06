@@ -248,7 +248,8 @@ describe("taking a Unit starts its build in the team's space", () => {
       : content.replace(/^- \*\*Test Strategy\*\*:.*$/m, (line) => `${line}\n- **${name}**: ${value}`);
     let homeState = readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: express");
     for (const [name, value] of [["Plan Approval", "on (set by you)"], ["Sensors", "on (set by you)"], ["Learnings", "on (set by you)"],
-      ["Depth", "Comprehensive"], ["Review Override", "adversarial"]] as const) homeState = set(homeState, name, value);
+      ["Depth", "Comprehensive"], ["Review Override", "adversarial"], ["Guard Policy", "strict (set by you)"],
+      ["Construction Autonomy Mode", "gated"]] as const) homeState = set(homeState, name, value);
     writeFileSync(statePath, homeState);
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
@@ -263,6 +264,8 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(field(state, "Learnings")).toBe("on (from the home's plan)");
     expect(field(state, "Depth")).toBe("Comprehensive");
     expect(field(state, "Review Override")).toBe("adversarial");
+    expect(field(state, "Guard Policy")).toBe("strict (from the home's plan)");
+    expect(field(state, "Construction Autonomy Mode")).toBe("gated");
   });
 
   test("the team approves each of its stages: the build holds on a stage until it is approved", () => {
