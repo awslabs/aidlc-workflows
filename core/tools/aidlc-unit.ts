@@ -4922,15 +4922,21 @@ function unitUsage(verb: string): string {
 // anything is read or written: `--help` or `-h` prints the verb's usage, and a
 // word the verb does not take is named with that usage, so a request to read
 // the usage never commits, pushes or claims. `-h` as an option's value stays
-// that option's. Every verb also takes --project-dir and the launcher's own
-// flags, which the dispatcher hands on after the words.
+// that option's. A switch takes no value, so each is read here as `--x=true`
+// and the word after it stays a word: `-h` after `--commit` is still the
+// request for the usage. Every verb also takes --project-dir and the launcher's
+// own flags, switches the dispatcher hands on after the words.
 function checkUnitWords(verb: string, args: readonly string[]): void {
   if (!Object.hasOwn(UNIT_GRAMMAR, verb)) return;
   const grammar = UNIT_GRAMMAR[verb];
-  const { positional, flags } = parseArgs([...args]);
+  const switches = new Set([...(grammar.switches ?? []), ...[...LAUNCHER_GLOBAL_FLAGS].map((flag) => flag.slice(2)), "help"]);
+  const end = args.indexOf("--");
+  const { positional, flags } = parseArgs(args.map((token, index) =>
+    (end < 0 || index < end) && token.startsWith("--") && switches.has(token.slice(2)) ? `${token}=true` : token
+  ));
   if (Object.hasOwn(flags, "help") || positional.includes("-h")) printUsageAndExit(`usage: ${unitUsage(verb)}`);
   const option = Object.keys(flags).find((key) =>
-    key !== "project-dir" && !grammar.options.includes(key) && !LAUNCHER_GLOBAL_FLAGS.has(`--${key}`)
+    key !== "project-dir" && !grammar.options.includes(key) && !switches.has(key)
   );
   const extra = positional[grammar.name ? 1 : 0];
   if (option === undefined && extra === undefined) return;

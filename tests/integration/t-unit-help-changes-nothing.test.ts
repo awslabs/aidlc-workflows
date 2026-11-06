@@ -152,6 +152,29 @@ describe("the doors a person or the agent types reach the same check", () => {
   });
 });
 
+// A switch takes no value, so the word after it is never read as its value:
+// `-h` there is still a request for the usage, and any other word is one the
+// verb does not take.
+describe("a switch never takes the next word", () => {
+  test("publish --commit, land --accept-released-attempt and a launcher flag", () => {
+    const w = world();
+    writeFileSync(join(w.mate, "notes.txt"), "a note nobody asked to publish\n");
+    writeFileSync(join(w.lead, "notes.txt"), "a note nobody asked to share\n");
+    expectUsage(unchangedBy(w.mate, w.remote, () => unitTool(["publish", "alpha", "--commit", "-h"], w.mate)), "publish");
+    expectRefused(
+      unchangedBy(w.mate, w.remote, () => unitTool(["publish", "alpha", "--commit", "extra"], w.mate)),
+      "publish",
+      "extra",
+    );
+    expectUsage(
+      unchangedBy(w.lead, w.remote, () => unitTool(["land", "alpha", "--accept-released-attempt", "-h"], w.lead)),
+      "land",
+    );
+    expectUsage(unchangedBy(w.lead, w.remote, () => unitTool(["share", "--yes", "-h"], w.lead)), "share");
+    expectRefused(unchangedBy(w.lead, w.remote, () => unitTool(["share", "--yes", "now"], w.lead)), "share", "now");
+  });
+});
+
 describe("known arguments act as before", () => {
   test("share with no words commits and pushes; release reads --expect-nonce", () => {
     const w = world();

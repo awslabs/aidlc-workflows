@@ -202,8 +202,10 @@ export function nextFlagTakesFollowing(flag: string, following: string | undefin
 export type UnitGrammar = {
   /** The verb takes the Unit's name, its one word that is not an option. */
   name: boolean;
-  /** The options the verb reads, as aidlc-lib.ts parseArgs keys them. */
+  /** The options the verb reads that take a value, as aidlc-lib.ts parseArgs keys them. */
   options: readonly string[];
+  /** The options it reads that take none, so the word after one is never its value. */
+  switches?: readonly string[];
   /** Its usage after the invocation, the line `--help` prints. */
   usage: string;
 };
@@ -228,14 +230,20 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   },
   land: {
     name: true,
-    options: ["step", "target", "strategy", "accept-released-attempt", "user-input"],
+    options: ["step", "target", "strategy", "user-input"],
+    switches: ["accept-released-attempt"],
     usage: "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] " +
       "[--accept-released-attempt --user-input <acknowledgment>]",
   },
   "merge-status": { name: true, options: [], usage: "unit merge-status <unit>" },
   participate: { name: false, options: [], usage: "unit participate" },
   pin: { name: true, options: [], usage: "unit pin <unit>" },
-  publish: { name: true, options: ["commit", "include"], usage: "unit publish <unit> [--commit [--include <path>]...]" },
+  publish: {
+    name: true,
+    options: ["include"],
+    switches: ["commit"],
+    usage: "unit publish <unit> [--commit [--include <path>]...]",
+  },
   release: { name: true, options: ["expect-nonce"], usage: "unit release <unit> [--expect-nonce <claim-nonce>]" },
   share: { name: false, options: [], usage: "unit share" },
   status: { name: false, options: [], usage: "unit status" },
