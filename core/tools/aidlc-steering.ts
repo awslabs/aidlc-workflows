@@ -101,18 +101,24 @@ export function rulesContentEntries(
     }
     return entry;
   });
-  // A team's build that follows the lead's project rules too reads the lead's
-  // project.md where it is, before the team's own rules, so theirs are on top.
-  let lead: string | undefined;
+  // A team's build that follows the lead's rules too reads each of the lead's
+  // files (their agreed practices, their project rules) where it is, just
+  // before the team's own file of the same name, so theirs are on top.
+  let leads: string[];
   try {
-    lead = getField(readStateFile(projectDir), LEAD_RULES_FIELD)?.trim();
+    leads = (getField(readStateFile(projectDir), LEAD_RULES_FIELD) ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
   } catch {
-    lead = undefined;
+    leads = [];
   }
-  if (!lead || entries.some((entry) => entry.rel === lead)) return entries;
-  const own = entries.findIndex((entry) => /\/memory\/project\.md$/.test(entry.rel));
-  const at = own >= 0 ? own : entries.length;
-  return [...entries.slice(0, at), { rel: lead, abs: join(projectDir, lead) }, ...entries.slice(at)];
+  let out = entries;
+  for (const lead of leads) {
+    if (out.some((entry) => entry.rel === lead)) continue;
+    const name = lead.slice(lead.lastIndexOf("/") + 1);
+    const own = out.findIndex((entry) => entry.rel.endsWith(`/memory/${name}`));
+    const at = own >= 0 ? own : out.length;
+    out = [...out.slice(0, at), { rel: lead, abs: join(projectDir, lead) }, ...out.slice(at)];
+  }
+  return out;
 }
 
 function missingFile(path: string): boolean {

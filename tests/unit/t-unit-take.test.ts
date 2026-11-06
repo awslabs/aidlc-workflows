@@ -442,6 +442,37 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(readFileSync(join(alice, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8")).toContain("Every handler ships with a contract test.");
   });
 
+  // A live run (S1): payments built the refund amount test-after against the
+  // lead's agreed "test first", which the take never carried.
+  test("the lead's agreed practices are offered at the take too, named, and taken they reach the build before the team's own", () => {
+    const home = makeHome();
+    const practices = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
+    const seeded = readFileSync(practices, "utf-8");
+    expect(seeded).toContain("## Testing Posture\n");
+    writeFileSync(practices, seeded.replace("## Testing Posture\n", "## Testing Posture\nTest first for the refund amount.\n"));
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    const choices = ask.choices as Array<{ label: string; command: string }>;
+    expect(choices.map((choice) => choice.label).slice(0, 2)).toEqual([
+      "Start refunds for payments and follow the lead's agreed practices too (Testing Posture)",
+      "Start refunds for payments under your team's own rules only",
+    ]);
+    const took = take(alice, "refunds", ["--team", "payments", "--lead-rules"]);
+    expect(took.status, took.out).toBe(0);
+    const record = buildDir(alice, "payments", "refunds");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/team.md");
+    const step = next(alice);
+    expect(step.kind, JSON.stringify(step).slice(0, 400)).toBe("run-stage");
+    expect(step.rules_in_context as string[]).toContain("aidlc/spaces/default/memory/team.md");
+    // The lead's file is read, never written, from the build.
+    expect(readFileSync(practices, "utf-8")).toContain("Test first for the refund amount.");
+  });
+
   test("at the lead's project the learnings choice says a project learning is offered to any team that takes a Unit", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const lead = readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md"), "utf-8");

@@ -181,6 +181,7 @@ import {
   homeLocation,
   inputName,
   LEAD_RULES_FIELD,
+  leadRules as leadRulesOf,
   SIGN_OFF_CLAUSE,
   lastCommittedByThisPerson,
   parseHandFile,
@@ -5904,7 +5905,8 @@ function createUnitBuild(
     ] as const) {
       content = setOrInsertField(content, "## Runtime State", field, value);
     }
-    if (leadRules) content = setOrInsertField(content, "## Runtime State", LEAD_RULES_FIELD, `aidlc/spaces/${home.space}/memory/project.md`);
+    const leads = leadRules ? leadRulesOf(projectDir, home.space).paths : [];
+    if (leads.length > 0) content = setOrInsertField(content, "## Runtime State", LEAD_RULES_FIELD, leads.join(", "));
     // The plan as the home approved it, never its scope's defaults: each
     // ceremony (Plan Approval, sensors, learnings ...), the depth, the test
     // strategy and the review class the home's plan set.

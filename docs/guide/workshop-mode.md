@@ -600,13 +600,14 @@ When the lead's project records `Home Location`, each team builds its Unit as a 
 work of its own, in its own workspace and under its own rules. A team member
 runs `/aidlc` in their workspace with no work of their own selected there, and
 AI-DLC offers the Units their team can take, from what the workspace already
-has (the lead's plan and the claims git last brought in). Where the lead's
-project has rules of its own (its `project.md` holds more than the template's
-notes), each Unit is offered two ways in that same question: **Start <unit> and
-follow the lead's project rules too** (those rules named by their headings),
-which loads the lead's `project.md` where it is, read only, before the team's
-own rules, so the team's are on top; or **Start <unit> under your team's own
-rules only**. In a clone where the team's own build is finished or pushed, its
+has (the lead's plan and the claims git last brought in). Where the lead has
+practices they agreed (their `team.md`) or project rules of their own (their
+`project.md`) beyond the template's notes, each Unit is offered two ways in
+that same question: **Start <unit> and follow the lead's agreed practices too**
+(or **project rules**, or both, named by their headings), which loads each of
+those files where it is, read only, just before the team's own file of the same
+name, so the team's are on top; or **Start <unit> under your team's own rules
+only**. In a clone where the team's own build is finished or pushed, its
 `/aidlc` or words about the team's other Units put the Units it can start first,
 once in a chat, never "everything is done" or a new piece of work. At the lead's
 project, the learnings question's first choice

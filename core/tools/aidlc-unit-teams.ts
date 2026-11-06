@@ -184,19 +184,33 @@ export function unitsLeftOpen(rows: readonly AuditShardEvent[]): Set<string> {
   return open;
 }
 
-// A team's build that follows the lead's project rules too (Arden's call):
-// the lead's project.md, read where it is and never written from the build,
-// loaded before the team's own rules, so the team's own are on top.
+// A team's build that follows the lead's rules too (Arden's call): the lead's
+// agreed practices (memory/team.md) and project rules (memory/project.md),
+// each read where it is and never written from the build, and loaded before
+// the team's own file of the same name, so the team's own are on top. The
+// field lists the lead's files that hold any.
 export const LEAD_RULES_FIELD = "Lead Project Rules";
 
-// The headings of the lead's project.md that hold a rule of its own, not only
-// the template's notes: how the take question names those rules. Empty when it
-// has none, or none can be read here.
-export function leadProjectRuleNames(projectDir: string, homeSpace: string): string[] {
+// The lead's rules a team's take can follow: the files, as LEAD_RULES_FIELD
+// records them, and the headings of each that hold one of the lead's own, not
+// only the template's notes, for the take question to name.
+export function leadRules(projectDir: string, homeSpace: string): { paths: string[]; practices: string[]; project: string[] } {
+  const path = (file: string) => `aidlc/spaces/${homeSpace}/memory/${file}`;
+  const practices = memoryRuleNames(projectDir, path("team.md"));
+  const project = memoryRuleNames(projectDir, path("project.md"));
+  return {
+    paths: [...(practices.length > 0 ? [path("team.md")] : []), ...(project.length > 0 ? [path("project.md")] : [])],
+    practices,
+    project,
+  };
+}
+
+// The headings of one of the lead's memory files that hold a rule of its own.
+// Empty when it has none, or it cannot be read here.
+function memoryRuleNames(projectDir: string, rel: string): string[] {
   let text: string;
   try {
-    // The path LEAD_RULES_FIELD records, as the build reads it.
-    text = readFileSync(join(projectDir, "aidlc", "spaces", homeSpace, "memory", "project.md"), "utf-8");
+    text = readFileSync(join(projectDir, ...rel.split("/")), "utf-8");
   } catch {
     return [];
   }

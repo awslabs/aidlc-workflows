@@ -722,7 +722,7 @@ import {
   unitsBuiltBeforeTeams,
   unitsBuiltHereGateOpen,
   unitsTakenFromHome,
-  leadProjectRuleNames,
+  leadRules,
   offersLearningsCorrectionChoices,
   parseHandFile,
   unitLikelyReposFrom,
@@ -9051,11 +9051,14 @@ function unitTakeLook(
       // The lead's project has rules of its own: each start is offered with
       // them too (read-only, the team's own on top) or under the team's own
       // rules only, in the one question (Arden's call).
-      const leadRules = leadProjectRuleNames(projectDir, space);
-      const withRules = (offered: AskChoice[]): AskChoice[] => leadRules.length === 0 ? offered : offered.flatMap((choice) => [
+      // Their agreed practices (memory/team.md) come with them, named as such.
+      const lead = leadRules(projectDir, space);
+      const names = [...lead.practices, ...lead.project];
+      const brings = lead.practices.length === 0 ? "project rules" : lead.project.length === 0 ? "agreed practices" : "agreed practices and project rules";
+      const withRules = (offered: AskChoice[]): AskChoice[] => names.length === 0 ? offered : offered.flatMap((choice) => [
         {
-          label: `${choice.label} and follow the lead's project rules too (${leadRules.join(", ")})`,
-          detail: `${choice.detail} The lead's project rules apply to its build too, as they are, with your team's own on top.`,
+          label: `${choice.label} and follow the lead's ${brings} too (${names.join(", ")})`,
+          detail: `${choice.detail} The lead's ${brings} apply to its build too, as they are, with your team's own on top.`,
           command: `${choice.command} --lead-rules`,
         },
         { label: `${choice.label} under your team's own rules only`, detail: choice.detail, command: choice.command },
