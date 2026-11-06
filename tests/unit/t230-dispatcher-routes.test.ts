@@ -290,6 +290,11 @@ function expectSameRun(actual: RunResult, expected: RunResult, label: string): v
   expect(actual.stderr.equals(expected.stderr), `${label} stderr\nactual:\n${actual.stderr}\nexpected:\n${expected.stderr}`).toBe(true);
 }
 
+function asCompiledInvocation(result: RunResult): RunResult {
+  const named = (bytes: Buffer) => Buffer.from(bytes.toString("utf-8").replaceAll("bun .claude/tools/aidlc.ts", "aidlc"));
+  return { ...result, stdout: named(result.stdout), stderr: named(result.stderr) };
+}
+
 function entriesUnder(root: string): string[] {
   if (!existsSync(root)) return [];
   const out: string[] = [];
@@ -2234,7 +2239,9 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       const compiled = viaImportedCompiledMain(argv, projectDir, env);
       expect(compiled.stderr.toString()).not.toContain("has no in-process delegate");
       expect(compiled.stderr.toString()).not.toContain("does not export main");
-      expectSameRun(compiled, dev, title);
+      // Each mode names the command its person types (aidlcInvocation): the
+      // compiled engine `aidlc`, the projected Bun tree its own dispatcher.
+      expectSameRun(compiled, asCompiledInvocation(dev), title);
     });
   }
 
