@@ -226,7 +226,7 @@ import { UNIT_VERBS } from "./aidlc-command.ts";
 // changes nothing.
 const UNIT_USAGE: ReadonlyMap<string, string> = new Map([
   ["adopt", "adopt <unit>"],
-  ["amend", "amend <unit> --input <file> --answer <approve|reject> (--request-file <file> | --person-words <text>)"],
+  ["amend", "amend <unit> --input <file> --answer <approve|reject> [--file <text the lead approves>] (--request-file <file> | --person-words <text>)"],
   ["assign", "assign <unit>=<team> [<unit>=<team> ...] | --open"],
   ["claim", "claim <unit> [--team <label>] [--rhythm per-stage|unit-end]"],
   ["gate", "gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)"],
@@ -7110,13 +7110,18 @@ function amendInput(args: string[], projectDir?: string): void {
     const taken = amendedBefore.ok
       ? amendedBefore
       : git(pd, ["show", `${live.payload.base_oid}:${relative(pd, path).split(sep).join("/")}`, "--"]);
-    const text = changeOntoCurrent(pd, path, taken.ok ? taken.stdout : null, shown.stdout);
+    // The lead's own text of the two put together (--file), approved as written.
+    const own = flags.file !== undefined ? readFileSync(resolve(pd, flags.file), "utf-8") : null;
+    const text = own ?? changeOntoCurrent(pd, path, taken.ok ? taken.stdout : null, shown.stdout);
     if (text === null) {
       const theirs = writeProposedText(pd, live, proposal.input);
       fail(
         `${live.owner}'s change was made on an older copy of the ${name}, and it does not fit onto the ${name} as it ` +
           `stands here now, so nothing was changed. Show the lead both: their version${theirs === null ? "" : ` (${theirs})`} ` +
-          `and the current one (${relative(pd, path).split(sep).join("/")}); the team can send the change again on the current one.`,
+          `and the current one (${relative(pd, path).split(sep).join("/")}); the team can send the change again on the current one. ` +
+          `When the lead puts the two together (or asks you to), write that text to a file and approve it as written with ` +
+          `\`${aidlcInvocation()} unit amend ${shellArg(unit)} --input ${shellArg(proposal.input)} --answer approve --file <that file> ` +
+          `${unitWordsArg("amend", unit)}\`.`,
       );
     }
     writeFileSync(path, text, "utf-8");

@@ -838,7 +838,10 @@ plan is asked once, with the path of the team's version (the board keeps the
 choice after a "Not now"), and the agent runs
 `amend <unit> --input <file> --answer <approve|reject> --request-file <file>`
 with their reply written to that file: their own words after the question was
-shown, not empty and not the agent's. An approved change is written into the home's
+shown, not empty and not the agent's. A change made on an older copy is put onto
+the text approved since; where the two do not fit together, nothing changes and
+both are shown, and the text the lead puts together from them is approved as
+written with `--file <that text>`. An approved change is written into the home's
 record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
 onto the claim of every Unit whose stages read it; a team it did not reach is
 named, and a team by file gets a newer hand-off file.

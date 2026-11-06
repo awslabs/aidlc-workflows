@@ -149,6 +149,29 @@ describe("a change to a shared input", () => {
     expect(readFileSync(homeCopy, "utf-8")).toBe("# Requirements\n\nFR1 refunds, full amounts only.\n");
     expect(String(amended.json?.error ?? amended.out)).toContain("was made on an older copy of the requirements");
     expect(String(amended.json?.error ?? amended.out)).toContain(".aidlc-engine/proposed/refunds/");
+    // The way on is named: the lead's own text of the two put together is approved as written.
+    expect(String(amended.json?.error ?? amended.out)).toContain(`amend refunds --input ${REQUIREMENTS} --answer approve --file <`);
+  });
+
+  // A live run: the lead said to put the team's change onto the current text
+  // themselves, and with no way to approve that, the agent closed the proposal
+  // as turned down: the record said the lead turned down what they approved.
+  test("the lead's own text of the two put together is approved as written: the team hears it approved, and every team gets it", () => {
+    const { home, alice } = proposed();
+    const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/"));
+    writeFileSync(homeCopy, "# Requirements\n\nFR1 refunds, full amounts only.\n");
+    next(home.dir);
+    const merged = join(home.dir, "merged-requirements.md");
+    writeFileSync(merged, "# Requirements\n\nFR1 refunds, full or partial amounts.\n");
+    const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--file", merged,
+      "--person-words", "apply it to the current requirements yourself"], home.dir);
+    expect(amended.status, amended.out).toBe(0);
+    expect(readFileSync(homeCopy, "utf-8")).toBe("# Requirements\n\nFR1 refunds, full or partial amounts.\n");
+    const answer = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { proposals?: Array<{ answer?: string }>; amendments?: unknown[] };
+    expect(answer.proposals?.at(-1)?.answer).toBe("approved");
+    expect(answer.amendments?.length).toBe(1);
+    git(alice, ["fetch", "-q", "origin"]);
+    expect(notices(next(alice))).toContain("The home approved your change to the requirements.");
   });
 
   test("the owner is asked once at the home, and their approval reaches every team building with it", () => {
