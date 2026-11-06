@@ -16,7 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
@@ -6088,8 +6088,27 @@ function pushUnit(args: string[], projectDir?: string): void {
       fail(`${name} has the remotes ${joinNames(remote.remotes)} and none is set for pushing: ask the person which one ${unit} goes to.`);
     }
     // Files Code Generation wrote outside the repo it named (at the workspace
-    // root, say) are not in it: said in plain words, with the way back.
-    const outside = repo === "." ? [] : paths.filter((path) => !existsSync(join(dir, path)) && existsSync(join(pd, path)));
+    // root, say) are not in it: said in plain words, with the way back. A file
+    // the manifest gives by its path from the workspace that is in the repo is
+    // said as that, never as outside it; the way back is the same, since only
+    // Code Generation records a new manifest for the review.
+    const missing = repo === "." ? [] : paths.filter((path) => !existsSync(join(dir, path)) && existsSync(join(pd, path)));
+    const inRepo = (path: string): string | null => {
+      const there = relative(resolve(dir), resolve(pd, path));
+      return there === "" || there.startsWith("..") || isAbsolute(there) ? null : there.split(sep).join("/");
+    };
+    const outside = missing.filter((path) => inRepo(path) === null);
+    const fromWorkspace = missing.filter((path) => inRepo(path) !== null);
+    if (outside.length === 0 && fromWorkspace.length > 0) {
+      const more = fromWorkspace.length > 1 ? ` and ${fromWorkspace.length - 1} more` : "";
+      const one = fromWorkspace.length === 1;
+      fail(
+        `${unit}'s Code Generation recorded ${fromWorkspace[0]}${more} by ${one ? "its" : "their"} path from the workspace, not from ` +
+          `${name} (in ${name}, ${inRepo(fromWorkspace[0])}${more}), so nothing was pushed. Ask the person whether to take ${unit} ` +
+          `back to Code Generation to record ${one ? "it" : "them"} by ${one ? "its" : "their"} path in ${name}; on their yes, run ` +
+          `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` and follow what it returns.`,
+      );
+    }
     if (outside.length > 0) {
       fail(
         `${unit}'s Code Generation wrote ${outside[0]}${outside.length > 1 ? ` and ${outside.length - 1} more` : ""} outside ${name}, ` +

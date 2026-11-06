@@ -585,6 +585,34 @@ describe("at the home", () => {
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
   });
 
+  // A live run: Code Generation wrote the files in the repo, and its manifest
+  // gave them by their path from the workspace ("checkout-api/src/...").
+  test("files in the repo that the manifest gives by their path from the workspace are never called outside it", () => {
+    const { hosts, alice, record } = refundsTaken();
+    mkdirSync(join(alice, "checkout-api", "src"), { recursive: true });
+    writeFileSync(join(alice, "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
+    writeFileSync(join(alice, "checkout-api", "src", "refund-routes.ts"), "export const routes = 1;\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [
+        { repo: "checkout-api", path: "checkout-api/src/refunds.ts" },
+        { repo: "checkout-api", path: "checkout-api/src/refund-routes.ts" },
+      ],
+    })}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status).not.toBe(0);
+    const said = String(pushed.json?.error);
+    expect(said, pushed.out).not.toContain("outside checkout-api");
+    expect(said, pushed.out).toStartWith(
+      "refunds's Code Generation recorded checkout-api/src/refunds.ts and 1 more by their path from the workspace, not from " +
+        "checkout-api (in checkout-api, src/refunds.ts and 1 more), so nothing was pushed. Ask the person whether to take refunds " +
+        "back to Code Generation to record them by their path in checkout-api; on their yes, run `",
+    );
+    expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
+    expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
+  });
+
   test("a home moved on past the Unit stages records no Unit: the result stays on its claim, said once, and is recorded back on the Unit stages", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
