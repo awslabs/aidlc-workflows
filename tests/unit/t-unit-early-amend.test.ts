@@ -45,9 +45,9 @@ afterEach(cleanupTeamBuild);
 const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
 
 // refunds pushed by payments; a data member's clone with billing, ready to take
-// reporting, which waits on refunds.
+// reporting, which waits on refunds and which the lead left open for a team.
 function refundsPushed(dependencies?: string) {
-  const taken = refundsTaken(undefined, undefined, dependencies);
+  const taken = refundsTaken(["refunds=payments", "checkout-ui=web", "--open", "reporting"], undefined, dependencies);
   codeGenerated(taken.alice, taken.record);
   expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
   git(taken.home.dir, ["fetch", "-q", "origin"]);
