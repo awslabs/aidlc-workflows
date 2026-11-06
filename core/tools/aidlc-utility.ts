@@ -143,6 +143,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   displayRepoPath,
   hostedAddressOwner,
+  repoCloneable,
   parseWorkspaceManifest,
   readWorkspaceRepos,
   repoNotThereLine,
@@ -4000,13 +4001,29 @@ export function registeredRepoDoctorChecks(projectDir: string): DoctorCheck[] {
     // codekbSourceRoot's own test for falling back to the whole workspace; it
     // cannot be called here, since its repo read binds the chat.
     if (existsSync(dir) && statSync(dir).isDirectory()) continue;
+    const drop = `if this work no longer covers it, \`${aidlcDispatcherInvocation(`intent remove-repo ${repo}`)}\``;
+    // A repo repos.json (or repos.local.json) puts elsewhere is said there.
+    const repos = readWorkspaceRepos(projectDir);
+    const source = repos.pathSource.get(repo);
+    if (source !== undefined) {
+      const clone = repoCloneable(projectDir, repo)
+        ? `clone it there with \`${aidlcDispatcherInvocation(`intent add-repo ${repo}`)}\``
+        : "clone it there";
+      rows.push({
+        pass: false,
+        severity: "warn",
+        label: `Registered repo "${repo}" has no folder at ${displayRepoPath(repos.entries.get(repo)?.path ?? repo)}, where ${source} puts it: ` +
+          "Reverse Engineering would analyse the whole workspace under its name",
+        fix: `${clone}, or ${source === "repos.local.json" ? "change" : "give"} its path in repos.local.json; ${drop}`,
+      });
+      continue;
+    }
     rows.push({
       pass: false,
       severity: "warn",
       label:
         `Registered repo "${repo}" has no folder in the workspace: Reverse Engineering would analyse the whole workspace under its name`,
-      fix: `restore or clone "${repo}" into the workspace folder; if this work no longer covers it, ` +
-        `\`${aidlcDispatcherInvocation(`intent remove-repo ${repo}`)}\``,
+      fix: `restore or clone "${repo}" into the workspace folder; ${drop}`,
     });
   }
   return rows;

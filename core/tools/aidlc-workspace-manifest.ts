@@ -333,6 +333,17 @@ export function repoCloneable(projectDir: string, repoName: string): boolean {
   return repos.entries.get(repoName)?.url !== undefined || (repos.entries.has(repoName) && repos.manifest?.org !== undefined);
 }
 
+// With this person's repos.local.json unreadable: what is wrong, and where the
+// repos its paths may move are looked for until it reads. Null when it reads.
+export function localUnreadableLine(projectDir: string, repoNames: string[]): string | null {
+  const error = readWorkspaceRepos(projectDir).localError;
+  if (error === undefined) return null;
+  const one = repoNames.length === 1;
+  const them = one ? repoNames[0] : `${repoNames.slice(0, -1).join(", ")} and ${repoNames.at(-1)}`;
+  return `${error.replace(/([^.!?])$/, "$1.")} Your own paths in it are not used until it reads, so ${them} ` +
+    `${one ? "is" : "are"} looked for where repos.json puts ${one ? "it" : "them"} for now.`;
+}
+
 // The offer, when repos.json can clone a repo that is not where it puts it.
 export function repoCloneOfferLine(projectDir: string, repoNames: string[]): string {
   const repos = readWorkspaceRepos(projectDir);

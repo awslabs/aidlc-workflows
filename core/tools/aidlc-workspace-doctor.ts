@@ -305,13 +305,20 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         });
       }
 
-      // W4 - This person's repos.local.json: what in it is not read.
+      // W4 - This person's repos.local.json: what in it is not read. A file
+      // that cannot be read leaves every path of theirs unused: a warning.
       const local = readWorkspaceRepos(projectDir);
-      const localLines = [...(local.localError === undefined ? [] : [local.localError]), ...local.ignored];
-      if (localLines.length > 0) {
+      if (local.localError !== undefined) {
+        results.push({
+          pass: false,
+          severity: "warn",
+          label: `Your repos.local.json: ${local.localError.replace(/([^.!?])$/, "$1.")} Your own paths in it are not used until it reads. (advisory)`,
+        });
+      }
+      if (local.ignored.length > 0) {
         results.push({
           pass: true,
-          label: `Your repos.local.json: ${localLines.join(" ")} (advisory)`,
+          label: `Your repos.local.json: ${local.ignored.join(" ")} (advisory)`,
         });
       }
     }

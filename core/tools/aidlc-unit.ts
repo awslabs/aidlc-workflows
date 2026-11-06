@@ -197,7 +197,7 @@ import {
   TEAM_RHYTHM_OFFER,
   theTeam,
 } from "./aidlc-unit-teams.js";
-import { repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
+import { localUnreadableLine, repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
   captureStageValidationBasis,
@@ -7449,6 +7449,10 @@ function likelyReposNotHere(
 ): { lines: string; question: string; offer: { offer?: { choices: Array<{ label: string; command?: string }> } } } {
   const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
     .filter((repo) => recorded.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
+  // Their own paths cannot be read: their copy may be elsewhere, so no clone
+  // is offered until the file reads.
+  const unreadable = missing.length > 0 ? localUnreadableLine(pd, missing) : null;
+  if (unreadable !== null) return { lines: ` ${unreadable}`, question: "", offer: {} };
   const cloneable = missing.filter((repo) => repoCloneable(pd, repo));
   return {
     lines: missing.filter((repo) => !cloneable.includes(repo)).map((repo) => ` ${repoNotThereLine(pd, repo)}`).join(""),

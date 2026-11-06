@@ -640,7 +640,9 @@ work does: after every stage, or once at its end.
   `repos.local.json`. When `repos.json` has its address, the take asks instead:
   "billing is not at ../billing yet, where repos.json puts it. Do you want me to
   clone it there?" On your yes it is cloned there with your own git, and its
-  files are nobody's change at the Unit's gates.
+  files are nobody's change at the Unit's gates. While your own
+  `repos.local.json` cannot be read, the take says what is wrong with it and
+  offers no clone, since your copy may be where that file puts it.
 
 Each build keeps its entry in its own record folder (`aidlc-intent.json`), not in
 the space's `intents.json`, so two people who take two Units in one space share

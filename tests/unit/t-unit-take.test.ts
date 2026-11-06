@@ -640,4 +640,29 @@ describe("a likely repo this workspace has no copy of", () => {
     const row = readIntentRegistry(alice, "payments").find((entry) => entry.dirName === took.json?.record);
     expect(row?.repos).toEqual(["billing", "checkout-api"]);
   });
+
+  test("with their repos.local.json unreadable, the take says so and offers no clone: their own copy may be elsewhere", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const mine = tempDir("alice-code");
+    cloneCode(hosts["checkout-api"], mine, "api", "alice");
+    // Their own path for checkout-api, with a slip: a trailing comma.
+    writeFileSync(join(alice, "repos.local.json"), `{ "repos": [ { "name": "checkout-api", "path": ${JSON.stringify(join(mine, "api"))} }, ] }\n`);
+    const took = run(UNIT, ["take", "refunds", "--home", HOME], alice);
+    expect(took.status, took.out).toBe(0);
+    const notice = String(took.json?.notice);
+    expect(notice).toContain("repos.local.json is not valid JSON");
+    expect(notice).toContain(
+      "Your own paths in it are not used until it reads, so checkout-api and billing are looked for where repos.json puts them for now.",
+    );
+    expect(notice).not.toContain("Do you want me to clone");
+    expect(took.json?.offer).toBeUndefined();
+  });
 });
+

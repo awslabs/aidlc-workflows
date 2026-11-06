@@ -47,6 +47,17 @@ describe("registeredRepoDoctorChecks", () => {
     expect(rows[0].fix).toContain("engine intent remove-repo api");
   });
 
+  test("a registered repo repos.json puts elsewhere is said where repos.json puts it, and the clone is add-repo's", () => {
+    const project = projectWithRepos(["web"]);
+    writeFileSync(join(project, "repos.json"), `${JSON.stringify({ repos: [{ name: "web", url: "git@example.test:acme/web.git", path: "../web-elsewhere" }] })}\n`);
+    const rows = registeredRepoDoctorChecks(project);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].label).toContain('Registered repo "web" has no folder at ../web-elsewhere, where repos.json puts it');
+    expect(rows[0].fix).not.toContain("into the workspace folder");
+    expect(rows[0].fix).toContain("engine intent add-repo web");
+    expect(rows[0].fix).toContain("engine intent remove-repo web");
+  });
+
   test("says nothing for a folder that is there without .git: Reverse Engineering reads that folder", () => {
     const project = projectWithRepos(["api"]);
     mkdirSync(join(project, "api"));
