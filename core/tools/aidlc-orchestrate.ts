@@ -609,6 +609,7 @@ import {
   claimsOpenHere,
   defaultTeamLabel,
   homeResultsPastUnitStages,
+  pastUnitStages,
   landedNotOnRemote,
   namesInProse,
   localUnitClaimOverviewForIntent,
@@ -14559,8 +14560,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   // A home past every Unit stage while teams build: said on whichever step runs.
-  const pastUnitStages = stateContent ? homeResultsPastUnitStages(pd, stateContent, engineSessionId) : null;
-  if (pastUnitStages !== null) sayWithStepOnce(pd, pastUnitStages);
+  const resultsNotRecorded = stateContent ? homeResultsPastUnitStages(pd, stateContent, engineSessionId) : null;
+  if (resultsNotRecorded !== null) sayWithStepOnce(pd, resultsNotRecorded);
 
   // If the current stage is still in-flight (pending / in-progress /
   // awaiting-approval / revising), the next move is normally to run THAT stage
@@ -17378,13 +17379,17 @@ function unitBoardRows(
         payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
       const waiting = leadSignOffOn(stateContent) && !payload.signoff ? ", waiting for your sign-off" : "";
       // Every repo seen merged by a look that records nothing (`team-board`):
-      // the step records it, and the Units waiting only on it open then.
+      // the step records it, and the Units waiting only on it open then; past
+      // the Unit stages, only once the work is back on them.
       const opens = results.get(unit)?.done === true
         ? [...dependencies].filter(([, deps]) => deps.includes(unit) && deps.every((dep) => dep === unit || done(dep)))
           .map(([dependent]) => dependent)
         : null;
       const named = opens === null || opens.length === 0 ? "" : opens.length === 1 ? opens[0] : `${opens.slice(0, -1).join(", ")} and ${opens.at(-1)}`;
-      const unrecorded = opens === null ? "" : `, not recorded yet: the next step here records it${named ? ` and opens ${named}` : ""}`;
+      const past = opens === null ? null : pastUnitStages(stateContent);
+      const unrecorded = opens === null ? "" : past !== null
+        ? `, not recorded yet: it is recorded once the work is back on ${past.back}`
+        : `, not recorded yet: the next step here records it${named ? ` and opens ${named}` : ""}`;
       return { unit, team, status: `${mergedStatus(verdicts)}${waiting}${unrecorded}` };
     }
     if (payload.by_file) {

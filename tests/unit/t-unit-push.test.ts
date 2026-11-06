@@ -949,9 +949,9 @@ describe("at the home", () => {
     const step = next(home.dir, chat);
     const said = ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("refunds (from payments) is back but not recorded yet"));
     expect(said, JSON.stringify(step)).toEqual([
-      "refunds (from payments) is back but not recorded yet: main skipped the Unit stages (functional-design to " +
-        "code-generation) when it moved on to build-and-test, so there is nothing on main to record the Unit in. " +
-        "This work takes it in once it is back on functional-design, and going back starts the Unit stages again here.",
+      "refunds (from payments) is back but not recorded yet: this work moved on to Build and Test past the Unit stages, " +
+        "so it is recorded once the work is back on Functional Design, and Build and Test does not have its outputs " +
+        "until then.",
     ]);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();

@@ -57,6 +57,7 @@ import {
   filterProducesByKind,
   getField,
   loadStageGraph,
+  markPersonLinesHeard,
   humanPresenceGuardDisabled,
   idSuffix,
   listIntentDirs,
@@ -6870,31 +6871,57 @@ function checkTeamResultsQuietly(
   return found;
 }
 
-// At a home teams build for, once a forward jump skipped every Unit stage: a
-// team's result that came back has nothing here to be recorded in, so it stays
-// on its claim, said once in land's words; the Unit walk records it once the
-// work is back on the first Unit stage (checkTeamResults runs only there). The
-// claims are fetched once per chat and again after the person speaks.
-export function homeResultsPastUnitStages(projectDir: string, stateContent: string, sessionId?: string): string | null {
-  if (homeLocation(stateContent) === null || !hasAnyUnitClaimRefs(projectDir)) return null;
+// The work here is past the Unit stages: its stage comes after every Unit stage
+// the scope plans, whether a forward jump skipped them all or left the stage it
+// started from unchecked behind it. The Unit walk, the one place a team's
+// result is recorded (checkTeamResults), runs on any Unit stage and nowhere
+// else. The stage it is at, and the Unit stage it left from (the first one not
+// done, a skipped one included), by name; else null.
+export function pastUnitStages(stateContent: string): { at: string; back: string } | null {
   // The Unit stages as the scope plans them: with no state, no skip is read.
   const stages = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", "", true);
-  const skipped = unitStagesSkippedOnMain(projectDir, stages);
-  if (skipped === null || stages.length === 0) return null;
+  const order = loadStageGraph().map((stage) => stage.slug);
+  const at = order.indexOf(getField(stateContent, "Current Stage")?.trim() ?? "");
+  if (stages.length === 0 || at <= Math.max(...stages.map((slug) => order.indexOf(slug)))) return null;
+  const done = new Set(parseCheckboxes(stateContent).filter((entry) => entry.state === "completed").map((entry) => entry.slug));
+  const name = (slug: string) => stageLabel(loadGraph().find((entry) => entry.slug === slug), slug) ?? slug;
+  return { at: name(order[at]), back: name(stages.find((slug) => !done.has(slug)) ?? stages.at(-1)!) };
+}
+
+// Why a team's result back here is not recorded yet, for take-in and the step.
+function notRecordedPastUnitStages(past: { at: string; back: string }, one: boolean): string {
+  return `this work moved on to ${past.at} past the Unit stages, so ${one ? "it is" : "they are"} recorded once the work is ` +
+    `back on ${past.back}, and ${past.at} does not have ${one ? "its" : "their"} outputs until then.`;
+}
+
+function resultsBackLine(back: UnitClaimView[], past: { at: string; back: string }): string {
+  const one = back.length === 1;
+  return `${joinNames(back.map((claim) => `${claim.unit} (from ${claim.owner})`))} ${one ? "is" : "are"} back but not ` +
+    `recorded yet: ${notRecordedPastUnitStages(past, one)}`;
+}
+
+const resultsBack = (projectDir: string): UnitClaimView[] => [...cachedClaims(projectDir).values()]
+  .filter((claim) => claim.status === "claimed" && claim.payload.result !== undefined && !claim.payload.done);
+
+// At a home teams build for, once the work moved on past the Unit stages: a
+// team's result that came back stays on its claim, said once, and the Unit
+// walk records it once the work is back on a Unit stage. While a team Unit is
+// not done, the claims are fetched once per chat and again after the person speaks.
+export function homeResultsPastUnitStages(projectDir: string, stateContent: string, sessionId?: string): string | null {
+  if (homeLocation(stateContent) === null || !hasAnyUnitClaimRefs(projectDir)) return null;
+  const past = pastUnitStages(stateContent);
+  if (past === null) return null;
   let back: UnitClaimView[];
   try {
+    const open = [...cachedClaims(projectDir).values()].some((claim) => claim.status === "claimed" && !claim.payload.done);
+    if (!open) return null;
     if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { sessionId, sincePerson: true });
-    back = [...cachedClaims(projectDir).values()]
-      .filter((claim) => claim.status === "claimed" && claim.payload.result !== undefined && !claim.payload.done);
+    back = resultsBack(projectDir);
   } catch (e) {
     if (e instanceof GitWriteRefused) throw e;
     return null;
   }
-  if (back.length === 0) return null;
-  const one = back.length === 1;
-  return `${joinNames(back.map((claim) => `${claim.unit} (from ${claim.owner})`))} ${one ? "is" : "are"} back but not ` +
-    `recorded yet: ${skipped}. This work takes ${one ? "it" : "them"} in once it is back on ${stages[0]}, ` +
-    "and going back starts the Unit stages again here.";
+  return back.length === 0 ? null : resultsBackLine(back, past);
 }
 
 // Once per Unit and attempt: its outputs written into the home's record, then UNIT_MERGED.
@@ -8256,6 +8283,19 @@ function takeIn(args: string[], projectDir?: string): void {
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload, undefined, undefined, files), live.oid);
   if (!sent.ok) fail(`${unit}'s claim moved while the file was taken in: ${sent.refused ?? "try again"}.`);
   invalidateLiveClaimPayloadCache(pd, unit);
+  // Past the Unit stages a result is not recorded here yet: said now, and the
+  // step's own line for it counts as said in this chat.
+  const past = file.kind === "result" ? pastUnitStages(readStateFile(pd)) : null;
+  if (past !== null) {
+    lines[0] = `Took in ${unit}'s result from ${live.owner}, but it is not recorded yet: ${notRecordedPastUnitStages(past, true)}`;
+    try {
+      const session = resolveWorkflowSelection(pd).sessionId;
+      const back = resultsBack(pd);
+      if (session && back.length === 1 && back[0].unit === unit) markPersonLinesHeard(pd, session, [resultsBackLine(back, past)]);
+    } catch {
+      // Unmarked, the step says it once more.
+    }
+  }
   console.log(JSON.stringify({ taken_in: true, unit, kind: file.kind, notice: lines.join(" ") }));
 }
 

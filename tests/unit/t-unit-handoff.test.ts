@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:hand-off, subcommand:aidlc-unit:take-in, subcommand:aidlc-unit:progress, function:renderHandFile, function:parseHandFile, function:handFileStep
+// covers: subcommand:aidlc-unit:hand-off, subcommand:aidlc-unit:take-in, subcommand:aidlc-unit:progress, function:renderHandFile, function:parseHandFile, function:handFileStep, function:pastUnitStages
 //
 // Hand-off by file (#2410, item 6), for a team that cannot reach the home's
 // repository. The lead holds the Unit for the team and writes one readable
@@ -7,14 +7,17 @@
 // takes in by pointing at them, and the home's board offers the hand-off. A
 // repo the home cannot fetch keeps the team's own word on whether it merged.
 // Files are LF when written and read with CRLF too; a changed file is taken in
-// as it is, an older one with a line, one for other work changes nothing.
+// as it is, an older one with a line, one for other work changes nothing. A
+// result taken in once the work moved on past the Unit stages says it is not
+// recorded yet and where it is, and back on them it is recorded.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { createTestProject, fixtureIntentId8, seedAidlcMemory } from "../harness/fixtures.ts";
+import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { AIDLC_SRC, createTestProject, fixtureIntentId8, seedAidlcMemory } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
@@ -26,15 +29,19 @@ import {
   homeState,
   makeHome,
   next,
+  ORCH,
   run,
   STATE,
   tellsWhatToType,
   tempDir,
   UNIT,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
+
+const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 
 const OPEN = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
   "  - name: reporting\n    repos: [ledger]\n    depends_on: []\n```\n";
@@ -389,6 +396,73 @@ describe("progress and the result come back as files", () => {
     const late = run(UNIT, ["take-in", older], home.dir);
     expect(late.status, late.out).toBe(0);
     expect(String(late.json?.notice)).toContain("This file is from an earlier attempt of reporting; it is taken in as the team's latest word.");
+  });
+});
+
+// The team builds reporting from the file, pushes and merges in ledger, and
+// sends its result file back to the lead.
+function resultSent(home: { dir: string }): string {
+  const partner = partnerWorkspace();
+  expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+  const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+  const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+  mkdirSync(join(partner.dir, "ledger", "src"), { recursive: true });
+  writeFileSync(join(partner.dir, "ledger", "src", "report.ts"), "export const report = 1;\n");
+  const stage = join(record, "construction", "reporting", "code-generation");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+    stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/report.ts" }],
+  })}\n`);
+  expect(run(UNIT, ["push"], partner.dir).status).toBe(0);
+  git(join(partner.dir, "ledger"), ["switch", "-q", "main"]);
+  git(join(partner.dir, "ledger"), ["merge", "-q", "--ff-only", "reporting"]);
+  git(join(partner.dir, "ledger"), ["push", "-q", "origin", "main"]);
+  expect(run(UNIT, ["push"], partner.dir).status).toBe(0);
+  return deliver(partner.dir, "aidlc/handoff/fixture-reporting-result.md");
+}
+
+// A live run: the lead skipped ahead from Functional Design to Build and Test,
+// then took in a team's result file. Take-in said "Took in", the board read
+// merged, nothing recorded it, and Build and Test ran without its outputs.
+describe("a result taken in after the lead's project moved on past the Unit stages", () => {
+  test("take-in, the board and the step say it is not recorded yet and where it is, and back on Functional Design it is", () => {
+    const { home } = handedOff();
+    const resultFile = resultSent(home);
+    const lead = { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-handoff-lead" };
+    next(home.dir, lead);
+    const jumped = run(JUMP, ["execute", "--target", "build-and-test", "--direction", "forward"], home.dir);
+    expect(jumped.status, jumped.out).toBe(0);
+    expect(next(home.dir, lead).stage).toBe("build-and-test");
+    const why = "this work moved on to Build and Test past the Unit stages, so it is recorded once the work is back on " +
+      "Functional Design, and Build and Test does not have its outputs until then.";
+    const taken = run(UNIT, ["take-in", resultFile], home.dir, lead);
+    expect(taken.status, taken.out).toBe(0);
+    expect(taken.json?.notice).toBe(`Took in reporting's result from data, but it is not recorded yet: ${why}`);
+    const row = "- reporting, data: ledger merged, not recorded yet: it is recorded once the work is back on Functional Design";
+    expect(run(ORCH, ["team-board"], home.dir).out).toContain(row);
+    expect(run(UTILITY, ["status"], home.dir).out).toContain(row);
+    // Said at take-in in the lead's chat, so its next step does not say it again; another chat hears it once.
+    const step = next(home.dir, lead);
+    expect(step.stage, JSON.stringify(step)).toBe("build-and-test");
+    expect(JSON.stringify(step)).not.toContain("not recorded yet");
+    const other = next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-handoff-second-chat" });
+    expect(other.change_notices, JSON.stringify(other)).toContain(`reporting (from data) is back but not recorded yet: ${why}`);
+    expect(readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNIT_MERGED")).toEqual([]);
+    // Back on Functional Design, the walk records it.
+    const back = run(JUMP, ["execute", "--target", "functional-design", "--direction", "backward"], home.dir);
+    expect(back.status, back.out).toBe(0);
+    next(home.dir, lead);
+    const merged = readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNIT_MERGED");
+    expect(merged.map((entry) => entry.block).join("\n")).toContain("reported by data");
+  });
+
+  test("the way back named is the Unit stage the work left from, and a home still on the Unit stages is not past them", () => {
+    const fromCodeGeneration = homeState()
+      .replace(/^- \[-\] functional-design/m, "- [x] functional-design")
+      .replace(/^- \[ \] (nfr-requirements|nfr-design|infrastructure-design) /gm, "- [x] $1 ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test");
+    expect(pastUnitStages(fromCodeGeneration)).toEqual({ at: "Build and Test", back: "Code Generation" });
+    expect(pastUnitStages(homeState())).toBeNull();
   });
 });
 
