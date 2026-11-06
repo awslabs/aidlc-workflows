@@ -2392,6 +2392,7 @@
         "bugfix",
         "refactor",
         "security-patch",
+        "infra",
         "classic",
         "workshop",
         "express"
@@ -2492,6 +2493,7 @@
         "bugfix",
         "refactor",
         "security-patch",
+        "infra",
         "classic",
         "workshop",
         "express"
@@ -3576,8 +3578,8 @@
         "nfr-requirements": "EXECUTE",
         "nfr-design": "EXECUTE",
         "infrastructure-design": "EXECUTE",
-        "code-generation": "SKIP",
-        "build-and-test": "SKIP",
+        "code-generation": "EXECUTE",
+        "build-and-test": "EXECUTE",
         "ci-pipeline": "EXECUTE",
         "deployment-pipeline": "EXECUTE",
         "environment-provisioning": "EXECUTE",

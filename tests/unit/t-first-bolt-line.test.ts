@@ -3,10 +3,10 @@
 // The first Construction step's line. "Starting the first Bolt now: one build
 // pass over the code, tests and checks for a piece of the work." is said where
 // the plan builds code in Units. A plan whose Construction builds no code
-// (stock infra, or a plan made for an analysis that skips Code Generation) is
-// not starting a build pass, and a plan with no Units (refactor,
-// security-patch, or a jump over a Units Generation that never ran) has no
-// Bolt, so their first Construction step gets the ordinary line instead.
+// (a plan made for an analysis that skips Code Generation) is not starting a
+// build pass, and a plan with no Units (infra, refactor, security-patch, or a
+// jump over a Units Generation that never ran) has no Bolt, so their first
+// Construction step gets the ordinary line instead.
 //
 // Mechanism: cli - spawns the shipped tools against temp projects created via
 // intent-create, then a forward jump to the first Construction stage.
@@ -68,10 +68,10 @@ function firstConstructionLine(createArgs: string[], first: string, unitsGenerat
 }
 
 describe("the first Construction step names a Bolt only where code is built", () => {
-  test("stock infra builds no code: its first Construction step gets the ordinary line", () => {
+  test("stock infra builds its IaC without Units: its first Construction step gets the ordinary line", () => {
     const line = firstConstructionLine(["--scope", "infra"], "nfr-requirements");
     expect(line).not.toContain("Bolt");
-    expect(line).toBe("Now working on NFR Requirements (stage 1 of 8), wearing the architect hat.");
+    expect(line).toBe("Now working on NFR Requirements (stage 1 of 10), wearing the architect hat.");
   });
 
   test("a plan made for an analysis, with Code Generation skipped, gets the ordinary line", () => {

@@ -202,7 +202,7 @@ routes on it.
 | ARS Range | Workflow Shape | Typical Stage Count | Stock Scope Territory |
 |-----------|---------------|---------------------|-----------------------|
 | 0–20 | Near-direct implementation | 5–9 | poc, bugfix |
-| 21–40 | Focused workflow | 8–13 | refactor, security-patch, infra |
+| 21–40 | Focused workflow | 8–15 | refactor, security-patch, infra |
 | 41–60 | Standard workflow | 15–22 | mvp, custom |
 | 61–80 | Comprehensive workflow | 22–28 | feature, custom |
 | 81–100 | Full ceremony | 28–32 | enterprise |
