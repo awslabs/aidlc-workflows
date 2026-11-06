@@ -301,6 +301,47 @@ describe("the push", () => {
     expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain(".aidlc-worktrees/refunds/checkout-api/src/refunds.ts");
   });
 
+  test("the build wrote a file their .gitignore leaves out: the push leaves it out too, says so once, and pushes the rest", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, ".gitignore"), "dist/\n");
+    // The bundle registered as source for the review, as the build's own step did.
+    writeFileSync(join(billing, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["dist/main.js"] })}\n`);
+    git(billing, ["add", ".gitignore", ".aidlc-source-paths.json"]);
+    git(billing, ["commit", "-q", "-m", "ignore the bundle"]);
+    git(billing, ["push", "-q", "origin", "HEAD:main"]);
+    codeGenerated(alice, record);
+    mkdirSync(join(billing, "dist"), { recursive: true });
+    writeFileSync(join(billing, "dist", "main.js"), "bundle();\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    const written = JSON.parse(readFileSync(manifest, "utf-8")) as { writes: Array<{ repo: string; path: string }> };
+    written.writes.push({ repo: "billing", path: "dist/main.js" });
+    writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain("dist/main.js in billing is not in the commit: billing's .gitignore leaves it out.");
+    expect(String(pushed.json?.notice)).not.toContain("-f");
+    expect(git(hosts.billing, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).not.toContain("dist/main.js");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
+  });
+
+  test("every file the build wrote in a repo is one its .gitignore leaves out: that repo is not switched or pushed, and the line says so", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, ".gitignore"), "lib/\n");
+    writeFileSync(join(billing, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["lib/refund.ts"] })}\n`);
+    git(billing, ["add", ".gitignore", ".aidlc-source-paths.json"]);
+    git(billing, ["commit", "-q", "-m", "ignore lib"]);
+    git(billing, ["push", "-q", "origin", "HEAD:main"]);
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toStartWith("Pushed branch refunds in checkout-api.");
+    expect(String(pushed.json?.notice)).toContain("lib/refund.ts in billing is not in the commit: billing's .gitignore leaves it out.");
+    expect(git(billing, ["branch", "--show-current"])).toBe("main");
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts.billing }).status).not.toBe(0);
+  });
+
   test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);

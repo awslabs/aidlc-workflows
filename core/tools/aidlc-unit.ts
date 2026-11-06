@@ -6284,6 +6284,14 @@ function takeClaimNow(projectDir: string, build: UnitBuild): UnitClaimView | nul
   }
 }
 
+// The paths a repo's own ignore rules leave out and git does not track: git
+// would refuse to add them, as the person's own `git add` would.
+function untrackedIgnored(dir: string, paths: readonly string[]): string[] {
+  if (paths.length === 0) return [];
+  const checked = spawnSync("git", ["check-ignore", "--stdin", "-z"], { cwd: dir, input: paths.join("\0"), encoding: "utf-8" });
+  return checked.status === 0 ? checked.stdout.split("\0").filter(Boolean) : [];
+}
+
 // Whether a repo of the push holds changes of the person's beyond the Unit's.
 function ownChanges(planned: ReadonlyArray<{ dir: string }>): boolean {
   return planned.some(({ dir }) => git(dir, ["status", "--porcelain"]).stdout.trim() !== "");
@@ -6414,6 +6422,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   const results: RepoResult[] = [];
   const takeTree = readTakeTree(activeRecordDir(pd));
   const leftOut: string[] = [];
+  const gitIgnored: Array<{ path: string; name: string }> = [];
   // Every repo first: there, and a remote to push to.
   const planned: Array<{ repo: string; dir: string; name: string; remote: string; paths: string[] }> = [];
   for (const [repo, paths] of byRepo) {
@@ -6482,7 +6491,17 @@ function pushUnit(args: string[], projectDir?: string): void {
           "--target code-generation` and follow what it returns.",
       );
     }
-    planned.push({ repo, dir, name, remote, paths });
+    // Files their .gitignore leaves out (a build's bundle, say) stay out of
+    // the commit, as their own git keeps them; a repo with nothing else to
+    // send is not switched or pushed. Said once, with the rest.
+    const ignored = untrackedIgnored(dir, paths);
+    for (const path of ignored) gitIgnored.push({ path, name });
+    const kept = paths.filter((path) => !ignored.includes(path));
+    if (kept.length > 0) planned.push({ repo, dir, name, remote, paths: kept });
+  }
+  if (planned.length === 0 && gitIgnored.length > 0) {
+    fail(`Nothing of ${unit}'s is left to push: every file its Code Generation wrote is one the repos' .gitignore leaves out ` +
+      `(${joinNames(gitIgnored.map((entry) => `${entry.path} in ${entry.name}`))}). Nothing was switched or pushed.`);
   }
   // Then in each, onto the Unit's branch as their own hands would and its
   // commit made with their git (hooks, signing, identity), before anything is
@@ -6579,6 +6598,11 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (addedRepos.length > 0) {
     lines.push(`${joinNames(addedRepos)} ${addedRepos.length === 1 ? "was" : "were"} not in the home's plan; ${unit} changed ` +
       `${addedRepos.length === 1 ? "it" : "them"}, so ${addedRepos.length === 1 ? "it is" : "they are"} now among ${unit}'s repos and went with the push.`);
+  }
+  for (const name of [...new Set(gitIgnored.map((entry) => entry.name))]) {
+    const files = gitIgnored.filter((entry) => entry.name === name).map((entry) => `${entry.path} in ${name}`);
+    lines.push(`${joinNames(files)} ${files.length === 1 ? "is" : "are"} not in the commit: ${name}'s .gitignore leaves ` +
+      `${files.length === 1 ? "it" : "them"} out.`);
   }
   if (leftOut.length > 0) {
     lines.push(`${joinNames(leftOut)} ${leftOut.length === 1 ? "is" : "are"} not in the commit: ${leftOut.length === 1 ? "it" : "each"} ` +
