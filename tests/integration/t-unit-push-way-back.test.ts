@@ -4,13 +4,15 @@
 // or the person's Not now, so whatever the push asks of the person is still
 // their move inside the work. A live run on Codex: the push refused the
 // files Code Generation wrote (its manifest gave them by their path from the
-// workspace), the person said to take it back to Code Generation, and every
+// workspace; that list is now refused at Code Generation's own check, so here
+// its files are gone before the push), the person said to take it back to
+// Code Generation, and every
 // redo was refused, because the build's record had finished at the last
 // approval and no turn of theirs was on record any more: an approved Unit that
 // neither pushed nor went back. Not now still ends the build, once.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, readFileSync, readdirSync } from "node:fs";
+import { cpSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { type HostName, hostFor } from "../harness/scope-hosts.ts";
@@ -94,7 +96,11 @@ function completions(record: string): number {
 describe("a Unit's push and its way back stay the person's moves", () => {
   {
     test("the push refused, the person's yes takes it back to Code Generation", () => {
-      const { host, person, agent, push, record } = builtToPush("codex", true);
+      const { host, person, agent, push, record, dir } = builtToPush("codex", false);
+      // The files its Code Generation recorded are gone from billing before the push.
+      const manifest = JSON.parse(readFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), "utf-8")) as
+        { writes: Array<{ repo?: string; path: string }> };
+      for (const write of manifest.writes) rmSync(join(dir, write.repo ?? ".", ...write.path.split("/")), { force: true });
       // The build is approved and its push is asked: the work is not finished yet.
       expect(statusOf(record)).not.toBe("Completed");
       expect(completions(record)).toBe(0);

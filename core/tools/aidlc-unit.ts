@@ -6310,6 +6310,19 @@ function pushUnit(args: string[], projectDir?: string): void {
           "and follow what it returns.",
       );
     }
+    // Files it recorded that are nowhere (not on disk and never committed in
+    // the repo, a redo that wrote others, say): git would refuse to add them,
+    // so this is said first, in plain words, with the way back.
+    const gone = paths.filter((path) => !existsSync(join(dir, path)) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok);
+    if (gone.length > 0) {
+      const one = gone.length === 1;
+      fail(
+        `${unit}'s Code Generation recorded ${gone[0]}${one ? "" : ` and ${gone.length - 1} more`} in ${name}, and ${one ? "it is" : "they are"} ` +
+          `not there, so nothing was pushed. Ask the person whether to take ${unit} back to Code Generation to write and record ` +
+          `${one ? "it" : "them"} again; on their yes, run \`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo ` +
+          "--target code-generation` and follow what it returns.",
+      );
+    }
     planned.push({ repo, dir, name, remote, paths });
   }
   // Then in each, onto the Unit's branch as their own hands would and its
