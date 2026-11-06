@@ -170,6 +170,9 @@ describe("a team member's clone of the home's workspace", () => {
     expect(said).not.toContain("Who builds which Unit");
     // Again in the same chat: still the Units offer, never the lead's walk.
     expect(JSON.stringify(next(alice, ENV))).not.toContain("as a file");
+    // Their words there are read against the Units offer, never sent on as the lead's work.
+    const words = next(alice, ENV, ["we are the payments team and want to take refunds, our Unit"]);
+    expect(String(words.message), JSON.stringify(words).slice(0, 500)).toContain(`take refunds --home ${HOME} --team payments`);
   });
 
   test("the lead on a second machine: their own word that they lead this work, recorded, puts the lead's questions there again", () => {

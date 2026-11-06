@@ -4939,6 +4939,15 @@ function unselectedWordsReplyDirective(
   );
 }
 
+// Their words with the lead's work selected in a checkout that did not make
+// its plan (planMadeElsewhere): read against the Units offer, as in a clone
+// with nothing selected, never sent on as the lead's work. Null elsewhere.
+function leadsWorkElsewhereWords(pd: string, stateContent: string, requestId: string): PrintDirective | null {
+  if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null || !planMadeElsewhere(pd)) return null;
+  const offer = unitTakeAsk(pd);
+  return offer === null ? null : unitsWordsReplyDirective(requestId, offer, [engineSelection(pd).intent ?? ""].filter(Boolean));
+}
+
 // The person's words in a teammate's clone of the lead's work built by teams,
 // after the Units offer: read against its choices, with their commands; the
 // lead's work itself is picked only on the lead's own word that they lead it.
@@ -14598,7 +14607,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const build = unitBuildOf(stateContent);
       const pushDue = build !== null && buildWaitsForPush(stateContent) && /^- \[x\] code-generation\s/m.test(stateContent) &&
         getField(stateContent, UNIT_PUSH_FIELD)?.trim() !== "pushed" ? build.unit : undefined;
-      emit(reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent), pushDue));
+      emit(leadsWorkElsewhereWords(pd, stateContent, words.id) ??
+        reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent), pushDue));
       return;
     }
   }
@@ -14629,7 +14639,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
       undefined, routingSettings(carriedRoutingFlags(flags)),
     );
-    emit(teamWordsReplyDirective(words.id, pd));
+    emit(leadsWorkElsewhereWords(pd, stateContent, words.id) ?? teamWordsReplyDirective(words.id, pd));
     return;
   }
   // A Unit's build its lead turned down or sent back waits for the team's way
