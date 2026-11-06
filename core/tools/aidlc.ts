@@ -462,7 +462,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes]"],
+    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes] [--json|--quiet]"],
   },
   {
     id: "top-use",
@@ -552,7 +552,7 @@ export const ROUTES: readonly Route[] = [
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "versions install", summary: "install a retained release" }],
     all: [
-      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>]",
+      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--dry-run] [--yes] [--json|--quiet]",
     ],
   },
   {
@@ -570,7 +570,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["prune [--yes]"],
+    all: ["prune [--yes] [--json|--quiet]"],
   },
   {
     id: "state-passthrough",
@@ -3906,10 +3906,41 @@ function validateSimplePublicGrammar(
   return null;
 }
 
+// A verb the lifecycle tool runs: the words that tool gets (the route's prefix,
+// the verb and what follows it up to a `--`, then this launcher's own flags,
+// which resolveActionFrom hands on at the end; --project-dir, which every
+// lifecycle grammar takes, is left out) and the verb's usage, its form from the
+// route, the line `aidlc system --help` prints for it.
+function lifecycleVerb(argv: readonly string[]): { args: string[]; usage: string } | null {
+  const route = routePolicyFor(argv);
+  if (route?.tool !== TOOLS.lifecycle) return null;
+  const clean = withoutProjectDirFlag(argv);
+  const delimiter = clean.indexOf("--");
+  const words = delimiter < 0 ? clean : clean.slice(0, delimiter);
+  const end = argv.indexOf("--");
+  const launcherFlags = (end < 0 ? argv : argv.slice(0, end)).filter((token) => LAUNCHER_GLOBAL_FLAGS.has(token));
+  const path = route.namespace === "public"
+    ? []
+    : route.group === "top" ? ["system"] : ["system", route.group];
+  const verb = words[path.length];
+  const form = route.all?.find((item) => item === verb || item.startsWith(`${verb} `));
+  if (!form) return null;
+  return {
+    args: [...(route.prefix ?? []), ...words.slice(path.length), ...launcherFlags],
+    usage: [aidlcInvocation(), ...path, form].join(" "),
+  };
+}
+
 async function publicCommandGrammarError(
   route: Route | null,
   argv: readonly string[],
 ): Promise<string | null> {
+  if (route?.namespace === "system") {
+    const lifecycle = lifecycleVerb(argv);
+    if (!lifecycle) return null;
+    const { validatePublicLifecycleArgs } = await import("./aidlc-lifecycle.ts");
+    return validatePublicLifecycleArgs(lifecycle.args);
+  }
   if (
     route?.namespace !== "public" ||
     route.group !== "top"
@@ -3977,7 +4008,12 @@ function renderPublicGrammarFailure(
     text(2, `For the full list, run '${invoke} config --help'.\n`);
     return 2;
   }
-  return renderDispatcherFailure(argv, 2, message);
+  const code = renderDispatcherFailure(argv, 2, message);
+  const usage = lifecycleVerb(argv)?.usage;
+  if (usage && requestedOutputMode(argv) === "human") {
+    text(2, `${heading("usage:", process.stderr)} ${usage}\n`);
+  }
+  return code;
 }
 
 function projectPolicyError(route: Route, argv: readonly string[]): string | null {
@@ -4263,6 +4299,14 @@ export async function main(rawArgv: string[]): Promise<void> {
   const commandHelp = commandHelpRequest(argv);
   if (commandHelp) {
     text(1, renderCommandHelp(commandHelp));
+    return;
+  }
+  // `aidlc system rollback --help` and the other lifecycle verbs under
+  // `system`: the lifecycle tool takes --help as one more word, so the verb's
+  // usage is printed here and nothing runs.
+  const lifecycleHelp = lifecycleVerb(argv);
+  if (lifecycleHelp?.args.some((token) => token === "--help" || token === "-h")) {
+    text(1, `usage: ${lifecycleHelp.usage}\n`);
     return;
   }
   const route = routePolicyFor(argv);
