@@ -304,8 +304,10 @@ export function teamUnitStageApplies(
 // The Units built and approved here, one at a time, before the work switched
 // to teams: done at the home as they were, never recorded as merged. One whose
 // last gate (its checkpoint, or its stage's gate) was still open is not done:
-// the home's own walk puts that gate to the person here.
-export function unitsBuiltBeforeTeams(rows: readonly AuditShardEvent[], finalStage: string): Set<string> {
+// the home's own walk puts that gate to the person here. None in main's own
+// team flow (no Home Location), which reads its Units as main does.
+export function unitsBuiltBeforeTeams(stateContent: string, rows: readonly AuditShardEvent[], finalStage: string): Set<string> {
+  if (homeLocation(stateContent) === null) return new Set();
   return builtBeforeTeams(rows, finalStage).approved;
 }
 

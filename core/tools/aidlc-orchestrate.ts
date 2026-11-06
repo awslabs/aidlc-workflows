@@ -17245,7 +17245,7 @@ export function deriveTeamUnitProgressModel(
   );
   const mergedReceipts = unitMergedReceipts(projectDir, orderedAuditRows);
   // Units built here one at a time before teams joined are done here.
-  const builtBefore = unitsBuiltBeforeTeams(orderedAuditRows, block[block.length - 1].slug);
+  const builtBefore = unitsBuiltBeforeTeams(stateContent, orderedAuditRows, block[block.length - 1].slug);
   if (builtBefore.size > 0) mergedUnitOverrides = new Set([...(mergedUnitOverrides ?? []), ...builtBefore]);
   const transactions = unitMergeTransactions(projectDir);
   const mergeTracking =
@@ -17477,8 +17477,13 @@ function homeWalkUnits(
   return units.filter((unit) => !heldElsewhere.has(unit) && !waitsOnTeam(unit));
 }
 
-function homeMergedUnits(projectDir: string, model: TeamUnitProgressModel | null, auditRows: readonly AuditShardEvent[], finalStage: string): Set<string> {
-  return model?.mergedUnits ?? new Set([...unitMergedReceipts(projectDir, auditRows), ...unitsBuiltBeforeTeams(auditRows, finalStage)]);
+// The Units merged at the lead's project: its progress model's, else (a
+// read-only probe) the audit's. Main's own team flow (no Home Location) reads
+// them from its model alone, as main does.
+function homeMergedUnits(projectDir: string, stateContent: string, model: TeamUnitProgressModel | null, auditRows: readonly AuditShardEvent[], finalStage: string): Set<string> {
+  if (model !== null) return model.mergedUnits;
+  if (homeLocation(stateContent) === null) return new Set();
+  return new Set([...unitMergedReceipts(projectDir, auditRows), ...unitsBuiltBeforeTeams(stateContent, auditRows, finalStage)]);
 }
 
 // Where a Unit the lead's project builds stands, from its Unit Progress row:
@@ -17589,7 +17594,7 @@ function teamHomeBoardText(projectDir: string, stateContent: string): string {
     // The audit alone says what merged.
   }
   const { rows } = unitBoardRows(projectDir, stateContent, dag.batches.flat(), overview, results,
-    homeMergedUnits(projectDir, model, auditRows, finalStage), model?.section ?? stateContent);
+    homeMergedUnits(projectDir, stateContent, model, auditRows, finalStage), model?.section ?? stateContent);
   return [renderUnitBoard(workLabel(projectDir), rows), ...settledNotices].join("\n");
 }
 
@@ -17702,7 +17707,7 @@ function emitTeamUnitMajorRunStage(
   const finalStage = block[block.length - 1];
   // The Units merged here, read from the audit too when this run derives no
   // progress model (a read-only probe, the route check of `unit start`).
-  const mergedHere = homeMergedUnits(projectDir, model, auditRows, finalStage?.slug ?? "");
+  const mergedHere = homeMergedUnits(projectDir, stateContent, model, auditRows, finalStage?.slug ?? "");
   const dependencies = heldElsewhere.size > 0 ? unitDependencies(projectDir) : new Map<string, string[]>();
   const step = teamUnitMajorWalkStep(
     projectDir, refreshedState, block, homeWalkUnits(units, heldElsewhere, mergedHere, dependencies), kinds, ledgers,
