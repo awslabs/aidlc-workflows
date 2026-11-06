@@ -18,6 +18,7 @@ import {
   PLUGIN_COMMAND_NAME_RE,
   type RouteNamespaceName,
   TRUSTED_ROUTE_NAMESPACE,
+  UNIT_GRAMMAR,
   UNIT_VERBS,
 } from "./aidlc-command.ts";
 import {
@@ -261,19 +262,7 @@ export const ROUTES: readonly Route[] = [
     ...PUBLIC_ENGINE,
     namespace: "public",
     mutationScope: "project",
-    all: [
-      "unit adopt <unit>",
-      "unit claim <unit>",
-      "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
-      "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--accept-released-attempt --user-input <text>]",
-      "unit merge-status <unit>",
-      "unit participate",
-      "unit pin <unit>",
-      "unit publish <unit> [--commit [--include <path>]...]",
-      "unit release <unit>",
-      "unit share",
-      "unit status",
-    ],
+    all: Object.values(UNIT_GRAMMAR).map((grammar) => grammar.usage),
   },
   {
     id: "top-compose",
