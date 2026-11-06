@@ -709,6 +709,7 @@ import {
   unitLikelyRepos,
   unitsAssignedSinceTeams,
   assignmentNotHeld,
+  unitsKeptForTeams,
   unitsInPlanOrder,
   unknownLikelyReposLine,
   UNIT_WORDS_NOTE,
@@ -5799,12 +5800,26 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const rows = evidence?.allRows ?? readAuditShardEvents(projectDir);
   if (rows.some((row) => row.event === "UNIT_STARTED")) return null;
-  // The lead's answer, kept while the home could not be reached: holding it again is offered.
+  // The lead's answer, kept while the home could not be reached: holding it
+  // again is offered once. Once they answer, the home builds its own Units
+  // and the ones named for a team wait for it (unitsKeptForTeams), said once.
   const kept = assignmentNotHeld(rows);
   if (kept !== null) {
-    const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. " +
-      "Do you want me to try again?";
-    return lineEndingTurn(null, [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open) }, { label: "Not now" }] }]);
+    const retry = engineAskMark(projectDir, UNIT_ASSIGNMENT_RETRY_ASK);
+    if (retry === null || !personRepliedAfter(projectDir, retry)) {
+      if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, UNIT_ASSIGNMENT_RETRY_ASK);
+      const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. " +
+        "Do you want me to try again?";
+      return lineEndingTurn(null, [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open) }, { label: "Not now" }] }]);
+    }
+    const waiting = [...unitsKeptForTeams(rows)];
+    if (waiting.length > 0) {
+      const units = waiting.map(([unit]) => unit);
+      const teams = [...new Set(waiting.map(([, team]) => team))];
+      sayWithStepOnce(projectDir, `${namesInProse(units)} ${units.length === 1 ? "is" : "are"} kept for ${namesInProse(teams)}: ` +
+        `${units.length === 1 ? "it waits for its team" : "they wait for their teams"} until the home can be reached and you ask me to try again.`);
+    }
+    return null;
   }
   if (unitsAssignedSinceTeams(rows)) return null;
   const dag = resolveBoltBatches(projectDir, evidence);
@@ -5852,6 +5867,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
 }
 
 const UNIT_ASSIGNMENT_ASK = "unit-assignment.json";
+const UNIT_ASSIGNMENT_RETRY_ASK = "unit-assignment-retry.json";
 
 // A line for the person said with the step this `next` emits, once per chat.
 function sayWithStepOnce(projectDir: string, line: string): void {
@@ -16828,6 +16844,7 @@ function teamHomeClaims(
     if (refreshed.fetched) overview = readOverview();
   }
   const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
+  for (const unit of teamHome ? unitsKeptForTeams(readAuditShardEvents(projectDir)).keys() : []) heldElsewhere.add(unit);
   // What came back from the teams, checked against each repo once per step
   // (with the home unreached, the board is the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();
@@ -17424,6 +17441,9 @@ function teamUnitMajorWalkBeat(
   const heldElsewhere = !scopeStamp && homeLocation(stateContent) !== null && hasAnyUnitClaimRefs(projectDir)
     ? new Set(cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed.map((row) => row.unit))
     : new Set<string>();
+  if (!scopeStamp && homeLocation(stateContent) !== null) {
+    for (const unit of unitsKeptForTeams(auditRows).keys()) heldElsewhere.add(unit);
+  }
   const units = scopeStamp
     ? [scopeStamp.unit]
     : heldElsewhere.size === 0

@@ -919,7 +919,10 @@ taken. Who builds which Unit (`ask_type:
 unit-assignment`) is asked once; after the person spoke without naming teams the
 step is a print with the same choice in `offers`, and an answer kept while the
 home could not be reached (`UNITS_ASSIGNED` with `Held: not yet`) makes the step
-a print offering to try again. A team's result carries the
+a print offering to try again, once; after the person answers it the home builds
+the Units it holds no team for, and the ones named for a team wait for it
+(`unitsKeptForTeams`), said once. Leaving every Unit open holds nothing, so it
+needs no home. A team's result carries the
 outputs the home's later stages consume and the files the cross-Unit coverage
 check at Build and Test reads of the Unit (`crossUnitCoverageReads`).
 

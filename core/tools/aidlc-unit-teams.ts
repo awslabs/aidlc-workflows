@@ -141,6 +141,15 @@ export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: st
   return { pairs, open: auditBlockField(last.block, "Open") === "all" };
 }
 
+// The Units the lead named for teams while the home could not be reached, with
+// their teams: never the home's own to build while they wait to be held.
+export function unitsKeptForTeams(rows: readonly AuditShardEvent[]): Map<string, string> {
+  return new Map((assignmentNotHeld(rows)?.pairs ?? []).map((pair) => {
+    const at = pair.indexOf("=");
+    return [pair.slice(0, at), pair.slice(at + 1)] as [string, string];
+  }));
+}
+
 // The line for likely repos the work does not record: said once, kept as
 // written. Null when every one names a recorded repo, or the work records none
 // (its likely folders are inside the one repo).

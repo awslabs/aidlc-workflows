@@ -4990,10 +4990,14 @@ function assignUnits(args: string[], projectDir?: string): void {
     named.delete(skeleton);
   }
   const identity = activeIdentity(pd);
-  let integration: ReturnType<typeof fetchIntegration>;
+  let integration: ReturnType<typeof fetchIntegration> | null;
   try {
     integration = fetchIntegration(pd);
-  } catch (error) {
+  } catch {
+    // Every Unit left open holds nothing at the home, so it needs no home.
+    integration = null;
+  }
+  if (integration === null && named.size > 0) {
     // The home cannot be reached: the answer is kept, and the next step offers to hold it again.
     const kept = [...named].map(([unit, team]) => `${unit}=${team}`);
     appendAuditEntry("UNITS_ASSIGNED", {
@@ -5004,8 +5008,8 @@ function assignUnits(args: string[], projectDir?: string): void {
     }, pd);
     console.log(JSON.stringify({
       assigned: [],
-      notice: `Nothing is held for the teams yet: the home could not be reached (${errorMessage(error)}). I've kept who builds which ` +
-        "Unit. Do you want me to try again?",
+      notice: "Nothing is held for the teams yet: the home could not be reached. I've kept who builds which Unit. " +
+        "Do you want me to try again?",
       offer: { choices: [{ label: "Try again", command: assignRetryCommand(kept, open) }, { label: "Not now" }] },
     }));
     return;
@@ -5013,6 +5017,7 @@ function assignUnits(args: string[], projectDir?: string): void {
   const assigned: Array<{ unit: string; team: string }> = [];
   const held = new Set<string>();
   for (const [unit, team] of named) {
+    if (integration === null) break;
     validateClaimRefUnit(identity.intentId8, unit);
     const ref = claimRef(identity.intentId8, unit);
     const current = currentClaim(pd, integration.remote, ref);
@@ -5057,7 +5062,8 @@ function assignUnits(args: string[], projectDir?: string): void {
   // Open: no team holds it, whether named now, earlier, or never.
   const openUnits = unitsInPlanOrder(pd, local.units).filter((unit) =>
     unit !== skeleton && !held.has(unit) &&
-    (named.has(unit) || currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit))?.status !== "claimed"));
+    (named.has(unit) || integration === null ||
+      currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit))?.status !== "claimed"));
   appendAuditEntry("UNITS_ASSIGNED", {
     Assigned: assigned.map((row) => `${row.unit}=${row.team}`).join(", ") || "none",
     Open: openUnits.join(", ") || "none",

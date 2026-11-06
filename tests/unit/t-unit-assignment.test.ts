@@ -189,7 +189,9 @@ describe("the lead's answer is never asked for twice", () => {
     git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
     const kept = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "payments takes refunds, web the UI"], home.dir);
     expect(kept.status, kept.out).toBe(0);
-    expect(String(kept.json?.notice)).toStartWith("Nothing is held for the teams yet: the home could not be reached (");
+    expect(String(kept.json?.notice)).toBe(
+      "Nothing is held for the teams yet: the home could not be reached. I've kept who builds which Unit. Do you want me to try again?",
+    );
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     const offer = (step.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)[0];
@@ -202,6 +204,41 @@ describe("the lead's answer is never asked for twice", () => {
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "yes, try again"], home.dir).status).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.owner).toBe("payments");
     expect(next(home.dir).kind).not.toBe("ask");
+  });
+
+  // A probe: the home's remote did not answer, and the lead said Not now. The
+  // question was put at every /aidlc after, and the home built nothing.
+  test("a home that cannot be reached: try again is asked once; after Not now the home builds its open Units, never a team's", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(next(home.dir).ask_type).toBe("unit-assignment");
+    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
+    const kept = run(UNIT, ["assign", "refunds=payments", "--person-words", "payments takes refunds"], home.dir);
+    expect(kept.status, kept.out).toBe(0);
+    expect(String(kept.json?.notice)).not.toContain("fatal");
+    expect(next(home.dir).kind).toBe("print");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+    const step = next(home.dir);
+    expect(JSON.stringify(step)).not.toContain("Do you want me to try again?");
+    expect(step, JSON.stringify(step)).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
+      "refunds is kept for payments: it waits for its team until the home can be reached and you ask me to try again.",
+    );
+    expect(JSON.stringify(next(home.dir))).not.toContain("Do you want me to try again?");
+  });
+
+  test("leave them all open needs no home: nothing to hold, so nothing waits on the remote", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(next(home.dir).ask_type).toBe("unit-assignment");
+    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
+    const open = run(UNIT, ["assign", "--open"], home.dir);
+    expect(open.status, open.out).toBe(0);
+    expect(open.json?.open).toEqual(["refunds", "checkout-ui", "reporting"]);
+    expect(String(open.json?.notice)).not.toContain("could not be reached");
+    const step = next(home.dir);
+    expect(JSON.stringify(step)).not.toContain("Do you want me to try again?");
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
   });
 
   test("words with no turn of the lead's behind them are not recorded as the lead's", () => {
