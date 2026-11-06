@@ -8274,7 +8274,19 @@ export function handFileActedOn(projectDir: string, file: HandFile): boolean {
   const unit = file.fields.Unit ?? "";
   const work = file.fields["Home Work"] ?? "";
   try {
-    if (file.kind === "handoff") return findUnitBuild(projectDir, work, unit) !== null;
+    if (file.kind === "handoff") {
+      // Its build is here and the file brings nothing newer than what the
+      // build took of each input (a newer one, after the lead approved a
+      // change, is taken in by `take --file`).
+      const build = findUnitBuild(projectDir, work, unit);
+      if (build === null) return false;
+      const record = join(intentsDir(projectDir, build.space), build.dirName);
+      const taken = inputsTakenFile(record).taken;
+      return approvedInputsOf(record).every(({ path, fingerprint }) => {
+        const text = file.files.get(path);
+        return text === undefined || textFingerprint(text) === (taken[path] ?? fingerprint);
+      });
+    }
     const identity = activeIdentity(projectDir);
     if (work !== identity.intentUuid) return false;
     const live = currentClaim(projectDir, repositoryRemote(projectDir), claimRef(identity.intentId8, unit));

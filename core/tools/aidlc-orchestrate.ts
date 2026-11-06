@@ -9101,6 +9101,17 @@ function handFileStep(projectDir: string, path: string): AskDirective | PrintDir
   }
   if (file === null) return null;
   if (handFileActedOn(projectDir, file)) return "done";
+  // A newer hand-off file for a Unit whose build is here, and a team's result
+  // or progress file at the home, are taken in by their commands.
+  const newerHandOff = file.kind === "handoff" &&
+    findUnitBuild(projectDir, file.fields["Home Work"] ?? "", file.fields.Unit ?? "") !== null;
+  if (newerHandOff) {
+    return {
+      kind: "print",
+      message: `Run \`${aidlcToolInvocation("unit")} take --file ${shellArg(path)}\`, then tell the person its notice line in one ` +
+        "line and re-run `next` to continue.",
+    };
+  }
   if (file.kind !== "handoff") {
     return {
       kind: "print",
@@ -9173,15 +9184,12 @@ function turnedDownStep(projectDir: string, unit: string, down: { repo: string; 
 function unitProposeAsk(projectDir: string, stateContent: string): AskDirective | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
-  const byFile = getField(stateContent, "Home Result")?.trim() === "by file";
+  // A team building by file is asked the same: its change goes to the lead
+  // in a progress file (the propose command writes it).
   for (const changed of changedInputs(projectDir, stateContent)) {
     const askName = `unit-propose-${changed.path.replace(/[^A-Za-z0-9.-]+/g, "_")}-${changed.fingerprint.slice("sha256:".length, 19)}.json`;
     if (engineAskMark(projectDir, askName) !== null) continue;
     noteEngineAskMark(projectDir, askName);
-    if (byFile) {
-      sayWithStepOnce(projectDir, `You changed the ${changed.name} here. The home takes no push from here, so send your change to the lead with your result file.`);
-      continue;
-    }
     return {
       kind: "ask",
       ask_type: "unit-propose",

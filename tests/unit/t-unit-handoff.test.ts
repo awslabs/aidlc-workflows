@@ -298,6 +298,10 @@ describe("progress and the result come back as files", () => {
     const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
     writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, by month.\n");
+    // Its step puts the change to them as any team's is put; its command writes the progress file.
+    const steps = [next(partner.dir), next(partner.dir)];
+    expect(JSON.stringify(steps)).not.toContain("with your result file");
+    expect(steps.map((step) => step.ask_type), JSON.stringify(steps).slice(0, 500)).toContain("unit-propose");
     const sent = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "report refunds by month"], partner.dir);
     expect(sent.status, sent.out).toBe(0);
     expect(sent.json?.notice).toBe(
@@ -333,7 +337,13 @@ describe("progress and the result come back as files", () => {
     expect(approved.status, approved.out).toBe(0);
     const newer = /A newer hand-off file for reporting is at (\S+): send it/.exec(String(approved.json?.notice))?.[1];
     expect(newer, String(approved.json?.notice)).toBeString();
-    const taken = run(UNIT, ["take", "--file", deliver(home.dir, newer!)], partner.dir);
+    const delivered = deliver(home.dir, newer!);
+    // The person's own path: pointing AI-DLC at the newer file is the step that brings it in.
+    const pointed = next(partner.dir, undefined, ["--hand-file", delivered]);
+    expect(pointed.kind, JSON.stringify(pointed).slice(0, 600)).toBe("print");
+    expect(String(pointed.message)).toContain(`take --file '${delivered}'`);
+    expect(JSON.stringify(pointed)).not.toContain("is yours, handed off");
+    const taken = run(UNIT, ["take", "--file", delivered], partner.dir);
     expect(taken.status, taken.out).toBe(0);
     expect(String(taken.json?.notice)).toContain("The lead approved your change to the requirements.");
     expect(readFileSync(copy, "utf-8").replace(/\r\n/g, "\n")).toBe(
