@@ -5968,7 +5968,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
     `Who builds which Unit? ${described.join(", ")}. Name a team for each, or leave a Unit open for any team ` +
     "to take later.";
   const assignCommand = `${unitTool} assign <unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]] ${unitWordsArg("assign")}`;
-  const open = { label: "Leave them all open", detail: "Any team takes a Unit when it is ready.", command: `${unitTool} assign --open` };
+  const open = { label: "Leave them all open", detail: "Any team takes a Unit when it is ready; nothing is built here until you ask for it.", command: `${unitTool} assign --open` };
   // Asked once: after the lead spoke without naming teams, the step is where
   // it stands, with the same choice, and nothing is built here meanwhile.
   const mark = engineAskMark(projectDir, UNIT_ASSIGNMENT_ASK);

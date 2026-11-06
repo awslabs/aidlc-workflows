@@ -71,8 +71,10 @@ describe("who builds which Unit is asked once, at the home", () => {
         "reporting (likely billing; waits on refunds). Name a team for each, or leave a Unit open for any team to " +
         "take later.",
     );
-    const choices = ask.choices as Array<{ label: string; command?: string }>;
+    const choices = ask.choices as Array<{ label: string; command?: string; detail?: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Name the teams", "Leave them all open"]);
+    // Open means open for any team: the lead hears that nothing starts here until they say.
+    expect(choices[1].detail).toBe("Any team takes a Unit when it is ready; nothing is built here until you ask for it.");
     expect(choices[0].command).toBeUndefined();
     expect(String(choices[1].command)).toEndWith("aidlc-unit.ts assign --open");
     expect(String(ask.assign_command)).toContain("assign <unit>=<team>");
@@ -549,3 +551,4 @@ describe("a Unit the lead leaves open waits for a team", () => {
     expect(next(home.dir, chat)).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
   });
 });
+
