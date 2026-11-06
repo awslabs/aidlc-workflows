@@ -831,6 +831,9 @@ describe("at the home", () => {
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-push-waits", prompt: "build refunds" }).status).toBe(0);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
+    // Once in the chat, the Unit the team can start next comes first (reporting, early on refunds' push).
+    const offer = personsNext(alice, chat, "t-unit-push-waits");
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("unit-take");
     const first = personsNext(alice, chat, "t-unit-push-waits");
     expect(first.kind, JSON.stringify(first)).toBe("done");
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -866,6 +869,7 @@ describe("at the home", () => {
     // The person approved the last stage: their earlier turns are spent.
     appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(personsNext(alice, chat, "t-unit-push-turned-down").ask_type).toBe("unit-take");
     expect(personsNext(alice, chat, "t-unit-push-turned-down").kind).toBe("done");
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);

@@ -27,6 +27,7 @@ import {
   codeGenerated,
   codeHost,
   ENV,
+  finishBuild,
   GIT_ENV,
   git,
   homeState,
@@ -141,6 +142,26 @@ describe("a team member's clone of the home's workspace", () => {
     // Asked once in the chat: words after it are read as words, never the same offer again.
     const again = next(alice, chat, ["something else entirely"]);
     expect(again.ask_type ?? null, JSON.stringify(again)).not.toBe("unit-take");
+  });
+
+  // Live runs on Claude Code and Codex: a teammate whose finished build was
+  // still selected asked to start the next Unit the lead held for them, and
+  // was offered a new piece of work that would run Inception again.
+  test("words from a finished build's chat about another Unit get the Units to take, never new work", () => {
+    const home = homeWithTeams(["refunds=payments", "checkout-ui=payments"]);
+    const alice = cloneOf(home.remote, "alice");
+    expect(take(alice, "refunds").status).toBe(0);
+    const record = buildDir(alice, "payments", "refunds");
+    finishBuild(record);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat" };
+    const ask = next(alice, chat, ["The lead also gave us checkout-ui. Can I start that one now?"]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 500)).toBe("unit-take");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start checkout-ui");
+    const again = next(alice, chat, ["something else entirely"]);
+    expect(again.ask_type ?? null, JSON.stringify(again).slice(0, 300)).not.toBe("unit-take");
+    // A new chat's bare /aidlc there gets the same offer first, never "everything is done".
+    const bare = next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat-2" });
+    expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("unit-take");
   });
 
   test("while the home builds the walking skeleton, hears that every Unit waits on it, and nothing of the home's work runs", () => {

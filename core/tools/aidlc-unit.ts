@@ -6615,6 +6615,21 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
 // have it; null when it is not turned down (or the claims are not here). A
 // turned-down build is not finished: its record reads as work under way again,
 // so the person's turns in it count and their way back runs.
+// Whether the lead's project turned this build's Unit down, read as the home
+// has it now for a build that waits on it (fetched now once it is pushed).
+export function buildTurnedDownNow(projectDir: string, stateContent: string, sessionId?: string): boolean {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return false;
+  if (!isReadOnlyEngineProbe() && getField(stateContent, "Home Result")?.trim() !== "by file") {
+    try {
+      refreshHomeClaims(projectDir, { home: buildsHome(projectDir, build), sessionId, now: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed" });
+    } catch {
+      // The claims stand as this clone last fetched them.
+    }
+  }
+  return reopenTurnedDownBuild(projectDir, stateContent) !== null;
+}
+
 export function reopenTurnedDownBuild(projectDir: string, stateContent: string): { repo: string } | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;

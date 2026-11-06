@@ -592,7 +592,10 @@ notes), each Unit is offered two ways in that same question: **Start <unit> and
 follow the lead's project rules too** (those rules named by their headings),
 which loads the lead's `project.md` where it is, read only, before the team's
 own rules, so the team's are on top; or **Start <unit> under your team's own
-rules only**. At the lead's project, the learnings question's first choice
+rules only**. In a clone where the team's own build is finished or pushed, its
+`/aidlc` or words about the team's other Units put the Units it can start first,
+once in a chat, never "everything is done" or a new piece of work. At the lead's
+project, the learnings question's first choice
 reads **Yes, for this project, and offered to any team that takes a Unit**.
 
 - **A clone of the home's own workspace**: the home's work is here too, and its
