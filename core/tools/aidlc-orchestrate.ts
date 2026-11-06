@@ -8995,10 +8995,20 @@ function handFileStep(projectDir: string, path: string): AskDirective | PrintDir
   };
 }
 
+// A Unit's build its lead turned down or sent back, not redone since its
+// push: not finished, whatever its record says, so its step says so
+// (turnedDownStep) whether the person's words or a bare /aidlc reach it.
+function turnedDownBuildWaits(pd: string, stateContent: string): { repo: string; from?: "build-and-test" } | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null || redoneSincePush(pd, build.unit)) return null;
+  return reopenTurnedDownBuild(pd, stateContent);
+}
+
 // A Unit the home turned down, at the end of its build: the way back to Code
 // Generation asked once, with why; after that, where it stands, with the same
-// offer for the agent.
-function turnedDownStep(projectDir: string, unit: string, repo: string): AskDirective | PrintDirective {
+// offer for the agent. One the lead's Build and Test sent back says that.
+function turnedDownStep(projectDir: string, unit: string, down: { repo: string; from?: "build-and-test" }): AskDirective | PrintDirective {
+  const sentBack = down.from === "build-and-test";
   const back = {
     label: `Take ${unit} back to Code Generation`,
     detail: "Its code stays as it is; you change what the home asked for, then push it again.",
@@ -9006,8 +9016,8 @@ function turnedDownStep(projectDir: string, unit: string, repo: string): AskDire
   };
   const askName = `unit-turned-down-${unit}`;
   if (engineAskMark(projectDir, askName) !== null) {
-    const question = `${unit} is not finished: it was turned down at the home and waits for your change and a new push. ` +
-      "Do you want me to take it back to Code Generation?";
+    const question = `${unit} is not finished: it was ${sentBack ? "sent back from the lead's Build and Test" : "turned down at the home"} ` +
+      "and waits for your change and a new push. Do you want me to take it back to Code Generation?";
     return lineEndingTurn(null, [{ question, choices: [back, { label: "Not now" }] }]);
   }
   noteEngineAskMark(projectDir, askName);
@@ -9016,10 +9026,12 @@ function turnedDownStep(projectDir: string, unit: string, repo: string): AskDire
     ask_type: "unit-turned-down",
     response_route: "command",
     question: `Do you want me to take ${unit} back to Code Generation so you can change it and push it again? ` +
-      `That is what I'd do: ${repo} needs the change before ${unit} can merge.`,
+      (sentBack
+        ? `That is what I'd do: the lead's Build and Test needs the change before ${unit} can merge again.`
+        : `That is what I'd do: ${down.repo} needs the change before ${unit} can merge.`),
     choices: [
       back,
-      { label: "Not now", detail: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} stays turned down until you come back to it.` },
+      { label: "Not now", detail: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} stays ${sentBack ? "sent back" : "turned down"} until you come back to it.` },
     ],
   };
 }
@@ -13682,8 +13694,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !flags.phase &&
     !flags.resume &&
     workflowFinished(stateContent, scope) &&
-    // A Unit's build is not over while its push is still to offer.
-    !unitPushToOffer(pd, stateContent)
+    // A Unit's build is not over while its push is still to offer, nor while
+    // the lead's turn-down or send-back of it waits for the team.
+    !unitPushToOffer(pd, stateContent) &&
+    turnedDownBuildWaits(pd, stateContent) === null
   ) {
     const typedScope = flags.scope ?? flags.positionalScope;
     if (typedScope) {
@@ -14723,9 +14737,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const build = stateContent ? unitBuildOf(stateContent) : null;
     // Once the redo's Code Generation is approved the push answers it, never the redo again.
     const redone = build !== null && redoneSincePush(pd, build.unit);
-    const down = build !== null && !redone ? reopenTurnedDownBuild(pd, stateContent!) : null;
+    const down = stateContent ? turnedDownBuildWaits(pd, stateContent) : null;
     if (build !== null && down !== null) {
-      emit(turnedDownStep(pd, build.unit, down.repo));
+      emit(turnedDownStep(pd, build.unit, down));
       return;
     }
     // No stage left to run — the workflow is complete.

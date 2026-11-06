@@ -6943,7 +6943,7 @@ export function buildTurnedDownNow(projectDir: string, stateContent: string, ses
   return reopenTurnedDownBuild(projectDir, stateContent) !== null;
 }
 
-export function reopenTurnedDownBuild(projectDir: string, stateContent: string): { repo: string } | null {
+export function reopenTurnedDownBuild(projectDir: string, stateContent: string): { repo: string; from?: "build-and-test" } | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
   try {
@@ -6954,7 +6954,7 @@ export function reopenTurnedDownBuild(projectDir: string, stateContent: string):
     if (getField(stateContent, "Status") === "Completed" && !isReadOnlyEngineProbe()) {
       withAuditLock(projectDir, () => writeStateFile(projectDir, setField(readStateFile(projectDir), "Status", "Running")));
     }
-    return { repo: mine.payload.turned_down.repo };
+    return { repo: mine.payload.turned_down.repo, ...(mine.payload.turned_down.from ? { from: mine.payload.turned_down.from } : {}) };
   } catch {
     return null;
   }

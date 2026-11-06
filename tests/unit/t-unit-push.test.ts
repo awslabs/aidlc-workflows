@@ -1116,6 +1116,37 @@ describe("at the home", () => {
 // a Unit a team built; its retry reopened that Unit's Code Generation at the
 // lead's project, where nothing of it is built, and the board still said done.
 describe("a team's done Unit that the lead's Build and Test sends back", () => {
+  // A live run on Codex: the team's build was pushed and finished; after the
+  // lead's Build and Test sent refunds back, "can you check again?" heard that
+  // the work is finished, and the question that came named no repo.
+  test("a finished, pushed build sent back reaches the team on their own words too, and its question names the lead's Build and Test", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(run(UNIT, ["send-back", "refunds", "--person-words", "checkout-api sends no CORS headers"], home.dir).status).toBe(0);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat" };
+    const words = "the lead says they sent our refunds unit back to us. can you check again?";
+    // Their words read as work under way, never as finished work; the agent's
+    // step on from them is the build's own, which asks for the way back.
+    const read = next(alice, chat, ["--", words]);
+    expect(JSON.stringify(read)).not.toContain("is finished");
+    expect(String(read.message), JSON.stringify(read).slice(0, 600)).toContain("Work is in progress on");
+    const step = next(alice, chat);
+    expect(step.ask_type, JSON.stringify(step).slice(0, 600)).toBe("unit-turned-down");
+    expect([...((read.change_notices ?? []) as string[]), ...((step.change_notices ?? []) as string[])])
+      .toContain('refunds was sent back from the lead\'s Build and Test: "checkout-api sends no CORS headers".');
+    expect(String(step.question)).toBe("Do you want me to take refunds back to Code Generation so you can change it and push it again? " +
+      "That is what I'd do: the lead's Build and Test needs the change before refunds can merge again.");
+    expect(JSON.stringify(next(alice, chat))).toContain(
+      "refunds is not finished: it was sent back from the lead's Build and Test and waits for your change and a new push.",
+    );
+  });
+
   test("goes back to its team in the failure's words, is not done here meanwhile, and is recorded again once it merges again", () => {
     const { home, hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);
