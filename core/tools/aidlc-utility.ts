@@ -44,7 +44,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
-import { hasStateUpgrade, stateUpgradeRecord } from "./aidlc-state-upgrade.ts";
+import { hasStateUpgrade, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -2026,7 +2026,9 @@ function workHereStatus(projectDir: string, space: string): string | null {
 // where each Unit stands and what comes next (unitWalkStanding). The
 // orchestrator is loaded only here, with an awaited import as aidlc-jump.ts
 // loads it (the compiled build takes no require() of it), and only for the
-// work's own record in Construction, which is the record the walk reads. Null
+// work's own record in Construction, which is the record the walk reads, and
+// not while an older AI-DLC's record waits for the next step to bring it up:
+// reading the walk would bring it up in place, and status writes nothing. Null
 // otherwise, or when it cannot be read: status then gives the light count
 // (unitProgress) and the Next Stage field.
 async function soloUnitWalk(
@@ -2035,7 +2037,7 @@ async function soloUnitWalk(
   scope: string,
   content: string,
 ): Promise<{ clause: string; current: number | null; total: number; next: string | null } | null> {
-  if (flags.intent || flags.space || isTeamUnitOwnership(content)) return null;
+  if (flags.intent || flags.space || isTeamUnitOwnership(content) || waitsToBeBroughtUp(content)) return null;
   if ((getField(content, "Construction Iteration") ?? "").trim() !== "unit-major") return null;
   if (findStageBySlug((getField(content, "Current Stage") ?? "").trim())?.phase !== "construction") return null;
   try {

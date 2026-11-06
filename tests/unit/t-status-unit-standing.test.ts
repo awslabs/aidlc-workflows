@@ -49,6 +49,7 @@ type Options = {
   checkpoints?: "enabled" | "disabled";
   iteration?: "unit-major" | "stage-major";
   current?: string;
+  version?: string;
 };
 
 // The dependency file in the shape the Units Generation stage asks for: a
@@ -77,7 +78,7 @@ function fixture(units: string[], options: Options = {}) {
 - **Project Type**: Greenfield
 - **Project Type Source**: you
 - **Scope**: feature
-- **State Version**: 8
+- **State Version**: ${options.version ?? "8"}
 - **Unit Ownership**: solo
 ## Runtime State
 - **Revision Count**: 0
@@ -389,6 +390,18 @@ describe("t-status-unit-standing: status says where each Unit stands", () => {
     const before = snapshot(p);
     status(p);
     expect(snapshot(p)).toEqual(before);
+  });
+
+  // A record an older AI-DLC wrote waits for the next step to bring it up;
+  // reading the walk would bring it up in place, so status reads as before.
+  test("status on a record an older AI-DLC wrote writes nothing and keeps the light count", () => {
+    const p = fixture(SIX, { version: "7" });
+    cover(p, "u1");
+    approve(p, "u1", SIX);
+    const before = snapshot(p);
+    const row = line(status(p), "CONSTRUCTION");
+    expect(snapshot(p)).toEqual(before);
+    expect(row).toEndWith("Unit 2 of 6");
   });
 
   test("one DAG grammar and one Unit name rule: aidlc-lib and the review records re-export them", () => {
