@@ -18,6 +18,7 @@
 // hands them the same thing again. A print with no offers reads as before.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -539,6 +540,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     const home = makeHome({ dependencies, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -546,7 +548,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     const waiting = next(alice);
     expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
     expect(String(waiting.narration)).toContain("The walking skeleton, orders, is built at the home first.");
-    // Carrying the home's work on is offered only to whoever led it, never to a teammate.
+    // Carrying the home's work on is offered only in the checkout that made the plan, never to a teammate.
     expect(waiting.offers, JSON.stringify(waiting)).toBeUndefined();
     expect(waiting.message).toBe("Say the line above, then end the turn.");
     readsAsOffers(waiting);
@@ -602,12 +604,26 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(git(home.remote, ["rev-parse", claimRef])).not.toBe(claimBefore);
   });
 
-  test("the lead's second clone with nothing to take: carrying the work on here is offered, recommended, and taking it moves on", () => {
+  test("a copy of the lead's own checkout with nothing to take: carrying the work on here is offered, recommended, and taking it moves on", () => {
     const { home } = refundsTaken();
+    // The plan's rows are in the lead's own checkout's shard, as after the lead's Inception.
+    asLeadsOwnCheckout(home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "plan approved"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
     const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], cloneOf(home.remote, "carol"));
     expect(took.status, took.out).toBe(0);
-    // The same git identity as the one who wrote the home's work.
-    const laptop = withTools(cloneOf(home.remote, "lead"));
+    // A clone made under the lead's own git name is a clone all the same: carrying the work on is not offered there.
+    const clone = next(withTools(cloneOf(home.remote, "lead")), ENV);
+    expect(String(clone.narration), JSON.stringify(clone)).toEndWith("Nothing is ready to take yet.");
+    expect(clone.offers).toBeUndefined();
+    // A copy of the lead's checkout keeps its clone id, so the plan's rows are its own.
+    const leadsCopy = (): string => {
+      const dir = withTools(cloneOf(home.remote, "lead"));
+      cpSync(join(home.dir, "aidlc", ".aidlc-clone-id"), join(dir, "aidlc", ".aidlc-clone-id"));
+      return dir;
+    };
+    const laptop = leadsCopy();
     const step = next(laptop, ENV);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(String(step.narration)).toEndWith("Nothing is ready to take yet.");
@@ -624,7 +640,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     readsAsOffers(after);
     // Once in a chat: the next look in the same chat says where things stand, and offers it no more.
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-laptop" };
-    const desk = withTools(cloneOf(home.remote, "lead"));
+    const desk = leadsCopy();
     expect((next(desk, chat).offers as Offer[] | undefined)?.length).toBe(1);
     expect(next(desk, chat).offers).toBeUndefined();
     // A second chat on that clone hears it once too, and switching between them offers it to neither again.

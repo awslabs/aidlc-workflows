@@ -15,6 +15,7 @@
 // files there ignore themselves from inside aidlc/ until its root part is in.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -115,6 +116,23 @@ describe("a team member's clone of the home's workspace", () => {
     expect(choices[2].command).toEndWith(`next --pick ${HOME}`);
   });
 
+  // A live run: every teammate's first screen offered to carry the lead's whole work on.
+  test("only the checkout that made the plan is offered to carry the work on as its home, never a clone under the lead's git name", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const labels = (dir: string) => ((next(dir).choices ?? []) as Array<{ label: string }>).map((choice) => choice.label);
+    // A clone made under the lead's own git name is a clone all the same.
+    expect(labels(cloneOf(home.remote, "lead"))).toEqual(["Start refunds", "Start checkout-ui"]);
+    // A copy of the lead's checkout keeps its clone id, so the plan's rows are its own.
+    const copy = cloneOf(home.remote, "lead-copy");
+    cpSync(join(home.dir, "aidlc", ".aidlc-clone-id"), join(copy, "aidlc", ".aidlc-clone-id"));
+    expect(labels(copy)).toContain("Carry on fixture here, as its home");
+  });
+
   // A live run on opencode: its skill enters a bare /aidlc with `next --resume`,
   // which picked up the home's work (the only open work) and showed the lead's
   // board; the take offer never came, and the agent released a team's Unit.
@@ -209,6 +227,7 @@ describe("a team member's clone of the home's workspace", () => {
     const home = makeHome({ dependencies, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(home.remote, "alice");

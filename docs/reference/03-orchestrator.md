@@ -783,12 +783,13 @@ Unit Progress, the claims git last brought in (or the home's latest
 in this workspace. Its choices are **Start <unit>** for each Unit the person's
 team can take now, **Carry on <unit>** for a build already here (any space),
 and **Carry on <work> here, as its home** when the home's record is in the
-selected space and this workspace is the home's own; each runs one command
-(`unit take`, or `next --pick`). When nothing is ready to take, the step is the
-line that says where each Unit stands, with the offer to carry the work on here
-as its home, once in a chat (`offersOnce`), to whoever wrote the home's record
-last by git identity when this workspace is the home's own; a teammate is
-offered nothing. The home's work that git copied into a team's
+selected space, this workspace is the home's own, and this checkout made the
+plan (`planMadeElsewhere` over that record's audit is false: its plan rows are
+in this checkout's own shard); each runs one command (`unit take`, or `next
+--pick`). When nothing is ready to take, the step is the line that says where
+each Unit stands, with the offer to carry the work on here as its home, once in
+a chat (`offersOnce`), on the same recorded fact, never a match on git
+identity; a teammate is offered nothing. The home's work that git copied into a team's
 own workspace (its `Home Location` is not this workspace's `origin`) is never
 offered to carry on, and `workToPickUp` leaves it out.
 

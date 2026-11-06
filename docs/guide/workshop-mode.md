@@ -610,10 +610,11 @@ project, the learnings question's first choice
 reads **Yes, for this project, and offered to any team that takes a Unit**.
 
 - **A clone of the home's own workspace**: the home's work is here too, and its
-  Units are offered beside **Carry on <work> here, as its home**, for the lead
-  on another machine; with nothing ready to take, carrying it on is still
-  offered, once in a chat, to whoever wrote the home's work last (a teammate
-  hears where things stand).
+  Units are offered to take. **Carry on <work> here, as its home** is offered
+  only in the checkout that made the plan (or a copy of that folder), once in a
+  chat when nothing is ready to take; a teammate's clone never offers it,
+  whatever its git name, and hears where things stand. The lead in a fresh
+  clone on another machine says so in their own words and picks the work.
 - **A team's own workspace made from the home's** (its `origin` is the team's
   repository): the home's work that git copied in stays the home's, read only,
   and is never offered to carry on. Its Units are, and taking one reaches the

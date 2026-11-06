@@ -8889,11 +8889,14 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   const ownWork = workToPickUp(projectDir, active, null)?.filter(({ intent, state }) =>
     !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
   if (ownWork.length > 0) return null;
+  // The work this checkout made the plan of (its plan's rows are in this
+  // checkout's own audit shard, planMadeElsewhere): only there is carrying it
+  // on here, as its home, offered. A teammate's clone, whatever its git name,
+  // never is.
+  const ledHere = homeHere.filter((home) => !planMadeElsewhere(projectDir, readAuditShardEvents(projectDir, home.dirName!, active)));
   if (choices.length === 0) {
-    // Whoever led the work (by their own git identity) can still carry it on
-    // here as its home: offered to them once in a chat, and to nobody else.
-    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, offersOnce(projectDir, homeHere
-      .filter((home) => lastCommittedByThisPerson(projectDir, join("aidlc", "spaces", active, "intents", home.dirName!)))
+    // Offered once in a chat.
+    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, offersOnce(projectDir, ledHere
       .map((home) => {
         const label = intentDisplayLabel(home);
         return {
@@ -8905,7 +8908,7 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
         };
       })));
   }
-  for (const home of homeHere) {
+  for (const home of ledHere) {
     choices.push({
       label: `Carry on ${intentDisplayLabel(home)} here, as its home`,
       detail: "Where its Units are given out and come back.",
@@ -14155,7 +14158,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // A teammate's first words in a clone of work teams build ("what's ours?",
     // "take u1 for payments"): the Units to take are what is theirs, put as a
     // bare `next` puts them, once in a chat; picking the work itself is the
-    // lead's, and "Carry on ... here, as its home" stays among the choices.
+    // lead's, and in the lead's own checkout "Carry on ... here, as its home"
+    // stays among the choices.
     const take = here !== null && here.selectable.length > 0 && !takeOfferedOnWords(pd) ? unitTakeAsk(pd) ?? soloElsewhereAsk(pd) : null;
     if (take !== null) {
       noteTakeOfferedOnWords(pd);
