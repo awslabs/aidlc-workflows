@@ -1,4 +1,4 @@
-// covers: function:cleanChatLine, function:newChatStep, function:shippedNewChatStep, function:createPrintDirective, function:sayPendingPersonLines, subcommand:aidlc-orchestrate:next
+// covers: function:cleanChatLine, function:newChatStep, function:shippedNewChatStep, function:treeIsTheHost, function:createPrintDirective, function:sayPendingPersonLines, subcommand:aidlc-orchestrate:next
 //
 // New work started beside other work in a chat carries on in that chat, and
 // the person is offered once to start it in a clean chat instead. The offer
@@ -18,11 +18,12 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { newChatStep } from "../../dist/kiro/.kiro/tools/aidlc-new-chat.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -218,5 +219,37 @@ describe("t-clean-chat-line-per-tool: the clean-chat offer names the person's ow
     expect(print.kind).toBe("print");
     expect(offers(JSON.stringify(print))).toBe(0);
     expect(print.message).toContain("then re-run `next` to continue.");
+  });
+
+  // A native engine in a project with several harnesses runs on the first one
+  // installed for every host but Codex, so its tree's step can be another
+  // tool's: Kiro CLI's "/chat new" said in Cursor (AIDA review 5797055097 F1).
+  test("a native engine that cannot tell the person's tool among several installed names no step", () => {
+    const installed = (dirs: string[]): string => {
+      const proj = project("kiro");
+      for (const [tree, dir] of [["cursor", ".cursor"], ["copilot", ".aidlc"]] as const) {
+        if (!dirs.includes(dir)) continue;
+        mkdirSync(join(proj, dir, "tools"), { recursive: true });
+        cpSync(join(REPO_ROOT, "dist", tree, dir, "tools", "data"), join(proj, dir, "tools", "data"), { recursive: true });
+      }
+      return proj;
+    };
+    const native = (proj: string): string | null => {
+      const was = process.env.AIDLC_COMPILED_EXECUTABLE;
+      process.env.AIDLC_COMPILED_EXECUTABLE = "/usr/local/bin/aidlc";
+      try {
+        return newChatStep(proj);
+      } finally {
+        if (was === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
+        else process.env.AIDLC_COMPILED_EXECUTABLE = was;
+      }
+    };
+    delete process.env.AIDLC_COMPILED_EXECUTABLE;
+    expect(native(installed([".kiro", ".cursor"]))).toBeNull();
+    expect(native(installed([".kiro", ".aidlc"]))).toBeNull();
+    // One harness installed: the engine's tree is the person's tool.
+    expect(native(installed([".kiro"]))).toBe(KIRO_CLI_STEP);
+    // The copy channel runs from the tree of the tool that called it.
+    expect(newChatStep(installed([".kiro", ".cursor"]))).toBe(KIRO_CLI_STEP);
   });
 });
