@@ -6375,6 +6375,13 @@ function pushUnit(args: string[], projectDir?: string): void {
     const dir = repo === "." ? pd : repoDir(pd, repo);
     if (!isGitRepoDir(dir)) fail(repoNotThereLine(pd, repo));
     const name = repo === "." ? "the repo" : repo;
+    // A merge, rebase, cherry-pick or revert of theirs under way: a commit now
+    // would be made over it, so nothing is committed until it is finished.
+    const underWay = gitOperationUnderWay(dir);
+    if (underWay !== null) {
+      fail(`${name} is in the middle of ${underWay.what}, so nothing was committed or pushed. Finish it (${underWay.finish}) ` +
+        `or put it aside (${underWay.abort}), then I can push ${unit}.`);
+    }
     const remote = pushRemoteOf(dir, unit, picked.get(repo));
     if (remote === null) fail(`${name} has no remote to push ${unit} to.`);
     if (typeof remote === "object") {
@@ -7100,6 +7107,17 @@ export function earlyBaseMerged(
     const repos = moves(waiting === null ? dep.repos : dep.repos.filter(({ repo }) => waiting.some((left) => left.repo === repo)), true);
     return repos.length > 0 ? [{ unit: dep.unit, repos }] : [];
   });
+}
+
+// The git operation of theirs under way in a repo, in plain words with git's
+// own way to finish it and to put it aside; null when none is.
+export function gitOperationUnderWay(dir: string): { what: string; finish: string; abort: string } | null {
+  const at = (name: string): boolean => existsSync(resolve(dir, git(dir, ["rev-parse", "--git-path", name]).stdout.trim()));
+  if (rebaseUnderWay(dir)) return { what: "a rebase", finish: "git rebase --continue", abort: "git rebase --abort" };
+  if (at("MERGE_HEAD")) return { what: "a merge", finish: "git commit", abort: "git merge --abort" };
+  if (at("CHERRY_PICK_HEAD")) return { what: "a cherry-pick", finish: "git cherry-pick --continue", abort: "git cherry-pick --abort" };
+  if (at("REVERT_HEAD")) return { what: "a revert", finish: "git revert --continue", abort: "git revert --abort" };
+  return null;
 }
 
 // A rebase git stopped in a repo, waiting for the person.

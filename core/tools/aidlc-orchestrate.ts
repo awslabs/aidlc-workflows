@@ -626,6 +626,7 @@ import {
   teamHandoverMarkName,
   teamSharedHere,
   unitBranchInTheWay,
+  gitOperationUnderWay,
   unitsTaken,
   type UnitClaimOverview,
   type UnitClaimView,
@@ -9055,6 +9056,18 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   // Their own changes in the way of the Unit's branch: the push would be
   // refused the same way, so it is offered once they are out of the way.
   const branch = unitBranchOf(stateContent, unit);
+  // A merge, rebase, cherry-pick or revert of theirs under way in a repo: the
+  // push would be refused, so it is offered once that is finished.
+  const underWay = repos.find((repo) => {
+    const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
+    return existsSync(join(dir, ".git")) && gitOperationUnderWay(dir) !== null;
+  });
+  if (underWay !== undefined) {
+    const dir = underWay === "." ? projectDir : repoDir(projectDir, underWay);
+    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed: ${underWay === "." ? "the repo" : underWay} is in the middle of ` +
+      `${gitOperationUnderWay(dir)!.what}. Once it is finished or put aside, do you want me to push it?`);
+    return null;
+  }
   const inTheWay = unitBranchInTheWay(projectDir, branch, byRepo);
   if (inTheWay.length > 0) {
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed: changes of yours in ${joinRepoNames(inTheWay)} are in the way ` +

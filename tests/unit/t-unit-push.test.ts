@@ -230,6 +230,33 @@ describe("the push", () => {
     expect(git(billing, ["log", "-1", "--format=%s", "main"])).toBe("REF-7 refund handler");
   });
 
+  test("a merge left under way in a repo: the push commits nothing over it, says so in plain words with the way on, and goes once it is finished", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const billing = join(alice, "billing");
+    // The integration branch moved on, and a merge of it into the Unit's branch is left resolved but not committed.
+    const other = cloneOf(hosts.billing, "bob");
+    writeFileSync(join(other, "MERGED.md"), "on main since\n");
+    git(other, ["add", "MERGED.md"]);
+    git(other, ["commit", "-q", "-m", "main moves on"]);
+    git(other, ["push", "-q", "origin", "HEAD:main"]);
+    git(billing, ["switch", "-q", "-c", "refunds"]);
+    git(billing, ["fetch", "-q", "origin"]);
+    git(billing, ["merge", "--no-commit", "--no-ff", "origin/main"]);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toStartWith(
+      "billing is in the middle of a merge, so nothing was committed or pushed. Finish it (git commit) or put it aside " +
+        "(git merge --abort), then I can push refunds.",
+    );
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts.billing }).status).not.toBe(0);
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], { cwd: billing }).status).toBe(0);
+    git(billing, ["commit", "-q", "--no-edit"]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["show", "refunds:MERGED.md"])).toBe("on main since");
+  });
+
   test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
