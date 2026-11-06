@@ -227,10 +227,11 @@ describe("Kiro harness names a person types", () => {
       "In a chat on the v3 engine this install as shipped cannot record the person's answers, so AI-DLC refuses every approval",
     );
     expect(onboarding).toContain(
-      "With `--yes` it also takes AI-DLC's recommended answer to each Kiro setting not yet answered on this machine, settings that apply to all the person's projects:",
+      "With `--yes` it also takes AI-DLC's recommended answer to each Kiro setting AI-DLC has neither asked about nor been given an answer for on this machine, settings that apply to all the person's projects:",
     );
     expect(onboarding).toContain(
-      "So first tell them in one line that the switch may also turn Workflows off and, on Windows, set Kiro IDE's terminal to PowerShell, for all their projects, " +
+      "So before you run it, tell them in one line that it may download the AI-DLC release files it rebuilds `.kiro/` from, " +
+        "and may change these Kiro settings for all their projects (Workflows off in Kiro IDE and in Kiro CLI; on Windows, Kiro IDE's terminal to PowerShell), " +
         "and run the switch only once they have agreed with that line in front of them;",
     );
     expect(onboarding).toContain("For any other step it names (a dry run whose plan is then applied with the `--plan-token` it prints)");
