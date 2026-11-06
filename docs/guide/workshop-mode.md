@@ -717,7 +717,12 @@ team hears them once at its next step, and its build, finished until then, is
 open again: AI-DLC asks once whether to take the Unit back to Code Generation so
 the team can change it and push it again, which it recommends, and runs the way
 back when they say yes. Once the redo's Code Generation is approved, the end of
-the build offers the push again. What already merged stays merged.
+the build offers the push again. What already merged stays merged. A team whose
+chat is on another of its builds hears it there too, once, with how to go back
+to that build. When the lead's Build and Test finds a Unit a team built
+wanting, its retry sends the Unit back to the team in the failure's own words
+(`aidlc unit send-back <unit>`): it is never rebuilt at the lead's project, the
+board shows it back with the team, and its next merge is recorded again.
 
 ### Start early, and change a shared input
 

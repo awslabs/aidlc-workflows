@@ -964,3 +964,26 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     expect(merges()).toBe(2);
   });
 });
+
+// The lead's call on a live run: the lead sent a team's Unit back while that
+// team's chat was on another of its builds, and "any news from the lead?"
+// heard nothing; the lead's words reached only the build they were about.
+describe("a team hears the lead's turn-down from any chat on its work", () => {
+  test("on another of its builds, the turn-down of its Unit is said once, with how to go back to that build", () => {
+    const { home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=payments"]);
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    // Its chat moves to its other Unit.
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    const chat = personsChat("alice-chat");
+    const step = personsNext(alice, chat, "alice-chat");
+    const line = 'refunds was turned down in billing at the home: "needs the ledger entry". Its build is waiting for you; say so to go back to it.';
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 600)).toContain(line);
+    expect(String(step.change_notices_note)).toContain(`take refunds --home ${HOME_RECORD}`);
+    expect((personsNext(alice, chat, "alice-chat").change_notices ?? []) as string[]).not.toContain(line);
+  });
+});

@@ -590,6 +590,8 @@ import {
 import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
+  BUILD_WAITING_CLAUSE,
+  otherBuildsTurnedDown,
   amendAskName,
   buildClaimNotes,
   handFileActedOn,
@@ -1072,7 +1074,12 @@ function switchBackOnFollowUps(directive: Directive): string[] {
       notice.backOn !== null && carried.includes(notice.line) ? [notice.backOn] : []
     ),
     ...[...handoverFollowUps].flatMap(([line, followUp]) => carried.includes(line) ? [followUp] : []),
-    // Read off the line itself, so every part of a step delivered in parts carries it.
+    // Read off the lines themselves, so every part of a step delivered in parts carries them.
+    ...(engineProjectDir && carried.some((line) => line.endsWith(BUILD_WAITING_CLAUSE))
+      ? otherBuildsTurnedDown(engineProjectDir, engineSelection(engineProjectDir).intent ?? null)
+        .filter((entry) => carried.includes(entry.line))
+        .map((entry) => `When the person asks to go back to it, run \`${entry.command}\` and follow what it returns.`)
+      : []),
     ...(carried.some((line) => line.includes(SIGN_OFF_CLAUSE))
       ? [`When the person asks to sign off a teammate's result themselves, run \`${aidlcToolInvocation("unit")} lead-sign-off on ` +
         `${unitWordsArg("lead-sign-off")}\` and tell them in plain words what it reports. ${UNIT_WORDS_NOTE}`]
@@ -12854,6 +12861,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const switchedToTeams = switchSoloToTeams(pd, engineSessionId);
   const stateContent = loadStateFileIfPresent(pd);
   if (switchedToTeams !== null) sayWithStepOnce(pd, switchedToTeams);
+  // A turn-down of another of this clone's Unit builds reaches a chat on any of its work.
+  if (!isReadOnlyEngineProbe()) {
+    for (const { line } of otherBuildsTurnedDown(pd, engineSelection(pd).intent ?? null, engineSessionId)) sayWithStepOnce(pd, line);
+  }
   // Solo work selected in a teammate's clone and still built from another
   // machine: the person's bare /aidlc or their words get its offer first, once
   // in a chat, as they do with no work selected, so the step never walks

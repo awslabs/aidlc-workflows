@@ -56,6 +56,7 @@ import {
   loadStageGraph,
   humanPresenceGuardDisabled,
   idSuffix,
+  listIntentDirs,
   invalidateLiveClaimPayloadCache,
   isNonAnswer,
   isReadOnlyEngineProbe,
@@ -6768,6 +6769,55 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     }
   }
   return lines;
+}
+
+export const BUILD_WAITING_CLAUSE = "Its build is waiting for you; say so to go back to it.";
+
+// The lead's turn-down of another of this clone's Unit builds, said in a chat
+// on any of its work, not only the build it is about: each line once per chat
+// (the caller's), with the step that takes that build up again. The claims are
+// read as this clone last fetched them, fetched once per chat.
+export function otherBuildsTurnedDown(projectDir: string, selected: string | null, sessionId?: string): Array<{ line: string; command: string }> {
+  const found: Array<{ line: string; command: string }> = [];
+  let spaces: string[];
+  try {
+    spaces = readdirSync(join(projectDir, "aidlc", "spaces"));
+  } catch {
+    return found;
+  }
+  for (const space of spaces) {
+    for (const dirName of listIntentDirs(projectDir, space)) {
+      if (dirName === selected) continue;
+      let build: UnitBuild | null;
+      try {
+        build = unitBuildOf(readStateFile(projectDir, dirName, space));
+      } catch {
+        continue;
+      }
+      if (build === null) continue;
+      const homeSpace = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
+      const homeDir = build.homeRecord.slice(build.homeRecord.indexOf("/") + 1);
+      try {
+        const home = buildsHome(projectDir, build);
+        if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { home, sessionId });
+        const mine = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
+          .get(build.unit);
+        const down = mine?.payload.turned_down;
+        if (!down || mine?.payload.done) continue;
+        const said = down.from === "build-and-test"
+          ? `${build.unit} was sent back from the lead's Build and Test${down.words ? `: "${down.words}"` : ""}.`
+          : `${build.unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}.`;
+        found.push({
+          line: `${said} ${BUILD_WAITING_CLAUSE}`,
+          command: `${aidlcToolInvocation("unit")} take ${shellArg(build.unit)} --home ${shellArg(homeDir)}` +
+            (homeSpace === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(homeSpace)}`),
+        });
+      } catch {
+        // A home this clone cannot read says nothing here.
+      }
+    }
+  }
+  return found;
 }
 
 // The Units this build started early on that are now done at the home, and
