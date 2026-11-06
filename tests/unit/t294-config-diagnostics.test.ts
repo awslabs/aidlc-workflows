@@ -1930,6 +1930,25 @@ describe("t294 trust diagnostics", () => {
       expect(renamed.label).toBe(KIRO_TRUST_INCOMPLETE);
     });
 
+    // Windows runners may lack the permissions this fixture needs.
+    test.skipIf(process.platform === "win32")(`${harness}: Kiro native trust recognises a dropped plugin's registration only when it is a plain file`, async () => {
+      const project = temp(`aidlc-t294-trust-kiro-plugin-entry-${harness}-`);
+      cpSync(join(DIST_RELEASE, harness), project, { recursive: true });
+      cpSync(join(DIST, "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
+      const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+      const written = readFileSync(registration, "utf-8");
+      const outside = join(temp(`aidlc-t294-trust-kiro-plugin-entry-target-${harness}-`), "aidlc-test-pro-compose.json");
+      writeFileSync(outside, written);
+      rmSync(registration);
+      symlinkSync(outside, registration);
+      const linked = await kiroNativeTrust(project, harness);
+      expect(linked.label).toBe(KIRO_TRUST_INCOMPLETE);
+      rmSync(registration);
+      writeFileSync(registration, written);
+      const regular = await kiroNativeTrust(project, harness);
+      expect(regular.pass, regular.label).toBe(true);
+    });
+
     for (const earlier of EARLIER_KIRO_IDE_DROPS) {
       test(`${harness}: Kiro native trust passes with a plugin dropped from ${earlier.build}, a refresh keeps it so, and an edited registration or a leftover Bun entry still fails it`, async () => {
         const project = install(harness);
