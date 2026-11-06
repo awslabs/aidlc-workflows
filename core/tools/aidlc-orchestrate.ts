@@ -599,6 +599,7 @@ import {
   buildClaimNotes,
   handFileActedOn,
   reopenTurnedDownBuild,
+  turnedDownLine,
   buildTurnedDownNow,
   leadSignOffOn,
   signOffAskName,
@@ -2750,11 +2751,24 @@ function routePlanApproval(directive: Directive): Directive {
     }
   }
   try {
-    return routeCodeGenerationPlanApproval(projectDir, directive);
+    return withTurnDownForPlan(projectDir, routeCodeGenerationPlanApproval(projectDir, directive));
   } catch (e) {
     recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
     return directive;
   }
+}
+
+// A Unit's build back at Code Generation after its home turned it down or sent
+// it back: the plan to write is for what the home said, so the plan step
+// carries the home's words (planNote).
+function withTurnDownForPlan(projectDir: string, directive: Directive): Directive {
+  if (directive.kind !== "run-stage" || directive.plan_approval?.status !== "plan") return directive;
+  const state = loadStateFileIfPresent(projectDir);
+  const build = unitBuildOf(state);
+  const down = state === null || build === null ? null : turnedDownBuildWaits(projectDir, state);
+  if (build === null || down === null) return directive;
+  directive.plan_approval = { ...directive.plan_approval, feedback: turnedDownLine(build.unit, down) };
+  return directive;
 }
 
 // With plan approval off, a build keeps the record that its plan was built
@@ -8998,7 +9012,7 @@ function handFileStep(projectDir: string, path: string): AskDirective | PrintDir
 // A Unit's build its lead turned down or sent back, not redone since its
 // push: not finished, whatever its record says, so its step says so
 // (turnedDownStep) whether the person's words or a bare /aidlc reach it.
-function turnedDownBuildWaits(pd: string, stateContent: string): { repo: string; from?: "build-and-test" } | null {
+function turnedDownBuildWaits(pd: string, stateContent: string): { repo: string; words?: string; from?: "build-and-test" } | null {
   const build = unitBuildOf(stateContent);
   if (build === null || redoneSincePush(pd, build.unit)) return null;
   return reopenTurnedDownBuild(pd, stateContent);

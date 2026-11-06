@@ -1142,6 +1142,10 @@ describe("at the home", () => {
     const step = next(alice, chat);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.stage).toBe("code-generation");
+    // The redo's plan is written for the home's words, never the plan from before the turn-down put up again.
+    expect(String(step.plan_note), JSON.stringify(step.plan_approval)).toContain(
+      'refunds was turned down in billing at the home: "billing needs the ledger entry too". Revise this plan and its test instructions for it',
+    );
   });
 
   test("a turn-down at the home reaches the team once, in the home's words", () => {

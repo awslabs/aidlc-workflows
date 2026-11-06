@@ -1707,12 +1707,18 @@ export function inputsNote(paths: readonly string[]): string {
 // ask), so a stage step only ever says whether to plan or to build. The `next`
 // it names is an isolated run's own when the plan state carries one.
 export function planNote(
-  plan: { status: string; skipped?: true; notice?: string; next?: string },
+  plan: { status: string; skipped?: true; notice?: string; next?: string; feedback?: string },
   invocation: string,
 ): string {
   const next = plan.next ?? `${invocation} next`;
   switch (plan.status) {
     case "plan":
+      // A Unit's build back at Code Generation after its home turned it down:
+      // what the home said is what the plan is written for.
+      if (plan.feedback) {
+        return `${plan.feedback} Revise this plan and its test instructions for it (Code Generation Steps 1 and 2), then run \`` +
+          next + "`: AI-DLC asks the person to approve the plan itself, never you.";
+      }
       return "Write this plan and its test instructions (Code Generation Steps 1 and 2), then run `" + next +
         "`: AI-DLC asks the person to approve the plan itself, never you.";
     case "revise":
@@ -2004,7 +2010,10 @@ export function withAgentNotes<T extends object>(
         : [];
       if (gaps.length > 0) notes.inputs_note = inputsNote(gaps);
       if (isPlainObject(d.plan_approval) && typeof d.plan_approval.status === "string") {
-        notes.plan_note = planNote(d.plan_approval as { status: string; skipped?: true; notice?: string; next?: string }, invocation);
+        notes.plan_note = planNote(
+          d.plan_approval as { status: string; skipped?: true; notice?: string; next?: string; feedback?: string },
+          invocation,
+        );
       }
     }
     const dispatched = d.mode === "subagent" || d.mode === "pipeline" || d.mode === "mob" || "wave" in d;

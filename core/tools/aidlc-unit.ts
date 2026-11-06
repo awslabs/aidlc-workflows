@@ -6943,7 +6943,18 @@ export function buildTurnedDownNow(projectDir: string, stateContent: string, ses
   return reopenTurnedDownBuild(projectDir, stateContent) !== null;
 }
 
-export function reopenTurnedDownBuild(projectDir: string, stateContent: string): { repo: string; from?: "build-and-test" } | null {
+// What the home said of a Unit it turned down or sent back, in one line.
+export function turnedDownLine(unit: string, down: { repo: string; words?: string; from?: string }): string {
+  const words = down.words ? `: "${down.words}"` : "";
+  return down.from === "build-and-test"
+    ? `${unit} was sent back from the lead's Build and Test${words}.`
+    : `${unit} was turned down in ${down.repo} at the home${words}.`;
+}
+
+export function reopenTurnedDownBuild(
+  projectDir: string,
+  stateContent: string,
+): { repo: string; words?: string; from?: "build-and-test" } | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
   try {
@@ -6954,7 +6965,8 @@ export function reopenTurnedDownBuild(projectDir: string, stateContent: string):
     if (getField(stateContent, "Status") === "Completed" && !isReadOnlyEngineProbe()) {
       withAuditLock(projectDir, () => writeStateFile(projectDir, setField(readStateFile(projectDir), "Status", "Running")));
     }
-    return { repo: mine.payload.turned_down.repo, ...(mine.payload.turned_down.from ? { from: mine.payload.turned_down.from } : {}) };
+    const down = mine.payload.turned_down;
+    return { repo: down.repo, ...(down.words ? { words: down.words } : {}), ...(down.from ? { from: down.from } : {}) };
   } catch {
     return null;
   }
@@ -7103,9 +7115,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
   const unit = build.unit;
   const down = mine.payload.turned_down;
   if (down) {
-    lines.push(down.from === "build-and-test"
-      ? `${unit} was sent back from the lead's Build and Test${down.words ? `: "${down.words}"` : ""}.`
-      : `${unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}.`);
+    lines.push(turnedDownLine(unit, down));
   }
   for (const proposal of mine.payload.proposals ?? []) {
     if (proposal.answer === "approved") lines.push(`The home approved your change to the ${inputName(proposal.input)}.`);
@@ -7180,9 +7190,7 @@ export function otherBuildsTurnedDown(projectDir: string, selected: string | nul
           .get(build.unit);
         const down = mine?.payload.turned_down;
         if (!down || mine?.payload.done) continue;
-        const said = down.from === "build-and-test"
-          ? `${build.unit} was sent back from the lead's Build and Test${down.words ? `: "${down.words}"` : ""}.`
-          : `${build.unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}.`;
+        const said = turnedDownLine(build.unit, down);
         found.push({
           line: `${said} ${BUILD_WAITING_CLAUSE}`,
           command: `${aidlcToolInvocation("unit")} take ${shellArg(build.unit)} --home ${shellArg(homeDir)}` +
