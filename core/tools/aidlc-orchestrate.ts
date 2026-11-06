@@ -4930,6 +4930,26 @@ function unselectedWordsReplyDirective(
   );
 }
 
+// The person's words in a teammate's clone of the lead's work built by teams,
+// after the Units offer: read against its choices, with their commands; the
+// lead's work itself is picked only on the lead's own word that they lead it.
+function unitsWordsReplyDirective(requestId: string, offer: AskDirective | PrintDirective, work: string[]): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  const said = offer.kind === "ask" ? String(offer.question ?? "") : String(offer.narration ?? "");
+  const choices = offer.kind !== "ask" ? "" : (offer.choices ?? [])
+    .filter((choice) => choice.command !== undefined).map((choice) => `${choice.label}: \`${choice.command}\``).join("; ");
+  return printDirective(
+    `This clone has the lead's work (${work.join(", ")}), built by teams one Unit each; the work itself is not picked here. ` +
+      `The Units offer says: ${said} Read the person's words. ` +
+      (choices === "" ? "" : `If they ask for one of these Units (to take it, start it, or start it early), run that choice's ` +
+        `command and follow what it returns: ${choices}. `) +
+      `If they only ask what is here, run \`${orchestrate} next\` with nothing after it. If they say they lead this work and ask ` +
+      `to carry it on here, run \`${aidlcDispatcherInvocation("intent")} switch <name>\` with its name. Otherwise (new work of ` +
+      `their own, or you cannot tell), run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
+      "engine kept their words.",
+  );
+}
+
 // The person's words on a step the engine names next: a file of their own in
 // the request folder, read as any request file is (nextArgsWithRequestFile),
 // so no shell on the way changes a line break, a character cmd.exe reads, or an
@@ -8909,11 +8929,9 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   const ownWork = workToPickUp(projectDir, active, null)?.filter(({ intent, state }) =>
     !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
   if (ownWork.length > 0) return null;
-  // The work this checkout made the plan of (its plan's rows are in this
-  // checkout's own audit shard, planMadeElsewhere): only there is carrying it
-  // on here, as the lead, offered. A teammate's clone, whatever its git name,
-  // never is.
-  const ledHere = homeHere.filter((home) => !planMadeElsewhere(projectDir, readAuditShardEvents(projectDir, home.dirName!, active)));
+  // Only in the checkout that made the plan is carrying it on here, as the
+  // lead, offered. A teammate's clone, whatever its git name, never is.
+  const ledHere = homeHere.filter((home) => planMadeHere(projectDir, home.dirName!, active));
   if (choices.length === 0) {
     // Offered once in a chat.
     return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, offersOnce(projectDir, ledHere
@@ -8942,6 +8960,14 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
     question: `${sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the lead approved.`.trim(),
     choices,
   };
+}
+
+// Whether this checkout made the plan of a piece of work here: its plan's rows
+// are in this checkout's own audit shard (planMadeElsewhere). The lead's own
+// checkout, or a copy of it, is the one place the lead's work built by teams
+// is offered to carry on, or picked by words.
+function planMadeHere(projectDir: string, dirName: string, space: string): boolean {
+  return !planMadeElsewhere(projectDir, readAuditShardEvents(projectDir, dirName, space));
 }
 
 function unitTakeLook(
@@ -14234,12 +14260,20 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // Before the lead's plan reaches the clone there is nothing to take yet.
     if (here === null && leadsPlanNotHere(pd)) sayWithStepOnce(pd, WORK_BEFORE_THE_PLAN);
     if (here !== null && here.selectable.length > 0) {
+      // The lead's work built by teams, in a clone that did not make its plan
+      // (a teammate's), is never theirs to pick: their words after the Units
+      // offer are read against its choices.
+      const pickable = here.selectable.filter(({ state, selector }) =>
+        !(isTeamUnitOwnership(state) && homeLocation(state) !== null && !planMadeHere(pd, selector, here.space)));
+      const offer = pickable.length === 0 ? unitTakeAsk(pd) : null;
       const words = saveReadingQuestion(pd, flags.intent, "", "routing", {
         space: here.space,
-        targets: here.selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
-        pick: true,
+        targets: pickable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
+        pick: pickable.length > 0,
       });
-      emit(unselectedWordsReplyDirective(words.id, pd, here.selectable.map(({ selector }) => selector), finishedUnselectedWork(pd)));
+      emit(offer !== null
+        ? unitsWordsReplyDirective(words.id, offer, here.selectable.map(({ selector }) => selector))
+        : unselectedWordsReplyDirective(words.id, pd, pickable.map(({ selector }) => selector), finishedUnselectedWork(pd)));
       return;
     }
   }

@@ -152,6 +152,27 @@ describe("a team member's clone of the home's workspace", () => {
   // Live runs on Codex, Kiro CLI and Copilot CLI: a teammate's first line with
   // words ("what is ours to build?") got the pick of the work itself, which
   // selected it in their clone and showed them the lead's board.
+  // A live run on Codex: after the Units offer, a teammate's words about their
+  // own Unit got the pick of the lead's whole work, which selected it in their
+  // clone and put the lead's own questions to them.
+  test("a teammate's words after the Units offer are read against its choices, never the pick of the lead's work", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat" };
+    expect(next(alice, chat, ["hi, what is ours to build?"]).ask_type).toBe("unit-take");
+    const words = next(alice, chat, ["refunds is ours, we want to start it now"]);
+    expect(words.kind, JSON.stringify(words).slice(0, 600)).toBe("print");
+    expect(String(words.message)).not.toContain("--pick");
+    expect(String(words.message)).toContain(`take refunds --home ${HOME} --team payments`);
+    // The lead's work is switched to only on their own word that they lead it.
+    expect(String(words.message)).toContain("If they say they lead this work and ask to carry it on here, run");
+  });
+
   test("a teammate's first words are answered with the Units to take, never the pick of the work itself", () => {
     const home = homeWithTeams(["refunds=payments", "checkout-ui=web"]);
     const alice = cloneOf(home.remote, "alice");
