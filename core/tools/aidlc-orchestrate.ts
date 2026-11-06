@@ -573,7 +573,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { chatTookStep, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -688,6 +688,7 @@ import {
   questionTextSha,
   recordedQuestion,
   shownAgainFields,
+  shownOnlyInOtherChats,
 } from "./aidlc-questions.ts";
 import {
   isPlanApprovalBeat,
@@ -13844,6 +13845,10 @@ function revisedUnitGateStep(stage: GraphStage, unit: string): Directive {
   );
 }
 
+// Said first with a gate shown in a chat that never saw it, when another chat
+// of this clone opened it (the work order's words).
+const FINISHED_IN_OTHER_CHAT = "This was finished in your other chat; here it is to approve.";
+
 // Reuse the settled run-stage surface without re-entering body or review work.
 // Unlike autonomous swarm bookkeeping, an open human gate keeps its approval.
 function applyGateOnlyShape(
@@ -13871,13 +13876,19 @@ function applyGateOnlyShape(
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
     const unit = directive.unit ?? null;
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
+    // A gate another chat of this clone opened, shown in this one for the first
+    // time, says so first; QUESTION_SHOWN then names this chat, so it is said
+    // once. Only where the host named this chat: the process tree gives the
+    // chats of one window one id, and a restart a new one.
+    const elsewhere = gateQuestion !== null && hostNamesThisChat(projectDir) &&
+      shownOnlyInOtherChats(projectDir, gateQuestion.id, engineSessionId ?? null);
     // The rules Approve adds to the project's rules, what the person left out
     // of the build, the files of theirs it changed, and a check that still
     // fails on a declared output, are said with the gate, each on its own line
     // after what the stage produced: the narration is the person's line, and
     // the produced sentence stays whole.
     const narration = [
-      line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
+      elsewhere ? FINISHED_IN_OTHER_CHAT : null, line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
       unitsWithoutInputsNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
@@ -22514,6 +22525,9 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
       // The last part has handed over the build, so it keeps the record `next`
       // keeps when it hands over a build that fits one message.
       if (!recordHandedOverBuild(pd, prepared.transported)) return;
+      // A gate shown again after its rules parts is shown in this chat, as one
+      // `next` hands out in one message is.
+      recordQuestionStep(prepared);
       writePrepared(prepared);
       return;
     }
