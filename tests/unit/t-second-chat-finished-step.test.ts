@@ -291,6 +291,30 @@ describe("t-second-chat-finished-step: a stage finished in another chat is shown
     expect(String(twice.narration ?? "")).not.toContain(FINISHED_ELSEWHERE);
   });
 
+  // Live on Kiro CLI the first chat wrote the late "1" on the summary's answer
+  // line first, as the stage protocol has it ("Looks correct Looks correct"),
+  // and the gate shown next was a "can't go ahead" question. In the run this
+  // work order came from, it blanked the line and asked the summary again.
+  for (const [how, line] of [["wrote over", "Looks correct Looks correct"], ["blanked", ""]] as const) {
+    test(`the summary answer line the first chat ${how} is put back, and the gate is shown`, () => {
+      const { folder, first } = secondChatFinishedTheStage();
+      const questions = readFileSync(folder.questions, "utf-8");
+      const written = folder.text();
+      first.said("1");
+      first.write(folder.questions, questionsBody(line));
+      expect(redirected(line === "" ? first.askSummary() : first.answerSummary())).toContain("orchestrate next`");
+      expect(readFileSync(folder.questions, "utf-8")).toBe(questions);
+      const gate = first.next();
+      expect(gate, JSON.stringify(gate)).toMatchObject({ kind: "run-stage", stage: STAGE, gate_only: true });
+      expect(String(gate.narration).split("\n")[0]).toBe(FINISHED_ELSEWHERE);
+      expect(folder.text()).toBe(written);
+      first.said("Approve");
+      folder.json(first.tool("orchestrate", ["report", "--stage", STAGE, "--result", "approved", "--user-input",
+        "Approve"]), "approve the gate shown in the first chat");
+      expect(folder.stageMark()).toBe("x");
+    });
+  }
+
   test("a late answer to one of the stage's own questions names the waiting gate too", () => {
     const { folder, first } = secondChatFinishedTheStage();
     const answers = folder.rows("QUESTION_ANSWERED").length;

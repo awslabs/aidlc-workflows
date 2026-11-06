@@ -247,6 +247,7 @@ import {
   picksAddANote,
   summaryConfirmationCommands,
   summaryConfirmationOwed,
+  summaryAnswerPutBack,
   summaryQuestionFileRelative,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
@@ -1003,8 +1004,11 @@ function revisedSummaryNote(
 // and nothing is recorded. The summary is closed once the gate opens, whichever
 // chat asks; the stage's other questions only in a chat that never saw the
 // gate, opened in another chat of this clone (shownOnlyInOtherChats), since a
-// chat at its own gate may still ask the person something about it. True when
-// it printed the step.
+// chat at its own gate may still ask the person something about it. The
+// summary's answer line the chat wrote over or blanked first (the stage
+// protocol has it written before it is recorded) is put back as confirmed, so
+// the gate's own check finds the file as the other chat left it. True when it
+// printed the step.
 function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "answer"): boolean {
   if (flags.unit !== undefined || flags.single !== undefined) return false;
   if (flags.checkpoint !== undefined && flags.checkpoint !== "summary-confirmation") return false;
@@ -1022,6 +1026,17 @@ function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "
   const gate = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage, unit: null });
   const elsewhere = gate !== null && shownOnlyInOtherChats(pd, gate.id, commandChat(pd));
   if (flags.checkpoint === undefined && !elsewhere) return false;
+  const node = loadStageGraphAll().find((entry) => entry.slug === stage);
+  const questions = node ? summaryQuestionFileRelative(pd, node, content, null) : null;
+  if (questions !== null) {
+    try {
+      const path = resolve(pd, questions);
+      const putBack = summaryAnswerPutBack(readFileSync(path, "utf-8"));
+      if (putBack !== null) writeFileAtomic(path, putBack);
+    } catch {
+      // The gate's own check says what is wrong with the file.
+    }
+  }
   const next = aidlcDispatcherInvocation("orchestrate next");
   const waits = `Stage "${stage}" is finished and waiting for the person's approval` +
     `${elsewhere ? ", opened in another chat," : ""} with its documents as they are, so nothing was recorded`;

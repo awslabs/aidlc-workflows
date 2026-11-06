@@ -13395,6 +13395,22 @@ function summaryAnswerCleared(content: string): string | null {
   return bom + parts.join("");
 }
 
+// The questions file with its one summary answer line put back to `[Answer]:
+// Looks correct`, every other byte as it was (line endings included): a chat
+// still showing the summary wrote over (or blanked) a confirmation another chat
+// already recorded, before the engine could say the stage was done. Null when
+// the section does not hold exactly one answer line, or it reads Looks correct.
+export function summaryAnswerPutBack(content: string): string | null {
+  const answers = summaryAnswerLines(content);
+  if (answers === null || answers.length !== 1 || answers[0].value === "Looks correct") return null;
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const parts = content.slice(bom.length).split(/(\r\n|\r|\n)/);
+  const at = answers[0].line * 2;
+  if (!/^\[Answer\]:/.test(parts[at] ?? "")) return null;
+  parts[at] = "[Answer]: Looks correct";
+  return bom + parts.join("");
+}
+
 export function summaryConfirmationGuardDisabled(): boolean {
   return resolveProjectFlag("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD") === "1";
 }
