@@ -35,6 +35,7 @@ import { KEPT_RULE_SCOPES, keptRuleFile } from "./aidlc-graph.ts";
 import {
   activeIntentUuid,
   activeSpace,
+  addPendingPersonLines,
   artifactFilename,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -5759,13 +5760,14 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (existing !== null) {
     setActiveSpaceCursor(pd, existing.space);
     selectIntentForSession(pd, existing.dirName, existing.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
+    const carrying = `Carrying on ${unit}, ${theTeam(existing.space)}'s build here.`;
     console.log(JSON.stringify({
       taken: true,
       resumed: true,
       unit,
       space: existing.space,
       record: existing.dirName,
-      notice: `Carrying on ${unit}, ${theTeam(existing.space)}'s build here.`,
+      ...(saidWithNextStep(pd, carrying) ? {} : { notice: carrying }),
     }));
     return;
   }
@@ -5914,25 +5916,41 @@ function takeUnit(args: string[], projectDir?: string): void {
       writeStateFile(pd, setOrInsertField(content, "## Runtime State", "Home Result", "by file"), build.dirName, build.space);
     });
   }
+  const taken = `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, for ${theTeam(team)}. Its build is its own ` +
+    `piece of work here, under your team's rules, from what the home approved.` +
+    (resultByFile
+      ? ` You can read the home but not write to it, so the result of ${unit} goes back as a file when it is built.`
+      : "") +
+    earlyLines.map((line) => ` ${line}`).join("") +
+    notThere.lines +
+    (planChanging !== null
+      ? ` The home is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
+      : "");
+  // A clone question goes with its choices, now; the take's own line otherwise
+  // waits for the build's next step.
+  const said = notThere.question === "" && saidWithNextStep(pd, taken);
   console.log(JSON.stringify({
     taken: true,
     unit,
     team,
     space: build.space,
     record: build.dirName,
-    notice: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, for ${theTeam(team)}. Its build is its own ` +
-      `piece of work here, under your team's rules, from what the home approved.` +
-      (resultByFile
-        ? ` You can read the home but not write to it, so the result of ${unit} goes back as a file when it is built.`
-        : "") +
-      earlyLines.map((line) => ` ${line}`).join("") +
-      notThere.lines +
-      (planChanging !== null
-        ? ` The home is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
-        : "") +
-      notThere.question,
+    ...(said ? {} : { notice: taken + notThere.question }),
     ...notThere.offer,
   }));
+}
+
+// A line of the take's for the person: it waits for the next step the agent
+// speaks from in this chat (on the build it selected), as a jump's does, so it
+// reaches them with that step's own lines. False when no chat can hold it, and
+// the output carries it.
+function saidWithNextStep(pd: string, line: string): boolean {
+  try {
+    const session = resolveWorkflowSelection(pd).sessionId;
+    return session !== null && session !== undefined && addPendingPersonLines(pd, session, [line]);
+  } catch {
+    return false;
+  }
 }
 
 // Git that talks to a remote nobody typed a command for (the claims fetch, the

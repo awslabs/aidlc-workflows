@@ -782,3 +782,28 @@ describe("a print with no offers reads as it did before the teams' steps became 
     }
   });
 });
+
+describe("the take's own line reaches the person with the build's next step, once", () => {
+  test("a teammate takes from the offer in their chat: the line comes with the next step, never only in the take's output, and never twice", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bob = withTools(cloneOf(home.remote, "bob"));
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, bob, name, "bob");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "bob-chat" };
+    const offer = next(bob, chat);
+    expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
+    const took = runPrinted(bob, chat, choice(offer, "Start refunds"));
+    expect(took.status, took.out).toBe(0);
+    const line = "Refunds is yours, for the payments team. Its build is its own piece of work here, under your team's rules, " +
+      "from what the home approved.";
+    expect(JSON.parse(took.out.trim().split("\n").at(-1)!).notice, took.out).toBeUndefined();
+    const step = next(bob, chat);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(line);
+    expect(JSON.stringify(next(bob, chat))).not.toContain("is yours");
+  });
+});

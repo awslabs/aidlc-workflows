@@ -559,10 +559,13 @@ describe("builds in one workspace", () => {
     expect(choices.map((choice) => choice.label)).toContain("Carry on refunds");
     const resumed = run(UNIT, ["take", "refunds", "--home", HOME], laptop, chat);
     expect(resumed.status, resumed.out).toBe(0);
-    expect(resumed.json).toMatchObject({ resumed: true, notice: "Carrying on refunds, the payments team's build here." });
+    expect(resumed.json).toMatchObject({ resumed: true });
+    // The line is the person's: it comes with the build's next step in this chat.
+    expect(resumed.json?.notice).toBeUndefined();
     const step = next(laptop, chat);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("refunds");
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain("Carrying on refunds, the payments team's build here.");
   });
 });
 
