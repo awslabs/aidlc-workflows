@@ -390,9 +390,9 @@ Other code moving after you approved a code plan (a `git pull`, another Unit lan
 The exception is a build of Units in parallel under `strict`. A change in the project after Code Generation started that is not a Unit's own landing, an AI-DLC update or a file Git ignores and does not track (your edit or commit, a `git pull`) stops the next Unit from landing; under `relaxed` and `off` the Unit lands with the change kept, and one line says so. If the change came after you approved the plan, `strict` also asks you to approve the plan again before the Units are set up, and approving again does not lift the stop at the landing. To go on, undo the change and tell the agent to carry on, or set Guard Policy `relaxed` for this piece of work (`/aidlc --guard-policy relaxed`) and the Unit lands with it kept. Where your team locked `strict` in memory, that switch is refused with a line naming the file, so undoing the change is the way on there.
 
 **When the owner of a shared plan amends an input.** A change a team proposed
-to a shared input (a contract summary, the requirements) and the owner of the
-shared plan approved by the lead is not a stale approval on any value. The
-home's stages that used it are recorded as current with a
+to a shared input (a contract summary, the requirements) that the lead
+approved is not a stale approval on any value. The lead's project's stages
+that used it are recorded as current with a
 `SHARED_INPUT_AMENDED` row, and each team building with it hears one line from
 the amendment itself, with the offer to redo a stage that used it, on
 `strict`, `relaxed` and `off` alike. Nobody is asked to approve again.
