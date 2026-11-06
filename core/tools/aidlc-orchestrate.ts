@@ -4958,7 +4958,7 @@ function unitsWordsReplyDirective(requestId: string, offer: AskDirective | Print
   const choices = offer.kind !== "ask" ? "" : (offer.choices ?? [])
     .filter((choice) => choice.command !== undefined).map((choice) => `${choice.label}: \`${choice.command}\``).join("; ");
   return printDirective(
-    `This clone has the lead's work (${work.join(", ")}), built by teams one Unit each; the work itself is not picked here. ` +
+    `This clone has the lead's work (${work.join(", ")}), built by teams; the work itself is not picked here. ` +
       `The Units offer says: ${said} Read the person's words. ` +
       (choices === "" ? "" : `If they ask for one of these Units (to take it, start it, or start it early), run that choice's ` +
         `command and follow what it returns: ${choices}. `) +

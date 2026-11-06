@@ -721,7 +721,7 @@ describe("who takes what", () => {
     const home = homeWithTeams(["checkout-ui=web"]);
     const ask = next(cloneOf(home.remote, "riley"));
     expect(ask.question).toBe(
-      "fixture is built by teams, one Unit each. Ready to take: checkout-ui (for web; likely checkout-web). " +
+      "fixture is built by teams. Ready to take: checkout-ui (for web; likely checkout-web). " +
         "The lead's project builds: refunds, reporting. Taking a Unit starts it as your team's own piece of work here, " +
         "from what the lead approved.",
     );
