@@ -372,6 +372,37 @@ describe.each(["strict", "relaxed", "off", "locked"] as const)("Guard Policy %s,
       expect(auditBlockField(rows(proj, "SYSTEM_INSTALL_ALLOWED")[0]?.block ?? "", "Person Reply")).toBe("yes, install it");
     }
   });
+
+  // An archive of work that was running, a redo included, is its finish: the
+  // redo they asked for before it asks for no install. An archive of finished
+  // work spends nothing: their ask between the completion and the archive still
+  // runs the install (keptSinceFinished).
+  test("archived during a redo, the redo's ask runs no install; archived after a finish, an ask before it still does", () => {
+    const redone = finished(policy);
+    joinChat(redone, LATER);
+    expect(reply(redone, "Can you redo Code Generation? I'd like the code built again.", LATER).status).toBe(0);
+    const step = String(next(redone, ["--stage", "code-generation"]).message ?? "");
+    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(step)?.[1];
+    expect(jump, step).toBeDefined();
+    const ran = runNamed(redone, jump as string, { AIDLC_SESSION_OVERRIDE: LATER });
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(getField(readFileSync(seededStateFile(redone), "utf-8"), "Status")).toBe("Running");
+    // The record keeps whole seconds, and a redo runs a while before anyone archives it.
+    Bun.sleepSync(1001 - (Date.now() % 1000));
+    archive(redone);
+    heldForThePerson(redone, LATER);
+    expect(reply(redone, "yes, install it", LATER).status).toBe(0);
+    expect(guardBash(redone, PYTEST, { session: LATER }).code).toBe(0);
+    expect(auditBlockField(rows(redone, "SYSTEM_INSTALL_ALLOWED")[0]?.block ?? "", "Person Reply")).toBe("yes, install it");
+
+    const done = finished(policy);
+    joinChat(done, LATER);
+    expect(reply(done, "pytest is missing, install it with apt", LATER).status).toBe(0);
+    archive(done);
+    const asked = guardBash(done, PYTEST, { session: LATER });
+    expect(asked.code, asked.stderr).toBe(0);
+    expect(rows(done, "SYSTEM_INSTALL_BLOCKED")).toHaveLength(0);
+  });
 });
 
 test("on finished work an install the approved plan names runs at once, and one it does not name waits", () => {
