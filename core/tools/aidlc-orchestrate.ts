@@ -19573,7 +19573,7 @@ const KIRO_CONTEXT_OFFER_HEARD = "kiro-context-offer";
 // A new chat that picks the work up on the same model starts about as full as
 // this chat got in its first turn on the work (#3642). From half the window,
 // where the statusline turns yellow (contextColor), it would fill again soon,
-// so the line says that instead of recommending one.
+// so the line says a new chat will not help much instead of recommending one.
 const NEW_CHAT_NO_ROOM_PERCENT = 50;
 function addContextParkOffer(
   reply: { kind: string; narration?: string; change_notices?: string[] },
@@ -19604,10 +19604,11 @@ function addContextParkOffer(
   if (full === null) return;
   const first = kiroFirstTurnFill(chat, since);
   const noRoom = first !== null && first.percent >= NEW_CHAT_NO_ROOM_PERCENT;
+  // The figure names its source: on Kiro CLI 3.1.0 the agent left out the
+  // sentence that gave it bare, twice.
   const line = noRoom
-    ? `${full} A new chat on the same model${first.model ? ` (${first.model})` : ""} will not help much: this chat ` +
-      `reached about ${Math.round(first.percent)}% in its first turn on this work, so a new chat would fill up ` +
-      `${summarized ? "and be summarized again" : "again"} soon.`
+    ? `${full} By Kiro's count this chat was about ${Math.round(first.percent)}% full in its first turn on this ` +
+      `work, so a new chat on the same model${first.model ? ` (${first.model})` : ""} will not help much.`
     : summarized
     ? `${full} Do you want to pause here and carry on in a new chat? I recommend it: your work is saved, and a new ` +
       "chat picks it up from the saved files."
