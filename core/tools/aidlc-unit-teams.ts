@@ -143,6 +143,37 @@ export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: st
   return { pairs, open: auditBlockField(last.block, "Open") === "all" };
 }
 
+// What the plan's share reaches, from the lead's answers since teams: Units held
+// for a team that takes them from the home, and Units open for any team. A
+// Unit handed off by file comes to its team as that file, never from the home.
+export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: number; open: number } {
+  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  let teamsAt = -1;
+  ordered.forEach((row, at) => {
+    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
+  });
+  const byFile = new Map<string, boolean>();
+  const open = new Set<string>();
+  for (const row of ordered.slice(teamsAt + 1)) {
+    if (row.event !== "UNITS_ASSIGNED") continue;
+    const opened = auditBlockField(row.block, "Open");
+    if (opened !== null && opened !== "none") {
+      for (const unit of opened.split(",").map((entry) => entry.trim()).filter(Boolean)) {
+        byFile.delete(unit);
+        open.add(unit);
+      }
+    }
+    const file = auditBlockField(row.block, "By File") !== null;
+    for (const pair of (auditBlockField(row.block, "Assigned") ?? "").split(",").map((entry) => entry.trim())) {
+      const at = pair.indexOf("=");
+      if (at < 1) continue;
+      open.delete(pair.slice(0, at));
+      byFile.set(pair.slice(0, at), file);
+    }
+  }
+  return { held: [...byFile.values()].filter((file) => !file).length, open: open.size };
+}
+
 // The Units the lead named for teams while the home could not be reached, with
 // their teams: never the home's own to build while they wait to be held.
 export function unitsKeptForTeams(rows: readonly AuditShardEvent[]): Map<string, string> {

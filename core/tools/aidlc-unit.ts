@@ -4861,6 +4861,14 @@ function shareMain(args: string[], projectDir?: string): void {
     fail(`${errorMessage(error)} Then share again.`);
   }
   const pushed = git(pd, ["push", remote, `HEAD:refs/heads/${branch}`], { GIT_TERMINAL_PROMPT: "0" });
+  // The plan's push to a home that does not answer: there is nothing to pull,
+  // and its question is not put again each turn; the person asks when it can.
+  if (!pushed.ok && planOnly && !quietly(() => git(pd, ["ls-remote", "--heads", remote]).ok)) {
+    fail(
+      `${remote} could not be reached, so the plan was not shared${committed > 0 ? " (the commit is kept here)" : ""}. ` +
+        `Once it can be reached, \`${aidlcInvocation()} unit share --plan\` shares it.`,
+    );
+  }
   if (!pushed.ok) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
     fail(

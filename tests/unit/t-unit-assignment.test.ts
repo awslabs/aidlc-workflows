@@ -349,6 +349,42 @@ describe("the home's plan goes to the teams the way main's share question asks i
     git(home.dir, ["push", "-q", "origin", "main"]);
     expect(isShare(next(home.dir))).toBe(false);
   });
+
+  test("leave them all open: the question says the Units are open for any team, not that the teams have them", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    next(home.dir);
+    expect(run(UNIT, ["assign", "--open"], home.dir).status).toBe(0);
+    const ask = next(home.dir);
+    expect(isShare(ask), JSON.stringify(ask)).toBe(true);
+    expect(String(ask.question)).toStartWith("The Units are open for any team to take. Share the plan with them now?");
+  });
+
+  test("every Unit held for a team handed off by file: no team takes it from the home, so nothing is asked", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    next(home.dir);
+    for (const [unit, team] of [["refunds", "payments"], ["checkout-ui", "web"]]) {
+      const handed = run(UNIT, ["hand-off", unit, "--team", team], home.dir);
+      expect(handed.status, handed.out).toBe(0);
+    }
+    expect(isShare(next(home.dir))).toBe(false);
+  });
+
+  test("a home that cannot be reached: Share says so, keeps the commit, and the question is not put again each turn", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    next(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    expect(isShare(next(home.dir))).toBe(true);
+    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status).not.toBe(0);
+    expect(shared.out).toContain("origin could not be reached, so the plan was not shared");
+    expect(shared.out).not.toContain("pull main");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "ok" }, home.dir);
+    expect(isShare(next(home.dir))).toBe(false);
+  });
 });
 
 describe("the Unit plan open again at the home", () => {

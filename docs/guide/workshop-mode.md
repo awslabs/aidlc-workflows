@@ -119,12 +119,16 @@ Typed, the same step is `/aidlc unit share`, or your own commit and
 Where the work records code repos of its own, the home asks who builds which
 Unit instead. When a slice is built first by everyone together, the question
 says which one and why, and naming a team for it gives it to that team instead.
-Once the Units are held for their teams, the next step asks once whether to
-share the plan with them: **Share them with the teams** runs
-`aidlc unit share --plan`, which commits AI-DLC's record here (`aidlc/`, none of
-your other files) and pushes main with a plain push; **Not now** leaves it, and
-a team's clone sees the plan once main is pushed (or push it yourself with
-`git push origin main`).
+Once the Units are held for their teams, or left open for any team, the next
+step asks once whether to share the plan with them: **Share them with the
+teams** runs `aidlc unit share --plan`, which commits AI-DLC's record here
+(`aidlc/`, none of your other files) and pushes main with a plain push; **Not
+now** leaves it, and a team's clone sees the plan once main is pushed (or push
+it yourself with `git push origin main`). When every Unit held for a team went
+to it as a hand-off file and none is open, nothing is asked: no team takes the
+plan from here. When the remote does not answer, Share says so and keeps the
+commit, and the question is not put again; run `aidlc unit share --plan` once
+it can be reached.
 
 Claims open by dependency batch. "Delivery planning is complete" does not mean
 every Unit is claimable; a Unit remains blocked until every `depends_on` row is

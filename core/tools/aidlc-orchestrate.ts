@@ -696,6 +696,7 @@ import {
   teamUnitStageApplies,
   unitsBuiltBeforeTeams,
   unitsBuiltHereGateOpen,
+  unitsTakenFromHome,
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
@@ -5555,10 +5556,15 @@ function buildOutShareOffer(projectDir: string, auditRows: readonly AuditShardEv
   if (handoverOffered(projectDir, mark) || shareBlocker(projectDir) !== null) return null;
   const target = shareTarget(projectDir);
   if (target === null || !planUnshared(projectDir, target)) return null;
+  // Every Unit held for a team went as a file, and none is open: no team takes
+  // anything from the home.
+  const reach = unitsTakenFromHome(auditRows);
+  if (reach.held === 0 && reach.open === 0) return null;
+  const said = reach.held === 0 ? "The Units are open for any team to take." : "The teams have their Units.";
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
-    question: "The teams have their Units. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
+    question: `${said} Share the plan with them now? I'd commit the plan here (AI-DLC's record, ` +
       `nothing else of yours) and push ${target.branch} to ${target.remote}, so each team can take its Unit by opening ` +
       `its own clone and running ${entrySkillInvocation()}.`,
     choices: [
