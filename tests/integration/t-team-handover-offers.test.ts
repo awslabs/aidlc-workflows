@@ -10,11 +10,14 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationStepOnRecord } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
+import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import {
   ORCH,
   UNIT,
@@ -227,14 +230,77 @@ describe("step 2: another clone takes a Unit", () => {
     expect(commandFor(nextDirective(mate), "Take alpha")).toMatch(/ next --claim alpha$/);
     const take = runMergeTool(ORCH, ["next", "--claim", "alpha", "--team", "Payments team"], mate);
     expect(take.status, take.out).toBe(0);
-    expect(String(JSON.parse(take.stdout).message)).toContain("--claim alpha --team 'Payments team'");
-    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--team", "Payments team"], mate);
+    // The name goes in a file the claim reads, which the claim spends.
+    const file = String(JSON.parse(take.stdout).message).match(/--claim alpha --request-file (\S+)`/)?.[1];
+    expect(file, take.stdout).toBeDefined();
+    expect(readFileSync(join(mate, file as string), "utf-8")).toBe("Payments team");
+    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--request-file", file as string], mate);
     expect(claimed.status, claimed.out).toBe(0);
     expect(JSON.parse(claimed.stdout)).toMatchObject({ owner: "Payments team" });
+    expect(existsSync(join(mate, file as string))).toBe(false);
     const offer = nextDirective(clone(remote, "late"));
     expect(labels(offer), JSON.stringify(offer)).toEqual(["Take beta", "Not now"]);
     expect(String(offer.question)).toContain("alpha is with Payments team");
   });
+
+  // The claim command next prints, run through the shell the agent runs it in:
+  // bash (Git Bash on Windows, Claude Code's), PowerShell (Kiro's and Codex's on
+  // Windows), cmd.exe (Copilot's and opencode's). No one quoting reads an
+  // apostrophe beside & the same in PowerShell and Git Bash. The board is every
+  // other clone's: the Take question's holders.
+  const NAMES = ["O'Brien", "Ops & QA", "QA\\", "O'Brien & QA"];
+  const SHELLS = [
+    { shell: "bash", skip: gitBashSkipReason() },
+    { shell: "PowerShell", skip: process.platform === "win32" ? null : "Windows only" },
+    { shell: "cmd.exe", skip: process.platform === "win32" ? null : "Windows only" },
+  ] as const;
+  for (const { shell, skip } of SHELLS) {
+    test.skipIf(skip !== null)(`a team name as given reaches the board, through ${shell}: ${NAMES.join(", ")}`, () => {
+      const units = ["alpha", "beta", "gamma", "delta", "epsilon"];
+      const { remote } = makeSeed(
+        "# Unit dependencies\n\n```yaml\nunits:\n  - name: skeleton\n    depends_on: []\n" +
+          units.map((unit) => `  - name: ${unit}\n    depends_on: [skeleton]\n`).join("") + "```\n",
+      );
+      NAMES.forEach((name, i) => {
+        const mate = clone(remote, `mate${i}`);
+        const take = runMergeTool(ORCH, ["next", "--claim", units[i], "--team", name], mate);
+        expect(take.status, take.out).toBe(0);
+        const printed = String(JSON.parse(take.stdout).message).match(/`[^`]*? (--claim [^`]*)`/)?.[1];
+        expect(printed, take.stdout).toBeDefined();
+        const dir = mkdtempSync(join(tmpdir(), "aidlc-claim-shell-"));
+        tempDirs.push(dir);
+        const words = [process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts")];
+        const [file, argv]: [string, string[]] = shell === "bash"
+          ? [join(dir, "claim.sh"), [process.platform === "win32" ? gitBashPath() : "bash"]]
+          : shell === "PowerShell"
+          ? [join(dir, "claim.ps1"), ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]]
+          : [join(dir, "claim.cmd"), ["cmd.exe", "/d", "/c"]];
+        const q = (word: string) => (shell === "cmd.exe" ? `"${word}"` : `'${word}'`);
+        writeFileSync(
+          file,
+          shell === "bash"
+            ? `${words.map(q).join(" ")} ${printed} --project-dir ${q(mate)}\n`
+            : shell === "PowerShell"
+            ? `& ${words.map(q).join(" ")} ${printed} --project-dir ${q(mate)}\r\nexit $LASTEXITCODE\r\n`
+            : `@${words.map(q).join(" ")} ${printed} --project-dir ${q(mate)}\r\n`,
+        );
+        const claimed = spawnSync(argv[0], [...argv.slice(1), file], {
+          cwd: mate,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+            AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+            AIDLC_SKIP_ARTIFACT_GUARD: "1",
+          },
+        });
+        expect(claimed.status, `${printed}\n${claimed.stdout}${claimed.stderr}`).toBe(0);
+        expect(JSON.parse(claimed.stdout).owner, printed).toBe(name);
+      });
+      const offer = nextDirective(clone(remote, "late"));
+      for (const [i, name] of NAMES.entries()) expect(String(offer.question)).toContain(`${units[i]} is with ${name}`);
+    });
+  }
 
   test("a team's clone after its Unit lands and it pulls is offered the next Unit", () => {
     const { seed: lead, remote } = makeSeed(parallelDependencyBody());

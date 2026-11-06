@@ -4218,7 +4218,7 @@ function adoptUnit(args: string[], projectDir?: string): void {
 function claimUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit claim <unit> [--team <label>] [--rhythm per-stage|unit-end]");
+  if (!unit) fail("Usage: aidlc-unit claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]");
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   if (
@@ -4229,6 +4229,17 @@ function claimUnit(args: string[], projectDir?: string): void {
     fail(`Invalid --rhythm "${flags.rhythm}"; expected per-stage or unit-end.`);
   }
   const pd = resolveProjectDir(projectDir);
+  // The team name in the file `next --claim` wrote for this command, so no
+  // shell read it on the way; spent once the claim holds.
+  let team = flags.team;
+  let spend = (): void => {};
+  if (flags["request-file"] !== undefined) {
+    if (team !== undefined) fail("Pass either --team or --request-file, not both.");
+    const read = readRequestFile(pd, flags["request-file"]);
+    if (typeof read === "string") fail(read);
+    team = read.text;
+    spend = read.spend;
+  }
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   const identity = activeIdentity(pd);
@@ -4253,6 +4264,7 @@ function claimUnit(args: string[], projectDir?: string): void {
       recovered.nonce === existingStamp.nonce
     ) {
       finalizeClaimCheckout(pd, existingStamp, recovered);
+      spend();
       console.log(JSON.stringify({ claimed: true, recovered: true, ...existingStamp }));
       return;
     }
@@ -4294,7 +4306,7 @@ function claimUnit(args: string[], projectDir?: string): void {
       ? current.generation
       : (current?.generation ?? 0) + 1;
   const nonce = randomUUID();
-  const owner = claimOwnerLabel(pd, flags.team);
+  const owner = claimOwnerLabel(pd, team);
   // Pin takes exactly one newly added team shard (candidateBoundary). A
   // checkout whose own shard main already has (the lead's own checkout, or a
   // copy of it) keeps the claim's evidence in a shard of the claim's own: the
@@ -4366,6 +4378,7 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
+  spend();
   console.log(JSON.stringify({ claimed: true, ...stamp, ...(planWarning ? { warning: planWarning } : {}) }));
 }
 
