@@ -207,15 +207,27 @@ describe("t-submodule-not-a-repo: the repos work records when it starts", () => 
     expect(row(alone).repos).toEqual(["lib"]);
   });
 
-  test("a .gitmodules with CRLF line ends and a trailing slash reads the same", () => {
-    const proj = project(OWN_CODE);
-    const listed = readFileSync(join(proj, ".gitmodules"), "utf-8");
-    writeFileSync(
-      join(proj, ".gitmodules"),
-      listed.replace(/path = shared-utils/, "path = shared-utils/").replace(/\r?\n/g, "\r\n"),
-    );
+  test("a .gitmodules with CRLF line ends, a trailing slash or a Windows path reads the same", () => {
+    for (const written of ["shared-utils/", ".\\shared-utils\\"]) {
+      const proj = project(OWN_CODE);
+      const listed = readFileSync(join(proj, ".gitmodules"), "utf-8");
+      writeFileSync(
+        join(proj, ".gitmodules"),
+        listed.replace("path = shared-utils", `path = ${written}`).replace(/\r?\n/g, "\r\n"),
+      );
+      create(proj);
+      expect(row(proj).repos ?? [], written).toEqual([]);
+    }
+  });
+
+  test("code in a clone beside the submodule is that clone's, not the project's own", () => {
+    const proj = project(ONLY_SUBMODULES);
+    write(join(proj, "api"), OWN_CODE);
+    git(join(proj, "api"), ["init", "-q"]);
+    git(join(proj, "api"), ["add", "-A"]);
+    git(join(proj, "api"), ["commit", "-qm", "seed"]);
     create(proj);
-    expect(row(proj).repos ?? []).toEqual([]);
+    expect(row(proj).repos).toEqual(["api", "shared-utils"]);
   });
 
   test("existing code declared after a new-project start records no submodule", () => {
@@ -243,7 +255,7 @@ describe("t-submodule-not-a-repo: removing a submodule from the work", () => {
     const r = run(proj, ["intent", "remove-repo", "shared-utils", "--person-words", "it's only this repo"]);
     expect(r.rc, r.out).toBe(0);
     expect(r.out.trim()).toBe(
-      "Removed shared-utils from this piece of work's repos; it works on the workspace folder itself again. Its folder stays.",
+      "Removed shared-utils from this piece of work's repos; it now works on the workspace folder itself. Its folder stays.",
     );
     expect(row(proj).repos ?? []).toEqual([]);
     expect(audit(proj)).toContain("**Removed**: shared-utils");

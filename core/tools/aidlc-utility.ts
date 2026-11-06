@@ -7813,12 +7813,15 @@ function submodulePath(path: string): string {
   return path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
 }
 
-// `besideSubmodules` reads the project as if the folders its .gitmodules lists
-// were not there, and without the signal those declarations give: Brownfield
-// then means code of the project's own beside its submodules.
-export function detectWorkspace(projectDir: string, { besideSubmodules = false } = {}): ScanResult {
+// `ownCodeBeside` leaves these folders and the ones the project's .gitmodules
+// lists out of the root's signals and the nested walk, and drops the signal
+// those declarations give: Brownfield then means code of the project's own,
+// outside its submodules and the other repos in it.
+export function detectWorkspace(projectDir: string, { ownCodeBeside }: { ownCodeBeside?: readonly string[] } = {}): ScanResult {
   const submodules = scanSubmodules(projectDir);
-  const leftOut: ReadonlySet<string> = new Set(besideSubmodules ? submodules.map((entry) => submodulePath(entry.path)) : []);
+  const leftOut: ReadonlySet<string> = new Set(
+    ownCodeBeside === undefined ? [] : [...ownCodeBeside, ...submodules.map((entry) => submodulePath(entry.path))],
+  );
   // Root scan (depth 0 for the top-level file sweep, byte-identical to the
   // base inline loop plus the SCAN_SOURCE_DIRS recurse, both inside scanSignals).
   const root = scanSignals(projectDir, 0, leftOut);
@@ -7918,7 +7921,7 @@ export function detectWorkspace(projectDir: string, { besideSubmodules = false }
   // SCANNED (Unknown is truthful until the submodules are fetched). A root
   // signal: folded in after the nested fallback so nested aggregation (and
   // nestedRoot attribution) still runs when submodules are the only signal.
-  if (submodules.length > 0 && !besideSubmodules) brownfield = true;
+  if (submodules.length > 0 && ownCodeBeside === undefined) brownfield = true;
 
   const result: ScanResult = {
     projectType: brownfield ? "Brownfield" : "Greenfield",
@@ -7939,14 +7942,14 @@ function isProjectSubmodule(projectDir: string, name: string): boolean {
 // The repos a piece of work records when it starts, one rule for its creation
 // and for existing code declared before Construction: the set the person named
 // (`--repos`) as named; otherwise the repos found in the folder, less the
-// submodules of a project with code of its own beside them, which is then the
-// work's repo as in any one-repo project. A project made only of submodules
-// records them.
+// submodules of a project with code of its own beside them (outside them and
+// the other repos found), which is then the work's repo as in any one-repo
+// project. A project made only of submodules records them.
 function startingRepoSet(projectDir: string, explicitReposCsv?: string): string[] {
   const repos = resolveIntentRepoSet(projectDir, explicitReposCsv);
   if (explicitReposCsv && explicitReposCsv.trim().length > 0) return repos;
   if (!repos.some((name) => isProjectSubmodule(projectDir, name))) return repos;
-  if (detectWorkspace(projectDir, { besideSubmodules: true }).projectType !== "Brownfield") return repos;
+  if (detectWorkspace(projectDir, { ownCodeBeside: repos }).projectType !== "Brownfield") return repos;
   return repos.filter((name) => !isProjectSubmodule(projectDir, name));
 }
 
@@ -9810,7 +9813,7 @@ function handleIntentRepos(
       } else {
         const listed = workspaceManifestNames(projectDir).includes(name);
         lines.push(
-          `Removed ${name} from this piece of work's repos${outcome.none ? "; it works on the workspace folder itself again" : ""}. Its folder stays` +
+          `Removed ${name} from this piece of work's repos${outcome.none ? "; it now works on the workspace folder itself" : ""}. Its folder stays` +
             (listed ? ", and so does its line in repos.json (delete that line to take it off the workspace's list)." : "."),
         );
         if (outcome.units !== null) lines.push(outcome.units);
