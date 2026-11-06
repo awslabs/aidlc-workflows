@@ -24,7 +24,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
-import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
+import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import {
   claimPayload,
@@ -475,6 +475,24 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(step.rules_in_context as string[]).toContain("aidlc/spaces/default/memory/team.md");
     // The lead's file is read, never written, from the build.
     expect(readFileSync(practices, "utf-8")).toContain("Test first for the refund amount.");
+  });
+
+  // A live run on Codex: the take carried the lead's agreed "tests are written
+  // first" into the build's rules, but its testing contract still read the
+  // organisation's default, so the agent asked the team whether to copy it.
+  test("taken with the lead's agreed practices, the build's testing contract follows the lead's Testing Posture where the team's own says none", () => {
+    const home = makeHome();
+    const practices = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
+    const seeded = readFileSync(practices, "utf-8");
+    writeFileSync(practices, seeded.replace("## Testing Posture\n", "## Testing Posture\nTDD: the refund amount's tests are written first and must fail.\n"));
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const posture = (dir: string) => JSON.parse(run(join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), ["resolve"], dir).out) as { methodology: string; source: string };
+    expect(take(alice, "refunds", ["--team", "payments", "--lead-rules"]).status).toBe(0);
+    expect(posture(alice)).toMatchObject({ methodology: "tdd", source: "team" });
   });
 
   test("at the lead's project the learnings choice says a project learning is offered to any team that takes a Unit", () => {

@@ -184,6 +184,7 @@ import {
   recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
 import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } from "./aidlc-swarm-source.ts";
+import { LEAD_RULES_FIELD } from "./aidlc-unit-teams.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
@@ -1291,6 +1292,14 @@ export function resolveTestingPosture(
     state = readFileSync(stateFilePath(projectDir), "utf-8");
   } catch {
     // Pre-creation and focused tests use deterministic defaults.
+  }
+  // A team's build taken with the lead's rules too reads them as the rules
+  // reach it (aidlc-steering.ts): the lead's file of a layer before the
+  // team's own, so the team's Testing Posture wins where it says one.
+  for (const lead of (getField(state, LEAD_RULES_FIELD) ?? "").split(",").map((entry) => entry.trim()).filter(Boolean)) {
+    const layer = (["team", "project"] as const).find((name) => lead.endsWith(`/memory/${name}.md`));
+    if (layer === undefined || (sections[layer] ?? "").trim() !== "" || !existsSync(join(projectDir, lead))) continue;
+    sections[layer] = extractTestingPostureSection(readFileSync(join(projectDir, lead), "utf-8"));
   }
   return resolveTestingPostureFromSections(sections, {
     scope: (getField(state, "Scope") ?? "feature").trim().toLowerCase(),
