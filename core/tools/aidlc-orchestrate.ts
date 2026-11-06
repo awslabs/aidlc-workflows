@@ -603,9 +603,7 @@ import {
   skeletonHeldBackOnShare,
   teamsClone,
   teamStanceToRead,
-  shareTarget,
   shareOfferTarget,
-  integrationBranchToRead,
   teamHandoverMarkName,
   teamSharedHere,
   type UnitClaimOverview,
@@ -6065,9 +6063,7 @@ function assembleTeamConstructionBoard(
     })
     .sort((a, b) => compareBoardKeys(a.unit, b.unit));
   const landedHere = landedNotOnRemote(projectDir);
-  const target = landedHere.length > 0 && shareBlocker(projectDir) === null && integrationBranchToRead(projectDir) === null
-    ? shareTarget(projectDir)
-    : null;
+  const target = landedHere.length > 0 && shareBlocker(projectDir) === null ? shareOfferTarget(projectDir) : null;
   const blocked = overview.waiting
     .map((row) => ({
       unit: row.unit,
