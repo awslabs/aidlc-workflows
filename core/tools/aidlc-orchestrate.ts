@@ -9079,8 +9079,13 @@ function soloElsewhereAsk(projectDir: string, selected?: { intent: IntentInfo; s
     const take = `${aidlcToolInvocation("unit")} take %s --home ${shellArg(intent.dirName)}` +
       (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
     const label = intentDisplayLabel(intent);
-    // The Unit under way there, never one it finished last.
-    const on = progress.done.has(at.unit) ? "" : `, on ${at.unit} (${stageLabel(nodeForSlug(at.stage), at.stage) ?? at.stage})`;
+    // The Unit under way there and the stage it started last, never a Unit it
+    // finished or a stage skipped for it; nothing between Units.
+    const under = rows.filter((row) => row.event === "UNIT_STARTED" && !progress.done.has(auditBlockField(row.block, "Unit") ?? ""))
+      .sort((a, b) => (a.timestamp !== b.timestamp ? (a.timestamp < b.timestamp ? -1 : 1) : a.pos - b.pos)).at(-1);
+    const underStage = under === undefined ? null : auditBlockField(under.block, "Stage");
+    const on = under === undefined || underStage === null ? ""
+      : `, on ${auditBlockField(under.block, "Unit")} (${stageLabel(nodeForSlug(underStage), underStage) ?? underStage})`;
     return {
       kind: "ask",
       ask_type: "unit-take",
@@ -9094,7 +9099,7 @@ function soloElsewhereAsk(projectDir: string, selected?: { intent: IntentInfo; s
           detail: "It moves to you as a piece of work of its own here; everything done so far is kept.",
           command: take.replace("%s", shellArg(unit)),
         })),
-        { label: "Follow along", detail: "See where it stands, without changing anything.", command: `${aidlcInvocation()} status --space ${shellArg(space)} --intent ${shellArg(intent.dirName)}` },
+        { label: "Follow along", detail: "See where it stands, without changing anything.", command: `${aidlcDispatcherInvocation("status")} --space ${shellArg(space)} --intent ${shellArg(intent.dirName)}` },
       ],
     };
   }

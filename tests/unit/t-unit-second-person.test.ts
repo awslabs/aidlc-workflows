@@ -74,7 +74,8 @@ function soloAtA(refundsDone = false, reportingStarted = true) {
 describe("a teammate opens solo work built from another machine", () => {
   test("is offered the whole work to carry on, an open Unit to take, or to follow along", () => {
     const home = soloAtA();
-    const ask = next(cloneOf(home.remote, "bob"));
+    const bob = cloneOf(home.remote, "bob");
+    const ask = next(bob);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
     expect(ask.question).toBe(
       "fixture is being built from another machine, on refunds (Functional Design). Carry on the whole work here, " +
@@ -83,8 +84,28 @@ describe("a teammate opens solo work built from another machine", () => {
     const choices = ask.choices as Array<{ label: string; command: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Carry on fixture here", "Take checkout-ui", "Follow along"]);
     expect(choices[1].command).toEndWith(`take checkout-ui --home ${HOME_RECORD}`);
-    // Follow along is the dispatcher's own status, which every install has.
-    expect(choices[2].command).toContain(`aidlc.ts status --space default --intent ${HOME_RECORD}`);
+    // Follow along is the dispatcher's `engine status`: a copied project spells
+    // the dispatcher `bun .claude/tools/aidlc.ts`, an installed one `aidlc`, and
+    // both run this same route.
+    const follow = /^(?:bun \S+\/tools\/aidlc\.ts|aidlc) (engine status .*)$/.exec(choices[2].command)?.[1];
+    expect(follow, choices[2].command).toBe(`engine status --space default --intent ${HOME_RECORD}`);
+    const shown = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), ...follow!.split(" ")], {
+      cwd: bob, env: { ...ENV, CLAUDE_PROJECT_DIR: bob, AIDLC_PROJECT_DIR: bob }, encoding: "utf-8",
+    });
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+  });
+
+  test("the stage it names is the one the other machine started last, never one skipped after it", () => {
+    const home = makeHome({ repos: {} });
+    const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
+    row("UNIT_STARTED", "functional-design", "refunds");
+    row("UNIT_STARTED", "code-generation", "refunds");
+    row("UNIT_SKIPPED", "infrastructure-design", "refunds");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "solo work under way"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ask = next(cloneOf(home.remote, "bob"));
+    expect(String(ask.question), JSON.stringify(ask)).toStartWith("fixture is being built from another machine, on refunds (Code Generation).");
   });
 
   test("between its Units, the offer names no Unit the other machine already finished", () => {
