@@ -1205,6 +1205,36 @@ describe("at the home", () => {
     );
   });
 
+  // A live run on Kiro CLI: after the lead's turn-down the team redid the Unit
+  // from billing's newer main; the push was refused as non-fast-forward, its
+  // branch on origin still holding the build that was turned down, and the
+  // agent handed the person git's own ways, a force push among them.
+  test("a redo built on the newer main whose branch on origin holds the turned-down build: the way on is a new branch the home follows", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "rebuild it on the new main"], home.dir).status).toBe(0);
+    // The redo, from billing's main and not on top of the pushed branch.
+    git(join(alice, "billing"), ["switch", "-q", "main"]);
+    git(join(alice, "billing"), ["branch", "-q", "-D", "refunds"]);
+    git(join(alice, "billing"), ["switch", "-q", "-c", "refunds", "main"]);
+    mkdirSync(join(alice, "billing", "lib"), { recursive: true });
+    writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    const said = String(refused.json?.error);
+    expect(said, refused.out).toContain("its branch refunds on origin in billing still holds the build pushed before");
+    expect(said).not.toContain("non-fast-forward");
+    expect(said).toContain("aidlc-unit.ts push --branch refunds-2`");
+    expect(said).toContain("AI-DLC never forces a push");
+    const again = run(UNIT, ["push", "--branch", "refunds-2"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(git(hosts.billing, ["show", "refunds-2:lib/refund.ts"])).toBe("export const refund = 2;");
+    expect(git(hosts.billing, ["rev-parse", "refunds"])).not.toBe(git(hosts.billing, ["rev-parse", "refunds-2"]));
+  });
+
   test("a turn-down at the home reaches the team once, in the home's words", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);

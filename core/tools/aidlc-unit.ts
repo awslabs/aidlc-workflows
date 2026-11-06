@@ -6662,7 +6662,26 @@ function pushUnit(args: string[], projectDir?: string): void {
   }
   for (const { repo, dir, name, remote, paths } of planned) {
     const pushed = git(dir, ["push", "-u", remote, branch]);
-    if (!pushed.ok) fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}`);
+    if (!pushed.ok) {
+      // Its branch on the remote holds commits this build is not on top of (a
+      // redo built from the newer main after a turn-down): replacing that
+      // branch takes a force push, which AI-DLC never makes, so the way on it
+      // gives is a new branch the lead's project follows from the result.
+      const theirs = `refs/remotes/${remote}/${branch}`;
+      git(dir, ["fetch", "-q", remote, `${branch}:${theirs}`]);
+      const behind = git(dir, ["rev-parse", "--verify", "--quiet", theirs]).ok &&
+        !git(dir, ["merge-base", "--is-ancestor", theirs, "HEAD"]).ok;
+      if (behind) {
+        const fresh = `${branch}-2`;
+        fail(
+          `${unit} was not pushed: its branch ${branch} on ${remote} in ${name} still holds the build pushed before, and ` +
+            `this build is not on top of it. Ask the person whether to push it as a new branch, ${fresh}, which the ` +
+            `lead's project then follows; on their yes, run \`${aidlcToolInvocation("unit")} push --branch ${fresh}\`. ` +
+            `Replacing ${branch} itself takes a force push of their own; AI-DLC never forces a push.${whereNow()}`,
+        );
+      }
+      fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}`);
+    }
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
     const base = earlier.get(repo)?.base ??
       (git(dir, ["merge-base", "HEAD", repoIntegration(dir, remote)]).stdout.trim() || head);
