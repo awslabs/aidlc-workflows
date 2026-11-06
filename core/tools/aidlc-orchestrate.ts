@@ -14291,13 +14291,15 @@ function batchBuiltElsewhereStep(projectDir: string, stage: string, batch: numbe
   if (rows.slice(at + 1).some((row) => row.event === "SESSION_ENDED" &&
     auditBlockField(row.block, "Session") === building.chat)) return null;
   const take = `${aidlcToolInvocation("swarm")} take-over --batch ${batch} --message <id>`;
-  const step = printDirective(
-    `The side-by-side build of ${units.join(", ")} was started from another chat on this machine and has not ` +
-      "landed, so run nothing for it here and end your turn. When the person asks to build these Units in this chat " +
-      `instead, run \`${take}\`, with <id> the message they asked in, then run bare ` +
-      `\`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
-  );
-  step.narration = BUILDING_IN_OTHER_CHAT;
+  const step: Directive = {
+    ...printDirective(
+      `The side-by-side build of ${units.join(", ")} was started from another chat on this machine and has not ` +
+        "landed, so run nothing for it here and end your turn. When the person asks to build these Units in this " +
+        `chat instead, run \`${take}\`, with <id> the message they asked in, then run bare ` +
+        `\`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
+    ),
+    narration: BUILDING_IN_OTHER_CHAT,
+  };
   turnEndingPrints.add(step);
   planWaitPrints.add(step);
   return step;
