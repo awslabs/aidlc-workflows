@@ -664,5 +664,46 @@ describe("a likely repo this workspace has no copy of", () => {
     expect(notice).not.toContain("Do you want me to clone");
     expect(took.json?.offer).toBeUndefined();
   });
+
+  test("on Codex, a take whose repos sit beside the workspace names Codex's own step to let it write there, and changes no setting", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    // Her own copies live beside the workspace, as her repos.local.json says.
+    for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as "billing"], join(alice, ".."), `${name}-mine`, "alice");
+    writeFileSync(join(alice, "repos.local.json"), `${JSON.stringify({ repos: [
+      { name: "checkout-api", path: "../checkout-api-mine" },
+      { name: "billing", path: "../billing-mine" },
+    ] })}\n`);
+    const onCodex = run(UNIT, ["take", "refunds", "--home", HOME], alice, { ...ENV, AIDLC_HARNESS_NAME: "codex" });
+    expect(onCodex.status, onCodex.out).toBe(0);
+    expect(String(onCodex.json?.notice)).toContain(
+      "Codex writes only inside this folder unless you start it with the others: to let it write in ../checkout-api-mine " +
+        "and ../billing-mine, start Codex here with `codex --add-dir ../checkout-api-mine --add-dir ../billing-mine`.",
+    );
+    expect(existsSync(join(alice, ".codex", "config.toml"))).toBe(false);
+  });
+
+  test("on another host, or with every repo inside the workspace, nothing is said about Codex", () => {
+    const { took } = (() => {
+      const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+      const home = makeHome({ repos: hosts });
+      expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+      expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+      git(home.dir, ["add", "-A"]);
+      git(home.dir, ["commit", "-q", "-m", "teams"]);
+      git(home.dir, ["push", "-q", "origin", "main"]);
+      const alice = cloneOf(home.remote, "alice");
+      for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+      return { took: run(UNIT, ["take", "refunds", "--home", HOME], alice, { ...ENV, AIDLC_HARNESS_NAME: "codex" }) };
+    })();
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).not.toContain("--add-dir");
+  });
 });
 

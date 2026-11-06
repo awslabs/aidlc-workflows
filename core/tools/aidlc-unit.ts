@@ -197,7 +197,7 @@ import {
   TEAM_RHYTHM_OFFER,
   theTeam,
 } from "./aidlc-unit-teams.js";
-import { localUnreadableLine, repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
+import { displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
   captureStageValidationBasis,
@@ -219,6 +219,7 @@ import {
   entrySkillInvocation,
   isCompiledExecutable,
   quoteCommandArgument,
+  runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
 import { UNIT_VERBS } from "./aidlc-command.ts";
@@ -7439,6 +7440,21 @@ function takeFromFile(pd: string, path: string): void {
   }));
 }
 
+// On Codex, which writes only inside the folder it started in unless the
+// person adds others: their own step for the Unit's repos that sit outside
+// the workspace (Codex's --add-dir). AI-DLC writes no sandbox setting.
+function codexWritableLine(pd: string, repos: string[]): string {
+  if (runtimeHarnessName(pd) !== "codex") return "";
+  const local = readWorkspaceRepos(pd);
+  const outside = repos.filter((repo) => {
+    const there = relative(resolve(pd), resolve(repoDir(pd, repo)));
+    return there.startsWith("..") || isAbsolute(there);
+  }).map((repo) => displayRepoPath(local.entries.get(repo)?.path ?? repo));
+  if (outside.length === 0) return "";
+  return ` Codex writes only inside this folder unless you start it with the others: to let it write in ${joinNames(outside)}, ` +
+    `start Codex here with \`codex ${outside.map((path) => `--add-dir ${shellArg(path)}`).join(" ")}\`.`;
+}
+
 // The likely repos of a taken Unit that this workspace has no checkout of: a
 // line each with the way to one, and, for those repos.json gives an address,
 // the offer to clone them where it puts them (add-repo's clone, on their yes).
@@ -7455,7 +7471,8 @@ function likelyReposNotHere(
   if (unreadable !== null) return { lines: ` ${unreadable}`, question: "", offer: {} };
   const cloneable = missing.filter((repo) => repoCloneable(pd, repo));
   return {
-    lines: missing.filter((repo) => !cloneable.includes(repo)).map((repo) => ` ${repoNotThereLine(pd, repo)}`).join(""),
+    lines: missing.filter((repo) => !cloneable.includes(repo)).map((repo) => ` ${repoNotThereLine(pd, repo)}`).join("") +
+      codexWritableLine(pd, likely.length > 0 ? [...new Set(likely.map((repo) => repo.split("/")[0]))].filter((repo) => recorded.includes(repo)) : recorded),
     question: cloneable.length > 0 ? ` ${repoCloneOfferLine(pd, cloneable)}` : "",
     offer: cloneable.length === 0 ? {} : {
       offer: {
