@@ -6981,12 +6981,13 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     const shown = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/amendments/${amendment.input}`, "--"]);
     if (!shown.ok) continue;
     // Pushed after the change came: it was built on the older one, and its stages hear it as stale.
+    // Both times are to the second, so a change of the push's own second reads as after it.
     const pushedAt = readAuditShardEvents(projectDir).filter((row) => row.event === "UNIT_PUSHED")
       .map((row) => row.timestamp).sort().at(-1);
     const line = takeNewerInput(projectDir, record, unit, amendment.input, shown.stdout, {
       at: amendment.at,
       done: mine.payload.done === true,
-      pushed: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed" && (pushedAt === undefined || amendment.at > pushedAt),
+      pushed: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed" && (pushedAt === undefined || amendment.at >= pushedAt),
       proposedHere: (mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input),
     });
     if (line !== null) lines.push(line);
