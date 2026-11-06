@@ -220,6 +220,38 @@ describe("t-newest-request-wins: the newest request is the one the work plans fr
     expect(JSON.stringify(await wordsDuringWork(proj, SECOND_SESSION))).not.toContain(WAITS);
   });
 
+  // /aidlc-init with only a description hands it on as new work (`next --new-intent`).
+  test("the newer request started with /aidlc-init takes the waiting one's place too", async () => {
+    const proj = fresh();
+    await asks(proj, SESSION, SHORT);
+    await later();
+    await say(proj, `/aidlc-init ${FULLER}`, "claude", { session: SECOND_SESSION });
+    const question = await proposed(proj, "claude", SECOND_SESSION, await next(proj, "claude", SECOND_SESSION, ["--new-intent", FULLER]));
+    expect(newerLines(question), JSON.stringify(question).slice(0, 400)).toEqual([lineFor(FULLER)]);
+    await picks(proj, SECOND_SESSION, question);
+    expect(recorded(proj).description).toBe(FULLER);
+    expect(JSON.stringify(await wordsDuringWork(proj, SECOND_SESSION))).not.toContain(WAITS);
+  });
+
+  // Archived work is no work in hand: the request after it gets the fresh plan step.
+  test("with only archived work here, the newer request takes the waiting one's place too", async () => {
+    const proj = fresh();
+    await picks(proj, SESSION, await asks(proj, SESSION, "an old notes app"));
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const old = readdirSync(intents).find((name) => name.endsWith("-the-work")) ?? "";
+    const archived = spawnSync(process.execPath, [DISPATCHER, "engine", "intent", "archive", old, "--project-dir", proj], {
+      cwd: proj, env: env(proj, { session: SESSION }), encoding: "utf-8",
+    });
+    expect(archived.status, `${archived.stdout}${archived.stderr}`).toBe(0);
+    await later();
+    await asks(proj, SESSION, SHORT);
+    await later();
+    const question = await newestReading(proj, SECOND_SESSION, await asks(proj, SECOND_SESSION, FULLER));
+    expect(newerLines(question)).toEqual([lineFor(FULLER)]);
+    await picks(proj, SECOND_SESSION, question);
+    expect(JSON.stringify(await wordsDuringWork(proj, SECOND_SESSION))).not.toContain(WAITS);
+  });
+
   test("the newer request sent to a tailored plan marks the waiting one replaced and says the line", async () => {
     const proj = fresh();
     await asks(proj, SESSION, SHORT);

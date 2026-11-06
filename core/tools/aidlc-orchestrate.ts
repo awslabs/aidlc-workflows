@@ -3740,10 +3740,12 @@ function openFrontQuestion(
  */
 function newestRequestReplaces(pd: string, saved: string, words: string): void {
   if (isReadOnlyEngineProbe() || loadStateFileIfPresent(pd) !== null) return;
-  // Work whose record is in this checkout, of any kind, keeps today's path; a
-  // row whose record is missing here is no work started.
+  // Work whose record is in this checkout keeps today's path. A row whose
+  // record is missing here, or archived work, is no work in hand, as creation
+  // reads them (unselectedRecords).
   const workHere = listSpaces(pd).some(({ name }) => readIntentRegistry(pd, name).some((row) =>
-    row.dirName !== undefined && row.dirName !== "" && existsSync(join(intentsDir(pd, name), row.dirName, "aidlc-state.md"))));
+    !isArchivedIntent(row) && row.dirName !== undefined && row.dirName !== "" &&
+    existsSync(join(intentsDir(pd, name), row.dirName, "aidlc-state.md"))));
   if (workHere) return;
   const waiting = waitingFrontRequests(pd).filter((question) => question.id !== saved);
   if (waiting.length === 0) return;
@@ -7245,7 +7247,7 @@ function planProposalDirective(
       pd, description, "", "front", undefined, flags.newIntent === true, derivedFrom, undefined,
       routingSettings(carriedRoutingFlags(flags)),
     );
-  if (question !== kept && derivedFrom === undefined && finished === undefined && flags.newIntent !== true) {
+  if (question !== kept && derivedFrom === undefined && finished === undefined) {
     newestRequestReplaces(pd, question.id, description);
   }
   const next = `${aidlcToolInvocation("orchestrate")} next`;
