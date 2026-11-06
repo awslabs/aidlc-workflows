@@ -11,7 +11,6 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +18,7 @@ import {
   artifactFilename,
   loadStageGraphAll,
   readAuditShardEvents,
+  requireLiveClaimForTeamUnit,
   unitOpenCheckpoints,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, createTestProject, seedAidlcMemory, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
@@ -31,6 +31,7 @@ import {
   clone,
   git,
   nextDirective,
+  prepareCandidate,
   runMergeTool,
   tempDirs,
   unitProgressRow,
@@ -48,7 +49,9 @@ const REVIEWER = "aidlc-architecture-reviewer-agent";
 
 // The lead's own checkout at Construction with two team Units and no walking
 // skeleton, pushed to the remote every team clones. The plan is made here.
-function leadsCheckout(ownership: "team" | "solo" = "team"): { lead: string; remote: string } {
+// `fdOnly`: Functional Design is the one per-Unit stage, the rest skipped.
+function leadsCheckout(ownership: "team" | "solo" = "team", fdOnly = false): { lead: string; remote: string } {
+  const later = fdOnly ? "SKIP" : "EXECUTE";
   const lead = createTestProject();
   tempDirs.push(lead);
   seedAidlcMemory(lead);
@@ -74,10 +77,10 @@ function leadsCheckout(ownership: "team" | "solo" = "team"): { lead: string; rem
 
 ### CONSTRUCTION PHASE
 - [-] functional-design \u2014 EXECUTE
-- [ ] nfr-requirements \u2014 EXECUTE
-- [ ] nfr-design \u2014 EXECUTE
-- [ ] infrastructure-design \u2014 EXECUTE
-- [ ] code-generation \u2014 EXECUTE
+- [ ] nfr-requirements \u2014 ${later}
+- [ ] nfr-design \u2014 ${later}
+- [ ] infrastructure-design \u2014 ${later}
+- [ ] code-generation \u2014 ${later}
 - [ ] build-and-test \u2014 EXECUTE
 
 ## Current Status
@@ -294,6 +297,44 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     walkFunctionalDesign(lead, "alpha");
     // A second chat in the same checkout meets the same step.
     expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
+    // Its Code Generation and Bolt work need no claim either, as the
+    // walking skeleton on main does not; the teammate's Unit still does.
+    expect(requireLiveClaimForTeamUnit(lead, "alpha")).toBeNull();
+    expect(() => requireLiveClaimForTeamUnit(lead, "beta")).toThrow("requires a live claim");
+  });
+
+  test("once the lead's Unit is done, the board is the step while the teams' Units are not merged", () => {
+    const { lead, remote } = leadsCheckout("team", true);
+    leadStartsAlpha(lead);
+    teammateClaimsBeta(remote);
+    expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
+    writeAndReview(lead, "alpha");
+    expect(unitVerb(lead, "complete", "alpha").status).toBe(0);
+    nextDirective(lead);
+    for (const args of [
+      ["report", "--stage", FD, "--unit", "alpha", "--result", "awaiting-approval"],
+      ["report", "--stage", FD, "--unit", "alpha", "--result", "approved", "--user-input", "Approve"],
+    ]) {
+      const reported = runMergeTool(ORCH, args, lead);
+      expect(reported.status, reported.out).toBe(0);
+    }
+    for (let chat = 0; chat < 2; chat++) {
+      const after = nextDirective(lead);
+      expect(after, JSON.stringify(after).slice(0, 400)).toMatchObject({ kind: "notice" });
+      expect(String(after.message)).toContain("Team Construction Dispatcher");
+      expect(String(after.message)).toContain("beta");
+    }
+  });
+
+  test("a teammate's published Unit is offered to the lead for review while the lead walks theirs", () => {
+    const { lead, remote } = leadsCheckout();
+    leadStartsAlpha(lead);
+    prepareCandidate(remote, "beta", "team-b");
+    const offer = nextDirective(lead);
+    expect(offer, JSON.stringify(offer).slice(0, 400)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["review"] });
+    expect(String(offer.question)).toContain("beta is ready from team-b");
+    // Not now: the walk goes on with alpha.
+    expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
   });
 
   test("nobody is offered the lead's Unit while the lead walks it", () => {
@@ -305,7 +346,12 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     expect(claimable(third)).toEqual([]);
     const shown = JSON.stringify(nextDirective(third));
     expect(shown).not.toContain("--claim alpha");
+    expect(shown).toContain("is being built in the checkout that started it");
     expect(claimable(lead)).toEqual([]);
+    // Asked for by name, it is taken, and the claim says so once.
+    const taken = runMergeTool(UNIT, ["claim", "alpha", "--team", "team-c"], third);
+    expect(taken.status, taken.out).toBe(0);
+    expect(String(JSON.parse(taken.stdout).warning)).toContain("was being built in the checkout that started it");
   });
 });
 

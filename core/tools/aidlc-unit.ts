@@ -38,6 +38,7 @@ import {
   auditBlockField,
   auditShardBlocks,
   auditShardName,
+  knownAuditShardName,
   type AuditShardEvent,
   type CachedUnitClaim,
   candidateReviewCoverageProjection,
@@ -228,6 +229,8 @@ export interface UnitClaimOverview {
   claimed: Array<{ unit: string; owner: string; generation: number; blockedBy?: string[] }>;
   waiting: Array<{ unit: string; blockedBy: string[] }>;
   claims: Map<string, UnitClaimView>;
+  /** Units a checkout walks without a claim (the lead's own, begun before the teams took the others). */
+  walked?: string[];
   warning?: string;
 }
 
@@ -755,6 +758,7 @@ function buildOverview(
   const claimable: string[] = [];
   const claimed: UnitClaimOverview["claimed"] = [];
   const waiting: Array<{ unit: string; blockedBy: string[] }> = [];
+  const walkedUnits: string[] = [];
   for (const unit of opening.units) {
     const claim = claims.get(unit);
     if (opening.completed.has(unit)) {
@@ -773,12 +777,22 @@ function buildOverview(
       });
       continue;
     }
-    if (walked.has(unit)) continue;
+    if (walked.has(unit)) {
+      walkedUnits.push(unit);
+      continue;
+    }
     const blockedBy = opening.blockers.get(unit) ?? [];
     if (blockedBy.length > 0) waiting.push({ unit, blockedBy });
     else claimable.push(unit);
   }
-  return { claimable, claimed, waiting, claims, ...(warning ? { warning } : {}) };
+  return {
+    claimable,
+    claimed,
+    waiting,
+    claims,
+    ...(walkedUnits.length > 0 ? { walked: walkedUnits } : {}),
+    ...(warning ? { warning } : {}),
+  };
 }
 
 function cacheClaims(
@@ -4264,6 +4278,13 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (current?.status === "claimed") {
     fail(`Unit "${unit}" is already claimed by "${current.owner}".`);
   }
+  // Another checkout was building it without a claim (#3610): the person asked
+  // for it by name, so the claim is taken and they hear it once.
+  const walkedIn = unitsWalkedWithoutClaim(pd).get(unit);
+  const walkedWarning = walkedIn !== undefined && walkedIn !== knownAuditShardName(pd)
+    ? `Unit "${unit}" was being built in the checkout that started it, before any team took a Unit; from now on ` +
+      "it is yours, and that checkout sees it claimed."
+    : null;
   const generation =
     current?.status === "released"
       ? current.generation
@@ -4342,7 +4363,8 @@ function claimUnit(args: string[], projectDir?: string): void {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
   spend();
-  console.log(JSON.stringify({ claimed: true, ...stamp, ...(planWarning ? { warning: planWarning } : {}) }));
+  const warning = [planWarning, walkedWarning].filter((line): line is string => !!line).join(" ");
+  console.log(JSON.stringify({ claimed: true, ...stamp, ...(warning ? { warning } : {}) }));
 }
 
 // A checkout whose own shard main already holds claims into a shard of the

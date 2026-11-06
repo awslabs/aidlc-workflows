@@ -5713,6 +5713,8 @@ export interface TeamConstructionBoard {
     releasedAfterGitAccepted: boolean;
   }>;
   claimable: string[];
+  /** Units a checkout walks without a claim (the lead's own, begun before the teams took the others). */
+  walked: string[];
   blocked: Array<{ unit: string; blockedBy: string[] }>;
   /** Claimed Units a team published that wait for review here (not pinned at that commit, nothing left to land first). */
   ready: Array<{ unit: string; owner: string; key: string }>;
@@ -5967,6 +5969,7 @@ function assembleTeamConstructionBoard(
     claims,
     awaitingMerge,
     claimable,
+    walked: [...(overview.walked ?? [])].sort(compareBoardKeys),
     blocked,
     ready,
     unpushed: target === null ? null : { units: landedHere.map((row) => row.unit), ...target },
@@ -6057,15 +6060,18 @@ export function renderTeamConstructionBoard(
   const claimedUnits = board.claims.filter((claim) => claim.status === "claimed");
   if (nextActions.length === 0) {
     nextActions.push(
-      claimedUnits.length === 0
+      claimedUnits.length === 0 && board.walked.length === 0
         ? "- No dispatcher action is pending; main may resume the normal Construction walk."
         : mode === "dispatcher"
-        ? "- Nothing runs from this checkout: every Unit not yet merged is claimed or waits on one. " +
-          "Each claimed Unit is worked in its own checkout:"
+        ? "- Nothing runs from this checkout: every Unit not yet merged is claimed, waits on one, or is built " +
+          "where it was started. Each claimed Unit is worked in its own checkout:"
         : "- No dispatcher action is pending. Each claimed Unit is worked in its own checkout:",
     );
-  } else if (claimedUnits.length > 0) {
+  } else if (claimedUnits.length > 0 || board.walked.length > 0) {
     nextActions.push("- Each claimed Unit is worked in its own checkout:");
+  }
+  for (const unit of board.walked) {
+    nextActions.push(`  - \`${unit}\` is being built in the checkout that started it, before any team took a Unit.`);
   }
   for (const claim of claimedUnits) {
     nextActions.push(
@@ -16241,6 +16247,19 @@ function emitTeamUnitMajorRunStage(
       unit: scopeStamp.unit,
     });
     return;
+  }
+  // The Unit this checkout walked without a claim is done; while the teams'
+  // Units are not all merged, the board is the step here, as for a checkout
+  // that walks none (#3610).
+  if (held !== null && model !== null) {
+    const merged = model.mergedUnits;
+    if (resolution.batches.flat().some((unit) => !held.has(unit) && !merged.has(unit))) {
+      emit(noticeDirective(renderTeamConstructionBoard(
+        buildTeamConstructionBoard(projectDir, refreshedState, { model }),
+        "dispatcher",
+      )));
+      return;
+    }
   }
   const next = nextInScopeStage(finalStage.slug, scope, refreshedState);
   if (!next) {

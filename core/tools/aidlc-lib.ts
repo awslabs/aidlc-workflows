@@ -30525,6 +30525,9 @@ export function requireLiveClaimForTeamUnit(
   }
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
+    // A Unit this checkout walks without a claim is its own, as the walking
+    // skeleton on main is (#3610).
+    if (!selector.intent && !selector.space && unitsHeldHere(pd)?.has(unit)) return null;
     throw new Error(
       `Unit Ownership: team requires a live claim for Unit "${unit}" before fork or lifecycle work.`,
     );
