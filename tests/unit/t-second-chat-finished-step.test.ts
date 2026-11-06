@@ -22,8 +22,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { cleanupTestProject, seededRecordDir, setupIntegrationProject } from "../harness/fixtures.ts";
+import { cleanupTestProject, seedBoltDag, seededRecordDir, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { hostNamesThisChat } from "../../dist/kiro-ide/.kiro/tools/aidlc-record-core.ts";
 
@@ -43,6 +44,27 @@ const HOST_ENV = [
 ];
 const FIRST_DOCUMENT = "# Requirements\n\n## Functional Requirements\n\n- B1: Only the owner can read a saved search.\n";
 const SECOND_DOCUMENT = "# Requirements\n\n## Functional Requirements\n\n- M1: Saved searches.\n- M2: Owners only.\n";
+
+// Construction built stage by stage, solo, at its first per-Unit stage.
+const UNIT_STAGE = "functional-design";
+const CONSTRUCTION_STAGES = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design",
+  "code-generation", "build-and-test"];
+const STAGE_MAJOR_STATE = [
+  "# AI-DLC State Tracking", "",
+  "## Project Information",
+  "- **Project**: Add saved searches", "- **Project Type**: Greenfield", "- **Scope**: feature", "- **State Version**: 8", "",
+  "## Runtime State",
+  "- **Revision Count**: 0", "- **Skeleton Stance**: off", "- **Construction Iteration**: stage-major",
+  "- **Unit Ownership**: solo", "- **Construction Checkpoints**: enabled", "- **Construction Execution**: serial",
+  "- **Construction Autonomy Mode**: gated", "",
+  "## Scope Configuration",
+  "- **Stages to Execute**: all", "- **Stages to Skip**: none", "- **Depth**: Standard", "- **Test Strategy**: Standard", "",
+  "## Stage Progress", "",
+  "### CONSTRUCTION PHASE",
+  ...CONSTRUCTION_STAGES.map((stage) => `- [ ] ${stage} \u2014 EXECUTE`), "",
+  "## Current Status",
+  "- **Lifecycle Phase**: CONSTRUCTION", `- **Current Stage**: ${UNIT_STAGE}`, "- **Status**: Running", "",
+].join("\n");
 
 type Json = Record<string, unknown>;
 type Run = { code: number; stdout: string; stderr: string };
@@ -83,9 +105,13 @@ class Folder {
   readonly env: NodeJS.ProcessEnv;
   readonly outputs: string[] = [];
 
-  constructor() {
-    this.dir = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
+  constructor(options: { stageMajorUnits?: string[] } = {}) {
+    this.dir = setupIntegrationProject(options.stageMajorUnits ? {} : { withState: "state-brownfield-feature.md" });
     created.push(this.dir);
+    if (options.stageMajorUnits) {
+      writeFileSync(seededStateFile(this.dir), STAGE_MAJOR_STATE);
+      seedBoltDag(this.dir, options.stageMajorUnits);
+    }
     this.stageDir = join(seededRecordDir(this.dir), "inception", STAGE);
     this.questions = join(this.stageDir, `${STAGE}-questions.md`);
     this.artifact = join(this.stageDir, "requirements.md");
@@ -198,6 +224,22 @@ class Chat {
 
   said(prompt: string): void {
     this.folder.ok(this.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt }), "the person's message");
+  }
+
+  // An engine command as a step prints it: `bun .claude/tools/<tool>.ts ...`.
+  printed(command: string): Run {
+    const [bun, file, ...args] = command.trim().split(/\s+/).map((word) => word.replace(/^'|'$/g, ""));
+    expect(bun, command).toBe("bun");
+    return this.folder.run([BUN, join(this.folder.dir, file), ...args, "--project-dir", this.folder.dir], this.id);
+  }
+
+  // The person types a setting; the agent runs the setter the step names.
+  typedSetting(prompt: string, flags: string[]): void {
+    this.said(prompt);
+    const step = this.folder.json(this.tool("orchestrate", ["next", ...flags]), prompt);
+    const setter = /Run `(bun [^`]+)` to update the configuration/.exec(String(step.message))?.[1];
+    expect(setter, JSON.stringify(step)).toBeDefined();
+    this.folder.ok(this.printed(setter!), `the setter for ${prompt}`);
   }
 
   summaryArgs(): string[] {
@@ -318,6 +360,77 @@ describe("t-second-chat-finished-step: a stage finished in another chat is shown
       expect(folder.stageMark()).toBe("x");
     });
   }
+
+  // AIDA review 5797127665 F2: a summary the person asked to change, with
+  // summary confirmation off since, has no confirmation on record to put back.
+  test("a summary they asked to change, with confirmation off since, is left as it is", () => {
+    const folder = new Folder();
+    const first = new Chat(folder, FIRST);
+    first.start();
+    folder.ok(first.tool("jump", ["execute", "--target", STAGE, "--direction", "redo"]), "start the stage");
+    first.next();
+    first.said("Q1: A");
+    first.write(folder.questions, questionsBody(""));
+    folder.json(first.askSummary(), "the first chat asks the summary");
+    const second = new Chat(folder, SECOND);
+    second.start();
+    second.said("Request changes: the team can read saved searches too");
+    second.next();
+    second.write(folder.questions, questionsBody("Request changes"));
+    folder.json(second.tool("log", ["answer", ...second.summaryArgs(), "--details",
+      "Request changes: the team can read saved searches too"]), "the second chat records the change request");
+    second.typedSetting("/aidlc --summary-confirmation off", ["--summary-confirmation", "off"]);
+    expect(second.next()).toMatchObject({ kind: "run-stage", stage: STAGE });
+    expect(second.finishStage(SECOND_DOCUMENT).kind).toBe("print");
+    expect(folder.stageMark()).toBe("?");
+    const questions = readFileSync(folder.questions, "utf-8");
+    first.said("1");
+    first.write(folder.questions, questionsBody("Looks correct Looks correct"));
+    const written = readFileSync(folder.questions, "utf-8");
+    expect(redirected(first.answerSummary())).toContain("orchestrate next`");
+    expect(readFileSync(folder.questions, "utf-8")).toBe(written);
+    expect(written).not.toBe(questions);
+  });
+
+  // AIDA review 5797127665 F1: Construction stage by stage, the last Unit's
+  // summary left showing in one chat while the other confirms it, builds the
+  // Units and opens the stage's gate. The record is set up as the stage's own
+  // commands leave it; the Units' build in between is not this file's subject.
+  test("a Unit's late summary answer names the stage's waiting gate, built stage by stage", () => {
+    const folder = new Folder({ stageMajorUnits: ["alpha", "beta"] });
+    const state = seededStateFile(folder.dir);
+    writeFileSync(state, readFileSync(state, "utf-8").replace(`- [ ] ${UNIT_STAGE} `, `- [-] ${UNIT_STAGE} `));
+    appendAuditEntry("STAGE_STARTED", { Stage: UNIT_STAGE }, folder.dir);
+    const unitDir = join(seededRecordDir(folder.dir), "construction", "beta", UNIT_STAGE);
+    const questions = join(unitDir, `${UNIT_STAGE}-questions.md`);
+    const summary = ["--stage", UNIT_STAGE, "--unit", "beta", "--checkpoint", "summary-confirmation",
+      "--questions-file", questions];
+    const first = new Chat(folder, FIRST);
+    const second = new Chat(folder, SECOND);
+    first.start();
+    second.start();
+    first.said("carry on");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(questions, questionsBody(""));
+    folder.json(first.tool("log", ["decision", ...summary, "--decision", SUMMARY_QUESTION,
+      "--options", "Looks correct,Request changes"]), "the first chat asks beta's summary");
+    second.said("the summary for beta looks correct, carry on");
+    writeFileSync(questions, questionsBody("Looks correct"));
+    folder.json(second.tool("log", ["answer", ...summary, "--details", "Looks correct"]), "the second chat confirms it");
+    const confirmed = readFileSync(questions, "utf-8");
+    // The second chat built the Units and opened the stage's gate.
+    writeFileSync(state, readFileSync(state, "utf-8").replace(`- [-] ${UNIT_STAGE} `, `- [?] ${UNIT_STAGE} `));
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", {
+      Stage: UNIT_STAGE, "Question Id": "f1a1da00", "Question Type": "gate", "Question Chat": SECOND,
+    }, folder.dir);
+    first.said("1");
+    first.write(questions, questionsBody("Looks correct Looks correct"));
+    const step = redirected(first.tool("log", ["answer", ...summary, "--details", "Looks correct"]));
+    expect(step).toContain("orchestrate next`");
+    // Stage by stage the gate is the stage's own, so its Request Changes is too.
+    expect(step).toContain(`report --stage ${UNIT_STAGE} --result rejected`);
+    expect(readFileSync(questions, "utf-8")).toBe(confirmed);
+  });
 
   test("a late answer to one of the stage's own questions names the waiting gate too", () => {
     const { folder, first } = secondChatFinishedTheStage();

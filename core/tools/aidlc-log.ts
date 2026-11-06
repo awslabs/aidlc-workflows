@@ -250,6 +250,8 @@ import {
   summaryQuestionFileRelative,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
+  summaryAuthorizationThisAttempt,
+  readSummaryAuthorization,
   summaryConfirmationAnswer,
   summaryConfirmationContentHash,
   singleStageAttemptIsOpen,
@@ -1018,6 +1020,14 @@ function summaryAnswerPutBack(content: string): string | null {
   return null;
 }
 
+// The positive summary confirmation this questions file stands on: the
+// stage's own for this attempt, or the Unit's.
+function summaryConfirmedOnRecord(pd: string, stage: string, unit: string | null, questions: string): boolean {
+  const authorization = unit === null ? summaryAuthorizationThisAttempt(pd, stage) : readSummaryAuthorization(pd, stage, unit);
+  return authorization !== null && authorization.choice === "Looks correct" &&
+    authorization.questions_file.replaceAll("\\", "/") === questions;
+}
+
 // A stage's own question asked or answered while its gate waits (a chat that
 // was still showing it when another chat finished the stage): the stage is
 // done, so the step is that gate, shown with `next`, the documents as they are,
@@ -1030,7 +1040,10 @@ function summaryAnswerPutBack(content: string): string | null {
 // the gate's own check finds the file as the other chat left it. True when it
 // printed the step.
 function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "answer"): boolean {
-  if (flags.unit !== undefined || flags.single !== undefined) return false;
+  if (flags.single !== undefined) return false;
+  // A Unit's own question at the stage's gate (Construction stage by stage):
+  // the Unit's summary and documents are done too.
+  const unit = flags.unit ?? null;
   if (flags.checkpoint !== undefined && flags.checkpoint !== "summary-confirmation") return false;
   const stage = flags.stage;
   const pd = resolveActiveProjectDir(projectDir, stage);
@@ -1043,12 +1056,14 @@ function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "
   if (getField(content, "Current Stage")?.trim() !== stage) return false;
   if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") return false;
   if (stageBox(content, stage) !== "awaiting-approval") return false;
-  const gate = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage, unit: null });
+  const gate = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage });
   const elsewhere = gate !== null && shownOnlyInOtherChats(pd, gate.id, commandChat(pd));
   if (flags.checkpoint === undefined && !elsewhere) return false;
   const node = loadStageGraphAll().find((entry) => entry.slug === stage);
-  const questions = node ? summaryQuestionFileRelative(pd, node, content, null) : null;
-  if (questions !== null) {
+  const questions = node ? summaryQuestionFileRelative(pd, node, content, unit) : null;
+  // Only a confirmation on record for this attempt is put back: a summary the
+  // person asked to change, with summary confirmation off since, stays as it is.
+  if (questions !== null && summaryConfirmedOnRecord(pd, stage, unit, questions)) {
     try {
       const path = resolve(pd, questions);
       const putBack = summaryAnswerPutBack(readFileSync(path, "utf-8"));
@@ -1060,7 +1075,7 @@ function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "
   const next = aidlcDispatcherInvocation("orchestrate next");
   const waits = `Stage "${stage}" is finished and waiting for the person's approval` +
     `${elsewhere ? ", opened in another chat," : ""} with its documents as they are, so nothing was recorded`;
-  const change = `When it asked for a change, run \`${requestChangesReportCommand(pd, stage, undefined)}\` and ` +
+  const change = `When it asked for a change, run \`${requestChangesReportCommand(pd, stage, flags.unit)}\` and ` +
     "follow what it returns: their messages go on the record as what should change.";
   const message = verb === "decision"
     ? `${waits}: there is no question of it to ask now. When the person's last reply asked for nothing to change, ` +
