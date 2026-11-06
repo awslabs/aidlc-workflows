@@ -562,6 +562,21 @@ describe("the push", () => {
     );
   });
 
+  // A live run on opencode: the push question was left open in one chat; in a
+  // new chat "where were we?" got the words step, which never named the push,
+  // and the person was asked to carry on to a next stage there is none of.
+  test("words in a new chat while the push question is open: the step names the push, and going on puts it again", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "first" }).ask_type).toBe("unit-push");
+    const words = next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "second" }, ["--resume", "where were we?"]);
+    expect(words.kind, JSON.stringify(words).slice(0, 500)).toBe("print");
+    expect(String(words.message)).toContain("refunds is built and approved, and its push is the next step.");
+    expect(String(words.message)).not.toContain("engine status");
+    expect(next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "second" }).ask_type).toBe("unit-push");
+  });
+
   test("back on main after a push, with the Unit's files changed again: the next push carries them onto its branch, and nothing of theirs moves", () => {
     const { hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);

@@ -731,6 +731,7 @@ import {
   renderUnitBoard,
   type UnitBoardRow,
   UNIT_PUSH_FIELD,
+  buildWaitsForPush,
   unitBranchOf,
   isHomesCopiedWork,
   unitBuildOf,
@@ -4855,7 +4856,7 @@ function openDecisionQuestionReading(wordsAlone: boolean): string {
 // change to this work: the conductor reads which, the same split as
 // openGateReplyDirective. The person's words never travel in the re-entry
 // report; the engine kept them for the other reading.
-function reentryReplyDirective(requestId: string, pd: string, undo = "", work: string[] = [], openWork = ""): PrintDirective {
+function reentryReplyDirective(requestId: string, pd: string, undo = "", work: string[] = [], openWork = "", pushDue?: string): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // The pieces of work here by exact name, the one in progress marked: the
   // agent reads whether the words name exactly one ("the auth one" with auth
@@ -4869,14 +4870,20 @@ function reentryReplyDirective(requestId: string, pd: string, undo = "", work: s
     "of another), ask them once in plain words which they meant, then stop.";
   // One piece here: its name, so the agent compares their words with it.
   const on = work.length < 2 && openWork !== "" ? ` on "${openWork}"` : "";
+  // A Unit's build whose push is due: going on, and where it stands, are its push question.
+  const goOn = pushDue === undefined
+    ? "If they only ask for the work to go on (such as \"carry on\", \"proceed\" or " +
+      `"keep going"), run \`${orchestrate} next\` with nothing after it: the work continues where it stands.`
+    : `${pushDue} is built and approved, and its push is the next step. If their words answer the push, or only ask ` +
+      `where things stand or for the work to go on (such as "where were we?" or "carry on"), run \`${orchestrate} next\` ` +
+      "with nothing after it: it puts the push question to them.";
   return printDirective(
     `${undo}Work is in progress${on}, and the person's words may ask to redo, jump to a stage, or start fresh, or may only ` +
-      "ask for it to go on. Read them. If they only ask for the work to go on (such as \"carry on\", \"proceed\" or " +
-      `"keep going"), run \`${orchestrate} next\` with nothing after it: the work continues where it stands. If they ` +
+      `ask for it to go on. Read them. ${goOn} If they ` +
       `ask to redo, jump or start fresh, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with ` +
       "the choice you read from their words (add `--target <stage slug>` for the stage they named, and `--unit <unit>` " +
       "or `--every-unit` when they named a Unit or said every Unit), then follow the print it returns. " +
-      `${workQuestionReading(WORK_ITSELF)} If they are ` +
+      `${pushDue === undefined ? `${workQuestionReading(WORK_ITSELF)} ` : ""}If they are ` +
       `about something else, such as new work or a change to this work, or you cannot tell which, run \`${orchestrate} ` +
       `next --request ${requestId}\` and follow what it returns: the engine kept their words and asks the person where ` +
       "that work belongs, and a redo or jump they say there is read the same way. When their words describe new work, " +
@@ -14580,7 +14587,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent)));
+      // A Unit's build approved and not pushed: its push question is the
+      // next step, asked or not in this chat.
+      const build = unitBuildOf(stateContent);
+      const pushDue = build !== null && buildWaitsForPush(stateContent) && /^- \[x\] code-generation\s/m.test(stateContent) &&
+        getField(stateContent, UNIT_PUSH_FIELD)?.trim() !== "pushed" ? build.unit : undefined;
+      emit(reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent), pushDue));
       return;
     }
   }
