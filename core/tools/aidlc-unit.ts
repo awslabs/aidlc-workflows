@@ -5110,6 +5110,15 @@ function assignUnits(args: string[], projectDir?: string): void {
     if (!local.units.includes(unit)) fail(`${unit} is not one of this work's Units (${local.units.join(", ")}).`);
     if (named.has(unit)) fail(`${unit} can go to a team or stay open; you named ${named.get(unit)} and open.`);
   }
+  // A Unit the lead's project started stays there, its approvals the lead's:
+  // no team is named over it, and it is not left open.
+  const startedHere = new Set(readAuditShardEvents(pd).filter((row) => row.event === "UNIT_STARTED")
+    .map((row) => auditBlockField(row.block, "Unit") ?? ""));
+  for (const unit of [...named.keys(), ...openNamed].filter((name) => startedHere.has(name))) {
+    lines.push(`${unit} was started here, so it stays here with you.`);
+    named.delete(unit);
+  }
+  openNamed.splice(0, openNamed.length, ...openNamed.filter((unit) => !startedHere.has(unit)));
   // The lead's own words win over the slice built together first: the part
   // they name a team for goes to that team, and nothing is built together
   // first for this work, said once.
@@ -5136,7 +5145,7 @@ function assignUnits(args: string[], projectDir?: string): void {
   if (integration === null && named.size > 0) {
     // The home cannot be reached: the answer is kept, and the next step offers to hold it again.
     const kept = [...named].map(([unit, team]) => `${unit}=${team}`);
-    const leftOpen = openAll ? local.units.filter((unit) => unit !== skeleton && !named.has(unit)) : openNamed;
+    const leftOpen = openAll ? local.units.filter((unit) => unit !== skeleton && !named.has(unit) && !startedHere.has(unit)) : openNamed;
     appendAuditEntry("UNITS_ASSIGNED", {
       Assigned: kept.join(", ") || "none",
       ...(openAll ? { Open: "all" } : {}),
@@ -5205,7 +5214,7 @@ function assignUnits(args: string[], projectDir?: string): void {
   // Left open, waiting for a team: every Unit open when they left them all
   // open, else the ones they named open and any named for a team that could
   // not be held for it. The rest of the open Units are built here.
-  const leftOpen = openUnits.filter((unit) => openAll || openNamed.includes(unit) || named.has(unit));
+  const leftOpen = openUnits.filter((unit) => !startedHere.has(unit) && (openAll || openNamed.includes(unit) || named.has(unit)));
   const builtHere = openUnits.filter((unit) => !leftOpen.includes(unit));
   appendAuditEntry("UNITS_ASSIGNED", {
     Assigned: assigned.map((row) => `${row.unit}=${row.team}`).join(", ") || "none",

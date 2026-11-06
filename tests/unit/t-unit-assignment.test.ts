@@ -552,3 +552,21 @@ describe("a Unit the lead leaves open waits for a team", () => {
   });
 });
 
+describe("a Unit the lead's project started stays there", () => {
+  // A live run: with the orders API built alone at the lead's project and its
+  // approval open, the lead said "give the report Unit to the data team and
+  // keep the API with us"; the agent ran assign u1-orders-api=us, the API was
+  // held for a team called "us", and the lead's approval of it was refused.
+  test("naming a team for it holds nothing for that team and says it stays; the other Units go to their teams", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
+    const assigned = run(UNIT, ["assign", "refunds=us", "checkout-ui=web", "--person-words", "checkout-ui to web, keep refunds with us"], home.dir);
+    expect(assigned.status, assigned.out).toBe(0);
+    expect(String(assigned.json?.notice)).toContain("refunds was started here, so it stays here with you.");
+    const id8 = fixtureIntentId8(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ status: "claimed", owner: "web" });
+    expect(String(assigned.json?.notice)).not.toContain("Refunds: us.");
+  });
+});
