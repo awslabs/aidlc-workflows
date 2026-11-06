@@ -835,9 +835,10 @@ its checkpoint, or after every stage), and the teammate's build approves the
 same way; the Units it already built and approved stay done there, one whose
 approval was still open is put to the lead there once, for the whole Unit, and
 it says in one line who took which Unit. Nothing is asked again. The home looks for a teammate's
-take once its Units are being built: once when a chat starts, and before it
-starts its next Unit, so the lead never fetches for it and never starts a Unit
-a teammate took. Each look takes a few seconds at
+take once its Units are being built: once when a chat starts, and once at each
+boundary between Units, however many steps that takes, so the lead never fetches
+for it and never starts a Unit a teammate took; once every Unit is built there,
+it no longer looks. Each look takes a few seconds at
 most, and nothing is said when the remote cannot be reached. The board names each
 teammate by their own git name.
 

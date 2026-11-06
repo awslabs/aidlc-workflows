@@ -7681,6 +7681,36 @@ function takeIn(args: string[], projectDir?: string): void {
 // and the approvals it had (once per Unit at its checkpoint, or after every
 // stage). The Units it already built here stay done here. Nothing is asked
 // again. The line for the person, or null when nothing switched.
+// The Unit boundary a chat last looked for a teammate's take at, kept in the
+// workspace's sessions folder (the look runs before any work is selected).
+const SOLO_LOOK_FILE = "solo-take-look.json";
+
+function soloBoundaryLooked(projectDir: string, sessionId?: string): string | null {
+  try {
+    const marks = JSON.parse(readFileSync(join(sessionsDir(projectDir), SOLO_LOOK_FILE), "utf-8")) as Record<string, string>;
+    return marks[sessionId ?? ""] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function noteSoloBoundaryLooked(projectDir: string, sessionId: string | undefined, boundary: string): void {
+  if (isReadOnlyEngineProbe()) return;
+  const path = join(sessionsDir(projectDir), SOLO_LOOK_FILE);
+  let marks: Record<string, string> = {};
+  try {
+    marks = JSON.parse(readFileSync(path, "utf-8")) as Record<string, string>;
+  } catch {
+    // None kept yet.
+  }
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileAtomic(path, `${JSON.stringify({ ...marks, [sessionId ?? ""]: boundary })}\n`);
+  } catch {
+    // Unkept: the next step at this boundary looks again.
+  }
+}
+
 export function switchSoloToTeams(projectDir: string, sessionId?: string): string | null {
   let state: string;
   try {
@@ -7698,15 +7728,26 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   // has begun (or its first Unit is next): the claims are looked at once when
   // a chat starts and before each next Unit starts, never after each message
   // inside a Unit and never at an Inception step.
+  // A boundary (the Units done so far) is looked at once in a chat, however
+  // many steps it takes, and once every Unit of the plan is built here nothing
+  // is left for a teammate to take, so no step looks.
   const remote = repositoryRemote(projectDir);
   const stages = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true);
   const progress = soloUnitsProgress(readAuditShardEvents(projectDir), stages.at(-1) ?? "code-generation");
-  if (remote !== null && (progress.started.size > 0 || stages.includes(getField(state, "Current Stage")?.trim() ?? ""))) {
-    refreshHomeClaims(projectDir, {
-      home: { target: remote, id8: activeIdentity(projectDir).intentId8 },
-      sessionId,
-      now: progress.started.size > 0 && [...progress.started].every((unit) => progress.done.has(unit)),
-    });
+  let planUnits: string[] = [];
+  try {
+    const dag = resolveBoltDag(projectDir);
+    planUnits = dag.state === "ok" ? dag.units : [];
+  } catch {
+    planUnits = [];
+  }
+  const allBuilt = planUnits.length > 0 && planUnits.every((unit) => progress.done.has(unit));
+  if (remote !== null && !allBuilt && (progress.started.size > 0 || stages.includes(getField(state, "Current Stage")?.trim() ?? ""))) {
+    const between = progress.started.size > 0 && [...progress.started].every((unit) => progress.done.has(unit));
+    const boundary = [...progress.done].sort().join(",");
+    const fresh = between && soloBoundaryLooked(projectDir, sessionId) !== boundary;
+    refreshHomeClaims(projectDir, { home: { target: remote, id8: activeIdentity(projectDir).intentId8 }, sessionId, now: fresh });
+    if (fresh) noteSoloBoundaryLooked(projectDir, sessionId, boundary);
   }
   if (!hasAnyUnitClaimRefs(projectDir)) return null;
   let taken: UnitClaimView[];

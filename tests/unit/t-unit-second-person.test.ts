@@ -285,11 +285,9 @@ describe("the lead's own chat hears a teammate's take once a chat starts and bet
     git(home.dir, ["commit", "-q", "-m", "refunds built here"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
     typed(home.dir);
-    const first = next(home.dir, chat);
-    const unit = String(first.unit);
-    expect(["checkout-ui", "reporting"], JSON.stringify(first)).toContain(unit);
+    // A teammate takes a Unit while the lead is between Units: the boundary's one look sees it.
+    const unit = "checkout-ui";
     expect(run(UNIT, ["take", unit, "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
-    // The agent's own next step in the same turn, the person silent.
     const step = next(home.dir, chat);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
       `Your teammate bob took ${unit}; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.`,
@@ -334,6 +332,30 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     const { trace, env } = traced();
     next(home.dir, env);
     expect(looks(trace)).toBe(1);
+  });
+
+  // A live run: one person, three Units, git's own trace: a look at every step
+  // around a Unit boundary (4 in 75 seconds) and every step after the last Unit
+  // (Build and Test and on), 22 in all, where one per boundary was the aim.
+  test("several steps at one Unit boundary make one look", () => {
+    const home = betweenUnits();
+    const { trace, env } = traced();
+    for (let step = 0; step < 4; step++) next(home.dir, env);
+    expect(looks(trace)).toBe(1);
+  });
+
+  test("once every Unit of the plan is built here, no step looks", () => {
+    const home = makeHome({ repos: {} });
+    for (const unit of ["refunds", "checkout-ui", "reporting"]) {
+      appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: unit, "Run floor": "0" }, home.dir);
+      appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: unit, "Run floor": "0" }, home.dir);
+    }
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "every Unit built here"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const { trace, env } = traced();
+    for (let step = 0; step < 3; step++) next(home.dir, env);
+    expect(looks(trace)).toBe(0);
   });
 
   // The command lines still running that name a host stand-in's port.
