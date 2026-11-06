@@ -787,7 +787,7 @@ it left it: the new version is put beside it (`<file>.from-lead.md`), said once,
 and when its result comes to the lead's project the lead hears once that the team's copy has its
 own edit, made on the version before the change.
 A team by file gets a newer hand-off file to take in. A team whose Unit was
-already done and merged hears once that the input changed after it was done,
+already done and merged hears once that the input changed and the Unit is done,
 with an offer to start follow-up work; the done Unit is never reopened. A
 change turned down reaches the team that proposed it once, with the owner's
 words.

@@ -551,6 +551,10 @@ describe("taking a Unit starts its build in the team's space", () => {
     mkdirSync(design, { recursive: true });
     writeFileSync(join(design, "interaction-spec.md"), "# Interaction spec\n\nThe refund panel asks to confirm before it sends.\n");
     writeFileSync(join(design, "mockups.md"), "# Mockups\n\nRefund panel with a confirm step.\n");
+    // The lead's planning of the work itself is theirs: a change to it is no news for a team.
+    const planning = join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "inception", "delivery-planning");
+    mkdirSync(planning, { recursive: true });
+    writeFileSync(join(planning, "bolt-plan.md"), "# Bolt plan\n\nrefunds first.\n");
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(run(UNIT, ["assign", "checkout-ui=web"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
@@ -565,6 +569,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(approved).toContain("inception/refined-mockups/interaction-spec.md");
     // The lead's own record of the code is the team's code itself: never copied.
     expect(approved).not.toContain("reverse-engineering");
+    expect(approved).not.toContain("delivery-planning");
   });
 
   // A live run on Codex: the lead's work ran Construction autonomously, the

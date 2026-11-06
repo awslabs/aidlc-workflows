@@ -338,7 +338,7 @@ describe("a change to a shared input", () => {
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
     const step = personsNext(bob, chat, "bob-chat");
     expect(notices(step).join(" "), JSON.stringify(step).slice(0, 500)).toContain("The lead changed the requirements");
-    expect(notices(step).join(" ")).not.toContain("after checkout-ui was pushed");
+    expect(notices(step).join(" ")).not.toContain("checkout-ui stays as you pushed it");
   });
 
   // A live run (decision 34): the lead changed the requirements and approved
@@ -383,7 +383,7 @@ describe("a change to a shared input", () => {
     expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).toContain("The requirements you changed reach the teams");
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice))).toContain(
-      "The lead changed the requirements after refunds was done. Do you want me to start follow-up work for it?",
+      "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
     );
   });
 
@@ -467,7 +467,7 @@ describe("a change to a shared input", () => {
     expect(run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     git(alice, ["fetch", "-q", "origin"]);
     const step = next(alice);
-    expect(notices(step)).toContain("The lead changed the requirements after refunds was pushed; refunds stays as you pushed it.");
+    expect(notices(step)).toContain("The lead changed the requirements; refunds stays as you pushed it.");
     expect(JSON.stringify(step)).not.toContain("Do you want me to redo");
   });
 
@@ -537,7 +537,7 @@ describe("a change to a shared input", () => {
     const before = readFileSync(join(record, "aidlc-state.md"), "utf-8");
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice))).toContain(
-      "The lead changed the requirements after refunds was done. Do you want me to start follow-up work for it?",
+      "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
     );
     const after = readFileSync(join(record, "aidlc-state.md"), "utf-8");
     expect(after.match(/^- \[.\] [a-z-]+ /gm)).toEqual(before.match(/^- \[.\] [a-z-]+ /gm));

@@ -5779,9 +5779,11 @@ function homePlanAt(projectDir: string, home: HomeWork, oid: string, branch: str
 // The lead's approved Ideation and Inception outputs a Unit's build reads: the
 // copy it starts from, at the paths the lead's own checkout holds them, plus
 // the Unit plan itself. Each the Unit's planned stages read, and each output of
-// a stage the lead's plan ran (`state`), so what a stage reads there without
-// naming it (the mockups the lead approved) is here too. The lead's notes of
-// the code (Reverse Engineering) and of their own team's practices stay theirs.
+// a stage they stand on (requires_stage, all the way up) that the lead's plan
+// ran (`state`), so what a stage reads there without naming it (the mockups
+// the lead approved) is here too, and the lead's planning of the work itself
+// (Delivery Planning) is not. The lead's notes of the code (Reverse
+// Engineering) and of their own team's practices stay theirs.
 const LEADS_OWN_STAGES = new Set(["reverse-engineering", "practices-discovery"]);
 function homeInputPaths(stages: string[], state: string): string[] {
   const graph = loadStageGraphAll();
@@ -5789,8 +5791,20 @@ function homeInputPaths(stages: string[], state: string): string[] {
   // A take marks the lead's completed stages completed in its own state too, so
   // the build reads the same list; a stage done with nothing written adds nothing.
   const ran = new Set(parseCheckboxes(state).filter((box) => box.state === "completed").map((box) => box.slug));
+  const upstream = new Set<string>();
+  const walk = [...stages];
+  while (walk.length > 0) {
+    const slug = walk.pop()!;
+    for (const required of graph.find((entry) => entry.slug === slug)?.requires_stage ?? []) {
+      if (!upstream.has(required)) {
+        upstream.add(required);
+        walk.push(required);
+      }
+    }
+  }
   for (const stage of graph) {
-    if ((stage.phase !== "ideation" && stage.phase !== "inception") || LEADS_OWN_STAGES.has(stage.slug) || !ran.has(stage.slug)) continue;
+    if ((stage.phase !== "ideation" && stage.phase !== "inception") || LEADS_OWN_STAGES.has(stage.slug) ||
+      !ran.has(stage.slug) || !upstream.has(stage.slug)) continue;
     for (const name of [...(stage.produces ?? []), ...(stage.optional_produces ?? [])]) {
       paths.add(`${stage.phase}/${stage.slug}/${artifactFilename(name)}`);
     }
@@ -7521,9 +7535,11 @@ function takeNewerInput(
   writeFileSync(path, text, "utf-8");
   noteInputTaken(record, input, textFingerprint(text));
   const renewed = renewForAmendedInput(projectDir, input, { Unit: unit, "Amended At Home": how.at });
-  if (how.done) return `The lead changed the ${name} after ${unit} was done. Do you want me to start follow-up work for it?`;
+  // Said without "after": the lead may have changed it before the Unit was
+  // done or pushed, and it reaches the team only now.
+  if (how.done) return `The lead changed the ${name}, and ${unit} is already done. Do you want me to start follow-up work for it?`;
   // Pushed and waiting on the home: it hears the change and nothing of it is reopened.
-  if (how.pushed) return `The lead changed the ${name} after ${unit} was pushed; ${unit} stays as you pushed it.`;
+  if (how.pushed) return `The lead changed the ${name}; ${unit} stays as you pushed it.`;
   if (renewed.length > 0) return staleStageLine(stageLabel(loadGraph().find((stage) => stage.slug === renewed[0]), renewed[0]) ?? renewed[0]);
   return `The lead changed the ${name}; ${unit} uses the new one from here.`;
 }
