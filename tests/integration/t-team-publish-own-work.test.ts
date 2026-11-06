@@ -92,7 +92,7 @@ describe("a team's publish commits its own work", () => {
     expect(existsSync(join(checkout, "node_modules", "pkg-0", "index.js"))).toBe(true);
     expect(readFileSync(join(checkout, ".gitignore"), "utf-8")).toBe(ignoreBefore);
     expect(result.left_out_note).toBe(
-      "I left out 54 new files here that are not part of this Unit's work, like node_modules/, .codex/ and .agents/ " +
+      "I left out 54 new files here that this Unit's build did not list as its own, like node_modules/, .codex/ and .agents/ " +
         "(`git status` shows them); tell me if you want any of them in.",
     );
     expect(String(result.left_out_include)).toMatch(/ unit publish alpha --commit --include '<path>'/);
@@ -124,6 +124,15 @@ describe("a team's publish commits its own work", () => {
     expect(committed(checkout)).toContain("node_modules/pkg-7/index.js");
   });
 
+  test("--include . puts every new file it left out in", () => {
+    const checkout = claimedDone(["src/alpha.ts"]);
+    addInstallAndDependencies(checkout);
+    const result = publish(checkout, "--include", ".");
+    expect(result.left_out).toBeUndefined();
+    expect(result.include_unmatched_note).toBeUndefined();
+    expect(stillNew(checkout)).toEqual([]);
+  });
+
   test("an --include that names no left-out file is said in one line; the publish still publishes", () => {
     const checkout = claimedDone(["src/alpha.ts"]);
     addInstallAndDependencies(checkout);
@@ -149,7 +158,7 @@ describe("a team's publish commits its own work", () => {
     const first = publish(checkout);
     expect(first.left_out).toBe(1);
     expect(first.left_out_note).toBe(
-      "I left out 1 new file here that is not part of this Unit's work: src/alpha-extra.ts " +
+      "I left out 1 new file here that this Unit's build did not list as its own: src/alpha-extra.ts " +
         "(`git status` shows it); tell me if you want it in.",
     );
     const again = publish(checkout, "--include", "src/alpha-extra.ts");

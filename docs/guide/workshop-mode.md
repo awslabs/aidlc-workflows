@@ -172,7 +172,7 @@ would build:
 
 - **Share them with the teams** runs `aidlc unit share`: it commits what git
   shows changed here (the question names how many files and, by name, up to
-  ten new files outside `aidlc/`, those nearest the project's top first, with
+  ten new files outside `aidlc/`, past ten those nearest the project's top, with
   how many more; `git status` shows the rest before you share; ignored files
   and AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` stay
   out)

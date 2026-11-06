@@ -2097,8 +2097,10 @@ function leftOutFields(unit: string, leftOut: string[], unmatched: string[]): Re
   return {
     ...fields,
     left_out: leftOut.length,
-    left_out_note: `I left out ${leftOut.length} new file${one ? "" : "s"} here that ${one ? "is" : "are"} not part of ` +
-      `this Unit's work${which} (\`git status\` shows ${one ? "it" : "them"}); tell me if you want ${one ? "it" : "any of them"} in.`,
+    // The tool knows what the Unit's build listed, not what it wrote, so the
+    // line says that.
+    left_out_note: `I left out ${leftOut.length} new file${one ? "" : "s"} here that this Unit's build did not list as ` +
+      `its own${which} (\`git status\` shows ${one ? "it" : "them"}); tell me if you want ${one ? "it" : "any of them"} in.`,
     left_out_include: "When they want any of them in, run " +
       `\`${aidlcInvocation()} unit publish ${quoteCommandArgument(unit)} --commit --include '<path>'\`` +
       ", with one --include for each file or folder they name.",
@@ -4728,12 +4730,13 @@ export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit 
   const keptUntracked = untracked.filter((path) => !own.has(path));
   if (work === undefined) return { paths: kept, untracked: keptUntracked, leftOut: [], unmatched: [] };
   const claims = unitSourceClaims(pd, work.unit);
-  // As the person or the agent types it, on Windows too: `\` is `/`, and a
-  // folder may end in `/`.
+  // As the person or the agent types it, on Windows too: `\` is `/`, a folder
+  // may end in `/`, and `.` is the whole project (every file left out).
   const include = [...new Set((work.include ?? [])
-    .map((path) => path.replaceAll("\\", "/").replace(/^(\.\/)+/, "").replace(/\/+$/, ""))
-    .filter((path) => path !== ""))];
-  const under = (path: string, folder: string): boolean => path === folder || path.startsWith(`${folder}/`);
+    .filter((path) => path.trim() !== "")
+    .map((path) => path.replaceAll("\\", "/").replace(/\/+$/, "").replace(/^(\.\/)+/, "") || "."))];
+  const under = (path: string, folder: string): boolean =>
+    folder === "." || path === folder || path.startsWith(`${folder}/`);
   const outsideWork = keptUntracked.filter((path) =>
     !under(path, "aidlc") && !claims.some((claim) => sourceClaimCovers(sourcePathKey("", path), claim))
   );

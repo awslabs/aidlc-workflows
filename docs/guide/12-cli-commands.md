@@ -752,8 +752,8 @@ commits the Unit's own work: every change to a tracked file, the record under
 Generation says it wrote). Other new files, such as AI-DLC's own install or a
 `node_modules` your `.gitignore` does not list, stay on disk uncommitted, and
 the publish says once how many it left out. `--include <path>` puts a new file
-or folder in as well (give it once for each); run it after a publish to publish
-again with them:
+or folder in as well (give it once for each, or `.` for all of them); run it
+after a publish to publish again with them:
 
 ```bash
 /aidlc unit publish user-profile-api
