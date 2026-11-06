@@ -145,10 +145,11 @@ describe("no step of the build-out comes back after its own command ran", () => 
     const assignment = next(home.dir);
     expect(assignment.ask_type, JSON.stringify(assignment)).toBe("unit-assignment");
     const assign = String(assignment.assign_command).replace("<unit>=<team> [<unit>=<team> ...]", "refunds=payments checkout-ui=web");
-    const board = movesOn(home.dir, ENV, assignment, assign);
-    git(home.dir, ["add", "-A"]);
-    git(home.dir, ["commit", "-q", "-m", "teams"]);
-    git(home.dir, ["push", "-q", "origin", "main"]);
+    // Sharing the plan with the teams is asked once; its yes pushes it, and the board follows.
+    const share = movesOn(home.dir, ENV, assignment, assign);
+    expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
+    const shareChoice = (share.choices as Array<{ label: string; command?: string }>).find((choice) => choice.label === "Share them with the teams");
+    const board = movesOn(home.dir, ENV, share, shareChoice!.command!);
     // The board, with checkout-ui held for web and not taken: its hand-off offer, run once, is not offered again.
     const offer = (board.offers as Array<{ choices: Array<{ label: string; command?: string }> }>)
       .find((entry) => entry.choices[0].label.includes("checkout-ui"))!;
@@ -218,6 +219,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     expect(run(UNIT, ["hand-off", "reporting", "--team", "data", "--person-words", "hand off reporting to data"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const partner = withTools(createTestProject());
     seedAidlcMemory(partner);
     git(partner, ["init", "-q", "-b", "main"]);
@@ -453,6 +455,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   test("a take: a Unit the home started is refused with a way on that does not offer it; an open Unit starts for a team the lead named", () => {
     const home = teamsHome();
     expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const homeStep = next(home.dir);
     expect(homeStep.unit, JSON.stringify(homeStep)).toBe("checkout-ui");
     expect(run(STATE, ["unit", "start", "--stage", "functional-design", "--unit", "checkout-ui"], home.dir).status).toBe(0);

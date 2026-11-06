@@ -123,6 +123,25 @@ describe("a team member's clone of the home's workspace", () => {
     ]);
   });
 
+  // Live runs on Codex, Kiro CLI and Copilot CLI: a teammate's first line with
+  // words ("what is ours to build?") got the pick of the work itself, which
+  // selected it in their clone and showed them the lead's board.
+  test("a teammate's first words are answered with the Units to take, never the pick of the work itself", () => {
+    const home = homeWithTeams(["refunds=payments", "checkout-ui=web"]);
+    const alice = cloneOf(home.remote, "alice");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat" };
+    const ask = next(alice, chat, ["hi, I am on the payments team. what is ours to build?"]);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).toEqual([
+      "Start refunds",
+      "Start checkout-ui",
+      "Carry on fixture here, as its home",
+    ]);
+    // Asked once in the chat: words after it are read as words, never the same offer again.
+    const again = next(alice, chat, ["something else entirely"]);
+    expect(again.ask_type ?? null, JSON.stringify(again)).not.toBe("unit-take");
+  });
+
   test("while the home builds the walking skeleton, hears that every Unit waits on it, and nothing of the home's work runs", () => {
     const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n  - name: orders\n    depends_on: []\n" +
       "  - name: refunds\n    depends_on: [orders]\n  - name: checkout-ui\n    depends_on: [orders]\n" +

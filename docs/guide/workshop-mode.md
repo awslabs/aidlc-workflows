@@ -117,12 +117,14 @@ Typed, the same step is `/aidlc unit share`, or your own commit and
 `git push origin main`.
 
 Where the work records code repos of its own, the home asks who builds which
-Unit instead, and the lead publishes the approved Inception state and artifacts
-before teams take their Units:
-
-```bash
-git push origin main
-```
+Unit instead. When a slice is built first by everyone together, the question
+says which one and why, and naming a team for it gives it to that team instead.
+Once the Units are held for their teams, the next step asks once whether to
+share the plan with them: **Share them with the teams** runs
+`aidlc unit share --plan`, which commits AI-DLC's record here (`aidlc/`, none of
+your other files) and pushes main with a plain push; **Not now** leaves it, and
+a team's clone sees the plan once main is pushed (or push it yourself with
+`git push origin main`).
 
 Claims open by dependency batch. "Delivery planning is complete" does not mean
 every Unit is claimable; a Unit remains blocked until every `depends_on` row is

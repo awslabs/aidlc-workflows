@@ -45,6 +45,8 @@ function handedOff() {
   expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
   const handed = run(UNIT, ["hand-off", "reporting", "--team", "data", "--person-words", "hand off reporting to the data team"], home.dir);
   expect(handed.status, handed.out).toBe(0);
+  // The lead's yes to sharing the plan with the teams.
+  expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
   return { home, handed };
 }
 

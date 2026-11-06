@@ -247,7 +247,7 @@ const UNIT_FORMS = [
   "unit publish <unit> [--commit]",
   "unit push [--later]",
   "unit release <unit>",
-  "unit share",
+  "unit share [--plan]",
   "unit sign-off <unit> --person-words <text>",
   "unit status",
   "unit take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] | --file <file>",

@@ -11,7 +11,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -40,6 +40,12 @@ const field = (content: string, name: string) => new RegExp(`^- \\*\\*${name}\\*
 function chooseTeams(dir: string): void {
   const result = run(STATE, ["set-unit-ownership", "team"], dir);
   expect(result.status, result.out).toBe(0);
+}
+
+// The lead's yes to sharing the plan with the teams (main's `unit share`).
+function share(dir: string): void {
+  const shared = run(UNIT, ["share", "--plan"], dir);
+  expect(shared.status, shared.out).toBe(0);
 }
 
 describe("choosing teams records where the home is", () => {
@@ -152,13 +158,14 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(open.status, open.out).toBe(0);
     expect(open.json?.open).toEqual(["refunds", "checkout-ui", "reporting"]);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
+    // The plan goes to the teams once, as main's share question asks it; main's
+    // "Build them here for now" is its claim flow's, never this home's.
     const step = next(home.dir);
     expect(step.ask_type).not.toBe("unit-assignment");
-    // Who builds which Unit was the one question: main's share question
-    // (Share them with the teams, Build them here for now) is its claim
-    // flow's, never put at this home.
-    expect(step.ask_type, JSON.stringify(step)).not.toBe("team-handover");
-    expect(JSON.stringify(step)).not.toContain("unit share");
+    expect(step.ask_type, JSON.stringify(step)).toBe("team-handover");
+    expect(JSON.stringify(step)).not.toContain("Build them here for now");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+    expect(next(home.dir).kind).toBe("run-stage");
   });
 });
 
@@ -203,7 +210,10 @@ describe("the lead's answer is never asked for twice", () => {
     git(home.dir, ["remote", "set-url", "origin", home.remote]);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "yes, try again"], home.dir).status).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.owner).toBe("payments");
-    expect(next(home.dir).kind).not.toBe("ask");
+    // Held now: what is asked next is sharing the plan, never the assignment again.
+    const after = next(home.dir);
+    expect(after.ask_type, JSON.stringify(after)).not.toBe("unit-assignment");
+    expect(JSON.stringify(after)).not.toContain("try again");
   });
 
   // A probe: the home's remote did not answer, and the lead said Not now. The
@@ -236,8 +246,12 @@ describe("the lead's answer is never asked for twice", () => {
     expect(open.status, open.out).toBe(0);
     expect(open.json?.open).toEqual(["refunds", "checkout-ui", "reporting"]);
     expect(String(open.json?.notice)).not.toContain("could not be reached");
-    const step = next(home.dir);
+    let step = next(home.dir);
     expect(JSON.stringify(step)).not.toContain("Do you want me to try again?");
+    if (step.ask_type === "team-handover") {
+      appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+      step = next(home.dir);
+    }
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
   });
 
@@ -248,6 +262,92 @@ describe("the lead's answer is never asked for twice", () => {
     expect(run(UNIT, ["assign", "refunds=payments", "--person-words", "the agent's guess"], home.dir, guarded).status).toBe(0);
     const row = readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNITS_ASSIGNED").at(-1);
     expect(row?.block).not.toContain("Person Words");
+  });
+});
+
+// A live run: the lead named the teams, the claims went to the home's remote,
+// and the home's plan (its record) stayed unpushed; a teammate's clone had no
+// plan and its /aidlc said "Tell me what to build".
+// Live runs: the lead had answered that no slice is built together first
+// (their team's practices), and the who-builds-which question still named one,
+// leaving that part off the teams' list.
+describe("the slice built together first, at the question of who builds which part", () => {
+  const stance = (dir: string) => field(readFileSync(join(dir, "aidlc", "spaces", "default", "intents", "fixture-8000000000000001", "aidlc-state.md"), "utf-8"), "Skeleton Stance");
+
+  test("the lead's own answer on it is read first: settled off, the question names no part as built first", () => {
+    const home = makeHome({ state: homeState().replace("- **Skeleton Stance**: off\n", "") });
+    chooseTeams(home.dir);
+    const settle = next(home.dir);
+    expect(settle.ask_type ?? null, JSON.stringify(settle)).not.toBe("unit-assignment");
+    expect(settle.gate, JSON.stringify(settle)).toBe("unresolved");
+    expect(run(ORCH, ["report", "--skeleton-stance", "off"], home.dir).status).toBe(0);
+    const ask = next(home.dir);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-assignment");
+    expect(String(ask.question)).not.toContain("first");
+    expect(String(ask.question)).toContain("refunds");
+  });
+
+  test("said in plain words; the lead's words naming a team for it win, said once, nothing asked again", () => {
+    const home = makeHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    chooseTeams(home.dir);
+    const ask = next(home.dir);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-assignment");
+    const first = /^(\S+) is built here first, by everyone together, so every team builds on one working slice; to have one team build it instead, name a team for it\. /.exec(String(ask.question))?.[1];
+    expect(first, String(ask.question)).toBeString();
+    expect(String(ask.question)).not.toContain("walking skeleton");
+    const assigned = run(UNIT, ["assign", `${first}=payments`], home.dir);
+    expect(assigned.status, assigned.out).toBe(0);
+    expect(String(assigned.json?.notice)).toContain(`${first} goes to payments, as you said, so nothing is built together first for this work.`);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), first!)?.owner).toBe("payments");
+    expect(stance(home.dir)).toBe("off");
+    const after = next(home.dir);
+    expect(after.ask_type ?? null, JSON.stringify(after)).not.toBe("unit-assignment");
+  });
+});
+
+describe("the home's plan goes to the teams the way main's share question asks it", () => {
+  const isShare = (step: Record<string, unknown>) =>
+    step.kind === "ask" && step.ask_type === "team-handover" && ((step.handovers ?? []) as string[]).includes("share");
+
+  test("once the teams are named and their Units held: asked once, Share pushes main, Not now is kept", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(next(home.dir).ask_type).toBe("unit-assignment");
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    const ask = next(home.dir);
+    expect(isShare(ask), JSON.stringify(ask)).toBe(true);
+    expect(String(ask.question)).toStartWith("The teams have their Units. Share the plan with them now?");
+    const choices = ask.choices as Array<{ label: string; command?: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual(["Share them with the teams", "Not now"]);
+    expect(String(choices[0].command)).toEndWith(" unit share --plan");
+    // Not now: the step goes on and the question is not put again.
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+    expect(isShare(next(home.dir))).toBe(false);
+    expect(isShare(next(home.dir))).toBe(false);
+  });
+
+  test("Share puts the plan on the home's remote, where a teammate's clone takes its Unit", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    next(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    const ask = next(home.dir);
+    expect(isShare(ask), JSON.stringify(ask)).toBe(true);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+    expect(isShare(next(home.dir))).toBe(false);
+  });
+
+  test("a plan already pushed is not asked about", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    next(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams named"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    expect(isShare(next(home.dir))).toBe(false);
   });
 });
 
@@ -268,6 +368,7 @@ describe("the home walks only the Units no team holds", () => {
     const home = makeHome();
     chooseTeams(home.dir);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    share(home.dir);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(String(step.narration)).toStartWith("Units of fixture:");
@@ -277,6 +378,7 @@ describe("the home walks only the Units no team holds", () => {
     const home = makeHome();
     chooseTeams(home.dir);
     expect(run(UNIT, ["assign", "refunds=payments", "reporting=data"], home.dir).status).toBe(0);
+    share(home.dir);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("checkout-ui");
@@ -286,6 +388,7 @@ describe("the home walks only the Units no team holds", () => {
     const home = makeHome();
     chooseTeams(home.dir);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    share(home.dir);
     expect(next(home.dir).kind).toBe("print");
     // The person's skip of a step: not offered for the web team's checkout-ui.
     const asked = run(ORCH, ["next", "--skip", "functional-design"], home.dir);
@@ -303,6 +406,7 @@ describe("the home walks only the Units no team holds", () => {
     const home = makeHome();
     chooseTeams(home.dir);
     expect(run(UNIT, ["assign", "refunds=payments", "reporting=data"], home.dir).status).toBe(0);
+    share(home.dir);
     const step = next(home.dir);
     expect(step.unit, JSON.stringify(step)).toBe("checkout-ui");
     const stage = String(step.stage);

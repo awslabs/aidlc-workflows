@@ -5212,6 +5212,36 @@ function teamCommandsNote(): string {
 // note in the workspace's sessions folder, where the person's heard lines,
 // which belong to a piece of work, cannot go.
 const OFFERS_PUT_FILE = "offers-put.json";
+// The take offer put to a teammate's words, once in a chat (no work is
+// selected there yet, so the chat's own sessions file keeps it).
+const TAKE_ON_WORDS_FILE = "take-offered-on-words.json";
+
+function takeOfferedOnWords(projectDir: string): boolean {
+  if (!engineSessionId) return false;
+  try {
+    return (JSON.parse(readFileSync(join(sessionsDir(projectDir), TAKE_ON_WORDS_FILE), "utf-8")) as string[]).includes(engineSessionId);
+  } catch {
+    return false;
+  }
+}
+
+function noteTakeOfferedOnWords(projectDir: string): void {
+  if (!engineSessionId || isReadOnlyEngineProbe()) return;
+  const path = join(sessionsDir(projectDir), TAKE_ON_WORDS_FILE);
+  let chats: string[] = [];
+  try {
+    chats = JSON.parse(readFileSync(path, "utf-8")) as string[];
+  } catch {
+    // None noted yet.
+  }
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileAtomic(path, `${JSON.stringify([...new Set([...chats, engineSessionId])])}\n`);
+  } catch {
+    // Unnoted: the next words in this chat get the offer again.
+  }
+}
+
 function offersOnce(projectDir: string, offers: StepOffer[]): StepOffer[] {
   const chat = engineSessionId;
   if (!chat) return offers;
@@ -5353,7 +5383,14 @@ function constructionStaffingAsk(
   if (teams && teamsClone(projectDir, stateContent)) return null;
   // Teams building each Unit as work of their own: who builds which Unit is
   // the one question, asked once at the home.
-  if (teams && homeLocation(stateContent) !== null) return unitAssignmentAsk(projectDir, stateContent);
+  if (teams && homeLocation(stateContent) !== null) {
+    // The lead's own answer on building a first slice together (their team's
+    // practices, read at this stage's settle step) comes before who builds
+    // which part, so the question never names a part their answer ruled out.
+    if (isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null &&
+      scopeDefaultSkeletonStance(scope) === "on") return null;
+    return unitAssignmentAsk(projectDir, stateContent);
+  }
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const dag = resolveBoltBatches(projectDir, evidence);
   if (dag.state !== "ok" || dag.units.length < 2) return null;
@@ -5505,6 +5542,43 @@ function teamShareOffer(
       detail: `This session builds the ${unitPlainName(unit)} Unit here; I'll ask again before the next one.`,
     },
   });
+}
+
+// At a home whose teams build across repos: once the Units are held for their
+// teams, the plan reaches the teams' clones only once the home's main is
+// pushed, so main's share question is put here too, once; Not now is kept.
+function buildOutShareOffer(projectDir: string, auditRows: readonly AuditShardEvent[]): AskDirective | null {
+  if (!unitsAssignedSinceTeams(auditRows) || assignmentNotHeld(auditRows) !== null) return null;
+  const mark = teamHandoverMarkName("share", "plan");
+  if (handoverOffered(projectDir, mark) || shareBlocker(projectDir) !== null) return null;
+  const target = shareTarget(projectDir);
+  if (target === null || !planUnshared(projectDir, target)) return null;
+  return teamHandoverAsk(projectDir, {
+    handovers: ["share"],
+    marks: [mark],
+    question: "The teams have their Units. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
+      `nothing else of yours) and push ${target.branch} to ${target.remote}, so each team can take its Unit by opening ` +
+      `its own clone and running ${entrySkillInvocation()}.`,
+    choices: [
+      {
+        label: "Share them with the teams",
+        detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
+        command: `${aidlcInvocation()} unit share --plan`,
+      },
+    ],
+    notNow: { label: "Not now", detail: "Nothing is pushed; a team's clone sees the plan once main is pushed." },
+  });
+}
+
+// The teams' clones see the work as a team home only once the remote's main
+// (as this clone last fetched it) carries its state with the home recorded.
+function planUnshared(projectDir: string, target: { remote: string; branch: string }): boolean {
+  const state = relative(projectDir, stateFilePath(projectDir)).split("\\").join("/");
+  const shown = Bun.spawnSync({
+    cmd: ["git", "show", `refs/remotes/${target.remote}/${target.branch}:${state}`],
+    cwd: projectDir, stdout: "pipe", stderr: "ignore",
+  });
+  return shown.exitCode !== 0 || homeLocation(new TextDecoder().decode(shown.stdout)) === null;
 }
 
 // In a claimed checkout whose Unit is complete and approved: commit it and
@@ -5836,7 +5910,8 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
     return notes.length > 0 ? `${unit} (${notes.join("; ")})` : unit;
   });
   const unitTool = aidlcToolInvocation("unit");
-  const question = `${skeleton !== null ? `${skeleton} is the walking skeleton, built here first. ` : ""}` +
+  const question = `${skeleton !== null ? `${skeleton} is built here first, by everyone together, so every team ` +
+    "builds on one working slice; to have one team build it instead, name a team for it. " : ""}` +
     `Who builds which Unit? ${described.join(", ")}. Name a team for each, or leave a Unit open for any team ` +
     "to take later.";
   const assignCommand = `${unitTool} assign <unit>=<team> [<unit>=<team> ...] ${unitWordsArg("assign")}`;
@@ -13669,6 +13744,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // chain ends.
   if (!stateContent && onlyProse && flags.intent !== undefined && flags.markedWords !== true && flags.request === undefined) {
     const here = unselectedRecords(pd);
+    // A teammate's first words in a clone of work teams build ("what's ours?",
+    // "take u1 for payments"): the Units to take are what is theirs, put as a
+    // bare `next` puts them, once in a chat; picking the work itself is the
+    // lead's, and "Carry on ... here, as its home" stays among the choices.
+    const take = here !== null && here.selectable.length > 0 && !takeOfferedOnWords(pd) ? unitTakeAsk(pd) : null;
+    if (take !== null) {
+      noteTakeOfferedOnWords(pd);
+      emit(take);
+      return;
+    }
     if (here !== null && here.selectable.length > 0) {
       const words = saveReadingQuestion(pd, flags.intent, "", "routing", {
         space: here.space,
@@ -16993,6 +17078,11 @@ function emitTeamUnitMajorRunStage(
     if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
     return a.pos - b.pos;
   });
+  const sharePlan = teamHome && !isReadOnlyEngineProbe() ? buildOutShareOffer(projectDir, auditRows) : null;
+  if (sharePlan !== null) {
+    emit(sharePlan);
+    return;
+  }
   let model: TeamUnitProgressModel | null = null;
   let refreshedState: string;
   try {

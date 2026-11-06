@@ -62,7 +62,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit merged <unit> --repo <repo>` | At the home, count one repo of a team's Unit as merged where the board does not see it, in your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
-| `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
+| `/aidlc unit share [--plan]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only, for a home whose teams build in repos of their own |
 | `/aidlc unit publish <unit> [--commit]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the work first |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |

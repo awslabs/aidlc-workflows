@@ -4770,10 +4770,11 @@ export function workToCommit(projectDir: string): { paths: string[]; untracked: 
   return { paths: paths.filter((path) => !own.has(path)), untracked: untracked.filter((path) => !own.has(path)) };
 }
 
-// Commits what workToCommit names, as the person, with their own git setup;
-// nothing to commit commits nothing. Returns how many paths it took.
-function commitWorkHere(projectDir: string, message: string): number {
-  const { paths } = workToCommit(projectDir);
+// Commits what workToCommit names (with `only`, just the paths it keeps), as
+// the person, with their own git setup; nothing to commit commits nothing.
+// Returns how many paths it took.
+function commitWorkHere(projectDir: string, message: string, only?: (path: string) => boolean): number {
+  const paths = workToCommit(projectDir).paths.filter((path) => only === undefined || only(path));
   if (paths.length === 0) return 0;
   const added = git(projectDir, ["add", "-A", "--", ...paths]);
   if (!added.ok) fail(`git add failed: ${added.stderr.trim()}`);
@@ -4823,10 +4824,14 @@ export function shareBlocker(projectDir: string): string | null {
 // refused, a push the remote refused) keeps what it committed and leaves both
 // offers due again (their marks cleared), so the next step asks again instead
 // of building here.
-function shareMain(projectDir?: string): void {
+// `--plan`: AI-DLC's record only (the plan a team's clone takes its Unit
+// from), for a home whose teams build in repos of their own; none of the
+// person's other files here is committed.
+function shareMain(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const blocker = shareBlocker(pd);
   if (blocker !== null) fail(blocker);
+  const planOnly = parseArgs(args).bareFlags.has("plan");
   const { remote, branch } = shareTarget(pd)!;
   const landed = landedNotOnRemote(pd).map((row) => row.unit);
   let committed: number;
@@ -4834,6 +4839,7 @@ function shareMain(projectDir?: string): void {
     committed = commitWorkHere(
       pd,
       landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams",
+      planOnly ? (path) => path === "aidlc" || path.startsWith("aidlc/") : undefined,
     );
   } catch (error) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
@@ -4979,7 +4985,7 @@ function assignUnits(args: string[], projectDir?: string): void {
   }
   if (pairs.length === 0 && !open) fail("Usage: aidlc-unit assign <unit>=<team> [<unit>=<team> ...] | --open");
   const local = localOpeningStatus(pd);
-  const skeleton = teamSkeletonOn(state) ? local.skeleton : null;
+  let skeleton = teamSkeletonOn(state) ? local.skeleton : null;
   const lines: string[] = [];
   const named = new Map<string, string>();
   for (const { unit, team } of pairs) {
@@ -4988,9 +4994,20 @@ function assignUnits(args: string[], projectDir?: string): void {
     if (already !== undefined && already !== team) fail(`${unit} can go to one team; you named ${already} and ${team}.`);
     named.set(unit, team);
   }
+  // The lead's own words win over the slice built together first: the part
+  // they name a team for goes to that team, and nothing is built together
+  // first for this work, said once.
   if (skeleton !== null && named.has(skeleton)) {
-    lines.push(`${skeleton} is the walking skeleton, built here before the teams take their Units.`);
-    named.delete(skeleton);
+    const [command, ...stanceArgs] = aidlcEngineCommand(
+      "state",
+      ["set-skeleton-stance", "off", "--project-dir", pd],
+      join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts"),
+      isCompiledExecutable() ? process.execPath : null,
+    );
+    const set = spawnSync(command, stanceArgs, { cwd: pd, encoding: "utf-8", env: process.env });
+    if (set.status !== 0) fail(`${(set.stderr || set.stdout).trim()}`);
+    lines.push(`${skeleton} goes to ${named.get(skeleton)}, as you said, so nothing is built together first for this work.`);
+    skeleton = null;
   }
   const identity = activeIdentity(pd);
   let integration: ReturnType<typeof fetchIntegration> | null;
@@ -7383,7 +7400,7 @@ export function main(argv: string[]): void {
     else if (command === "claim") claimUnit(args, projectDir);
     else if (command === "release") releaseUnit(args, projectDir);
     else if (command === "participate") participate(projectDir);
-    else if (command === "share") shareMain(projectDir);
+    else if (command === "share") shareMain(args, projectDir);
     else if (command === "publish") publishUnit(args, projectDir);
     else if (command === "pin") pinUnit(args, projectDir);
     else if (command === "gate") gateUnitMerge(args, projectDir);

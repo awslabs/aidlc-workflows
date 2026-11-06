@@ -307,6 +307,8 @@ describe("scenario 4: a team that cannot reach the home", () => {
     expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     const handed = run(UNIT, ["hand-off", "reporting", "--team", "data", "--person-words", "hand off reporting to the data team"], home.dir);
     expect(handed.status, handed.out).toBe(0);
+    // The lead's yes to sharing the plan with the teams.
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const file = "aidlc/handoff/fixture-reporting.md";
     // The partner's own workspace on Copilot, with its own copy of ledger.
     const partner = join(tempDir("partner"), "data workspace");
