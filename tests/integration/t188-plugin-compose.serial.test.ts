@@ -1755,6 +1755,43 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(sidecar["nfr-design"]).toEqual({ produces: ["syn-kinds-old-notes"] });
   });
 
+  test("adds.produces is skipped by the installed schema's verdict, however that engine words its error", () => {
+    // An engine with neither the entry writer nor today's wording of the
+    // review_artifact error: compose still sees that the output breaks the
+    // stage, skips it in that engine's words, and composes the rest.
+    const contrib = (target: string, outputs: string[]) => [
+      "---", `target: ${target}`, "plugin: syn-kinds-worded",
+      "adds:", "  produces:", ...outputs.map((name) => `    - ${name}`),
+      "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-kinds-worded",
+      {
+        "contributions/construction/functional-design.md": contrib("functional-design", ["syn-kinds-worded-notes"]),
+        "contributions/construction/nfr-design.md": contrib("nfr-design", ["syn-kinds-worded-notes"]),
+      },
+      ".claude",
+      (_proj, harnessDir) => {
+        const tools = join(harnessDir, "tools");
+        cpSync(join(tools, "aidlc-plugin-produces-kinds.ts"), join(tools, "aidlc-plugin-produces-kinds-real.ts"));
+        writeFileSync(
+          join(tools, "aidlc-plugin-produces-kinds.ts"),
+          'export { removeOrphanProducesKinds } from "./aidlc-plugin-produces-kinds-real.ts";\n',
+        );
+        const schema = join(tools, "aidlc-stage-schema.ts");
+        const source = readFileSync(schema, "utf-8");
+        expect(source).toContain("is pruned for applicable unit kinds: ");
+        writeFileSync(schema, source.replace("is pruned for applicable unit kinds: ", "leaves these Unit kinds without a review: "));
+      },
+    );
+    expect(drops).toContain(
+      'contribution to functional-design: adds.produces syn-kinds-worded-notes would make the stage apply to Unit kinds its review target does not cover (review_artifact "functional-spec" leaves these Unit kinds without a review: packaging)',
+    );
+    expect(drops).not.toContain("aidlc-graph compile failed");
+    expect(stage(proj, "functional-design")?.produces).not.toContain("syn-kinds-worded-notes");
+    expect(stage(proj, "nfr-design")?.produces).toContain("syn-kinds-worded-notes");
+  });
+
   test("adds.produces skips an output the stage would still refuse with its entries, and composes the rest", () => {
     // An installed functional-design with optional outputs of its own: one with
     // no entry, which a plugin output gets none for, and one whose entry
