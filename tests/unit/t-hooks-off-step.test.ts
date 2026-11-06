@@ -72,8 +72,11 @@ const HARNESSES: Harness[] = [
     dir: ".kiro",
     lines: () => [
       "Type /agent and pick aidlc, then carry on.",
-      "Quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), " +
-        "then type /aidlc to carry on.",
+      "Type /upgrade-agent and choose the workspace agents, then quit Kiro and start `kiro-cli --v3` again in this " +
+        "folder; or, to switch this project to Kiro, quit Kiro, run `bun .kiro/tools/aidlc.ts config --harness kiro` " +
+        "in a terminal in this folder and, once it has finished, start `kiro-cli --v3`; or quit Kiro and start it " +
+        "again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the " +
+        "AI-DLC Kiro CLI guide). Then type /aidlc to carry on.",
     ],
   },
   {

@@ -86,6 +86,10 @@ function output(run: ReturnType<typeof runUtility>): string {
 
 // The fixture runs the Claude tools tree; giving its shipped harness data a
 // Kiro tree's hookActivation block makes the doctor read it as that install.
+// The kiro copy tree's own command for the switch to Kiro, which its shipped
+// recovery line names.
+const KIRO_SWITCH = "bun .kiro/tools/aidlc.ts config --harness kiro";
+
 function asShippedKiro(project: string, harness: "kiro" | "kiro-ide"): Record<string, string> {
   const kiro = JSON.parse(readFileSync(
     join(REPO_ROOT, "dist", harness, ".kiro", "tools", "data", "harness.json"),
@@ -325,9 +329,10 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
   }
 
   // #1487: Kiro CLI's engines read disjoint registrations. The kiro tree's
-  // hooks live in the agent JSON, which only the v2 engine runs, so the
-  // generic "fully restart the harness" advice could never work on v3. The
-  // shipped kiro hookActivation names v2 and its ACP flag instead.
+  // hooks live in the agent JSON, which the v3 engine runs only once Kiro has
+  // upgraded it, so the generic "fully restart the harness" advice could never
+  // work there. The shipped kiro hookActivation names Kiro's upgrade, the
+  // switch to Kiro in the install's own command, v2, and the ACP flag instead.
   test("Kiro CLI after workflow progress names the engine its hooks need", () => {
     const project = projectWithWorkflowProgress();
 
@@ -337,9 +342,21 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
     expect(text).toContain("In Kiro CLI, type /agent and pick aidlc, then carry on.");
     expect(text).toContain(
-      "quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide). " +
-        "From an ACP client, start `kiro-cli acp --agent-engine v2`.",
+      'If Kiro says agent "aidlc" needs upgrading for this agent engine, type /upgrade-agent and choose the ' +
+        "workspace agents, then quit Kiro and start `kiro-cli --v3` again in this folder; or, to switch this " +
+        `project to Kiro, quit Kiro, run \`${KIRO_SWITCH}\` in a terminal in this folder and, once it has ` +
+        "finished, start `kiro-cli --v3`; or quit Kiro and start it again in this folder with: kiro-cli --v2 " +
+        "--agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide). " +
+        "From an ACP client, start `kiro-cli acp --agent-engine v2`, or switch this project to Kiro and start " +
+        "the client as the AI-DLC guide for Kiro says.",
     );
+    expect(text).not.toContain("{{INVOKE}}");
+    // A native install names its own command there.
+    const native = JSON.parse(readFileSync(
+      join(REPO_ROOT, "dist-release", "kiro", ".kiro", "tools", "data", "harness.json"),
+      "utf-8",
+    )) as { hookActivation: { recovery: string } };
+    expect(native.hookActivation.recovery).toContain("run `aidlc config --harness kiro` in a terminal in this folder");
     expect(text).not.toContain("fully restart the harness");
     for (const advice of KIRO_IDE_ADVICE) expect(text).not.toContain(advice);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

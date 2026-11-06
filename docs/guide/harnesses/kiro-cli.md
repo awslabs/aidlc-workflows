@@ -288,15 +288,34 @@ exactly like a permission failure. `--trust-all-tools` runs every command
 without asking, a `git push` and a recursive delete included. Use it only
 inside a disposable sandbox where blanket shell access is acceptable.
 
-**The hooks run on Kiro CLI's v2 engine, including over ACP.** This
-distribution registers its hooks in `.kiro/agents/aidlc.json`. Kiro CLI runs
-that block on its v2 engine while the `aidlc` agent is active. `kiro-cli acp`
-picks the agent from `chat.defaultAgent`, the same way `kiro-cli --v2` does.
-Kiro CLI's v3 engine does not run the file as AI-DLC ships it, so if a session
-starts on v3 (for example when a client starts `kiro-cli acp --agent-engine v3`)
-or switches to another agent, none of these hooks run. With no hooks, no
-`HUMAN_TURN` receipts are recorded, so every approval and confirmation is
-refused. No write events are recorded either, so reviews are refused.
+**Which Kiro CLI engine runs the hooks.** This distribution registers its
+hooks in `.kiro/agents/aidlc.json`. Kiro CLI runs that block on its v2 engine
+while the `aidlc` agent is active, including over ACP: `kiro-cli acp` picks the
+agent from `chat.defaultAgent`, the same way `kiro-cli --v2` does. Kiro CLI's
+v3 engine does not run the file as AI-DLC ships it. It runs the file once Kiro
+has upgraded it for v3, and the v2 engine still runs an upgraded file.
+
+From Kiro CLI 2.37, Kiro makes that upgrade by itself when it starts on v3
+(`kiro-cli --v3`, or a plain `kiro-cli` once you have chosen V3), unless
+`chat.enableAutoAgentUpgrade` is `false` in your own Kiro CLI settings. It
+rewrites every agent file in `.kiro/agents/` and keeps each original beside it
+as `<name>.json.bak` (`.json.bak.1` and on when one is already there), so
+`git status` shows 15 changed and 15 new files that AI-DLC did not write. On
+Kiro CLI 3.1.0 this happened before Kiro asked whether to trust the folder,
+also when the answer was not to trust it, and Kiro said nothing about it on
+screen. After that, the hooks run on v3 too. `aidlc doctor --verbose` counts
+those files as upgraded by Kiro, not as your changes, and `aidlc config` keeps
+them (see [Refresh Safety](../18-install-and-lifecycle.md#refresh-safety)). To
+undo the upgrade, first run `kiro-cli settings chat.enableAutoAgentUpgrade
+false`, or Kiro upgrades the files again at its next start on v3, then rename
+each `.json.bak` back to `.json`.
+
+Kiro does not upgrade the files while that setting is `false`, and
+`kiro-cli acp --agent-engine v3` upgraded nothing on Kiro CLI 3.1.0. A session
+on v3 with the files not upgraded runs none of these hooks, and neither does a
+session that switches to another agent. With no hooks, no `HUMAN_TURN` receipts
+are recorded, so every approval and confirmation is refused. No write events
+are recorded either, so reviews are refused.
 
 A prompt Kiro makes itself (for example the `[SYSTEM] Sub-agent synthesis:` message a newer
 kiro-cli sends after a sub-agent returns) is not counted as your turn: it is recorded as
@@ -304,18 +323,26 @@ kiro-cli sends after a sub-agent returns) is not counted as your turn: it is rec
 chat record says which is which, and anything unknown is yours.
 After the first workflow stage, `/aidlc --doctor` reports this as "Hooks have
 never executed". Before that, doctor warns that AI-DLC's hooks have not run in
-this project yet and names the same step. Restarting on the v3
-engine does not fix it. With another agent picked, type `/agent` and pick
-`aidlc`, then carry on in the same chat. On the 3.0 engine (Kiro prints
-`agent "aidlc" needs upgrading for this agent engine` under its replies), quit
-and start `kiro-cli --v2 --agent aidlc` in this folder
-instead (an ACP client starts `kiro-cli acp --agent-engine v2`). To run Kiro
-CLI on its v3 engine, use the
-[Kiro IDE](kiro-ide.md) distribution instead; in an existing project,
-`aidlc config --harness kiro` switches `.kiro/` to it in place and keeps
-`aidlc/` (at a terminal it asks first; with `--yes` it switches; without a terminal, or under
-`--quiet` or `--json`, it changes nothing and prints the command with `--yes`); then start `kiro-cli --v3` (when it asks to trust the folder and you know
-what is in it, choose **Trust, continue**). See
+this project yet and names the same step. With another agent picked, type
+`/agent` and pick `aidlc`, then carry on in the same chat. When Kiro says
+`agent "aidlc" needs upgrading for this agent engine` (when it starts, or under
+its replies), Kiro is on v3 with the files not upgraded, and restarting on v3
+alone does not fix it. Take one of
+these ways:
+
+- Type `/upgrade-agent`, choose the workspace agents, then quit Kiro and start
+  `kiro-cli --v3` again in this folder. The chat you typed it in stays on Kiro's
+  default agent.
+- Switch to the [Kiro](kiro-ide.md) distribution, made for Kiro CLI's v3
+  engine: `aidlc config --harness kiro` switches `.kiro/` to it in place and
+  keeps `aidlc/` (at a terminal it asks first; with `--yes` it switches; without
+  a terminal, or under `--quiet` or `--json`, it changes nothing and prints the
+  command with `--yes`); then start `kiro-cli --v3` (when it asks to trust the
+  folder and you know what is in it, choose **Trust, continue**).
+- Quit and start `kiro-cli --v2 --agent aidlc` in this folder.
+
+An ACP client starts `kiro-cli acp --agent-engine v2`, or, after the switch to
+Kiro, what the [Kiro IDE](kiro-ide.md) guide names. See
 [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
 
 ### When the chat fills up

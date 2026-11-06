@@ -32,7 +32,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro IDE: a build, test or probe command the agent ran shows `Exit Code: -1` while AI-DLC's own commands work | Kiro did not run it: it is waiting for you to allow it, or you declined it. Choose **Allow** (or **Always allow**) on Kiro's prompt, or tell the agent how to go on |
 | Kiro IDE: your reply to an approval question is not seen, or commands come back with exit code -1 | Choose **Trust Folder & Continue** when Kiro asks whether you trust this folder (or select **Manage**, then **Trust**, on the Restricted Mode banner), then run **Developer: Reload Window** from the Command Palette and say carry on; if your next message is still not recorded, `/aidlc --doctor` shows why. In Kiro CLI, quit and start `kiro-cli --v3` again in the folder (when it asks to trust the folder and you know what is in it, choose **Trust, continue**) (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Kiro IDE or Kiro CLI: an approval says your answer was not recorded because `aidlc-record-human-turn` is switched off, or the next AI-DLC step says an AI-DLC hook is switched off | That hook's file in `.kiro/hooks/` carries `"enabled": false`: Kiro IDE's Agent Hooks panel writes it, and a file committed that way brings it to every clone. AI-DLC never turns it back on for you. In Kiro IDE turn it back on under Agent Hooks; in Kiro CLI change `"enabled": false` to `true` in the file the line names, then quit Kiro and start `kiro-cli --v3` again in the folder (hook files are read when a session starts) (see [A Kiro hook switched off](#a-kiro-hook-switched-off)) |
-| Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: Kiro CLI (V2) needs Kiro CLI's v2 engine (`kiro-cli --v2`), Kiro needs v3 (`kiro-cli --v3`) (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
+| Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: Kiro CLI (V2) needs Kiro CLI's v2 engine (`kiro-cli --v2`), or v3 once Kiro has upgraded its agent files; Kiro needs v3 (`kiro-cli --v3`) (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | AI-DLC says its knowledge base cannot read files in your knowledge documents folder, or `aidlc doctor` warns about them | Those files were never added to the knowledge base, or have no text it can read. Do what the line says for each one (add it, or save a `.md`, `.txt` or `.csv` copy beside it), then run `/aidlc knowledge sync` (see [Document Knowledge](08-knowledge.md#document-knowledge-documentkb)) |
 | `aidlc doctor` says this project is in a synced folder (Google Drive, OneDrive, Dropbox, Box or iCloud Drive), or a review or plan approval is refused for a file nobody edited | The sync client can rewrite files AI-DLC checks, and a changed file stops an approval until it is reviewed again. Move the project out of the synced folder, or pause sync for it, then take the step the refusal names |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
@@ -256,12 +256,19 @@ changes nothing.
 - **Kiro CLI (V2) distribution** (`--harness kiro-v2`, `.kiro/agents/aidlc.json`):
   hooks run on Kiro CLI's v2 engine, so start it with `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for
   an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)), with the
-  `aidlc` agent active; v3 does not run the file as AI-DLC ships it. With
+  `aidlc` agent active. v3 does not run the file as AI-DLC ships it, but runs
+  it once Kiro has upgraded it, which Kiro CLI 2.37 and later does by itself at
+  a start on v3 unless `chat.enableAutoAgentUpgrade` is `false` in your Kiro
+  CLI settings (it keeps each original as `<name>.json.bak`; see
+  [Kiro CLI](harnesses/kiro-cli.md#usage)). With
   another agent picked, type `/agent` and pick `aidlc`, then carry on in the
-  same chat. If Kiro prints `agent "aidlc" needs upgrading for this agent
-  engine` under its replies, the session is on the 3.0 engine: quit Kiro and
-  start it again in this folder with `kiro-cli --v2 --agent aidlc`. From an ACP
-  client, start `kiro-cli acp --agent-engine v2`.
+  same chat. If Kiro says `agent "aidlc" needs upgrading for this agent
+  engine`, the session is on v3 with the files not upgraded: type
+  `/upgrade-agent`, choose the workspace agents, then quit Kiro and start
+  `kiro-cli --v3` again in this folder; or switch to Kiro (below) with
+  `aidlc config --harness kiro`; or quit Kiro and start it again in this folder
+  with `kiro-cli --v2 --agent aidlc`. From an ACP client, start
+  `kiro-cli acp --agent-engine v2`.
 - **Kiro distribution** (`--harness kiro`, `.kiro/hooks/aidlc-*.json`): hooks run
   only on Kiro CLI's v3 engine, so start it with `kiro-cli --v3`. Kiro CLI 2.33.0 takes
   the engine only from the command line or your own Kiro CLI settings: it

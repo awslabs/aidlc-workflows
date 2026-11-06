@@ -614,7 +614,7 @@ const ACTIVE_SPACE_VALUE = "default\n";
 // rules-subdir and any host-native generated-runner frontmatter from this
 // open-set descriptor. Pretty-printed + trailing newline keeps output
 // diff-friendly and stable under --check.
-function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
+function writeHarnessData(treeRoot: string, m: HarnessManifest, invoke: string): void {
   // A FRESH object, deliberately: the runtime READER tolerates unknown keys, but
   // this writer alone decides what ships. Anything hand-added to a local
   // harness.json is erased on the next build, so a new configuration field has
@@ -635,7 +635,10 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
   // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
-  if (m.hookActivation) data.hookActivation = m.hookActivation;
+  // Its lines can name the install's own command, so `{{INVOKE}}` is filled per tree.
+  if (m.hookActivation) {
+    data.hookActivation = JSON.parse(substituteInvocationTokens(JSON.stringify(m.hookActivation), m.harnessDir, invoke));
+  }
   // And only a host whose own step to a clean chat is known.
   if (m.newChatStep) data.newChatStep = m.newChatStep;
   // Only the Kiro rows declare a layout; the runtime reads it in place of the row name.
@@ -1069,7 +1072,7 @@ function buildTree(
   //     purely from the manifest, so unseeded; written into the same tools/data/
   //     the compile step just created, hence walked + byte-diffed by --check
   //     like any other generated file.
-  writeHarnessData(treeRoot, m);
+  writeHarnessData(treeRoot, m, invoke);
   writePluginAgentData(treeRoot, m);
   writeAgentTiersData(treeRoot);
   writeSettingsSchemaData(treeRoot);
