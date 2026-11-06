@@ -52,6 +52,7 @@ A workflow's `Running` state persists across Claude Code sessions. You start a w
 | `Running -> Completed` | Final stage outcome reported through `aidlc-orchestrate.ts report` | `tools/aidlc-state.ts` (internal emitter) |
 | `Running -> Archived`, `Completed -> Archived` | `aidlc-utility intent archive <name>` (human decision; refused only for claimed team Units) | `tools/aidlc-utility.ts` |
 | `Archived -> Running`, `Archived -> Completed` | `aidlc-utility intent unarchive <name>` (back to the status recorded in `Archived From`) | `tools/aidlc-utility.ts` |
+| `Completed -> Running` | `aidlc-jump execute` (a redo or backward jump the person asked for on finished work) and `aidlc-jump reopen` (a Unit's step on work whose walk ended on it or a later stage of its phase): the work runs again on the target, the registry row goes back to `in-flight` (finishing again marks it `complete`), and `doctor` reads the later `STAGE_STARTED` or reopen rows as a reopened run, not drift | `tools/aidlc-jump.ts` |
 | `Completed -> Running` | `aidlc-utility scope-change` to a scope that runs a stage after the last one: the work reopens at that stage (`[-]`, one `STAGE_STARTED`, the registry row `in-flight`), past any stage skipped with the switch (`--skip`, off the plan with one `RECOMPOSED` row); `doctor` reads a `WORKFLOW_COMPLETED` followed by a later `STAGE_STARTED` as a reopened run, not drift | `tools/aidlc-utility.ts` |
 
 ---

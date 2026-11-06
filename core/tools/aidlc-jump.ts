@@ -40,6 +40,8 @@ import {
   resolveStage,
   resolveWorkflowSelection,
   type StageEntry,
+  updateIntentStatus,
+  withAuditLock,
   setCheckbox,
   removeField,
   setField,
@@ -301,6 +303,17 @@ function parseFlags(
 // The active Unit's lifecycle mirror is dropped; the next `unit start` writes
 // it again.
 
+// Work moved back to Running from Completed is in flight again on the work
+// list (intents.json, which `intent list` and the running-work readers show),
+// as a scope change's reopen puts it; finishing again marks it complete. One
+// place for every move of the jump tool, under the workspace lock the registry
+// write asks for.
+function backInFlight(pd: string, before: string, after: string): void {
+  if (getField(before, "Status")?.trim() !== "Completed" || getField(after, "Status")?.trim() !== "Running") return;
+  const { intent, space } = resolveWorkflowSelection(pd);
+  if (intent !== null) withAuditLock(pd, () => updateIntentStatus(pd, intent, "in-flight", space));
+}
+
 // The change the person asked for, in their words. On finished work the
 // human-turn hook keeps their messages beside the record and writes no turn on
 // them, so the change is every message of theirs kept there since the finish
@@ -330,6 +343,7 @@ function handleReopen(args: string[]): void {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
+  const stateBefore = content;
   const targetSlug = flags.target;
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
   if (!targetSlug || units.length === 0) {
@@ -430,6 +444,7 @@ function handleReopen(args: string[]): void {
   }
   content = setField(content, "Last Updated", isoTimestamp());
   writeStateFile(pd, content);
+  backInFlight(pd, stateBefore, content);
   console.log(JSON.stringify({
     reopened: targetSlug, stages, units, ...(stagesReset.length > 0 ? { stages_reset: stagesReset } : {}),
     state_updated: true, audit_appended: true,
@@ -755,6 +770,7 @@ async function handleExecute(args: string[]): Promise<void> {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
+  const stateBefore = content;
 
   const targetSlug = flags.target;
   if (!targetSlug) error("Usage: execute --target <slug> --direction <forward|backward|redo> [--units <unit[,unit...]> [--stages <slug[,slug...]>]] [--scope <scope>]");
@@ -942,6 +958,7 @@ async function handleExecute(args: string[]): Promise<void> {
   }
 
   writeStateFile(pd, content);
+  backInFlight(pd, stateBefore, content);
 
   // The jump is done, so its line (what it skipped and the way back, or what
   // comes after an owed Reverse Engineering) can never fail it. The line is

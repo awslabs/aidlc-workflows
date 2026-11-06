@@ -1,4 +1,4 @@
-// covers: function:jumpIsPersonsMove, function:turnKeptSinceFinished, function:standingPersonTurn, hook:aidlc-plan-approval-guard, hook:aidlc-record-human-turn, scope:bugfix, function:reconstructTimeline, function:changeAsked, function:keptSinceFinished, subcommand:aidlc-utility:doctor
+// covers: function:jumpIsPersonsMove, function:turnKeptSinceFinished, function:standingPersonTurn, hook:aidlc-plan-approval-guard, hook:aidlc-record-human-turn, scope:bugfix, function:reconstructTimeline, function:changeAsked, function:keptSinceFinished, function:backInFlight, subcommand:aidlc-utility:doctor
 //
 // #3608, driven with no model through the real engine and hooks
 // (tests/harness/scope-run.ts): a bugfix with the stages after Code Generation
@@ -8,10 +8,14 @@
 // redone build runs to its gate and back to done, with no refusal on the way;
 // a file the person asks for after the finish is written. On work built Unit
 // by Unit a Unit's redo after the finish runs for that Unit only, doctor reads
-// it as a run, and a Unit's change keeps the person's words.
+// it as a run, and a Unit's change keeps the person's words. While a redo runs
+// the work list says the work is in flight.
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
+  activeRecord,
   auditEvents,
   cleanupScopeProjects,
   field,
@@ -21,6 +25,15 @@ import {
 } from "../harness/scope-run.ts";
 
 afterAll(cleanupScopeProjects);
+
+// The work's row on the work list (intents.json), which `intent list` and the
+// running-work readers show: in flight while a redo runs, complete again at done.
+function listed(proj: string): string | undefined {
+  const { space, intent } = activeRecord(proj);
+  const rows = JSON.parse(readFileSync(join(proj, "aidlc", "spaces", space, "intents", "intents.json"), "utf-8")) as
+    Array<{ dirName: string; status: string }>;
+  return rows.find((row) => row.dirName === intent)?.status;
+}
 
 const SKIP = ["--skip", "build-and-test,deployment-pipeline,deployment-execution"];
 // Classic with two Units: the design stages that add no wiring skipped, and Build and Test, so it finishes at Code Generation.
@@ -46,10 +59,13 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     const print = agent.next("--stage", "code-generation");
     const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(String(print.message ?? ""))?.[1];
     expect(jump, JSON.stringify(print)).toContain("--direction redo");
+    expect(listed(proj)).toBe("complete");
     const ran = host.bash(jump as string);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(listed(proj), "the redo runs, but the work list says the work is complete").toBe("in-flight");
     const final = agent.drive(agent.next());
     expect(final.kind).toBe("done");
+    expect(listed(proj)).toBe("complete");
     expect(host.refusals).toEqual([]);
     expect(agent.asked.slice(asked).filter((q) => q.what === "plan approval")).toHaveLength(1);
     const rows = auditEvents(proj);
@@ -80,14 +96,17 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     person.say("Redo code generation for the core unit.");
     const ran = host.bash(reopen as string);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
-    // While core redoes its step, doctor reads a reopened run, not a lost
-    // state write whose fix would end the redo.
+    // While core redoes its step, the work list says it is in flight, and
+    // doctor reads a reopened run, not a lost state write whose fix would end
+    // the redo.
+    expect(listed(proj), "the redo runs, but the work list says the work is complete").toBe("in-flight");
     const doctor = host.bash("bun .claude/tools/aidlc-utility.ts doctor");
     expect(doctor.stdout, "doctor read the reopen as drift").not.toContain("State/audit drift");
     expect(doctor.stdout).not.toContain("set Status=Completed");
     const final = agent.drive(agent.next());
     expect(final.kind).toBe("done");
     expect(host.refusals.slice(refusals)).toEqual([]);
+    expect(listed(proj)).toBe("complete");
     const plans = agent.asked.slice(asked).filter((q) => q.what === "plan approval");
     expect(plans.map((q) => q.unit)).toEqual(["core"]);
     expect(auditEvents(proj).filter((row) => row.event === "WORKFLOW_COMPLETED").length).toBe(finishedRows + 1);
