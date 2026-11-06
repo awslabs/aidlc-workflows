@@ -723,6 +723,18 @@ describe("who takes what", () => {
     expect(refused.out).toContain("checkout-ui is being built at the lead's project, so it is not open to take. Run `");
   });
 
+  test("a take whose team.md names a branch the lead's project lacks says which file named it", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const alice = cloneOf(home.remote, "alice");
+    const teamMd = join(alice, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(teamMd, readFileSync(teamMd, "utf-8").replace("## Way of Working\n", "## Way of Working\n\nIntegration branch: `develop`.\n"));
+    const refused = take(alice, "refunds", ["--team", "payments"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain(
+      "The lead's project's branch develop, named in aidlc/spaces/default/memory/team.md under Way of Working, could not be fetched from origin",
+    );
+  });
+
   test("a teammate who takes before cloning the code repos: the build records the home's repos", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });

@@ -751,7 +751,9 @@ team. The agent writes the words the answer came from to the request file the
 command names (`--request-file aidlc/.aidlc-request-text/unit-assign.txt`), and
 they go into the `UNITS_ASSIGNED` audit row when a turn of yours stands behind
 them. When the lead's project cannot be reached, the answer is kept
-(`Held: not yet`) and the next step offers to try again.
+(`Held: not yet`) and the next step offers to try again. When it answers but has no
+branch of that name (say the one `memory/team.md` names under Way of Working), the
+answer is kept the same way and every line says that, with the file that named it.
 
 ### `/aidlc unit take <unit> --home <record>` - Take a Unit as your team's own work
 

@@ -935,8 +935,9 @@ and not answered, and the hand-off by file for a Unit held for a team and not
 taken. Who builds which Unit (`ask_type:
 unit-assignment`) is asked once; after the person spoke without naming teams the
 step is a print with the same choice in `offers`, and an answer kept while the
-home could not be reached (`UNITS_ASSIGNED` with `Held: not yet`) makes the step
-a print offering to try again, once; after the person answers it the home builds
+home could not be reached (`UNITS_ASSIGNED` with `Held: not yet`), or that
+answered with no such branch (`Not Held Because`, said in the offer and its
+waiting line), makes the step a print offering to try again, once; after the person answers it the home builds
 the Units it holds no team for, and the ones named for a team wait for it
 (`unitsKeptForTeams`), said once. Leaving every Unit open holds nothing, so it
 needs no home. A team's result carries the

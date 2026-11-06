@@ -249,6 +249,34 @@ describe("the lead's answer is never asked for twice", () => {
     expect(JSON.stringify(next(home.dir))).not.toContain("Do you want me to try again?");
   });
 
+  // A live run: team.md's Way of Working named a branch origin did not have,
+  // and every try said the lead's project could not be reached, though origin
+  // answered.
+  test("a branch team.md names that the remote lacks is said as that, with its file; once it is there, trying again holds the Unit", () => {
+    const home = makeHome();
+    const teamMd = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(teamMd, readFileSync(teamMd, "utf-8").replace("## Way of Working\n", "## Way of Working\n\nIntegration branch: `develop`.\n"));
+    chooseTeams(home.dir);
+    expect(next(home.dir).ask_type).toBe("unit-assignment");
+    const kept = run(UNIT, ["assign", "refunds=payments", "--person-words", "payments takes refunds"], home.dir);
+    expect(kept.status, kept.out).toBe(0);
+    const why = "origin has no branch develop, the branch named in aidlc/spaces/default/memory/team.md under Way of Working";
+    expect(String(kept.json?.notice)).toBe(`Nothing is held for the teams yet: ${why}. I've kept who builds which Unit. Do you want me to try again?`);
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNITS_ASSIGNED").at(-1)?.block).toContain("**Held**: not yet");
+    const step = next(home.dir);
+    const offer = (step.offers as Array<{ question: string }>)[0];
+    expect(offer.question).toBe(`Who builds which Unit is kept, but nothing is held for the teams yet: ${why}. Do you want me to try again?`);
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+    const after = next(home.dir);
+    expect((after.change_notices ?? []) as string[], JSON.stringify(after)).toContain(
+      "refunds is kept for payments: it waits for its team until that is put right and you ask me to try again.",
+    );
+    expect(JSON.stringify([kept.json, step, after])).not.toContain("could not be reached");
+    git(home.dir, ["push", "-q", "origin", "main:develop"]);
+    expect(run(UNIT, ["assign", "refunds=payments", "--person-words", "try again"], home.dir).status).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.owner).toBe("payments");
+  });
+
   test("leave them all open needs no home: nothing to hold, so nothing waits on the remote", () => {
     const home = makeHome();
     chooseTeams(home.dir);

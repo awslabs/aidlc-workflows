@@ -740,6 +740,7 @@ import {
   unitLikelyRepos,
   unitsAssignedSinceTeams,
   assignmentNotHeld,
+  notHeldWords,
   unitsKeptForTeams,
   unitsLeftOpen,
   unitsStartedAtLeadsProject,
@@ -6156,10 +6157,11 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
   // and the ones named for a team wait for it (unitsKeptForTeams), said once.
   const kept = assignmentNotHeld(rows);
   if (kept !== null) {
+    const notHeld = notHeldWords(kept.because);
     const retry = engineAskMark(projectDir, UNIT_ASSIGNMENT_RETRY_ASK);
     if (retry === null || !personRepliedAfter(projectDir, retry)) {
       if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, UNIT_ASSIGNMENT_RETRY_ASK);
-      const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the lead's project could not be reached. " +
+      const question = `Who builds which Unit is kept, but nothing is held for the teams yet: ${notHeld.why}. ` +
         "Do you want me to try again?";
       return lineEndingTurn(null, [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open, kept.leftOpen) }, { label: "Not now" }] }]);
     }
@@ -6168,7 +6170,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
       const units = waiting.map(([unit]) => unit);
       const teams = [...new Set(waiting.map(([, team]) => team))];
       sayWithStepOnce(projectDir, `${namesInProse(units)} ${units.length === 1 ? "is" : "are"} kept for ${namesInProse(teams)}: ` +
-        `${units.length === 1 ? "it waits for its team" : "they wait for their teams"} until the lead's project can be reached and you ask me to try again.`);
+        `${units.length === 1 ? "it waits for its team" : "they wait for their teams"} until ${notHeld.until} and you ask me to try again.`);
     }
     return null;
   }

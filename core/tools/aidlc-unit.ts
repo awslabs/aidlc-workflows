@@ -215,6 +215,8 @@ import {
   unitsKeptForTeams,
   unitsLeftOpen,
   unitsStartedAtLeadsProject,
+  NOT_HELD_BECAUSE_FIELD,
+  notHeldWords,
   unitGateRhythmChosen,
   unitWriteTargets,
   outputForLead,
@@ -485,6 +487,18 @@ function integrationBranch(projectDir: string, remote: string | null): string {
   return current || "main";
 }
 
+// The remote answered and has no such branch (git ls-remote --exit-code exits
+// 2), never a remote out of reach. `because` is that, in the lead's words, with
+// the file that named the branch.
+export class IntegrationBranchMissing extends Error {
+  readonly because: string;
+  constructor(message: string, remote: string, branch: string, source: string | null) {
+    super(message);
+    this.because = `${remote} has no branch ${branch}` +
+      (source === null ? "" : `, the branch named in ${source} under Way of Working`);
+  }
+}
+
 function fetchIntegration(projectDir: string): {
   remote: string | null;
   branch: string;
@@ -500,11 +514,13 @@ function fetchIntegration(projectDir: string): {
   if (remote) {
     const fetched = git(projectDir, ["fetch", remote, branch]);
     if (!fetched.ok) {
-      fail(
-        named
-          ? `${named} could not be fetched from ${remote}: ${fetched.stderr.trim().replace(/^fatal:\s*/i, "")}`
-          : `git fetch ${remote} ${branch} failed: ${fetched.stderr.trim()}`,
-      );
+      const message = named
+        ? `${named} could not be fetched from ${remote}: ${fetched.stderr.trim().replace(/^fatal:\s*/i, "")}`
+        : `git fetch ${remote} ${branch} failed: ${fetched.stderr.trim()}`;
+      if (git(projectDir, ["ls-remote", "--exit-code", "--heads", remote, `refs/heads/${branch}`]).code === 2) {
+        throw new IntegrationBranchMissing(message, remote, branch, affirmed?.source ?? null);
+      }
+      fail(message);
     }
   }
   const ref = remote ? `refs/remotes/${remote}/${branch}` : `refs/heads/${branch}`;
@@ -5452,14 +5468,17 @@ function assignUnits(args: string[], projectDir?: string): void {
   }
   const identity = activeIdentity(pd);
   let integration: ReturnType<typeof fetchIntegration> | null;
+  let missing: IntegrationBranchMissing | null = null;
   try {
     integration = fetchIntegration(pd);
-  } catch {
+  } catch (e) {
     // Every Unit left open holds nothing at the home, so it needs no home.
     integration = null;
+    if (e instanceof IntegrationBranchMissing) missing = e;
   }
   if (integration === null && named.size > 0) {
-    // The home cannot be reached: the answer is kept, and the next step offers to hold it again.
+    // The home cannot be reached, or has no such branch: the answer is kept,
+    // with why, and the next step offers to hold it again.
     const kept = [...named].map(([unit, team]) => `${unit}=${team}`);
     const leftOpen = openAll ? local.units.filter((unit) => unit !== skeleton && !named.has(unit) && !staysHere(unit)) : openNamed;
     appendAuditEntry("UNITS_ASSIGNED", {
@@ -5468,11 +5487,12 @@ function assignUnits(args: string[], projectDir?: string): void {
       ...(leftOpen.length > 0 ? { "Left Open": leftOpen.join(", ") } : {}),
       ...(lifted.length > 0 ? { "Started Here": lifted.join(", ") } : {}),
       Held: "not yet",
+      ...(missing !== null ? { [NOT_HELD_BECAUSE_FIELD]: missing.because } : {}),
       ...(words ? { "Person Words": words } : {}),
     }, pd);
     console.log(JSON.stringify({
       assigned: [],
-      notice: "Nothing is held for the teams yet: the lead's project could not be reached. I've kept who builds which Unit. " +
+      notice: `Nothing is held for the teams yet: ${notHeldWords(missing?.because ?? null).why}. I've kept who builds which Unit. ` +
         "Do you want me to try again?",
       offer: { choices: [{ label: "Try again", command: assignRetryCommand(kept, openAll, openNamed) }, { label: "Not now" }] },
     }));
@@ -5719,7 +5739,9 @@ function fetchHomeIntegration(
     const branch = affirmed?.branch ?? integrationBranch(projectDir, remote);
     if (remote) {
       const fetched = git(projectDir, ["fetch", remote, branch]);
-      if (!fetched.ok) fail(`The lead's project's branch ${branch} could not be fetched from ${remote}: ${fetched.stderr.trim()}`);
+      // Where the name came from, so the person can correct it there.
+      const from = affirmed ? `, named in ${affirmed.source} under Way of Working,` : "";
+      if (!fetched.ok) fail(`The lead's project's branch ${branch}${from} could not be fetched from ${remote}: ${fetched.stderr.trim()}`);
     }
     const ref = remote ? `refs/remotes/${remote}/${branch}` : `refs/heads/${branch}`;
     return { ref, branch, oid: gitOutput(projectDir, ["rev-parse", "--verify", ref], `The lead's project's branch ${branch} is not here`) };

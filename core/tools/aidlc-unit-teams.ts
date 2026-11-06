@@ -141,9 +141,24 @@ export function unitsAssignedSinceTeams(rows: readonly AuditShardEvent[]): boole
   return ordered.slice(teamsAt + 1).some((row) => row.event === "UNITS_ASSIGNED");
 }
 
+// Why a kept answer is not held, on its row when the remote answered without
+// the branch (IntegrationBranchMissing's words); a row without it is a home
+// that could not be reached.
+export const NOT_HELD_BECAUSE_FIELD = "Not Held Because";
+
+// The words for why a kept answer is not held yet, said by assign's notice,
+// the step's offer to try again and its line for a Unit kept for its team.
+export function notHeldWords(because: string | null): { why: string; until: string } {
+  return because === null
+    ? { why: "the lead's project could not be reached", until: "the lead's project can be reached" }
+    : { why: because, until: "that is put right" };
+}
+
 // The lead's answer to who builds which Unit, kept while the home could not
 // be reached (the newest UNITS_ASSIGNED since teams says `Held: not yet`).
-export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: string[]; open: boolean; leftOpen: string[] } | null {
+export function assignmentNotHeld(
+  rows: readonly AuditShardEvent[],
+): { pairs: string[]; open: boolean; leftOpen: string[]; because: string | null } | null {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   let teamsAt = -1;
   ordered.forEach((row, at) => {
@@ -154,7 +169,12 @@ export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: st
     .filter((row) => row.event === "UNITS_ASSIGNED" && auditBlockField(row.block, "Here") === null).at(-1);
   if (last === undefined || auditBlockField(last.block, "Held") !== "not yet") return null;
   const pairs = (auditBlockField(last.block, "Assigned") ?? "").split(",").map((pair) => pair.trim()).filter((pair) => pair.includes("="));
-  return { pairs, open: auditBlockField(last.block, "Open") === "all", leftOpen: listField(last.block, "Left Open") };
+  return {
+    pairs,
+    open: auditBlockField(last.block, "Open") === "all",
+    leftOpen: listField(last.block, "Left Open"),
+    because: auditBlockField(last.block, NOT_HELD_BECAUSE_FIELD),
+  };
 }
 
 function listField(block: string, name: string): string[] {
