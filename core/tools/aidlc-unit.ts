@@ -5995,7 +5995,10 @@ function commitUnitPaths(dir: string, paths: string[], own: Record<string, strin
   try {
     const head = git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).ok;
     git(dir, head ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env);
-    const plain = paths.filter((path) => own[path] === undefined);
+    // A file the Unit deleted whose deletion the branch already has (a redo
+    // that merged the newer main, say) leaves nothing to add.
+    const plain = paths.filter((path) => own[path] === undefined &&
+      (existsSync(join(dir, path)) || git(dir, ["ls-files", "--error-unmatch", "--", path], env).ok));
     if (plain.length > 0) {
       const added = git(dir, ["add", "--", ...plain], env);
       if (!added.ok) fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
@@ -6845,8 +6848,10 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     // Files it recorded that are nowhere (not on disk and never committed in
     // the repo, a redo that wrote others, say): git would refuse to add them,
-    // so this is said first, in plain words, with the way back.
-    const gone = paths.filter((path) => !existsSync(join(dir, path)) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok);
+    // so this is said first, in plain words, with the way back. One the repo's
+    // history has is a deletion, already committed or still to add.
+    const gone = paths.filter((path) => !existsSync(join(dir, path)) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok &&
+      git(dir, ["log", "--all", "-1", "--format=%H", "--", path]).stdout.trim() === "");
     if (gone.length > 0) {
       const one = gone.length === 1;
       fail(

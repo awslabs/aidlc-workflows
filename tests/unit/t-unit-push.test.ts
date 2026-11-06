@@ -552,6 +552,34 @@ describe("the push", () => {
     expect(readFileSync(join(billing, "NOTES.md"), "utf-8")).toBe("mine\n");
   });
 
+  // A live run on Kiro CLI: the redo after a turn-down merged the newer main
+  // into the Unit's branch and dropped a file of the first build; Code
+  // Generation listed it as deleted, and the push said it was "not there" and
+  // offered to write it again, though its deletion was already committed.
+  test("a file the Unit deleted whose deletion its branch already has is pushed as deleted, never said to be missing", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const api = join(alice, "checkout-api");
+    git(api, ["switch", "-q", "refunds"]);
+    git(api, ["rm", "-q", "src/refunds.ts"]);
+    git(api, ["commit", "-q", "-m", "drop the first build's file"]);
+    mkdirSync(join(api, "src"), { recursive: true });
+    writeFileSync(join(api, "src", "refunds-v2.ts"), "export const refunds = 2;\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    writeFileSync(manifest, `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1,
+      writes: [{ repo: "checkout-api", path: "src/refunds.ts" }, { repo: "checkout-api", path: "src/refunds-v2.ts" },
+        { repo: "billing", path: "lib/refund.ts" }],
+    }, null, 2)}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(pushed.out).not.toContain("not there");
+    const files = git(hosts["checkout-api"], ["ls-tree", "-r", "--name-only", "refunds"]).split("\n");
+    expect(files).toContain("src/refunds-v2.ts");
+    expect(files).not.toContain("src/refunds.ts");
+  });
+
   test("their own change in the way of the Unit's branch: the push says git's words and the way on, touches nothing, and the next step does not offer it again", () => {
     const { hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);
