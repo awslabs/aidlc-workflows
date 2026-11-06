@@ -21,7 +21,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   resolveStage,
@@ -110,9 +110,18 @@ function writeStageOutputs(p: string, slug: string): void {
   }
 }
 
-function recordReview(p: string, slug: string, reviewer: string): void {
+// The per-clone measurement file beside the audit shards.
+function metricsFile(p: string): string | undefined {
+  const dir = seededAuditDir(p);
+  return readdirSync(dir)
+    .filter((name) => /^review-metrics-.*\.jsonl$/.test(name))
+    .map((name) => join(dir, name))[0];
+}
+
+function recordReview(p: string, slug: string, reviewer: string, coveredBy?: string): void {
   writeStageOutputs(p, slug);
-  const base = ["review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1"];
+  const base = ["review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1",
+    ...(coveredBy === undefined ? [] : ["--covered-by", coveredBy])];
   const requested = run(LOG_TOOL, base, p);
   expect(requested.status, `request for ${slug}: ${requested.out}`).toBe(0);
   const { reviewFile } = JSON.parse(requested.out) as { reviewFile: string };
@@ -150,6 +159,11 @@ describe("t-review-granularity-flow (phase mode, real CLI)", () => {
     expect(deferred.directive?.stage).toBe("requirements-analysis");
     expect(deferred.directive?.reviewer).toBeUndefined();
     expect(deferred.directive?.review_covers).toBeUndefined();
+    // The gate's one plain-words sentence reads its anchor from here (§12a).
+    expect(deferred.directive?.review_deferred).toEqual({
+      anchor: "refined-mockups",
+      anchor_name: "Refined Mockups",
+    });
 
     advanceToAnchor(p);
     const anchor = runOrchestrateNext(ORCHESTRATE_TOOL, p, [], {
@@ -195,8 +209,8 @@ describe("t-review-granularity-flow (phase mode, real CLI)", () => {
 
     // The grouped pass records each covered stage's own receipt — the logger
     // accepts a request for a completed stage — and the gate then opens.
-    recordReview(p, "requirements-analysis", "aidlc-product-lead-agent");
-    recordReview(p, "user-stories", "aidlc-product-lead-agent");
+    recordReview(p, "requirements-analysis", "aidlc-product-lead-agent", "refined-mockups");
+    recordReview(p, "user-stories", "aidlc-product-lead-agent", "refined-mockups");
     const opened = run(STATE_TOOL, ["gate-start", "refined-mockups"], p);
     expect(opened.status, opened.out).toBe(0);
     const approved = run(
@@ -206,9 +220,9 @@ describe("t-review-granularity-flow (phase mode, real CLI)", () => {
     );
     expect(approved.status, approved.out).toBe(0);
 
-    const metricsPath = join(seededAuditDir(p), "review-metrics.jsonl");
-    expect(existsSync(metricsPath)).toBe(true);
-    const rows = readFileSync(metricsPath, "utf-8")
+    const metricsPath = metricsFile(p);
+    expect(metricsPath).toBeDefined();
+    const rows = readFileSync(metricsPath!, "utf-8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -226,14 +240,37 @@ describe("t-review-granularity-flow (phase mode, real CLI)", () => {
     );
   });
 
+  test("the logger itself enforces the deferral: a per-stage dispatch at a deferred stage is refused", () => {
+    const p = phaseProject();
+    writeStageOutputs(p, "requirements-analysis");
+    // An agent that read the stage file's reviewer and dispatched anyway.
+    const rogue = run(LOG_TOOL, [
+      "review", "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent", "--iteration", "1",
+    ], p);
+    expect(rogue.status).not.toBe(0);
+    expect(rogue.out).toContain("Refined Mockups");
+    expect(rogue.out).toContain("--covered-by");
+    // A covered-by naming the wrong anchor is refused the same way.
+    const wrong = run(LOG_TOOL, [
+      "review", "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent", "--iteration", "1",
+      "--covered-by", "contract-design",
+    ], p);
+    expect(wrong.status).not.toBe(0);
+    expect(wrong.out).toContain("--covered-by");
+    expect(wrong.out).toContain("refined-mockups");
+    // No receipt or metrics row leaked from the refusals.
+    expect(metricsFile(p)).toBeUndefined();
+  });
+
   test("stage granularity logs metrics rows marked stage", () => {
     const p = createTestProject();
     tempDirs.push(p);
     seedAidlcMemory(p);
     seedStateFile(p, "state-mid-inception.md");
     recordReview(p, "requirements-analysis", "aidlc-product-lead-agent");
-    const metricsPath = join(seededAuditDir(p), "review-metrics.jsonl");
-    const rows = readFileSync(metricsPath, "utf-8")
+    const rows = readFileSync(metricsFile(p)!, "utf-8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);

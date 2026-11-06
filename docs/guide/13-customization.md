@@ -322,9 +322,15 @@ review_granularity: phase
 
 What changes and what does not:
 
-- **Human approval gates are untouched.** Every stage still ends at its gate;
-  intermediate gates just carry no reviewer findings brief. All grouped
-  findings reach you at the anchor stage's gate, tagged per artifact.
+- **Human approval gates are untouched.** Every stage still ends at its gate,
+  and a deferred stage's gate says once, in plain words, that its review comes
+  later in the phase. All grouped findings reach you at the anchor stage's
+  gate, named per stage, each with the way back to its stage.
+- **The engine enforces the grouping.** A per-stage review dispatched at a
+  deferred stage anyway (a stage file still names its reviewer) is refused by
+  the engine with the anchor named, so the saving does not depend on how
+  closely an agent follows the absent reviewer block. A review you ask for in
+  your own words still runs any time.
 - **Receipts stay per stage.** The grouped pass records each covered stage's
   own review receipt, so write-freeze, staleness, and recovery behave exactly
   as per-stage reviews do. Editing a reviewed artifact later invalidates that
@@ -349,10 +355,10 @@ stages' human-approved gates stand, exactly as skipping a reviewed stage does
 today, and you can still ask for a review of any stage in plain words at any
 time.
 
-Each review request and verdict is also logged to
-`audit/review-metrics.jsonl` in the intent's record (timestamp, stage,
-granularity, iteration, verdict, findings counts), so the two modes can be
-compared on real runs.
+Each review request and verdict is also logged to a per-clone
+`audit/review-metrics-<host>-<clone>.jsonl` in the intent's record (timestamp,
+stage, granularity, iteration, verdict, findings counts), so the two modes can
+be compared on real runs.
 
 ### Plan approval
 

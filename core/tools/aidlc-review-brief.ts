@@ -64,7 +64,8 @@ import {
   validateUnitName,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.js";
-import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { phaseReviewRole } from "./aidlc-review-granularity.ts";
 import {
   constructionCheckpointKind,
   resolveConstructionCheckpoint,
@@ -1711,16 +1712,24 @@ function gateReviewScope(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit: string | undefined,
-): { contextUnit: string | undefined; endOfUnit: StageEntry[] | null; earlier: ReviewedContext[] } {
+): { contextUnit: string | undefined; endOfUnit: StageEntry[] | null; earlier: ReviewedContext[]; phaseCovered: ReviewedContext[] } {
   const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
     ? undefined
     : unit;
   const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage);
-  const earlier = endOfUnit === null
-    ? []
-    : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true)
-      .filter(({ context }) => context.incompleteReview === true || context.findings.some(findingIsOpen));
-  return { contextUnit, endOfUnit, earlier };
+  // Phase granularity: the anchor's gate decides over the grouped pass, so
+  // every covered stage's review shows ahead of this stage's own — named per
+  // stage, clean reviews included — and the accepts line counts them too
+  // (stage-protocol-reviewer §12a, phase review).
+  const phaseCovered = contextUnit !== undefined ? [] : phaseCoveredContexts(projectDir, stage);
+  const earlier = [
+    ...phaseCovered,
+    ...(endOfUnit === null
+      ? []
+      : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true)
+        .filter(({ context }) => context.incompleteReview === true || context.findings.some(findingIsOpen))),
+  ];
+  return { contextUnit, endOfUnit, earlier, phaseCovered };
 }
 
 // The #2099 line for the gate the brief with the same `unit` opens: a stage's
@@ -2530,7 +2539,7 @@ export function renderReviewBrief(
   unit?: string,
   fallbackFinding?: string,
 ): string {
-  const { contextUnit, earlier } = gateReviewScope(projectDir, stage, unit);
+  const { contextUnit, earlier, phaseCovered } = gateReviewScope(projectDir, stage, unit);
   // An open finding on work kept after its review (relaxed or off) shows as
   // Approve records it. The change itself was said once, as change_notices,
   // when it was recorded, so the brief does not say it again. Marked before the
@@ -2672,15 +2681,56 @@ export function renderReviewBrief(
         : acceptsLine !== null
           ? "continue."
           : "continue; no findings are open.";
+  // A grouped finding about a stage already approved carries the way back to
+  // that stage, so the person is never told to fix an earlier document with no
+  // route to it.
+  const wayBack = [...new Map(
+    phaseCovered
+      .filter(({ context }) => context.findings.some(findingIsOpen))
+      .map(({ stage: of }) => [of.slug, of] as const),
+  ).values()].map((of) =>
+    `**Way back:** a change to ${findStageBySlug(of.slug)?.name ?? of.slug}'s documents is a jump back — ` +
+      `\`${entrySkillInvocation()} --stage ${of.slug}\` — and the work replays forward from there.`
+  );
   lines.push(
     "",
     renderFindingsContext(shown),
+    ...(wayBack.length === 0 ? [] : ["", ...wayBack]),
     "",
     "**Decision options:**",
     `- **Approve** - ${approve}`,
-    "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
+    phaseCovered.length > 0
+      ? "- **Request Changes** - return to the listed artifacts so the required actions can be addressed; a change to an earlier stage's document goes back to that stage (the way back above)."
+      : "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
   );
   return lines.join("\n");
+}
+
+// Phase granularity: the stages this anchor's grouped pass covers, with their
+// current reviews (stage-protocol-reviewer §12a, phase review). Empty for a
+// per-unit stage, a non-anchor, or when the state cannot be read.
+function phaseCoveredContexts(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+): ReviewedContext[] {
+  if (stage.for_each === "unit-of-work") return [];
+  try {
+    const statePath = stateFilePath(projectDir);
+    if (!existsSync(statePath)) return [];
+    const state = readFileSync(statePath, "utf-8");
+    const role = phaseReviewRole(
+      { ...stage, name: findStageBySlug(stage.slug)?.name ?? stage.slug },
+      getField(state, "Scope") ?? "",
+      state,
+    );
+    if (role.role !== "anchor") return [];
+    const nodes = role.covers
+      .map((covered) => findStageBySlug(covered.slug))
+      .filter((node): node is NonNullable<ReturnType<typeof findStageBySlug>> => node !== undefined);
+    return reviewedContexts(projectDir, nodes, [undefined], true);
+  } catch {
+    return [];
+  }
 }
 
 export function renderSummaryConfirmationBrief(

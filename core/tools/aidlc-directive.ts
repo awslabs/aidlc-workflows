@@ -482,6 +482,11 @@ export interface RunStageDirective {
   // freeze, and recovery stay per stage. Absent everywhere else, including on
   // every deferred stage (which simply carries no reviewer block).
   review_covers?: { slug: string; name: string }[];
+  // review_deferred — phase granularity only: this stage's review is deferred
+  // to its reviewer's anchor stage, so the directive carries no reviewer block
+  // and the approval gate says so once, in plain words (§12a, phase review).
+  // Present only on deferred stages; never beside a reviewer block.
+  review_deferred?: { anchor: string; anchor_name: string };
   // protocol_modules — optional deterministic hints naming conditional
   // protocol files the conductor reads before the stage body. The prose
   // triggers remain the compatibility fallback when this field is absent.
@@ -1065,6 +1070,7 @@ const RUN_STAGE_FIELDS = [
   "reviewer_max_iterations",
   "review_class",
   "review_covers",
+  "review_deferred",
   "protocol_modules",
   "swarm_settled",
   "gate_only",
@@ -2444,6 +2450,22 @@ function checkRunStageShared(
         )
       ) {
         errors.push(`${kind}: review_covers must be a nonempty array of {slug, name}`);
+      }
+    }
+    // review_deferred — a deferred stage names its anchor and never also
+    // carries a reviewer block.
+    if ("review_deferred" in o) {
+      const deferred = o.review_deferred;
+      if (
+        !isPlainObject(deferred) ||
+        typeof deferred.anchor !== "string" ||
+        typeof deferred.anchor_name !== "string" ||
+        Object.keys(deferred).length !== 2
+      ) {
+        errors.push(`${kind}: review_deferred must be {anchor, anchor_name}`);
+      }
+      if (typeof o.reviewer === "string") {
+        errors.push(`${kind}: review_deferred never rides beside a reviewer block`);
       }
     }
     checkOptionalProtocolModules(o, kind, errors);

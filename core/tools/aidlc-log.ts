@@ -13,7 +13,7 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFile
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { resolveReviewGranularity } from "./aidlc-review-granularity.ts";
+import { phaseReviewRole, resolveReviewGranularity } from "./aidlc-review-granularity.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   askedQuestionFields,
@@ -123,6 +123,7 @@ import {
   freshReviewReceipts,
   filterProducesByKind,
   auditShardDir,
+  auditShardName,
   getField,
   guardAttemptState,
   guardRefusalOutput,
@@ -3630,11 +3631,14 @@ function completionChecksHold(pd: string, stage: string, unit: string | undefine
 }
 
 // Lightweight review measurement: one JSONL line per request and per terminal
-// verdict, beside the audit shards (`audit/review-metrics.jsonl`), stamped with
-// the effective review granularity so a workshop can compare stage- and
-// phase-granularity runs (duration = a verdict row's `at` minus its matching
-// request row's). Advisory only: a failed append never blocks a receipt, and
-// nothing reads the file back.
+// verdict, beside the audit shards, stamped with the effective review
+// granularity so a workshop can compare stage- and phase-granularity runs
+// (duration = a verdict row's `at` minus its matching request row's). Kept
+// PER CLONE like the audit shards themselves (`audit/review-metrics-<the
+// clone's shard stem>.jsonl`), so teammates' clones never append to one
+// committed file and a pull never meets a merge conflict in a file the tool
+// wrote. Advisory only: a failed append never blocks a receipt, and nothing
+// reads the files back; shard readers ignore non-`.md` names.
 function appendReviewMetric(
   pd: string,
   intent: string | undefined,
@@ -3647,8 +3651,9 @@ function appendReviewMetric(
     mkdirSync(dir, { recursive: true });
     const state = intent ? readStateFile(pd, intent, space) : "";
     const scope = getField(state, "Scope") ?? "";
+    const stem = auditShardName(pd).replace(/\.md$/, "");
     appendFileSync(
-      join(dir, "review-metrics.jsonl"),
+      join(dir, `review-metrics-${stem}.jsonl`),
       `${JSON.stringify({ at: isoTimestamp(), granularity: resolveReviewGranularity(scope, state), ...entry })}\n`,
     );
   } catch {
@@ -3812,6 +3817,43 @@ function handleReview(args: string[]): void {
         else budget = node.reviewer_max_iterations ?? 2;
       } catch {
         // Class resolution fails open; ordinal enforcement remains active.
+      }
+    }
+    // Phase granularity is enforced HERE, not only at directive emission: an
+    // agent that reads the stage file's `reviewer:` and dispatches anyway is
+    // refused with the anchor named, so the grouping holds on every harness.
+    // The anchor's grouped pass admits a covered stage with
+    // `--covered-by <anchor>` (validated against phaseReviewRole, never
+    // trusted), a review the person asked for with --person-asked, and a
+    // retry of an admitted pending request as before. Verdicts close
+    // already-admitted requests, so only new requests are judged.
+    if (
+      flags.verdict === undefined &&
+      !retryPending &&
+      flags.single !== "true" &&
+      flags.unit === undefined &&
+      !autonomousCandidate &&
+      flags["person-asked"] !== "true"
+    ) {
+      const role = phaseReviewRole(node, getField(state, "Scope") ?? "", state);
+      if (role.role === "deferred") {
+        const coveredBy = flags["covered-by"];
+        if (coveredBy !== role.anchor) {
+          const anchorName = loadStageGraphAll().find((entry) => entry.slug === role.anchor)?.name ?? role.anchor;
+          refuseReview(
+            `Reviews are grouped per phase for this piece of work: "${flags.stage}"'s review runs at ` +
+              `${anchorName}'s step, which records this stage's own receipt, so nothing is owed here — ` +
+              `go on to this stage's approval gate. The grouped pass requests it with ` +
+              `--covered-by "${role.anchor}"; a review the person asked for runs now with ` +
+              `--person-asked --message <their message id>.`,
+          );
+        }
+      } else if (flags["covered-by"] !== undefined) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": --covered-by "${flags["covered-by"]}" does not ` +
+            `match this stage's review plan (it reviews ${role.role === "anchor" ? "as its group's anchor" : "at its own step"}). ` +
+            `Drop --covered-by and request it as the stage's own review.`,
+        );
       }
     }
     // Receipt freshness is needed only while minting REVIEW_REQUESTED (to

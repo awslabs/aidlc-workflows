@@ -9342,6 +9342,15 @@ function buildRunStageDirective(
     const role: PhaseReviewRole = reviewClass === "none" || singleRun
       ? { role: "stage" }
       : phaseReviewRole(node, scope, stateContent);
+    if (role.role === "deferred") {
+      // The gate still has to say, once and in plain words, that this stage's
+      // review comes later (§1 via §12a's deferred-gate sentence), so the
+      // directive names where.
+      directive.review_deferred = {
+        anchor: role.anchor,
+        anchor_name: nodeForSlug(role.anchor)?.name ?? role.anchor,
+      };
+    }
     if (reviewClass !== "none" && role.role !== "deferred") {
       directive.reviewer = node.reviewer;
       directive.review_artifact = node.review_artifact;

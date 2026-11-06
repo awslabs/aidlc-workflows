@@ -21,11 +21,14 @@ in this module applies unchanged, with three additions:
 
 1. **One request per stage.** Before dispatching the reviewer, record the
    request for this stage as step 1 says, and then one more request per
-   `review_covers` entry — the same command with `--stage "<entry.slug>"`.
-   Each returns its own `reviewFile`. If a covered stage's request is refused
-   because its review budget is already spent — a fresh review already covers
-   it — skip that entry and say nothing; any other refusal names its own next
-   step, so follow it as §12a step 1 says.
+   `review_covers` entry — the same command with `--stage "<entry.slug>"
+   --covered-by "<directive.stage>"` (the engine admits a deferred stage's
+   request only through that flag, a retry of its own pending request, or a
+   review the person asked for). Each returns its own `reviewFile`. If a
+   covered stage's request is refused because its review budget is already
+   spent — a fresh review already covers it — skip that entry and say nothing;
+   any other refusal names its own next step, so follow it as §12a step 1
+   says.
 2. **One dispatch, one review per stage.** Dispatch the reviewer ONCE, with
    every `reviewFile` path and every covered stage's artifacts beside this
    stage's own. The reviewer reads them together — cross-artifact consistency
@@ -39,9 +42,25 @@ in this module applies unchanged, with three additions:
    step. A `NOT-READY` on a covered stage follows this stage's class: advisory
    verdicts are decision support at the gate, never a re-run.
 
-What the user hears stays exactly the §12a sentences: one "check this over"
-line for the whole grouped pass, never one per covered stage, and the words
-`review_covers`, "anchor", "deferred", or "granularity" are never said.
+**The deferred stage's gate.** A `run-stage` directive that carries
+`review_deferred` (and so no reviewer block) is a stage whose review runs
+later, and its approval question has to say so once, before the person
+decides. The §1 approval question's first line is this sentence, filled and
+with the brackets dropped — **SAY:** "The [reviewer's trade]'s check on this
+comes a little later, at [review_deferred.anchor_name]; approve now and I
+will bring you anything it finds there, with a way back." That sentence is
+the whole of it: said once, at the gate, never as a warning banner elsewhere.
+
+**At the anchor's gate.** The engine's findings brief lists each covered
+stage's review by name with the way back to it. A change request aimed at a
+covered stage's documents is a jump back to that stage (the brief's way-back
+command), never a revision of the anchor's own artifacts; a change request
+aimed at the anchor's artifacts is the normal §1 revision.
+
+Beyond those sentences, what the user hears stays exactly the §12a lines: one
+"check this over" line for the whole grouped pass, never one per covered
+stage, and the words `review_covers`, `review_deferred`, "anchor", or
+"granularity" are never said.
 
 ### What the user hears from this section
 

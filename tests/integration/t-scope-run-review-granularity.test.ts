@@ -52,6 +52,7 @@ const REVIEWED_PROSE_STAGES = [
 describe("review granularity phase, flipped mid-run in the person's words", () => {
   test("defers to the anchors, keeps per-stage receipts, and logs the metrics", () => {
     let flipped = false;
+    let rogueRefusal = "";
     let construction: Directive | null = null;
     const run = runScope("mvp", {
       afterApproval: (stage: string, agent: AgentStandIn) => {
@@ -62,6 +63,16 @@ describe("review granularity phase, flipped mid-run in the person's words", () =
         if (agent.actOnPrint(answer)) return agent.personTypes("/aidlc");
         return undefined;
       },
+      atGate: (stage, _unit, agent) => {
+        if (stage !== "user-stories") return;
+        // The misbehaving-agent scenario the field runs showed: the stage file
+        // names a reviewer, so the agent dispatches one anyway. The ENGINE
+        // refuses it, naming the anchor, so the grouping holds regardless of
+        // the model.
+        rogueRefusal = agent.host.bash(
+          "bun .claude/tools/aidlc.ts engine log review --stage user-stories --reviewer aidlc-product-lead-agent --iteration 1",
+        ).stderr;
+      },
       until: (d) => {
         if (d.kind === "run-stage" && d.stage === "functional-design") construction = d;
         return construction !== null;
@@ -70,7 +81,7 @@ describe("review granularity phase, flipped mid-run in the person's words", () =
     runs.push(run);
 
     // The setter answered in plain words and audited the change.
-    expect(run.host.trace.join("\n")).toContain("once at the end of each phase");
+    expect(run.host.trace.join("\n")).toContain("grouped per reviewer late in each phase");
     expect(auditEvents(run.proj).filter((e) => e.event === "REVIEW_GRANULARITY_CHANGED")).toHaveLength(1);
 
     // Reviewer blocks appear ONLY on intent-capture (pre-flip) and the anchors.
@@ -87,12 +98,20 @@ describe("review granularity phase, flipped mid-run in the person's words", () =
     expect(byStage.get("rough-mockups")).toEqual([]);
     expect(byStage.get("refined-mockups")).toEqual(["requirements-analysis", "user-stories"]);
     expect(byStage.get("contract-design")).toEqual(["domain-design", "units-generation"]);
-    // The deferred stages' directives carried no reviewer block at all.
+    // The deferred stages' directives carried no reviewer block, and named
+    // their anchor for the gate's one plain-words sentence.
+    const anchors: Record<string, string> = {
+      "requirements-analysis": "refined-mockups",
+      "user-stories": "refined-mockups",
+      "domain-design": "contract-design",
+      "units-generation": "contract-design",
+    };
     for (const d of run.agent.directives) {
       if (d.kind !== "run-stage") continue;
-      if (["requirements-analysis", "user-stories", "domain-design", "units-generation"].includes(String(d.stage))) {
-        expect(d.reviewer, String(d.stage)).toBeUndefined();
-      }
+      const anchor = anchors[String(d.stage)];
+      if (anchor === undefined) continue;
+      expect(d.reviewer, String(d.stage)).toBeUndefined();
+      expect((d.review_deferred as { anchor?: string } | undefined)?.anchor, String(d.stage)).toBe(anchor);
     }
 
     // Every reviewed prose stage still holds its own terminal receipt.
@@ -106,8 +125,12 @@ describe("review granularity phase, flipped mid-run in the person's words", () =
     // The measurement file marks the pre-flip review stage and later phase.
     const intents = join(run.proj, "aidlc", "spaces", "default", "intents");
     const metrics = readdirSync(intents)
-      .map((name) => join(intents, name, "audit", "review-metrics.jsonl"))
-      .find((path) => existsSync(path));
+      .flatMap((name) => {
+        const audit = join(intents, name, "audit");
+        return existsSync(audit)
+          ? readdirSync(audit).filter((f) => /^review-metrics-.*\.jsonl$/.test(f)).map((f) => join(audit, f))
+          : [];
+      })[0];
     expect(metrics, intents).toBeDefined();
     const rows = readFileSync(metrics!, "utf-8")
       .trim()
@@ -118,6 +141,10 @@ describe("review granularity phase, flipped mid-run in the person's words", () =
     for (const slug of REVIEWED_PROSE_STAGES.filter((s) => s !== "intent-capture")) {
       expect(byGranularity("phase"), slug).toContain(slug);
     }
+
+    // The engine, not the prose, refused the rogue per-stage dispatch.
+    expect(rogueRefusal).toContain("Refined Mockups");
+    expect(rogueRefusal).toContain("--covered-by");
 
     // The run reached Construction: every deferred gate opened without a
     // receipt and both anchors' gates stood on their covered receipts.

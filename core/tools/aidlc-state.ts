@@ -5551,9 +5551,10 @@ function verifyReviewerPrecondition(
           reviewer,
           receipts,
           action,
+          coveredFor,
         );
       }
-      reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
+      reviewerPreconditionError(pd, content, stage, reviewer, receipts, action, coveredFor);
     }
     // Phase granularity: the anchor's gate also stands on each covered stage's
     // own receipt, through this same precondition, so a grouped review that was
@@ -5977,6 +5978,10 @@ function staleReviewPreconditionError(
   reviewer: string,
   receipts: ReturnType<typeof freshReviewReceipts>,
   action: ReviewerPreconditionAction = "complete",
+  // Set when an anchor's gate runs this check for a covered stage (phase
+  // granularity): the named request carries --covered-by so the logger admits
+  // it, and the line says the receipt reopens nothing.
+  coveredBy?: string,
 ): never {
   const slug = stage.slug;
   const recoverySpent =
@@ -6002,7 +6007,7 @@ function staleReviewPreconditionError(
     `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
       `${reviewer} reviewed it. Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
-      `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
+      `--reviewer ${reviewer} --iteration <next ordinal>${coveredBy === undefined ? "" : ` --covered-by "${coveredBy}"`}\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
       `spent: ${recoveryGuidance(pd, content, slug)} Only a human Request Changes decision ` +
@@ -6036,6 +6041,10 @@ function reviewerPreconditionError(
   reviewer: string,
   receipts: ReturnType<typeof freshReviewReceipts>,
   action: ReviewerPreconditionAction = "complete",
+  // Set for an anchor gate's covered-stage check (phase granularity): the
+  // named request carries --covered-by and the line says the grouped receipt
+  // reopens nothing, so redoing the approved stage is never the only way on.
+  coveredBy?: string,
 ): never {
   const slug = stage.slug;
   const pending = receipts.stagePending;
@@ -6059,9 +6068,9 @@ function reviewerPreconditionError(
   if (action === "present-approval-gate") {
     const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
-        `current output. Apply any fixes first, then request the review with ` +
+        `current output. ${coveredBy === undefined ? "Apply any fixes first, then request" : "It is part of this gate's grouped phase review, so recording it reopens nothing: request"} the review with ` +
         `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
-        `${ordinal}\` and record its verdict with the same command plus ` +
+        `${ordinal}${coveredBy === undefined ? "" : ` --covered-by "${coveredBy}"`}\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
         `approval summary instead.`;
@@ -6075,8 +6084,8 @@ function reviewerPreconditionError(
   }
   const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
-      `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
-      `${slug} --reviewer ${reviewer} --iteration ${ordinal}\` and record its verdict ` +
+      `${coveredBy === undefined ? "Apply any fixes first, then request" : "It is part of this gate's grouped phase review, so recording it reopens nothing: request"} the review with \`aidlc-log.ts review --stage ` +
+      `${slug} --reviewer ${reviewer} --iteration ${ordinal}${coveredBy === undefined ? "" : ` --covered-by "${coveredBy}"`}\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
       `READY review in the approval summary instead.`;

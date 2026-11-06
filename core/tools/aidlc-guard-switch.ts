@@ -828,7 +828,7 @@ export function applyIntentSettings(
     const back = `say so or type ${entrySkillInvocation()} config set review-granularity ${was}`;
     const where = (value: string): string =>
       value === "phase"
-        ? "once at the end of each phase (ideation and inception; Construction stays per stage)"
+        ? "grouped per reviewer late in each phase (ideation and inception; Construction stays per stage)"
         : "after every reviewed stage";
     lines.push(!update.changed
       ? `Specialist reviews already run ${where(level)} for this work.`

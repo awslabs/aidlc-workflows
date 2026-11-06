@@ -159,10 +159,12 @@ means. The write guard is a guardrail, not a security boundary. See
 the owning commands and the read-only query contract.
 
 Beside the `.md` shards, the review command appends one JSON line per review
-request and per terminal verdict to `audit/review-metrics.jsonl` (timestamp,
-stage, reviewer, iteration, effective review granularity, verdict; a retried
-request is marked `retry: true`, and a verdict row carries findings counts
-when it built a review record). It is an advisory measurement file — nothing reads it back, a failed
+request and per terminal verdict to a per-clone measurement file,
+`audit/review-metrics-<host>-<clone>.jsonl` — the same per-clone rule the
+shards follow, so teammates' clones never append to one committed file
+(timestamp, stage, reviewer, iteration, effective review granularity, verdict;
+a retried request is marked `retry: true`, and a verdict row carries findings
+counts when it built a review record). It is an advisory measurement file — nothing reads it back, a failed
 append never blocks a receipt, and shard readers ignore it — kept so
 stage- and phase-granularity runs can be compared
 ([Review granularity](13-customization.md#review-granularity)).

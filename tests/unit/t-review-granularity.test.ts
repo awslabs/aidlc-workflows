@@ -224,7 +224,7 @@ describe("config-change --review-granularity", () => {
     const project = projectWithState();
     const result = runUtility(project, ["config-change", "--review-granularity", "phase"]);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("once at the end of each phase");
+    expect(result.stdout).toContain("grouped per reviewer late in each phase");
     const state = readFileSync(stateFilePath(project), "utf-8");
     expect(state).toContain("- **Review Granularity**: phase");
     const audit = readAllAuditShards(project);
