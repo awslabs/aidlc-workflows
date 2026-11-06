@@ -143,6 +143,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   hostedAddressOwner,
   parseWorkspaceManifest,
+  readWorkspaceRepos,
   repoNotThereLine,
   type WorkspaceManifest,
   workspaceManifestWith,
@@ -7874,6 +7875,27 @@ export function detectWorkspace(projectDir: string): ScanResult {
     };
 
     walkContainers(projectDir, [], 0);
+  }
+
+  // A repo repos.json puts outside the workspace (beside it, say) is code of
+  // this work too, which neither sweep above reaches: read as a nested hit is,
+  // never named as a nested root (that list is the workspace's own folders).
+  if (!brownfield) {
+    for (const name of readWorkspaceRepos(projectDir).entries.keys()) {
+      const dir = repoDir(projectDir, name);
+      const inside = relative(resolve(projectDir), resolve(dir));
+      if (inside === "" || (!inside.startsWith("..") && !isAbsolute(inside))) continue;
+      const sub = scanSignals(dir, 0);
+      if (!sub.brownfield) continue;
+      brownfield = true;
+      for (const [lang, n] of Object.entries(sub.langCounts)) {
+        langCounts[lang] = (langCounts[lang] || 0) + n;
+      }
+      for (const fw of sub.frameworks) {
+        if (!frameworks.includes(fw)) frameworks.push(fw);
+      }
+      if (buildSystem === "Unknown") buildSystem = sub.buildSystem;
+    }
   }
 
   // Language list: primary = highest count; secondary = >= 20% of primary count.

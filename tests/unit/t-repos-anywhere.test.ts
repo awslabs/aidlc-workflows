@@ -23,6 +23,7 @@ import {
   workspaceGitignoreEntries,
 } from "../../dist/claude/.claude/tools/aidlc-workspace-manifest.ts";
 import { insideProject, workspaceTargetPath } from "../../dist/claude/.claude/tools/aidlc-workspace-repos.ts";
+import { detectWorkspace } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -187,6 +188,35 @@ describe("repoDir is the one resolver", () => {
     expect(repoNotThereLine(ws, "ghost")).toBe(
       "ghost is not at ghost in this workspace. Clone it there, or list it in repos.json with its path.",
     );
+  });
+});
+
+// The first /aidlc scans for code: a workspace whose repos.json puts its repos
+// beside it (decision 17's layout) has code, however empty its own folder is.
+describe("the workspace scan reads the repos repos.json names", () => {
+  function codeAt(dir: string): void {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "x", dependencies: { express: "^4.0.0" } }));
+    writeFileSync(join(dir, "src", "index.ts"), "export const x = 1;\n");
+  }
+
+  test("repos outside the workspace with code: Brownfield, their languages counted", () => {
+    const { root, ws } = layout();
+    for (const name of ["api", "web"]) codeAt(join(root, "work", name));
+    writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "api", path: "../api" }, { name: "web", path: "../web" }] }));
+    const scan = detectWorkspace(ws);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.languages).toContain("TypeScript");
+  });
+
+  test("a repos.json path with no code there, or no repos.json: the folder alone decides, as before", () => {
+    const { root, ws } = layout();
+    mkdirSync(join(root, "work", "api"), { recursive: true });
+    writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "api", path: "../api" }] }));
+    expect(detectWorkspace(ws).projectType).toBe("Greenfield");
+    const other = layout();
+    codeAt(join(other.root, "work", "api"));
+    expect(detectWorkspace(other.ws).projectType).toBe("Greenfield");
   });
 });
 
