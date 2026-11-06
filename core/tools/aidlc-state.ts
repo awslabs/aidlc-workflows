@@ -936,6 +936,12 @@ function refuseForAgent(msg: string, options: { personDecided?: boolean } = {}):
   throw new DecisionNotMadeError(msg, options.personDecided === true);
 }
 
+// A team's blocking check refusing the stage gate the engine settles itself:
+// the step is the agent's (ask the person Fix or Override, as at a Unit's
+// checkpoint, whose refusal reaches the agent through the checkpoint's verify),
+// so the router hands it to the agent instead of showing it as an error.
+class BlockingCheckStepError extends StateCommandError {}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -1192,6 +1198,9 @@ export function main(argv: string[]): void {
         auditMessage: e.message,
         agentGuidance: e.personDecided ? "person-decided" : "question-open",
       });
+    }
+    if (e instanceof BlockingCheckStepError) {
+      exitWithError({ message: e.message, auditMessage: e.message, agentGuidance: "blocking-check" });
     }
     exitWithError(errorMessage(e));
   }
@@ -4341,9 +4350,17 @@ function enforceBlockingGateSensors(
     ? blockingSensorOverrideVerify(at.unit, at.checkpointKind)
     : blockingSensorOverrideReport(slug, at.reportResult);
   const where = at.kind === "checkpoint" ? `"${slug}" for unit "${at.unit}"` : `"${slug}"`;
+  // At the stage gate the engine settles itself after every Unit's checkpoint,
+  // the refusal is the agent's step, as the checkpoint's is.
+  const stage = at.kind === "gate" ? findStageBySlug(slug) : undefined;
+  const refuse = stage !== undefined && engineSettlesLateGate(pd, stateContent, stage)
+    ? (message: string): never => {
+      throw new BlockingCheckStepError(message);
+    }
+    : error;
   if (overrideRequested) {
     if (isAutonomousMode(stateContent)) {
-      error(
+      refuse(
         `Refusing blocking sensor override for ${where}: Construction Autonomy Mode ` +
           "is autonomous. Unattended runs must halt on blocking sensor findings or " +
           "unavailable evaluations. When the person chooses the override, run " +
@@ -4352,13 +4369,13 @@ function enforceBlockingGateSensors(
       );
     }
     if (overrideInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
-      error(
+      refuse(
         `Refusing blocking sensor override for ${where}: --user-input must be the ` +
           `exact offered choice "${BLOCKING_SENSOR_OVERRIDE_CHOICE}".`,
       );
     }
     if (!hasBlockingSensorOverrideAuthorization(pd, slug, at.kind === "checkpoint" ? at.unit : null)) {
-      error(
+      refuse(
         `Refusing blocking sensor override for ${where}: no fresh authorization receipt ` +
           `proves that "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" was offered and selected after ` +
           "a HUMAN_TURN. Record the decision and exact answer through aidlc-log.ts, then retry.",
@@ -4366,7 +4383,7 @@ function enforceBlockingGateSensors(
     }
     return;
   }
-  error(
+  refuse(
     `Blocking gate sensor evaluation did not pass for ${where}. Sensors: ` +
       `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
       `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
@@ -7676,6 +7693,18 @@ function handleCheckpointChecks(args: string[]): void {
   }
   addBlockingSensorOverrideFields(fields, overridden, overridden.length > 0);
   console.log(JSON.stringify({ fields, overridden: overriddenKeys }));
+}
+
+// The stage gate the engine settles itself once every Unit of this walk is
+// approved at its checkpoint (the late gate): no person approves it, so a
+// team's blocking check refusing it is the agent's step to put to the person.
+export function engineSettlesLateGate(
+  pd: string,
+  stateContent: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): boolean {
+  return stage.for_each === "unit-of-work" && unitCheckpointChecksApply(stateContent) &&
+    !personAnswersGate(pd, stateContent, stage, null);
 }
 
 // Where a Unit's checkpoint runs its stages' blocking checks, and the late
