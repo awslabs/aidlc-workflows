@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
@@ -1753,10 +1753,13 @@ export function cloneIdentity(projectDir: string): CloneIdentity {
 }
 
 // Where the audit trail stood when a question was shown: the shard and its
-// size then, so the turns after it are the replies it can have.
+// size then, so the turns after it are the replies it can have, and when
+// (replyTurnsAfter reads it for another shard of the work).
 export interface AuditMark {
   shard: string;
   offset: number;
+  /** When it was taken; a mark kept before marks had a time has none. */
+  at?: string;
 }
 
 // Read the FIRST `**Field**: value` line from one audit block (tolerates an
@@ -1979,6 +1982,100 @@ export function auditShardTurnBlocks(content: string): string[] {
   const blocks = auditShardBlocks(content);
   const withdrawn = withdrawnTurnPositions(blocks);
   return withdrawn.size === 0 ? blocks : blocks.filter((_, pos) => !withdrawn.has(pos));
+}
+
+// The work a project-relative shard path is written for: its record folder,
+// for a tracked shard (`<record>/audit/<name>`) and a claimed Unit's own record
+// (`<record>/.aidlc-engine/audit/<name>`) alike. Null for any other path.
+function auditShardWork(shard: string): string | null {
+  const parts = shard.split("/");
+  const name = parts.pop() ?? "";
+  if (!/^[A-Za-z0-9._-]+\.md$/.test(name) || parts.pop() !== "audit") return null;
+  if (parts.at(-1) === ENGINE_DIR) parts.pop();
+  return parts.length > 0 ? parts.join("/") : null;
+}
+
+const AUDIT_MARK_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+// The HOST_TURNs in a shard's text, by the Message Id they take back, with
+// the latest time each is stamped.
+function hostTurnTimes(text: string): Map<string, string> {
+  const times = new Map<string, string>();
+  if (!text.includes("HOST_TURN")) return times;
+  for (const block of auditShardBlocks(text)) {
+    const id = auditBlockField(block, "Event") === "HOST_TURN" ? auditBlockField(block, "Message Id") : null;
+    const at = auditBlockField(block, "Timestamp") ?? "";
+    if (id !== null && (times.get(id) ?? "") <= at) times.set(id, at);
+  }
+  return times;
+}
+
+// The person's reply turns after a question's mark, oldest first; `isReply`
+// says which turns are replies (isReplyTurn, aidlc-lib.ts). In the mark's own
+// shard they are the turns after its offset. A team checkout that claims a
+// Unit writes the work's rows to the Unit's own record from then on, and to
+// its tracked shard again once the claim is gone, so when the shard written
+// now is another shard of the same work, its turns stamped after the mark
+// count too, and a HOST_TURN in either shard takes back a turn in the other.
+// A mark from before marks kept a time takes the first row at or after its
+// offset as one: never earlier than the showing, since a claim only trims that
+// shard or resets it to a prefix, though a row stamped before its wait for the
+// audit lock can make it a second early. When the claim left no row there, it
+// takes `shownAt`, a time its question was shown again, if the caller has one.
+// Times are whole seconds and only a later one counts. Rows a handover adopted
+// into the Unit's record read as the checkout's own: no row names the checkout
+// it came from. Another clone's shard and another work's prove nothing.
+export function replyTurnsAfter(
+  projectDir: string,
+  mark: AuditMark,
+  isReply: (block: string) => boolean,
+  shownAt?: string,
+): string[] {
+  const shardPath = auditFilePath(projectDir);
+  const current = relative(projectDir, shardPath).split(sep).join("/");
+  if (mark.shard === current) {
+    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
+    return auditShardTurnBlocks(after).filter(isReply);
+  }
+  const work = auditShardWork(current);
+  if (work === null || auditShardWork(mark.shard) !== work) return [];
+  const read = (path: string, offset = 0): string => {
+    try {
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, path));
+      return readAppendOnlyFileNoFollowOrThrow(path, "audit shard").subarray(offset).toString("utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
+    }
+  };
+  const marked = read(join(projectDir, ...mark.shard.split("/")), mark.offset);
+  const now = read(shardPath);
+  const at = typeof mark.at === "string" && AUDIT_MARK_AT.test(mark.at)
+    ? mark.at
+    : auditShardBlocks(marked).map((block) => auditBlockField(block, "Timestamp"))
+      .find((stamp) => stamp !== null) ?? (shownAt !== undefined && AUDIT_MARK_AT.test(shownAt) ? shownAt : null);
+  const takenBack = (block: string, times: Map<string, string>): boolean => {
+    const id = auditBlockField(block, "Message Id");
+    const taken = id === null ? undefined : times.get(id);
+    return taken !== undefined && taken >= (auditBlockField(block, "Timestamp") ?? "");
+  };
+  const takenNow = hostTurnTimes(now);
+  const turns = auditShardTurnBlocks(marked).filter((block) => isReply(block) && !takenBack(block, takenNow));
+  const seen = new Set(turns.map((block) => block.trim()));
+  if (at !== null) {
+    const takenThere = hostTurnTimes(marked);
+    for (const block of auditShardTurnBlocks(now)) {
+      const stamp = auditBlockField(block, "Timestamp");
+      if (stamp === null || stamp <= at || !isReply(block) || takenBack(block, takenThere)) continue;
+      if (seen.has(block.trim())) continue;
+      seen.add(block.trim());
+      turns.push(block);
+    }
+  }
+  return turns
+    .map((block, pos) => ({ block, pos, stamp: auditBlockField(block, "Timestamp") ?? "" }))
+    .sort((a, b) => (a.stamp < b.stamp ? -1 : a.stamp > b.stamp ? 1 : a.pos - b.pos))
+    .map(({ block }) => block);
 }
 
 // A shard file that a sync tool or a person copied (a "<shard> 2.md" conflict

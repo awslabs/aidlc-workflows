@@ -391,7 +391,7 @@ describe("the push", () => {
     codeGenerated(alice, record);
     const help = run(UNIT, ["push", "--help"], alice);
     expect(help.status, help.out).toBe(0);
-    expect(help.out).toContain("Usage: aidlc-unit push [--branch <name>]");
+    expect(help.out).toContain("unit push [--branch <name>]");
     for (const repo of ["checkout-api", "billing"]) {
       expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: join(alice, repo) }).status).not.toBe(0);
       expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts[repo as "billing"] }).status).not.toBe(0);
@@ -400,7 +400,7 @@ describe("the push", () => {
     expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown }).result).toBeUndefined();
     const rebase = run(UNIT, ["rebase", "-h"], alice);
     expect(rebase.status, rebase.out).toBe(0);
-    expect(rebase.out).toContain("Usage: aidlc-unit rebase");
+    expect(rebase.out).toContain("unit rebase");
   });
 
   test("a repo whose git signs its commits gets a signed Unit commit", () => {

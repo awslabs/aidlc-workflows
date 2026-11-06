@@ -110,6 +110,7 @@ import {
   isQuestionId,
   latestFrontQuestionId,
   latestQuestion,
+  markReplaced,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
   questionsFromMessage,
@@ -129,6 +130,7 @@ import {
   saveQuestion,
   saveRestartRequest,
   takeRestartRequest,
+  waitingFrontRequests,
 } from "./aidlc-question-store.ts";
 import {
   latestMessage, listMessages, messageBeforeJoining, noReplySince, personTurnStands, readMessage, standingPersonTurn,
@@ -506,6 +508,7 @@ import {
   unitMergeTransactions,
   unitMergeTransactionsForIdentity,
   unitMajorConstructionStageSlugs,
+  unitsHeldHere,
   validateLiveUnitScope,
   validScopes,
   shellArg,
@@ -3808,14 +3811,15 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
 /**
  * The plan question the person was asked and has not answered: the latest copy
  * this engine kept, when it is one of its own front questions and nothing was
- * started from it. A question whose answer created work is answered, and a
- * routing question has its own step (openRoutingQuestion).
+ * started from it. A question whose answer created work is answered, one a
+ * newer request replaced waits no more (newestRequestReplaces), and a routing
+ * question has its own step (openRoutingQuestion).
  */
 function openFrontQuestion(
   projectDir: string,
 ): { question: StoredQuestion; sole: boolean } | null {
   const latest = latestQuestion(projectDir);
-  if (latest === null || latest.origin !== "front") return null;
+  if (latest === null || latest.origin !== "front" || latest.replacedBy !== undefined) return null;
   if (intentStartedByQuestion(projectDir, latest.id) !== null) return null;
   // A question copy does not say which chat it was shown in, and a reply
   // answers a question of this work from any chat, so with more than one still
@@ -3823,9 +3827,36 @@ function openFrontQuestion(
   // says so instead of naming one: the agent has the question it asked in its
   // own chat, with that question's own commands. A question this one was
   // derived from (the proposal step's request, answered by the agent's plan) is
-  // the same request, not another open question.
+  // the same request, not another open question. A replaced one still counts:
+  // its own chat may still show it, and its commands still answer it there.
   const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY);
   return { question: latest, sole: earliest === null || earliest === latest.id || earliest === latest.composedFrom };
+}
+
+/**
+ * A new request, saved as question `saved` for `words`, on a workspace where no
+ * work has started: the newest request is the one the work plans from (#3609).
+ * Every request whose plan question still waits is marked replaced by it, and
+ * the person hears once, with the next step the agent speaks from, that the
+ * newer one is used. The agent already read the words as a request (the
+ * waiting step's own command, or words it passed as theirs); nothing here
+ * reads them.
+ */
+function newestRequestReplaces(pd: string, saved: string, words: string): void {
+  if (isReadOnlyEngineProbe() || loadStateFileIfPresent(pd) !== null) return;
+  // Work whose record is in this checkout keeps today's path. A row whose
+  // record is missing here, or archived work, is no work in hand, as creation
+  // reads them (unselectedRecords).
+  const workHere = listSpaces(pd).some(({ name }) => readIntentRegistry(pd, name).some((row) =>
+    !isArchivedIntent(row) && row.dirName !== undefined && row.dirName !== "" &&
+    existsSync(join(intentsDir(pd, name), row.dirName, "aidlc-state.md"))));
+  if (workHere) return;
+  const waiting = waitingFrontRequests(pd).filter((question) => question.id !== saved);
+  if (waiting.length === 0) return;
+  markReplaced(pd, waiting.map((question) => question.id), saved);
+  if (engineSessionId !== undefined) {
+    addPendingPersonLines(pd, engineSessionId, [`I've used your newer request: "${requestPreview(words)}".`]);
+  }
 }
 
 function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
@@ -5545,16 +5576,32 @@ function handoverOffered(projectDir: string, mark: string): boolean {
   return engineAskMark(projectDir, mark) !== null;
 }
 
-// What a commit here takes, as the share and publish questions say it: the
-// count, and by path every file git does not track yet outside AI-DLC's
-// record, however many, since the commit takes them all (so an unignored
-// secret is seen before it is pushed). Null when nothing.
-function workToCommitWords(projectDir: string): string | null {
-  const { paths, untracked } = workToCommit(projectDir);
+// As many new files as the share, publish and push questions name before
+// "and N more", as the brought-files note does.
+const NEW_FILES_NAMED = 10;
+
+// What a commit here takes, as the share, publish and push questions say it:
+// the count, and by path the files git does not track yet outside AI-DLC's
+// record, every one of a handful in git's order. Past ten, an unignored
+// dependency folder would make the step too long to send, so the question
+// names the ten nearest the project's top, where an unignored key usually
+// sits (a stable sort by depth keeps git's order within a depth, the same ten
+// on every platform), and says how many more. The commit still takes them
+// all. For a Unit's publish (`unit`) these are its own work, as its commit
+// takes it. Null when nothing.
+function workToCommitWords(projectDir: string, unit?: string): string | null {
+  const { paths, untracked } = workToCommit(projectDir, unit === undefined ? undefined : { unit });
   if (paths.length === 0) return null;
   const outside = untracked.filter((path) => path !== "aidlc" && !path.startsWith("aidlc/"));
-  const named = outside.length === 0 ? "" : ` (new: ${outside.join(", ")})`;
-  return `the ${paths.length} changed file${paths.length === 1 ? "" : "s"} here${named}`;
+  const depth = (path: string): number => path.split("/").length;
+  const shown = outside.length <= NEW_FILES_NAMED
+    ? outside
+    : [...outside].sort((a, b) => depth(a) - depth(b)).slice(0, NEW_FILES_NAMED);
+  const more = outside.length - shown.length;
+  const rest = more > 0 ? `, and ${more} more; \`git status\` shows the rest` : "";
+  const named = outside.length === 0 ? "" : ` (new: ${shown.join(", ")}${rest})`;
+  const of = unit === undefined ? "" : " of its work";
+  return `the ${paths.length} changed file${paths.length === 1 ? "" : "s"}${of} here${named}`;
 }
 
 // Before this session starts a Unit on the lead's walk, while claims are open
@@ -5646,7 +5693,7 @@ function teamPublishOffer(projectDir: string, unit: string): AskDirective | null
   const key = `${unit}-${head.exitCode === 0 ? new TextDecoder().decode(head.stdout).trim().slice(0, 12) : "none"}`;
   const mark = teamHandoverMarkName("publish", key);
   if (handoverOffered(projectDir, mark)) return null;
-  const work = workToCommitWords(projectDir);
+  const work = workToCommitWords(projectDir, unit);
   const name = unitPlainName(unit);
   return teamHandoverAsk(projectDir, {
     handovers: ["publish"],
@@ -6095,6 +6142,8 @@ export interface TeamConstructionBoard {
     releasedAfterGitAccepted: boolean;
   }>;
   claimable: string[];
+  /** Units a checkout walks without a claim (the lead's own, begun before the teams took the others). */
+  walked: string[];
   blocked: Array<{ unit: string; blockedBy: string[] }>;
   /** Claimed Units a team published that wait for review here (not pinned at that commit, nothing left to land first). */
   ready: Array<{ unit: string; owner: string; key: string }>;
@@ -6349,6 +6398,7 @@ function assembleTeamConstructionBoard(
     claims,
     awaitingMerge,
     claimable,
+    walked: [...(overview.walked ?? [])].sort(compareBoardKeys),
     blocked,
     ready,
     unpushed: target === null ? null : { units: landedHere.map((row) => row.unit), ...target },
@@ -6439,15 +6489,18 @@ export function renderTeamConstructionBoard(
   const claimedUnits = board.claims.filter((claim) => claim.status === "claimed");
   if (nextActions.length === 0) {
     nextActions.push(
-      claimedUnits.length === 0
+      claimedUnits.length === 0 && board.walked.length === 0
         ? "- No dispatcher action is pending; main may resume the normal Construction walk."
         : mode === "dispatcher"
-        ? "- Nothing runs from this checkout: every Unit not yet merged is claimed or waits on one. " +
-          "Each claimed Unit is worked in its own checkout:"
+        ? "- Nothing runs from this checkout: every Unit not yet merged is claimed, waits on one, or is built " +
+          "where it was started. Each claimed Unit is worked in its own checkout:"
         : "- No dispatcher action is pending. Each claimed Unit is worked in its own checkout:",
     );
-  } else if (claimedUnits.length > 0) {
+  } else if (claimedUnits.length > 0 || board.walked.length > 0) {
     nextActions.push("- Each claimed Unit is worked in its own checkout:");
+  }
+  for (const unit of board.walked) {
+    nextActions.push(`  - \`${unit}\` is being built in the checkout that started it, before any team took a Unit.`);
   }
   for (const claim of claimedUnits) {
     nextActions.push(
@@ -7607,6 +7660,9 @@ function planProposalDirective(
       pd, description, "", "front", undefined, flags.newIntent === true, derivedFrom, undefined,
       routingSettings(carriedRoutingFlags(flags)),
     );
+  if (question !== kept && derivedFrom === undefined && finished === undefined) {
+    newestRequestReplaces(pd, question.id, description);
+  }
   const next = `${aidlcToolInvocation("orchestrate")} next`;
   const words = `"${requestPreview(description)}".${documentSplitSentence(description)}`;
   // Words beside finished work may ask to go back to one of its stages: the
@@ -7933,7 +7989,11 @@ function createPrintDirective(
   const cmd = [`--scope ${scopeArg(scope)}`];
   let labelHint = "";
   if (description && description.length > 0) {
-    const questionId = flags.request ?? saveQuestion(projectDir, description, scope).id;
+    let questionId = flags.request;
+    if (questionId === undefined) {
+      questionId = saveQuestion(projectDir, description, scope).id;
+      newestRequestReplaces(projectDir, questionId, description);
+    }
     cmd.push(`--request ${questionId}`);
     // The conductor (LLM) condenses the description into the short dir-name label
     // — the engine can't summarize. Name the missing --label in the directive so
@@ -12285,11 +12345,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           `or \`${tool} compose --request ${open.id}${stages.tailored}\` for a plan tailored to it`
         : `\`${tool} compose --request ${open.id}${stages.tailored}\`, or one of the plan commands that question listed, ` +
           `each with \`--request ${open.id}\``;
+    // The request it was asked about: a chat that never saw the question cannot
+    // tell an answer from the same work asked again without it (#3609).
+    const about = openFront.sole ? ` about "${requestPreview(open.text)}"` : "";
     emit(printDirective(
-      "The person has not answered the plan question they were asked, so `next` cannot tell their reply from a " +
-      `new request and took nothing from the line. If their words answer that question, run the command it gave ` +
-      `for their choice: ${answer}. If they are asking for something else, run ` +
-      `\`${tool}${wordsForNextStep(questionDir, "other", flags.intent ?? "")}\`, which keeps every word of theirs (${JSON.stringify(flags.intent ?? "")}). ` +
+      `The person has not answered the plan question they were asked${about}, so \`next\` cannot tell their reply ` +
+      `from a new request and took nothing from the line. If their words answer that question, run the command it ` +
+      `gave for their choice: ${answer}. If they are asking for something else, or for the same work again in more ` +
+      `or other words, run \`${tool}${wordsForNextStep(questionDir, "other", flags.intent ?? "")}\`, which keeps ` +
+      `every word of theirs (${JSON.stringify(flags.intent ?? "")}) as their newest request. ` +
       "If you cannot tell, ask them once in plain words.",
     ));
     return;
@@ -13440,6 +13504,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (flags.intent && !flags.request && !inFlight) {
       splitSaid = documentSplitSentence(flags.intent);
       flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
+      newestRequestReplaces(pd, flags.request, flags.intent);
     } else if (!flags.request && !inFlight) {
       // A report-only or task-less composition is described only on approval,
       // and its approval names this entry, so words said at its gate (plan
@@ -14353,6 +14418,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           emit(offer);
           return;
         }
+        // The Unit this checkout walks without a claim is still its own once a
+        // team claims another (#3610): after the offers above, the walk goes on
+        // with it instead of the board.
+        if (unitsHeldHere(pd) !== null) throw new Error("claimless-team-mode");
         // While the guard's fan-out check holds (a landed Unit's claim
         // included) it refuses Unit work in this checkout, so the board stays
         // up until the walk has no Unit left to take: every Unit merged. A
@@ -17310,6 +17379,20 @@ function teamHomeBoardText(projectDir: string, stateContent: string): string {
   return [renderUnitBoard(workLabel(projectDir), rows), ...settledNotices].join("\n");
 }
 
+// The Units an unclaimed team checkout walks itself once the teams take Units
+// (#3610): the ones it walks without a claim (unitsHeldHere), or null for every
+// Unit. Before the plan is shared the checkout walks every Unit, as before.
+function teamWalkHeldUnits(projectDir: string): ReadonlySet<string> | null {
+  const held = unitsHeldHere(projectDir);
+  if (held === null) return null;
+  try {
+    return claimlessTeamCheckout(projectDir) ? null : held;
+  } catch {
+    // A record that cannot be read keeps the walk on the held Units.
+    return held;
+  }
+}
+
 function emitTeamUnitMajorRunStage(
   projectType: "brownfield" | "greenfield" | null,
   scope: string,
@@ -17344,7 +17427,11 @@ function emitTeamUnitMajorRunStage(
         "made on the version before your change, and they kept it: what they built uses theirs.");
     }
   }
-  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat().filter((unit) => !heldElsewhere.has(unit));
+  // A team checkout that is no home walks only the Units it holds (unitsHeldHere).
+  const held = scopeStamp || teamHome ? null : teamWalkHeldUnits(projectDir);
+  const units = scopeStamp
+    ? [scopeStamp.unit]
+    : resolution.batches.flat().filter((unit) => !heldElsewhere.has(unit) && (held === null || held.has(unit)));
   const kinds = resolution.unitKinds;
   const rhythm = effectiveUnitGateRhythm(projectDir, stateContent);
   const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
@@ -17659,6 +17746,20 @@ function emitTeamUnitMajorRunStage(
     });
     return;
   }
+  // The Unit this checkout walked without a claim is done; once the teams take
+  // Units, while theirs are not all merged, the board is the step here, as for
+  // a checkout that walks none (#3610).
+  if (held !== null) {
+    const readOnly = model === null;
+    const seen = model ?? deriveTeamUnitProgressModel(projectDir, refreshedState, auditRows, undefined, { readOnly: true });
+    if (resolution.batches.flat().some((unit) => !held.has(unit) && !seen.mergedUnits.has(unit))) {
+      emit(noticeDirective(renderTeamConstructionBoard(
+        buildTeamConstructionBoard(projectDir, refreshedState, { model: seen, readOnly }),
+        "dispatcher",
+      )));
+      return;
+    }
+  }
   const next = nextInScopeStage(finalStage.slug, scope, refreshedState);
   if (!next) {
     emit({
@@ -17831,11 +17932,14 @@ function teamUnitMajorWalkBeat(
   if (!scopeStamp && homeLocation(stateContent) !== null) {
     for (const unit of [...unitsKeptForTeams(auditRows).keys(), ...unitsLeftOpen(auditRows)]) heldElsewhere.add(unit);
   }
+  // A team checkout that is no home walks only the Units it holds (unitsHeldHere).
+  const held = scopeStamp || homeLocation(stateContent) !== null ? null : teamWalkHeldUnits(projectDir);
+  const walked = resolution.batches.flat().filter((unit) => held === null || held.has(unit));
   const units = scopeStamp
     ? [scopeStamp.unit]
     : heldElsewhere.size === 0
-      ? resolution.batches.flat()
-      : homeWalkUnits(resolution.batches.flat(), heldElsewhere, model.mergedUnits, unitDependencies(projectDir));
+      ? walked
+      : homeWalkUnits(walked, heldElsewhere, model.mergedUnits, unitDependencies(projectDir));
   const recordPrefix = engineRelativeRecordDir(projectDir);
   const codekbCtx = codekbCtxFor(projectDir);
   const step = teamUnitMajorWalkStep(

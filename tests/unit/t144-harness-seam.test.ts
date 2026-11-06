@@ -49,6 +49,7 @@ const LIB_SIBLINGS = [
   "aidlc-learned-date.ts",
   "aidlc-git-name.ts",
   "aidlc-unit-landing.ts",
+  "aidlc-unit-holders.ts",
   "aidlc-kiro-chat-record.ts",
   "aidlc-claude-turn-origin.ts",
   "aidlc-claude-turn-pending.ts",

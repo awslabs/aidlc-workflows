@@ -1,4 +1,4 @@
-// covers: hook:aidlc-sync-workflow-state, function:statusSyncLeavesUnitCursor, subcommand:aidlc-orchestrate:continue
+// covers: hook:aidlc-sync-workflow-state, function:statusSyncLeavesCursor, subcommand:aidlc-orchestrate:continue
 //
 // On Kiro IDE the status sync runs after every shell command and takes the
 // stage from the audit tail's last STAGE_STARTED. In a checkout that claimed a

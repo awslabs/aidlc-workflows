@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, function:parseNextFlags, function:unitCommandArgv, function:readNextLine,
-// function:classifyTerminalCommand, function:isReadOnlyNextArgv, function:nextArgsAreOnlyWords
+// function:classifyTerminalCommand, function:isReadOnlyNextArgv, function:nextArgsAreOnlyWords, function:UNIT_GRAMMAR
 //
 // `/aidlc unit pin alpha` and the other `unit` verbs are the person's own Unit commands
 // (docs/guide/12-cli-commands.md), so `next` names that command for the agent to run, on every harness, instead of
@@ -13,7 +13,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { UNIT_VERBS } from "../../dist/claude/.claude/tools/aidlc-command.ts";
+import { UNIT_GRAMMAR, UNIT_VERBS } from "../../dist/claude/.claude/tools/aidlc-command.ts";
 import { classifyTerminalCommand, isReadOnlyNextArgv, readNextLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { nextArgsAreOnlyWords, parseNextFlags } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
@@ -194,6 +194,24 @@ describe("one list of Unit verbs", () => {
     const route = ROUTES.find((entry) => entry.id === "unit");
     expect(route).toBeDefined();
     expect([...route!.verbs].sort()).toEqual([...UNIT_VERBS.keys()].sort());
+  });
+
+  // The Unit tool refuses any option a verb's grammar leaves out, and `--help`
+  // prints the usage, so the usage names exactly the options the verb takes.
+  test("each verb's usage names its Unit name and exactly the options it takes, and the route prints the same", () => {
+    for (const [verb, grammar] of Object.entries(UNIT_GRAMMAR)) {
+      expect(grammar.usage.startsWith(`unit ${verb}`), verb).toBe(true);
+      expect(grammar.usage.split(" ")[2] === "<unit>", verb).toBe(grammar.name);
+      const named = [...new Set([...grammar.usage.matchAll(/--([a-z][a-z-]*)/g)].map((match) => match[1]))];
+      const switches = grammar.switches ?? [];
+      expect(named.sort(), verb).toEqual([...grammar.options, ...switches].sort());
+      // A switch is shown with nothing after it to take, an option with its value.
+      for (const name of switches) expect(grammar.usage, `${verb} --${name}`).toMatch(new RegExp(`--${name}(?=$|[\\])]| --| \\[)`));
+      for (const name of grammar.options) expect(grammar.usage, `${verb} --${name}`).toMatch(new RegExp(`--${name} [^-\\[\\]|()]`));
+    }
+    expect(ROUTES.find((entry) => entry.id === "unit")?.all).toEqual(
+      Object.values(UNIT_GRAMMAR).map((grammar) => grammar.usage),
+    );
   });
 
   test("each verb reaches its own branch of the Unit tool, not the tool's list of verbs", () => {

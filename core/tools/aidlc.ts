@@ -18,6 +18,7 @@ import {
   PLUGIN_COMMAND_NAME_RE,
   type RouteNamespaceName,
   TRUSTED_ROUTE_NAMESPACE,
+  UNIT_GRAMMAR,
   UNIT_VERBS,
 } from "./aidlc-command.ts";
 import {
@@ -227,35 +228,10 @@ export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
-// The unit tool's verbs (UNIT_VERBS, aidlc-command.ts) are routed at both
+// The unit tool's verbs (UNIT_GRAMMAR, aidlc-command.ts) are routed at both
 // doors: `aidlc unit`, which people and scripts type, and `aidlc engine unit`,
 // the form aidlcToolInvocation prints for the agent on a native install.
-const UNIT_FORMS = [
-  "unit adopt <unit>",
-  "unit amend <unit> --input <file> --answer <approve|reject> --person-words <text>",
-  "unit assign <unit>=<team> [<unit>=<team> ...] [--open [<unit>,...]] [--person-words <text>] | --open | --here <unit>",
-  "unit claim <unit>",
-  "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
-  "unit hand-off <unit> --team <team> [--person-words <text>]",
-  "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--accept-released-attempt --user-input <text>]",
-  "unit lead-sign-off on|off",
-  "unit merge-status <unit>",
-  "unit merged <unit> --repo <repo> --person-words <text>",
-  "unit participate",
-  "unit pin <unit>",
-  "unit progress",
-  "unit propose --input <file> [--file <changed text>] [--person-words <text>]",
-  "unit publish <unit> [--commit]",
-  "unit push [--later]",
-  "unit release <unit>",
-  "unit share [--plan]",
-  "unit sign-off <unit> --person-words <text>",
-  "unit status",
-  "unit take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] | --file <file>",
-  "unit take-in <file>",
-  "unit turned-down <unit> --repo <repo> --person-words <text>",
-  "unit send-back <unit> --person-words <text>",
-] as const;
+const UNIT_FORMS = Object.values(UNIT_GRAMMAR).map((grammar) => grammar.usage);
 
 // ROUTES_TABLE_START
 export const ROUTES: readonly Route[] = [
@@ -624,6 +600,8 @@ export const ROUTES: readonly Route[] = [
       "gate-start",
       // The review request runs it (aidlc-log.ts, completionChecksHold).
       "completion-checks",
+      // A Unit's checkpoint verify and ask run it (aidlc-construction-checkpoints.ts, unitGateChecks).
+      "checkpoint-checks",
       "approve",
       "reject",
       "revise",

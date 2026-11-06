@@ -3,6 +3,24 @@ import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
+import {
+  cachedClaimFanoutActive,
+  claimRegistryCachePath,
+  claimRegistryGit,
+  readUnitClaimRegistryCache,
+  type UnitClaimRegistryCache,
+  unitsHeldHere,
+} from "./aidlc-unit-holders.ts";
+export {
+  CLAIM_REGISTRY_CACHE_FILE,
+  cachedClaimFanoutActive,
+  claimRegistryCachePath,
+  readUnitClaimRegistryCache,
+  type CachedUnitClaim,
+  type UnitClaimRegistryCache,
+  unitsHeldHere,
+  unitsWalkedWithoutClaim,
+} from "./aidlc-unit-holders.ts";
 import { KIRO_SESSION_DIR_RE, kiroChatRecordPaths } from "./aidlc-kiro-chat-record.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -119,6 +137,7 @@ export {
 import {
   ACTIVE_DIRECTIVE_MARKER,
   ACTIVE_INTENT_POINTER,
+  activeIntent,
   activeIntentUuid,
   applicableTeamUnitScopeStamp,
   attemptEventDefinitelyBefore,
@@ -185,6 +204,7 @@ import {
   readStateWrites,
   recordDirMatches,
   registryList,
+  replyTurnsAfter,
   relativeRecordDir,
   relativeRecordDirForSelection,
   resolveAuditProjectPath,
@@ -11826,6 +11846,8 @@ export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
   slug: string,
+  // Filled with each pick's Unit, when given: its answer's, or the question's it answers.
+  units?: Map<AuditShardEvent, string | null>,
 ): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
   const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
   // Each clone's shard keeps its own append order, so a teammate's question in
@@ -11879,7 +11901,10 @@ export function blockingSensorPicks(
     const numbered = /^(\d+)[.)]?$/.exec(details);
     const named = numbered ? offered[Number(numbered[1]) - 1] : checkLabel(details);
     const choice = BLOCKING_SENSOR_OVERRIDE_OPTIONS.find((option) => option === named);
-    if (choice !== undefined) picks.set(row, choice);
+    if (choice !== undefined) {
+      picks.set(row, choice);
+      units?.set(row, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"));
+    }
   }
   return picks;
 }
@@ -11963,7 +11988,8 @@ export function blockingSensorFixes(
     const units = new Set<string>();
     const before = rows.filter((row) => attemptEventDefinitelyBefore(row, pick));
     for (const result of latestSensorResults(before, stage.slug).values()) {
-      if (result.kind !== "failed" || !blocking.has(result.id)) continue;
+      // A Unit's checkpoint fires name the Unit; the stage gate's name none.
+      if (result.kind !== "failed" || !blocking.has(result.id) || result.unit !== null) continue;
       // The gate fires on every declared output, so the matcher over all of
       // them names the owner; only a codekb stage reads the recorded
       // repositories, and none is per Unit.
@@ -11974,9 +12000,10 @@ export function blockingSensorFixes(
     return units.size > 0 ? units : null;
   };
   const fixes = new Map<AuditShardEvent, ReadonlySet<string> | null>();
-  for (const [row, choice] of blockingSensorPicks(rows, stage.slug)) {
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  for (const [row, choice] of blockingSensorPicks(rows, stage.slug, pickUnits)) {
     if (choice !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0]) continue;
-    const unit = auditBlockField(row.block, "Unit");
+    const unit = pickUnits.get(row) ?? null;
     fixes.set(row, unit ? new Set([unit]) : failedUnits(row));
   }
   return fixes;
@@ -12004,20 +12031,82 @@ function auditEventIsAfter(later: AuditShardEvent, earlier: AuditShardEvent): bo
 // back, and nothing was asked or answered on the stage since. The state tool
 // accepts an override report on this test, and `next` names that report while
 // it holds, so the two never disagree about a pick.
-export function hasBlockingSensorOverrideAuthorization(projectDir: string, slug: string): boolean {
+//
+// In solo work built Unit by Unit with checkpoints, a pick made at a Unit's
+// checkpoint names that Unit (its answer, or the check's question it answers):
+// it stands for that Unit's checkpoint only (`unit`), until a verification
+// carries it, or the Unit is approved, sent back or started again, and never
+// for the stage's own gate over every Unit. Everywhere else a pick reads as it
+// always has.
+export function hasBlockingSensorOverrideAuthorization(
+  projectDir: string,
+  slug: string,
+  unit: string | null = null,
+): boolean {
   const rows = readAuditShardEvents(projectDir);
+  // Solo work built Unit by Unit with checkpoints is where a pick can be made at a Unit's checkpoint.
+  let unitPicks = unit !== null;
+  if (!unitPicks) {
+    try {
+      const stateContent = readStateFile(projectDir);
+      unitPicks = constructionCheckpointsApply(stateContent) &&
+        getField(stateContent, "Construction Iteration") === "unit-major";
+    } catch {
+      unitPicks = false;
+    }
+  }
+  const unitOf = (row: AuditShardEvent): string | null => auditBlockField(row.block, "Unit");
   const stageRows = rows.filter((row) => {
     const workflow = auditBlockField(row.block, "Workflow");
     return auditBlockField(row.block, "Stage") === slug &&
       !workflow?.startsWith("single-stage:");
   });
-  const boundaries = stageRows.filter((row) => BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event));
-  const interactions = stageRows.filter((row) =>
-    row.event === "DECISION_RECORDED" ||
-    row.event === "QUESTION_ANSWERED"
+  // A verification that verified with an Override spent the pick it used,
+  // whichever Unit it named; one whose project check failed leaves the pick
+  // standing for the same findings (the state tool holds it to them). A
+  // Unit's approval and its Request Changes (the checkpoint's GATE_ rows carry
+  // the Unit), and its stage started again, end a pick made at its checkpoint.
+  const spent = (row: AuditShardEvent): boolean =>
+    row.event === "CHECKPOINT_VERIFICATION_RECORDED" && auditBlockField(row.block, "Blocking Sensor Override") === "true" &&
+    auditBlockField(row.block, "Verified") === "true";
+  const boundaries = [
+    ...stageRows.filter((row) => BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event)),
+    ...(unitPicks ? rows.filter(spent) : []),
+    ...(unit !== null
+      ? rows.filter((row) => unitOf(row) === unit && (
+        row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED" ||
+        (row.event === "UNIT_STARTED" && auditBlockField(row.block, "Stage") === slug)
+      ))
+      : []),
+  ];
+  // At a Unit's checkpoint the agent re-logging the check's question, or an
+  // answer to it that is no Fix pick of the person's (the Override recorded
+  // again, with --unit or without, or with no new reply), is no new decision:
+  // it does not spend the pick, so the person's Override is never refused into
+  // asking again. A Fix pick, or any answer to another question, still does.
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  const picks = blockingSensorPicks(rows, slug, pickUnits);
+  const asksCheck = (row: AuditShardEvent | undefined): boolean =>
+    row !== undefined && row.event === "DECISION_RECORDED" &&
+    auditBlockField(row.block, "Decision") === BLOCKING_SENSOR_OVERRIDE_DECISION;
+  // An answer to the check's own question (the stage's latest question in its shard).
+  const answersCheck = (row: AuditShardEvent): boolean => asksCheck(stageRows.filter((other) =>
+    other.event === "DECISION_RECORDED" && other.shard === row.shard && other.pos < row.pos
+  ).at(-1));
+  const relogged = (row: AuditShardEvent): boolean => unit !== null && (
+    asksCheck(row) ||
+    (row.event === "QUESTION_ANSWERED" && answersCheck(row) && picks.get(row) !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0])
   );
-  for (const [answer, choice] of blockingSensorPicks(rows, slug)) {
+  const interactions = stageRows.filter((row) =>
+    (row.event === "DECISION_RECORDED" || row.event === "QUESTION_ANSWERED") &&
+    (unit === null || unitOf(row) === null || unitOf(row) === unit) && !relogged(row)
+  );
+  for (const [answer, choice] of picks) {
     if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE) continue;
+    // At a Unit's checkpoint a pick that names no Unit is the Unit's too (the
+    // agent left --unit off); at the stage gate it must name none.
+    const pickUnit = pickUnits.get(answer) ?? null;
+    if (unitPicks && pickUnit !== unit && !(unit !== null && pickUnit === null)) continue;
     if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
       continue;
     }
@@ -12145,19 +12234,19 @@ export function auditMark(projectDir: string): AuditMark {
   return {
     shard: projectRelativePath(projectDir, shardPath),
     offset: existsSync(shardPath) ? statSync(shardPath).size : 0,
+    at: isoTimestamp(),
   };
 }
 
 // The person replied after the mark: a human turn that is more than a command
-// to AIDLC (isReplyTurn) is on record after it. A decision on an open question
-// needs this; presence for what a command asks for does not. A trail that
-// cannot be read, or a mark from another shard, proves no reply.
-export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean {
+// to AIDLC (isReplyTurn) is on record after it, in this checkout's record of
+// the work (replyTurnsAfter). A decision on an open question needs this;
+// presence for what a command asks for does not. A trail that cannot be read
+// proves no reply. `shownAt`: as replyTurnsAfter takes it.
+export function personRepliedAfter(projectDir: string, mark: AuditMark, shownAt?: string): boolean {
   try {
-    const shardPath = auditFilePath(projectDir);
-    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return false;
-    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardTurnBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    const reply = (block: string) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block });
+    return replyTurnsAfter(projectDir, mark, reply, shownAt).length > 0;
   } catch {
     return false;
   }
@@ -12183,14 +12272,11 @@ export function rowsAfterMark(projectDir: string, mark: AuditMark): ((row: Audit
 
 // Their replies after the mark, as personRepliedAfter counts them, oldest
 // first: the message each turn names (null when it names none) and its time.
-// Empty when there is none, or the mark is another shard's.
+// Empty when there is none.
 export function repliesAfter(projectDir: string, mark: AuditMark): Array<{ messageId: string | null; at: string }> {
   try {
-    const shardPath = auditFilePath(projectDir);
-    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return [];
-    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardTurnBlocks(after)
-      .filter((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }))
+    const reply = (block: string) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block });
+    return replyTurnsAfter(projectDir, mark, reply)
       .map((block) => ({ messageId: auditBlockField(block, "Message Id"), at: auditBlockField(block, "Timestamp") ?? "" }));
   } catch {
     return [];
@@ -29662,27 +29748,8 @@ export function composeMarkerPath(projectDir: string): string {
 export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
 export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
 export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
-export const CLAIM_REGISTRY_CACHE_FILE = ".aidlc-claim-registry.json";
 export const UNIT_RELEASE_PENDING_FILE = ".aidlc-unit-releases";
 export const UNIT_MERGE_DIR = ".aidlc-unit-merges";
-
-export interface CachedUnitClaim {
-  status: "claimed" | "released";
-  owner: string;
-  generation: number;
-  nonce: string;
-  ref: string;
-  oid: string;
-  observed_at?: string;
-}
-
-export interface UnitClaimRegistryCache {
-  version: 1;
-  space: string;
-  intent_uuid: string;
-  claims: Record<string, CachedUnitClaim>;
-  warning?: string;
-}
 
 export interface UnitMergeEvidence {
   stages_expected: string[];
@@ -29768,10 +29835,6 @@ export function claimGenerationsPath(projectDir: string): string {
 
 export function unitParticipantPath(projectDir: string): string {
   return join(workspaceRoot(projectDir), UNIT_PARTICIPANT_FILE);
-}
-
-export function claimRegistryCachePath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLAIM_REGISTRY_CACHE_FILE);
 }
 
 function identityScopedUnitPath(
@@ -30047,60 +30110,6 @@ export function clearClaimGeneration(projectDir: string, unit: string): void {
   );
 }
 
-export function readUnitClaimRegistryCache(
-  projectDir: string,
-): UnitClaimRegistryCache | null {
-  try {
-    const parsed = JSON.parse(
-      readFileSync(claimRegistryCachePath(projectDir), "utf-8"),
-    ) as Partial<UnitClaimRegistryCache>;
-    if (
-      parsed.version !== 1 ||
-      typeof parsed.space !== "string" ||
-      typeof parsed.intent_uuid !== "string" ||
-      parsed.claims === null ||
-      typeof parsed.claims !== "object" ||
-      Array.isArray(parsed.claims)
-    ) {
-      return null;
-    }
-    const claims: Record<string, CachedUnitClaim> = {};
-    for (const [unit, value] of Object.entries(parsed.claims)) {
-      if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        return null;
-      }
-      const claim = value as Partial<CachedUnitClaim>;
-      if (
-        (claim.status !== "claimed" && claim.status !== "released") ||
-        typeof claim.owner !== "string" ||
-        !Number.isInteger(claim.generation) ||
-        (claim.generation ?? 0) < 1 ||
-        typeof claim.nonce !== "string" ||
-        typeof claim.ref !== "string" ||
-        typeof claim.oid !== "string" ||
-        (
-          claim.observed_at !== undefined &&
-          typeof claim.observed_at !== "string"
-        )
-      ) {
-        return null;
-      }
-      claims[unit] = claim as CachedUnitClaim;
-    }
-    return {
-      version: 1,
-      space: parsed.space,
-      intent_uuid: parsed.intent_uuid,
-      claims,
-      ...(typeof parsed.warning === "string" && parsed.warning
-        ? { warning: parsed.warning }
-        : {}),
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function writeUnitClaimRegistryCache(
   projectDir: string,
   cache: UnitClaimRegistryCache,
@@ -30120,25 +30129,6 @@ interface ClaimRegistryPayload {
 }
 
 const LIVE_CLAIM_PAYLOADS = new Map<string, ClaimRegistryPayload | null>();
-
-function claimRegistryGit(
-  projectDir: string,
-  args: string[],
-  options: { localOnly?: boolean } = {},
-): { ok: boolean; stdout: string; stderr: string } {
-  const result = spawnSync("git", args, {
-    cwd: projectDir,
-    encoding: "utf-8",
-    env: options.localOnly
-      ? { ...process.env, GIT_NO_LAZY_FETCH: "1" }
-      : process.env,
-  });
-  return {
-    ok: result.status === 0,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-  };
-}
 
 function claimRegistryRemote(projectDir: string): string | null {
   const remoteResult = claimRegistryGit(projectDir, ["remote"]);
@@ -30391,68 +30381,6 @@ export function worktreeClaimBoundaryMatches(
   return main;
 }
 
-// The one check that team Unit fan-out is active: a claim of the active intent
-// still says `claimed`, a landed Unit's included (land never releases it). The
-// guard below and `next` in an unscoped team checkout (aidlc-orchestrate.ts,
-// routeNext) both read it, so `next` never hands out Unit work the guard refuses.
-// At the home of teams that build their Units as work of their own, a claim is
-// held for a team elsewhere and never keeps the home from the Units no team
-// holds.
-export function cachedClaimFanoutActive(projectDir: string, stateContent?: string): boolean {
-  if (unitTeams().homeLocation(stateContent ?? readStateFile(projectDir)) !== null) return false;
-  const cache = readUnitClaimRegistryCache(projectDir);
-  const space = activeSpace(projectDir);
-  const intentUuid = activeIntentUuid(projectDir, space);
-  if (!intentUuid) return false;
-  if (
-    cache &&
-    cache.space === space &&
-    cache.intent_uuid === intentUuid &&
-    Object.values(cache.claims).some((claim) => claim.status === "claimed")
-  ) {
-    return true;
-  }
-  const id8 = idSuffix(intentUuid);
-  const refs = claimRegistryGit(projectDir, [
-    "for-each-ref",
-    "--format=%(objectname) %(refname)",
-    "refs/heads/claim/",
-    "refs/remotes/",
-  ], { localOnly: true });
-  if (!refs.ok) return false;
-  for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
-    const [oid, ref] = line.trim().split(/\s+/, 2);
-    if (
-      !oid ||
-      !ref ||
-      (
-        !ref.startsWith(`refs/heads/claim/${id8}/`) &&
-        !new RegExp(`^refs/remotes/[^/]+/claim/${escapeRegex(id8)}/`).test(ref)
-      )
-    ) {
-      continue;
-    }
-    const shown = claimRegistryGit(
-      projectDir,
-      ["show", `${oid}:.aidlc-unit-claim.json`, "--"],
-      { localOnly: true },
-    );
-    if (!shown.ok) continue;
-    try {
-      const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
-      if (
-        payload.intent_uuid === intentUuid &&
-        payload.status === "claimed"
-      ) {
-        return true;
-      }
-    } catch {
-      // Malformed local claim refs are handled by notice composition.
-    }
-  }
-  return false;
-}
-
 export function validateLiveUnitScope(
   projectDir: string,
   requestedUnit?: string,
@@ -30463,8 +30391,13 @@ export function validateLiveUnitScope(
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
     if (cachedClaimFanoutActive(pd, state)) {
+      const held = unitsHeldHere(pd);
+      if (held && (requestedUnit === undefined || held.has(requestedUnit))) return null;
       throw new Error(
-        "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is " +
+        (held
+          ? `This checkout works ${[...held].map((unit) => `Unit "${unit}"`).join(", ")} without a claim, and no other ` +
+            "Unit's work runs here; another Unit is worked here once it is "
+          : "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is ") +
           `claimed with \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,
       );
     }
@@ -30549,6 +30482,13 @@ export function requireLiveClaimForTeamUnit(
   }
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
+    // A Unit this checkout walks without a claim is its own, as the walking
+    // skeleton on main is (#3610): for the active work, however the caller
+    // names it (a fork and a merge name its space).
+    const space = activeSpace(pd);
+    const activeWork = (!selector.space || selector.space === space) &&
+      (!selector.intent || selector.intent === activeIntent(pd, space) || selector.intent === activeIntentUuid(pd, space));
+    if (activeWork && unitsHeldHere(pd)?.has(unit)) return null;
     throw new Error(
       `Unit Ownership: team requires a live claim for Unit "${unit}" before fork or lifecycle work.`,
     );
@@ -36478,12 +36418,15 @@ export interface UnitCheckpoint {
 }
 
 // Every Unit whose latest current-attempt row for the stage is open (started,
-// resumed, or paused), most recently touched first.
-function openUnitCheckpoints(rows: readonly UnitLifecycleRow[]): UnitCheckpoint[] {
+// resumed, or paused), most recently touched first. Only the Units this checkout
+// holds (unitsHeldHere; null is every Unit): another checkout's open Unit,
+// pushed with main, is that checkout's, and never stops one held here (#3610).
+function openUnitCheckpoints(rows: readonly UnitLifecycleRow[], held: ReadonlySet<string> | null): UnitCheckpoint[] {
   const open: UnitCheckpoint[] = [];
   const seen = new Set<string>();
   for (let i = rows.length - 1; i >= 0; i--) {
     const { unit, event, block } = rows[i];
+    if (held !== null && !held.has(unit)) continue;
     if (seen.has(unit)) continue;
     seen.add(unit);
     if (UNIT_TERMINAL_EVENTS.has(event)) continue;
@@ -36582,7 +36525,7 @@ export function unitLifecycleSnapshot(
       receipts.delete(row.unit);
     }
   }
-  const open = openUnitCheckpoints(rows);
+  const open = openUnitCheckpoints(rows, unitsHeldHere(projectDir));
   const checkpoint = open[0] ?? null;
   const unitEvents = new Set([
     "UNIT_STARTED",
@@ -36731,10 +36674,11 @@ export function unitLifecycleReceiptsInUse(
 // with its recorded
 // Reason / Next Action (for the resume path and the paused-first routing), or
 // the in-flight unit (started/resumed, not yet completed), or null when no
-// unit is mid-lifecycle. At most one unit can be non-terminal on the inline
-// path (the engine emits one unit at a time); if a corrupted ledger carries
-// several, the LATEST row wins — deterministic, and `unit start` refuses to
-// open a second active unit anyway.
+// unit is mid-lifecycle. Only a Unit this checkout holds counts (unitsHeldHere).
+// At most one of those can be non-terminal on the inline path (the engine emits
+// one unit at a time); if a corrupted ledger carries several, the LATEST row
+// wins (deterministic), and `unit start` refuses to open a second active unit
+// anyway.
 export function activeUnitCheckpoint(
   projectDir: string,
   slug: string,
@@ -36753,7 +36697,7 @@ export function unitOpenCheckpoints(
   const audit = readAllAuditShards(projectDir);
   if (!audit) return [];
   const unitMajor = unitMajorLifecycleMode(projectDir);
-  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor));
+  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor), unitsHeldHere(projectDir));
 }
 
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
