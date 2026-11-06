@@ -20,7 +20,8 @@
 // look at the board between a merge and the step that records it. They come in
 // the order they were fixed, so on an older engine the journey stops at the
 // first route it still breaks. The cases after the journey are routes of their
-// own: the lead's project building a Unit while a team's Unit merges.
+// own: the lead's project building a Unit while a team's Unit merges, and a
+// team's next Unit asked for in the chat of its pushed build.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -376,5 +377,27 @@ describe("the lead's project builds a Unit of its own while a team's Unit merges
     expect(step, JSON.stringify(step).slice(0, 400)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
     expect(unitsMerged(home.dir)).toEqual(["refund-button"]);
     expect(claimPayload(home.remote, id8, "refund-button")).toMatchObject({ done: true });
+  });
+});
+
+describe("a team's pushed build, asked for the team's next Unit", () => {
+  test("on Copilot CLI, in the same chat, once its first Unit is merged the team is offered the Unit that opened", () => {
+    const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api") };
+    const receipts = plan("receipts");
+    const statements: Plan = { ...receipts, unit: "statements", dependsOn: "receipts" };
+    const { home, id8 } = leadsProject(hosts, [receipts, statements], ["receipts=finance", "statements=finance"]);
+    const frank = teamClone(home, hosts, receipts);
+    frank.person.say("/aidlc");
+    const built = takeAndBuild(frank, frank.agent.next());
+    expectResult(home.remote, id8, receipts, pick(frank, built.end, "Push"));
+    mergeOnHost(hosts["checkout-api"], "receipts", "rebase");
+    const lead = homeStandIn(home);
+    lead.person.say("/aidlc");
+    lead.agent.next();
+    expect(claimPayload(home.remote, id8, "receipts")).toMatchObject({ done: true });
+    // x2783-s9 14: in the chat of his pushed build he asks for more, and met the finished work's doors and new work.
+    const more = frank.agent.personTypes("/aidlc Anything else for the finance team?");
+    expect(more.ask_type, JSON.stringify(more).slice(0, 800)).toBe("unit-take");
+    expect(pick(frank, more, startChoice(more, "statements").label)).toMatchObject({ taken: true, unit: "statements", team: "finance" });
   });
 });
