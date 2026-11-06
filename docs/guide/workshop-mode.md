@@ -97,7 +97,9 @@ When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back
 gate; claims open once its Unit Progress row on the pushed main is complete.
 With `skeleton: off`, or `Skeleton Stance: off` recorded in the work's state,
-dependency-ready Units open immediately.
+dependency-ready Units open immediately. When the team's practices answer
+whether to build a thin end-to-end slice first, that answer is read at the
+first step after several teams are chosen, before a Unit is handed out.
 
 On the workspace's own repo, teams take Units from the plan on the shared
 remote. Once claims are open (at once with the skeleton off, once the walking

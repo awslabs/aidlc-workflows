@@ -289,6 +289,10 @@ describe("the slice built together first, at the question of who builds which pa
 
   test("the lead's own answer on it is read first: settled off, the question names no part as built first", () => {
     const home = makeHome({ state: homeState().replace("- **Skeleton Stance**: off\n", "") });
+    // Their team's practices answer it (Practices Discovery writes this section).
+    const memory = join(home.dir, "aidlc", "spaces", "default", "memory");
+    mkdirSync(memory, { recursive: true });
+    writeFileSync(join(memory, "team.md"), "# Team rules\n\n## Walking Skeleton\n\nNo thin slice first: each Unit is built on its own.\n");
     chooseTeams(home.dir);
     const settle = next(home.dir);
     expect(settle.ask_type ?? null, JSON.stringify(settle)).not.toBe("unit-assignment");
