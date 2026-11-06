@@ -95,6 +95,18 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(shown.status, shown.stdout + shown.stderr).toBe(0);
   });
 
+  test("a stage the other machine finished since is not named: the Unit alone is", () => {
+    const home = makeHome({ repos: {} });
+    const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
+    row("UNIT_STARTED", "functional-design", "refunds");
+    row("UNIT_COMPLETED", "functional-design", "refunds");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "solo work under way"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ask = next(cloneOf(home.remote, "bob"));
+    expect(String(ask.question), JSON.stringify(ask)).toStartWith("fixture is being built from another machine, on refunds. ");
+  });
+
   test("the stage it names is the one the other machine started last, never one skipped after it", () => {
     const home = makeHome({ repos: {} });
     const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
@@ -169,6 +181,25 @@ describe("a teammate opens solo work built from another machine", () => {
     const other = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
     expect(other.status).not.toBe(0);
     expect(other.out).toContain("refunds is being built on the other machine; take another Unit, or follow along.");
+  });
+
+  test("the teammate's second clone is never switched to teams as if it were the home, and hears no take of their own", () => {
+    const home = soloAtA();
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob"));
+    expect(took.status, took.out).toBe(0);
+    const again = cloneOf(home.remote, "bob");
+    const before = readFileSync(seededStateFile(again), "utf-8");
+    const chat = personsChat("chat-bob-again");
+    const select = /`([^`]* intent switch [^`]*)`/.exec(String(next(again, chat, ["--pick", HOME_RECORD]).message))?.[1];
+    expect(select).toBeString();
+    const switched = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), ...select!.split(" ").slice(2)], {
+      cwd: again, env: { ...chat, CLAUDE_PROJECT_DIR: again, AIDLC_PROJECT_DIR: again }, encoding: "utf-8",
+    });
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    const step = next(again, chat);
+    expect(JSON.stringify(step)).not.toContain("Your teammate bob took checkout-ui");
+    expect(readFileSync(seededStateFile(again), "utf-8")).toBe(before);
+    expect(readAuditShardEvents(again).filter((row) => row.event === "UNIT_OWNERSHIP_SET")).toEqual([]);
   });
 
   test("the home's own session switches to teams at its next step, keeps its work and its approvals, and asks nothing again", () => {

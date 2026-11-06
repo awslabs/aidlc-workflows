@@ -156,12 +156,14 @@ import {
   approvedInputsOf,
   artifactAt,
   blobsAt,
+  builtFromAnotherMachine,
   findUnitBuild,
   HANDOFF_DIR,
   type HandFile,
   HOME_LOCATION_FIELD,
   homeLocation,
   inputName,
+  lastCommittedByThisPerson,
   parseHandFile,
   patchIdOf,
   type Proposal,
@@ -7459,6 +7461,10 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   }
   if (isTeamUnitOwnership(state) || homeLocation(state) !== null || isReadOnlyEngineProbe()) return null;
   if (getField(state, "Construction Iteration")?.trim() !== "unit-major") return null;
+  // Only the machine building the work, or its builder's other machine, is its
+  // home: a teammate's clone (their second one too) never switches the work.
+  const elsewhere = builtFromAnotherMachine(state, readAuditShardEvents(projectDir), auditShardName(projectDir));
+  if (elsewhere !== null && !lastCommittedByThisPerson(projectDir, elsewhere.shard)) return null;
   // A teammate's take changes what this session does next once its Unit walk
   // has begun (or its first Unit is next): the claims are looked at once when
   // a chat starts and before each next Unit starts, never after each message

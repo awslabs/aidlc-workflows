@@ -9115,8 +9115,14 @@ function soloElsewhereAsk(projectDir: string, selected?: { intent: IntentInfo; s
     // finished or a stage skipped for it; nothing between Units.
     const under = rows.filter((row) => row.event === "UNIT_STARTED" && !progress.done.has(auditBlockField(row.block, "Unit") ?? ""))
       .sort((a, b) => (a.timestamp !== b.timestamp ? (a.timestamp < b.timestamp ? -1 : 1) : a.pos - b.pos)).at(-1);
+    // A stage it finished since is not where it is: the Unit is named alone.
     const underStage = under === undefined ? null : auditBlockField(under.block, "Stage");
+    const stageDone = under !== undefined && rows.some((row) =>
+      (row.event === "UNIT_COMPLETED" || row.event === "UNIT_SKIPPED") &&
+      auditBlockField(row.block, "Unit") === auditBlockField(under.block, "Unit") &&
+      auditBlockField(row.block, "Stage") === underStage && row.timestamp >= under.timestamp);
     const on = under === undefined || underStage === null ? ""
+      : stageDone ? `, on ${auditBlockField(under.block, "Unit")}`
       : `, on ${auditBlockField(under.block, "Unit")} (${stageLabel(nodeForSlug(underStage), underStage) ?? underStage})`;
     return {
       kind: "ask",
