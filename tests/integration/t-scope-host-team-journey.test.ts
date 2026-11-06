@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, function:checkTeamResults, function:unitMergeVerdict, function:localRepoOverrideLines
+// covers: subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:release, function:checkTeamResults, function:unitMergeVerdict, function:localRepoOverrideLines
 //
 // The build-out's journey (#2410, section 3), on every tool's tree, in one piece
 // of work. The home is the lead's clone on Claude Code; each team works in its
@@ -20,8 +20,9 @@
 // look at the board between a merge and the step that records it. They come in
 // the order they were fixed, so on an older engine the journey stops at the
 // first route it still breaks. The cases after the journey are routes of their
-// own: the lead's project building a Unit while a team's Unit merges, and a
-// team's next Unit asked for in the chat of its pushed build.
+// own: the lead's project building a Unit while a team's Unit merges, a team's
+// next Unit asked for in the chat of its pushed build, and a take of another
+// team's Unit and its way back.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -236,6 +237,13 @@ function expectResult(remote: string, id8: string, p: Plan, pushed: Record<strin
 const unitsMerged = (dir: string): string[] =>
   readAuditShardEvents(dir).filter((row) => row.event === "UNIT_MERGED").map((row) => /\*\*Unit\*\*: (\S+)/.exec(row.block)?.[1] ?? "").sort();
 
+// A Unit the lead holds for a team that nobody has taken, and not by file.
+function heldNotTaken(claim: Record<string, unknown> | null, team: string): void {
+  expect(claim).toMatchObject({ status: "claimed", owner: team });
+  expect(claim?.taken_by, JSON.stringify(claim)).toBeUndefined();
+  expect(claim?.by_file, JSON.stringify(claim)).toBeUndefined();
+}
+
 describe("one piece of work, a team on every tool", () => {
   test("each team takes, builds and pushes its Unit by the routes the live runs took; the repos merge their own way; the home records every Unit done and runs Build and Test", () => {
     const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web"), billing: codeHost("billing") };
@@ -399,5 +407,35 @@ describe("a team's pushed build, asked for the team's next Unit", () => {
     const more = frank.agent.personTypes("/aidlc Anything else for the finance team?");
     expect(more.ask_type, JSON.stringify(more).slice(0, 800)).toBe("unit-take");
     expect(pick(frank, more, startChoice(more, "statements").label)).toMatchObject({ taken: true, unit: "statements", team: "finance" });
+  });
+});
+
+// refunds held for payments and checkout-ui for web.
+const TWO_TEAMS: Plan[] = [
+  { unit: "refunds", team: "payments", tool: "copilot", person: "alice", repos: [{ repo: "checkout-api", merge: "squash" }] },
+  { unit: "checkout-ui", team: "web", tool: "copilot", person: "sam", repos: [{ repo: "checkout-web", merge: "squash" }] },
+];
+
+describe("a teammate on Copilot CLI and the Units the lead held for teams", () => {
+  test("asking to take another team's Unit leaves it with that team, and a take is given back to the team it was held for", () => {
+    const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web") };
+    const { home, id8 } = leadsProject(hosts, TWO_TEAMS, TWO_TEAMS.map((p) => `${p.unit}=${p.team}`));
+    const sam = teamClone(home, hosts, TWO_TEAMS[1]);
+    // x2783-s9 5: his words name the payments team's Unit, and the agent takes it for his own team.
+    const offer = sam.agent.personTypes("/aidlc We are the web team. Can we take refunds instead?");
+    expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
+    const asked = sam.agent.host.bash(`${startChoice(offer, "refunds").command.replace(/ --team (?:'[^']*'|\S+)/, "")} --team web`);
+    heldNotTaken(claimPayload(home.remote, id8, "refunds"), "payments");
+    expect(asked.stdout + asked.stderr).toContain("payments");
+    // x2783-s9 6: he takes his team's own Unit, then asks to give it back; the lead's hold for web comes back.
+    const mine = startChoice(offer, "checkout-ui");
+    sam.person.pick(String(offer.question), [mine.label], mine.label);
+    const took = sam.agent.host.bash(mine.command);
+    expect(took.status, took.stdout + took.stderr).toBe(0);
+    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ owner: "web", taken_by: "sam" });
+    sam.person.say("give it back, it is not ours to build after all");
+    const back = sam.agent.host.bash(`bun ${sam.agent.host.dir}/tools/aidlc-unit.ts release checkout-ui`);
+    expect(back.status, back.stdout + back.stderr).toBe(0);
+    heldNotTaken(claimPayload(home.remote, id8, "checkout-ui"), "web");
   });
 });
