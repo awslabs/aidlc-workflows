@@ -17,7 +17,11 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-const REPO_BLOB_URL = "https://github.com/awslabs/aidlc-workflows/blob/main";
+// Default points at the upstream repo; a fork (e.g. the Japanese docs-ja build)
+// overrides it with AIDLC_REPO_BLOB_URL so out-of-tree links land on the fork's
+// own blobs instead of upstream's.
+const REPO_BLOB_URL =
+  process.env.AIDLC_REPO_BLOB_URL ?? "https://github.com/awslabs/aidlc-workflows/blob/main";
 
 const docsDir = resolve(process.argv[2] ?? "docs");
 const repoRoot = dirname(docsDir);

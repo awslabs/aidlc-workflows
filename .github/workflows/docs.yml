@@ -1,29 +1,11 @@
 name: Deploy Documentation
 
+# Fork note (kato83): this fork publishes the Japanese site from docs-ja/ via
+# docs-ja.yml. The upstream English site would fight the Japanese one for the
+# single `pages` environment, so the English push/PR triggers are disabled
+# here and only manual dispatch remains. Restore the push/pull_request blocks
+# below to re-enable the upstream English deploy.
 on:
-  push:
-    branches:
-      - main
-    # Only rebuild/deploy the site when something the build actually consumes
-    # changes: the docs sources, the zensical config, the link-rewrite step,
-    # the Python deps it installs, or this workflow itself.
-    paths:
-      - 'docs/**'
-      - 'zensical.toml'
-      - 'scripts/docs-rewrite-links.ts'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - '.github/workflows/docs.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'docs/**'
-      - 'zensical.toml'
-      - 'scripts/docs-rewrite-links.ts'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 # The build job validates every PR and push; only the deploy job needs

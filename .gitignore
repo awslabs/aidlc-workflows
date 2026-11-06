@@ -54,3 +54,7 @@ CLAUDE.local.md
 # directory anywhere in the repo (root, dist/, tools/, etc.) is ignored.
 **/.pi-lens/
 .pi-lens/
+
+# Japanese docs translation: vendored natural-japanese lint caches (kato83 fork)
+tools/natural-japanese/__pycache__/
+tools/natural-japanese/**/__pycache__/

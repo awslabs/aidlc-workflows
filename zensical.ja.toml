@@ -1,0 +1,198 @@
+site_name = "AI-DLC Workflows（日本語）"
+site_description = "AI-DLC（AI 駆動開発ライフサイクル）- 一つのコアを、多くのハーネスへ"
+site_url = "https://kato83.github.io/aidlc-workflows/"
+repo_url = "https://github.com/kato83/aidlc-workflows"
+repo_name = "kato83/aidlc-workflows"
+
+docs_dir = "docs-ja"
+site_dir = "site"
+
+nav = [
+  { "ホーム" = "README.md" },
+  { "ユーザーガイド" = [
+    { "はじめかた" = [
+      "guide/00-introduction.md",
+      "guide/01-getting-started.md",
+      "guide/onboarding.md",
+      "guide/workflow-profiles.md",
+      "guide/02-your-first-workflow.md",
+      "guide/18-install-and-lifecycle.md",
+    ] },
+    { "中心となる考え方" = [
+      "guide/03-spaces-and-intents.md",
+      "guide/04-phases-and-stages.md",
+      "guide/05-scopes-and-depth.md",
+      "guide/06-agents.md",
+      "guide/07-interaction-modes.md",
+    ] },
+    { "日々の使い方" = [
+      "guide/10-state-and-audit.md",
+      "guide/11-session-management.md",
+      "guide/12-cli-commands.md",
+      "guide/14-artifacts-reference.md",
+      "guide/17-skills.md",
+    ] },
+    { "チームに合わせる" = [
+      "guide/08-knowledge.md",
+      "guide/09-rules-and-the-learning-loop.md",
+      "guide/13-customization.md",
+    ] },
+    { "入力を書く" = [
+      "guide/writing-inputs/vision-document-guide.md",
+      "guide/writing-inputs/technical-environment-guide.md",
+    ] },
+    { "エージェント詳説" = [
+      { "概要" = "guide/agents/README.md" },
+      "guide/agents/product-agent.md",
+      "guide/agents/design-agent.md",
+      "guide/agents/delivery-agent.md",
+      "guide/agents/architect-agent.md",
+      "guide/agents/aws-platform-agent.md",
+      "guide/agents/compliance-agent.md",
+      "guide/agents/devsecops-agent.md",
+      "guide/agents/developer-agent.md",
+      "guide/agents/quality-agent.md",
+      "guide/agents/pipeline-deploy-agent.md",
+      "guide/agents/operations-agent.md",
+    ] },
+    { "ほかのハーネス" = [
+      { "概要" = "guide/harnesses/README.md" },
+      "guide/harnesses/kiro-cli.md",
+      "guide/harnesses/kiro-ide.md",
+      "guide/harnesses/codex-cli.md",
+      "guide/harnesses/cursor.md",
+      "guide/harnesses/opencode.md",
+    ] },
+    { "困ったときと例" = [
+      "guide/15-troubleshooting.md",
+      "guide/16-worked-examples.md",
+      "guide/workshop-mode.md",
+      "guide/facilitator-guide.md",
+      "guide/glossary.md",
+    ] },
+  ] },
+  { "ハーネスエンジニアガイド" = [
+    { "概要" = "harness-engineering/00-overview.md" },
+    { "ステージとエージェント" = [
+      "harness-engineering/01-anatomy-of-a-stage.md",
+      "harness-engineering/02-adding-a-stage.md",
+      "harness-engineering/03-adding-an-agent.md",
+    ] },
+    { "設定の面" = [
+      "harness-engineering/04-scopes.md",
+      "harness-engineering/05-rules-and-the-loop.md",
+      "harness-engineering/06-sensors.md",
+      "harness-engineering/07-team-knowledge.md",
+    ] },
+    { "応用" = [
+      "harness-engineering/08-construction-and-swarm.md",
+      "harness-engineering/09-porting-to-a-new-harness.md",
+      "harness-engineering/10-authoring-a-plugin.md",
+    ] },
+  ] },
+  { "開発者リファレンス" = [
+    { "アーキテクチャ" = [
+      { "概要" = "reference/00-overview.md" },
+      "reference/01-architecture.md",
+      "reference/02-plane-architecture.md",
+    ] },
+    { "エンジン" = [
+      "reference/03-orchestrator.md",
+      "reference/12-state-machine.md",
+      "reference/13-runtime-graph.md",
+      "reference/17-skill-system.md",
+    ] },
+    { "ステージシステム" = [
+      "reference/04-stage-protocol.md",
+      "reference/15-stage-definition.md",
+      "reference/04-stages/initialization.md",
+      "reference/04-stages/ideation.md",
+      "reference/04-stages/inception.md",
+      "reference/04-stages/construction.md",
+      "reference/04-stages/operation.md",
+    ] },
+    { "サブシステム" = [
+      "reference/05-agent-system.md",
+      "reference/06-hooks-and-tools.md",
+      "reference/07-sensor-system.md",
+      "reference/08-rule-system.md",
+      "reference/10-knowledge-system.md",
+      "reference/16-artifact-vocabulary.md",
+      "reference/18-plugin-mechanism.md",
+      "reference/19-supply-chain-security.md",
+      "reference/20-commit-provenance.md",
+    ] },
+    { "エージェントリファレンス" = [
+      { "概要" = "reference/agents/README.md" },
+      "reference/agents/product-agent.md",
+      "reference/agents/design-agent.md",
+      "reference/agents/delivery-agent.md",
+      "reference/agents/architect-agent.md",
+      "reference/agents/aws-platform-agent.md",
+      "reference/agents/compliance-agent.md",
+      "reference/agents/devsecops-agent.md",
+      "reference/agents/developer-agent.md",
+      "reference/agents/quality-agent.md",
+      "reference/agents/pipeline-deploy-agent.md",
+      "reference/agents/operations-agent.md",
+    ] },
+    { "ハーネスの注記" = [
+      "reference/14-claude-features.md",
+      "reference/kiro-ide-hook-payload.md",
+    ] },
+    { "コントリビューション" = [
+      "reference/09-testing.md",
+      "reference/11-contributing.md",
+      "reference/diagrams.md",
+    ] },
+    { "付録" = [
+      { "プラグインの例: test-pro" = "reference/examples/test-pro/README.md" },
+      "reference/research/Codex Manifest Shape Report.md",
+      "reference/research/Cross-Tool Plugin Comparison.md",
+      "reference/research/kiro-windows-output-encoding/README.md",
+    ] },
+  ] },
+  { "ロードマップ" = "roadmap.md" },
+]
+
+[theme]
+name = "material"
+language = "ja"
+features = [
+  "navigation.sidebar",
+  "navigation.sections",
+  "navigation.top",
+  "search.suggest",
+  "content.code.copy",
+]
+
+[[theme.palette]]
+scheme = "default"
+primary = "indigo"
+accent = "cyan"
+[theme.palette.toggle]
+icon = "material/brightness-7"
+name = "ダークモードに切り替え"
+
+[[theme.palette]]
+scheme = "slate"
+primary = "indigo"
+accent = "cyan"
+[theme.palette.toggle]
+icon = "material/brightness-4"
+name = "ライトモードに切り替え"
+
+[markdown_extensions]
+admonition = {}
+
+[markdown_extensions."pymdownx.details"]
+
+# install ドキュメントのハーネスごとの <details> ドロップダウンのように、
+# markdown="1" を持つ HTML ブロックの中の Markdown を描画する。GitHub は
+# この属性を無視し、同じブロックをそのまま描画する。
+[markdown_extensions.md_in_html]
+
+[markdown_extensions."pymdownx.superfences"]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
