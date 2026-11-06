@@ -178,6 +178,33 @@ describe("the push", () => {
     expect(readFileSync(join(billing, "README.md"), "utf-8")).toBe("# billing\n\nlocal, still editing\n");
   });
 
+  test("their pre-push hook refuses the first push: the push that sends the branch says the commits that come along, once", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
+    git(billing, ["commit", "-q", "-am", "local readme"]);
+    writeFileSync(join(billing, "README.md"), "# billing\n\nlocal, still editing\n");
+    // Their hook turns the first push away, then lets the next one through.
+    writeFileSync(join(billing, ".git", "refuse-once"), "");
+    writeFileSync(join(billing, ".git", "hooks", "pre-push"),
+      "#!/bin/sh\nif [ -f .git/refuse-once ]; then rm .git/refuse-once; echo 'pushes are paused' >&2; exit 1; fi\nexit 0\n");
+    chmodSync(join(billing, ".git", "hooks", "pre-push"), 0o755);
+    codeGenerated(alice, record);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toContain("The push of refunds in billing was refused");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      'Branch refunds in billing starts from where you were, so your commit not yet on origin/main comes along: "local readme".',
+    );
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: fixture", "local readme"]);
+    // Sent once: the next push says nothing of it.
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).not.toContain("come along");
+  });
+
   test("a repo whose git signs its commits gets a signed Unit commit", () => {
     const { hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);

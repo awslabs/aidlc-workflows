@@ -6091,6 +6091,22 @@ function repoIntegration(dir: string, remote: string): string {
   return `${remote}/main`;
 }
 
+// The person's own commits the first push of a Unit's branch sends with it:
+// those on no remote, back from where the branch was made (this run, else the
+// branch's oldest reflog entry, git's own record of it). Said on the push that
+// sends them, whichever run made the branch; once the remote has the branch,
+// they went with it. Null with nothing to say, or no record of the start.
+function comesAlongLine(dir: string, name: string, branch: string, remote: string, made?: string): string | null {
+  if (git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]).ok) return null;
+  const start = made ?? git(dir, ["log", "-g", "--format=%H", `refs/heads/${branch}`, "--"]).stdout.split(/\r?\n/).filter(Boolean).at(-1);
+  if (!start) return null;
+  const subjects = git(dir, ["log", "--format=%s", start, "--not", "--remotes"]).stdout.split(/\r?\n/).filter(Boolean);
+  if (subjects.length === 0) return null;
+  return `Branch ${branch} in ${name} starts from where you were, so your ${subjects.length === 1 ? "commit" : `${subjects.length} commits`} ` +
+    `not yet on ${repoIntegration(dir, remote)} come${subjects.length === 1 ? "s" : ""} along: ` +
+    `${subjects.slice(0, 3).map((subject) => `"${subject}"`).join(", ")}${subjects.length > 3 ? " and more" : ""}.`;
+}
+
 function pushUnit(args: string[], projectDir?: string): void {
   const { bareFlags, flags } = parseArgs(args);
   const pd = resolveProjectDir(projectDir);
@@ -6188,6 +6204,8 @@ function pushUnit(args: string[], projectDir?: string): void {
   // commit made with their git (hooks, signing, identity), before anything is
   // pushed: a hook that stops one pushes nothing.
   const moved: Array<{ name: string; from: string }> = [];
+  // Where this run made a Unit branch from where they were, by repo.
+  const madeAt = new Map<string, string>();
   const along: string[] = [];
   const whereNow = (done = false): string =>
     whereNowLine(unit, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "");
@@ -6211,12 +6229,7 @@ function pushUnit(args: string[], projectDir?: string): void {
           const tried = git(dir, ["switch", "-q", "-c", unit]);
           switched = tried.ok;
           said = tried.stderr;
-          const subjects = git(dir, ["log", "--format=%s", `${integration}..HEAD`]).stdout.split(/\r?\n/).filter(Boolean);
-          if (switched && subjects.length > 0) {
-            along.push(`Branch ${unit} in ${name} starts from where you were, so your ${subjects.length === 1 ? "commit" : `${subjects.length} commits`} ` +
-              `not yet on ${integration} come${subjects.length === 1 ? "s" : ""} along: ` +
-              `${subjects.slice(0, 3).map((subject) => `"${subject}"`).join(", ")}${subjects.length > 3 ? " and more" : ""}.`);
-          }
+          if (switched) madeAt.set(repo, git(dir, ["rev-parse", "HEAD"]).stdout.trim());
         }
       }
       if (!switched) {
@@ -6233,8 +6246,13 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
   }
   for (const { repo, dir, name, remote, paths } of planned) {
+    const comesAlong = comesAlongLine(dir, name, unit, remote, madeAt.get(repo));
     const pushed = git(dir, ["push", "-u", remote, unit]);
-    if (!pushed.ok) fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}`);
+    if (!pushed.ok) {
+      fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}` +
+        along.map((line) => ` ${line}`).join(""));
+    }
+    if (comesAlong !== null) along.push(comesAlong);
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
     const base = earlier.get(repo)?.base ??
       (git(dir, ["merge-base", "HEAD", repoIntegration(dir, remote)]).stdout.trim() || head);
