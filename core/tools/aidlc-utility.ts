@@ -11177,7 +11177,7 @@ function codekbPathPlace(
   for (const repo of recorded) {
     const root = resolve(codekbSourceRoot(projectDir, repo, space));
     // A recorded repo not cloned here resolves to the project folder, which
-    // holds every path.
+    // holds every path inside the project.
     if (root === resolve(projectDir) || !pathContainedBy(root, at)) continue;
     const from = relative(root, at);
     return { repo, path: from === "" ? "./" : from.split(sep).join("/") };
@@ -11251,7 +11251,7 @@ function handleCodekbSnapshot(
             recorded.length > 0
               ? `To scan code kept outside the project, add it to this work with ` +
                   `\`${aidlcDispatcherInvocation("intent add-repo <name> --url <address>")}\`, which clones it into ` +
-                  `the project folder, then run it again with --repo <name>.`
+                  `the project folder, then run it again with --repo <name> --paths ./.`
               : "To scan code kept outside the project, put a checkout of it in a folder inside the project, then name that folder.",
           );
         }

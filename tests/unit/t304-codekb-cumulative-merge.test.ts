@@ -1,4 +1,4 @@
-// covers: file:aidlc-common/stages/inception/reverse-engineering.md, file:knowledge/aidlc-developer-agent/re-artifacts.md, function:codekbSourceFingerprint, function:codekbPathPlace, function:codekbStoreGeneration, subcommand:aidlc-utility:codekb-snapshot, subcommand:aidlc-utility:codekb-publish
+// covers: file:aidlc-common/stages/inception/reverse-engineering.md, file:knowledge/aidlc-developer-agent/re-artifacts.md, function:codekbSourceFingerprint, function:codekbStoreGeneration, subcommand:aidlc-utility:codekb-snapshot, subcommand:aidlc-utility:codekb-publish
 //
 // t304 - Focused Reverse Engineering rescans merge into the shared CodeKB
 // without stale-source publication or concurrent lost updates.
@@ -425,13 +425,13 @@ describe("t304 source and store generation interleavings", () => {
       "../../elsewhere is outside the api repository's folder: run it again with --paths naming folders inside it.",
     );
     expect(elsewhere).toContain(
-      " intent add-repo <name> --url <address>`, which clones it into the project folder, then run it again with --repo <name>.",
+      " intent add-repo <name> --url <address>`, which clones it into the project folder, then run it again with --repo <name> --paths ./.",
     );
     const missing = refusal("src/nothere");
     expect(missing).toContain("src/nothere is not in the repository");
     expect(missing).not.toContain("in the api repository");
     // A recorded repo not cloned here resolves to the project folder, which
-    // holds every path, so it is never where an outside path is.
+    // holds every path inside the project, so it is never named.
     const rows = readIntentRegistry(project);
     writeIntentRegistry(project, rows.map((row) => ({ ...row, repos: ["api", "billing", "shipping"] })));
     const other = refusal("../other");
