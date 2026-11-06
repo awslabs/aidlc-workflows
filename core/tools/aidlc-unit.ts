@@ -7927,8 +7927,12 @@ function amendClaim(
     if (!amended(current).ok) return "missed";
   }
   invalidateLiveClaimPayloadCache(pd, claim.unit);
+  // The newer file names the team's own proposals the lead approved, so a
+  // change approved for another team never reads as the answer to theirs.
+  const approvedHere = (({ ...current.payload, ...(extra?.(current.payload) ?? {}) }).proposals ?? [])
+    .filter((entry) => entry.answer === "approved").map((entry) => entry.input);
   return current.payload.by_file && !current.payload.taken_by
-    ? [`A newer hand-off file for ${claim.unit} is at ${writeHandOffFile(pd, claim.unit, current.owner, current.generation)}: send it to ${current.owner}.`]
+    ? [`A newer hand-off file for ${claim.unit} is at ${writeHandOffFile(pd, claim.unit, current.owner, current.generation, undefined, approvedHere)}: send it to ${current.owner}.`]
     : [];
 }
 
@@ -8374,6 +8378,7 @@ function writeHandOffFile(
   team: string,
   attempt: number,
   waits: ReadonlyArray<{ dep: string; written: string }> = leadsCodeNotThere(pd, unit),
+  approvedProposals: readonly string[] = [],
 ): string {
   const state = readStateFile(pd);
   const identity = activeIdentity(pd);
@@ -8409,6 +8414,7 @@ function writeHandOffFile(
       "Home Approvals": approvals.join("; ") || "none recorded",
       Repos: (row?.repos ?? []).join(", "),
       ...(waits.length > 0 ? { "Waits On": waits.map((wait) => `${wait.dep}, which the lead's project builds: ${wait.written}`).join("; ") } : {}),
+      ...(approvedProposals.length > 0 ? { "Approved Proposals": approvedProposals.join(", ") } : {}),
     },
     files,
   ));
@@ -8439,7 +8445,10 @@ function takeFromFile(pd: string, path: string): void {
     // reach the build as an amendment on a claim does.
     const record = join(intentsDir(pd, existing.space), existing.dirName);
     const state = readStateFile(pd, existing.dirName, existing.space);
-    const proposed = inputsTakenFile(record).proposed ?? [];
+    // A change it proposed is answered only where the newer file says the
+    // lead approved it; another team's approved change is theirs, not this.
+    const approvedHere = new Set((fields["Approved Proposals"] ?? "").split(",").map((entry) => entry.trim()).filter(Boolean));
+    const proposed = (inputsTakenFile(record).proposed ?? []).filter((input) => approvedHere.has(input));
     const lines = approvedInputsOf(record).flatMap(({ path: input }) => {
       const text = file.files.get(input);
       if (text === undefined) return [];

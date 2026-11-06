@@ -371,6 +371,42 @@ describe("progress and the result come back as files", () => {
     expect(readFileSync(copy, "utf-8").replace(/\r\n/g, "\n")).toContain("FR2 refunds in the shop's currency.");
   });
 
+  // A live run: the partner had proposed its own change, still in its
+  // progress file; the lead approved another team's change and the newer file
+  // was read as the answer to the partner's: "the lead approved your change",
+  // and the partner's own edit was written over.
+  test("a newer file that brings another team's approved change never answers the team's own proposal, nor writes over its edit", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+    const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    const copy = join(record, "inception", "requirements-analysis", "requirements.md");
+    const own = "# Requirements\n\nFR1 refunds, by month.\n";
+    writeFileSync(copy, own);
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "report refunds by month"], partner.dir).status).toBe(0);
+    // payments proposes its own change, and the lead approves that one.
+    const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", "fixture-8000000000000001", "inception", "requirements-analysis", "requirements.md");
+    const pat = cloneOf(home.remote, "pat");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], pat).status).toBe(0);
+    const patIntents = join(pat, "aidlc", "spaces", "payments", "intents");
+    const patRecord = join(patIntents, readdirSync(patIntents).find((name) => name.endsWith("-refunds"))!);
+    writeFileSync(join(patRecord, "inception", "requirements-analysis", "requirements.md"),
+      `${readFileSync(homeCopy, "utf-8").replace(/\r\n/g, "\n").trimEnd()}\nFR2 refunds in the shop's currency.\n`);
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds in the shop's currency"], pat).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const approved = run(UNIT, ["amend", "refunds", "--input", "inception/requirements-analysis/requirements.md", "--answer", "approve",
+      "--person-words", "yes, in the shop's currency"], home.dir);
+    expect(approved.status, approved.out).toBe(0);
+    const newer = /A newer hand-off file for reporting is at (\S+): send it/.exec(String(approved.json?.notice))?.[1];
+    expect(newer, String(approved.json?.notice)).toBeString();
+    const taken = run(UNIT, ["take", "--file", deliver(home.dir, newer!)], partner.dir);
+    expect(taken.status, taken.out).toBe(0);
+    expect(String(taken.json?.notice)).not.toContain("The lead approved your change");
+    expect(readFileSync(copy, "utf-8").replace(/\r\n/g, "\n")).toBe(own);
+    expect(readFileSync(copy.replace(/\.md$/, ".from-lead.md"), "utf-8")).toContain("FR2 refunds in the shop's currency.");
+  });
+
   test("a turned-down by-file change says nothing reaches the team from here", () => {
     const { home } = handedOff();
     const partner = partnerWorkspace();
