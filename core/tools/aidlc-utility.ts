@@ -143,7 +143,9 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   displayRepoPath,
   hostedAddressOwner,
+  isProjectSubmodule,
   mappedRepoDir,
+  parseGitmodules,
   repoCloneable,
   parseWorkspaceManifest,
   readWorkspaceRepos,
@@ -151,8 +153,10 @@ import {
   type WorkspaceManifest,
   workspaceManifestWith,
   type WorkspaceRepoEntry,
+  submodulePath,
   withoutCredentials,
 } from "./aidlc-workspace-manifest.ts";
+export { parseGitmodules };
 import {
   CloneFailure,
   discardStagedWorkspaceRepo,
@@ -7772,48 +7776,6 @@ function scanSignals(dir: string, fileScanDepth: number, leftOut: ReadonlySet<st
   };
 }
 
-// Parse .gitmodules (ini-like) into submodule entries. Pure and exported for
-// direct unit testing. Line-oriented, tolerant: malformed content degrades to
-// whatever parses (total garbage yields []); it never throws. An entry with no
-// path is dropped, as is any path that is absolute or escapes the project via a
-// `..` segment (a caller joins path under projectDir and must not follow it out).
-export function parseGitmodules(
-  content: string
-): Array<{ name: string; path: string; url: string }> {
-  const entries: Array<{ name: string; path: string; url: string }> = [];
-  let current: { name: string; path: string; url: string } | null = null;
-  const finish = () => {
-    if (!current) return;
-    const p = current.path;
-    const isUnsafe =
-      p === "" ||
-      p.startsWith("/") ||
-      /^[A-Za-z]:[\\/]/.test(p) || // Windows drive-absolute
-      p.split(/[/\\]/).includes("..");
-    if (!isUnsafe) entries.push(current);
-    current = null;
-  };
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
-    if (line.startsWith("[")) {
-      finish();
-      const m = line.match(/^\[submodule\s+"(.+)"\]$/);
-      current = m ? { name: m[1], path: "", url: "" } : null;
-      continue;
-    }
-    if (!current) continue;
-    const eq = line.indexOf("=");
-    if (eq < 0) continue;
-    const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1).trim();
-    if (key === "path") current.path = value;
-    else if (key === "url") current.url = value;
-  }
-  finish();
-  return entries;
-}
-
 // Read + parse the workspace-root .gitmodules and probe each declared path for
 // initialization. A missing/unreadable file yields [] (the swallow idiom of the
 // scanner neighbors). `initialized` mirrors isGitRepoDir (aidlc-lib.ts): the dir
@@ -7830,13 +7792,6 @@ function scanSubmodules(projectDir: string): SubmoduleEntry[] {
     ...e,
     initialized: existsSync(join(projectDir, e.path, ".git")),
   }));
-}
-
-// A path .gitmodules lists, as the '/'-joined path from the project the scan
-// walks (a Windows path's backslashes, a leading ./ and a trailing slash read
-// the same).
-function submodulePath(path: string): string {
-  return path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
 }
 
 // `ownCodeBeside` leaves these folders and the ones the project's .gitmodules
@@ -7988,11 +7943,6 @@ export function detectWorkspace(projectDir: string, { ownCodeBeside }: { ownCode
   };
   if (nestedHits.length > 0) result.nestedRoot = nestedRoots.join(", ");
   return result;
-}
-
-// Whether `name` is a folder the project's .gitmodules lists.
-function isProjectSubmodule(projectDir: string, name: string): boolean {
-  return scanSubmodules(projectDir).some((entry) => submodulePath(entry.path) === name);
 }
 
 // The repos a piece of work records when it starts, one rule for its creation

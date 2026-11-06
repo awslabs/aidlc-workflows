@@ -936,6 +936,64 @@ describe("at the home", () => {
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
   });
 
+  // A live run: work in a one-repo project holding a git submodule recorded
+  // the submodule as its only repo (as work did before a project's own
+  // submodule stopped being recorded), and Code Generation wrote the Unit's
+  // code in the project's own repo, where the person keeps it.
+  test("work that records the project's submodule as its only repo: the push names the way on, and after it the code goes from the project's repo and the lead counts its merge", () => {
+    const vendorHost = codeHost("vendor");
+    const home = makeHome({ repos: { vendor: vendorHost } });
+    writeFileSync(join(home.dir, ".gitignore"), readFileSync(join(home.dir, ".gitignore"), "utf-8").replace("/vendor/\n", ""));
+    git(home.dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", vendorHost, "vendor"]);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    git(alice, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
+    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    mkdirSync(join(alice, "src"), { recursive: true });
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const refunds = 1;\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }],
+    })}\n`);
+    writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error);
+    expect(said, refused.out).toStartWith(
+      "refunds's Code Generation wrote its code in this project's own repo, and this work records vendor, a submodule of the " +
+        "project, as its only repo, so nothing was pushed. Ask the person whether to take vendor off this work's repos",
+    );
+    expect(said).not.toContain("back to Code Generation");
+    expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
+    // The person's yes: the named command, then the push again.
+    expect(said).toContain("/aidlc-utility.ts intent remove-repo vendor`, then push refunds again.");
+    const removed = run(UTILITY, ["intent", "remove-repo", "vendor"], alice);
+    expect(removed.status, removed.out).toBe(0);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice), pushed.out).toStartWith("Pushed branch refunds in the repo.");
+    expect(git(home.remote, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toContain("src/refunds.ts");
+    expect(git(join(alice, "vendor"), ["status", "--porcelain"])).toBe("");
+    expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: vendorHost }).status).not.toBe(0);
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
+      result: { repos: Array<{ repo: string; branch: string }> };
+    };
+    expect(claim.result.repos.map((repo) => [repo.repo, repo.branch])).toEqual([[".", "refunds"]]);
+    // Merged in the project's repo, the lead's next step counts it, with no word of theirs.
+    mergeOnHost(home.remote, "refunds", "squash");
+    git(home.dir, ["pull", "-q", "origin", "main"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+  });
+
   test("a home moved on past the Unit stages records no Unit: the result stays on its claim, said once, and is recorded back on the Unit stages", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);

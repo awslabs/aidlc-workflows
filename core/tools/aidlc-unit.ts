@@ -147,6 +147,7 @@ import {
   readIntentRegistry,
   slugify,
   DEFAULT_SPACE,
+  hasRealGitEntry,
   isGitRepoDir,
   repoDir,
   resolveWorkflowSelection,
@@ -213,7 +214,7 @@ import {
   TEAM_RHYTHM_OFFER,
   theTeam,
 } from "./aidlc-unit-teams.js";
-import { displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
+import { displayRepoPath, isProjectSubmodule, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
   captureStageValidationBasis,
@@ -6470,6 +6471,20 @@ function pushUnit(args: string[], projectDir?: string): void {
     // A record that is there but names writes its repos do not have (the
     // source list's own check, readUnitSourceManifest) is that, with the way back.
     const recorded = existsSync(join(activeRecordDir(pd), "construction", unit, "code-generation", "source-manifest.json"));
+    // Work that records a submodule of the project as its only repo, from
+    // before a project's own submodule stopped being recorded, while the code
+    // is the project's own (the record reads whole with no repo recorded): the
+    // way on is remove-repo's, which takes such a submodule off at any stage.
+    const only = intentRepos(pd);
+    if (recorded && only.length === 1 && hasRealGitEntry(pd) && isProjectSubmodule(pd, only[0]) &&
+      readUnitSourceManifest(pd, "code-generation", unit, { recordedRepos: [] }).ok) {
+      fail(
+        `${unit}'s Code Generation wrote its code in this project's own repo, and this work records ${only[0]}, a submodule ` +
+          `of the project, as its only repo, so nothing was pushed. Ask the person whether to take ${only[0]} off this work's ` +
+          `repos, so the project's own repo is the work's repo (${only[0]}'s folder stays as it is); on their yes, run ` +
+          `\`${aidlcToolInvocation("utility")} intent remove-repo ${only[0]}\`, then push ${unit} again.`,
+      );
+    }
     fail(recorded
       ? `${unit}'s Code Generation record names what it wrote in a way its repos do not have (${manifest.reason}), so nothing ` +
         `was pushed. Ask the person whether to take ${unit} back to Code Generation to write and record it again; on their yes, run ` +
