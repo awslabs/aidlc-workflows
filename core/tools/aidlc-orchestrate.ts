@@ -19336,7 +19336,8 @@ function addContextParkOffer(
     : null;
   if (full === null) return;
   const first = kiroFirstTurnFill(chat, since);
-  const line = first !== null && first.percent >= NEW_CHAT_NO_ROOM_PERCENT
+  const noRoom = first !== null && first.percent >= NEW_CHAT_NO_ROOM_PERCENT;
+  const line = noRoom
     ? `${full} A new chat on the same model${first.model ? ` (${first.model})` : ""} will not help much: this chat ` +
       `reached about ${Math.round(first.percent)}% in its first turn on this work, so a new chat would fill up ` +
       `${summarized ? "and be summarized again" : "again"} soon.`
@@ -19349,6 +19350,9 @@ function addContextParkOffer(
   // Unit's step has its narration rewritten on the way out: the settled lines
   // ride both, as sayWithStepOnce's do.
   if (reply.kind === "run-stage") settledNotices.push(line);
+  // A line that asks nothing rides as a change notice, which the agent says as
+  // written: at the end of a gate's narration it was left out (Kiro CLI 3.1.0).
+  else if (noRoom) reply.change_notices = [...(reply.change_notices ?? []), line];
   else reply.narration = reply.narration ? `${reply.narration}\n${line}` : line;
   markPersonLinesHeard(projectDir, chat, [KIRO_CONTEXT_OFFER_HEARD]);
 }
