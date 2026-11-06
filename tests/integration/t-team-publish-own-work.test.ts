@@ -9,7 +9,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -20,6 +20,7 @@ import {
   nextDirective,
   prepareCandidate,
   runMergeTool,
+  tempDirs,
 } from "../harness/team-unit-merge.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -68,8 +69,9 @@ function publish(dir: string, ...extra: string[]): Record<string, unknown> {
   return JSON.parse(published.stdout) as Record<string, unknown>;
 }
 
+// -z: git spells every name as it is, a non-ASCII one too (core.quotepath).
 function committed(dir: string): string[] {
-  return git(dir, ["ls-files"]).split("\n");
+  return git(dir, ["ls-files", "-z"]).split("\0").filter(Boolean);
 }
 
 function stillNew(dir: string): string[] {
@@ -174,6 +176,37 @@ describe("a team's publish commits its own work", () => {
     const result = publish(checkout);
     expect(result.left_out).toBe(55);
     expect(committed(checkout)).not.toContain("notes.txt");
+  });
+
+  // Windows caps one command line at 32,767 characters: the paths go to git on
+  // its standard input, so a publish of thousands commits them on every
+  // platform, each name as it is.
+  test("a publish of 2,000 new files of the Unit's own work commits every one, each name as it is", () => {
+    const checkout = claimedDone(["src/alpha.ts", "generated/"]);
+    const odd = ["with space.md", "it's.md", "r\u00e9sum\u00e9.md", "-draft.md", "[draft].md"].map((name) => `generated/${name}`);
+    for (const path of odd) write(checkout, path);
+    for (let i = odd.length; i < 2_000; i++) write(checkout, `generated/client/models/model-number-${i}.ts`, "export {};\n");
+    const result = publish(checkout);
+    expect(result.published).toBe(true);
+    expect(result.left_out).toBeUndefined();
+    const files = committed(checkout);
+    expect(files.filter((path) => path.startsWith("generated/"))).toHaveLength(2_000);
+    expect(files).toEqual(expect.arrayContaining(odd));
+    expect(git(checkout, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
+  });
+
+  test("the team's own pre-commit hook runs on the publish, as before", () => {
+    const checkout = claimedDone(["src/alpha.ts", "src/alpha-extra.ts"]);
+    write(checkout, "src/alpha-extra.ts", "export const extra = 1;\n");
+    const hooks = join(checkout, "..", `${checkout.split(/[\\/]/).pop()}-hooks`);
+    mkdirSync(hooks, { recursive: true });
+    tempDirs.push(hooks);
+    writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\necho ran > \"$(dirname \"$0\")/ran\"\n");
+    chmodSync(join(hooks, "pre-commit"), 0o755);
+    git(checkout, ["config", "core.hooksPath", hooks]);
+    publish(checkout);
+    expect(existsSync(join(hooks, "ran"))).toBe(true);
+    expect(committed(checkout)).toContain("src/alpha-extra.ts");
   });
 
   test("the publish question names only the Unit's own work", () => {
