@@ -163,7 +163,7 @@ import {
   LOCK_FOLDER_HELD_SAID_KEY,
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
-import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
+import { mainCheckoutChangeStep, personSpokeSinceFinished, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
@@ -1727,11 +1727,12 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 // personTurnStands's (no decision after it, so the approval they just gave
 // never also reopens what it approved). With no step on record there is
 // nothing to wait for.
-// Parked work's last step is the park, which no issued step outlives.
-function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): boolean | EngineInvocation {
+// Parked work's last step is the park, and finished work's the finish, which no
+// issued step outlives.
+function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand, finished: boolean): boolean | EngineInvocation {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
-    if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
+    if (finished || (getField(state, "Parked") ?? "").trim().length > 0) return true;
     const current = readActiveDirectiveMarker(projectDir, state);
     const marker = current ?? readIssuedDirectiveMarker(projectDir);
     if (marker === null) return true;
@@ -1787,6 +1788,10 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
 // other harness a fresh `next` delivers the step, so `next` stays their way on.
 // The harness name says which, never the step's attempt: freshActiveDirectiveMarker
 // gives every harness a settled attempt, so a Claude Code step can carry one.
+// On finished work (`finished`, read as the human-turn hook reads it) their
+// words are kept beside the record, not on it, so what they asked since it
+// finished is read there (personSpokeSinceFinished): a redo of Code Generation
+// after work finished at it, which `next --stage` leaves to this door (#3608).
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
@@ -1794,10 +1799,11 @@ function jumpIsPersonsMove(
   state: string,
   marker: ActiveDirectiveMarker | null,
   jump: JumpCommand,
+  finished: boolean,
 ): boolean | EngineInvocation {
   if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
-  if (!personTurnStands(projectDir, "plain", { requests: true })) return false;
-  const last = lastStepAdmitsPersonsMoves(projectDir, jump);
+  if (!(finished ? personSpokeSinceFinished(projectDir) : personTurnStands(projectDir, "plain", { requests: true }))) return false;
+  const last = lastStepAdmitsPersonsMoves(projectDir, jump, finished);
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }
 
@@ -2669,7 +2675,8 @@ async function evaluate(
               jumpAdmitted: (jump) => {
                 const move = toolName === "Bash" &&
                   (jumpNextNamesBack(projectDir, state ?? "", jump) ||
-                    jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump));
+                    jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump,
+                      selectedRecordIsFinished(projectDir, workflow.selection)));
                 if (typeof move === "object") jumpWayOn = move;
                 return move === true;
               },

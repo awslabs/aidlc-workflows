@@ -956,3 +956,32 @@ export function standingPersonTurn(
     return null;
   }
 }
+
+/**
+ * Presence on finished work, where personTurnStands finds nothing: once the
+ * work is finished the human-turn hook keeps the person's messages beside its
+ * record and writes no turn on it (hookStandsOutside). So the fact is a message
+ * no turn on the work names (sentOnThisWork: a terminal message, which has no
+ * chat, counts as on the work and stands for nothing here), kept at or after
+ * the work's latest WORKFLOW_COMPLETED row, from this chat (any chat's when
+ * the engine names none, as standingPersonTurn fails toward the person). Both
+ * times are whole seconds; a tie with the finish is harmless, as the message
+ * that gave the finishing approval is named on the record. No completion row,
+ * or a shard that cannot be read: false. The plan-approval guard reads it for
+ * a jump (jumpIsPersonsMove). Ids, times and the engine's own rows, never words.
+ */
+export function personSpokeSinceFinished(pd: string): boolean {
+  try {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, undefined, undefined, unreadable);
+    if (unreadable.length > 0) return false;
+    const finishedAt = rows.filter((row) => row.event === "WORKFLOW_COMPLETED").map((row) => row.timestamp).sort().at(-1);
+    if (finishedAt === undefined) return false;
+    const onThisWork = sentOnThisWork(rows);
+    const chat = invokingChat(pd);
+    return listMessages(pd).some((message) =>
+      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat));
+  } catch {
+    return false;
+  }
+}
