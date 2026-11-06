@@ -6723,6 +6723,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (bareFlags.has("branch")) fail(`push --branch needs the branch name the person gave. usage: ${unitUsage("push")}`);
   const before = unitBranchOf(state, unit);
   const branch = flags.branch?.trim() || before;
+  const finishMerge = bareFlags.has("finish-merge") || flags["finish-merge"] !== undefined;
   if (flags.branch !== undefined) {
     const checked = git(pd, ["check-ref-format", "--branch", branch]);
     if (!checked.ok) fail(`"${branch}" is not a branch name git takes, so nothing was pushed.${checked.stderr.trim() ? ` Git says: "${gitSaid(checked.stderr)}".` : ""}`);
@@ -6805,9 +6806,14 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     const name = repo === "." ? "the repo" : repo;
     // A merge, rebase, cherry-pick or revert of theirs under way: a commit now
-    // would be made over it, so nothing is committed until it is finished.
+    // would be made over it, so nothing is committed until it is finished. A
+    // merge on the Unit's own branch with nothing left to resolve is finished
+    // first on the person's yes to the push question's choice (`--finish-merge`).
     const underWay = gitOperationUnderWay(dir);
-    if (underWay !== null) {
+    if (underWay !== null && finishMerge && unitMergeToFinish(dir, branch)) {
+      const made = git(dir, ["commit", "-q", "--no-edit"]);
+      if (!made.ok) fail(`The merge in ${name} could not be finished, so nothing was pushed. Git says: "${gitSaid(made.stderr || made.stdout)}".`);
+    } else if (underWay !== null) {
       fail(`${name} is in the middle of ${underWay.what}, so nothing was committed or pushed. Finish it (${underWay.finish}) ` +
         `or put it aside (${underWay.abort}), then I can push ${unit}.`);
     }
@@ -7626,6 +7632,18 @@ export function earlyBaseMerged(
 
 // The git operation of theirs under way in a repo, in plain words with git's
 // own way to finish it and to put it aside; null when none is.
+// A merge under way on the Unit's own branch with nothing left to resolve and
+// nothing staged that the merge did not bring (a redo that merged the newer
+// main, say): the push question offers to finish it, and `push --finish-merge`
+// concludes it with the person's own git before the Unit's commit.
+export function unitMergeToFinish(dir: string, branch: string): boolean {
+  if (gitOperationUnderWay(dir)?.what !== "a merge") return false;
+  if (git(dir, ["branch", "--show-current"]).stdout.trim() !== branch) return false;
+  if (git(dir, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim() !== "") return false;
+  const merged = new Set(git(dir, ["diff", "--name-only", "-z", "HEAD...MERGE_HEAD"]).stdout.split("\0").filter(Boolean));
+  return git(dir, ["diff", "--cached", "--name-only", "-z"]).stdout.split("\0").filter(Boolean).every((path) => merged.has(path));
+}
+
 export function gitOperationUnderWay(dir: string): { what: string; finish: string; abort: string } | null {
   const at = (name: string): boolean => existsSync(resolve(dir, git(dir, ["rev-parse", "--git-path", name]).stdout.trim()));
   if (rebaseUnderWay(dir)) return { what: "a rebase", finish: "git rebase --continue", abort: "git rebase --abort" };

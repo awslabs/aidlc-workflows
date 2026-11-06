@@ -49,7 +49,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign <unit>=<team> ... \| --open` | At the lead's project, hold each named Unit for a team, or leave every Unit open |
 | `/aidlc unit take <unit> --home <record>` | Take a Unit of the lead's work as your team's own piece of work, or carry its build on |
-| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
+| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--finish-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
 | `/aidlc unit hand-off <unit> --team <team>` | At the lead's project, hold a Unit for a team that cannot reach it and write its hand-off file |
 | `/aidlc unit progress` | In a Unit's build by file, write a progress file for the lead |
 | `/aidlc unit take-in <file>` | At the lead's project, take a team's result or progress file in |
@@ -796,6 +796,7 @@ the build; you can also run it yourself, for example after a review fix:
 /aidlc unit push --later
 /aidlc unit push --remote billing=team
 /aidlc unit push --branch feature/refunds
+/aidlc unit push --finish-merge
 ```
 
 In each repo the Unit's Code Generation recorded writing to (its
@@ -817,6 +818,12 @@ the lead's project's later stages read) goes onto the Unit's claim at the lead's
 `UNIT_PUSHED` is recorded; until the lead's project takes it (`Unit Push: unsent`), the
 next step offers to send it again. A repo the Unit changed that the lead's plan
 did not list is added to the build's repos first (`intent add-repo`), said once.
+A merge, rebase, cherry-pick or revert left under way in a repo is never
+committed over: the push says so with git's way to finish it or put it aside.
+A merge on the Unit's own branch with nothing left to resolve (a redo that
+merged the newer integration branch, say) is offered instead: **Finish the
+merge and push** runs `--finish-merge`, which concludes it with your own
+`git commit --no-edit` and then pushes.
 `--later` pushes nothing and only records that you said not now.
 
 The branch is named after the Unit unless you name it: when your team's

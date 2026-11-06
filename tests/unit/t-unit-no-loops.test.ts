@@ -471,7 +471,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     movesOn(alice, ENV, ready, choice(ready, "Push"));
   });
 
-  test("a merge of theirs under way in a repo: the push is refused with the way on, not offered again while it is under way, then it goes", () => {
+  test("a merge under way on the Unit's branch: the push question offers to finish it, a push without that yes commits nothing over it, and the yes goes", () => {
     const { alice, record } = refundsTaken();
     withTools(alice);
     codeGenerated(alice, record);
@@ -488,19 +488,16 @@ describe("a step that waits on the person, and every way on the round added, nev
     git(billing, ["commit", "-q", "-m", "side"]);
     git(billing, ["switch", "-q", "refunds"]);
     git(billing, ["merge", "--no-commit", "--no-ff", "side"]);
+    // The push question offers to finish it with the push, once; a push
+    // without that yes commits nothing over it.
     const push = next(alice, ENV);
-    expect(push.ask_type, JSON.stringify(push)).not.toBe("unit-push");
-    expect((push.change_notices ?? []) as string[]).toContain(
-      "refunds is built and approved, and not pushed: billing is in the middle of a merge. Once it is finished or put aside, do you want me to push it?",
-    );
+    expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
+    expect(String(push.question)).toContain("billing is in the middle of a merge on refunds, with nothing left to resolve.");
     readsAsOffers(push);
     const refused = run(UNIT, ["push"], alice);
     expect(refused.status).not.toBe(0);
     expect(String(refused.json?.error)).toContain("billing is in the middle of a merge, so nothing was committed or pushed.");
-    git(billing, ["commit", "-q", "--no-edit"]);
-    const ready = next(alice, ENV);
-    expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-push");
-    movesOn(alice, ENV, ready, choice(ready, "Push"));
+    movesOn(alice, ENV, push, choice(push, "Finish the merge and push"));
   });
 
   test("a take: a Unit the home started is refused with a way on that does not offer it; an open Unit starts for a team the lead named", () => {

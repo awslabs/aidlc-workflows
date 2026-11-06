@@ -639,6 +639,7 @@ import {
   teamSharedHere,
   unitBranchInTheWay,
   gitOperationUnderWay,
+  unitMergeToFinish,
   unitsTaken,
   type UnitClaimOverview,
   type UnitClaimView,
@@ -9315,7 +9316,11 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   // A merge, rebase, cherry-pick or revert of theirs under way in a repo: the
   // push would be refused, so it is offered once that is finished.
   const dirOf = (repo: string): string => targets.get(repo)?.dir ?? (repo === "." ? projectDir : repoDir(projectDir, repo));
-  const underWay = repos.find((repo) => existsSync(join(dirOf(repo), ".git")) && gitOperationUnderWay(dirOf(repo)) !== null);
+  const underWayHere = repos.filter((repo) => existsSync(join(dirOf(repo), ".git")) && gitOperationUnderWay(dirOf(repo)) !== null);
+  // A merge on the Unit's own branch with nothing left to resolve is the
+  // push's to finish on their yes (unitMergeToFinish); anything else waits.
+  const toFinish = underWayHere.filter((repo) => unitMergeToFinish(dirOf(repo), branch));
+  const underWay = underWayHere.find((repo) => !toFinish.includes(repo));
   if (underWay !== undefined) {
     const dir = dirOf(underWay);
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed: ${underWay === "." ? "the repo" : underWay} is in the middle of ` +
@@ -9332,20 +9337,28 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const changed = names.length === 0 ? "" : ` It changed ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`}.`;
   // A repo with several remotes and none set for pushing: which one is theirs to say.
   const pick = pushRemotesToPick(projectDir, unit, repos);
-  const detail = "Only the files its Code Generation wrote; nothing else of yours is committed.";
+  const finishing = toFinish.length > 0;
+  const detail = finishing
+    ? "The merge is finished first, with your git; then only the files its Code Generation wrote, nothing else of yours."
+    : "Only the files its Code Generation wrote; nothing else of yours is committed.";
+  const verb = finishing ? "Finish the merge and push" : "Push";
+  const finishFlag = finishing ? " --finish-merge" : "";
   const pushes = pick.length === 0
-    ? [{ label: "Push", detail, command: `${unitTool} push` }]
+    ? [{ label: verb, detail, command: `${unitTool} push${finishFlag}` }]
     : pick[0].remotes.map((remote) => {
       const pairs = pick.filter((entry) => entry.remotes.includes(remote)).map((entry) => `${entry.repo}=${remote}`);
-      return { label: `Push to ${remote}`, detail, command: `${unitTool} push --remote ${shellArg(pairs.join(","))}` };
+      return { label: `${verb} to ${remote}`, detail, command: `${unitTool} push --remote ${shellArg(pairs.join(","))}${finishFlag}` };
     });
+  const merging = !finishing ? "" : ` ${joinRepoNames(toFinish)} ${toFinish.length === 1 ? "is" : "are"} in the middle of a merge on ` +
+    `${branch}, with nothing left to resolve.`;
   const several = pick.length === 0 ? "" : ` ${pick.map((entry) => (entry.repo === "." ? "The repo" : entry.repo)).join(" and ")} ` +
     `${pick.length === 1 ? "has" : "have"} several remotes and none is set for pushing.`;
   return {
     kind: "ask",
     ask_type: "unit-push",
     response_route: "command",
-    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is built and you approved it.${changed}${several} Commit its changes on ` +
+    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is built and you approved it.${changed}${several}${merging} ` +
+      `${finishing ? "Finish the merge, then commit" : "Commit"} its changes on ` +
       `branch ${branch} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}?`,
     choices: [
       ...pushes,

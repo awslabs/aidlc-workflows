@@ -230,6 +230,34 @@ describe("the push", () => {
     expect(git(billing, ["log", "-1", "--format=%s", "main"])).toBe("REF-7 refund handler");
   });
 
+  // A live run on Kiro CLI: the redo after a turn-down merged the newer main
+  // into the Unit's branch and left the merge uncommitted; the person's "yes,
+  // push it" was refused and they were asked again, twice.
+  test("a merge under way on the Unit's own branch, nothing left to resolve: the push question offers to finish it, and the one yes finishes it and pushes", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const billing = join(alice, "billing");
+    const other = cloneOf(hosts.billing, "bob");
+    writeFileSync(join(other, "MERGED.md"), "on main since\n");
+    git(other, ["add", "MERGED.md"]);
+    git(other, ["commit", "-q", "-m", "main moves on"]);
+    git(other, ["push", "-q", "origin", "HEAD:main"]);
+    git(billing, ["switch", "-q", "-c", "refunds"]);
+    git(billing, ["fetch", "-q", "origin"]);
+    git(billing, ["merge", "--no-commit", "--no-ff", "origin/main"]);
+    const asked = next(alice);
+    expect(asked.ask_type, JSON.stringify(asked).slice(0, 600)).toBe("unit-push");
+    expect(String(asked.question)).toContain("billing is in the middle of a merge on refunds, with nothing left to resolve.");
+    const finish = (asked.choices as Array<{ label: string; command?: string }>).find((entry) => entry.label === "Finish the merge and push");
+    expect(finish?.command, JSON.stringify(asked.choices)).toEndWith("aidlc-unit.ts push --finish-merge");
+    const pushed = run(UNIT, ["push", "--finish-merge"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["show", "refunds:MERGED.md"])).toBe("on main since");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], { cwd: billing }).status).not.toBe(0);
+  });
+
   test("a merge left under way in a repo: the push commits nothing over it, says so in plain words with the way on, and goes once it is finished", () => {
     const { hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);
