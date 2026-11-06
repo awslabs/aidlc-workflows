@@ -193,9 +193,13 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(rows.filter((row) => row.event === "UNIT_GATE_RHYTHM_SET")).toHaveLength(1);
     // refunds was built here, never merged anywhere: the record says nothing it did not do.
     expect(rows.filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
-    // The work goes on with reporting, under way here; nothing is asked again.
-    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
-    expect(step.unit).toBe("reporting");
+    // Teams build it now, in a workspace with no repos.json: reporting's first
+    // step makes the one offer to write it (t-repos-anywhere's). Then the work
+    // goes on with reporting, under way here; nothing is asked again.
+    expect(step.ask_type, JSON.stringify(step)).toBe("repos-manifest");
+    const on = next(home.dir);
+    expect(on.kind, JSON.stringify(on)).toBe("run-stage");
+    expect(on.unit).toBe("reporting");
     expect(next(home.dir).ask_type).toBeUndefined();
   });
 });

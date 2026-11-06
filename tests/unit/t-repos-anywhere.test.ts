@@ -34,6 +34,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { SHAPES, SESSION, STATES } from "../harness/code-generation-states.ts";
+import { projectAt, templateProjects } from "../harness/aidlc-answers-corpus.ts";
+import { env as runEnv, exec, next as liveNext, say } from "../harness/aidlc-input-corpus.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -47,7 +49,7 @@ const dirs: string[] = [];
 const projects: string[] = [];
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-  for (const proj of projects) cleanupTestProject(proj);
+  for (const proj of [...projects, ...templateProjects()]) cleanupTestProject(proj);
 });
 
 const GIT_ENV: NodeJS.ProcessEnv = {
@@ -467,5 +469,34 @@ describe("the one offer to write repos.json", () => {
     writeFileSync(join(proj, "repos.json"), JSON.stringify({ repos: [{ name: "checkout-api" }, { name: "checkout-web" }] }));
     const step = next(proj);
     expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
+  });
+
+  test("the person's own approval moves the work on: the next step makes the offer once, then never again", async () => {
+    // The Requirements Analysis gate open as a run leaves it, in a workspace with two repos the work records.
+    const proj = await projectAt("stage-gate");
+    projects.push(proj);
+    for (const name of ["checkout-api", "checkout-web"]) repoAt(join(proj, name));
+    const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+    registry[0].repos = ["checkout-api", "checkout-web"];
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+    expect((await say(proj, "Approve", "claude")).status).toBe(0);
+    const approved = await exec(
+      [BUN, ORCH, "report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve", "--project-dir", proj],
+      { cwd: proj, env: runEnv(proj, { env: { AIDLC_DISABLE_SENSORS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" } }) },
+    );
+    expect(approved.status, approved.stdout + approved.stderr).toBe(0);
+    const ask = (await liveNext(proj, [])).directive;
+    expect(ask?.ask_type, JSON.stringify(ask)).toBe("repos-manifest");
+    expect(ask?.question).toStartWith("Write repos.json from the 2 repos found here (checkout-api, checkout-web)?");
+    const after = (await liveNext(proj, [])).directive;
+    expect(after?.ask_type, JSON.stringify(after)).not.toBe("repos-manifest");
+    expect(after?.kind).toBe("run-stage");
+  });
+
+  test("an unattended run is never offered it", () => {
+    const proj = boundaryProject(["checkout-api", "checkout-web"]);
+    const result = runOrchestrateNext(ORCH, proj, [], { env: { ...ENV, AIDLC_UNATTENDED: "1" } });
+    expect(result.directive?.ask_type, result.out).not.toBe("repos-manifest");
   });
 });

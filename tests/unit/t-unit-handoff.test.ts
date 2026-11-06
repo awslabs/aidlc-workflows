@@ -153,6 +153,9 @@ describe("the team takes the file in", () => {
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Home Result**: by file");
     expect(readFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "utf-8"))
       .toBe("# Requirements\n\nFR1 refunds.\n");
+    // The build records ledger in a workspace with no repos.json: its first
+    // step offers once to write it (t-repos-anywhere's), then the build runs.
+    expect(next(partner.dir).ask_type).toBe("repos-manifest");
     const step = next(partner.dir);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("reporting");

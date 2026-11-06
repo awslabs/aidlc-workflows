@@ -167,6 +167,7 @@ import {
 } from "./aidlc-directive.ts";
 import {
   docsRoot,
+  holdsAnyFile,
   intentDisplayLabel,
   isBindableIntentRecordName,
   keptRepliesSinceStageStart,
@@ -5332,6 +5333,22 @@ function projectTypeAskDirective(
 }
 
 // A clone that took part or holds a claim is a team's, not the lead's.
+// Nothing of the stage is written yet in the active work's record (for a stage
+// run once per Unit, in no Unit's folder): its first step. A folder that
+// cannot be read (a file where it goes) is not one.
+function stageNotBegun(projectDir: string, slug: string): boolean {
+  const node = nodeForSlug(slug);
+  if (!node) return false;
+  const record = docsRoot(projectDir);
+  try {
+    if (holdsAnyFile(join(record, node.phase, slug))) return false;
+    if (!isPerUnit(node) || !existsSync(join(record, node.phase))) return true;
+    return !readdirSync(join(record, node.phase)).some((unit) => holdsAnyFile(join(record, node.phase, unit, slug)));
+  } catch {
+    return false;
+  }
+}
+
 function teamsClone(projectDir: string, stateContent: string): boolean {
   return existsSync(unitParticipantPath(projectDir)) ||
     readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
@@ -5340,8 +5357,10 @@ function teamsClone(projectDir: string, stateContent: string): boolean {
 // The one offer to write repos.json from the repos found here (decision 21):
 // at a stage boundary, the first time the work records repos or teams are
 // chosen (open question 7), in a workspace that has none, once per clone. One
-// person's work on one repo is never offered it. Null when the step goes on.
+// person's work on one repo is never offered it, nor an unattended run, which
+// has nobody to answer. Null when the step goes on.
 function reposManifestAsk(projectDir: string, stateContent: string): AskDirective | null {
+  if (process.env.AIDLC_UNATTENDED === "1") return null;
   if (existsSync(join(projectDir, REPOS_FILE)) || reposManifestOffered(projectDir)) return null;
   if (homeLocation(stateContent) === null && intentRepos(projectDir).length === 0) return null;
   const found = discoverSiblingRepos(projectDir);
@@ -14467,8 +14486,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // (one unit per `next`, gate suppressed on every uncovered unit with the real
     // gate only on the all-covered re-entry; issue #368) and emits a single
     // directive for every other stage.
+    // The person's approval moves the cursor onto the next stage, so the one
+    // offer to write repos.json is made here too, at that stage's first step,
+    // before anything of it is written; never mid-stage, at a gate or while it
+    // is revised.
+    const enteredHere = (currentState === "pending" || currentState === "in-progress") && stageNotBegun(pd, currentSlug);
     const staffing = constructionStaffingAsk(pd, stateContent, currentSlug, scope) ??
-      reverseEngineeringScopeAsk(pd, stateContent, currentSlug) ?? unitsReposAsk(pd, stateContent);
+      reverseEngineeringScopeAsk(pd, stateContent, currentSlug) ?? unitsReposAsk(pd, stateContent) ??
+      (enteredHere && stateContent !== null ? reposManifestAsk(pd, stateContent) : null);
     if (staffing) {
       emit(staffing);
       return;
