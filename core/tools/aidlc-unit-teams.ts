@@ -31,6 +31,7 @@ import {
   repoDir,
   REQUEST_TEXT_DIR,
   slugify,
+  UNIT_GATE_RHYTHM_FIELD,
   unitDependencyPath,
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
@@ -60,6 +61,12 @@ export function homeLocation(stateContent: string | null): string | null {
 // stage, said once as teams are chosen and in the lead's assign reply.
 export const TEAM_RHYTHM_OFFER = "Each team will approve its Unit after every stage. Do you want them to approve once " +
   "at the end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
+
+// The offer is put only until the lead answers it: either answer runs the
+// setter, which records the rhythm, so nothing asks it again.
+export function unitGateRhythmChosen(stateContent: string): boolean {
+  return getField(stateContent, UNIT_GATE_RHYTHM_FIELD) !== null;
+}
 
 // Which team flow new team work takes, decided once as teams are chosen: the
 // build-out (assign, take, push, the team's own merge) for work whose code is
@@ -1057,6 +1064,19 @@ export function lastCommittedByThisPerson(projectDir: string, path: string): boo
   const mine = run(["config", "user.email"]);
   if (email && mine) return email.toLowerCase() === mine.toLowerCase();
   return name !== "" && name === run(["config", "user.name"]);
+}
+
+// The Units the lead's project started that stay its own: each it started,
+// unless the lead's own word gave it to a team or left it open since (an
+// assign's Started Here, recorded with their words).
+export function unitsStartedAtLeadsProject(rows: readonly AuditShardEvent[]): Set<string> {
+  const started = new Set<string>();
+  for (const row of [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))) {
+    if (row.event === "UNIT_STARTED") started.add(auditBlockField(row.block, "Unit") ?? "");
+    if (row.event === "UNITS_ASSIGNED") for (const unit of listField(row.block, "Started Here")) started.delete(unit);
+  }
+  started.delete("");
+  return started;
 }
 
 // A solo walk's Units: started when any per-Unit stage started for it, done

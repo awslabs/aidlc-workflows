@@ -737,6 +737,8 @@ import {
   assignmentNotHeld,
   unitsKeptForTeams,
   unitsLeftOpen,
+  unitsStartedAtLeadsProject,
+  unitGateRhythmChosen,
   unitsInPlanOrder,
   unknownLikelyReposLine,
   SIGN_OFF_CLAUSE,
@@ -5331,6 +5333,9 @@ function teamCommandsNote(): string {
     `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
     `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`; when they ask to build a Unit ` +
     `left open here, run \`${unitTool} assign --here <unit> ${unitWordsArg("assign")}\`. ` +
+    `When they ask to hold a Unit for a team, run \`${unitTool} assign <unit>=<team> ${unitWordsArg("assign")}\`; ` +
+    `when they ask to leave a Unit open for any team, run \`${unitTool} assign --open <unit> ${unitWordsArg("assign")}\`; ` +
+    "for a Unit started here that they asked to go to a team or be left open all the same, add `--started-here <unit>`. " +
     `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> ${unitWordsArg("hand-off")}\`; ` +
     `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. ${UNIT_WORDS_NOTE} ` +
     "Say the notice line each prints.";
@@ -5571,7 +5576,7 @@ function constructionStaffingAsk(
   const speaks = !(isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null);
   if (teams) {
     if (!speaks) return null;
-    if (getField(stateContent, "Unit Gate Rhythm") === null) {
+    if (!unitGateRhythmChosen(stateContent)) {
       sayWithStepOnce(projectDir, TEAM_RHYTHM_OFFER);
     }
     const handout = teamHandoutLine(projectDir, stateContent, dag.batches.flat()[0]);
@@ -8980,7 +8985,7 @@ function unitTakeLook(
         (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
       const likely = unitLikelyRepos(projectDir, intent.dirName, space);
       // A Unit no team holds that the home started is the home's.
-      const startedAtHome = soloUnitsProgress(readAuditShardEvents(projectDir, intent.dirName, space), "").started;
+      const startedAtHome = unitsStartedAtLeadsProject(readAuditShardEvents(projectDir, intent.dirName, space));
       // The teams the lead named: an open Unit is started for one of them, or another the person names.
       const named = [...new Set([...overview.claims.values()].filter((claim) => claim.status === "claimed").map((claim) => claim.owner))];
       const forTeams = (unit: string, holder: string | null, label: string, detail: string, extra = ""): AskChoice[] => {

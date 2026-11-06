@@ -14,13 +14,15 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
+  cloneOf,
   ENV,
   git,
+  HOME_RECORD,
   homeState,
   makeHome,
   next,
@@ -567,10 +569,145 @@ describe("a Unit the lead's project started stays there", () => {
     appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
     const assigned = run(UNIT, ["assign", "refunds=us", "checkout-ui=web", "--person-words", "checkout-ui to web, keep refunds with us"], home.dir);
     expect(assigned.status, assigned.out).toBe(0);
-    expect(String(assigned.json?.notice)).toContain("refunds was started here, so it stays here with you.");
+    expect(String(assigned.json?.notice)).toContain(
+      "refunds was started here, at the lead's project, so it stays here with you. If the person asked for it to go to us " +
+        "all the same, run this again with --started-here refunds and their words.",
+    );
     const id8 = fixtureIntentId8(home.dir);
     expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
     expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ status: "claimed", owner: "web" });
     expect(String(assigned.json?.notice)).not.toContain("Refunds: us.");
+  });
+});
+
+// Live runs (x2783-s9, Claude Code at the lead's project): "Hold it for them
+// again" became a hand-off by file, since the board's note named no other way
+// to hold a Unit for a team, and the lead's assign could not undo it; "Leave it
+// for them" for a Unit the lead's project had started did the same; and each
+// assign asked the approval rhythm again after the lead had answered it.
+describe("the lead's re-hold stays a hold", () => {
+  const pushAll = (dir: string) => {
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-q", "-m", "the lead's word"]);
+    git(dir, ["push", "-q", "origin", "main"]);
+  };
+
+  test("the lead's assign of a Unit handed off by file to the same team holds it here again, not by file", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments crew"], home.dir).status).toBe(0);
+    const handed = run(UNIT, ["hand-off", "refunds", "--team", "payments crew"], home.dir);
+    expect(handed.status, handed.out).toBe(0);
+    const id8 = fixtureIntentId8(home.dir);
+    const byFile = claimPayload(home.remote, id8, "refunds")!;
+    expect(byFile.by_file).toBe(true);
+    const again = run(UNIT, ["assign", "refunds=Payments Crew"], home.dir);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toContain(
+      "refunds is held for payments crew here again, not by file: they take it from this workspace.",
+    );
+    const held = claimPayload(home.remote, id8, "refunds")!;
+    expect(held).toMatchObject({ status: "claimed", owner: "payments crew", generation: byFile.generation });
+    expect(held.by_file).toBeUndefined();
+    const board = run(ORCH, ["team-board"], home.dir);
+    expect(board.out).toContain("- refunds, payments crew: held for payments crew, not taken yet");
+  });
+
+  test("the board's note names how to hold a Unit for a team and leave one open, beside the hand-off by file", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    const board = next(home.dir);
+    expect(board.board_note, JSON.stringify(board)).toBeDefined();
+    const note = String(board.board_note);
+    expect(note).toContain(
+      "When they ask to hold a Unit for a team, run `bun .claude/tools/aidlc-unit.ts assign <unit>=<team> " +
+        "--request-file aidlc/.aidlc-request-text/unit-assign.txt`",
+    );
+    expect(note).toContain(
+      "when they ask to leave a Unit open for any team, run `bun .claude/tools/aidlc-unit.ts assign --open <unit> " +
+        "--request-file aidlc/.aidlc-request-text/unit-assign.txt`",
+    );
+    expect(note).toContain("--started-here <unit>");
+    expect(note).toContain("When they ask to hand a Unit off by file");
+  });
+
+  // Live (this fold's run, Claude Code): a later assign said "Built here: reporting" for the Unit the lead had
+  // left open, so the agent ran the whole assign again with words of its own added to the lead's.
+  test("a Unit an earlier answer left open stays open in a later assign's line and record, never built here", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments", "--open", "reporting"], home.dir).status).toBe(0);
+    const later = run(UNIT, ["assign", "checkout-ui=web"], home.dir);
+    expect(later.status, later.out).toBe(0);
+    expect(String(later.json?.notice)).toContain("Open for any team: reporting.");
+    expect(String(later.json?.notice)).not.toContain("Built here");
+    const row = readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNITS_ASSIGNED").at(-1)!;
+    expect(auditBlockField(row.block, "Left Open")).toBe("reporting");
+  });
+
+  test("the approval rhythm is asked until the lead answers it, either way, and never again after", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    const first = run(UNIT, ["assign", "refunds=payments"], home.dir);
+    expect(String(first.json?.notice)).toContain("Each team will approve its Unit after every stage.");
+    const offer = first.json?.offer as { choices: Array<{ label: string; command?: string; recommended?: boolean }> };
+    expect(offer.choices[0]).toMatchObject({ label: "Keep approvals after every stage", recommended: true });
+    expect(offer.choices[0].command).toEndWith("aidlc-state.ts set-unit-gate-rhythm per-stage");
+    // Not answered yet: the next assign asks it again.
+    const unanswered = run(UNIT, ["assign", "checkout-ui=web"], home.dir);
+    expect(String(unanswered.json?.notice)).toContain("Each team will approve its Unit after every stage.");
+    // The lead keeps it: never asked again.
+    expect(run(STATE, ["set-unit-gate-rhythm", "per-stage"], home.dir).status).toBe(0);
+    const later = run(UNIT, ["assign", "reporting=data"], home.dir);
+    expect(later.status, later.out).toBe(0);
+    expect(String(later.json?.notice)).not.toContain("approve");
+    expect(later.json?.offer).toBeUndefined();
+  });
+
+  test("a Unit started at the lead's project is left open when the person asked for it all the same, with their words, and a team takes it", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "checkout-ui", "Run floor": "0" }, home.dir);
+    const stays = run(UNIT, ["assign", "--open", "checkout-ui"], home.dir);
+    expect(stays.status, stays.out).toBe(0);
+    expect(String(stays.json?.notice)).toContain(
+      "checkout-ui was started here, at the lead's project, so it stays here with you. If the person asked for it to be " +
+        "left open all the same, run this again with --started-here checkout-ui and their words.",
+    );
+    const words = "Hold on, I didn't mean we build it here. I left it open for a team to grab. Leave it for them.";
+    const open = run(UNIT, ["assign", "--open", "checkout-ui", "--started-here", "checkout-ui", "--person-words", words], home.dir);
+    expect(open.status, open.out).toBe(0);
+    expect(String(open.json?.notice)).toContain("Open for any team: checkout-ui.");
+    expect(String(open.json?.notice)).toContain("What was built on checkout-ui here stays in this work's record.");
+    const row = readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNITS_ASSIGNED").at(-1)!;
+    expect(auditBlockField(row.block, "Started Here")).toBe("checkout-ui");
+    expect(auditBlockField(row.block, "Person Words")).toBe(words);
+    pushAll(home.dir);
+    // The lead's next step moves past it, and asks nothing about it.
+    const step = next(home.dir);
+    expect(step.unit, JSON.stringify(step)).not.toBe("checkout-ui");
+    expect(String(step.narration)).toContain("- checkout-ui, open: waiting for a team to take it");
+    // A teammate is offered it and takes it.
+    const sam = cloneOf(home.remote, "sam");
+    const ask = next(sam);
+    expect(String(ask.question)).not.toContain("checkout-ui (at the home)");
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "storefront"], sam);
+    expect(took.status, took.out).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "storefront", taken_by: "sam" });
+  });
+
+  test("a Unit started at the lead's project goes to the team the person named all the same, and the walk there moves past it", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "checkout-ui", "Run floor": "0" }, home.dir);
+    const held = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--started-here", "checkout-ui", "--person-words", "checkout-ui goes to web after all"], home.dir);
+    expect(held.status, held.out).toBe(0);
+    expect(String(held.json?.notice)).toContain("Checkout-ui: web.");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ status: "claimed", owner: "web" });
+    const step = next(home.dir);
+    expect(step.unit, JSON.stringify(step)).not.toBe("checkout-ui");
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("approval-gate");
   });
 });

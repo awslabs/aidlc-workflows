@@ -739,7 +739,12 @@ open (`--open <unit>,...`, or `--open` alone for every Unit you did not name)
 waits for any team to take it, and the home builds it only when you say so:
 `--here <unit>` builds it here after all, as the board's **Build <unit> here**
 does. A Unit you leave out is built here. A Unit a team already holds stays
-with it, and the command says so. One Unit named for two teams is refused with both names. The
+with it, and the command says so; one handed to that team by file, with nothing
+back from the file yet, is held for it here again, through the workspace. A
+Unit the home already started stays here, and the command says so: when you
+asked for it to go to a team or be left open all the same, the agent adds
+`--started-here <unit>`, your words go on the record, and what was built on it
+here stays in the work's record. One Unit named for two teams is refused with both names. The
 walking skeleton, when on, is built at the home first and is never held for a
 team. The agent writes the words the answer came from to the request file the
 command names (`--request-file aidlc/.aidlc-request-text/unit-assign.txt`), and

@@ -231,8 +231,8 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   assign: {
     name: false,
     pairs: true,
-    options: ["open", "here", "request-file", "person-words"],
-    usage: "unit assign <unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]] " +
+    options: ["open", "here", "started-here", "request-file", "person-words"],
+    usage: "unit assign <unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]] [--started-here <unit>[,<unit>...]] " +
       "[--request-file <file> | --person-words <text>] | --open | --here <unit>[,<unit>...]",
   },
   claim: {

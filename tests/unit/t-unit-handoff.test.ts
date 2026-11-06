@@ -519,3 +519,21 @@ describe("a hand-off of a Unit that waits on one the lead's project builds", () 
     expect(readFileSync(join(home.dir, ...REPORTING.split("/")), "utf-8")).not.toContain("Waits On");
   });
 });
+
+// The lead's assign over a Unit handed off by file (x2783-s9): with nothing
+// back from the file yet it is a hold here again (t-unit-assignment); once the
+// team builds from it, it stays by file, said.
+describe("the lead's assign over a Unit its team builds from the hand-off file", () => {
+  test("it stays by file, said in one line", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+    expect(run(UNIT, ["progress"], partner.dir).status).toBe(0);
+    const progressFile = deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md");
+    expect(run(UNIT, ["take-in", progressFile], home.dir).status).toBe(0);
+    const again = run(UNIT, ["assign", "reporting=data"], home.dir);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toContain("reporting is being built by data from its hand-off file, so it stays by file.");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")?.by_file).toBe(true);
+  });
+});

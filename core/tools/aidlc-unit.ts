@@ -212,6 +212,8 @@ import {
   unitDependencies,
   unitsKeptForTeams,
   unitsLeftOpen,
+  unitsStartedAtLeadsProject,
+  unitGateRhythmChosen,
   unitWriteTargets,
   outputForLead,
   unitWordsArg,
@@ -5408,15 +5410,28 @@ function assignUnits(args: string[], projectDir?: string): void {
     if (!local.units.includes(unit)) fail(`${unit} is not one of this work's Units (${local.units.join(", ")}).`);
     if (named.has(unit)) fail(`${unit} can go to a team or stay open; you named ${named.get(unit)} and open.`);
   }
-  // A Unit the lead's project started stays there, its approvals the lead's:
-  // no team is named over it, and it is not left open.
-  const startedHere = new Set(readAuditShardEvents(pd).filter((row) => row.event === "UNIT_STARTED")
-    .map((row) => auditBlockField(row.block, "Unit") ?? ""));
+  // A Unit the lead's project started stays there, its approvals the lead's,
+  // unless the person asked for it to go to a team or be left open all the
+  // same: the agent, having read their words, names it with --started-here,
+  // and the record keeps that with their words.
+  const startedHere = unitsStartedAtLeadsProject(readAuditShardEvents(pd));
+  const lift = new Set((flags["started-here"] ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry && entry !== "true"));
+  const lifted = (openAll ? [...lift] : []).filter((unit) => startedHere.has(unit));
   for (const unit of [...named.keys(), ...openNamed].filter((name) => startedHere.has(name))) {
-    lines.push(`${unit} was started here, so it stays here with you.`);
+    if (lift.has(unit)) {
+      if (!lifted.includes(unit)) lifted.push(unit);
+      continue;
+    }
+    lines.push(
+      `${unit} was started here, at the lead's project, so it stays here with you. If the person asked for it ` +
+        `${named.has(unit) ? `to go to ${named.get(unit)}` : "to be left open"} all the same, run this again with ` +
+        `--started-here ${unit} and their words.`,
+    );
     named.delete(unit);
   }
-  openNamed.splice(0, openNamed.length, ...openNamed.filter((unit) => !startedHere.has(unit)));
+  const staysHere = (unit: string): boolean => startedHere.has(unit) && !lifted.includes(unit);
+  openNamed.splice(0, openNamed.length, ...openNamed.filter((unit) => !staysHere(unit)));
+  if (lifted.length > 0) lines.push(`What was built on ${joinNames(lifted)} here stays in this work's record.`);
   // The lead's own words win over the slice built together first: the part
   // they name a team for goes to that team, and nothing is built together
   // first for this work, said once.
@@ -5443,11 +5458,12 @@ function assignUnits(args: string[], projectDir?: string): void {
   if (integration === null && named.size > 0) {
     // The home cannot be reached: the answer is kept, and the next step offers to hold it again.
     const kept = [...named].map(([unit, team]) => `${unit}=${team}`);
-    const leftOpen = openAll ? local.units.filter((unit) => unit !== skeleton && !named.has(unit) && !startedHere.has(unit)) : openNamed;
+    const leftOpen = openAll ? local.units.filter((unit) => unit !== skeleton && !named.has(unit) && !staysHere(unit)) : openNamed;
     appendAuditEntry("UNITS_ASSIGNED", {
       Assigned: kept.join(", ") || "none",
       ...(openAll ? { Open: "all" } : {}),
       ...(leftOpen.length > 0 ? { "Left Open": leftOpen.join(", ") } : {}),
+      ...(lifted.length > 0 ? { "Started Here": lifted.join(", ") } : {}),
       Held: "not yet",
       ...(words ? { "Person Words": words } : {}),
     }, pd);
@@ -5468,8 +5484,27 @@ function assignUnits(args: string[], projectDir?: string): void {
     const current = currentClaim(pd, integration.remote, ref);
     if (current?.status === "claimed") {
       held.add(unit);
-      if (current.owner === team) assigned.push({ unit, team });
-      else lines.push(`${unit} is held by ${current.owner}, so it stays with them.`);
+      if (teamSpaceOf(current.owner) !== teamSpaceOf(team)) {
+        lines.push(`${unit} is held by ${current.owner}, so it stays with them.`);
+        continue;
+      }
+      // Handed off by file and named for the same team again: a hold through
+      // this workspace again, the same attempt, while nothing came back from
+      // the file; once the team builds from it, it stays by file.
+      if (current.payload.by_file && current.payload.taken_by === undefined) {
+        if (current.payload.progress !== undefined || current.payload.result !== undefined) {
+          lines.push(`${unit} is being built by ${current.owner} from its hand-off file, so it stays by file.`);
+        } else {
+          const { by_file: _byFile, ...hold } = current.payload;
+          const rewritten = updateClaimRef(pd, integration.remote, ref,
+            createClaimCommit(pd, current.oid, { ...hold, predecessor_oid: current.oid } as UnitClaimPayload), current.oid);
+          if (rewritten.ok) invalidateLiveClaimPayloadCache(pd, unit);
+          lines.push(rewritten.ok
+            ? `${unit} is held for ${current.owner} here again, not by file: they take it from this workspace.`
+            : `${unit} stays handed off by file for now: ${rewritten.refused ?? "its claim moved meanwhile"}. Try again.`);
+        }
+      }
+      assigned.push({ unit, team: current.owner });
       continue;
     }
     const payload: UnitClaimPayload = {
@@ -5510,14 +5545,18 @@ function assignUnits(args: string[], projectDir?: string): void {
     (named.has(unit) || integration === null ||
       currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit))?.status !== "claimed"));
   // Left open, waiting for a team: every Unit open when they left them all
-  // open, else the ones they named open and any named for a team that could
-  // not be held for it. The rest of the open Units are built here.
-  const leftOpen = openUnits.filter((unit) => !startedHere.has(unit) && (openAll || openNamed.includes(unit) || named.has(unit)));
+  // open, else the ones they named open now or in an earlier answer, and any
+  // named for a team that could not be held for it. The rest of the open
+  // Units are built here.
+  const leftBefore = unitsLeftOpen(readAuditShardEvents(pd));
+  const leftOpen = openUnits.filter((unit) =>
+    !staysHere(unit) && (openAll || openNamed.includes(unit) || named.has(unit) || leftBefore.has(unit)));
   const builtHere = openUnits.filter((unit) => !leftOpen.includes(unit));
   appendAuditEntry("UNITS_ASSIGNED", {
     Assigned: assigned.map((row) => `${row.unit}=${row.team}`).join(", ") || "none",
     Open: openUnits.join(", ") || "none",
     ...(leftOpen.length > 0 ? { "Left Open": leftOpen.join(", ") } : {}),
+    ...(lifted.length > 0 ? { "Started Here": lifted.join(", ") } : {}),
     ...(words.trim() ? { "Person Words": words.trim() } : {}),
   }, pd);
   const planChanging = homePlanChangingLine(state, assigned.map((row) => row.unit));
@@ -5528,22 +5567,20 @@ function assignUnits(args: string[], projectDir?: string): void {
     ...(leftOpen.length > 0 ? [`Open for any team: ${leftOpen.join(", ")}.`] : []),
     ...(builtHere.length > 0 ? [`Built here: ${builtHere.join(", ")}.`] : []),
   ];
-  // The rhythm is the lead's to change: the offer says what is set, what to do
-  // and why, and gives the agent the command for the other choice.
-  const perStage = readUnitGateRhythm(state) !== "unit-end";
-  const rhythm = perStage
-    ? TEAM_RHYTHM_OFFER
-    : "Each team approves its Unit once, at the end.";
+  // The rhythm is the lead's to choose, asked until they answer: each choice
+  // runs the setter, so their answer is on the record and not asked again.
+  const askRhythm = !unitGateRhythmChosen(state);
+  const setRhythm = `${aidlcToolInvocation("state")} set-unit-gate-rhythm`;
   console.log(JSON.stringify({
     assigned,
     open: openUnits,
-    notice: [...summary, ...lines, rhythm].join(" "),
-    ...(perStage
+    notice: [...summary, ...lines, ...(askRhythm ? [TEAM_RHYTHM_OFFER] : [])].join(" "),
+    ...(askRhythm
       ? {
         offer: {
           choices: [
-            { label: "Keep approvals after every stage", recommended: true },
-            { label: "Approve once at the end of each Unit", command: `${aidlcToolInvocation("state")} set-unit-gate-rhythm unit-end` },
+            { label: "Keep approvals after every stage", recommended: true, command: `${setRhythm} per-stage` },
+            { label: "Approve once at the end of each Unit", command: `${setRhythm} unit-end` },
           ],
         },
       }
@@ -6194,7 +6231,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (opening.completed.has(unit)) fail(`${unit} is already done at the home.`);
   const homeRows = homeAuditAt(pd, home, integration.oid);
   // A Unit no team holds that the home started is the home's.
-  if (!home.solo && current?.status !== "claimed" && soloUnitsProgress(homeRows, "").started.has(unit)) {
+  if (!home.solo && current?.status !== "claimed" && unitsStartedAtLeadsProject(homeRows).has(unit)) {
     fail(`${unit} is being built at the home, so it is not open to take. Run \`${aidlcToolInvocation("orchestrate")} next\` for what is.`);
   }
   // A Unit the home marked done on its claim counts as done, pushed state or not.
