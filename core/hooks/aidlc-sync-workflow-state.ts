@@ -150,9 +150,10 @@ if (source === "ide-audit-sync") {
   // (e) The step in hand is a Unit's Construction step and the cursor already
   //     sits where the engine put it: in a checkout that claimed the Unit, on
   //     the Unit's own stage. A Unit step writes no STAGE_STARTED, so the last
-  //     start names the block's first stage, not where the work is. The rule
-  //     is statusSyncLeavesUnitCursor's; asking it here leaves the state file
-  //     untouched, so the front gate can skip the next command's call.
+  //     start names another stage (the block's first while the Units walk),
+  //     not where the work is. The rule is statusSyncLeavesUnitCursor's;
+  //     asking it here leaves the state file untouched, so the front gate can
+  //     skip the next command's call.
   if (statusSyncLeavesUnitCursor(
     stateContent,
     readActiveDirectiveMarker(projectDir, stateContent),

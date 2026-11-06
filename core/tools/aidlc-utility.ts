@@ -13342,19 +13342,21 @@ function applyKeptToPickedWork(projectDir: string, sessionId: string, space: str
 // ---------------------------------------------------------------------------
 
 // Whether a status sync to `stage` leaves the main cursor (Current Stage, In
-// Progress, the cursor checkbox) where it is. During a per-Unit Construction
-// step under unit-major the cursor is the engine's, in two shapes. In an
-// unscoped checkout it rests on the block's first stage while the Units walk,
-// and the task slug names the Unit's stage. In a checkout that claimed the Unit
-// (Unit Ownership: team), `aidlc-state.ts sync-unit-scope-stage` rests it on
-// the Unit's own stage, and the audit tail's last STAGE_STARTED still names the
-// block's first stage, because a Unit step writes UNIT_STARTED rows and no
-// STAGE_STARTED. Moving the cursor in either shape retires the step the engine
-// just issued, and the marker is not refreshed (its stage is not the sync's):
-// on Kiro IDE, where the sync runs after every shell command, `continue` then
-// restarts at part one and Plan Approval finds no current directive, forever.
-// The hook's audit-tail path asks this before it writes; set-status applies it
-// to the slug it is given.
+// Progress, the cursor checkbox) where it is. Under unit-major, while the step
+// the engine issued is a Unit's Construction step on `stage` or on Current
+// Stage, a sync to any Construction stage other than Current Stage leaves it:
+// the cursor is the engine's. In an unscoped checkout it rests on the block's
+// first stage while the Units walk, and the task slug names the Unit's stage.
+// In a checkout that claimed the Unit (Unit Ownership: team),
+// `aidlc-state.ts sync-unit-scope-stage` rests it on the Unit's own stage, and
+// the sync names another stage: on Kiro IDE the audit tail's last
+// STAGE_STARTED, the block's first stage while the Units walk, because a Unit
+// step writes UNIT_STARTED rows and no STAGE_STARTED. There, moving the cursor
+// retires the step the engine just issued, and the marker is not refreshed
+// (its stage is not the sync's): on Kiro IDE, where the sync runs after every
+// shell command, `continue` then restarts at part one and Plan Approval finds
+// no current directive, forever. The hook's audit-tail path asks this before
+// it writes; set-status applies it to the slug it is given.
 export function statusSyncLeavesUnitCursor(
   stateContent: string,
   activeDirective: ActiveDirectiveMarker | null,

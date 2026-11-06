@@ -207,8 +207,8 @@ cards doing the work, and the guard notes nothing for them.
   step in hand is a Unit's Construction step whose stage `Current Stage`
   already holds (a checkout that claimed the Unit rests the cursor there): a
   Unit step writes `UNIT_STARTED`, no `STAGE_STARTED`, so the last start
-  names the block's first stage and moving to it would retire the issued step
-  after every command. Both
+  names another Construction stage (the block's first while the Units walk),
+  and moving to it would retire the issued step after every command. Both
   audit-tail hooks match `execute_bash`, Windows `execute_pwsh`, and the
   `shell` alias — the IDE surfaces no task event the sync could parse.
 - **front gate for the two audit-tail hooks**: they run once for every shell
