@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
-  checkpointRecordForms, loadConstructionEvidence, type ApprovalFindingDispositions, type ConstructionEvidence,
-  type RejectedFindingDispositions,
+  autonomyGranted, checkpointRecordForms, loadConstructionEvidence, type ApprovalFindingDispositions,
+  type ConstructionEvidence, type RejectedFindingDispositions,
 } from "./aidlc-construction-checkpoints.ts";
 import { askedQuestionFields, QUESTION_ID_FIELD, questionShows } from "./aidlc-questions.ts";
 import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
@@ -32,7 +32,7 @@ import {
   protectedTargetDigest,
   mintProtectedQuestion,
   intentRepos,
-  isAutonomousMode,
+  addPendingPersonLines,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
   maximalAttemptEvents,
@@ -154,8 +154,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
   const floor = latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, undefined, rows);
   if (floor === "unstarted#0" || floor.startsWith("AMBIGUOUS:")) errors.push("Code Generation attempt is missing or ambiguous.");
   const grant = shared ? shared.grant : latest(rows.filter((row) => ["WORKFLOW_STARTED", "AUTONOMY_MODE_SET"].includes(row.event)));
-  const humanRequired = !(isAutonomousMode(state) && grant?.event === "AUTONOMY_MODE_SET" &&
-    auditBlockField(grant.block, "Mode") === "autonomous");
+  const humanRequired = !autonomyGranted(state, grant);
   const chain = currentSwarmSourceMergeChain(pd, STAGE, undefined, undefined, shared?.allRows);
   if (chain.state !== "ready") errors.push(`Native swarm source-merge chain is unavailable${chain.state === "invalid" ? `: ${chain.reason}` : "."}`);
   const listing = shared ? shared.listing : workspaceSourceListing(pd);
@@ -455,7 +454,12 @@ export function approveSwarmCheckpoint(
     }, pd, selection.intent, selection.space);
     if (humanRequired) consumeProtectedQuestion(pd, session);
     const result = snapshot(pd, batch, units).result;
-    return notices.length > 0 ? { ...result, notices } : result;
+    // The agent's own approval under Continue automatically goes on, so its
+    // lines wait for the reply the person reads; a chat it cannot name hears
+    // them from this step as before.
+    const kept = !humanRequired && session !== "" && notices.length > 0 &&
+      addPendingPersonLines(pd, session, notices, { forReply: true });
+    return notices.length > 0 && !kept ? { ...result, notices } : result;
   });
 }
 

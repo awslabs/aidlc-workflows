@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  addPendingPersonLines,
   auditBlockField,
   BOLT_INTENT_ID8_REGEX,
   type BoltIdentity,
@@ -93,7 +94,8 @@ import {
   asksForHelp,
   printUsageAndExit,
 } from "./aidlc-lib.js";
-import { afterApprovedSkeleton } from "./aidlc-construction-checkpoints.ts";
+import { afterApprovedSkeleton, autonomyGrantedOnRecord } from "./aidlc-construction-checkpoints.ts";
+import { quoted } from "./aidlc-brought-files.ts";
 import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
 import { swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
@@ -2349,6 +2351,22 @@ function combinedLine(unit: string, combined: readonly string[], target: string)
     : `Landed Unit ${unit} with ${countFiles(combined)} settled by hand against what was already on ${target}: ${renderLandedPaths(combined)}.`;
 }
 
+// How the person sees what was settled by hand and undoes the landing, run from
+// the project: `git -C <repo>` for a Unit in another repository, the files by
+// their path there. A merge commit reverts against the branch it landed on.
+// The files are left out when one cannot be quoted for every shell or the line
+// names fewer than all of them; the commit alone still shows them. A repository
+// whose name no quoting passes whole gets no commands at all.
+function landingWayBack(sha: string, files: readonly string[], repo: string | null, mergeCommit: boolean): string | null {
+  const short = sha.slice(0, 12);
+  const where = repo ? quoted(repo) : "";
+  if (where === null) return null;
+  const git = where ? `git -C ${where} ` : "git ";
+  const named = files.map((file) => quoted(file));
+  const paths = named.length <= LANDED_PATHS_NAMED && named.every((file) => file !== null) ? ` -- ${named.join(" ")}` : "";
+  return `\`${git}show ${short}${paths}\` shows how, and \`${git}revert ${mergeCommit ? "-m 1 " : ""}${short}\` undoes the landing.`;
+}
+
 function assertLandedOnTop(
   slug: string,
   repoCwd: string,
@@ -2446,8 +2464,10 @@ function countFiles(paths: readonly string[]): string {
   return `${paths.length} ${paths.length === 1 ? "file" : "files"}`;
 }
 
+const LANDED_PATHS_NAMED = 20;
+
 function renderLandedPaths(paths: readonly string[]): string {
-  const shown = paths.slice(0, 20);
+  const shown = paths.slice(0, LANDED_PATHS_NAMED);
   const more = paths.length - shown.length;
   return more > 0 ? `${shown.join(", ")} +${more} more` : shown.join(", ");
 }
@@ -3155,7 +3175,21 @@ function handleMerge(args: string[]): void {
     // Named the way landedDifferences names every landed path: with its repository.
     const settled = combined.map((path) => (repoTarget.repo ? `${repoTarget.repo}/${path}` : path));
     if (settled.length > 0) {
-      landingNotices.push(combinedLine(sourceRecord.unit, settled, flags.target));
+      // Under Continue automatically the agent approves the batch itself and
+      // goes on, so the line, with the commit and the way back, waits for the
+      // reply the person reads; a gated run's merge says it as before.
+      let granted = false;
+      try {
+        granted = autonomyGrantedOnRecord(pd, readStateFile(pd, flags.intent, flags.space), flags.intent, flags.space);
+      } catch {
+        // The landing is done: an unreadable record only says the line as before.
+      }
+      const line = combinedLine(sourceRecord.unit, settled, flags.target);
+      const wayBack = granted ? landingWayBack(commitSha, combined, repoTarget.repo, strategy === "merge") : null;
+      const said = wayBack ? `${line} ${wayBack}` : line;
+      const kept = granted && selection.sessionId !== null &&
+        addPendingPersonLines(pd, selection.sessionId, [said], { forReply: true });
+      if (!kept) landingNotices.push(said);
     }
     const landedChanges = [...new Set([...landed.changed, ...settled])].sort();
     for (const [driver, paths] of landed.drivers) {

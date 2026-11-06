@@ -7038,6 +7038,13 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // ends the wait, and nothing surfaces in another chat. The same file keeps,
 // per work, the lines this chat has already heard that the engine would
 // otherwise repeat (a finished stage that is out of date).
+//
+// A line kept for the reply (forReply) comes from a checkpoint the agent
+// approved itself under Continue automatically, where the next step it speaks
+// from is still the middle of a long turn. It rides every step the agent speaks
+// from, so the step it stops on carries it whenever the turn ends, and goes
+// only once the person has written after a step carried it (the prompt hook's
+// carry); it has no age limit.
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
 const PERSON_LINES_SAID_MAX = 20;
 
@@ -7046,6 +7053,10 @@ interface PendingPersonLine {
   at: number;
   // The person's turn the line belongs to.
   turn: string;
+  // Kept for the reply the person reads: said until the person writes again.
+  reply?: true;
+  // A step carried this reply line in the turn it belongs to.
+  handed?: true;
 }
 
 interface PendingPersonLines {
@@ -7084,7 +7095,7 @@ function readPendingPersonLines(path: string, turn: string, work: string): Pendi
       if (!entry || typeof entry !== "object") return false;
       const { line, at, turn: lineTurn } = entry as Partial<PendingPersonLine>;
       if (typeof line !== "string" || typeof at !== "number") return false;
-      return lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
+      return lineTurn === turn && ((entry as PendingPersonLine).reply === true || now - at <= PENDING_PERSON_LINES_MAX_AGE_MS);
     });
     const said = saved.work === work && Array.isArray(saved.said)
       ? saved.said.filter((line): line is string => typeof line === "string")
@@ -7110,6 +7121,7 @@ export function addPendingPersonLines(
   projectDir: string,
   sessionId: string,
   lines: readonly string[],
+  options: { forReply?: boolean } = {},
 ): boolean {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const added = lines.filter((line) => line.trim().length > 0);
@@ -7118,7 +7130,7 @@ export function addPendingPersonLines(
   try {
     const saved = readPendingPersonLines(path, turn, work);
     const at = Date.now();
-    for (const line of added) saved.lines.push({ line, at, turn });
+    for (const line of added) saved.lines.push({ line, at, turn, ...(options.forReply ? { reply: true as const } : {}) });
     writePendingPersonLines(projectDir, path, work, saved);
     return true;
   } catch {
@@ -7126,19 +7138,32 @@ export function addPendingPersonLines(
   }
 }
 
-// The lines waiting for the next step the agent speaks from. `said()` clears
-// them once the step carries them; until then they stay waiting.
-export function pendingPersonLines(projectDir: string, sessionId: string): { lines: string[]; said(): void } {
+// The lines waiting for the next step the agent speaks from; with `replyOnly`
+// (a question the agent logs before asking it) only those kept for the reply.
+// `said()` clears the ordinary lines handed out once the step carries them and
+// marks the reply lines carried, which keep riding the steps until the person
+// writes; until then every line stays waiting.
+export function pendingPersonLines(
+  projectDir: string,
+  sessionId: string,
+  options: { replyOnly?: boolean } = {},
+): { lines: string[]; reply: boolean; said(): void } {
   const path = pendingPersonLinesPath(projectDir, sessionId);
-  const none = { lines: [], said: () => {} };
+  const none = { lines: [], reply: false, said: () => {} };
   if (!path || !existsSync(path)) return none;
   const { turn, work } = personTurnAndWork(projectDir);
   const saved = readPendingPersonLines(path, turn, work);
+  const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
   return {
-    lines: saved.lines.map((entry) => entry.line),
+    lines: handed.map((entry) => entry.line),
+    // Whether a line kept for the reply is among them.
+    reply: handed.some((entry) => entry.reply === true),
     said: () => {
       try {
-        writePendingPersonLines(projectDir, path, work, { lines: [], said: saved.said });
+        const waiting = saved.lines
+          .filter((entry) => entry.reply === true || !handed.includes(entry))
+          .map((entry) => (entry.reply === true && handed.includes(entry) ? { ...entry, handed: true as const } : entry));
+        writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
       } catch {
         /* the next step says them again rather than never */
       }
@@ -7153,9 +7178,16 @@ export function pendingPersonLines(projectDir: string, sessionId: string): { lin
  * agent asked of its own accord, which is how a switch line went unsaid on Kiro
  * CLI). Either way the line is still about what they just asked for, so it
  * follows them and the next step the agent speaks from says it. Each line keeps
- * the time it was first queued, so the age cap still ends the wait.
+ * the time it was first queued, so the age cap still ends an ordinary line's
+ * wait; a line kept for the reply has none.
  */
-export function carryPendingPersonLines(projectDir: string, sessionId: string | null): void {
+export function carryPendingPersonLines(
+  projectDir: string,
+  sessionId: string | null,
+  // The person wrote (the prompt hook): a reply line a step carried in the turn
+  // that just ended was said there, so it goes; one no step carried follows them.
+  options: { afterPrompt?: boolean } = {},
+): void {
   if (!sessionId) return;
   const path = pendingPersonLinesPath(projectDir, sessionId);
   if (!path || !existsSync(path)) return;
@@ -7166,15 +7198,22 @@ export function carryPendingPersonLines(projectDir: string, sessionId: string | 
       entry !== null && typeof entry === "object" &&
       typeof (entry as PendingPersonLine).line === "string" &&
       typeof (entry as PendingPersonLine).at === "number" &&
-      now - (entry as PendingPersonLine).at <= PENDING_PERSON_LINES_MAX_AGE_MS);
-    if (waiting.length === 0) return;
+      ((entry as PendingPersonLine).reply === true || now - (entry as PendingPersonLine).at <= PENDING_PERSON_LINES_MAX_AGE_MS) &&
+      !(options.afterPrompt === true && (entry as PendingPersonLine).handed === true));
+    const dropped = options.afterPrompt === true &&
+      (Array.isArray(raw.lines) ? raw.lines : []).some((entry) => (entry as PendingPersonLine)?.handed === true);
+    if (waiting.length === 0 && !dropped) return;
     const { turn, work } = personTurnAndWork(projectDir);
     // What this chat already heard belongs to the work it heard it on.
     const said = raw.work === work && Array.isArray(raw.said)
       ? raw.said.filter((line): line is string => typeof line === "string")
       : [];
     writePendingPersonLines(projectDir, path, work, {
-      lines: waiting.map((entry) => ({ line: entry.line, at: entry.at, turn })),
+      lines: waiting.map((entry) => ({
+        line: entry.line, at: entry.at, turn,
+        ...(entry.reply === true ? { reply: true as const } : {}),
+        ...(entry.handed === true ? { handed: true as const } : {}),
+      })),
       said,
     });
   } catch {
