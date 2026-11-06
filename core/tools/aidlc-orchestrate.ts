@@ -340,6 +340,7 @@ import {
   finishedWork,
   workStanding,
   readUnitScopeStamp,
+  cursorPastStage,
   workToPickUp,
   readProjectDescriptionAuthority,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
@@ -13490,6 +13491,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         validateLiveUnitScope(pd, unitScope.unit);
       } catch (e) {
         emit(errorDirective(errorMessage(e)));
+        return;
+      }
+      // The record moves on to Build and Test once every Unit's row is done,
+      // here too (and older releases wrote it so). Build and Test is the
+      // lead's, once every Unit lands: this checkout's step stays its Unit's.
+      const last = constructionUnitMajorBlock(scope, stateContent, true).at(-1);
+      if (last && cursorPastStage(stateContent, last.slug)) {
+        emitUnitMajorRunStage(last, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
         return;
       }
     } else if (!beforeTeamUnitWork(pd, stateContent)) {

@@ -92,7 +92,7 @@ describe("a claimed checkout whose record moved on to Build and Test", () => {
     expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: DONE, unit: "alpha" });
   });
 
-  test("not published: the offer to publish it", () => {
+  test("not published: the offer to publish it, once, and Not now is the wait", () => {
     const checkout = lastUnitClaimed(false);
     writeFileSync(
       seededStateFile(checkout),
@@ -102,6 +102,13 @@ describe("a claimed checkout whose record moved on to Build and Test", () => {
     );
     expect(nextDirective(checkout)).toMatchObject({
       kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha",
+    });
+    // Not now runs next: the Unit's own step again, not the same question.
+    expect(nextDirective(checkout)).toMatchObject({
+      kind: "notice",
+      message: 'Unit "alpha" is complete and approved in this checkout. ' +
+        "Once it lands on main, pull main here and this checkout is free again.",
+      unit: "alpha",
     });
   });
 });
