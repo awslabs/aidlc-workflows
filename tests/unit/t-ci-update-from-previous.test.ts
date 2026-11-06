@@ -1,17 +1,23 @@
 // covers: file:scripts/ci-update-from-previous.ts
 // The update-from-the-last-release check finds each harness tree's hook
 // commands, installed or copied, and reads the hook phase trace to see that
-// the engine ran them.
+// the engine ran them. It passes each release's config the Kiro names that
+// release reads.
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
+import { NATIVE_COMPILE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
+  bareAidlcProblem,
   checksumMatches,
   childEnvironment,
   copyRuntimeAsset,
   dispatched,
+  harnessArgFor,
   hookCommands,
   hookInput,
   hookRuns,
@@ -171,6 +177,47 @@ describe("ci-update-from-previous helpers", () => {
     expect(hookInput("claude", "aidlc engine hook review-freeze")).toBe("{}");
   });
 
+  // On Windows the first command after an update writes bin\aidlc.exe and
+  // removes the extensionless Git Bash launcher on purpose, so the check runs
+  // the bare aidlc the hooks run instead of looking for a file.
+  describe("the hooks' shell runs a bare aidlc that reports the candidate", () => {
+    const target = "9.9.9-update-check";
+    const shell = () => (process.platform === "win32" ? gitBashPath() : "/bin/sh");
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+    // PATH holds only the bin folder, so nothing installed on this machine answers.
+    const bareIn = (bin: string) =>
+      bareAidlcProblem(shell(), { ...process.env, AIDLC_BIN_DIR: bin, [pathKey]: bin }, target, bin, NATIVE_STARTUP_TIMEOUT_MS);
+    const launcher = (bin: string, says: string) => {
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "aidlc"), `#!/bin/sh\necho "aidlc ${says}"\n`, { mode: 0o755 });
+      return bin;
+    };
+    const skip = process.platform === "win32" && gitBashSkipReason() !== null;
+
+    test.skipIf(skip)("a launcher that runs and reports the candidate passes; one that reports another release or nothing there fails", () => {
+      const root = scratch();
+      expect(bareIn(launcher(join(root, "current"), target))).toBeNull();
+      expect(bareIn(launcher(join(root, "stale"), "1.0.0"))).toContain("1.0.0");
+      const none = join(root, "none");
+      mkdirSync(none);
+      expect(bareIn(none)).not.toBeNull();
+    });
+
+    test.skipIf(process.platform !== "win32" || skip)("on Windows bin\\aidlc.exe alone is what Git Bash runs", () => {
+      const root = scratch();
+      const entry = join(root, "fake-aidlc.ts");
+      writeFileSync(entry, `console.log(process.argv.includes("version") ? "aidlc ${target}" : "");\n`);
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      const compiled = spawnSync(process.execPath, ["build", entry, "--compile", "--outfile", join(bin, "aidlc.exe")], {
+        encoding: "utf-8",
+        timeout: NATIVE_COMPILE_TIMEOUT_MS,
+      });
+      expect(compiled.status, `${compiled.stdout}\n${compiled.stderr}`).toBe(0);
+      expect(bareIn(bin)).toBeNull();
+    }, NATIVE_COMPILE_TIMEOUT_MS + NATIVE_STARTUP_TIMEOUT_MS);
+  });
+
   // A copied project runs its own tool, so its wiring names `bun <dir>/tools/aidlc.ts`,
   // and Copilot and Cursor name their adapter file itself (dist/<harness> is the copy runtime's tree).
   test("a copied tree's hook commands are found on every harness that wires them in JSON", () => {
@@ -201,5 +248,18 @@ describe("ci-update-from-previous helpers", () => {
     expect(checksumMatches(file, `${digest.toUpperCase()}  aidlc-copy-runtime-2.11.0.tar.gz`)).toBe(true);
     expect(checksumMatches(file, `${"0".repeat(64)}  aidlc-copy-runtime-2.11.0.tar.gz\n`)).toBe(false);
     expect(checksumMatches(file, "")).toBe(false);
+  });
+});
+
+describe("the Kiro name each release's config reads", () => {
+  test("a release that names `kiro-v2` gets the typed names; an older one the ids", () => {
+    const typed = scratch();
+    mkdirSync(join(typed, "kiro-ide", ".kiro", "tools"), { recursive: true });
+    writeFileSync(join(typed, "kiro-ide", ".kiro", "tools", "aidlc-runtime-paths.ts"), 'const N = { kiro: "kiro-v2", "kiro-ide": "kiro" };\n');
+    const older = scratch();
+    mkdirSync(join(older, "kiro", ".kiro", "tools"), { recursive: true });
+    writeFileSync(join(older, "kiro", ".kiro", "tools", "aidlc-runtime-paths.ts"), "export const X = 1;\n");
+    expect(["kiro", "kiro-ide", "claude"].map((harness) => harnessArgFor(typed, harness))).toEqual(["kiro-v2", "kiro", "claude"]);
+    expect(["kiro", "kiro-ide", "claude"].map((harness) => harnessArgFor(older, harness))).toEqual(["kiro", "kiro-ide", "claude"]);
   });
 });

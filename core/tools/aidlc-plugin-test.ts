@@ -3,7 +3,7 @@
 
 import { discoverInstalledPluginNames } from "./aidlc-config-diagnostics.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
+import { harnessIdFromTyped, isCompiledExecutable, typedHarnessName } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -44,6 +44,7 @@ import {
   validatePluginRoot,
   walkPluginFiles,
 } from "./aidlc-plugin-validate.ts";
+import { mergePluginRulesFromRoot } from "./aidlc-plugin.ts";
 
 const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> --install <project-root> [--harness <name>] [--with <base-root>] [--json]";
@@ -360,10 +361,11 @@ function detectHarness(
   requested?: string,
 ): { name: string; target: PluginTarget } {
   if (requested) {
-    const target = targets[requested];
+    const id = harnessIdFromTyped(requested);
+    const target = Object.hasOwn(targets, id) ? targets[id] : undefined;
     if (!target) {
       throw new PluginTestUsageError(
-        `unknown harness "${requested}" (available: ${Object.keys(targets).sort().join(", ")})`,
+        `unknown harness "${requested}" (available: ${Object.keys(targets).map(typedHarnessName).sort().join(", ")})`,
       );
     }
     if (!existsSync(join(installRoot, target.harnessLeaf))) {
@@ -371,7 +373,7 @@ function detectHarness(
         `--harness ${requested} expects ${target.harnessLeaf}/ under ${installRoot}`,
       );
     }
-    return { name: requested, target };
+    return { name: id, target };
   }
   const candidates = Object.entries(targets).filter(([, target]) =>
     existsSync(join(installRoot, target.harnessLeaf)),
@@ -383,7 +385,7 @@ function detectHarness(
   }
   if (candidates.length > 1) {
     throw new PluginTestUsageError(
-      `install is ambiguous (${candidates.map(([name, target]) => `${name}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,
+      `install is ambiguous (${candidates.map(([name, target]) => `${typedHarnessName(name)}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,
     );
   }
   return { name: candidates[0][0], target: candidates[0][1] };
@@ -561,7 +563,7 @@ export function testPluginComposition(
   if (!validation.valid) {
     return {
       ...validation,
-      harness: options.harness ?? "",
+      harness: options.harness ? harnessIdFromTyped(options.harness) : "",
       composedFiles: [],
       changedFiles: [],
       drops: [],
@@ -605,8 +607,14 @@ export function testPluginComposition(
       // The candidate is a copy, so the select line a compose drop names works
       // in the project only for a plugin installed there; compose says so.
       const installedThere = new Set(discoverInstalledPluginNames(installRoot, target.harnessLeaf));
-      const composeEnv = (name: string): NodeJS.ProcessEnv =>
-        installedThere.has(name) ? {} : { AIDLC_PLUGIN_TEST_NOT_INSTALLED: "1" };
+      // The plugin's rules go in as sync puts them, right after each compose.
+      const composeEnv = (name: string): NodeJS.ProcessEnv => ({
+        AIDLC_PLUGIN_RULES_BY_SYNC: "1",
+        ...(installedThere.has(name) ? {} : { AIDLC_PLUGIN_TEST_NOT_INSTALLED: "1" }),
+      });
+      const mergeRules = (root: string): void => {
+        mergePluginRulesFromRoot(candidateRoot, target.harnessLeaf, root);
+      };
       const templateHooksDir =
         options.templateHooksDir ?? bundledPluginHookTemplatesDir();
       const { pluginRoot: builtRoot } = buildPluginProjection({
@@ -630,6 +638,7 @@ export function testPluginComposition(
           pluginBuilt: baseBuilt,
           env: composeEnv(pluginName(baseRoot)),
         });
+        if (base.status === 0) mergeRules(baseBuilt);
         if (base.status !== 0) {
           addTestError(
             validation,
@@ -657,6 +666,7 @@ export function testPluginComposition(
         pluginBuilt: builtRoot,
         env: composeEnv(logicalPluginName),
       });
+      if (first.status === 0) mergeRules(builtRoot);
       if (first.status !== 0) {
         addTestError(
           validation,
@@ -726,6 +736,7 @@ export function testPluginComposition(
         pluginBuilt: builtRoot,
         env: composeEnv(logicalPluginName),
       });
+      if (second.status === 0) mergeRules(builtRoot);
       const secondDrops = readPluginDropEntries(
         candidateRoot,
         logicalPluginName,
@@ -824,14 +835,14 @@ function formatPluginTest(
         "Plugin validation: INVALID",
         "Plugin test: FAILED",
       ) +
-      `Install: ${installRoot}\nHarness: ${result.harness}\n`
+      `Install: ${installRoot}\nHarness: ${typedHarnessName(result.harness)}\n`
     );
   }
   return [
     "Plugin test: CLEAN",
     `Plugin root: ${pluginRoot}`,
     `Install: ${installRoot}`,
-    `Harness: ${result.harness}`,
+    `Harness: ${typedHarnessName(result.harness)}`,
     `Composed files (${result.composedFiles.length}): ${result.composedFiles.join(", ") || "none"}`,
     `Changed files (${result.changedFiles.length}): ${result.changedFiles.join(", ") || "none"}`,
     `Drops: ${result.drops.length}`,

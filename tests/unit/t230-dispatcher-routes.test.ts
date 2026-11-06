@@ -1,5 +1,5 @@
 // covers: hook:aidlc-continue-workflow
-// covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
+// covers: tool:aidlc, function:renderCommandHelp, function:typedHarnessHosts, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
 // covers: function:kiroLayoutOf, function:kiroTreeLayout, function:installedKiroLayout
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -61,6 +61,7 @@ import {
   kiroLayoutOf,
   kiroTreeLayout,
   runtimeHarnessDir,
+  typedHarnessName,
 } from "../../core/tools/aidlc-runtime-paths.ts";
 import { installedKiroLayout } from "../../core/tools/aidlc-lib.ts";
 import { parseSensorManifest } from "../../core/tools/aidlc-sensor-schema.ts";
@@ -287,6 +288,11 @@ function expectSameRun(actual: RunResult, expected: RunResult, label: string): v
   expect(actual.exitCode, `${label} exit`).toBe(expected.exitCode);
   expect(actual.stdout.equals(expected.stdout), `${label} stdout\nactual:\n${actual.stdout}\nexpected:\n${expected.stdout}`).toBe(true);
   expect(actual.stderr.equals(expected.stderr), `${label} stderr\nactual:\n${actual.stderr}\nexpected:\n${expected.stderr}`).toBe(true);
+}
+
+function asCompiledInvocation(result: RunResult): RunResult {
+  const named = (bytes: Buffer) => Buffer.from(bytes.toString("utf-8").replaceAll("bun .claude/tools/aidlc.ts", "aidlc"));
+  return { ...result, stdout: named(result.stdout), stderr: named(result.stderr) };
 }
 
 function entriesUnder(root: string): string[] {
@@ -775,6 +781,20 @@ describe("t230 dispatcher route parity", () => {
       expectSameRun(routed, old, item.name);
     });
   }
+
+  test("an engine subcommand honours --help instead of running it (#3493)", () => {
+    const projectDir = makeProject();
+    const plugin = viaDispatcher(["engine", "plugin", "sync", "--help"], projectDir);
+    expect(plugin.exitCode, plugin.stdout.toString()).toBe(0);
+    expect(plugin.stdout.toString()).toContain("usage: aidlc engine plugin");
+    expect(plugin.stdout.toString()).toContain("--rules-level");
+    expect(plugin.stderr.toString()).toBe("");
+
+    const runtime = viaDispatcher(["engine", "runtime", "compile", "--help"], projectDir);
+    expect(runtime.exitCode, runtime.stdout.toString()).toBe(0);
+    expect(runtime.stdout.toString()).toContain("Usage: aidlc-runtime");
+    expect(runtime.stderr.toString()).toBe("");
+  });
 
   // The commands Reverse Engineering's repo question hands the agent, through
   // the entry it names: the list is recorded exactly, and --all keeps every repo.
@@ -1351,10 +1371,13 @@ describe("t230 dispatcher route parity", () => {
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   });
 
-  // Config there would set up a new project in that folder, so the refusal
-  // names the two steps that reach the person's project. Our own options are
-  // read before the person's words, so the flag goes right after the tool, on
-  // the copy channel and natively (Bun under the name aidlc stands in).
+  // Config in that folder sets it up as a new project: the step when it is the
+  // person's project before setup, the wrong one when they meant another. So
+  // natively the refusal names config for that exact folder, then the two steps
+  // that reach another one; the copy channel has no aidlc command. Our own
+  // options are read before the person's words, so the flag goes right after
+  // the tool (Bun under the name aidlc stands in for the native command). The
+  // hook is the first-run path: its registrations run before any setup there.
   test("a project-required command from a folder that is not a project names the step that works", () => {
     const project = makeProject();
     const outside = mkdtempSync(join(tmpdir(), "aidlc-t230-outside-"));
@@ -1368,17 +1391,33 @@ describe("t230 dispatcher route parity", () => {
       cpSync(BUN, launcher);
     }
     const env = { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR };
+    const payload = JSON.stringify({
+      session_id: "t230-outside",
+      cwd: outside,
+      tool_name: "bash",
+      tool_input: { command: "echo hi" },
+    });
     for (const [tool, after] of [[BUN, "aidlc.ts"], [launcher, "aidlc"]]) {
-      for (const command of [["engine", "plugin", "list"], ["next", "add", "a", "login", "page"]]) {
+      const config = after === "aidlc"
+        ? `run aidlc config in ${outside} if that folder is your project; otherwise `
+        : "";
+      for (
+        const command of [
+          ["engine", "plugin", "list"],
+          ["next", "add", "a", "login", "page"],
+          ["engine", "hook", "guard-tool-call"],
+        ]
+      ) {
         const label = `${after} ${command.join(" ")}`;
-        const refused = run([tool, DISPATCHER, ...command], outside, env);
+        const stdin = command[1] === "hook" ? payload : undefined;
+        const refused = run([tool, DISPATCHER, ...command], outside, env, stdin);
         expect(refused.exitCode, label).toBe(1);
         expect(refused.stderr.toString(), label).toContain(
           "requires an installed project harness or recognized project directory; " +
-            `run it from the project folder, or add --project-dir <path> right after ${after}\n`,
+            `${config}run it from the project folder, or add --project-dir <path> right after ${after}\n`,
         );
-        expect(refused.stderr.toString(), label).not.toContain("aidlc config");
-        const named = run([tool, DISPATCHER, "--project-dir", project, ...command], outside, env);
+        if (!config) expect(refused.stderr.toString(), label).not.toContain("aidlc config");
+        const named = run([tool, DISPATCHER, "--project-dir", project, ...command], outside, env, stdin);
         expect(named.exitCode, `${label}: ${named.stderr}`).toBe(0);
       }
     }
@@ -2200,7 +2239,9 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       const compiled = viaImportedCompiledMain(argv, projectDir, env);
       expect(compiled.stderr.toString()).not.toContain("has no in-process delegate");
       expect(compiled.stderr.toString()).not.toContain("does not export main");
-      expectSameRun(compiled, dev, title);
+      // Each mode names the command its person types (aidlcInvocation): the
+      // compiled engine `aidlc`, the projected Bun tree its own dispatcher.
+      expectSameRun(compiled, asCompiledInvocation(dev), title);
     });
   }
 
@@ -3238,15 +3279,37 @@ describe("t230 dispatcher help and errors", () => {
       ...PUBLIC_LIFECYCLE_GRAMMARS,
       ...SIMPLE_PUBLIC_GRAMMARS,
     };
+    // The `aidlc system` lifecycle verbs print their route's form for --help,
+    // so the form names every flag their grammar takes (--no-color as well
+    // as --project-dir is plumbing there).
+    const systemForms: Record<string, string> = {
+      rollback: "top-rollback",
+      "versions install": "versions-install",
+      "versions prune": "versions-prune",
+    };
     // Both parsers, so neither can gain a flag help does not name.
     expect(Object.keys(grammars).sort()).toEqual([
       "doctor",
+      "rollback",
       "uninstall",
       "update",
       "use",
       "version",
+      "versions install",
+      "versions prune",
     ]);
     for (const [command, grammar] of Object.entries(grammars)) {
+      if (systemForms[command]) {
+        const form = ROUTES.find((route) => route.id === systemForms[command])?.all?.[0] ?? "";
+        for (const flag of [...grammar.values, ...grammar.bare]) {
+          if (plumbing.has(flag) || flag === "--no-color") continue;
+          expect(
+            new RegExp(`[\\s\\[|]${flag}[\\s\\]|]`).test(` ${form} `),
+            `system ${command} usage omits the accepted flag ${flag}`,
+          ).toBe(true);
+        }
+        continue;
+      }
       const rendered = renderCommandHelp(
         command as (typeof PUBLIC_COMMANDS)[number],
       );
@@ -3454,7 +3517,7 @@ describe("t230 dispatcher help and errors", () => {
       .toBe("--download and --from are mutually exclusive");
   });
 
-  test("config help names top-level flags and section help still passes through", () => {
+  test("config help names top-level flags and section help still passes through", async () => {
     const projectDir = makeProject();
     const config = viaDispatcher(["config", "--help"], projectDir);
     expect(config.exitCode).toBe(0);
@@ -3495,6 +3558,28 @@ describe("t230 dispatcher help and errors", () => {
     ]) {
       expect(text).toContain(flag);
     }
+    // --harness and every name it takes: one harness/<name>/manifest.ts is one
+    // distribution of the release (what `aidlc versions list` shows), named as
+    // --harness takes it, in the words the setup picker shows for that tool.
+    expect(text).toMatch(/^ {2}--harness <name> {2}\S/m);
+    const lines = text.split("\n");
+    const start = lines.indexOf("HARNESSES");
+    expect(start, "config help has a HARNESSES list").toBeGreaterThan(0);
+    const rows = lines.slice(start + 1, lines.indexOf("", start)).map((line) => line.trim().split(/\s{2,}/));
+    const ids = readdirSync(join(REPO_ROOT, "harness"))
+      .filter((name) => existsSync(join(REPO_ROOT, "harness", name, "manifest.ts")))
+      .sort();
+    const expected: string[][] = [];
+    for (const id of ids) {
+      const manifest = (await import(join(REPO_ROOT, "harness", id, "manifest.ts"))).default as {
+        productName: string;
+        choiceName?: string;
+        choiceNote?: string;
+      };
+      const words = manifest.choiceName ?? manifest.productName;
+      expected.push([typedHarnessName(id), manifest.choiceNote ? `${words} (${manifest.choiceNote})` : words]);
+    }
+    expect(rows).toEqual(expected);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("human help stays short and hides plumbing nouns", () => {

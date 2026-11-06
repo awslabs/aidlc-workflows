@@ -28,7 +28,7 @@ import {
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   auditBlockField,
   readAuditShardEvents,
@@ -46,8 +46,12 @@ import {
   resolveTestingPostureFromSections,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  cleanupTestProject,
+  createTestProject,
   seededAuditShard,
   seededRecordDir,
+  SYNC_FOLDER_WORDS,
+  syncedFolderEnv,
 } from "../harness/fixtures.ts";
 import {
   acceptedRows,
@@ -437,6 +441,41 @@ describe("t334 (5) changed content or prompt before the answer cannot be recorde
       expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  test("a plan or instructions edited after approval names the differing files, and a synced folder when it is one", () => {
+    const project = createProject("strict");
+    const questions = presentPlan(project);
+    const session = "synced-after-approval";
+    startSession(project, session);
+    expect(decide(project, questions, session).code).toBe(0);
+    humanTurn(project, session);
+    expect(answer(project, questions, session).code).toBe(0);
+
+    const dir = codeGenerationRecordDir(project, null);
+    const plan = join(dir, "code-generation-plan.md");
+    const instructions = join(dir, "unit-test-instructions.md");
+    writeFileSync(plan, readFileSync(plan, "utf-8").replace("- [ ] Implement", "- [ ] Implement differently"));
+    writeFileSync(instructions, `${readFileSync(instructions, "utf-8")}\nRun twice.\n`);
+
+    const refused = answer(project, questions, session);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain("Plan Approval fingerprint does not match");
+    expect(refused.stderr).toContain(
+      `Files that differ from the approved copy: ${relative(project, plan).replaceAll("\\", "/")}, ` +
+        relative(project, instructions).replaceAll("\\", "/") + ".",
+    );
+    expect(refused.stderr).not.toContain("sync can change files");
+    expect(refused.stderr).toContain("Re-run the fingerprint command, re-present the plan, and approve again.");
+
+    const home = createTestProject();
+    try {
+      const synced = answer(project, questions, session, syncedFolderEnv(project, home));
+      expect(synced.code).not.toBe(0);
+      expect(synced.stderr).toContain(`${SYNC_FOLDER_WORDS} Re-run the fingerprint command`);
+    } finally {
+      cleanupTestProject(home);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (6) F16: lowered fences allow post-approval content edits without inventing approval", () => {

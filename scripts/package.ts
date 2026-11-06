@@ -636,6 +636,8 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
   // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
   if (m.hookActivation) data.hookActivation = m.hookActivation;
+  // And only a host whose own step to a clean chat is known.
+  if (m.newChatStep) data.newChatStep = m.newChatStep;
   // Only the Kiro rows declare a layout; the runtime reads it in place of the row name.
   if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
   // And only a host that cuts a shell result below the engine's cap.
@@ -1607,6 +1609,7 @@ function rewriteNativeInvocations(
   const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
     managedDirectories: string[];
     legacyManagedFileHashes?: Record<string, string[]>;
+    retiredCopyFileHashes?: Record<string, string[]>;
   };
   const legacyManagedFileHashes: Record<string, string[]> = {};
   for (const directory of descriptor.managedDirectories) {
@@ -1621,6 +1624,29 @@ function rewriteNativeInvocations(
       if (releaseHash !== copyHash) legacyManagedFileHashes[rel] = [copyHash];
     }
   }
+  // What the copy-era releases put at each path (scripts/copy-era-files.ts):
+  // they wrote no install record, so their unchanged files are told from the
+  // person's by these bytes.
+  // Read as data, not imported: a type for half a megabyte of JSON would weigh on the typecheck.
+  const copyEra = JSON.parse(readFileSync(join(REPO_ROOT, "scripts", "copy-era-files.json"), "utf-8")) as Record<string, Record<string, string[]>>;
+  const retiredCopyFileHashes: Record<string, string[]> = {};
+  for (const [rel, hashes] of Object.entries(copyEra[m.name] ?? {})) {
+    if (!descriptor.managedDirectories.some((directory) => rel.startsWith(`${directory}/`))) continue;
+    // The workspace's seeds are the team's once written (config preserves them,
+    // aidlc-init.ts workspaceSeed) and a copy runtime leaves them out
+    // (copyChannelOmits), so no signature is owed for them.
+    if (rel.startsWith("aidlc/")) continue;
+    const release = join(outRoot, rel);
+    if (!existsSync(release) || !lstatSync(release).isFile()) {
+      retiredCopyFileHashes[rel] = [...hashes].sort();
+      continue;
+    }
+    const releaseHash = sha256Bytes(readFileSync(release));
+    const known = new Set(legacyManagedFileHashes[rel] ?? []);
+    for (const hash of hashes) if (hash !== releaseHash) known.add(hash);
+    if (known.size > 0) legacyManagedFileHashes[rel] = [...known].sort();
+  }
+  descriptor.retiredCopyFileHashes = retiredCopyFileHashes;
   const descriptorRel = `${m.harnessDir}/${PROJECTION_DATA}`.split(sep).join("/");
   const copyDescriptor = join(copyRoot, descriptorRel);
   if (existsSync(copyDescriptor)) {

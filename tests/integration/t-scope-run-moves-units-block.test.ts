@@ -16,7 +16,9 @@ import { cleanupTestProject } from "../harness/fixtures.ts";
 import {
   AgentStandIn,
   activeRecord,
+  auditEvents,
   createScopeProject,
+  field,
   PersonScript,
   SCOPE_RUN_TIMEOUT_MS,
 } from "../harness/scope-run.ts";
@@ -80,11 +82,17 @@ describe("a units block the engine cannot read never reaches the person", () => 
     }, SCOPE_RUN_TIMEOUT_MS);
 
     test(`block ${label}, reviews off: opening the gate names the repair, and the person approves once`, () => {
-      const { final, agent } = run(label, ["--review", "none"], { write: body });
+      const { final, agent, host } = run(label, ["--review", "none"], { write: body });
       expect(final.kind).toBe("done");
       expect(agent.unitsBlockRepairs.map((repair) => repair.where)).toEqual(["gate"]);
       const approvals = agent.asked.filter((q) => q.what === "approval" && q.stage === "units-generation");
       expect(approvals).toHaveLength(1);
+      // The person answered the gate the engine opened, not one it backfilled at
+      // their approval: that one takes their reply only from a later second than
+      // the block's write, so a fast runner asked them twice.
+      const openings = auditEvents(host.proj)
+        .filter((e) => e.event === "STAGE_AWAITING_APPROVAL" && field(e.block, "Stage") === "units-generation");
+      expect(openings.map((e) => field(e.block, "Recovered"))).toEqual([null]);
       expect(agent.directives.filter((d) => d.kind === "error")).toEqual([]);
     }, SCOPE_RUN_TIMEOUT_MS);
   }

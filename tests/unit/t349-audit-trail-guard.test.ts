@@ -143,6 +143,35 @@ describe("t349 audit trail guard: file-write tools", () => {
     expect(kind("Glob", { pattern: `${AUDIT}/*.md` })).toBeNull();
   });
 
+  test("a script the model writes is judged on the trail it names, not on an audit folder beside a word it cannot place", () => {
+    const deploy = (line: string): string => [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'BUCKET="$ARTIFACT_BUCKET"',
+      line,
+      "",
+    ].join("\n");
+    const written = (line: string, cwd = CWD): string | null =>
+      kind("Write", { file_path: "infra/aws/deploy.sh", content: deploy(line) }, cwd);
+    for (const line of [
+      'cp ./reports/report.json "s3://$BUCKET/audit/"',
+      'echo done | tee "$OUT/audit/summary.txt"',
+      'cp ./reports/report.json "$OUT/" && echo ./audit/done',
+      'tar czf "$BACKUP" ./reports/audit/',
+    ]) {
+      expect(written(line), line).toBeNull();
+      expect(written(line, `${CWD}/${RECORD}`), line).toBeNull();
+    }
+    for (const line of [
+      `echo x >> ${AUDIT}/$(date +%s).md`,
+      `echo x >> "${AUDIT}/host-$(date +%s).md"`,
+      `echo x >> ${RECORD}/.aidlc-engine/audit/host-$(date +%s).md`,
+    ]) {
+      expect(written(line), line).toBe("audit");
+    }
+    expect(bash('echo x >> "$OUT/audit/host.md"')).toBe("audit");
+  });
+
   test("a refusal names the path that matched, for a guarded write and for content that reaches hooks", () => {
     const captured = (input: Record<string, unknown>): string => {
       const original = process.stderr.write;
@@ -171,6 +200,16 @@ describe("t349 audit trail guard: file-write tools", () => {
         content: "printf x > .claude/hooks/aidlc-write-audit-log.ts\n",
       },
     })).toContain("Matched: .claude/hooks/aidlc-write-audit-log.ts.");
+    const trail = captured({
+      tool_name: "Write",
+      tool_input: { file_path: "infra/aws/deploy.sh", content: `#!/bin/sh\necho x >> ${AUDIT}/$(date +%s).md\n` },
+    });
+    expect(trail).toContain(AUDIT_TRAIL_REFUSAL);
+    expect(trail).toContain("Matched: ");
+    expect(captured({ tool_name: "Bash", tool_input: { command: `echo x >> ${SHARD}` } }))
+      .toContain(`Matched: ${SHARD}.`);
+    expect(captured({ tool_name: "Bash", tool_input: { command: 'echo x >> "$R/audit/host.md"' } }))
+      .toContain("Matched: $R/audit/host.md.");
   });
 
   test("runtime records still classify as runtime, ahead of the audit class", () => {

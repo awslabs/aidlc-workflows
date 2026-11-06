@@ -7,6 +7,7 @@
 // approved plan + unit test instructions. Both the dispatch guard and autonomous
 // swarm referee consume the same contract.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { gitSubmoduleNames } from "./aidlc-git.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
@@ -185,7 +186,7 @@ import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } fr
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
-import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
 } from "./aidlc-reply-reader.ts";
@@ -1954,6 +1955,25 @@ function approvedCopyForAttempt(
   return { copy, built: receipt.status === "generation" };
 }
 
+function approvedCopyChangedFiles(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+  plan: string,
+  instructions: string,
+  recordedFingerprint: string | null,
+): string[] {
+  const copy = recordedFingerprint === null ? null : readApprovedPlanCopy(projectDir, authority);
+  if (copy === null || copy.fingerprint !== recordedFingerprint) return [];
+  const changed: string[] = [];
+  if (projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan)) {
+    changed.push(toPosix(relative(projectDir, join(authority.stageDir, "code-generation-plan.md"))));
+  }
+  if (instructions.replace(/\r\n/g, "\n") !== copy.instructions.replace(/\r\n/g, "\n")) {
+    changed.push(toPosix(relative(projectDir, join(authority.stageDir, "unit-test-instructions.md"))));
+  }
+  return changed;
+}
+
 /**
  * The one line the person hears when the plan they approved changed, or null
  * when it did not (or nothing was approved in this attempt). Before the build
@@ -2747,8 +2767,10 @@ export function codeGenerationIssuance(
  * approved here: the Unit's stages are the checkout's whole walk, so Code
  * Generation is over there, as it is once a workflow's walk moves past it,
  * though Current Stage stays on it. The engine records that notice as the step
- * on record on every harness (prepareEmission), the one notice it records. A
- * stamp that cannot be read leaves the step as it was.
+ * on record on every harness (prepareEmission), the one notice it records, and
+ * so the offer to publish that Unit it puts there first (a team-handover ask
+ * naming the Unit) is that same step. A stamp that cannot be read leaves the
+ * step as it was.
  */
 export function codeGenerationStepOnRecord(
   projectDir: string,
@@ -2756,7 +2778,8 @@ export function codeGenerationStepOnRecord(
   marker: ActiveDirectiveMarker | null,
 ): boolean {
   if (!codeGenerationIsTheStep(marker?.stage ?? "", getField(stateContent, "Current Stage") ?? "")) return false;
-  if (marker?.version !== 2 || marker.kind !== "notice" || !marker.unit) return true;
+  const doneStep = marker?.kind === "notice" || (marker?.kind === "ask" && marker.ask_type === "team-handover");
+  if (marker?.version !== 2 || !doneStep || !marker.unit) return true;
   try {
     return readApplicableTeamUnitScopeStamp(projectDir, stateContent)?.unit !== marker.unit;
   } catch {
@@ -4265,6 +4288,9 @@ export interface PlanApprovalPickerQuestion {
   options: string[] | null;
   // A multi-select picker, or a reply carrying several picks.
   severalPicks: boolean;
+  // A box that asked several questions: each one read as a box asking it
+  // alone would be, with the reply the person gave it (null when left blank).
+  questions?: Array<Omit<PlanApprovalPickerQuestion, "questions"> & { reply: string | null }>;
 }
 
 // A picker reply answers the plan only when it was the recorded question,
@@ -4824,6 +4850,13 @@ function planApprovalQuestionEvidence(
     );
   }
   if (artifacts.recordedFingerprint !== artifacts.expectedFingerprint) {
+    const changed = approvedCopyChangedFiles(
+      projectDir,
+      authority,
+      artifacts.plan,
+      artifacts.instructions,
+      artifacts.recordedFingerprint,
+    );
     throw new Error(
       artifacts.recordedFingerprint === null
         ? `Plan Approval found no recorded fingerprint: ${missingPlanApprovalFingerprintReason(artifacts.questions)}`
@@ -4831,6 +4864,8 @@ function planApprovalQuestionEvidence(
         ? "The recorded Plan Approval fingerprint was written under an earlier format. " +
             "Re-run the fingerprint command, re-present the plan, and approve again."
         : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract. " +
+            (changed.length > 0 ? `Files that differ from the approved copy: ${renderChangedPaths(changed)}. ` : "") +
+            syncFolderClause(projectDir) +
             "Re-run the fingerprint command, re-present the plan, and approve again.",
     );
   }
@@ -5843,7 +5878,6 @@ function publishCodeGenerationStart(
   prepared: ReturnType<typeof prepareCodeGenerationStart>,
   options: { recordContinuation?: boolean },
   originals: PlanApprovalRuntimeReceipt[],
-  pickUp: boolean,
 ): string[] {
   const { authority, receipt, continuation } = prepared;
   if (continuation) recordContinuedStaleContract(projectDir, continuation);
@@ -5853,9 +5887,10 @@ function publishCodeGenerationStart(
   // the person's change request: the receipt keeps the content the build
   // started on, at the attempt it started in, so an interrupted build in the
   // approval's own attempt picks up (see "Picking up an interrupted build"),
-  // and their next change request is judged against it (planAsSentBack). A
-  // swarm, a worktree delegation and a batch keep their own continuation rule.
-  const started = pickUp && continuation && !receipt.batch
+  // and their next change request is judged against it (planAsSentBack): a
+  // swarm batch, a worktree delegation and a grouped approval as well, so a
+  // second Request Changes in a row there is judged against the revision too.
+  const started = continuation
     ? buildContentFingerprint(continuation.artifacts.plan, continuation.artifacts.instructions, authority) : null;
   const startedOn = started !== null && started !== receipt.fingerprint ? { startedFingerprint: started } : {};
   if (receipt.status === "generation") {
@@ -5865,7 +5900,12 @@ function publishCodeGenerationStart(
     // attempt, which no judgement made in this attempt can match, and the
     // retry writes it again), and their sweep is for receipts of this
     // attempt, not of the one the approval was given in.
-    if (continuation?.carried && started !== null && started !== receipt.startedFingerprint) {
+    // A delegated receipt is the parent's copy in the Unit's worktree and must
+    // stay byte-equal to it (worktreeDelegationParent): the parent keeps it.
+    if (
+      continuation?.carried && started !== null && started !== receipt.startedFingerprint &&
+      receipt.delegation === undefined
+    ) {
       // The receipt as it stands now: the batch start may have marked it
       // (`carriedInto`) since it was read, and that mark must stay.
       const current = readPlanApprovalReceipt(projectDir, receipt) ?? receipt;
@@ -6021,7 +6061,7 @@ export function beginCodeGenerationBatch(
           if (carriedFresh) {
             writePlanApprovalReceipt(projectDir, { ...started.receipt, carriedInto: started.authority.runFloor });
           }
-          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals, pickUp));
+          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals));
         }
         if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
           throw new Error("Source files changed while code generation was starting. Retry the step.");
@@ -6121,6 +6161,8 @@ function replySession(projectDir: string, argv: string[]): string {
 }
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const subcommand = argv.find((arg) => (TESTING_POSTURE_SUBCOMMANDS as readonly string[]).includes(arg));
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {

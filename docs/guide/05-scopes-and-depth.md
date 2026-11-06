@@ -70,9 +70,10 @@ Each scope's stage count below is the stages it runs after Initialization's thre
 
 **Use when:** Making infrastructure changes (new environments, CDK/CloudFormation updates, cost optimization).
 
-- **Stages:** 10 of 30
+- **Stages:** 12 of 30
 - **Default depth:** Standard
 - **Skips:** User-facing stages (stories, mockups, user flows) — focuses on architecture, infrastructure, and deployment
+- **Writes the IaC in:** Code Generation, under Plan Approval, from the Infrastructure Design; Build and Test then runs the IaC checks, and Environment Provisioning applies it
 
 ### security-patch
 
@@ -175,7 +176,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `poc` | 8 / 33 | Minimal | Minimal | Prove feasibility fast |
 | `bugfix` | 9 / 33 | Minimal | Minimal | Fix and deploy a specific bug |
 | `refactor` | 10 / 33 | Minimal | Minimal | Clean up and deploy existing code |
-| `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
+| `infra` | 15 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
 | `classic` | 18 / 33 | Standard | Standard | V1-style Inception + Construction — the implicit default |
 | `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
@@ -216,8 +217,8 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |  |
 | 3.3 | NFR Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
 | 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
-| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
-| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
+| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  | ✓ |  |
 | 4.1 | Deployment Pipeline | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
 | 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  |  | ✓ |  |
@@ -226,7 +227,7 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
 | 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
 | 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
-| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **18** | **26** | **10** |
+| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **15** | **10** | **18** | **26** | **10** |
 <!-- END scope-stage-matrix -->
 
 A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.
@@ -292,7 +293,7 @@ composition:
 /aidlc --new-scope "..."               # force a custom plan even on a stock match
 ```
 
-The composer agent reads your task, then estimates five implementation-entropy components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - and composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. Structural estimates ground in CodeKB MCP call-graph and component analysis when a CodeKB server is configured and indexed (an optional external tool; nothing ships with AI-DLC); otherwise the composer falls back to the bounded workspace scan (brownfield/greenfield, languages). The proposal comes to you as a short offer: two or three sentences on what kind of change this looks like, how much process the composer suggests and the steps in plain terms, then one line with the plan's name, stage count and approval questions, and rows for its Guard Policy and its scope settings that you can change before approving. When a tailored plan skips a stage that a stage it keeps uses (beyond what the stock scope it runs on leaves out by design), the offer says so once, in one line naming them ("This plan skips Units Generation, which Contract Design, Functional Design and Code Generation use"). Ask, and the agent shows the score breakdown (each component with a LOW/MED/HIGH band and its evidence) and the reason for every EXECUTE and SKIP. On existing code a tailored plan always includes Reverse Engineering, which checks the code map an earlier scan left before it scans again, unless the composer has CodeKB evidence and proposes leaving it out (see CodeKB grounding below). When the plan is created, its scores and their evidence method are kept on the work's first audit entry. You approve, edit, or reject; nothing is written and no workflow starts before an explicit approval. A plan applies to the piece of work it was approved for, so composing never adds to your scope list unless you ask. On approve:
+The composer agent reads your task, then estimates five implementation-entropy components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - and composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. Structural estimates ground in CodeKB MCP call-graph and component analysis when a CodeKB server is configured and indexed (an optional external tool; nothing ships with AI-DLC); otherwise the composer falls back to the bounded workspace scan (brownfield/greenfield, languages). The proposal comes to you as a short offer: two or three sentences on what kind of change this looks like, how much process the composer suggests and the steps in plain terms, then one line with the plan's name, stage count and approval questions, and rows for its Guard Policy and its scope settings that you can change before approving. When a tailored plan skips a stage the stock scope it runs on would run, or a stage that a stage it keeps uses (beyond what that scope leaves out by design), the offer says so once, in one line naming every one ("This plan skips Units Generation, which Contract Design, Functional Design and Code Generation use, and Deployment Execution"). Ask, and the agent shows the score breakdown (each component with a LOW/MED/HIGH band and its evidence) and the reason for every EXECUTE and SKIP. On existing code a tailored plan always includes Reverse Engineering, which checks the code map an earlier scan left before it scans again, unless the composer has CodeKB evidence and proposes leaving it out (see CodeKB grounding below). When the plan is created, its scores and their evidence method are kept on the work's first audit entry. You approve, edit, or reject; nothing is written and no workflow starts before an explicit approval. A plan applies to the piece of work it was approved for, so composing never adds to your scope list unless you ask. On approve:
 
 - If the proposal MATCHED a stock scope, AI-DLC creates the workflow with that scope directly (a scan report full of code-level findings usually routes to `bugfix` or `security-patch` this way).
 - For a CUSTOM plan, AI-DLC creates the workflow on the nearest suitable stock scope (one with no walking skeleton and no test strategy other than the plan's depth, so the plan runs as the gate showed it; for a new project, one meant for new work rather than `bugfix`, `refactor`, or `security-patch` when one fits) with the plan's own stage changes and depth, in the same turn, and writes no scope file. The work's state records `Plan: <name>`, the name the composer suggested and the gate showed (`tailored plan` when it gave none), and `/aidlc status` shows it; the scope the plan runs on is not named there. The gate for a custom plan has a second approval, **Approve and save as scope**: it asks for a name (the composer suggests one) and keeps the plan as a reusable scope as well.

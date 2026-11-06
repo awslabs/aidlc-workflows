@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { projectSettingsPath } from "../../core/tools/aidlc-settings.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 4);
 
@@ -83,7 +84,7 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
     test(`${row.harness}: an edit stops the refresh and is kept; moving it aside or --force goes through`, () => {
       const p = project(row.harness);
       const release = join(RELEASES, row.harness);
-      const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", row.harness, "--mcp", "none", "--yes"]);
+      const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", typedHarnessName(row.harness), "--mcp", "none", "--yes"]);
       expect(installed.status, installed.out).toBe(0);
       const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "architect", ...row.pin, "--yes"]);
       expect(pinned.status, pinned.out).toBe(0);
@@ -204,7 +205,7 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
   test("an agent file put back to the release's own copy takes the recorded model with no conflict", () => {
     const p = project("release-copy");
     const release = join(RELEASES, "kiro");
-    const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro", "--mcp", "none", "--yes"]);
+    const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro-v2", "--mcp", "none", "--yes"]);
     expect(installed.status, installed.out).toBe(0);
     const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "architect", "--model", "claude-sonnet-5-5", "--yes"]);
     expect(pinned.status, pinned.out).toBe(0);
@@ -225,7 +226,7 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
     test(`kiro: a refresh keeps an agent file Kiro upgraded, ${order}, and --force writes the release's file with the model`, () => {
       const p = project("kiro-upgraded");
       const release = join(RELEASES, "kiro");
-      const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro", "--mcp", "none", "--yes"]);
+      const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro-v2", "--mcp", "none", "--yes"]);
       expect(installed.status, installed.out).toBe(0);
       const rel = ".kiro/agents/aidlc-architect-agent.json";
       const file = join(p.dir, rel);

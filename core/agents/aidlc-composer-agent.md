@@ -202,7 +202,7 @@ routes on it.
 | ARS Range | Workflow Shape | Typical Stage Count | Stock Scope Territory |
 |-----------|---------------|---------------------|-----------------------|
 | 0–20 | Near-direct implementation | 5–9 | poc, bugfix |
-| 21–40 | Focused workflow | 8–13 | refactor, security-patch, infra |
+| 21–40 | Focused workflow | 8–15 | refactor, security-patch, infra |
 | 41–60 | Standard workflow | 15–22 | mvp, custom |
 | 61–80 | Comprehensive workflow | 22–28 | feature, custom |
 | 81–100 | Full ceremony | 28–32 | enterprise |
@@ -588,10 +588,12 @@ When the person names the scope for the report themselves, that is their
 call: run without `--report` and match the scope they named.
 When the dispatch selected a workflow explicitly, pass that same space and
 intent so Guard Policy validation reads that workflow's memory. For a
-front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
-<settings> }` so the validator checks the six scope settings (Step 8) with the
-grid (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`,
-`collaborators`, `review_cap`); an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
+front/report proposal the first run checks the grid alone; once Step 8 has
+chosen the six scope settings from the validator's echo, write the file as
+`{ "stages": <grid>, "scopeSettings": <settings> }` so the validator checks
+them with the grid (`sensors`, `learnings`, `summary_confirmation`,
+`plan_approval`, `collaborators`, `review_cap`); an in-flight proposal carries
+no `scopeSettings`. Once Step 7 has routed
 a front/report proposal, its final run also names that route, `--matched
 <stock-scope>` or `--custom` (Step 8). Lenient mode
 for a front/report proposal; for an IN-FLIGHT proposal add `--strict` (the same
@@ -646,14 +648,15 @@ keep it as advisory evidence only. Route solely on
 - The mechanical screen's distance never overrides the final validated grid.
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
-- To confirm depth compatibility and read its settings (`guard_policy`,
-  `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `collaborators`, `review_cap`), read the `.md`
-  of that one scope, `nearest_stock[0]`, under `scopesDir`. A custom proposal
+- The validator echoes that one scope's depth, Guard Policy and settings as
+  `matched_start` (`scope`, `depth`, `guard_policy`, `scope_settings`) on
+  every run, your `--matched` run included (there, the scope it names):
+  confirm depth compatibility from it, and start a matched proposal's
+  settings from it (Step 8). A custom proposal
   takes its settings and Guard Policy from the validator's `custom_start`
-  instead (Step 8), and reads that file for its settings only when the
-  validator echoes no `custom_start`. **Efficiency rule**: never read
-  any other scope `.md` - the grid JSON has the complete EXECUTE/SKIP data; the
-  `.md` files only add depth, keywords, and these settings.
+  instead, and from `matched_start` only when the validator echoes no
+  `custom_start`. **Efficiency rule**: never read a scope `.md` - the grid
+  JSON has the complete EXECUTE/SKIP data, and the validator echoes the rest.
 - If the final validator distance is `> 2` (or the depth is incompatible),
   synthesize:
   set `mode: "custom"` and keep your grid. Re-run validate-grid after any
@@ -735,10 +738,8 @@ no fences and reopens that approval;
 and also stands the plan-approval and review-freeze checks aside; `off` does
 that and stands the state-transition and reviewer-scope checks aside too. No
 value removes a gate, and none of them touches human presence. For `mode: "matched"` start from the stock scope's
-`guard_policy` frontmatter value (read from that one scope `.md` in the order
-the scope loader reads it: `guard_policy:`, then the retired `change_control:`,
-then strict when neither line is present) and say in the rationale that it is
-this kind of work's usual setting. When the
+default, the validator's `matched_start.guard_policy`, and say in the rationale
+that it is this kind of work's usual setting. When the
 human has asked for a stricter value, keep theirs on every re-dispatch: the
 plan stays matched and creation applies it. The final `validate-grid --matched`
 run rejects only a value below the stock default. For `mode: "custom"` copy
@@ -748,7 +749,7 @@ composing, and the human raises the value on the gate row when they want a
 changed input to reopen an approval (keep theirs on every re-dispatch). When a
 memory layer declares strict, the validator refuses a lower value: propose
 strict and name that file in the rationale. When the validator echoes no
-`custom_start`, start from `nearest_stock[0]`'s `guard_policy` the same way.
+`custom_start`, start from `matched_start.guard_policy` the same way.
 For `mode: "in-flight"`
 return the running intent's current value unchanged (read `Guard Policy` from
 `aidlc-state.md`, or the retired `Change Control` line on an intent created
@@ -794,12 +795,11 @@ turns each review into one pass whose findings the human reads at the gate,
 and `none` dispatches no stage reviewer in the gated flow). Give one 1-2
 sentence `scopeSettingsRationale` naming what is off or capped and why this
 work does not need it. For `mode: "matched"` start from the stock scope's
-values (a missing ceremony line means `on`, a missing `review_cap` means
-`adversarial`). For `mode: "custom"` start from the validator's
-`custom_start.scope_settings`, the classic scope's values, whichever stock
+values, the validator's `matched_start.scope_settings`. For `mode: "custom"`
+start from the validator's `custom_start.scope_settings`, the classic scope's values, whichever stock
 scope the plan runs on: a custom plan picks its own stages but runs the
 ceremony a person gets without composing (when the validator echoes no
-`custom_start`, start from `nearest_stock[0]`'s values). A matched proposal
+`custom_start`, start from `matched_start.scope_settings`). A matched proposal
 that the human's edit turns custom keeps the Guard Policy and settings the
 gate showed, with their change applied. Either way, move one
 only when the evidence gives a reason, as a SKIP needs one (see "Scope

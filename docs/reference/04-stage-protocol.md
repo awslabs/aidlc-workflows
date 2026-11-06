@@ -160,7 +160,10 @@ AskUserQuestion({
 name of the next in-scope stage) on the reply that opened the gate (`report
 --result awaiting-approval` or `revised`, computed when the gate opens, so a
 plan change made during the stage is in it), else the run-stage directive's
-(computed at emit time), or `Complete workflow` when `next_stage` is null. The
+(computed at emit time), or `Complete workflow` when `next_stage` is null. In
+the checkout that claimed a team Unit, a Unit step's `next_stage` is that
+Unit's next step, and after its last one `landing Unit <unit>`: Build and Test
+runs once every Unit lands. The
 conductor never guesses the next stage.
 
 The conductor reads the person's reply, in any words, against what it showed
@@ -795,9 +798,10 @@ dynamic per workflow position.
    instead of `rules_content`, the chat already holds the bundle and the
    directive does not repeat it: paste nothing for the rules and name
    `directive.stage_file` in the brief, because every harness that sends
-   `rules_held` gives them to its registered agents itself (on Claude Code,
-   Codex and opencode the rule-delivery hook appends the exact bundle of the
-   stage that path names; Kiro CLI preloads it through `resources`; on Kiro
+   `rules_held` gives them to its registered agents itself (on Codex and
+   opencode the rule-delivery hook appends the exact bundle of the stage that
+   path names; on Claude Code it gives the agent the current stage's bundle
+   as the agent starts; Kiro CLI preloads it through `resources`; on Kiro
    IDE, and Kiro CLI v3 running the same tree, the always-included
    active-memory steering carries its text). Every brief still carries
    `directive.ceremony`, `directive.protocol_modules`, and the diary discipline
@@ -1024,7 +1028,7 @@ and problem complexity.
 | poc | Minimal | Minimal | ~8 | Initialization + Ideation + core Inception |
 | bugfix | Minimal | Minimal | 9 | Targeted |
 | refactor | Minimal | Minimal | 10 | Targeted |
-| infra | Standard | Standard | ~13 | Infra-focused |
+| infra | Standard | Standard | ~15 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
 | classic | Standard | Standard | 18 | The implicit default: no Ideation, Inception and Construction through Build and Test, no CI Pipeline or Operation |
 | workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
@@ -1330,14 +1334,18 @@ change. See
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
    review artifact(s), the engine-owned findings list, decision effects, and
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
-   is 1, engine-enforced). At a stage's gate, one line after the findings names
+   is 1, engine-enforced). At a stage's gate, one line names
    the open findings Approve records as `Accepted risk`, each with the start of
    its text (and its Unit when they span Units), and says, in plain words, that
    the person can instead approve and ask for one to be fixed (`--fix-finding`)
    or reject one as not applying, with their reason (`--reject-finding` on a
    Request Changes, whose gate comes back with the review as it stands when
    nothing else changed); the Approve option then does not say it again. The ids come from the builder
-   `GATE_APPROVED` writes through. A Unit's Construction checkpoint, a
+   `GATE_APPROVED` writes through. The step that shows the gate (the
+   `awaiting-approval` or `revised` report's reply, or `next` showing it again)
+   carries that line in its `change_notices`, said just before the approval
+   question, so the brief does not print it; the brief kept for the gate holds
+   it after the brief. A Unit's Construction checkpoint, a
    per-stage team Unit gate, and a gate whose one approval also covers later
    stages with open findings of their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction

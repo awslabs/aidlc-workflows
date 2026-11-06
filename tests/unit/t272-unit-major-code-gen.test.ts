@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:writeActiveDirectiveMarker
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:writeActiveDirectiveMarker, function:statusSyncLeavesCursor
 //
 // CLI-contract test for code-generation in the unit-major walk. mechanism = cli.
 //
@@ -61,8 +61,10 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   artifactFilename,
   latestMainWorkflowStageRunFloorForProject,
+  readActiveDirectiveMarker,
   stateDigest,
   unitCompletedReceipts,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   renderTestingContract,
@@ -387,6 +389,37 @@ describe("t272 code-generation joins the unit-major walk", () => {
     const gate = runNext(proj);
     expect(gate.stage).toBe("functional-design");
     expect(gate.gate).toBe(true);
+  });
+
+  // A checkout that claimed a Unit (Unit Ownership: team) rests Current Stage on
+  // the Unit's own stage (sync-unit-scope-stage), while the audit tail's last
+  // STAGE_STARTED still names the block's first stage. A sync to that stage is
+  // the mirror of the case above: the cursor stays, and the issued step with it.
+  test("task sync to the block's first stage leaves a claimed Unit's cursor on its own stage", () => {
+    const proj = seedProject({
+      current: "code-generation",
+      checkboxes: `- [-] functional-design — EXECUTE
+- [-] nfr-requirements — EXECUTE
+- [-] nfr-design — EXECUTE
+- [-] infrastructure-design — EXECUTE
+- [-] code-generation — EXECUTE
+- [ ] build-and-test — EXECUTE`,
+    });
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage",
+      stage: "code-generation",
+      unit: "alpha",
+      state_sha256: stateDigest(before),
+    });
+
+    runStatusSync(proj, "functional-design");
+
+    const after = readFileSync(seededStateFile(proj), "utf-8");
+    expect(after).toContain("- **Current Stage**: code-generation");
+    expect(stateDigest(after)).toBe(stateDigest(before));
+    // The step the engine issued is still the current one.
+    expect(readActiveDirectiveMarker(proj, after)?.stage).toBe("code-generation");
   });
 
   // 1: the late approvals are ONE question for all five stages. From a

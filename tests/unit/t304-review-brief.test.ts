@@ -50,6 +50,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   approvalDispositionField,
+  gateApproveAcceptsLine,
   hydrateReviewArtifactContexts,
   parseReviewArtifact,
   readReviewArtifactContexts,
@@ -736,12 +737,13 @@ describe("t304 executable review brief scenarios", () => {
   // the person's to weigh, not concerns that remain or actions they must take.
   test("a READY review with only Minor open findings reads ready, with the points to weigh", () => {
     const stage = findStageBySlug("requirements-analysis")!;
-    const one = renderReviewBrief(requirementProject([ROW_NEW]).proj, stage, "first");
+    const { proj } = requirementProject([ROW_NEW]);
+    const one = renderReviewBrief(proj, stage, "first");
     expect(one).toContain("**Review outcome:** Ready, with 1 minor point to weigh.");
     expect(one).not.toContain("Concerns remain");
     expect(one).toContain("> R-01 Suggested change: Add a delivery date");
     expect(one).not.toContain("Required action:");
-    expect(one).toContain("Approve accepts the open review finding R-01 (Deadline is missing) as risk;");
+    expect(gateApproveAcceptsLine(proj, stage)).toStartWith("Approve accepts the open review finding R-01 (Deadline is missing) as risk;");
     expect(one).toContain("- **Approve** - continue.\n");
     const two = renderReviewBrief(
       requirementProject([ROW_NEW, ROW_NEW_SECOND.replace("| Major |", "| Minor |")]).proj,
@@ -4597,27 +4599,32 @@ describe("t304 protocol and harness projections use the deterministic renderer",
   });
 });
 
-// #2099, the one line: at a gate with open review findings the brief says, in
-// one line beside the findings, that Approve accepts them as risk and that they
+// #2099, the one line: at a gate with open review findings the gate says, in
+// one line after the findings, that Approve accepts them as risk and that they
 // can instead approve and ask for one to be fixed (#3115's --fix-finding) or
 // reject one as not applying (--reject-finding on a change request), in plain
 // words. The ids are the findings Approve records as Accepted risk, from
 // the one builder approve writes through, each with its text; the Approve
 // option no longer says it a second time. Nothing at a Unit's own approval,
-// whose command takes no finding flag.
+// whose command takes no finding flag. The step that shows the gate carries the
+// line (t-gate-carries-approve-accepts-line), so the brief prints none.
 describe("t304 the gate brief says once what Approve accepts", () => {
   const STAGE = "requirements-analysis";
   const lineOf = (brief: string): string[] => brief.split("\n").filter((line) => line.startsWith("Approve accepts"));
+  // The gate's line for the brief's gate, the brief itself printing none.
+  const lineAt = (proj: string, stage: string, brief: string, unit?: string): string[] => {
+    expect(lineOf(brief)).toEqual([]);
+    const line = gateApproveAcceptsLine(proj, findStageBySlug(stage)!, unit);
+    return line === null ? [] : [line];
+  };
 
-  test("three open findings: one line after the findings, naming each with its text, and the Approve option says no more", () => {
+  test("three open findings: one line naming each with its text, and the Approve option says no more", () => {
     const project = engineOwnedFindingProject(["Minor", "Minor", "Minor"]);
     const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
     const line =
       "Approve accepts the open review findings R-01 (Concern 1), R-02 (Concern 2) and R-03 (Concern 3) as risk; " +
       'you can also approve and ask for one to be fixed, or reject one as not applying, saying why.';
-    expect(lineOf(brief)).toEqual([line]);
-    expect(brief.indexOf(line)).toBeGreaterThan(brief.indexOf("> R-03 Suggested change: Fix concern 3"));
-    expect(brief.indexOf(line)).toBeLessThan(brief.indexOf("**Decision options:**"));
+    expect(lineAt(project.proj, STAGE, brief)).toEqual([line]);
     expect(brief).toContain("- **Approve** - continue.\n");
     expect(brief).not.toContain("open findings accepted");
 
@@ -4633,7 +4640,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
   test("one open finding reads in the singular", () => {
     const project = engineOwnedFindingProject(["Major"]);
     const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
-    expect(lineOf(brief)).toEqual([
+    expect(lineAt(project.proj, STAGE, brief)).toEqual([
       "Approve accepts the open review finding R-01 (Concern 1) as risk; " +
         'you can also approve and ask for it to be fixed, or reject it as not applying, saying why.',
     ]);
@@ -4642,7 +4649,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
   test("no open finding: no line, and the option says none are open", () => {
     const { proj } = requirementProject([]);
     const brief = renderReviewBrief(proj, findStageBySlug(STAGE)!, "first");
-    expect(lineOf(brief)).toEqual([]);
+    expect(lineAt(proj, STAGE, brief)).toEqual([]);
     expect(brief).toContain("- **Approve** - continue; no findings are open.");
   });
 
@@ -4651,7 +4658,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     const rejected = requestChanges(project, ["R-01=does not apply"]);
     expect(rejected.status, rejected.out).toBe(0);
     const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "revision");
-    expect(lineOf(brief)).toEqual([
+    expect(lineAt(project.proj, STAGE, brief)).toEqual([
       "Approve accepts the open review findings R-02 (Concern 2) and R-03 (Concern 3) as risk; " +
         'you can also approve and ask for one to be fixed, or reject one as not applying, saying why.',
     ]);
@@ -4660,7 +4667,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
   test("work changed after its review: a finding Approve records as Changed after review is not named", () => {
     const { proj } = fixedAfterReviewProject("off");
     const brief = renderReviewBrief(proj, findStageBySlug(STAGE)!, "first");
-    expect(lineOf(brief)).toEqual([]);
+    expect(lineAt(proj, STAGE, brief)).toEqual([]);
     expect(brief).toContain("- **Approve** - continue with the work as changed after review.");
   });
 
@@ -4677,7 +4684,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
       { gate: "start" },
     );
     const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
-    expect(lineOf(brief)).toEqual([
+    expect(lineAt(project.proj, STAGE, brief)).toEqual([
       "Approve accepts the open review finding R-01 (FR1.1 and FR1.2 state behavioral obligations but carry no " +
         'explicit pass/fail...) as risk; you can also approve and ask for it to be fixed, or reject it as not applying, saying why.',
     ]);
@@ -4690,7 +4697,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     const unitB = join(proj, artifacts.get("unit-b")!);
     writeFileSync(unitB, readFileSync(unitB, "utf-8").replace("| R-02 |", "| R-01 |"), "utf-8");
     const brief = renderReviewBrief(proj, findStageBySlug("functional-design")!, "first");
-    expect(lineOf(brief)).toEqual([
+    expect(lineAt(proj, "functional-design", brief)).toEqual([
       "Approve accepts the open review findings unit-a R-01 (unit-a concern) and unit-b R-01 (unit-b concern) as risk; " +
         'you can also approve and ask for one to be fixed, or reject one as not applying, saying why.',
     ]);
@@ -4710,7 +4717,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
       proj,
     );
     const brief = renderReviewBrief(proj, findStageBySlug("functional-design")!, "first");
-    expect(lineOf(brief)).toEqual([
+    expect(lineAt(proj, "functional-design", brief)).toEqual([
       "Approve accepts the open review finding R-02 (unit-b concern) as risk; " +
         'you can also approve and ask for it to be fixed, or reject it as not applying, saying why.',
     ]);
@@ -4730,20 +4737,20 @@ describe("t304 the gate brief says once what Approve accepts", () => {
       "utf-8",
     );
     const own = renderReviewBrief(proj, findStageBySlug("code-generation")!, "first", "u2-note-tags");
-    expect(lineOf(own)).toEqual([]);
+    expect(lineAt(proj, "code-generation", own, "u2-note-tags")).toEqual([]);
     expect(own).toContain("- **Approve** - continue with the open findings accepted.");
   });
 
-  test("the printed brief carries the line, and the brief kept for the gate holds it", () => {
+  test("the printed brief leaves the line to the gate's step, and the brief kept for the gate holds it", () => {
     const project = engineOwnedFindingProject(["Minor", "Minor"]);
     const printed = run(REVIEW_BRIEF, ["review", "--stage", STAGE, "--why", "first"], project.proj);
     expect(printed.status, printed.out).toBe(0);
     const line =
       "Approve accepts the open review findings R-01 (Concern 1) and R-02 (Concern 2) as risk; " +
       'you can also approve and ask for one to be fixed, or reject one as not applying, saying why.';
-    expect(lineOf(printed.stdout)).toEqual([line]);
+    expect(lineOf(printed.stdout)).toEqual([]);
     const briefs = join(seededRecordDir(project.proj), ".aidlc-engine", "reviews", STAGE, "stage", "briefs");
     const { digest } = JSON.parse(readFileSync(join(briefs, "latest.json"), "utf-8")) as { digest: string };
-    expect(readFileSync(join(briefs, `${digest}.md`), "utf-8")).toContain(line);
+    expect(readFileSync(join(briefs, `${digest}.md`), "utf-8")).toBe(`${printed.stdout}\n${line}\n`);
   });
 });

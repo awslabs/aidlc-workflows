@@ -47,7 +47,7 @@ outputs: ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this st
 - Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
 - Read workspace profile for existing CI configuration
 
-Incremental scopes (infra) skip code-generation and build-and-test by design; when those inputs are absent, base the pipeline stages on the workspace's existing build/test setup (detected from the repo itself) instead — never invent the content of a missing artifact.
+When code-generation or build-and-test did not run for this intent (a stage the person skipped), their inputs are absent: base the pipeline stages on the workspace's existing build/test setup (detected from the repo itself) instead — never invent the content of a missing artifact.
 
 ### Step 2: Generate Clarifying Questions
 

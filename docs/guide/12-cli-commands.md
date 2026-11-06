@@ -36,19 +36,21 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
-| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out (never the last) |
+| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out |
 | `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers; `--all` keeps every recorded repo |
 | `/aidlc intent add-checkout <path>` | Have the review cover code kept in a worktree in the harness folder or outside the project; `remove-checkout <path>` takes it out |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space that starts from the default space's org rules and empty team and project practices |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
+| `/aidlc <plugin command> [args]` | Run a command an installed plugin adds (`aidlc <name>` in a terminal); `aidlc --help` lists them under their plugin |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
-| `/aidlc unit publish <unit>` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref |
+| `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
+| `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
 | `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
@@ -297,7 +299,10 @@ shows where the work stands.
 **Multi-repo workspaces.** When your workspace root holds more than one sibling
 code repo (each an immediate child directory with a `.git`), the creation step
 records the set of repos the intent touches in its `intents.json` row. By default
-it **auto-discovers** every sibling repo; to scope an intent to a specific subset,
+it **auto-discovers** every sibling repo, except a git submodule of a project that
+has code of its own beside it: that project is a one-repo project and is the
+work's repo (a project made only of submodules records them). To scope an intent
+to a specific subset, or to name a submodule as the work's repo,
 the creation tool accepts `--repos a,b` (a comma-separated list of repo directory
 names). These are flags of the deterministic `aidlc-utility intent-create` step the
 engine runs for you — not `/aidlc` flags you type. During Construction, each git
@@ -425,7 +430,10 @@ checkout (a real `.git` entry): a folder merely shaped like a repository is
 refused, as is a name with separators. The command serves work that already
 records repos; work that records none treats the workspace folder itself as its
 repo (`workspace reclassify` records its first repos). Removing the last
-recorded repo is refused for the same reason.
+recorded repo is refused for the same reason, unless it is a git submodule of
+the project (listed in its `.gitmodules`, the project folder a Git checkout
+itself): the work then records none and works on the workspace folder again.
+Removing a repo from work that records none changes nothing.
 
 There is no cut-off: after Units Generation is approved the repo is still added
 (or removed), and what that means for the approved Units follows the work's
@@ -506,7 +514,7 @@ switching examples, and what is committed.
 
 ### `/aidlc knowledge <verb>` — Index and read your own documents
 
-Put your documents — PDFs, Word files, Markdown, plain text — under
+Put your documents (PDFs, Word and Excel files, Markdown, plain text, CSV) under
 `aidlc/spaces/<space>/knowledge/documents/`, organised however you like, then index
 them so agents can cite them instead of guessing.
 
@@ -545,11 +553,18 @@ stored association is always the UUID, so renaming a slug never re-points a
 document). Scoping to an intent that has finished is refused unless you add
 `--allow-inactive`, which exists for back-filling evidence onto a closed record.
 
-**Text extraction** is delegated to whatever extractor the project configures. PDF
-gets a default extractor (`pdftotext`) if none is configured; a Word (`.docx`) file
-has no built-in default — with none configured it is catalogued and citable as
-`unsupported_type`; after configuring an extractor, run `sync` to retry unchanged
-rows of that detected type. If a CONFIGURED extractor is not installed the
+**Text extraction**: Markdown, plain text and CSV are read as they are, and Word
+(`.docx`) and Excel (`.xlsx`) files are read by AI-DLC itself, with nothing to
+install: a Word file's paragraphs and tables, and every sheet of a workbook as a
+table, with each formula's last saved result (dates and numbers as the file stores
+them; images, charts, comments and headers are not read). A project can configure
+its own extractor for any type, and a configured one wins. PDF gets a default
+extractor (`pdftotext`) if none is configured; any other type is catalogued and
+citable as `unsupported_type`; after configuring an extractor, run `sync` to retry
+unchanged rows of that detected type. A Word or Excel file AI-DLC cannot open (one
+that is password-protected, damaged, or in the older `.doc` or `.xls` format saved
+under the new name) is catalogued as `extraction_failed` with the reason. A Word or
+Excel file added before AI-DLC read them gets its text on the next `sync`. If a CONFIGURED extractor is not installed the
 document is catalogued as `extractor_unavailable` — visible in `list`, and fixed by
 installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on the
 same unchanged path reports `already` and does NOT retry extraction — only `sync`
@@ -557,7 +572,7 @@ re-probes rows in this state. Nothing is silently skipped.
 
 **Extraction is capped**: 50 pages for PDF with the default extractor
 (`pdftotext -l 50`, then a check for a page 51) and 200,000
-characters of extractor output. Past a cap the text is cut and the row records
+characters of extractor output (a Word or Excel file's text too). Past a cap the text is cut and the row records
 `truncated` — `show` prints a `truncated  yes` line above the content (`after
 page 50` when the page cap cut it) and the `--json` payload carries the flag
 inside `extraction`, with `pages_kept` for a page cut. Treat a truncated
@@ -569,6 +584,21 @@ per document. A configured extractor's `timeoutMs` overrides the extraction
 budget. An extraction timeout records `extraction_failed`; it does not establish
 that the document was read successfully. These time budgets do not change the
 byte, page, or output caps above.
+
+**Where pdftotext is missing** (Windows and macOS out of the box), AI-DLC reads a
+PDF itself, with nothing to install (`show --json` names that reader
+`builtin-pdf`). pdftotext still runs first wherever it is on `PATH`, and a PDF
+AI-DLC read itself is read again by pdftotext on the next `sync` after you install
+it. A project's own configured PDF extractor is never replaced: when it is
+missing the document is `extractor_unavailable`, as above. AI-DLC's reader runs as
+its own process under the same extraction budget and the same 50-page and
+200,000-character caps. A PDF that only restricts printing or copying is read; one
+that needs a password to open is `extraction_failed` with that reason. Known
+limits, where pdftotext does better: words in Thai, Hindi and other scripts whose
+letters combine can come out with spaces inside them, a PDF encrypted with AES-256
+or with its text compressed the older LZW or RunLength way is `extraction_failed`
+with the reason, and a PDF whose fonts carry no text mapping gives unreadable text. A scanned PDF has no text for either reader (`no_extractable_text`;
+there is no OCR).
 
 A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
 the document's path is substituted into. A configuration without it is refused when
@@ -623,6 +653,11 @@ work, recording a pinned merge gate, or resuming `aidlc unit land`.
 
 ---
 
+Each Unit command below prints its usage for `--help` and changes nothing
+(`-h` too, typed at a terminal: `aidlc unit share -h`). A word it does not
+take (a misspelt option, a second Unit name) is named with that usage before
+anything is committed, pushed or written.
+
 ### `/aidlc --claim <unit>` and `/aidlc unit claim <unit>` — Claim a team Unit
 
 Atomically claim one open Unit in a team-owned, unit-major Construction workflow.
@@ -640,11 +675,16 @@ concurrent claimant succeeds.
 /aidlc unit claim user-profile-api --team "Alice"
 ```
 
-`--team` supplies the human-readable holder label. `--rhythm` optionally pins
+`--team` supplies the human-readable holder label. With `/aidlc --claim`, the
+command AI-DLC runs for the claim carries the label in a file it writes
+(`--request-file`), so no shell on the way changes it: `O'Brien` or `Ops & QA`
+is recorded as given in PowerShell, Git Bash and cmd.exe. `--rhythm` optionally pins
 this claim to `per-stage` or `unit-end`; when omitted, the workflow's affirmed
 Unit gate rhythm is used. Claims are refused until dependencies and any required
 walking skeleton are complete, and a checkout with a live claim routes only its
-stamped Unit.
+stamped Unit. While main is back at Units Generation changing the Unit plan, a
+claim still goes ahead, and its result says once that if the approved plan
+changes that Unit's own entry, pin asks for a rebase onto main.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 
@@ -686,20 +726,50 @@ successor attempt and prevents a lost-output retry from tombstoning it.
 
 Write the gitignored participant marker for this clone. A subsequent bare
 `/aidlc` on unscoped main emits the typed Unit picker with claimable, already
-claimed, and dependency-blocked rows; a facilitator checkout without the marker
-receives the terminal fan-out notice instead.
+claimed, and dependency-blocked rows. A fresh clone of the shared work does not
+need it: its `/aidlc` offers the Units open to take on its own. A facilitator
+checkout without the marker receives the terminal fan-out notice instead.
 
 ```
 /aidlc unit participate
 ```
 
+### `/aidlc unit share` - Share main with the teams
+
+Run from a checkout of team work that holds no Unit claim, on the integration
+branch:
+
+```bash
+/aidlc unit share
+```
+
+It commits what git shows changed here (files git does not track included,
+ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
+`opencode.json` left out), then pushes the integration branch to the remote
+with a plain push, never forced, so the teams can take Units from the plan or
+see a Unit that landed. After it, this checkout shows the board instead of
+building Units. A push the remote refuses keeps the commit and says why; pull
+the branch, then share again. `/aidlc` offers this step itself when it is due:
+before a Unit would start on the lead's checkout, and after a land the remote
+does not have yet.
+
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 
 Run from the scoped team checkout after committing its artifacts, source, state
-mirror, and audit shard:
+mirror, and audit shard, or with `--commit` to commit them first; `/aidlc`
+offers that step itself when the Unit is complete and approved. `--commit`
+commits the Unit's own work: every change to a tracked file, the record under
+`aidlc/`, and the new files the Unit's source manifest lists (what its Code
+Generation says it wrote). Other new files, such as AI-DLC's own install or a
+`node_modules` your `.gitignore` does not list, stay on disk uncommitted, and
+the publish says once how many it left out. `--include <path>` puts a new file
+or folder in as well (give it once for each, or `.` for all of them); run it
+after a publish to publish again with them:
 
 ```bash
 /aidlc unit publish user-profile-api
+/aidlc unit publish user-profile-api --commit
+/aidlc unit publish user-profile-api --commit --include docs/diagrams --include README.md
 ```
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref
@@ -707,6 +777,11 @@ to a candidate commit that preserves both claim and implementation history.
 AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` (written when a
 session starts in a fresh clone) does not count, here or at landing; it stays
 uncommitted, and any other change still stops both.
+A change to a record outside the Unit's `construction/<unit>/` folder (an Inception
+artifact such as `contract-summary.md`, say) is still published, but pin will refuse
+that candidate, so publish names the file and says to take it out of the branch,
+change it on main instead, and publish again. Pin and land refuse it too and
+say to take it out in the checkout where the Unit is claimed.
 A claimed checkout keeps its own audit rows (sessions, turns, answers) in a
 local record under the intent record's `.aidlc-engine/audit/`, which AI-DLC's
 `.gitignore` keeps out of commits, and the claim's tracked shard takes only the
@@ -729,10 +804,16 @@ and audit-shard transport directly from that commit. It does not merge or create
 a worktree. The claim-bound team shard may carry only that Unit's attempt
 receipts; main-authority rows, another Unit's record/receipt paths, extra shards,
 and other workflow-record paths are refused. Pin also compares the candidate
-base's Unit DAG, Unit kinds, and active per-Unit stage columns with live main;
-a changed Construction contract requires rebase and republish. Product-source
-paths outside the Unit record tree are listed in the evidence for the human
+base's entry for the Unit (its kind and dependencies) and the active per-Unit
+stage columns with live main; a changed Construction contract requires rebase
+and republish. A Unit the plan adds, drops or changes elsewhere does not.
+Product-source paths outside the Unit record tree are listed in the evidence for the human
 merge gate.
+A rule kept in the claimed checkout (the space's `memory/project.md` or
+`memory/team.md`) is listed there too and lands with the Unit.
+
+Pin and land also refuse a Unit until every Unit it depends on has landed on
+main.
 
 ### `/aidlc unit gate <unit>` — Decide the pinned merge
 
@@ -768,10 +849,10 @@ neither.
 ```
 
 Landing first fetches the current integration branch and revalidates the
-approved evidence against the live Unit DAG, Unit kinds, and active per-Unit
-stage columns. Contract drift refuses before Git mutation and requires rebase,
-republish, re-pin, and a new merge gate. It then merges
-pinned content while retaining main-owned engine metadata, folds the Unit row,
+approved evidence against the Unit's live entry in the Unit DAG (its kind and
+dependencies) and the active per-Unit stage columns. Contract drift refuses
+before Git mutation and requires rebase, republish, re-pin, and a new merge
+gate. It then merges pinned content while retaining main-owned engine metadata, folds the Unit row,
 and finalizes the transported audit receipts. For crash recovery, run the
 idempotent steps separately:
 
@@ -854,7 +935,7 @@ They do bring AI-DLC's own copy of the active space's memory up to date
 start does, so the command is safe to run before the first intent is created;
 once an intent exists it also records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
 
-When a workflow has issues, `--doctor` also lists the structured findings in its Project section, one `warn [<id>] <summary>` row with a `fix:` line each (e.g. `gate-unresolved`, `runtime-graph-stale`), for unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
+When a workflow has issues, `--doctor` also lists the structured findings in its Project section, one `warn [<id>] <summary>` row with a `fix:` line each (e.g. `gate-unresolved`, `runtime-graph-missing`), for unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
 
 **Syntax:**
 
@@ -872,14 +953,15 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Hook presence | Every framework hook wired by `settings.json` exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. AI-DLC's status line is checked from your own `.claude/settings.local.json` when you turned it on; it only shows progress, so an `aidlc-statusline.ts` nobody wired is never reported as enforcement that is off. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
-| Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro writes when you switch a hook off under Agent Hooks. The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Kiro's Agent Hooks |
+| Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro IDE writes when you switch a hook off under Agent Hooks (a committed file can carry it too). The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Agent Hooks in Kiro IDE, or in Kiro CLI to change `"enabled": false` to `true` in the hook's file, then quit Kiro and start `kiro-cli --v3` again in the folder |
 | Kiro ignore sources | On the Kiro harness with the Markdown conductor (`.kiro/agents/aidlc-aidlc.md`, used by Kiro IDE and Kiro CLI v3): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the conductor agent (`agents/aidlc-aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by Kiro itself or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because Kiro's `fs_read` guard (Kiro IDE and Kiro CLI v3) then denies every stage, agent, and protocol read. Workspace-source matches warn, because doctor cannot tell which Kiro runs: in Kiro IDE they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting; Kiro CLI v3 applies `.kiroignore` (so a match there denies those reads) and not `.gitignore`, and the warning says which. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | Active space method copy | `aidlc/active-memory/` (the git-ignored copy every harness include reads) holds the active space's `memory/` files; the check writes it first, as every session start does, so a difference left is a file that cannot be written there (warn) |
 | VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
-| Hook heartbeats | `.aidlc-engine/hooks-health/` contains timestamps from hook executions (for a record with none of its own, the beat of the turn that created it, written just before the record existed, counts for its first five minutes). No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with the harness's own step to get its hooks running (on Claude Code, `"disableAllHooks": false` in `.claude/settings.local.json`, or the organization policy). Heartbeats stay in the clone whose hooks wrote them, while audit records travel in git, so when only other clones' audit records show the progress (a teammate's work you pulled) it is a warning instead, `This workflow was run in another clone (<machine>); this clone has no hook record for it yet`, with nothing to fix in this clone |
+| Synced folder | Only when the project sits in a synced folder: a Google Drive, OneDrive, Dropbox or Box folder under macOS `~/Library/CloudStorage`, iCloud Drive (`~/Library/Mobile Documents`), a Windows OneDrive folder, or a Dropbox folder that Dropbox's own `info.json` names. Says that sync can change files AI-DLC checks, and to move the project out of the synced folder or pause sync for it; the strict refusals for a document, plan or source that changed after its review or approval say the same. Silent otherwise (advisory - never fails) |
+| Hook heartbeats | `.aidlc-engine/hooks-health/` contains timestamps from hook executions (for a record with none of its own, the beat of the turn that created it, written just before the record existed, counts for its first five minutes). No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with the harness's own step to get its hooks running (on Claude Code, `"disableAllHooks": false` in `.claude/settings.local.json`, or the organization policy; when `.claude/settings.json` is missing, not valid JSON or registers none of AI-DLC's hooks, that file's repair instead). Heartbeats stay in the clone whose hooks wrote them, while audit records travel in git, so when only other clones' audit records show the progress (a teammate's work you pulled) it is a warning instead, `This workflow was run in another clone (<machine>); this clone has no hook record for it yet`, with nothing to fix in this clone |
 | Claude managed hook policy | On the Claude harness only, uses the existing managed-settings resolver (`AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows paths, macOS, Linux/WSL) plus alphabetical `managed-settings.d/` fragments and fails when effective `allowManagedHooksOnly` is `true` |
 | Your replies are not being recorded | When stage/gate events exist but the audit has no `HUMAN_TURN`, warns that the person's replies are not being recorded (so the next approval will be refused), with the harness's own hook step as the fix |
 | Hook drops | Surfaces any `.aidlc-engine/hooks-health/<hook>.drops` telemetry - each records a failure a hook swallowed to avoid breaking your tool call - with the drop count, last timestamp, and most frequent reasons per hook, and the remediation (inspect, then delete the file). A hook whose latest failure is under 24 hours old is a warning shown without `--verbose` (`Hook failures, the latest within the last day`), counting every failure; it clears a day later or when the file is deleted. Each reason is shown only up to its first colon, the hook's own summary, with secrets redacted; the detail after it stays in the file. Older failures, and `[advisory]` lines from the plugin compose hook, are a passing advisory row. A hook's normal decisions (the Stop hook letting a turn end because you have to answer first) go to `<hook>.trace` instead and are never counted. Only a `[degraded]` drop (a half-applied plugin compose) fails |
@@ -974,7 +1056,7 @@ audit trail (stage durations, gates, revisions, gaps, and long-duration,
 incomplete or skipped flags; a skipped stage shows its skip time as Completed),
 then runs **deterministic** condition→remedy rules (no LLM) for the
 common "it will not advance" causes: unresolved approval gates, state/audit
-drift, and a stale or missing runtime graph / cold or frozen hook heartbeats.
+drift, and a missing runtime graph / cold or frozen hook heartbeats.
 Findings come from the same shared `DoctorFinding` model the
 live `--doctor` uses, so the command and the report can never diverge. A remedy
 that names a recovery bypass (for example an `AIDLC_DISABLE_*` env var or an
@@ -989,8 +1071,8 @@ workflow starts while workflow-authority readers remain intent-scoped. `list` an
 **Safety.** The report never includes workspace source, raw state/audit/
 runtime-graph files, artifact/contribution/question/memory bodies, environment
 variables, or command output. Every emitted string is redacted: your home dir
-becomes `~`, the project root becomes `<project>`, intent ids are hashed, and
-secret-like values are scrubbed. Inputs whose real path escapes the project root
+becomes `~`, the project root becomes `<project>`, intent ids and Unit names are
+hashed, and secret-like values are scrubbed. Inputs whose real path escapes the project root
 are refused (a symlinked leaf or parent is not followed out of the tree),
 per-file and total size are capped (truncations are recorded in the manifest),
 and files are created owner-only where the platform supports it.
@@ -1003,7 +1085,7 @@ Diagnostic report created:
 
 Findings:
   ERROR gate-unresolved
-  WARNING runtime-graph-stale
+  WARNING runtime-graph-missing
 
 No source files or artifact bodies were included.
 ```
@@ -1984,6 +2066,39 @@ Display a summary of available commands and flags.
 /aidlc --help
 ```
 
+In a project whose plugins add commands, `aidlc --help` at a terminal lists
+them under `PLUGIN COMMANDS`, by plugin.
+
+---
+
+### `/aidlc <plugin command>` - Run a command a plugin adds
+
+A plugin can add commands of its own, such as a report or a dashboard. Run one
+the way you run AI-DLC's own:
+
+```
+/aidlc test-pro-report --since 7d                          # in the chat ($aidlc in Codex)
+aidlc test-pro-report --since 7d                           # in a terminal, native install
+bun .claude/tools/aidlc.ts test-pro-report --since 7d      # in a terminal, copy install (your harness folder)
+```
+
+AI-DLC starts the plugin's script itself, with its own runtime, so the command
+works on native and copy installs and in PowerShell, cmd, and POSIX shells;
+everything after the name goes to the script, and its output and exit code
+come back as they are. Your tool applies its own permission settings to it, as
+to any command: AI-DLC does not pre-approve plugin commands.
+
+- Only a plugin that is installed and on in this project runs. When it is off,
+  the command says so in one line and names the `aidlc config project --plugins`
+  command that turns it back on.
+- AI-DLC's own commands always keep their names. A plugin command named like
+  one of them, like a plan, or like another plugin's command is not added; the
+  plugin sync that meets it says so once, naming both, and `aidlc doctor
+  --verbose` shows it again.
+- When the name opens a longer sentence (`/aidlc test-pro-report on the login
+  bug`), the agent reads whether you meant the command or a request, and asks
+  you only if it cannot tell.
+
 ---
 
 ## Deterministic CLI Tools
@@ -2311,6 +2426,7 @@ before does not count) is required under every Guard Policy: `rereview` carries
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --over-unfinished-review --message <id>
+aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --override-blocking-sensors --user-input "Override blocking sensors"
 ```
 
 Verification runs the recorded, human-authorized `Construction Verification
@@ -2319,7 +2435,11 @@ does not accept a command argument. If `construction_checkpoint.command_authoriz
 is false, do not run `verify`: complete the
 [recorded-command flow](#construction-verification-command-record-human-authorization),
 then re-run `next`. A skeleton's command must prove the integrated slice end to
-end and check ordinary Units' working results. Approval requires a current
+end and check ordinary Units' working results. In solo work built Unit by Unit, `verify` first runs
+the blocking gate checks of the checkpoint's stages on the Unit's own outputs; a
+failing one refuses with the Unit named for the check's Fix or Override question,
+and the person's Override is retried with `--override-blocking-sensors --user-input
+"Override blocking sensors"` ([blocking checks at a Unit's checkpoint](../reference/07-sensor-system.md#default_severity)). Approval requires a current
 verified proof. Show "Verified with `<full command>` (exit 0)" in the human
 approval question, copying the complete `verification_command` from the current
 tool output into a code span without abbreviation. This display label is the full
@@ -2782,9 +2902,12 @@ aidlc engine workspace codekb --repo <repo>
 
 It prints the active space's deterministic
 `aidlc/spaces/<space>/codekb/<repo>/` path. Add `--json` for
-`{space, repo, dir}`. The query writes nothing, creates no directory, and emits
-no audit event; reverse-engineering stage prose invokes the same route so paths
-are never derived by hand.
+`{space, repo, dir, record, intent, stage, staged}`: also the active record, its
+intent's slug, the repo's Reverse Engineering staging folder and the files
+already in it (`record` and `intent` are `null` when no work is selected), every
+path relative to the project. The query writes nothing, creates no directory, and emits no audit
+event; reverse-engineering stage prose invokes the same route so paths are never
+derived by hand.
 
 ### `aidlc-utility codekb-snapshot` - bind a scan to source and store generations
 
@@ -3117,7 +3240,7 @@ A name is lowercase letters, digits, and single hyphens, starting with a letter,
 
 ### Creating a workflow with its own stage changes (`--skip` / `--add`)
 
-`next --scope <scope> --skip <slug,...> --add <slug,...> -- "<description>"` creates a workflow on `<scope>` with stages dropped or added for this piece of work only; the conductor passes them for a custom composed plan, and you can type them too. Typed with a request that names no plan, they are yours on the plan question: Go ahead creates the proposed plan with them, and so does another plan you pick from its list (a stage a plan already leaves out or runs is left off for that plan), and Tailor a plan hands them to the composer, so the plan it shows has them. Each slug must name a stage; an initialization stage, a stage on both lists, or a change the scope already makes (`--skip` of a stage it skips) is refused before anything is created. The work's state records `Plan: <name>` (`--plan-name <name>`, which the conductor passes with the composer's suggested name; lowercase letters, digits and hyphens; `tailored plan` without it), and no scope file is written. With `--save-as <name>`, which the conductor passes for **Approve and save as scope**, the creation also saves the plan as a scope with that name, the save [`scope save`](#aidlc-engine-scope-save-keep-a-plan-as-a-scope) does; a name that is taken or cannot name a scope is refused before anything is created. On a running workflow, `/aidlc --skip <slug,...>` and `/aidlc --add <slug,...>` change its remaining stages at once through `recompose`, with no approval question (you named the stages), and say in one line what changed and the way back. A scope or setting typed in the same command is applied first. A stage you name that has already started (in progress, being revised after you asked for changes, or waiting at its own approval question) is skipped where it stands, whatever kind of stage it is, and the work goes on, or ends when it was the last stage on the plan (the way back is to run it on its own, `/aidlc --stage <slug> --single`); an approval typed in the same message at an open gate is recorded too, so both happen once (at a question that named several stages, "skip Functional Design and approve the rest" approves the ones you did not skip, together). While Construction runs one Unit at a time, the step a Unit is on is skipped for that Unit only or for every Unit from here, as your words say (a skip that names no Unit is for every Unit from here); for one Unit the way back is `/aidlc --stage <slug> --unit <unit>`, and a Unit whose code step you skipped has no checkpoint. A later step of the Unit walk, or a stage after it such as Build and Test, comes off the plan for every Unit. A stage you add that the work has just passed over ("Approve, and add User Stories next" recorded as the approval first), while nothing after it has started, is put back and runs next, as when the add comes first. A flip the plan cannot take is refused with what you can do instead.
+`next --scope <scope> --skip <slug,...> --add <slug,...> -- "<description>"` creates a workflow on `<scope>` with stages dropped or added for this piece of work only; the conductor passes them for a custom composed plan, and you can type them too. Typed with a request that names no plan, they are yours on the plan question: Go ahead creates the proposed plan with them, and so does another plan you pick from its list (a stage a plan already leaves out or runs is left off for that plan), and Tailor a plan hands them to the composer, so the plan it shows has them. Each slug must name a stage; an initialization stage, a stage on both lists, or a change the scope already makes (`--skip` of a stage it skips) is refused before anything is created. The work's state records `Plan: <name>` (`--plan-name <name>`, which the conductor passes with the composer's suggested name; lowercase letters, digits and hyphens; `tailored plan` without it), and no scope file is written. With `--save-as <name>`, which the conductor passes for **Approve and save as scope**, the creation also saves the plan as a scope with that name, the save [`scope save`](#aidlc-engine-scope-save-keep-a-plan-as-a-scope) does; a name that is taken or cannot name a scope is refused before anything is created. On a running workflow, `/aidlc --skip <slug,...>` and `/aidlc --add <slug,...>` change its remaining stages at once through `recompose`, with no approval question (you named the stages), and say in one line what changed and the way back. A scope or setting typed in the same command is applied first. A stage you name that has already started (in progress, being revised after you asked for changes, or waiting at its own approval question) is skipped where it stands, whatever kind of stage it is, and the work goes on, or ends when it was the last stage on the plan (the way back is to run it on its own, `/aidlc --stage <slug> --single`); an approval typed in the same message at an open gate is recorded too, so both happen once (at a question that named several stages, "skip Functional Design and approve the rest" approves the ones you did not skip, together). While Construction runs one Unit at a time, the step a Unit is on is skipped for that Unit only or for every Unit from here, as your words say (a skip that names no Unit is for every Unit from here); for one Unit the way back is `/aidlc --stage <slug> --unit <unit>`, and a Unit whose code step you skipped has no checkpoint. A team's main checkout that works every Unit itself reads a skip the same way. A later step of the Unit walk, or a stage after it such as Build and Test, comes off the plan for every Unit. A stage you add that the work has just passed over ("Approve, and add User Stories next" recorded as the approval first), while nothing after it has started, is put back and runs next, as when the add comes first. A flip the plan cannot take is refused with what you can do instead.
 
 After a skip, the undo that one line names holds until the work moves past the earliest stage the change named (a stage it added: until that stage starts), or, with nothing after it on the plan, until the work is finished, and the line says which. While Construction runs one Unit at a time, a step of the Unit walk taken off the plan for every Unit holds until the first stage after the walk starts, since the work stays on the walk until every Unit is through; Reverse Engineering the work still owes holds until the first Construction stage starts. After that, a skipped stage runs on its own with `/aidlc --stage <slug> --single`. A skip typed at the open gate of the stage just before it names only that way, since approving that gate, which the same reply usually does, moves the work past it at once.
 
@@ -3135,9 +3258,9 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--report] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Without `--proposal` it reads the composer's proposal file, the `proposalPath` that `detect --json` prints. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already have: a shared one is an advisory naming the other plan (`The hint "bug" is also bugfix's; the plan proposal lists it under both.`), and the grid still validates (the composer runs this before the gate when keywords are granted, and `scope save --keywords` saves the hint and prints the same line). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's six scope settings: it must name exactly `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, and `collaborators` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. Neither route writes a scope file. `--matched` rejects a grid that differs from that stock scope and a Guard Policy below its default (a stricter value is one creation applies); any other setting may differ, except that plan approval cannot be off where the scope the plan runs on has it on (only the person turns it off, in their own words at the gate), and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). `--custom` picks the stock scope the plan runs on, the nearest one whose Guard Policy default is the proposal's or lower (any one for `strict`) and that adds nothing the gate does not show (no walking skeleton, and no test strategy other than the plan's depth); with `--project-type greenfield` it prefers one meant for new work over a scope marked `existing_code: true` (`bugfix`, `refactor`, and `security-patch` ship marked) whenever one qualifies, and a passing run echoes `routing`, `base_scope`, `plan_changes` (the `skip` and `add` stage lists that turn that scope's grid into the plan), `creation_settings` against that scope, and `creation_depth` when the proposal's `depth` member differs from that scope's; it requires that `depth` member (`minimal`, `standard`, or `comprehensive`) and rejects a Guard Policy that no stock scope defaults to or below, and a plan that skips an initialization stage. During a front compose, a passing `--matched` or `--custom` run keeps that plan for the request the compose step opened, with its `creation_depth`, its `creation_settings` and a Guard Policy above that scope's default, so approving a custom plan creates the stages, depth and settings the gate showed. Every run without `--matched` also echoes `custom_start`, the `guard_policy` and `scope_settings` a custom plan starts from: the `classic` scope's, whichever stock scope the plan runs on (omitted when `classic` is not an enabled scope). Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount. `--report` is the composer's run for a code-findings report: `nearest_stock` then ranks only `bugfix` and `security-patch`, `--custom` picks its base from those two, and `--matched` with any other scope is an error, so a report never lands on a lighter scope (such as `express`, with no reviewers or plan approval) whose grid happens to sit nearer. When the person names the scope for the report themselves, the composer runs without `--report`, so their choice stands.
+`bun .claude/tools/aidlc-graph.ts validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--report] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Without `--proposal` it reads the composer's proposal file, the `proposalPath` that `detect --json` prints. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already have: a shared one is an advisory naming the other plan (`The hint "bug" is also bugfix's; the plan proposal lists it under both.`), and the grid still validates (the composer runs this before the gate when keywords are granted, and `scope save --keywords` saves the hint and prints the same line). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's six scope settings: it must name exactly `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, and `collaborators` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. Neither route writes a scope file. `--matched` rejects a grid that differs from that stock scope and a Guard Policy below its default (a stricter value is one creation applies); any other setting may differ, except that plan approval cannot be off where the scope the plan runs on has it on (only the person turns it off, in their own words at the gate), and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). `--custom` picks the stock scope the plan runs on, the nearest one whose Guard Policy default is the proposal's or lower (any one for `strict`) and that adds nothing the gate does not show (no walking skeleton, and no test strategy other than the plan's depth); with `--project-type greenfield` it prefers one meant for new work over a scope marked `existing_code: true` (`bugfix`, `refactor`, and `security-patch` ship marked) whenever one qualifies, and a passing run echoes `routing`, `base_scope`, `plan_changes` (the `skip` and `add` stage lists that turn that scope's grid into the plan), `creation_settings` against that scope, and `creation_depth` when the proposal's `depth` member differs from that scope's; it requires that `depth` member (`minimal`, `standard`, or `comprehensive`) and rejects a Guard Policy that no stock scope defaults to or below, and a plan that skips an initialization stage. During a front compose, a passing `--matched` or `--custom` run keeps that plan for the request the compose step opened, with its `creation_depth`, its `creation_settings` and a Guard Policy above that scope's default, so approving a custom plan creates the stages, depth and settings the gate showed. Every run without `--matched` also echoes `custom_start`, the `guard_policy` and `scope_settings` a custom plan starts from: the `classic` scope's, whichever stock scope the plan runs on (omitted when `classic` is not an enabled scope). Every run also echoes `matched_start`, the `depth`, `guard_policy` and `scope_settings` of the stock scope a matched plan carries (the one `--matched` names, else the nearest), so the composer takes them from the validator instead of a scope file. Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount. `--report` is the composer's run for a code-findings report: `nearest_stock` then ranks only `bugfix` and `security-patch`, `--custom` picks its base from those two, and `--matched` with any other scope is an error, so a report never lands on a lighter scope (such as `express`, with no reviewers or plan approval) whose grid happens to sit nearer. When the person names the scope for the report themselves, the composer runs without `--report`, so their choice stands.
 
-The `summary` counts the stages and approval gates the plan runs; its `shown` count, the stages after Initialization, is the number every line the person reads uses. With `--project-type greenfield` it leaves out Reverse Engineering, which creation skips on a new project, so the counts the plan offer shows are the ones creation prints. A passing `--custom` run adds `skipped_inputs` when the plan's own changes leave a stage it keeps without a required input that the stock scope it runs on does not leave out: each skipped stage by name with the stages that use what it makes (`[{"stage": "Units Generation", "used_by": ["Contract Design", "Functional Design", "Code Generation"]}]`), which the plan offer says once, in one line. A stock scope's own unmade inputs stay advisories only.
+The `summary` counts the stages and approval gates the plan runs; its `shown` count, the stages after Initialization, is the number every line the person reads uses. With `--project-type greenfield` it leaves out Reverse Engineering, which creation skips on a new project, so the counts the plan offer shows are the ones creation prints. A passing `--custom` run adds `skipped_inputs` when the plan drops a stage the stock scope it runs on runs (the stages creation records as skipped; Reverse Engineering is left out on a new project, where creation skips it) or its own changes leave a stage it keeps without a required input that scope does not leave out: each skipped stage by name with the stages it keeps that use what it makes, none when no kept stage does (`[{"stage": "Units Generation", "used_by": ["Contract Design", "Functional Design", "Code Generation"]}, {"stage": "Deployment Execution", "used_by": []}]`), which the plan offer says once, in one line. A stock scope's own unmade inputs stay advisories only.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 

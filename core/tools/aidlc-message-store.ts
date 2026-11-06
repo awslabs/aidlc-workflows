@@ -23,6 +23,8 @@ import {
   rejectionIsFreshAttempt,
   removeRecordFileNoFollow,
   resolveInvokingSessionId,
+  resolveWorkflowSelection,
+  selectedRecordIsFinished,
   sessionsDir,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
@@ -171,6 +173,14 @@ export function hasStoredMessages(projectDir: string): boolean {
 /** The message behind `id`; null when it is missing, unreadable, or not a record of ours. */
 export function readMessage(projectDir: string, id: string): StoredMessage | null {
   return readStoredMessage(projectDir, id);
+}
+
+/**
+ * Remove the record of a message that turned out not to be the person's: a
+ * turn Claude Code started itself (settleClaudeTurns), so no proof finds it.
+ */
+export function forgetMessage(projectDir: string, id: string): void {
+  if (MESSAGE_ID.test(id)) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
 }
 
 function recordIds(projectDir: string): string[] {
@@ -898,15 +908,20 @@ export function personTurnStands(
   return standingPersonTurn(pd, mode, options) !== null;
 }
 
+type TurnOptions = { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean };
+
 /**
  * The turn personTurnStands reads, when it stands: its HUMAN_TURN row (whose
- * Message Id names the message behind what the command does), else null.
+ * Message Id names the message behind what the command does), else null. On
+ * finished work, where the human-turn hook keeps the person's messages beside
+ * the record and writes no turn on it, a message of theirs kept since the
+ * finish stands too (turnKeptSinceFinished), read as a turn.
  */
-export function standingPersonTurn(
-  pd: string,
-  mode: "request" | "plain",
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean } = {},
-): AuditShardEvent | null {
+export function standingPersonTurn(pd: string, mode: "request" | "plain", options: TurnOptions = {}): AuditShardEvent | null {
+  return turnOnTheRecord(pd, mode, options) ?? turnKeptSinceFinished(pd, options);
+}
+
+function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOptions): AuditShardEvent | null {
   try {
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
@@ -944,6 +959,55 @@ export function standingPersonTurn(
       kept ?? { id: id ?? "", at: of.timestamp, session: auditBlockField(of.block, "Session") },
       after,
     ) ? of : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Presence on finished work: once the work is finished (selectedRecordIsFinished,
+ * the reading the human-turn hook stands outside by) the hook keeps the
+ * person's messages beside its record and writes no turn on it. So the turn is
+ * their latest message no turn on the work names (sentOnThisWork: a terminal
+ * message, which has no chat, counts as on the work and stands for nothing
+ * here), kept at or after the work's latest WORKFLOW_COMPLETED row, from this
+ * chat (with no chat named, any chat's message in this project). With
+ * `requests` every kept message counts, as every turn the hook writes today
+ * does (only an older record's question row is left out on the record); with
+ * `replies` none does, as before: whether a message is a reply is the hook's
+ * reading, which the record keeps and the message does not. Nothing on the work decides after
+ * the finish, so no decision spends it. It is handed back in a turn's shape
+ * (its Message Id, Session and time), which is all a caller reads. Both times
+ * are whole seconds; a tie with the finish is harmless, as the message that
+ * gave the finishing approval is named on the record. No completion row, or a
+ * shard that cannot be read: null. Ids, times and the engine's own rows, never
+ * words.
+ */
+function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEvent | null {
+  if (options.replies === true) return null;
+  try {
+    if (!selectedRecordIsFinished(pd, resolveWorkflowSelection(pd, { intent: options.intent, space: options.space }))) {
+      return null;
+    }
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
+    if (unreadable.length > 0) return null;
+    const finishedAt = rows.filter((row) => row.event === "WORKFLOW_COMPLETED").map((row) => row.timestamp).sort().at(-1);
+    if (finishedAt === undefined) return null;
+    const onThisWork = sentOnThisWork(rows);
+    const chat = invokingChat(pd);
+    const kept = listMessages(pd).filter((message) =>
+      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat)).at(-1);
+    if (kept === undefined) return null;
+    const turn: AuditShardEvent = {
+      event: "HUMAN_TURN",
+      block: [`**Message Id**: ${kept.id}`, ...(kept.session === null ? [] : [`**Session**: ${kept.session}`])].join("\n"),
+      timestamp: kept.at,
+      shard: "",
+      shardIndex: -1,
+      pos: -1,
+    };
+    return options.planApprovalOff === true && !planApprovalOffStands(pd, turn) ? null : turn;
   } catch {
     return null;
   }

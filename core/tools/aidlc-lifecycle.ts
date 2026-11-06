@@ -136,8 +136,15 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   runtimeHarnessDir,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+
+// A release's harnesses as a person types them after --harness; the JSON
+// result keeps the ids.
+function typedHarnessList(distributions: readonly string[]): string {
+  return distributions.map(typedHarnessName).join(",");
+}
 
 export class LifecycleCommandError extends Error {
   constructor(
@@ -170,12 +177,20 @@ function offline(argv: readonly string[]): boolean | undefined {
   return undefined;
 }
 
-type PublicLifecycleCommand = "update" | "use" | "uninstall";
+type PublicLifecycleCommand =
+  | "update"
+  | "use"
+  | "uninstall"
+  | "rollback"
+  | "versions install"
+  | "versions prune";
 
 type PublicLifecycleGrammar = {
   values: ReadonlySet<string>;
   bare: ReadonlySet<string>;
-  positionals: number;
+  // The most positionals the verb takes; a missing one is the verb's own to
+  // name. Rollback counts its own (typedRollbackVersion says which two it got).
+  positionals?: number;
 };
 
 // Exported so t230 can prove command help names every flag this grammar
@@ -232,18 +247,56 @@ export const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
     ]),
     positionals: 0,
   },
+  // The `aidlc system` lifecycle verbs read only their own words and pass over
+  // the rest, so a word they do not read (`--dry-run` on rollback) is refused
+  // here, before the verb runs.
+  rollback: {
+    values: new Set(["--project-dir", "--version"]),
+    bare: new Set([
+      "--allow-harness-loss",
+      "--json",
+      "--list",
+      "--no-color",
+      "--quiet",
+      "--yes",
+    ]),
+  },
+  "versions install": {
+    values: new Set([
+      "--ca-bundle",
+      "--from",
+      "--project-dir",
+      "--release-base-url",
+    ]),
+    bare: new Set([
+      "--dry-run",
+      "--json",
+      "--no-color",
+      "--offline",
+      "--quiet",
+      "--yes",
+    ]),
+    positionals: 1,
+  },
+  "versions prune": {
+    values: new Set(["--project-dir"]),
+    bare: new Set(["--json", "--no-color", "--quiet", "--yes"]),
+    positionals: 0,
+  },
 };
 
 export function validatePublicLifecycleArgs(
   argv: readonly string[],
 ): string | null {
-  const command = argv[0] as PublicLifecycleCommand | undefined;
+  const command = (argv[0] === "versions" ? `versions ${argv[1]}` : argv[0]) as
+    | PublicLifecycleCommand
+    | undefined;
   const grammar = command ? PUBLIC_LIFECYCLE_GRAMMARS[command] : undefined;
-  if (!grammar) return null;
+  if (!command || !grammar) return null;
 
   const seen = new Set<string>();
   const positionals: string[] = [];
-  let startIndex = 1;
+  let startIndex = command.split(" ").length;
   if (command === "use") {
     const version = argv[1];
     if (!version || version.startsWith("--")) {
@@ -271,13 +324,8 @@ export function validatePublicLifecycleArgs(
     seen.add(token);
   }
 
-  if (positionals.length !== grammar.positionals) {
-    if (command === "use" && positionals.length === 0) {
-      return "use requires exactly one version";
-    }
-    return `unexpected ${command} positional ${
-      JSON.stringify(positionals[grammar.positionals] ?? positionals[0])
-    }`;
+  if (grammar.positionals !== undefined && positionals.length > grammar.positionals) {
+    return `unexpected ${command} positional ${JSON.stringify(positionals[grammar.positionals])}`;
   }
   if (argv.includes("--json") && argv.includes("--quiet")) {
     return "--json and --quiet are mutually exclusive";
@@ -488,7 +536,7 @@ function windowsLauncherOwnedByInstaller(): boolean {
   try {
     const helper = readFileSync(windowsShimPath(), "utf-8");
     return readFileSync(commandPath(), "utf-8") === windowsShim() &&
-      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper);
+      installerWindowsShimHelpers().includes(helper);
   } catch {
     return false;
   }
@@ -872,7 +920,12 @@ export function resolvePinnedDispatch(
       remediation,
     };
   }
-  if (registry.pins[project] !== version) {
+  // Only the dispatcher's own call registers a worktree: config makes this
+  // call as a read-only probe before it asks, without `reserve`.
+  if (
+    registry.pins[project] !== version &&
+    !(options.reserve === true && inheritWorktreePin(projectDir, version, registry.pins))
+  ) {
     return {
       kind: "failure",
       code: EXIT.failure,
@@ -1213,9 +1266,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   if (
     windows &&
     existsSync(windowsShimPath()) &&
-    ![windowsShimHelper(), ...previousWindowsShimHelpers()].includes(
-      readFileSync(windowsShimPath(), "utf-8"),
-    )
+    !installerWindowsShimHelpers().includes(readFileSync(windowsShimPath(), "utf-8"))
   ) {
     commandError("existing aidlc-shim.ps1 is not owned by this AI-DLC install", EXIT.integrity);
   }
@@ -1316,10 +1367,20 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
           });
           const output = Buffer.from(probe.stdout ?? new Uint8Array()).toString("utf-8").trim();
           if (probe.exitCode !== 0 || output !== `aidlc ${version} (runtime ${version})`) {
+            // The helper says why it stopped on stderr, in one aidlc: line. A
+            // release's helper without the BOM, beside a path that needs one,
+            // reads its own paths garbled, so its reason would name the wrong file.
+            const unreadable = command === commandPath() && probe.exitCode === 4 &&
+              shimHelper === bomlessWindowsShimHelper() && shimHelper !== windowsShimHelper();
+            const said = unreadable
+              ? `${version} did not start from ${installRoot()}: Windows PowerShell read the launcher written for it in the system code page, which cannot spell a letter in that path${
+                  previous ? `; ${previous} stays active` : ""
+                }`
+              : Buffer.from(probe.stderr ?? new Uint8Array()).toString("utf-8").replace(/\s+/g, " ").trim();
             throw new Error(
               `command pointer validation failed for ${version}: version probe returned ${
                 probe.exitCode ?? "no exit"
-              } ${JSON.stringify(output)}`,
+              } ${JSON.stringify(output)}${said ? `: ${said}` : ""}`,
             );
           }
         }
@@ -1592,7 +1653,15 @@ export { windowsPosixShim };
 // 4. Arguments reach the executable through --% and AIDLC_SHIM_ARGS, quoted
 // with the Windows C runtime rules, because Windows PowerShell 5.1 drops empty
 // arguments and strips embedded double quotes when it forwards @args itself.
+// Windows PowerShell 5.1 reads a .ps1 without a BOM in the ANSI code page, so
+// a non-ASCII letter in an install path needs one; an ASCII helper keeps the
+// bytes every release since FIRST_RELEASE_WITH_CURRENT_HELPER wrote.
 function windowsShimHelper(): string {
+  const helper = bomlessWindowsShimHelper();
+  return /[\u0080-\uffff]/.test(helper) ? `\uFEFF${helper}` : helper;
+}
+
+function bomlessWindowsShimHelper(): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const versionPointer = activeVersionPath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
@@ -1672,8 +1741,10 @@ function predatesCurrentHelper(version: string): boolean {
   }
 }
 
-function windowsShimHelperFor(version: string): string {
-  if (!predatesCurrentHelper(version)) return windowsShimHelper();
+export function windowsShimHelperFor(version: string): string {
+  if (!predatesCurrentHelper(version)) {
+    return predatesBomHelper(version) ? bomlessWindowsShimHelper() : windowsShimHelper();
+  }
   try {
     if (compareVersions(version, FIRST_RELEASE_WITH_SHARED_MARKER_HELPER) < 0) {
       return renderSilentWindowsShimHelper(STABLE_ONLY_HELPER_PATTERN);
@@ -1682,6 +1753,28 @@ function windowsShimHelperFor(version: string): string {
     // An unparsable version is not treated as older than 2.8.2.
   }
   return renderSilentWindowsShimHelper(VERSION_ID_PATTERN);
+}
+
+// 2.11.3 and every release before it accept the current helper only without a
+// BOM. The first release that writes it is a 2.11.4 preview, whose id was not
+// known here, so the rule has two halves: a release older than both this binary
+// and the first stable with the BOM helper gets the helper without it, and any
+// newer one gets the BOM (`aidlc update` runs in the binary it replaces, which
+// writes the new release's helper).
+const FIRST_STABLE_WITH_BOM_HELPER = "2.11.4";
+
+function predatesBomHelper(version: string): boolean {
+  try {
+    return compareVersions(version, AIDLC_VERSION) < 0 &&
+      compareVersions(version, FIRST_STABLE_WITH_BOM_HELPER) < 0;
+  } catch {
+    return false;
+  }
+}
+
+// Every helper an installer wrote, this binary's own first.
+function installerWindowsShimHelpers(): string[] {
+  return [windowsShimHelper(), bomlessWindowsShimHelper(), ...previousWindowsShimHelpers()];
 }
 
 // The helper every installer wrote before refusals carried a reason.
@@ -1905,7 +1998,7 @@ function olderReleaseHelperRepair(): string | null {
     const installed = readFileSync(windowsShimPath(), "utf-8");
     const wanted = windowsShimHelperFor(target);
     if (installed === wanted) return null;
-    return [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(installed) ? wanted : null;
+    return installerWindowsShimHelpers().includes(installed) ? wanted : null;
   } catch {
     return null;
   }
@@ -1975,7 +2068,7 @@ async function installVersion(options: {
       const root = join(candidate, "runtime", distribution);
       const { stamp } = projectionFiles(root);
       if (stamp.frameworkVersion !== version || stamp.distribution !== distribution) {
-        throw new Error(`${distribution} runtime stamp does not match release ${version}`);
+        throw new Error(`${typedHarnessName(distribution)} runtime stamp does not match release ${version}`);
       }
     }
     const baselinePath = join(candidate, basename(runtimeIntegrityPath(version)));
@@ -2085,7 +2178,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
     return success(
       (versions.length
         ? versions.map((item) =>
-            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${item.distributions.join(",")}]${item.pinPaths.length > 0 ? ` pinned by ${item.pinPaths.length} project(s)` : ""}${item.stalePinPaths.length > 0 ? ` ${item.stalePinPaths.length} stale pin(s)` : ""}${item.complete ? "" : " incomplete"}`
+            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${typedHarnessList(item.distributions)}]${item.pinPaths.length > 0 ? ` pinned by ${item.pinPaths.length} project(s)` : ""}${item.stalePinPaths.length > 0 ? ` ${item.stalePinPaths.length} stale pin(s)` : ""}${item.complete ? "" : " incomplete"}`
           ).join("\n")
         : "no retained versions") +
         (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
@@ -2143,7 +2236,6 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
   if (verb !== "install") return usage("usage: aidlc system versions <list|install|prune>");
   const version = argv[2];
   if (!version || version.startsWith("--")) return usage("versions install requires a release version");
-  if (argv.includes("--harness")) return usage("unknown argument: --harness");
   const result = await installVersion({
     version,
     from: valueAfter(argv, "--from"),
@@ -2567,7 +2659,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   }
   return success(
     dryRun
-      ? `update plan: ${current ?? "none"} -> ${result.version} [${result.distributions.join(",")}]${switched}`
+      ? `update plan: ${current ?? "none"} -> ${result.version} [${typedHarnessList(result.distributions)}]${switched}`
       : `updated ${current ?? "new install"} -> ${result.version}${switched}${
         pruned.length > 0 ? `; pruned ${pruned.join(", ")}` : ""
       }`,
@@ -2645,7 +2737,7 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     const eligible = versions.filter((item) => item.complete && !item.active);
     return success(
       (eligible.length
-        ? eligible.map((item) => `${item.version} [${item.distributions.join(",")}]`).join("\n")
+        ? eligible.map((item) => `${item.version} [${typedHarnessList(item.distributions)}]`).join("\n")
         : "no rollback target") +
         (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
       { versions: eligible, pinWarnings },
@@ -2675,7 +2767,7 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     : [];
   if (missing.length > 0 && !argv.includes("--allow-harness-loss")) {
     throw new Error(
-      `rollback target ${target} lacks harnesses: ${missing.join(", ")}; ` +
+      `rollback target ${target} lacks harnesses: ${missing.map(typedHarnessName).join(", ")}; ` +
         "to roll back anyway, without them, run it again with --allow-harness-loss",
     );
   }
@@ -2725,10 +2817,62 @@ export async function installPinnedRelease(options: {
           caBundle: options.caBundle,
         })).distributions;
     if (!distributions.includes(options.distribution)) {
-      commandError(`${version} does not contain the ${options.distribution} runtime`, EXIT.usage);
+      commandError(`${version} does not contain the ${typedHarnessName(options.distribution)} runtime`, EXIT.usage);
     }
   } finally {
     releaseReservation?.();
+  }
+}
+
+// The repository's shared git directory and this checkout's own one, resolved;
+// they differ only in a linked worktree (`git worktree add`).
+function gitDirs(dir: string): { common: string; own: string } | null {
+  const result = Bun.spawnSync(["git", "rev-parse", "--git-common-dir", "--git-dir"], {
+    cwd: dir,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "ignore",
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+  });
+  const [common, own] = Buffer.from(result.stdout ?? new Uint8Array())
+    .toString("utf-8")
+    .trim()
+    .split(/\r?\n/);
+  if (result.exitCode !== 0 || !common || !own) return null;
+  try {
+    return { common: realpathSync(resolve(dir, common)), own: realpathSync(resolve(dir, own)) };
+  } catch {
+    return null;
+  }
+}
+
+// A linked git worktree of a checkout registered on this machine is that
+// project: the person pinned it once, and every worktree made of it (a host
+// may make one per session) runs the release its own committed
+// `.aidlc-version` names instead of refusing until `config --pin` is typed
+// again, and is registered the way `config --pin` would register it. The
+// checkout may be registered for another version: a worktree cut from a branch
+// whose pin moved on, or one registered before the pin moved, follows its
+// file. A main checkout and a separate clone still register only through
+// `config --pin`.
+function inheritWorktreePin(
+  projectDir: string,
+  version: string,
+  pins: Readonly<Record<string, string>>,
+): boolean {
+  if (!existsSync(projectDir)) return false;
+  const dirs = gitDirs(projectDir);
+  if (dirs === null || dirs.common === dirs.own) return false;
+  const project = canonicalProjectPath(projectDir);
+  const sibling = Object.keys(pins).find((path) =>
+    path !== project && existsSync(path) && gitDirs(path)?.common === dirs.common
+  );
+  if (!sibling) return false;
+  try {
+    commitProjectPin(projectDir, version);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -2830,7 +2974,7 @@ export async function configureProjectPin(
       }
       const distribution = projectDistribution(projectDir);
       if (distribution && !distributions.includes(distribution)) {
-        commandError(`${version} does not contain this project's ${distribution} runtime`, EXIT.usage);
+        commandError(`${version} does not contain this project's ${typedHarnessName(distribution)} runtime`, EXIT.usage);
       }
       if (dryRun) {
         return success(

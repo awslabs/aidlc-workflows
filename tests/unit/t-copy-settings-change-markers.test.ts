@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { copyChannelOmits, projectionFiles } from "../../core/tools/aidlc-distribution.ts";
 import { addRootBlocks } from "../../core/tools/aidlc-includes.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -85,7 +86,7 @@ describe("a copy keeps one AI-DLC part in each managed file after a settings cha
 
       const refreshed = run(
         INIT,
-        ["config", "--project-dir", dir, "--from", release, "--harness", harness, "--mcp", "none", "--yes"],
+        ["config", "--project-dir", dir, "--from", release, "--harness", typedHarnessName(harness), "--mcp", "none", "--yes"],
         dir,
       );
       expect(refreshed.status, refreshed.out).toBe(0);

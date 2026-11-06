@@ -32,6 +32,7 @@ import {
 } from "node:path";
 import {
   assertPluginContentHasNoSymlinks,
+  assertPluginCommands,
   assertSupportedPluginContributionPaths,
   pluginMarketplaceIssue,
   scanPluginFiles,
@@ -44,6 +45,7 @@ import {
 import { sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
 import { committedTextBytes, runWithOwnerStampedLock } from "./aidlc-lib.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { typedHarnessName } from "./aidlc-runtime-paths.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -104,6 +106,7 @@ const CONTENT_DIRS = [
   "scopes",
   "agents",
   "knowledge",
+  "memory",
 ] as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -854,8 +857,8 @@ export function assertPluginBuildOutput(
   ) {
     throw new Error(
       `refusing to replace "${outDir}" - its ${PLUGIN_PROJECTION_MARKER} belongs to ` +
-        `plugin "${marker.plugin}" for harness "${marker.harness}", not plugin "${pluginName}" ` +
-        `for harness "${target.harnessName}".`,
+        `plugin "${marker.plugin}" for harness "${typedHarnessName(marker.harness)}", not plugin "${pluginName}" ` +
+        `for harness "${typedHarnessName(target.harnessName)}".`,
     );
   }
 }
@@ -874,6 +877,7 @@ export function buildPluginProjection(
   const manifest = readPluginManifest(pluginRoot);
   const pluginName = pluginNameFromManifest(pluginRoot, manifest);
   assertSupportedPluginContributionPaths(manifest);
+  assertPluginCommands(manifest);
   const firstParty = options.firstParty === true;
   const marketplaceIssue = firstParty ? null : pluginMarketplaceIssue(manifest.aidlc);
   if (marketplaceIssue) {

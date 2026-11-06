@@ -1,7 +1,7 @@
 // Learning-gate tool -- the tool-as-actor half of stage-protocol section 13's
 // Learnings Ritual. Two subcommands:
 //
-//   surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]
+//   surface --slug <stage-slug> [--unit <unit>] [--correction <their change> | --correction-file <file>]... [--project-dir <path>]
 //       Read-only. Prints, for each correction the agent read in the
 //       person's words (KNOWLEDGE), the one question the person answers
 //       (JUDGEMENT): "You asked me to <it>. Keep that for next time?" with
@@ -106,6 +106,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync }
 import { dirname, join, relative, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
+import { unitStageDiaryTexts, withoutWaveCopies } from "./aidlc-stage-diary.ts";
 import {
   activeIntent,
   appendUnderHeading,
@@ -134,7 +135,11 @@ import {
   listField,
   parseMemoryEntries,
   readAllAuditShards,
+  readApplicableTeamUnitScopeStamp,
   readStateFile,
+  isPerUnitStage,
+  isTeamUnitOwnership,
+  docsRoot,
   relativeMemoryPath,
   relativeRecordDir,
   resolveProjectDir,
@@ -418,6 +423,18 @@ function resolveMemoryPath(
   );
 }
 
+// The Unit a per-Unit stage's learnings step is about: the claimed checkout's,
+// else the one `--unit` names, else the Unit whose checkpoint is open, else
+// under team ownership the Unit the state says is active. Null at the stage's
+// one gate after every Unit, where every Unit's notes count.
+function surfaceUnit(projectDir: string, stateContent: string, atCheckpoint: string[], namedUnit?: string): string | null {
+  const claimed = readApplicableTeamUnitScopeStamp(projectDir, stateContent)?.unit;
+  if (claimed) return claimed;
+  if (namedUnit?.trim()) return namedUnit.trim();
+  if (atCheckpoint.length === 1) return atCheckpoint[0];
+  return isTeamUnitOwnership(stateContent) ? getField(stateContent, "Active Unit")?.trim() || null : null;
+}
+
 // A Construction checkpoint the person approves covers every stage its Unit
 // walked, while Current Stage waits on the first one until every Unit is past
 // it. A stage of the checkpoint now at its approval (ready, not yet approved)
@@ -483,7 +500,7 @@ function handleSurface(args: string[], projectDir: string): void {
   const flags = parseFlags(args);
   const slug = flags.slug;
   if (!slug) {
-    fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]", 1);
+    fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--unit <unit>] [--correction <their change> | --correction-file <file>]... [--project-dir <path>]", 1);
   }
 
   // Resolve space/intent FIRST, before touching any per-intent path. A
@@ -524,12 +541,25 @@ function handleSurface(args: string[], projectDir: string): void {
   // memory.md may be absent (the per-stage lifecycle owns deterministic
   // creation; a stage that ran without it counts no entries).
   const raw = existsSync(memAbs) ? readFileSync(memAbs, "utf-8") : "";
-  // Every Unit's turn at a stage writes the one stage diary. At a Unit's
-  // checkpoint, count that Unit's entries and the ones that name no Unit.
-  const unit = atCheckpoint.length === 1 ? atCheckpoint[0] : null;
-  const entries = parseMemoryEntries(raw).filter((e) => unit === null || e.unit === undefined || e.unit === unit);
+  // A per-Unit stage's notes are in each Unit's own diary, and work started
+  // before they moved there kept them in the one stage diary, tagged by Unit.
+  // For one Unit: its own diary, and its notes and the untagged ones in the
+  // stage diary. With no one Unit: every diary, whole.
+  const stage = findStageBySlug(slug);
+  const perUnit = stage !== null && stage !== undefined && isPerUnitStage(stage);
+  const unit = perUnit
+    ? surfaceUnit(projectDir, stateContent, atCheckpoint, flags.unit)
+    : atCheckpoint.length === 1 ? atCheckpoint[0] : null;
+  const own = perUnit
+    ? unitStageDiaryTexts(docsRoot(projectDir, pinnedIntent, space), slug, unit).flatMap(parseMemoryEntries)
+    : [];
+  const entries = [
+    ...own,
+    ...parseMemoryEntries(perUnit ? withoutWaveCopies(raw) : raw)
+      .filter((e) => unit === null || e.unit === undefined || e.unit === unit),
+  ];
 
-  // memory_path always ends `<prefix>/<phase>/<stageSlug>/memory.md` (see
+  // A stage-level memory_path always ends `<prefix>/<phase>/<stageSlug>/memory.md` (see
   // relativeMemoryPath), so the phase is the third-from-last segment regardless
   // of prefix shape: the per-intent record dir, the bare space prefix, or the
   // legacy flat `aidlc-docs` root all share that tail. Indexing from the front
@@ -810,7 +840,7 @@ const DEFAULT_PRACTICE_HEADING = "## Corrections";
 // Posture's Methodology and Ordering, and Guard Policy's Mode under its current
 // or retired heading. A learning written as one of those fields there keeps its
 // date out of the value.
-const SETTING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
+export const SETTING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
   [TESTING_HEADING, ["Methodology", "Ordering"]],
   [GUARD_POLICY_HEADING, ["Mode"]],
   [CHANGE_CONTROL_HEADING, ["Mode"]],

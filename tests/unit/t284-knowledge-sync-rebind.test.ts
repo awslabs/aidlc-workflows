@@ -332,13 +332,14 @@ describe("t284 removal: tombstone the RECORD, delete the TEXT", () => {
 });
 
 describe("t284 the retry INVERSION: the environment changed, not the document", () => {
-  test("extractor_unavailable retries when the extractor appears", () => {
+  test("an extractor_unavailable PDF row retries: a reader is always there now", () => {
     // Without this, every PDF stays permanently unextracted on a machine where
-    // the extractor was installed after the first sync, and the only recourse is
-    // editing every file to move its digest.
+    // it was recorded with no reader, and the only recourse is editing every
+    // file to move its digest. pdftotext reads it where it is installed, and
+    // AI-DLC's own reader where it is not.
     expect(shouldRetryExtraction(
       row({ state: "extractor_unavailable", extractor: { name: "pdftotext" } }) as never,
-    )).toBe(probeAvailable());
+    )).toBe(true);
   });
 
   test("a healthy `extracted` row is NOT retried", () => {

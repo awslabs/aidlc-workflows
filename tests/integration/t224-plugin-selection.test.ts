@@ -33,6 +33,7 @@ import {
   composePluginFixture,
   copyHarnessInstall,
 } from "../harness/plugin-kit.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 const BUN = process.execPath;
 const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
@@ -280,7 +281,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     const disable = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(disable.status).toBe(0);
     expect(disable.stdout).toContain(
-      "What test-pro added to other stages and agents is taken out; turn test-pro back on and it returns at the next session start.",
+      "What test-pro added to other stages and agents, and its rules, is taken out; turn test-pro back on and they return at the next session start.",
     );
     const stripped = readFileSync(stagePath, "utf-8");
     expect(stripped).not.toContain("test-pro-regression-suite");
@@ -365,7 +366,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
     const core = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(core.status, core.stderr).toBe(0);
-    expect(core.stdout).toContain(`What ${PLUGIN} added to other stages and agents is taken out;`);
+    expect(core.stdout).toContain(`What ${PLUGIN} added to other stages and agents, and its rules, is taken out;`);
     expect(buildSensors()).not.toContain("coverage-threshold");
     expect(buildSensors()).not.toContain("requirement-coverage");
   });
@@ -522,7 +523,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       });
       const config = (...args: string[]) => run(join(proj, leaf, "tools", "aidlc.ts"), ["config", ...args]);
       const installed = run(join(release, leaf, "tools", "aidlc.ts"), [
-        "config", "--from", release, "--harness", harness, "--project-dir", proj, "--yes",
+        "config", "--from", release, "--harness", typedHarnessName(harness), "--project-dir", proj, "--yes",
       ]);
       expect(installed.status, `${installed.stdout}${installed.stderr}`).toBe(0);
       composePluginFixture({ plugin: PLUGIN, harness, projectDir: proj, pluginBuilt: built, copyInstall: false });
@@ -535,6 +536,10 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       const composed = merged.map((path) => readFileSync(path, "utf-8"));
       const composedSidecar = readFileSync(sidecar, "utf-8");
       for (const text of composed) expect(text).toContain("<!-- plugin:test-pro:");
+      // test-pro's rules ride the same turn-off, in the team's rule files.
+      const ruleFiles = ["team.md", "phases/inception.md"].map((rel) => join(proj, "aidlc", "spaces", "default", "memory", rel));
+      const composedRules = ruleFiles.map((path) => readFileSync(path, "utf-8"));
+      for (const text of composedRules) expect(text).toContain("## Rules from the test-pro plugin");
 
       const off = config("project", "--plugins", "aidlc", "--yes");
       expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
@@ -543,6 +548,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       for (const path of merged) expect(readFileSync(path, "utf-8")).not.toContain("<!-- plugin:test-pro:");
       expect(readFileSync(stage, "utf-8")).not.toContain("test-pro-regression-suite");
       expect(existsSync(sidecar)).toBe(false);
+      for (const path of ruleFiles) expect(readFileSync(path, "utf-8")).not.toContain("## Rules from the test-pro plugin");
       const nodes = JSON.parse(readFileSync(join(proj, leaf, "tools", "data", "stage-graph.json"), "utf-8")) as GraphStage[];
       const bat = nodes.find((s) => s.slug === "build-and-test");
       expect(bat?.produces).not.toContain("test-pro-regression-suite");
@@ -553,6 +559,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       composePluginFixture({ plugin: PLUGIN, harness, projectDir: proj, pluginBuilt: built, copyInstall: false });
       expect(merged.map((path) => readFileSync(path, "utf-8"))).toEqual(composed);
       expect(readFileSync(sidecar, "utf-8")).toBe(composedSidecar);
+      expect(ruleFiles.map((path) => readFileSync(path, "utf-8"))).toEqual(composedRules);
     });
   }
 

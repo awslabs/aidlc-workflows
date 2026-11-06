@@ -1164,7 +1164,17 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
     AUDIT_DIRECTORY_TEXT.test(spelled) || (AIDLC_WORKSPACE.test(spelled) && AUDIT_WORD.test(spelled)) ||
     AIDLC_WORKSPACE.test(cwd);
   return words.some((word) => expandWord(word, values).some((expanded) => {
-    if (expanded === null) return AUDIT_SEGMENT.test(withoutOwnFolders(word, cwd)) || namesAudit;
+    if (expanded === null) {
+      if (authoredScriptText) {
+        const spelled = word.replace(/["']/g, "");
+        if (!protectedAuditTrailPath(spelled, cwd)) return false;
+        integrityTargetMatched ??= spelled;
+        return true;
+      }
+      if (!AUDIT_SEGMENT.test(withoutOwnFolders(word, cwd)) && !namesAudit) return false;
+      integrityTargetMatched ??= word;
+      return true;
+    }
     if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
     return computedRoot && !isAbsolute(expanded) && AUDIT_SEGMENT.test(expanded);
   }));
@@ -1215,6 +1225,7 @@ function withoutOwnFolders(text: string, cwd: string): string {
 // ended the walk was an audit-trail target.
 let auditTrailMatched = false;
 let integrityTargetMatched: string | null = null;
+let authoredScriptText = false;
 
 function protectedWriteTarget(path: string, cwd: string): boolean {
   if (protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd)) {
@@ -1223,6 +1234,7 @@ function protectedWriteTarget(path: string, cwd: string): boolean {
   }
   if (protectedAuditTrailPath(path, cwd)) {
     auditTrailMatched = true;
+    integrityTargetMatched ??= path;
     return true;
   }
   return false;
@@ -1385,6 +1397,20 @@ function protectedContentWrite(
   toolInput: Record<string, unknown> | undefined,
   cwd: string,
 ): boolean {
+  const enclosing = authoredScriptText;
+  authoredScriptText = true;
+  try {
+    return protectedContentWriteTargets(toolName, toolInput, cwd);
+  } finally {
+    authoredScriptText = enclosing;
+  }
+}
+
+function protectedContentWriteTargets(
+  toolName: string,
+  toolInput: Record<string, unknown> | undefined,
+  cwd: string,
+): boolean {
   const targets = writeTargets(toolName, toolInput, cwd);
   const contentTargets: string[] = [];
   const protectedWrite = (value: unknown, paths: string[]) => typeof value === "string" &&
@@ -1474,7 +1500,7 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
   }
   if (!protectedContentWrite(toolName, toolInput, cwd)) return null;
   integrityTargetMatched ??= targets[0] ?? null;
-  return "content";
+  return auditTrailMatched ? "audit" : "content";
 }
 
 export function violatesRuntimeIntegrity(input: ClaudeCodeHookInput): boolean {
@@ -1496,16 +1522,16 @@ function displayTarget(path: string, cwd: string | undefined): string {
 export function refuseRuntimeIntegrityViolation(input: ClaudeCodeHookInput): boolean {
   const violation = runtimeIntegrityViolation(input);
   if (violation === null) return false;
+  const matched = integrityTargetMatched === null
+    ? ""
+    : ` Matched: ${displayTarget(integrityTargetMatched, typeof input.cwd === "string" ? input.cwd : undefined)}.`;
   if (violation === "audit") {
-    process.stderr.write(`${AUDIT_TRAIL_REFUSAL}\n`);
+    process.stderr.write(`${AUDIT_TRAIL_REFUSAL}${matched}\n`);
     return true;
   }
   const clause = violation === "content"
     ? " (Scripts the agent writes or runs may not import these hooks either.)"
     : "";
-  const matched = integrityTargetMatched === null
-    ? ""
-    : ` Matched: ${displayTarget(integrityTargetMatched, typeof input.cwd === "string" ? input.cwd : undefined)}.`;
   process.stderr.write(`${RUNTIME_INTEGRITY_REFUSAL}${clause}${matched}\n`);
   return true;
 }

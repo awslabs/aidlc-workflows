@@ -269,7 +269,7 @@ describe("t316 standalone plugin compose test", () => {
       "--install",
       installRoot,
       "--harness",
-      "kiro-ide",
+      "kiro",
       "--json",
     ]);
     expect(result.status, result.stderr).toBe(0);
@@ -288,6 +288,21 @@ describe("t316 standalone plugin compose test", () => {
     expect(json.graph.presentStages).toContain("test-pro-full-suite");
     expect(treeDigest(installRoot)).toBe(before);
   }, COMPOSE_CASE_TIMEOUT_MS);
+
+  test("an invalid plugin tested against a Kiro name reports the harness that name selects", () => {
+    const { pluginRoot, installRoot } = copyFixture("kiro-invalid-manifest", KIRO_IDE_INSTALL);
+    writeFileSync(join(pluginRoot, ".aidlc-plugin", "plugin.json"), "{ not json\n", "utf-8");
+    for (const [typed, id] of [["kiro", "kiro-ide"], ["kiro-v2", "kiro"]] as const) {
+      const json = run([pluginRoot, "--install", installRoot, "--harness", typed, "--json"]);
+      expect(json.status, json.stderr).toBe(1);
+      const parsed = JSON.parse(json.stdout) as { valid: boolean; harness: string };
+      expect(parsed.valid).toBe(false);
+      expect(parsed.harness, typed).toBe(id);
+      const human = run([pluginRoot, "--install", installRoot, "--harness", typed]);
+      expect(human.status, human.stderr).toBe(1);
+      expect(human.stderr, typed).toContain(`Harness: ${typed}\n`);
+    }
+  });
 
   test("a colliding stage is reported as a compose drop and exits 1", () => {
     const { pluginRoot, installRoot } = copyFixture("collision");

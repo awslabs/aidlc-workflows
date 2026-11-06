@@ -108,6 +108,7 @@ import {
 	generateFireId,
 	normalizePathForComparison,
 	relativizePath,
+	sensorMatchesPath,
 } from "./aidlc-sensor-record.ts";
 import { parseSensorManifest, type SensorManifest } from "./aidlc-sensor-schema.ts";
 import {
@@ -610,7 +611,7 @@ function handleFire(args: string[]): void {
 	// re-checks so a
 	// human-callable invocation can't bypass the shape contract.
 	const matches = sensor.manifest.matches;
-	if (matches !== undefined && !matchesGlob(matches, outputPath)) {
+	if (matches !== undefined && !sensorMatchesPath(matches, outputPath)) {
 		dispatchError(
 			`output path "${outputPath}" does not match sensor "${id}" filter "${matches}"`,
 		);
@@ -1193,7 +1194,7 @@ function readPathSet(id: string, format: string, outputPath: string, matches: st
 		const path = isAbsolute(entry) ? entry : pathResolve(process.cwd(), entry);
 		if (set.includes(path)) continue;
 		if (!existsSync(path)) dispatchError(`output path does not exist: ${path}`);
-		if (matches !== undefined && !matchesGlob(matches, path)) {
+		if (matches !== undefined && !sensorMatchesPath(matches, path)) {
 			dispatchError(`output path "${path}" does not match sensor "${id}" filter "${matches}"`);
 		}
 		set.push(path);
@@ -1206,51 +1207,6 @@ function failedOutputsField(paths: string[]): string {
 	const SHOWN = 20;
 	const more = paths.length - SHOWN;
 	return `${paths.slice(0, SHOWN).join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
-}
-
-// --- Glob matcher (capability filter) ---
-//
-// Manifests carry a single `matches:` glob (e.g., `**/*.{ts,js}`). The
-// the PostToolUse Write/Edit hook applies the same filter at fire time. This is a tiny
-// bespoke matcher — not a full minimatch — because the patterns we ship
-// are constrained to suffix + brace-expansion shapes.
-function matchesGlob(pattern: string, path: string): boolean {
-	const normalizedPath = normalizePathForComparison(path);
-	// Split brace expansions: **/*.{ts,js} → [**/*.ts, **/*.js]
-	const variants: string[] = [];
-	const braceMatch = pattern.match(/^(.*)\{([^}]+)\}(.*)$/);
-	if (braceMatch) {
-		const [, prefix, options, suffix] = braceMatch;
-		for (const opt of options.split(",")) {
-			variants.push(`${prefix}${opt.trim()}${suffix}`);
-		}
-	} else {
-		variants.push(pattern);
-	}
-	return variants.some((v) => globToRegex(v).test(normalizedPath));
-}
-
-function globToRegex(glob: string): RegExp {
-	// Translate **, *, and literal segments. Sufficient for the manifest patterns shipped today.
-	let re = "";
-	for (let i = 0; i < glob.length; i++) {
-		const c = glob[i];
-		if (c === "*") {
-			if (glob[i + 1] === "*") {
-				re += ".*";
-				i++;
-			} else {
-				re += "[^/]*";
-			}
-		} else if (c === "?") {
-			re += "[^/]";
-		} else if (".+()|[]{}^$\\".includes(c)) {
-			re += `\\${c}`;
-		} else {
-			re += c;
-		}
-	}
-	return new RegExp(`^${re}$`);
 }
 
 // --- Help ---

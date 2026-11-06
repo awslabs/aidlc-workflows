@@ -206,11 +206,14 @@ const BASE_KEYS = [
 // settings file the host reads only when someone chooses it (#1407).
 // `agentFinishRecorded` is Claude Code's (its SubagentStop row lands before a
 // helper's result, so a verdict with none since its request had no reviewer).
+// `newChatStep` is the host's own step to a clean chat, which every shipped
+// tree declares and a new harness may leave out (then no offer is made).
 const OPTIONAL_KEYS = [
   "agentFinishRecorded",
   "directiveMaxBytes",
   "hookActivation",
   "kiroLayout",
+  "newChatStep",
   "runnerFrontmatterAdditions",
   "statusLine",
 ] as const;
@@ -269,7 +272,7 @@ describe("t294 absent by default — no harness is perturbed", () => {
 
   test("the runtime accessor returns null when nothing is configured", () => {
     // Absent is the NORMAL case, not an error: the tool then probes pdftotext on
-    // PATH and degrades to extractor_unavailable.
+    // PATH and, where it is missing, reads a PDF with AI-DLC's own reader.
     expect(documentExtractors()).toBeNull();
   });
 });

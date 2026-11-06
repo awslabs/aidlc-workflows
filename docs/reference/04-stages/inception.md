@@ -311,6 +311,9 @@ Four lead artifacts plus three spoke contributions are written to
   mix, which is `custom`, so that value is never split.
 - `discovered-rules.md` -- corrective, agent-facing. Two sections: Mandated
   (`ALWAYS …` rules) and Forbidden (`NEVER …` rules).
+  Each rule is one list item, and only those list items are rules
+  (`practicesRulesToAdd` in `aidlc-state.ts`): the gate's line names the ones
+  Approve adds to `project.md`, and `practices-promote` writes exactly those.
 - `evidence.md` -- per-agent finding summary; freshness trail for re-runs.
 - `practices-discovery-timestamp.md` -- run timestamp + commit hash.
 - `contributions/aidlc-{quality,developer,devsecops}-agent.md` -- one

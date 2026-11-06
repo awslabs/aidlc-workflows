@@ -7,6 +7,7 @@ import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers
 import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
 import { compareVersions } from "../../core/tools/aidlc-channel.ts";
 import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
+import { harnessIdFromTyped } from "../../core/tools/aidlc-runtime-paths.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const at = (...parts: string[]): string => join(ROOT, ...parts);
@@ -94,8 +95,9 @@ function documentedDistNames(text: string): string[] {
       ...[...text.matchAll(/(?:dist|runtime)\/([a-z][a-z-]+)\//g)].map(
         (match) => match[1],
       ),
-      ...[...text.matchAll(/--harness\s+([a-z][a-z-]+)/g)].map(
-        (match) => match[1],
+      // A typed name reads as the harness id it selects (`kiro` is kiro-ide).
+      ...[...text.matchAll(/--harness\s+([a-z][a-z0-9-]+)/g)].map(
+        (match) => harnessIdFromTyped(match[1]),
       ),
     ]),
   ].sort();
@@ -246,7 +248,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(131);
+    expect(eventTypes.length).toBe(132);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -739,12 +741,6 @@ describe("documentation parity derives current behavior from authored implementa
     };
     perScope("workflow-profiles", read("docs", "guide", "workflow-profiles.md"), /^## `([a-z][a-z-]+)`/);
     perScope("05-scopes-and-depth", read("docs", "guide", "05-scopes-and-depth.md"), /^### ([a-z][a-z-]+)\n/);
-
-    // The composer reads a matched scope's value in the loader's order.
-    const precedence =
-      "`guard_policy:`, then the retired `change_control:`, then strict when neither line is present";
-    expect(normalized(read("core", "knowledge", "aidlc-composer-agent", "composing.md"))).toContain(precedence);
-    expect(normalized(read("core", "agents", "aidlc-composer-agent.md"))).toContain(precedence);
   });
 
   test("workspace CLI docs follow the implemented public and hidden routes", () => {

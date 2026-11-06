@@ -2,7 +2,7 @@
 // native result; these tests do not claim to exercise Windows Job Object APIs.
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as promises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -123,38 +123,50 @@ test("multiple deferred fixtures from one retired job move together", async () =
   expect(existsSync(f.temp)).toBe(false);
 });
 
-test("an EXDEV fallback copies evidence but never deletes the protected source", async () => {
+// EXDEV is a second volume; the others are a file under the folder still held
+// by a process outside the retired job (Codex's sandbox accounts).
+for (const code of ["EXDEV", "EPERM", "EBUSY", "EACCES"]) {
+  test(`a move refused with ${code} copies evidence but never deletes the protected source`, async () => {
+    const f = fixture();
+    const move = spyOn(promises, "rename").mockRejectedValueOnce(Object.assign(new Error("refused move"), { code }));
+    try {
+      const retained = await finishE2eTemporaryFiles(f.env, f.artifacts, false, f.retirement);
+      expect(retained).toBe(join(f.artifacts, "retained-fixtures"));
+      expect(readFileSync(join(f.project, "proof.txt"), "utf8")).toBe("the passing fixture's complete evidence\n");
+      expect(readFileSync(join(retained!, "codex-mem-include-owned", "proof.txt"), "utf8"))
+        .toBe("the passing fixture's complete evidence\n");
+      expect(JSON.parse(readFileSync(join(f.artifacts, "deferred-cleanup.json"), "utf8")).sourceKept).toBe(true);
+    } finally { move.mockRestore(); }
+  });
+}
+
+test.skipIf(process.platform !== "win32")("a passing Codex file whose fixture folder is still held keeps a copy and its original", async () => {
   const f = fixture();
-  const move = spyOn(promises, "rename").mockRejectedValueOnce(Object.assign(new Error("cross-volume fixture"), { code: "EXDEV" }));
+  // NTFS refuses to rename a folder while a file under it is open.
+  const held = openSync(join(f.project, "proof.txt"), "r");
   try {
     const retained = await finishE2eTemporaryFiles(f.env, f.artifacts, false, f.retirement);
-    expect(readFileSync(join(f.project, "proof.txt"), "utf8")).toBe("the passing fixture's complete evidence\n");
+    expect(retained).toBe(join(f.artifacts, "retained-fixtures"));
     expect(readFileSync(join(retained!, "codex-mem-include-owned", "proof.txt"), "utf8"))
       .toBe("the passing fixture's complete evidence\n");
-    expect(JSON.parse(readFileSync(join(f.artifacts, "deferred-cleanup.json"), "utf8")).sourceKept).toBe(true);
-  } finally { move.mockRestore(); }
-});
-
-test("a deferred rename EPERM still fails and preserves the original", async () => {
-  const f = fixture();
-  const error = Object.assign(new Error("injected rename EPERM"), { code: "EPERM" });
-  const move = spyOn(promises, "rename").mockRejectedValueOnce(error);
-  try {
-    await expect(finishE2eTemporaryFiles(f.env, f.artifacts, false, f.retirement)).rejects.toBe(error);
     expect(existsSync(join(f.project, "proof.txt"))).toBe(true);
-  } finally { move.mockRestore(); }
+    expect(JSON.parse(readFileSync(join(f.artifacts, "deferred-cleanup.json"), "utf8")).sourceKept).toBe(true);
+  } finally { closeSync(held); }
 });
 
-test("an unreadable EXDEV snapshot remains a failure with its original retained", async () => {
+test("a snapshot that cannot be copied leaves the fixtures in place without failing the file", async () => {
   const f = fixture();
-  const failure = Object.assign(new Error("injected copy EPERM"), { code: "EPERM" });
   const move = spyOn(promises, "rename").mockRejectedValueOnce(Object.assign(new Error("cross-volume fixture"), { code: "EXDEV" }));
-  const copy = spyOn(promises, "cp").mockRejectedValueOnce(failure);
+  const copy = spyOn(promises, "cp").mockRejectedValueOnce(Object.assign(new Error("injected copy EPERM"), { code: "EPERM" }));
+  const log = spyOn(console, "error").mockImplementation(() => {});
   try {
-    await expect(finishE2eTemporaryFiles(f.env, f.artifacts, false, f.retirement)).rejects.toBe(failure);
+    expect(await finishE2eTemporaryFiles(f.env, f.artifacts, false, f.retirement)).toBe(f.temp);
     expect(existsSync(join(f.project, "proof.txt"))).toBe(true);
     expect(existsSync(join(f.artifacts, "deferred-cleanup.json"))).toBe(false);
+    const lines = log.mock.calls.map(call => String(call[0])).filter(line => line.includes("left in place"));
+    expect(lines).toEqual([expect.stringContaining(f.temp)]);
   } finally {
+    log.mockRestore();
     copy.mockRestore();
     move.mockRestore();
   }

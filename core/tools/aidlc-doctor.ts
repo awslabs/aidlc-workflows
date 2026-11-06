@@ -36,6 +36,7 @@ import {
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
@@ -287,7 +288,7 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   const issues: string[] = [];
   for (const harness of harnesses) {
     if (!isModelHarness(harness.distribution)) {
-      issues.push(`unsupported harness policy surface: ${harness.distribution}`);
+      issues.push(`unsupported harness policy surface: ${typedHarnessName(harness.distribution)}`);
       continue;
     }
     try {
@@ -297,11 +298,11 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
           harness.distribution,
           modelPolicyForHarness(resolved.models, harness.distribution),
         )
-          .map((issue) => `${harness.distribution}: ${issue}`),
+          .map((issue) => `${typedHarnessName(harness.distribution)}: ${issue}`),
       );
     } catch (error) {
       issues.push(
-        `${harness.distribution}: ${
+        `${typedHarnessName(harness.distribution)}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

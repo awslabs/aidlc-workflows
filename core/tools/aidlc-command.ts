@@ -148,6 +148,26 @@ export const PINNED_TOP_LEVEL_ROUTES = [
 
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
 
+/**
+ * The words AI-DLC's own commands answer to as the first word of `aidlc <word>`
+ * or `/aidlc <word>`: the dispatcher's public verbs and nouns, its namespaces,
+ * and the chat's own leading words (aidlc-lib.ts WORKSPACE_VERBS,
+ * ORCHESTRATOR_VERBS, the knowledge, plugin and unit nouns). A plugin command
+ * with one of these names is skipped, so core's command always keeps it. A
+ * literal list, as aidlc-lib.ts imports this module; t-plugin-named-commands
+ * pins it against ROUTES and those sets.
+ */
+export const CORE_COMMAND_WORDS: ReadonlySet<string> = new Set([
+  "next", "continue", "report", "park", "unpark", "team-board", "compose",
+  "doctor", "version", "help", "config", "update", "use", "uninstall", "status",
+  "unit", "attest", "plugin", "knowledge", "engine", "system",
+  "space", "space-create", "intent",
+]);
+
+/** A plugin command's name, and its script: one .ts file directly in tools/. */
+export const PLUGIN_COMMAND_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
+export const PLUGIN_COMMAND_SCRIPT_RE = /^tools\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts$/;
+
 // The sections `aidlc config <section>` takes (aidlc-init.ts reads them).
 export const CONFIG_SECTIONS = ["models", "runtime", "providers", "trust", "flags", "project"] as const;
 
@@ -164,6 +184,7 @@ export const NEXT_VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--continue",
   "--change",
   "--every-unit",
+  "--unit-plan",
   // Retired, still taken so the token never becomes task text.
   "--init",
   "--force",
@@ -178,23 +199,63 @@ export function nextFlagTakesFollowing(flag: string, following: string | undefin
   return following !== undefined && !following.startsWith("-") && !NEXT_VALUELESS_FLAGS.has(flag);
 }
 
+export type UnitGrammar = {
+  /** The verb takes the Unit's name, its one word that is not an option. */
+  name: boolean;
+  /** The options the verb reads that take a value, as aidlc-lib.ts parseArgs keys them. */
+  options: readonly string[];
+  /** The options it reads that take none, so the word after one is never its value. */
+  switches?: readonly string[];
+  /** Its usage after the invocation, the line `--help` prints. */
+  usage: string;
+};
+
 /**
- * The `unit` noun's verbs, each with whether it takes the Unit's name, as the
- * Unit tool runs them (aidlc-unit.ts main). The dispatcher's `unit` route and
- * the `next` line both read this list.
+ * The `unit` noun's verbs as the Unit tool runs them (aidlc-unit.ts main): whether
+ * each takes the Unit's name, the options it reads and its usage. The Unit tool
+ * checks a command's words against it before the verb runs, the dispatcher's
+ * `unit` route takes its usage forms from it, and UNIT_VERBS is read from it.
  */
-export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
-  ["adopt", true],
-  ["claim", true],
-  ["gate", true],
-  ["land", true],
-  ["merge-status", true],
-  ["participate", false],
-  ["pin", true],
-  ["publish", true],
-  ["release", true],
-  ["status", false],
-]);
+export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
+  adopt: { name: true, options: [], usage: "unit adopt <unit>" },
+  claim: {
+    name: true,
+    options: ["team", "request-file", "rhythm"],
+    usage: "unit claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]",
+  },
+  gate: {
+    name: true,
+    options: ["decision", "user-input", "request-file"],
+    usage: "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
+  },
+  land: {
+    name: true,
+    options: ["step", "target", "strategy", "user-input"],
+    switches: ["accept-released-attempt"],
+    usage: "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] " +
+      "[--accept-released-attempt --user-input <acknowledgment>]",
+  },
+  "merge-status": { name: true, options: [], usage: "unit merge-status <unit>" },
+  participate: { name: false, options: [], usage: "unit participate" },
+  pin: { name: true, options: [], usage: "unit pin <unit>" },
+  publish: {
+    name: true,
+    options: ["include"],
+    switches: ["commit"],
+    usage: "unit publish <unit> [--commit [--include <path>]...]",
+  },
+  release: { name: true, options: ["expect-nonce"], usage: "unit release <unit> [--expect-nonce <claim-nonce>]" },
+  share: { name: false, options: [], usage: "unit share" },
+  status: { name: false, options: [], usage: "unit status" },
+};
+
+/**
+ * The `unit` noun's verbs, each with whether it takes the Unit's name. The
+ * dispatcher's `unit` route and the `next` line both read this list.
+ */
+export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map(
+  Object.entries(UNIT_GRAMMAR).map(([verb, grammar]) => [verb, grammar.name]),
+);
 
 /**
  * The Unit tool's argv when a `next` line is the person's Unit command, else

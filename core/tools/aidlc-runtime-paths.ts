@@ -425,12 +425,11 @@ export function aidlcToolInvocation(
   return `bun ${path}`;
 }
 
-function explicitRuntimeProjectDir(): string | null {
+function explicitRuntimeProjectDir(argv: readonly string[] = process.argv.slice(1)): string | null {
   const internal = process.env.AIDLC_RUNTIME_PROJECT_DIR;
   if (internal) {
     return isAbsolute(internal) ? internal : resolve(process.cwd(), internal);
   }
-  const argv = process.argv.slice(1);
   const index = argv.indexOf("--project-dir");
   if (index >= 0 && argv[index + 1] && !argv[index + 1].startsWith("--")) {
     return isAbsolute(argv[index + 1])
@@ -563,6 +562,11 @@ export function runtimeProjectDir(): string {
   return explicitRuntimeProjectDir() ?? process.cwd();
 }
 
+/** The project a command names with only `args`, the words before its own (a plugin command's words are its script's). */
+export function runtimeProjectDirFrom(args: readonly string[]): string {
+  return explicitRuntimeProjectDir(args) ?? process.cwd();
+}
+
 export function runtimeHarnessDir(projectDir = runtimeProjectDir()): string {
   const explicit = process.env.AIDLC_HARNESS_DIR?.trim();
   if (explicit) return explicit;
@@ -676,6 +680,72 @@ export function runtimeHarnessName(
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
   return "claude";
+}
+
+// The name a person types after --harness, where it differs from the harness
+// id. Installed projects keep the ids they record (`kiro` = Kiro CLI on its V2
+// engine, `kiro-ide` = Kiro for Kiro IDE and Kiro CLI v3), so their stamps,
+// hook commands and model keys mean what they meant; only what is typed and
+// printed changes. `kiro-ide` is still read as the id it is. The `kiro:` line
+// is how another release's files tell that it reads these names
+// (runtimePathsReadTypedNames).
+const TYPED_HARNESS_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  kiro: "kiro-v2",
+  "kiro-ide": "kiro",
+});
+const TYPED_NAMES_MARK = 'kiro: "kiro-v2"';
+
+/**
+ * Whether the release whose runtime-paths file this is reads the typed names;
+ * a release from before them reads ids, so a missing file means ids.
+ */
+export function runtimePathsReadTypedNames(file: string): boolean {
+  try {
+    return readFileSync(file, "utf-8").includes(TYPED_NAMES_MARK);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the `aidlc.ts` tool at this path reads the typed names, as its files are now. */
+export function toolReadsTypedNames(tool: string): boolean {
+  return runtimePathsReadTypedNames(join(dirname(tool), "aidlc-runtime-paths.ts"));
+}
+
+/** The name to print after --harness for a harness id, for the `aidlc.ts` tool that will read it. */
+export function harnessNameFor(id: string, tool: string | undefined): string {
+  if (tool && !toolReadsTypedNames(tool)) return id;
+  return Object.hasOwn(TYPED_HARNESS_NAMES, id) ? TYPED_HARNESS_NAMES[id] : id;
+}
+
+/** The name to print after --harness for a harness id. */
+export function typedHarnessName(id: string): string {
+  return harnessNameFor(id, undefined);
+}
+
+/** The harness id a typed --harness name means. */
+export function harnessIdFromTyped(name: string): string {
+  return Object.entries(TYPED_HARNESS_NAMES).find(([, typed]) => typed === name)?.[0] ?? name;
+}
+
+/** Every harness this release ships, in id order: its id, the name --harness takes, and its host's name. */
+export function typedHarnessHosts(): { id: string; name: string; host: string }[] {
+  return Object.keys(HOST_LABELS).sort().map((id) => ({ id, name: typedHarnessName(id), host: HOST_LABELS[id] }));
+}
+
+/** A command line's --harness values, typed names read as harness ids. */
+export function harnessArgsAsIds(args: readonly string[]): string[] {
+  return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? harnessIdFromTyped(arg) : arg));
+}
+
+/** The same line with each --harness id written by `name`, to print. */
+export function harnessArgsWith(args: readonly string[], name: (id: string) => string): string[] {
+  return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? name(arg) : arg));
+}
+
+/** The same line with its --harness ids written as the names a person types, to print. */
+export function harnessArgsAsTyped(args: readonly string[]): string[] {
+  return harnessArgsWith(args, typedHarnessName);
 }
 
 /**
@@ -982,4 +1052,103 @@ export function knownActiveSpace(workspaceRootDir: string, cursorText: string | 
   } catch {
     return "default";
   }
+}
+
+// The sync services whose macOS File Provider folder is
+// ~/Library/CloudStorage/<name>-<account> (or <name> alone).
+const CLOUD_STORAGE_SERVICES = new Map([
+  ["GoogleDrive", "Google Drive"],
+  ["OneDrive", "OneDrive"],
+  ["Dropbox", "Dropbox"],
+  ["Box", "Box"],
+]);
+
+// A blank or relative value is unset: a relative one would resolve against the
+// working folder, which is the project at every refusal. A root that does not
+// resolve is dropped, never compared as written.
+function realDirectory(path: string | undefined): string | null {
+  if (!path || !isAbsolute(path)) return null;
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+
+function pathWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function dropboxRoots(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, home: string): string[] {
+  const files = platform === "win32"
+    ? [env.APPDATA, env.LOCALAPPDATA].map((dir) => (dir && isAbsolute(dir) ? join(dir, "Dropbox", "info.json") : ""))
+    : [isAbsolute(home) ? join(home, ".dropbox", "info.json") : ""];
+  const roots: string[] = [];
+  for (const file of files) {
+    if (!file) continue;
+    try {
+      const info = JSON.parse(readFileSync(file, "utf-8")) as unknown;
+      if (info === null || typeof info !== "object") continue;
+      for (const account of Object.values(info)) {
+        const path = (account as { path?: unknown } | null)?.path;
+        if (typeof path === "string") roots.push(path);
+      }
+    } catch {
+      // No Dropbox here, or a file it is still writing: nothing to name.
+    }
+  }
+  return roots;
+}
+
+/**
+ * The sync service whose folder holds the project, or null. Named only on a
+ * positive match: the project's real path is a known sync root or under one
+ * (macOS CloudStorage and iCloud, Windows OneDrive, a Dropbox root from
+ * Dropbox's own info.json). A miss is silence.
+ */
+export function syncServiceHolding(
+  projectDir: string,
+  options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; home?: string } = {},
+): string | null {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const home = options.home ?? homedir();
+  const project = realDirectory(projectDir);
+  if (project === null) return null;
+  if (platform === "darwin" && isAbsolute(home)) {
+    const cloud = realDirectory(join(home, "Library", "CloudStorage"));
+    if (cloud !== null && pathWithin(cloud, project)) {
+      const folder = relative(cloud, project).split(sep)[0] ?? "";
+      const service = CLOUD_STORAGE_SERVICES.get(folder.split("-")[0] ?? "");
+      if (service) return service;
+    }
+    const icloud = realDirectory(join(home, "Library", "Mobile Documents"));
+    if (icloud !== null && pathWithin(icloud, project)) return "iCloud Drive";
+  }
+  if (platform === "win32") {
+    for (const name of ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"]) {
+      const root = realDirectory(env[name]);
+      if (root !== null && pathWithin(root, project)) return "OneDrive";
+    }
+  }
+  for (const path of dropboxRoots(platform, env, home)) {
+    const root = realDirectory(path);
+    if (root !== null && pathWithin(root, project)) return "Dropbox";
+  }
+  return null;
+}
+
+// The words doctor's row and the refusals share: the row's label and fix, and
+// the same two as sentences on a refusal of a change nobody may have made.
+export function syncFolderLabel(service: string): string {
+  return `This project is in ${service === "iCloud Drive" ? "an" : "a"} ${service} folder; sync can change files AI-DLC checks`;
+}
+export const SYNC_FOLDER_STEP = "move it out of the synced folder or pause sync for it";
+
+/** The two sentences and a trailing space for a project in a synced folder, else "". */
+export function syncFolderClause(projectDir: string): string {
+  const service = syncServiceHolding(projectDir);
+  if (service === null) return "";
+  return `${syncFolderLabel(service)}. ${SYNC_FOLDER_STEP[0]!.toUpperCase()}${SYNC_FOLDER_STEP.slice(1)}. `;
 }

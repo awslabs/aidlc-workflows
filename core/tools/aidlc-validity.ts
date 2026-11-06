@@ -13,6 +13,7 @@ import {
   staleStageLine,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
+import { withdrawnTurnPositions } from "./aidlc-record-core.ts";
 import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
@@ -196,9 +197,42 @@ function graphContractFingerprint(stage: StageValidityNode): string {
 interface InstanceFingerprint {
   instance: ArtifactInstance;
   sha256: string;
-  /** The raw bytes' digest, when line endings made it differ. */
+  /** The raw bytes' digest, when reading made it differ. */
   rawSha256?: string;
+  /** The text's digest with CRLF read as LF but its tables as written, when lining them up made it differ. */
+  committedSha256?: string;
   present: boolean;
+}
+
+// Lining up a Markdown table's columns is no change: outside a code block, a
+// table (a run of `|` lines whose second line is its delimiter row) is read
+// with its cells' edge spaces and tabs trimmed, as GitHub Flavored Markdown
+// trims them, and its delimiter dashes as `---`. Other pipe lines are read as
+// written.
+function markdownTableText(path: string, text: Buffer): Buffer {
+  if (!/\.(md|markdown)$/i.test(path) || !text.includes(0x7c) || text.includes(13)) return text;
+  const source = text.toString("utf-8");
+  const lines = source.split("\n");
+  const cellsOf = (line: string): string[] =>
+    line.split(/(?<!\\)\|/).slice(1, /\|[ \t]*$/.test(line) ? -1 : undefined).map((cell) => cell.replace(/^[ \t]+|[ \t]+$/g, ""));
+  const delimiterFor = (header: string, next: string | undefined): boolean => {
+    if (next === undefined || !next.startsWith("|")) return false;
+    const cells = cellsOf(next);
+    return cells.length === cellsOf(header).length && cells.every((cell) => /^:?-+:?$/.test(cell));
+  };
+  let fence = "";
+  let row = 0;
+  const read = lines.map((line, at) => {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (!fence && marker) fence = marker;
+    else if (fence && marker?.[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = "";
+    const piped = !fence && !marker && line.startsWith("|");
+    row = !piped ? 0 : row > 0 ? row + 1 : delimiterFor(line, lines[at + 1]) ? 1 : 0;
+    if (row === 0) return line;
+    const cells = cellsOf(line);
+    return row === 2 ? `|${cells.map((cell) => cell.replace(/-+/, "---")).join("|")}|` : `| ${cells.join(" | ")} |`;
+  }).join("\n");
+  return read === source ? text : Buffer.from(read, "utf-8");
 }
 
 function fingerprintInstance(instance: ArtifactInstance): InstanceFingerprint {
@@ -213,11 +247,13 @@ function fingerprintInstance(instance: ArtifactInstance): InstanceFingerprint {
     // A CRLF line ending is no change: text is read with CRLF as LF; a file Git
     // would take as binary (a lone CR, a NUL) is read as it is.
     const bytes = readFileSync(path);
-    const text = committedTextBytes(bytes);
+    const committed = committedTextBytes(bytes);
+    const text = markdownTableText(path, committed);
     return {
       instance,
       sha256: `sha256:${sha256(text)}`,
       ...(text !== bytes ? { rawSha256: `sha256:${sha256(bytes)}` } : {}),
+      ...(text !== committed ? { committedSha256: `sha256:${sha256(committed)}` } : {}),
       present: true,
     };
   } catch (error) {
@@ -283,14 +319,17 @@ function aggregateArtifactBasis(
     present,
   }));
   const contentHash = `sha256:${sha256(canonicalJson(content))}`;
-  // As it was recorded before line endings were read as LF.
-  if (fingerprints.some((fingerprint) => fingerprint.rawSha256 !== undefined)) {
-    const raw = fingerprints.map(({ instance, sha256: digest, rawSha256, present }) => ({
-      path: instance.relativePath,
-      sha256: rawSha256 ?? digest,
-      present,
+  // As it was recorded before tables were read lined up (CRLF read as LF), and
+  // before line endings were read as LF (the raw bytes); the raw form last, so
+  // it stays the one rawFingerprintForm names.
+  for (const older of ["committedSha256", "rawSha256"] as const) {
+    if (fingerprints.every((fingerprint) => fingerprint[older] === undefined)) continue;
+    const form = fingerprints.map((fingerprint) => ({
+      path: fingerprint.instance.relativePath,
+      sha256: fingerprint[older] ?? fingerprint.sha256,
+      present: fingerprint.present,
     }));
-    rememberRawFingerprint(`sha256:${sha256(canonicalJson(raw))}`, contentHash);
+    rememberRawFingerprint(`sha256:${sha256(canonicalJson(form))}`, contentHash);
   }
 
   return {
@@ -364,16 +403,19 @@ function consumeIsApplicable(
   return !conditionalOn || !projectType || conditionalOn === projectType;
 }
 
-function captureInputBasis(
+// The concrete files each applicable input of `stage` resolves to, with the
+// stage that produces it: what the stage's Validation Basis records
+// (captureInputBasis), and what its gate reads for the Units with none
+// (unitInputGaps).
+function resolvedInputs(
   projectDir: string,
   stage: StageValidityNode,
   stages: readonly StageValidityNode[],
   projectType: "brownfield" | "greenfield" | null,
-  options: CaptureStageValidationOptions,
-): ArtifactBasis[] {
+  resolution: CaptureStageValidationOptions["resolution"],
+): { artifact: string; owner: StageValidityNode; required: boolean; instances: ArtifactInstance[] }[] {
   const producers = producersByArtifact(stages);
-  const inputs: ArtifactBasis[] = [];
-
+  const inputs: { artifact: string; owner: StageValidityNode; required: boolean; instances: ArtifactInstance[] }[] = [];
   for (const consume of stage.consumes ?? []) {
     if (!consumeIsApplicable(consume.conditional_on, projectType)) continue;
     const required = consume.required !== false;
@@ -382,21 +424,56 @@ function captureInputBasis(
     // producer. With no producer there is no observed edge to record.
     if (!required && owners.length === 0) continue;
     const owner = uniqueProducer(consume.artifact, producers);
-    const instances = resolveArtifactInstances(
-      projectDir,
-      consume.artifact,
-      owner,
-      options.resolution,
-    );
-    const basis = aggregateArtifactBasis(
-      consume.artifact,
-      owner.slug,
-      required,
-      instances,
-    );
+    const instances = resolveArtifactInstances(projectDir, consume.artifact, owner, resolution);
+    inputs.push({ artifact: consume.artifact, owner, required, instances });
+  }
+  return inputs;
+}
+
+function captureInputBasis(
+  projectDir: string,
+  stage: StageValidityNode,
+  stages: readonly StageValidityNode[],
+  projectType: "brownfield" | "greenfield" | null,
+  options: CaptureStageValidationOptions,
+): ArtifactBasis[] {
+  const inputs: ArtifactBasis[] = [];
+  for (const input of resolvedInputs(projectDir, stage, stages, projectType, options.resolution)) {
+    const basis = aggregateArtifactBasis(input.artifact, input.owner.slug, input.required, input.instances);
     if (basis) inputs.push(basis);
   }
   return sortedArtifactBases(inputs);
+}
+
+/**
+ * For each per-Unit stage that produces a required input of `stage`, the Units
+ * its files are expected for and the ones missing any of them, read the way
+ * captureStageValidationBasis reads them (a Unit whose kind needs none is not
+ * expected). Units in the order of their files.
+ */
+export function unitInputGaps(
+  projectDir: string,
+  stage: StageValidityNode,
+  stateContent: string,
+  stages: readonly StageValidityNode[] = loadGraph(),
+): { producer: string; units: string[]; missing: string[] }[] {
+  const gaps = new Map<string, { units: Set<string>; missing: Set<string> }>();
+  const inputs = resolvedInputs(projectDir, stage, stages, projectTypeFrom(stateContent), { stateContent });
+  for (const input of inputs) {
+    if (!input.required) continue;
+    for (const instance of input.instances) {
+      if (instance.unit === null) continue;
+      const gap = gaps.get(input.owner.slug) ?? { units: new Set<string>(), missing: new Set<string>() };
+      gap.units.add(instance.unit);
+      if (!fingerprintInstance(instance).present) gap.missing.add(instance.unit);
+      gaps.set(input.owner.slug, gap);
+    }
+  }
+  return [...gaps].map(([producer, gap]) => ({
+    producer,
+    units: [...gap.units],
+    missing: [...gap.units].filter((unit) => gap.missing.has(unit)),
+  }));
 }
 
 function captureOutputBasis(
@@ -547,10 +624,11 @@ export function parseStageValidationBasis(
 
 function orderedMainWorkflowEvents(audit: string): OrderedAuditEvent[] {
   if (audit.length === 0) return [];
-  const events = audit
-    .replaceAll("\r\n", "\n")
-    .split(/\n---\n/)
+  const blocks = audit.replaceAll("\r\n", "\n").split(/\n---\n/);
+  const withdrawn = withdrawnTurnPositions(blocks);
+  const events = blocks
     .map((block, position): OrderedAuditEvent | null => {
+      if (withdrawn.has(position)) return null;
       const event = auditBlockField(block, "Event");
       if (!event) return null;
       if (auditBlockField(block, "Workflow")?.startsWith("single-stage:")) {

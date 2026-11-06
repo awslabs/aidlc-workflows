@@ -109,11 +109,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   taken for Kiro IDE. `agentStepInHost` (`{ env, text }`) does the same for
   `agentStep`, so the agent gets only its own tool's line: given one line
   per tool, an agent showed the wrong one. `registration`
-  (`{ file, missing, invalid }`) names the project JSON file the host reads
-  AI-DLC's hook registrations from: while it is missing or is not valid JSON
-  no setting brings those hooks back, so the step is the line `missing` (its
-  `<repair>` is doctor's command that puts the file back) or `invalid` for the
-  person instead; Claude Code declares it for `.claude/settings.json`.
+  (`{ file, missing, invalid, unwired }`) names the project JSON file the host
+  reads AI-DLC's hook registrations from: while it is missing, is not valid
+  JSON or registers none of AI-DLC's hooks no setting brings those hooks back,
+  so the step is the line `missing` or `unwired` (its `<repair>` is doctor's
+  command that puts the hooks back) or `invalid` for the person instead, and
+  doctor gives the same line instead of `recovery` and `notRunYet`; Claude Code
+  declares it for `.claude/settings.json`.
   `startedInsideProject` is the line for a chat the host started in a folder
   inside the project, where no setting brings the hooks back: the person is
   shown it instead of `agentStep`, and doctor gives it instead of `recovery`
@@ -136,6 +138,15 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `notRunYet`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
   been allowed to run commands in, no AI-DLC command can run, so Kiro IDE
   also keeps that step in its orchestrator skill.
+- `newChatStep` (optional) - `{ text, inHost? }`: how the person starts a clean
+  chat in this host, in its own words, with `<entry>` filled in. When new work
+  starts beside other work in a chat, its first stage step says once, as it
+  comes and before the stage's work, "To start this in a clean chat instead,
+  <text>."; without it nothing is said. `inHost` (`{ env, text }`) gives one
+  host this tree runs in its own step, told apart as `missedReplyInHost` is:
+  Kiro IDE uses it beside Kiro CLI's `/chat new`. A native engine in a project
+  with more than one harness installed says no step, since it runs on the first
+  one installed and cannot tell which tool the person is in.
 - `directiveMaxBytes` (optional) - for a host that keeps less of one shell
   result than the engine's 28 KiB directive cap. The engine keeps every
   directive at or under it: stage rules ride inline only while they fit, and

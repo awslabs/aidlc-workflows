@@ -9,7 +9,8 @@
 // order. A plugin's `adds.scopes` are carried like its other additions. A line
 // the person changed outside the additions is still theirs to resolve. Doctor's
 // AI-DLC files row leaves the composed stages, personas and the personas'
-// per-harness copies to config, as config takes the additions out itself. A
+// per-harness copies to config, as config takes the additions out itself, and
+// the scope and stage tables beside the skill, which config renders again. A
 // switch between Kiro CLI and Kiro IDE removes the persona copy only Kiro IDE
 // ships, or writes it with the persona's fragments in it.
 
@@ -20,7 +21,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { frameworkFilesDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { holdsRecordedWrite } from "../../core/tools/aidlc-distribution.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -37,6 +40,16 @@ const HARNESS_DIRS = {
   opencode: ".aidlc",
 } as const;
 type Harness = keyof typeof HARNESS_DIRS;
+// The scope and stage tables beside each harness's /aidlc skill.
+const TABLES: Record<Harness, string> = {
+  claude: ".claude/skills/aidlc/tables.md",
+  codex: ".agents/skills/aidlc/tables.md",
+  copilot: ".github/skills/aidlc/tables.md",
+  cursor: ".cursor/skills/aidlc/tables.md",
+  kiro: ".kiro/skills/aidlc/tables.md",
+  "kiro-ide": ".kiro/skills/aidlc/tables.md",
+  opencode: ".aidlc/skills/aidlc/tables.md",
+};
 const STAGE = "aidlc-common/stages/construction/build-and-test.md";
 const PERSONA = "agents/aidlc-quality-agent.md";
 const STAGE_LINE = ["Document the coverage run command.", "Document the coverage run command and its output."] as const;
@@ -99,7 +112,7 @@ type Project = { dir: string; harness: Harness; env: Record<string, string>; plu
 
 function config(project: Project, ...extra: string[]): { status: number; out: string } {
   return run(
-    [INIT, "config", "--project-dir", project.dir, "--from", join(REPO_ROOT, "dist", project.harness), "--harness", project.harness, "--mcp", "none", ...extra],
+    [INIT, "config", "--project-dir", project.dir, "--from", join(REPO_ROOT, "dist", project.harness), "--harness", typedHarnessName(project.harness), "--mcp", "none", ...extra],
     project.dir,
     project.env,
   );
@@ -189,14 +202,54 @@ describe("a refresh after a later compose carries the plugin's additions over", 
     });
   }
 
+  // The sync rewrites the scope and stage tables beside the /aidlc skill with
+  // the plugin's rows, and config renders them again itself, so the row leaves
+  // them out before config runs as well as after it.
   for (const harness of Object.keys(HARNESS_DIRS) as Harness[]) {
-    test(`${harness}: after config with the plugin composed, doctor's AI-DLC files row passes`, () => {
+    test(`${harness}: with the plugin composed, doctor's AI-DLC files row passes before config and after it`, () => {
       const project = composed(harness);
+      const tables = TABLES[harness];
+      const manifest = JSON.parse(
+        readFileSync(join(project.dir, HARNESS_DIRS[harness], "tools", "data", "aidlc-manifest.json"), "utf-8"),
+      ) as { files: Record<string, string> };
+      expect(typeof manifest.files[tables]).toBe("string");
+      const synced = readFileSync(join(project.dir, tables), "utf-8");
+      expect(synced).toContain("test-pro-");
+      expect(holdsRecordedWrite(synced, manifest.files[tables])).toBe(false);
+      const row = frameworkFilesDoctorCheck(project.dir, HARNESS_DIRS[harness]);
+      expect(row.pass, row.label).toBe(true);
+
       const refreshed = config(project, "--yes");
       expect(refreshed.status, refreshed.out).toBe(0);
       expect(frameworkFilesDoctorCheck(project.dir, HARNESS_DIRS[harness])).toMatchObject({ pass: true });
     });
   }
+
+  // A note in the tables is not kept either: config renders them again over it,
+  // without a conflict, so the row that names what config stops on leaves it out.
+  test("claude: with the plugin composed, a note in the /aidlc skill still shows in doctor's row, one in its tables does not", () => {
+    const project = composed("claude");
+    for (const name of ["SKILL.md", "tables.md"]) {
+      const file = join(project.dir, ".claude", "skills", "aidlc", name);
+      writeFileSync(file, `${readFileSync(file, "utf-8")}\nOur team's note.\n`);
+    }
+    const row = frameworkFilesDoctorCheck(project.dir, ".claude");
+    expect(row.pass).toBe(false);
+    expect(row.label).toContain("1 changed in this project");
+    expect(row.label).toContain(".claude/skills/aidlc/SKILL.md");
+    expect(row.label).not.toContain("tables.md");
+  });
+
+  test("claude: with the plugin composed, tables that are no longer a file still show in doctor's row", () => {
+    const project = composed("claude");
+    const tables = join(project.dir, ".claude", "skills", "aidlc", "tables.md");
+    rmSync(tables);
+    mkdirSync(tables);
+    const row = frameworkFilesDoctorCheck(project.dir, ".claude");
+    expect(row.pass).toBe(false);
+    expect(row.label).toContain(".claude/skills/aidlc/tables.md");
+    expect(conflicts(project)).toContain(".claude/skills/aidlc/tables.md (managed path is not a regular file)");
+  });
 
   test("kiro-ide: config, then the switch to Kiro CLI: no conflict, the persona copy only Kiro IDE ships removed, the fragment kept", () => {
     const project = composed("kiro-ide");

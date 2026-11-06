@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin
+// covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:land
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -9,6 +9,7 @@ import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   UNIT,
   cleanupTempDirs,
+  gateAndLand,
   git,
   makeSeed,
   prepareCandidate,
@@ -19,7 +20,8 @@ import {
 // through AI-DLC's shipped .gitignore): the stages' shared diaries outside the
 // Unit's folder, review records under the record's engine folder that no
 // commit carries, and a Unit Progress row the engine rewrites on every `next`.
-// Publish hands pin exactly what it reads, and nothing the clone keeps.
+// Publish hands pin exactly what it reads, and nothing the clone keeps; the
+// landing keeps them off main, whose own .gitignore ignores them.
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -57,5 +59,25 @@ describe("t326 pinned team Unit merge: a real clone's own files", () => {
     );
     expect(model.section.split("\n").find((line) => line.startsWith("| alpha |")))
       .toStartWith("| alpha | alpha-team |");
+  });
+
+  test("a merge landing leaves the carried review records out of main's merge commit", () => {
+    const { seed, remote } = makeSeed();
+    const candidate = prepareCandidate(remote, "alpha", "alpha-team");
+    const record = relative(candidate.checkout, seededRecordDir(candidate.checkout)).replaceAll("\\", "/");
+    const carried = (tree: string[]) =>
+      tree.filter((path) => path.startsWith(`${record}/.aidlc-engine/reviews/`) && path.endsWith(".json"));
+
+    expect(carried(git(candidate.checkout, ["ls-tree", "-r", "--name-only", candidate.candidateOid]).split("\n")))
+      .toHaveLength(5);
+    const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
+    expect(pin.status, pin.out).toBe(0);
+    gateAndLand(seed, "alpha");
+
+    const mergeCommit = git(seed, ["log", "-1", "--merges", "--format=%H"]);
+    expect(mergeCommit).not.toBe("");
+    const merged = git(seed, ["diff", "--name-only", `${mergeCommit}^1`, mergeCommit]).split("\n");
+    expect(carried(merged)).toEqual([]);
+    expect(carried(git(seed, ["ls-tree", "-r", "--name-only", "HEAD"]).split("\n"))).toEqual([]);
   });
 });
