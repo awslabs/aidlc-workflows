@@ -17,9 +17,12 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   askedQuestionFields,
+  commandChat,
+  latestAskedQuestion,
   QUESTION_ID_FIELD,
   questionEntryDigests,
   questionShows,
+  shownOnlyInOtherChats,
 } from "./aidlc-questions.ts";
 import {
   chatsSince,
@@ -994,6 +997,45 @@ function revisedSummaryNote(
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
 // choices) on a stage that owes one, refuse it and name the command that counts.
+// A stage's own question asked or answered while its gate waits (a chat that
+// was still showing it when another chat finished the stage): the stage is
+// done, so the step is that gate, shown with `next`, the documents as they are,
+// and nothing is recorded. The summary is closed once the gate opens, whichever
+// chat asks; the stage's other questions only in a chat that never saw the
+// gate, opened in another chat of this clone (shownOnlyInOtherChats), since a
+// chat at its own gate may still ask the person something about it. True when
+// it printed the step.
+function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "answer"): boolean {
+  if (flags.unit !== undefined || flags.single !== undefined) return false;
+  if (flags.checkpoint !== undefined && flags.checkpoint !== "summary-confirmation") return false;
+  const stage = flags.stage;
+  const pd = resolveActiveProjectDir(projectDir, stage);
+  let content: string;
+  try {
+    content = readFileSync(stateFilePath(pd), "utf-8");
+  } catch {
+    return false;
+  }
+  if (getField(content, "Current Stage")?.trim() !== stage) return false;
+  if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") return false;
+  if (stageBox(content, stage) !== "awaiting-approval") return false;
+  const gate = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage, unit: null });
+  const elsewhere = gate !== null && shownOnlyInOtherChats(pd, gate.id, commandChat(pd));
+  if (flags.checkpoint === undefined && !elsewhere) return false;
+  const next = aidlcDispatcherInvocation("orchestrate next");
+  const waits = `Stage "${stage}" is finished and waiting for the person's approval` +
+    `${elsewhere ? ", opened in another chat," : ""} with its documents as they are, so nothing was recorded`;
+  const message = verb === "decision"
+    ? `${waits}: there is no question of it to ask now. Run \`${next}\` and show the gate it returns.`
+    : `${waits}: ${flags.checkpoint === undefined ? "its questions were answered" : "its summary was confirmed"} ` +
+      "before its documents were written. When the person's reply confirmed or answered it, it decides nothing at " +
+      `the gate: run \`${next}\` and show the gate it returns. When it asked for a change, run ` +
+      `\`${requestChangesReportCommand(pd, stage, undefined)}\` and follow what it returns: their messages go on ` +
+      "the record as what should change.";
+  console.log(JSON.stringify({ recorded: null, message }));
+  return true;
+}
+
 function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
   if (flags.checkpoint !== undefined) return;
   // An answer names a summary choice by its label, with what to change after it.
@@ -1177,6 +1219,7 @@ function handleDecision(args: string[]): void {
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
+  if (stageWaitsAtItsGate(flags, "decision")) return;
   refusePlainSummaryConfirmation(flags, "decision");
   const pd = resolveActiveProjectDir(projectDir, flags.stage);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
@@ -2227,6 +2270,7 @@ function handleAnswer(args: string[]): void {
     console.log(JSON.stringify({ recorded: picked.op, message }));
     return;
   }
+  if (stageWaitsAtItsGate(flags, "answer")) return;
   refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";

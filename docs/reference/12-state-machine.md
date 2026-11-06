@@ -142,7 +142,13 @@ checked, and the gate is shown once, after it. At a per-Unit stage's gate that
 print carries the produced line for the gate's Unit, which the report does not
 name; a joint late approval keeps the gate-only step below. Otherwise it re-presents the current gate as
 `run-stage` with `gate_only: true` and `gate: true`, not another execution of
-the stage body or reviewer. The directive retains `reviewer`, `review_artifact`,
+the stage body or reviewer. A gate another chat of this clone opened, shown in a
+chat that never saw it, starts its `narration` with "This was finished in your
+other chat; here it is to approve." (once per chat, only where the host names
+its chats, never on `--resume`), and a stage question that chat answers or asks
+late (`log answer`, `log decision`; the summary in any chat) records nothing and
+names this step, or the gate's Request Changes when the reply asked for a
+change. The directive retains `reviewer`, `review_artifact`,
 and `review_class` when they were present. `reviewer` and `review_artifact` name
 whose existing review the Review brief reads. Present the brief from the
 recorded review file and verdict; dispatch no reviewer and request no new

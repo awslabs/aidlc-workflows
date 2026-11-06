@@ -1,0 +1,418 @@
+// covers: subcommand:aidlc-log:answer, subcommand:aidlc-log:decision, subcommand:aidlc-orchestrate:next
+// covers: subcommand:aidlc-orchestrate:report, audit:QUESTION_SHOWN
+//
+// Live on Kiro CLI the first chat waited for the person's answer to Scope
+// Definition's summary; a second chat in the same folder carried on there,
+// wrote the stage's documents and showed its gate. Back in the first chat the
+// person answered the summary with "1": the late answer was refused as "no
+// matching unanswered summary question", the agent logged the summary question
+// again, the engine took it at the open gate, and the first chat wrote both
+// documents again and showed its own gate over files the second chat never
+// described.
+//
+// A chat that reaches a stage whose documents are written and whose gate is
+// waiting, opened in another chat, shows that gate with the files as they are,
+// said in one line ("This was finished in your other chat; here it is to
+// approve."), and writes nothing: the late answer and a summary question asked
+// again both name that step. Approving in either chat approves the same bytes;
+// asking for changes at the gate still redoes the stage; one chat alone meets
+// what it meets today. Runs the shipped tools and hooks with production guards.
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { cleanupTestProject, seededRecordDir, setupIntegrationProject } from "../harness/fixtures.ts";
+import { testGuardEnvironment } from "../harness/runner-profile.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+const BUN = process.execPath;
+const FIRST = "01995000-0995-7000-8000-000000003601";
+const SECOND = "01995000-0995-7000-8000-000000003602";
+const STAGE = "requirements-analysis";
+const REVIEWER = "aidlc-product-lead-agent";
+const SUMMARY_QUESTION = "Does this all look correct before I generate the artifact?";
+const FINISHED_ELSEWHERE = "This was finished in your other chat; here it is to approve.";
+const PRE_GUARDS = ["state-transition-guard", "reviewer-scope", "review-freeze", "plan-approval-guard"] as const;
+const HOST_ENV = [
+  "AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE", "AIDLC_STOP_HOOK_PROBE", "AWS_AIDLC_DEFAULT_SCOPE",
+  "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CONFIG_DIR",
+];
+const FIRST_DOCUMENT = "# Requirements\n\n## Functional Requirements\n\n- B1: Only the owner can read a saved search.\n";
+const SECOND_DOCUMENT = "# Requirements\n\n## Functional Requirements\n\n- M1: Saved searches.\n- M2: Owners only.\n";
+
+type Json = Record<string, unknown>;
+type Run = { code: number; stdout: string; stderr: string };
+
+const created: string[] = [];
+afterEach(() => {
+  while (created.length > 0) cleanupTestProject(created.pop());
+});
+
+function lastJson(text: string): Json | null {
+  const line = text.trim().split("\n").at(-1);
+  if (!line) return null;
+  try {
+    return JSON.parse(line) as Json;
+  } catch {
+    return null;
+  }
+}
+
+function questionsBody(summaryAnswer: string): string {
+  return [
+    "# Requirements Analysis Questions", "",
+    "## Question 1", "Who can read a saved search?", "",
+    "A) Only the owner", "B) The team", "X) Other (please specify)", "",
+    "[Answer]: A", "",
+    "## Consolidated Summary Confirmation", "",
+    "- Only the owner can read a saved search.", "",
+    "- Looks correct", "- Request changes", "",
+    `[Answer]: ${summaryAnswer}`.trimEnd(), "",
+  ].join("\n");
+}
+
+class Folder {
+  readonly dir: string;
+  readonly stageDir: string;
+  readonly questions: string;
+  readonly artifact: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly outputs: string[] = [];
+
+  constructor() {
+    this.dir = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
+    created.push(this.dir);
+    this.stageDir = join(seededRecordDir(this.dir), "inception", STAGE);
+    this.questions = join(this.stageDir, `${STAGE}-questions.md`);
+    this.artifact = join(this.stageDir, "requirements.md");
+    this.env = {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: this.dir,
+      AIDLC_PROJECT_DIR: this.dir,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_DISABLE_SENSORS: "1",
+    };
+    for (const key of HOST_ENV) delete this.env[key];
+    for (const args of [
+      ["init", "-q"], ["config", "user.name", "AI-DLC Fixture"], ["config", "user.email", "fixture@example.invalid"],
+      ["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture baseline"],
+    ]) this.ok(this.run(["git", ...args], FIRST), `git ${args[0]}`);
+  }
+
+  run(argv: string[], chat: string, input?: Json, extraEnv: NodeJS.ProcessEnv = {}): Run {
+    const child = Bun.spawnSync(argv, {
+      cwd: this.dir,
+      // The chat as Claude Code names it in the agent's shell: its id beside the live pid of the process running it.
+      env: { ...this.env, CLAUDE_CODE_SESSION_ID: chat, CLAUDE_PID: String(process.pid), ...extraEnv },
+      stdin: input === undefined ? "ignore" : Buffer.from(JSON.stringify(input)),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { code: child.exitCode, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
+  }
+
+  ok(run: Run, context: string): Run {
+    expect(run.code, `${context}\n${run.stdout}\n${run.stderr}`).toBe(0);
+    return run;
+  }
+
+  json(run: Run, context: string): Json {
+    this.ok(run, context);
+    const parsed = lastJson(run.stdout);
+    expect(parsed, `${context}\n${run.stdout}`).not.toBeNull();
+    return parsed!;
+  }
+
+  text(): string {
+    return readFileSync(this.artifact, "utf-8");
+  }
+
+  stageMark(): string {
+    const state = readFileSync(join(seededRecordDir(this.dir), "aidlc-state.md"), "utf-8");
+    return new RegExp(`^- \\[(.)\\] ${STAGE} `, "m").exec(state)?.[1] ?? "(none)";
+  }
+
+  rows(event: string) {
+    return readAuditShardEvents(this.dir).filter((row) => row.event === event);
+  }
+}
+
+class Chat {
+  constructor(readonly folder: Folder, readonly id: string) {}
+
+  hook(name: string, payload: Json): Run {
+    const argv = name === "record-human-turn"
+      ? [BUN, join(this.folder.dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"]
+      : [BUN, join(this.folder.dir, ".claude", "hooks", `aidlc-${name}.ts`)];
+    return this.folder.run(argv, this.id, { cwd: this.folder.dir, session_id: this.id, ...payload });
+  }
+
+  start(): void {
+    const transcripts = mkdtempSync(join(tmpdir(), "aidlc-chat-"));
+    created.push(transcripts);
+    const transcript = join(transcripts, `${this.id}.jsonl`);
+    writeFileSync(transcript, "");
+    this.folder.ok(this.hook("session-start", {
+      hook_event_name: "SessionStart", source: "startup", transcript_path: transcript,
+    }), "session start");
+  }
+
+  tool(name: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}): Run {
+    const result = this.folder.run(
+      [BUN, join(this.folder.dir, ".claude", "tools", `aidlc-${name}.ts`), ...args, "--project-dir", this.folder.dir],
+      this.id, undefined, extraEnv,
+    );
+    this.folder.outputs.push(`${this.id} ${name} ${args.join(" ")}\n${result.stdout}\n${result.stderr}`);
+    return result;
+  }
+
+  next(args: string[] = []): Json {
+    let step = this.folder.json(this.tool("orchestrate", ["next", ...args]), `next ${args.join(" ")}`);
+    for (let i = 0; step.kind === "load-steering" && i < 40; i++) {
+      const [, tool, ...rest] = String(step.next).trim().split(/\s+/);
+      step = this.folder.json(this.folder.run([BUN, join(this.folder.dir, tool), ...rest], this.id), "rule part");
+    }
+    return step;
+  }
+
+  // The agent's file write: the PreToolUse guards admit it, then the write-audit hook records it.
+  write(path: string, content: string): void {
+    const toolName = existsSync(path) && readFileSync(path, "utf-8") !== content ? "Edit" : "Write";
+    const toolInput = toolName === "Edit"
+      ? { file_path: path, old_string: readFileSync(path, "utf-8"), new_string: content }
+      : { file_path: path, content };
+    for (const guard of PRE_GUARDS) {
+      this.folder.ok(this.hook(guard, { hook_event_name: "PreToolUse", tool_name: toolName, tool_input: toolInput }),
+        `${guard} admits the write of ${path}`);
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+    this.folder.ok(this.hook("write-audit-log", {
+      hook_event_name: "PostToolUse", tool_name: toolName, tool_input: toolInput, tool_response: { success: true },
+    }), `record the write of ${path}`);
+  }
+
+  said(prompt: string): void {
+    this.folder.ok(this.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt }), "the person's message");
+  }
+
+  summaryArgs(): string[] {
+    return ["--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", this.folder.questions];
+  }
+
+  askSummary(): Run {
+    return this.tool("log", ["decision", ...this.summaryArgs(), "--decision", SUMMARY_QUESTION,
+      "--options", "Looks correct,Request changes"]);
+  }
+
+  answerSummary(): Run {
+    return this.tool("log", ["answer", ...this.summaryArgs(), "--details", "Looks correct"]);
+  }
+
+  // The stage's document written, reviewed READY, and its gate opened.
+  finishStage(document: string): Json {
+    this.write(this.folder.artifact, document);
+    const base = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1"];
+    const requested = this.folder.json(this.tool("log", base), "request the review");
+    this.write(resolve(this.folder.dir, String(requested.reviewFile)), [
+      "## Review", "", "**Verdict:** READY", `**Reviewer:** ${REVIEWER}`, "**Iteration:** 1", "",
+      "### Findings", "", "No outstanding findings.", "",
+    ].join("\n"));
+    this.folder.json(this.tool("log", [...base, "--verdict", "READY"]), "record the verdict");
+    return this.folder.json(this.tool("orchestrate", ["report", "--stage", STAGE, "--result", "awaiting-approval"]),
+      "open the approval gate");
+  }
+}
+
+// The first chat starts the stage and asks the summary; the second chat
+// carries on there, confirms it, writes the stage's document and opens its gate.
+function secondChatFinishedTheStage(): { folder: Folder; first: Chat; second: Chat } {
+  const folder = new Folder();
+  const first = new Chat(folder, FIRST);
+  first.start();
+  first.folder.ok(first.tool("jump", ["execute", "--target", STAGE, "--direction", "redo"]), "start the stage");
+  expect(first.next()).toMatchObject({ kind: "run-stage", stage: STAGE });
+  first.said("Q1: A");
+  first.write(folder.questions, questionsBody(""));
+  folder.json(first.askSummary(), "the first chat asks the summary");
+
+  const second = new Chat(folder, SECOND);
+  second.start();
+  second.said("yes, the summary looks correct, carry on");
+  second.next();
+  second.write(folder.questions, questionsBody("Looks correct"));
+  folder.json(second.answerSummary(), "the second chat records the summary answer");
+  expect(second.next()).toMatchObject({ kind: "run-stage", stage: STAGE });
+  expect(second.finishStage(FIRST_DOCUMENT).kind).toBe("print");
+  expect(folder.stageMark()).toBe("?");
+  return { folder, first, second };
+}
+
+// What a redirected record command prints: nothing recorded, the step to take.
+function redirected(run: Run): string {
+  expect(run.code, `${run.stdout}\n${run.stderr}`).toBe(0);
+  const printed = lastJson(run.stdout);
+  expect(printed, run.stdout).not.toBeNull();
+  expect(printed!.recorded).toBeNull();
+  return String(printed!.message);
+}
+
+describe("t-second-chat-finished-step: a stage finished in another chat is shown, not written again", () => {
+  test("the first chat's late summary answer names the waiting gate, and the gate is shown with the files as they are", () => {
+    const { folder, first } = secondChatFinishedTheStage();
+    const written = folder.text();
+    const decisions = folder.rows("DECISION_RECORDED").length;
+    const confirmations = folder.rows("SUMMARY_CONFIRMATION_RECORDED").length;
+    const errors = folder.rows("ERROR_LOGGED").length;
+    first.said("1");
+    const step = redirected(first.answerSummary());
+    expect(step).toContain("opened in another chat");
+    expect(step).toContain("orchestrate next`");
+    expect(step).not.toContain("Record the question before presenting it");
+    // The summary question asked again names the same step and is not recorded.
+    expect(redirected(first.askSummary())).toContain("orchestrate next`");
+    expect(folder.rows("DECISION_RECORDED").length).toBe(decisions);
+    expect(folder.rows("SUMMARY_CONFIRMATION_RECORDED").length).toBe(confirmations);
+    expect(folder.rows("ERROR_LOGGED").length).toBe(errors);
+    // `next` shows the gate opened in the other chat, said in one line, first.
+    const gate = first.next();
+    expect(gate, JSON.stringify(gate)).toMatchObject({ kind: "run-stage", stage: STAGE, gate_only: true });
+    expect(String(gate.narration).split("\n")[0]).toBe(FINISHED_ELSEWHERE);
+    expect(folder.text()).toBe(written);
+    const shown = folder.rows("QUESTION_SHOWN").filter((row) => auditBlockField(row.block, "Question Chat") === FIRST);
+    expect(shown.length).toBe(1);
+    // No loop: the late answer now meets the gate this chat has shown, and the
+    // gate shown again does not say the line twice.
+    const twice = first.next();
+    expect(twice).toMatchObject({ kind: "run-stage", stage: STAGE, gate_only: true });
+    expect(String(twice.narration ?? "")).not.toContain(FINISHED_ELSEWHERE);
+  });
+
+  test("a late answer to one of the stage's own questions names the waiting gate too", () => {
+    const { folder, first } = secondChatFinishedTheStage();
+    const answers = folder.rows("QUESTION_ANSWERED").length;
+    first.said("B, the team");
+    const step = redirected(first.tool("log", ["answer", "--stage", STAGE, "--details", "Q1: B"]));
+    expect(step).toContain("opened in another chat");
+    expect(step).toContain("orchestrate next`");
+    expect(folder.rows("QUESTION_ANSWERED").length).toBe(answers);
+  });
+
+  test("a late change request goes to the gate's Request Changes, with the person's words, and redoes the stage", () => {
+    const { folder, first } = secondChatFinishedTheStage();
+    first.said("Request changes: the team can read saved searches too");
+    const step = redirected(first.answerSummary());
+    const reject = /run `([^`]*--result rejected[^`]*)`/.exec(step)?.[1];
+    expect(reject, step).toBeDefined();
+    expect(reject).toContain(`report --stage ${STAGE} --result rejected`);
+    folder.json(first.tool("orchestrate", ["report", "--stage", STAGE, "--result", "rejected", "--user-input",
+      "Request Changes"]), "the gate's Request Changes from the first chat");
+    expect(folder.stageMark()).not.toBe("?");
+    const rejected = folder.rows("GATE_REJECTED").at(-1);
+    expect(rejected).toBeDefined();
+    expect(rejected!.block).toContain("the team can read saved searches too");
+    const redo = first.next();
+    expect(redo, JSON.stringify(redo)).toMatchObject({ kind: "run-stage", stage: STAGE });
+    expect(redo.gate_only).toBeUndefined();
+  });
+
+  test("approving in the first chat approves the bytes the second chat wrote", () => {
+    const { folder, first } = secondChatFinishedTheStage();
+    const written = folder.text();
+    first.said("1");
+    first.answerSummary();
+    first.next();
+    first.said("Approve");
+    folder.json(first.tool("orchestrate", ["report", "--stage", STAGE, "--result", "approved", "--user-input", "Approve"]),
+      "approve in the first chat");
+    expect(folder.stageMark()).toBe("x");
+    expect(folder.text()).toBe(written);
+  });
+
+  test("approving in the second chat approves the same bytes", () => {
+    const { folder, first, second } = secondChatFinishedTheStage();
+    const written = folder.text();
+    first.said("1");
+    first.answerSummary();
+    first.next();
+    second.said("Approve");
+    folder.json(second.tool("orchestrate", ["report", "--stage", STAGE, "--result", "approved", "--user-input", "Approve"]),
+      "approve in the second chat");
+    expect(folder.stageMark()).toBe("x");
+    expect(folder.text()).toBe(written);
+  });
+
+  test("asking for changes at the gate in the first chat still redoes the stage", () => {
+    const { folder, first } = secondChatFinishedTheStage();
+    first.said("1");
+    first.answerSummary();
+    first.next();
+    first.said("redo it: the team can read saved searches too");
+    folder.json(first.tool("orchestrate", ["report", "--stage", STAGE, "--result", "rejected", "--user-input",
+      "Request Changes"]), "request changes in the first chat");
+    expect(folder.stageMark()).not.toBe("?");
+    const redo = first.next();
+    expect(redo, JSON.stringify(redo)).toMatchObject({ kind: "run-stage", stage: STAGE });
+    expect(redo.gate_only).toBeUndefined();
+    // The summary is asked again in the revision, as one chat's revision does,
+    // and the revised document is written.
+    first.write(folder.questions, questionsBody(""));
+    folder.json(first.askSummary(), "the summary asked again while the stage is revised");
+    first.write(folder.artifact, SECOND_DOCUMENT);
+    expect(folder.text()).toBe(SECOND_DOCUMENT);
+  });
+
+  test("a resume in the first chat says where the work picks up, not the line", () => {
+    const { first } = secondChatFinishedTheStage();
+    first.said("/aidlc --resume");
+    const gate = first.next(["--resume"]);
+    expect(gate, JSON.stringify(gate)).toMatchObject({ stage: STAGE });
+    expect(JSON.stringify(gate)).not.toContain(FINISHED_ELSEWHERE);
+  });
+
+  test("a gate a teammate's clone opened is not called your other chat", () => {
+    const { folder, first } = secondChatFinishedTheStage();
+    // This checkout now writes a shard of its own: every row so far is another clone's.
+    writeFileSync(join(folder.dir, "aidlc", ".aidlc-clone-id"), "teammate0001\nhost\n");
+    first.said("B, the team");
+    // The stage's own question meets what it meets today, never the other-chat redirect.
+    const plain = first.tool("log", ["answer", "--stage", STAGE, "--details", "Q1: B"]);
+    expect(lastJson(plain.stdout)?.recorded).toBeUndefined();
+    expect(plain.stdout + plain.stderr).not.toContain("another chat");
+    const gate = first.next();
+    expect(gate).toMatchObject({ kind: "run-stage", stage: STAGE, gate_only: true });
+    expect(String(gate.narration ?? "")).not.toContain(FINISHED_ELSEWHERE);
+  });
+
+  test("one chat alone: the gate shown again says nothing about another chat", () => {
+    const folder = new Folder();
+    const only = new Chat(folder, FIRST);
+    only.start();
+    folder.ok(only.tool("jump", ["execute", "--target", STAGE, "--direction", "redo"]), "start the stage");
+    only.next();
+    only.said("Q1: A");
+    only.write(folder.questions, questionsBody(""));
+    folder.json(only.askSummary(), "ask the summary");
+    only.said("Looks correct");
+    only.write(folder.questions, questionsBody("Looks correct"));
+    folder.json(only.answerSummary(), "record the summary answer");
+    expect(only.finishStage(FIRST_DOCUMENT).kind).toBe("print");
+    const gate = only.next();
+    expect(gate).toMatchObject({ kind: "run-stage", stage: STAGE, gate_only: true });
+    expect(String(gate.narration ?? "")).not.toContain(FINISHED_ELSEWHERE);
+    // The summary answered again at its own gate names the gate, with no other chat in it.
+    only.said("1");
+    const step = redirected(only.answerSummary());
+    expect(step).toContain("orchestrate next`");
+    expect(step).not.toContain("another chat");
+    // A question of the stage asked at its own gate is the chat's own: recorded as today.
+    only.said("what does the owner see?");
+    const asked = folder.json(only.tool("log", ["decision", "--stage", STAGE, "--decision", "Should the owner see a count?",
+      "--options", "Yes,No"]), "a question at its own gate");
+    expect(asked.recorded).toBeUndefined();
+    expect(asked.emitted).toBe("DECISION_RECORDED");
+  });
+});
