@@ -31511,16 +31511,17 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   // panel or a committed file: a reply not recorded is then that switch, not a
   // folder Kiro has yet to trust and not a record whose hooks never ran (the
   // other hooks still beat), so this comes before the hooks-off step and the
-  // person is sent to the panel or the file (Kiro CLI has no panel), never to
-  // the trust step. A caller refusing for a reply not given yet (the summary choice
-  // the person has not made) is not a lost reply: it hears nothing here either.
+  // person is sent to the panel or, on Kiro CLI (no panel; hook files register
+  // when a session starts), the file and a new session, never to the trust
+  // step. A caller refusing for a reply not given yet (the summary choice the
+  // person has not made) is not a lost reply: it hears nothing here either.
   if (options.missedReply !== false && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
     return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
       "replies is switched off. Do not ask them to answer again. Tell them exactly this, with " +
       "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
-      `(${KIRO_REPLY_HOOK}) is switched off. To turn it back on, change \`"enabled": false\` to \`true\` in ` +
-      `\`${harnessDir()}/hooks/${KIRO_REPLY_HOOK}.json\` (in Kiro IDE, Agent Hooks does the same), then give your ` +
-      `answer once more." ${NO_CHECK_OFF_OFFER}`;
+      `(${KIRO_REPLY_HOOK}) is switched off. In Kiro CLI, change \`"enabled": false\` to \`true\` in ` +
+      `\`${harnessDir()}/hooks/${KIRO_REPLY_HOOK}.json\`, then quit Kiro and start \`kiro-cli --v3\` again in this ` +
+      `folder; in Kiro IDE, turn it back on under Agent Hooks. Then give your answer once more." ${NO_CHECK_OFF_OFFER}`;
   }
   // Nothing on record tells a reply not sent yet from one the prompt hook
   // failed to record, so every such refusal also says what happened to a reply

@@ -15,12 +15,14 @@ import { dirname, join } from "node:path";
 import { type KiroDisabledHook, kiroDisabledHooks } from "./aidlc-utility.ts";
 
 /**
- * The way back, as doctor's fix gives it in its own words: the file on either
- * host, the panel on Kiro IDE. "Change false to true" also reaches a flag on a `hooks` entry, which a
- * root-level `"enabled": true` would leave off.
+ * The way back on each host; doctor's fix gives the same steps in its own
+ * words. Kiro CLI has no panel and registers hook files when a session starts,
+ * so the edit there takes a new session. "Change false to true" also reaches a
+ * flag on a `hooks` entry, which a root-level `"enabled": true` would leave off.
  */
 export function kiroHookOnStep(file: string): string {
-  return `To turn it back on, change \`"enabled": false\` to \`true\` in \`${file}\` (in Kiro IDE, Agent Hooks does the same).`;
+  return `In Kiro CLI, change \`"enabled": false\` to \`true\` in \`${file}\`, then quit Kiro and start ` +
+    "`kiro-cli --v3` again in this folder; in Kiro IDE, turn it back on under Agent Hooks.";
 }
 
 export type KiroHookOff = KiroDisabledHook & {

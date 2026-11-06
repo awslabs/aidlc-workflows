@@ -2647,18 +2647,18 @@ describe("t294 trust diagnostics", () => {
       {
         pass: false,
         label: "AI-DLC hook aidlc-guard-tool-call is switched off: the approved plan, reviewed work and AI-DLC's records are not protected",
-        fix: 'change "enabled": false to true in .kiro/hooks/aidlc-guard-tool-call.json (in Kiro IDE, Agent Hooks does the same)',
+        fix: 'in Kiro CLI, change "enabled": false to true in .kiro/hooks/aidlc-guard-tool-call.json, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn aidlc-guard-tool-call back on under Agent Hooks',
       },
       {
         pass: false,
         label: "AI-DLC hook aidlc-record-human-turn is switched off: your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
-        fix: 'change "enabled": false to true in .kiro/hooks/aidlc-record-human-turn.json (in Kiro IDE, Agent Hooks does the same)',
+        fix: 'in Kiro CLI, change "enabled": false to true in .kiro/hooks/aidlc-record-human-turn.json, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn aidlc-record-human-turn back on under Agent Hooks',
       },
       {
         pass: true,
         severity: "warn",
         label: "AI-DLC hooks switched off: aidlc-log-subagent (a specialist agent's finished part is not recorded); aidlc-session-start (your first prompt starts the session instead)",
-        fix: 'change "enabled": false to true in their .kiro/hooks/ files (in Kiro IDE, Agent Hooks does the same)',
+        fix: 'in Kiro CLI, change "enabled": false to true in their .kiro/hooks/ files, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn them back on under Agent Hooks',
       },
     ]);
 

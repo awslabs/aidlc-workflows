@@ -155,9 +155,10 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
     const at = new Date(hook.since);
     const line = kiroHookOffLine(hook, at);
     expect(line).toMatch(/^AI-DLC hook aidlc-guard-tool-call is switched off since \d{2}:\d{2}: /);
-    // Kiro CLI has no Agent Hooks panel: the file and its setting are the way back there.
+    // Kiro CLI has no Agent Hooks panel and registers hook files when a session
+    // starts: the file, its setting and a new session are the way back there.
     expect(line).toEndWith(
-      `${hook.protects}. To turn it back on, change \`"enabled": false\` to \`true\` in \`.kiro/hooks/aidlc-guard-tool-call.json\` (in Kiro IDE, Agent Hooks does the same).`,
+      `${hook.protects}. In Kiro CLI, change \`"enabled": false\` to \`true\` in \`.kiro/hooks/aidlc-guard-tool-call.json\`, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn it back on under Agent Hooks.`,
     );
     expect(kiroHookOffLine(hook, new Date(at.getTime() + 3 * 24 * 3600 * 1000))).toMatch(/ since \d{4}-\d{2}-\d{2} \d{2}:\d{2}: /);
     expect(kiroDisabledHookChecks(proj, ".kiro")[0].label).toBe(`AI-DLC hook aidlc-guard-tool-call is switched off: ${hook.protects}`);
@@ -184,7 +185,9 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
       expect(before).not.toContain("Agent Hooks");
       switchOff(REPLY);
       const hint = unattendedHumanPresenceHint(proj);
-      expect(hint).toContain("To turn it back on, change `\"enabled\": false` to `true` in `.kiro/hooks/aidlc-record-human-turn.json` (in Kiro IDE, Agent Hooks does the same), then give your answer once more.");
+      expect(hint).toContain(
+        "In Kiro CLI, change `\"enabled\": false` to `true` in `.kiro/hooks/aidlc-record-human-turn.json`, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn it back on under Agent Hooks. Then give your answer once more.",
+      );
       expect(hint).toContain("Do not ask them to answer again");
       expect(hint).toContain("Never offer to turn a check off for them.");
       expect(hint).not.toMatch(/Trust Folder|Reload Window|Restricted Mode/);
@@ -205,7 +208,9 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
       expect(hooksOff).not.toContain("Agent Hooks");
       switchOff(REPLY);
       const hint = unattendedHumanPresenceHint(proj);
-      expect(hint).toContain("change `\"enabled\": false` to `true` in `.kiro/hooks/aidlc-record-human-turn.json`");
+      expect(hint).toContain(
+        "change `\"enabled\": false` to `true` in `.kiro/hooks/aidlc-record-human-turn.json`, then quit Kiro and start `kiro-cli --v3` again in this folder",
+      );
       expect(hint).not.toContain("Kiro is not running AI-DLC's hooks");
       expect(hint).not.toMatch(/Trust Folder|Reload Window|Restricted Mode/);
     });

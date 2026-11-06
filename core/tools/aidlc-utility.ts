@@ -3746,7 +3746,7 @@ export function kiroDisabledHookChecks(projectDir: string, harness: string): Doc
     rows.push({
       pass: false,
       label: `AI-DLC hook ${hook.name} is switched off: ${hook.protects}`,
-      fix: `change "enabled": false to true in ${hook.file} (in Kiro IDE, Agent Hooks does the same)`,
+      fix: `in Kiro CLI, change "enabled": false to true in ${hook.file}, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn ${hook.name} back on under Agent Hooks`,
     });
   }
   if (advisory.length > 0) {
@@ -3754,7 +3754,7 @@ export function kiroDisabledHookChecks(projectDir: string, harness: string): Doc
       pass: true,
       severity: "warn",
       label: `AI-DLC hooks switched off: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
-      fix: `change "enabled": false to true in their ${harness}/hooks/ files (in Kiro IDE, Agent Hooks does the same)`,
+      fix: `in Kiro CLI, change "enabled": false to true in their ${harness}/hooks/ files, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn them back on under Agent Hooks`,
     });
   }
   return rows;
