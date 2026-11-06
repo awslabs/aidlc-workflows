@@ -13,6 +13,9 @@
 //     no reply to it, and a command to AIDLC after the claim is none either;
 //     their reply after it is recorded once, the build starts, the developer
 //     handoff passes the guard, and the question is not asked again;
+//   - a question shown on the last preview or the last stable release, whose
+//     marks kept no time, is answered after the claim even when the claim put
+//     its shard back short of the question's mark;
 //   - team work with no claim records the reply as it always did.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -195,6 +198,34 @@ describe("the lead's plan approval after their checkout claims the Unit", () => 
       // Never asked again.
       expect(next(lead)).not.toMatchObject({ ask_type: "plan-approval" });
       expect(approvalsRecorded(lead)).toBe(1);
+    });
+  }
+
+  for (const release of ["the last preview", "the last stable release"] as const) {
+    test(`a question shown on ${release} is answered once the claim has reset its shard`, () => {
+      const lead = leadAtPlanQuestion("relaxed");
+      // Both kept no time on the question's marks; the stable release kept no shownFrom either.
+      const dir = join(lead, "aidlc", ".aidlc-sessions", "plan-approval");
+      const [ask] = readdirSync(dir).filter((name) => name.startsWith("ask-")).map((name) => join(dir, name));
+      const record = JSON.parse(readFileSync(ask, "utf-8")) as { repliesFrom: AuditMark; shownFrom?: AuditMark };
+      delete record.repliesFrom.at;
+      if (release === "the last stable release") delete record.shownFrom;
+      else delete record.shownFrom?.at;
+      writeFileSync(ask, `${JSON.stringify(record, null, 2)}\n`);
+      const claimed = run(lead, "aidlc-unit.ts", ["claim", "alpha", "--team", "lead team"]);
+      expect(claimed.status, claimed.out).toBe(0);
+      // The claim put the shard back to what main has, short of the question's mark.
+      const tracked = join(lead, ...record.repliesFrom.shard.split("/"));
+      expect(readFileSync(tracked).length).toBeLessThan(record.repliesFrom.offset);
+      // The turn from before the question, moved into the Unit's record, is still no reply.
+      expect(personRepliedAfter(lead, record.repliesFrom, readPlanApprovalAsk(lead, DEFAULT_INTENT_UUID)?.issuedAt)).toBe(false);
+      expect(approve(lead)).toMatchObject({ status: 1 });
+      nextSecond();
+      says(lead, "Fine, our plan looks good, go ahead with it.");
+      const recorded = approve(lead);
+      expect(recorded.message).toBe('Recorded "Approve Plan" for alpha. Run next.');
+      expect(approvalsRecorded(lead)).toBe(1);
+      expect(next(lead)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
     });
   }
 

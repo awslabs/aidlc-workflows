@@ -1948,11 +1948,17 @@ function hostTurnTimes(text: string): Map<string, string> {
 // A mark from before marks kept a time takes the first row at or after its
 // offset as one: never earlier than the showing, since a claim only trims that
 // shard or resets it to a prefix, though a row stamped before its wait for the
-// audit lock can make it a second early. Times are whole seconds and only a
-// later one counts. Rows a handover adopted into the Unit's record read as the
-// checkout's own: no row names the checkout it came from. Another clone's
-// shard and another work's prove nothing.
-export function replyTurnsAfter(projectDir: string, mark: AuditMark, isReply: (block: string) => boolean): string[] {
+// audit lock can make it a second early. When the claim left no row there, it
+// takes `shownAt`, a time its question was shown again, if the caller has one.
+// Times are whole seconds and only a later one counts. Rows a handover adopted
+// into the Unit's record read as the checkout's own: no row names the checkout
+// it came from. Another clone's shard and another work's prove nothing.
+export function replyTurnsAfter(
+  projectDir: string,
+  mark: AuditMark,
+  isReply: (block: string) => boolean,
+  shownAt?: string,
+): string[] {
   const shardPath = auditFilePath(projectDir);
   const current = relative(projectDir, shardPath).split(sep).join("/");
   if (mark.shard === current) {
@@ -1975,7 +1981,7 @@ export function replyTurnsAfter(projectDir: string, mark: AuditMark, isReply: (b
   const at = typeof mark.at === "string" && AUDIT_MARK_AT.test(mark.at)
     ? mark.at
     : auditShardBlocks(marked).map((block) => auditBlockField(block, "Timestamp"))
-      .find((stamp) => stamp !== null) ?? null;
+      .find((stamp) => stamp !== null) ?? (shownAt !== undefined && AUDIT_MARK_AT.test(shownAt) ? shownAt : null);
   const takenBack = (block: string, times: Map<string, string>): boolean => {
     const id = auditBlockField(block, "Message Id");
     const taken = id === null ? undefined : times.get(id);

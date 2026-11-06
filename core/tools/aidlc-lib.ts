@@ -12156,11 +12156,11 @@ export function auditMark(projectDir: string): AuditMark {
 // to AIDLC (isReplyTurn) is on record after it, in this checkout's record of
 // the work (replyTurnsAfter). A decision on an open question needs this;
 // presence for what a command asks for does not. A trail that cannot be read
-// proves no reply.
-export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean {
+// proves no reply. `shownAt`: as replyTurnsAfter takes it.
+export function personRepliedAfter(projectDir: string, mark: AuditMark, shownAt?: string): boolean {
   try {
     const reply = (block: string) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block });
-    return replyTurnsAfter(projectDir, mark, reply).length > 0;
+    return replyTurnsAfter(projectDir, mark, reply, shownAt).length > 0;
   } catch {
     return false;
   }

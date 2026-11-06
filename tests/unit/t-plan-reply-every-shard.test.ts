@@ -8,7 +8,9 @@
 // after the mark. What it never counts: a turn from before the question (one
 // the claim moved into the Unit's record included), a command to AIDLC, a turn
 // another engine question took, a turn a HOST_TURN took back (in either
-// shard), another work's turn, another clone's. The shards are written by
+// shard), another work's turn, another clone's. A question shown before marks
+// kept a time takes one from its shard, or from its last showing when the
+// claim left nothing at its offset. The shards are written by
 // hand here, as the claim and the human-turn hook leave them.
 import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
@@ -235,6 +237,19 @@ describe("a question shown before marks kept their time", () => {
     truncateSync(c.tracked, mark.offset - 1);
     appendFileSync(c.unitRecord, rows(turn(before(100), "f6000001")));
     expect(personRepliedAfter(c.dir, mark)).toBe(false);
+  });
+
+  test("with no row left at its offset, takes the time its question was shown again", () => {
+    const c = checkout();
+    const { at: _taken, ...mark } = auditMark(c.dir);
+    appendFileSync(c.tracked, rows(block("QUESTION_ASKED", before(200), { Checkpoint: "plan-approval" })));
+    claim(c, rows(turn(before(300), "f7000001")));
+    truncateSync(c.tracked, mark.offset - 1);
+    appendFileSync(c.unitRecord, rows(turn(before(150), "f7000002")));
+    // Shown again 120 seconds ago: only a reply after that counts.
+    expect(personRepliedAfter(c.dir, mark, before(120))).toBe(false);
+    appendFileSync(c.unitRecord, rows(turn(before(100), "f7000003")));
+    expect(personRepliedAfter(c.dir, mark, before(120))).toBe(true);
   });
 });
 
