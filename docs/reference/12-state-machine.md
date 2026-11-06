@@ -262,8 +262,10 @@ unit's `Run floor`, so the unit owes the stage nothing in this attempt
 kind-vacuous unit), the walk moves on, and every other unit still gets the
 stage. A unit that skipped every step that writes its code owes no
 Construction checkpoint at all: the walk goes on to the next unit, and no
-stage approval waits on it. Once a unit has finished work, a forward jump
-inside the per-unit steps moves only the unit in flight on the same way: `aidlc-jump.ts execute --units`
+stage approval waits on it. A forward jump inside the per-unit steps moves
+only the unit in flight on the same way, on the solo walk and on a team main
+that works every Unit itself, the first unit before any unit has finished work
+included: `aidlc-jump.ts execute --units`
 runs this transition for each step the walk would stop that unit at before the
 target, also for a step reopened behind its stage approval, whose checkbox and
 Current Stage stay as they are. When some units did the stage and others

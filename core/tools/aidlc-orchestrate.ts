@@ -17216,11 +17216,12 @@ function unitMajorReopen(
   };
 }
 
-// A forward jump in a solo unit-major walk. The person asked to go there, so it
-// goes through (#1411). When the target is the step the walk is already on,
-// plain routing lands there and skips nothing ("route"). A target among the
-// later per-unit steps, once a unit has finished work, moves only the unit in
-// flight on: `execute --units` skips that unit's steps up to the target and
+// A forward jump in a solo unit-major walk, or on a team's main that works
+// every Unit itself. The person asked to go there, so it goes through (#1411).
+// When the target is the step the walk is already on, plain routing lands
+// there and skips nothing ("route"). A target among the later per-unit steps
+// moves only the unit in flight on, before any unit has finished work too
+// (#3575): `execute --units` skips that unit's steps up to the target and
 // every other unit keeps its finished, approved work; this returns the execute
 // flags and the sentence naming what is skipped, so the agent can say what was
 // skipped and how to reopen it. Otherwise null: the jump runs as it does
@@ -17231,12 +17232,18 @@ function unitMajorForwardJump(
   scope: string,
   stateContent: string,
   targetSlug: string,
+  everyUnit = false,
 ): "route" | { before?: string; flags: string; said: string } | null {
   const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
-  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  // A jump asked for every Unit stays stage-wide on a team main: only that
+  // jump reaches every Unit.
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
+    (!everyUnit && teamMainWorksItsUnits(projectDir, stateContent)
+      ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug)
+      : null);
   if (!walk) return null;
   const step = walk.step;
-  const liveStage = step.kind === "work" || step.kind === "summary"
+  const liveStage = step.kind === "work" || step.kind === "summary" || step.kind === "gate"
     ? step.stage.slug
     : step.kind === "paused" ? step.stage : null;
   if (liveStage === targetSlug) return "route";
@@ -17246,8 +17253,7 @@ function unitMajorForwardJump(
   const inFlight = walkStepUnit(step);
   if (
     inFlight !== null && liveStage !== null &&
-    blockSlugs.indexOf(targetSlug) > blockSlugs.indexOf(liveStage) &&
-    walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0)
+    blockSlugs.indexOf(targetSlug) > blockSlugs.indexOf(liveStage)
   ) {
     const kind = walk.context.kinds?.get(inFlight) ?? null;
     const passed = walk.block
@@ -18534,7 +18540,7 @@ function emitJumpDirective(
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
     const unitMajor = direction === "forward"
-      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug)
+      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true)
       : null;
     if (unitMajor === "route") return "route";
     // The jump the person asked for, with nothing to run or say around it, is
