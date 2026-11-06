@@ -293,6 +293,7 @@ import {
   engineAskMark,
   hasAnyUnitClaimRefs,
   noteEngineAskMark,
+  teamSkeletonAnswerUnread,
   teamSkeletonOn,
   harnessDirectiveLimit,
   installedKiroLayout,
@@ -5156,6 +5157,35 @@ function teamsClone(projectDir: string, stateContent: string): boolean {
     readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
 }
 
+// The team's own walking-skeleton answer is read on the lead's checkout before
+// any team step decides from it (the handout line, the share, a teammate's
+// claim): a team's clone reads the lead's record and never writes the stance.
+function teamStanceToRead(projectDir: string, stateContent: string | null): boolean {
+  return stateContent !== null && teamSkeletonAnswerUnread(projectDir, stateContent) &&
+    !teamsClone(projectDir, stateContent) && !planMadeElsewhere(projectDir);
+}
+
+// The step that has the agent read it: the stage's own step with the classify
+// round-trip's gate, the step the first Construction stage gives with no
+// stance recorded (computeGate), here on whichever stage the team work is on.
+// Null when there is nothing to read.
+function teamStanceReadStep(
+  projectDir: string,
+  stateContent: string | null,
+  slug: string,
+  scope: string,
+  projectType: "brownfield" | "greenfield" | null,
+  recordPrefix: string | null,
+  codekbCtx?: CodekbCtx,
+): RunStageDirective | null {
+  const node = nodeForSlug(slug);
+  if (!node || !teamStanceToRead(projectDir, stateContent)) return null;
+  return {
+    ...buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, stateContent, recordPrefix, codekbCtx),
+    gate: GATE_UNRESOLVED,
+  };
+}
+
 // Who builds a plan of two or more Units is the person's to say, once, as
 // Inception ends: at the first step into a per-Unit Construction stage, while
 // nothing is built (a jump there meets the same rule). A pick records Unit
@@ -8841,8 +8871,10 @@ function isFirstRunStageOfWorkflow(
 // practices prose. The engine cannot classify free English, so it DEFERS: it
 // emits `gate: "unresolved"` for that one stage, the conductor classifies and
 // reports the stance (recorded in the state field below), and the next `next`
-// resolves the gate from the recorded stance. Every OTHER run-stage keeps its
-// boolean gate.
+// resolves the gate from the recorded stance. Team work whose own answer is
+// still to be read gets the same step on whichever stage it is on
+// (teamStanceReadStep), before a team step decides from it. Every OTHER
+// run-stage keeps its boolean gate.
 
 // The state field the conductor's classified stance is recorded in (written by
 // `report --skeleton-stance`, read by the next `next`). One of the three stance
@@ -13615,7 +13647,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // (one unit per `next`, gate suppressed on every uncovered unit with the real
     // gate only on the all-covered re-entry; issue #368) and emits a single
     // directive for every other stage.
-    const staffing = constructionStaffingAsk(pd, stateContent, currentSlug, scope) ??
+    const staffing = teamStanceReadStep(pd, stateContent, currentSlug, scope, projectType, recordPrefix, codekbCtx) ??
+      constructionStaffingAsk(pd, stateContent, currentSlug, scope) ??
       reverseEngineeringScopeAsk(pd, stateContent, currentSlug) ?? unitsReposAsk(pd, stateContent);
     if (staffing) {
       emit(staffing);
@@ -13651,7 +13684,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // swarm path, emitForSlug drives the engine's per-unit for_each loop for a
   // per-unit Construction stage (issue #368) and emits a single directive
   // otherwise.
-  const staffing = constructionStaffingAsk(pd, stateContent, next.slug, scope) ??
+  const staffing = teamStanceReadStep(pd, stateContent, next.slug, scope, projectType, recordPrefix, codekbCtx) ??
+    constructionStaffingAsk(pd, stateContent, next.slug, scope) ??
     reverseEngineeringScopeAsk(pd, stateContent, next.slug) ?? unitsReposAsk(pd, stateContent);
   if (staffing) {
     emit(staffing);
@@ -19616,10 +19650,10 @@ function handleSkeletonStanceReport(
     return;
   }
 
-  // Defensive: a stance only makes sense when the workflow is parked on the
-  // skeleton-gate stage with an unresolved gate. If the current stage is not the
-  // skeleton-gate stage for the scope, the conductor mis-fired — surface it
-  // rather than write the field at the wrong moment.
+  // Defensive: a stance only makes sense where `next` asks for it: on the
+  // skeleton-gate stage with an unresolved gate, or for team work whose own
+  // answer is still to be read (teamStanceToRead). Anywhere else the conductor
+  // mis-fired: surface it rather than write the field at the wrong moment.
   const slug = getField(stateContent, "Current Stage");
   const scope = getField(stateContent, "Scope");
   if (!slug || slug.length === 0) {
@@ -19635,7 +19669,7 @@ function handleSkeletonStanceReport(
     return;
   }
   const node = nodeForSlug(slug);
-  if (!node || !isSkeletonGateStage(node, scope, stateContent)) {
+  if (!node || !(isSkeletonGateStage(node, scope, stateContent) || teamStanceToRead(pd, stateContent))) {
     emit(errorDirective(
       `Current stage "${slug}" is not the skeleton-gate stage for scope "${scope}" - ` +
         "a skeleton stance is only reported for the first Construction Bolt's gate.",

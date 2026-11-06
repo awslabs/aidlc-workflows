@@ -12,7 +12,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { unitParticipantPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { claimsOpenHere } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
@@ -24,6 +24,7 @@ import {
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDag,
+  seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 
@@ -127,6 +128,12 @@ function project(
   seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), stateFile(at, ownership));
   seedBoltDag(proj, ["alpha", "beta"]);
+  const units = join(seededRecordDir(proj), "inception", "units-generation");
+  mkdirSync(units, { recursive: true });
+  writeFileSync(
+    join(units, "unit-of-work-dependency.md"),
+    "# Unit dependencies\n\n```yaml\nunits:\n  - name: alpha\n    depends_on: []\n  - name: beta\n    depends_on: []\n```\n",
+  );
   if (answer !== null) {
     const team = join(proj, "aidlc", "spaces", "default", "memory", "team.md");
     const body = readFileSync(team, "utf-8");
