@@ -165,6 +165,7 @@ import {
   readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
 } from "../tools/aidlc-lib.ts";
+import { isLeadHandOffNote } from "../tools/aidlc-unit-teams.ts";
 import {
   approvalFingerprint,
   beginCodeGeneration,
@@ -566,8 +567,9 @@ function latestPlanApprovalAnswer(questions: string): string | null {
 // The record files the shared plan-approval guard admits in every Plan
 // Approval state, by the identity it uses: the Code Generation stage's
 // learnings diary, the composer's proposal, a file in one of the engine text
-// folders (ENGINE_TEXT_DIRS), and one directly in the request-text folder.
-// None is a planning authority file.
+// folders (ENGINE_TEXT_DIRS), one directly in the request-text folder, and the
+// lead's own file in the hand-off folder (isLeadHandOffNote). None is a
+// planning authority file.
 function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string): boolean {
   try {
     const path = normalizeDriveLetter(normalizedPath);
@@ -576,10 +578,11 @@ function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string):
       return true;
     }
     if (dirname(path) === normalizeDriveLetter(resolve(join(projectDir, REQUEST_TEXT_DIR)))) return true;
-    return ENGINE_TEXT_DIRS.some((dir) => {
+    if (ENGINE_TEXT_DIRS.some((dir) => {
       const inside = relative(normalizeDriveLetter(resolve(join(docsRoot(projectDir), dir))), path);
       return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
-    });
+    })) return true;
+    return isLeadHandOffNote(projectDir, path, readFileSync(stateFilePath(projectDir), "utf-8"));
   } catch {
     return false;
   }

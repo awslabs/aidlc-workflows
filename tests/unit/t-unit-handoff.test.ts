@@ -22,8 +22,8 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { parseHandFile, type UnitResult } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
-import { AIDLC_SRC, createTestProject, fixtureIntentId8, seedAidlcMemory } from "../harness/fixtures.ts";
+import { isLeadHandOffNote, parseHandFile, type UnitResult } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { AIDLC_SRC, createTestProject, fixtureIntentId8, seedAidlcMemory, seededStateFile } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
@@ -35,6 +35,7 @@ import {
   git,
   HOME_RECORD,
   homeState,
+  hook,
   makeHome,
   mergeOnHost,
   next,
@@ -782,7 +783,9 @@ describe("the lead's assign over a Unit its team builds from the hand-off file",
 // the lead picked sending both Units back to their teams with the failure. The
 // engine said "Sent <unit> back to the <team> team with your words", but nothing
 // was written for a team that cannot reach the lead's project, so the lead
-// waited for fixed results from teams never told.
+// waited for fixed results from teams never told. Then the lead asked for one
+// file per team to mail, and the code-generation guard refused both writes to
+// aidlc/handoff/ while the Units waited on teams.
 describe("the lead's Build and Test sends back a Unit a team builds by file", () => {
   const FAILURE = "the refund route never calls the notices handler";
   // A request file with paragraphs is stock: both reach the team.
@@ -855,5 +858,32 @@ describe("the lead's Build and Test sends back a Unit a team builds by file", ()
     expect(taken.status, taken.out).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")?.turned_down).toBeUndefined();
     expect(String(next(home.dir).narration)).not.toContain("sent back from your Build and Test");
+  });
+
+  test("while it waits at Code Generation for the team, the lead's own file in the hand-off folder is written; the code still waits", () => {
+    const { home } = resultTakenIn();
+    expect(run(UNIT, ["send-back", "reporting", "--person-words", FAILURE], home.dir).status).toBe(0);
+    const statePath = seededStateFile(home.dir);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+    const write = (path: string) => hook(home.dir, ENV, {
+      hook_event_name: "PreToolUse", session_id: "lead-chat", tool_name: "Write",
+      tool_input: { file_path: join(home.dir, ...path.split("/")), content: `# For data\n\n${FAILURE}\n` },
+    });
+    const note = write("aidlc/handoff/fixture-reporting-build-failure.md");
+    expect(note.status, note.out).toBe(0);
+    const code = write("ledger/src/report.ts");
+    expect(code.status, code.out).toBe(2);
+  });
+
+  test("only a file directly in the hand-off folder of the lead's project is the lead's own note", () => {
+    const dir = tempDir("lead");
+    const lead = "## Runtime State\n- **Home Location**: /srv/home.git\n";
+    const note = join(dir, "aidlc", "handoff", "for-data.md");
+    expect(isLeadHandOffNote(dir, note, lead)).toBe(true);
+    expect(isLeadHandOffNote(dir, join(dir, "aidlc", "handoff", "old", "for-data.md"), lead)).toBe(false);
+    expect(isLeadHandOffNote(dir, join(dir, "aidlc", "for-data.md"), lead)).toBe(false);
+    // Work with no teams across repos, and a team's own Unit build, keep the guard as it was.
+    expect(isLeadHandOffNote(dir, note, "## Runtime State\n")).toBe(false);
+    expect(isLeadHandOffNote(dir, note, `${lead}- **Unit Build**: reporting\n`)).toBe(false);
   });
 });

@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
   type AuditShardEvent,
@@ -26,6 +26,7 @@ import {
   loadScopeMapping,
   loadStageGraphAll,
   markdownBlocks,
+  normalizeDriveLetter,
   parseBoltDag,
   readAtomicReplacedFileNoFollowOrThrow,
   readAuditShardEvents,
@@ -872,6 +873,18 @@ export interface HandFile {
 }
 
 export const HANDOFF_DIR = "aidlc/handoff";
+
+// A file the lead writes for a team directly in the hand-off folder of the
+// lead's own project (Home Location recorded, not a Unit's build). There the
+// folder is the lead's outbox to teams that work by file, and nothing builds
+// from it, so the plan-approval guard admits the write in every Plan Approval
+// state (with its own link checks) and the Kiro IDE adapter's list of what the
+// guard admits reads the same. A team's own build writes its progress and
+// result files there through its commands, and its plan wait holds as before.
+export function isLeadHandOffNote(projectDir: string, target: string, stateContent: string | null): boolean {
+  if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return false;
+  return normalizeDriveLetter(dirname(resolve(target))) === normalizeDriveLetter(resolve(projectDir, HANDOFF_DIR));
+}
 
 // A text's fingerprint, the same for its LF and CRLF spellings.
 export function textFingerprint(text: string): string {

@@ -37,9 +37,10 @@
 // state excepted) or is its Code Generation recovery question and the jump is
 // one it offers or not the choice the person just picked there. While the
 // person is editing the plan files themselves, those files are theirs
-// (personIsEditingPlanFile). Three kinds of files pass too: the composer's grid
+// (personIsEditingPlanFile). Four kinds of files pass too: the composer's grid
 // proposal, a person's answer text and a person's request file, which the
-// engine reads and nothing else.
+// engine reads and nothing else, and the lead's own file for a team in the
+// hand-off folder of the lead's project, which nothing builds from.
 //
 // How the hook decides: the active directive is the approval authority. A
 // directive with `unit` selects construction/<unit>/code-generation; a
@@ -181,6 +182,7 @@ import { insideProject } from "../tools/aidlc-workspace-repos.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
+import { HANDOFF_DIR, isLeadHandOffNote } from "../tools/aidlc-unit-teams.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
   AS_ITS_OWN_COMMAND,
@@ -1302,6 +1304,22 @@ function isRequestTextTarget(projectDir: string, target: string): boolean {
     if (!isTrustedRecordTarget(projectDir, target, folder)) return false;
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
+// Every target is a file of the lead's own for a team in the hand-off folder
+// (isLeadHandOffNote owns which), reached through no link and not hard-linked to
+// another file.
+function leadHandOffNotesOnly(projectDir: string, targets: string[], state: string | null): boolean {
+  try {
+    return targets.every((target) => {
+      if (!isLeadHandOffNote(projectDir, target, state)) return false;
+      if (!isTrustedRecordTarget(projectDir, target, join(projectDir, HANDOFF_DIR))) return false;
+      const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
+      return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    });
   } catch {
     return false;
   }
@@ -2832,6 +2850,18 @@ async function evaluate(
       mutation.targets.every((candidate) =>
         isEngineTextTarget(projectDir, candidate) || isRequestTextTarget(projectDir, candidate)
       )
+    ) {
+      return 0;
+    }
+    // So does a file of the lead's own for a team in the hand-off folder of the
+    // lead's project (a file-tool write alone): while the lead's Units wait on
+    // teams there, Code Generation is the stage on record and `next` shows only
+    // the board, so a refusal would leave the file they asked for no way in.
+    if (
+      WRITE_TOOLS.has(toolName) &&
+      !mutation.opaqueShell &&
+      mutation.targets.length > 0 &&
+      leadHandOffNotesOnly(projectDir, mutation.targets, state)
     ) {
       return 0;
     }

@@ -1938,14 +1938,16 @@ parallel batch. Not the engine's own files there, which only the engine writes
 worktree's `.aidlc-plan-approval/`), nor a path reached through a symlink or
 hard-linked to another file. Nothing in a record stands in for the person's
 answer: the approval is the engine's receipt, minted from the person's own
-recorded turn and kept outside `aidlc/spaces`. Three files outside that folder pass
+recorded turn and kept outside `aidlc/spaces`. Four files outside that folder pass
 too, exactly: the composer's grid proposal
 (`aidlc/spaces/<space>/intents/.aidlc-engine/composer-proposal.json`, the
 `proposalPath` that `detect --json` prints), a person's answer text in the
 project's `.aidlc-engine/answer-text/` folder for `log answer --details-file`,
-and a person's request directly inside `aidlc/.aidlc-request-text/` for
-`next --request-file`; a shell write to one, a write that also names another
-file, or a path through a symlink is judged like any other.
+a person's request directly inside `aidlc/.aidlc-request-text/` for
+`next --request-file`, and, at the lead's project of teams across repos (not a
+Unit's build), a file directly inside `aidlc/handoff/`, the lead's outbox to the
+teams that work by file, which nothing builds from; a shell write to one, a write
+that also names another file, or a path through a symlink is judged like any other.
 
 **While the engine's recovery question is open.** When a published
 guard-recovery ask is the active directive, source writes wait until the engine
