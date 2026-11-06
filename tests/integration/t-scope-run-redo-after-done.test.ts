@@ -14,7 +14,6 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
   auditEvents,
   cleanupScopeProjects,
-  field,
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
 } from "../harness/scope-run.ts";
@@ -40,6 +39,7 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     host.write("src/after-done-note.ts", "// A note the person asked for after the work finished.\n");
     expect(agent.next().kind).toBe("done");
     const asked = agent.asked.length;
+    const redoFrom = auditEvents(proj).length;
     person.say("Can you redo Code Generation? I'd like the code built again.");
     const print = agent.next("--stage", "code-generation");
     const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(String(print.message ?? ""))?.[1];
@@ -51,7 +51,7 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     expect(host.refusals).toEqual([]);
     expect(agent.asked.slice(asked).filter((q) => q.what === "plan approval")).toHaveLength(1);
     const rows = auditEvents(proj);
-    expect(rows.filter((row) => row.event === "STAGE_JUMPED" && field(row.block, "Target") !== null).length).toBeGreaterThanOrEqual(1);
+    expect(rows.slice(redoFrom).filter((row) => row.event === "STAGE_JUMPED")).toHaveLength(1);
     expect(rows.filter((row) => row.event === "PLAN_APPROVAL_BLOCKED")).toHaveLength(0);
     expect(rows.filter((row) => row.event === "WORKFLOW_COMPLETED").length).toBe(finishedRows + 1);
   }, SCOPE_RUN_TIMEOUT_MS);

@@ -202,12 +202,13 @@ describe("a redo of Code Generation the person asks for after their work finishe
   // even one marked superseded since, holds nothing back.
   test("an issued step superseded after the finish: the person's redo is admitted on the first ask", async () => {
     const proj = finished("relaxed");
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "code-generation");
+    // The step on record once the jump is printed, superseded after the print.
     const markerFile = join(activeDirectiveStorageDir(proj), "active-directive.json");
     const marker = JSON.parse(readFileSync(markerFile, "utf-8")) as Record<string, unknown>;
     expect(marker.stage).toBe("code-generation");
     writeFileSync(markerFile, `${JSON.stringify({ ...marker, delivery: "superseded", needs_rehydrate: true })}\n`, "utf-8");
-    expect(reply(proj, ASK).status).toBe(0);
-    const jump = jumpFor(proj, "code-generation");
     const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
     expect(verdict.code, verdict.said).toBe(0);
   });

@@ -12,7 +12,7 @@
 // work is done; a scope change already went through), so they are not here.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cleanupTestProject } from "../harness/fixtures.ts";
-import { finishedAtCodeGeneration, next, reply, runNamed, SHAPES } from "../harness/code-generation-states.ts";
+import { finishedAtCodeGeneration, next, reply, runNamed, SESSION, SHAPES } from "../harness/code-generation-states.ts";
 
 setDefaultTimeout(600_000);
 
@@ -76,4 +76,47 @@ describe.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, work fini
       expect(next(proj).kind).toBe("done");
     });
   }
+});
+
+// What nobody asked for waits on finished work, and its refusal says so in
+// plain words: it runs once the person asks for it here. It names no `next`,
+// which on finished work only says the work is done, and no engine words.
+describe.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, finished work, nobody asked", (policy) => {
+  test("the agent's own redo and switch are refused in plain words, and run once the person asks", async () => {
+    const proj = joined(policy);
+    const redo = (next(proj, ["--stage", "code-generation"]).message ?? "") as string;
+    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(redo)?.[1];
+    expect(jump, redo).toBeDefined();
+    for (const command of [jump as string, DOORS[0].command]) {
+      const held = await claude.call(proj, CHAT, { tool: "Bash", command });
+      expect(held.code, `${command} passed with nobody asking`).toBe(2);
+      expect(held.said).toContain("runs once the person asks for it");
+      for (const engineWords of ["next", "directive", "Code Generation cannot start", "Plan Approval authority"]) {
+        expect(held.said, `the refusal says ${engineWords}`).not.toContain(engineWords);
+      }
+    }
+    expect(reply(proj, "Redo Code Generation, please.", CHAT).status).toBe(0);
+    const asked = await claude.call(proj, CHAT, { tool: "Bash", command: jump as string });
+    expect(asked.code, asked.said).toBe(0);
+  });
+});
+
+// The chat that gave the finishing approval: that approval is no ask, so the
+// agent's own redo there gets the same plain line; a command held for its form
+// (piped) keeps its own refusal, as asking would not let it through.
+describe.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, the chat that finished the work", (policy) => {
+  test("the agent's own redo gets the plain line; the same jump piped does not", async () => {
+    const proj = finishedAtCodeGeneration(policy, "on");
+    created.push(proj);
+    const redo = (next(proj, ["--stage", "code-generation"]).message ?? "") as string;
+    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(redo)?.[1];
+    expect(jump, redo).toBeDefined();
+    const held = await claude.call(proj, SESSION, { tool: "Bash", command: jump as string });
+    expect(held.code).toBe(2);
+    expect(held.said).toContain("runs once the person asks for it");
+    expect(held.said).not.toContain("next");
+    const piped = await claude.call(proj, SESSION, { tool: "Bash", command: `${jump} | head -5` });
+    expect(piped.code).toBe(2);
+    expect(piped.said).not.toContain("runs once the person asks for it");
+  });
 });

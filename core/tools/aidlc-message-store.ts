@@ -971,10 +971,11 @@ function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOpt
  * their latest message no turn on the work names (sentOnThisWork: a terminal
  * message, which has no chat, counts as on the work and stands for nothing
  * here), kept at or after the work's latest WORKFLOW_COMPLETED row, from this
- * chat (with no chat named, any chat's message in this project), and with
- * `replies` one that carries words of theirs; with `requests` every kept
- * message counts, as every turn the hook writes today does (only an older
- * record's question row is left out on the record). Nothing on the work decides after
+ * chat (with no chat named, any chat's message in this project). With
+ * `requests` every kept message counts, as every turn the hook writes today
+ * does (only an older record's question row is left out on the record); with
+ * `replies` none does, as before: whether a message is a reply is the hook's
+ * reading, which the record keeps and the message does not. Nothing on the work decides after
  * the finish, so no decision spends it. It is handed back in a turn's shape
  * (its Message Id, Session and time), which is all a caller reads. Both times
  * are whole seconds; a tie with the finish is harmless, as the message that
@@ -983,6 +984,7 @@ function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOpt
  * words.
  */
 function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEvent | null {
+  if (options.replies === true) return null;
   try {
     if (!selectedRecordIsFinished(pd, resolveWorkflowSelection(pd, { intent: options.intent, space: options.space }))) {
       return null;
@@ -995,8 +997,7 @@ function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEven
     const onThisWork = sentOnThisWork(rows);
     const chat = invokingChat(pd);
     const kept = listMessages(pd).filter((message) =>
-      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat) &&
-      (options.replies !== true || message.words !== null)).at(-1);
+      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat)).at(-1);
     if (kept === undefined) return null;
     const turn: AuditShardEvent = {
       event: "HUMAN_TURN",

@@ -323,6 +323,9 @@ const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
 const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
+const FINISHED_WORK_WAITS_FOR_THE_PERSON =
+  "Not run: this work is finished, and this runs once the person asks for it in this chat. Tell them what it does " +
+  "and let them decide.";
 // Under strict every landing of the stage checks the main checkout against the
 // stage's start (assertAggregateSourceBeforeMerge), so nothing else changes it
 // while a parallel batch is out but the files the person asked to change
@@ -1292,6 +1295,8 @@ interface MutationIntent {
   engineRefused?: boolean;
   /** A line the lexer could not read whole that names AI-DLC, wrapped or not. */
   hidesEngine?: boolean;
+  /** AI-DLC's own command refused as the line's only command, read whole. */
+  engineAlone?: boolean;
   /** AI-DLC's own `next` on the line that carries a request file, when its reading admits it. */
   ownNext?: EngineInvocation;
 }
@@ -2105,6 +2110,7 @@ async function mutationIntent(
   let readable = true;
   let engineRefused = false;
   let hidesEngine = false;
+  let engineAlone = false;
   let ownNext: EngineInvocation | undefined;
   if (toolName === "Bash") {
     const command = toolInput?.command;
@@ -2177,11 +2183,14 @@ async function mutationIntent(
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
       (dynamic && (ENGINE_WORD.test(analysed) || (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand))));
     engineRefused = looksLikeEngine && opaqueShell;
+    // Refused as the line's one command, read whole: what holds it is the
+    // command's own condition, not a pipe or a second command beside it.
+    engineAlone = engineRefused && !dynamic && invocations.length === 1;
     // The same reading without the dynamic condition: AI-DLC named inside text
     // handed to a shell or evaluator (`eval "aidlc engine jump ..."`), which
     // the pass for finished work keeps waiting.
     hidesEngine = opaqueShell && (looksLikeEngine || ENGINE_WORD.test(analysed) ||
-      (/\baidlc\b(?![\\/])/i.test(analysed) && invocations.some(runsHiddenCommand)));
+      (/\baidlc(?=$|[\s"'`;|&)])/i.test(analysed) && invocations.some(runsHiddenCommand)));
     // Its `next` that carries a request file, read where the engine reads the
     // flag (before `--`), however it was wrapped (judgedNext).
     for (const invocation of invocations) {
@@ -2228,6 +2237,7 @@ async function mutationIntent(
     ...(readable ? {} : { readable }),
     ...(engineRefused ? { engineRefused } : {}),
     ...(hidesEngine ? { hidesEngine } : {}),
+    ...(engineAlone ? { engineAlone } : {}),
     ...(ownNext ? { ownNext } : {}),
   };
 }
@@ -2704,8 +2714,9 @@ async function evaluate(
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
       return 0;
     }
-    // Finished work whose walk ended at Code Generation keeps Current Stage
-    // there, but its walk is over: an edit, a shell command or the developer
+    // Finished work whose walk ended at Code Generation (Completed; archived
+    // work is judged as before) keeps Current Stage there, but its walk is
+    // over: an edit, a shell command or the developer
     // goes through, under every Guard Policy and whoever asked for it, as once
     // a walk is past Code Generation, where a handoff that names a plan is
     // still judged. AI-DLC's own commands this guard holds keep their own
@@ -2713,7 +2724,24 @@ async function evaluate(
     // switch for personAskedSinceGate), and so does a line the guard cannot
     // read that names AI-DLC (`eval` or `sh -c` around a jump, in either
     // spelling), which keeps its verdict.
-    if (finished && !mutation.engineRefused && !mutation.hidesEngine && !(guardedDispatch && explicitPlanDispatch)) return 0;
+    const walkEnded = finished && getField(state ?? "", "Status") === "Completed";
+    if (walkEnded && !mutation.engineRefused && !mutation.hidesEngine && !(guardedDispatch && explicitPlanDispatch)) return 0;
+    // What it holds on work whose walk ended because nobody asked (the agent's
+    // own jump, a switch, a config form) runs once the person asks; `next`
+    // there only says the work is done, so the refusal names their ask, not
+    // `next`. Archived work is judged as before.
+    // Nobody asked means no turn of theirs with no decision after it, the
+    // strictest reading a held command waits on, so the approval that
+    // finished the work is no ask. Held with their ask standing (a Unit's
+    // reopen), or for its form (a pipe, a second command, a line it cannot
+    // read), it keeps the refusal below.
+    if (walkEnded && mutation.engineAlone && !personTurnStands(projectDir, "plain", { requests: true })) {
+      verdict = { block: true, mentioned: [] };
+      blockedMutation = {
+        target: (mutation.shellCommand ?? "").trim().slice(0, 160), unit: null, opaqueShell: true, detail: null, finished: false,
+      };
+      return refuseExecutionIneligible(FINISHED_WORK_WAITS_FOR_THE_PERSON, false, false);
+    }
     // What the plan never governs, at any point of Code Generation and under
     // every Guard Policy: a command the lexer read whole that names no file it
     // writes and is not AI-DLC's own (a read, a scan, a test run), and a write
