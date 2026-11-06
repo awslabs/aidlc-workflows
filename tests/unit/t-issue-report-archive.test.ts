@@ -22,8 +22,11 @@ test("an archive unpacks into the folder it is given", () => {
   const src = mkdtempSync(join(tmpdir(), "archive-src-"));
   mkdirSync(join(src, "r"));
   writeFileSync(join(src, "r", "report.json"), "{}");
-  const archive = join(mkdtempSync(join(tmpdir(), "archive-out-")), "a.tar.gz");
-  execFileSync("tar", ["-czf", archive, "-C", src, "r"]);
+  const out = mkdtempSync(join(tmpdir(), "archive-out-"));
+  const archive = join(out, "a.tar.gz");
+  // Packed by a relative name: Git for Windows' GNU tar reads `-f C:\…` as a remote host. extractArchive
+  // itself is handed the absolute path, as collect.ts hands it.
+  execFileSync("tar", ["-czf", "a.tar.gz", "-C", src, "r"], { cwd: out });
   const into = mkdtempSync(join(tmpdir(), "archive-into-"));
   extractArchive(archive, into);
   expect(walkFiles(into).map((f) => f.slice(into.length + 1))).toEqual([join("r", "report.json")]);
