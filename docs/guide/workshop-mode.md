@@ -791,8 +791,9 @@ folder of its own; the teammate's clone never writes the work's own state. At
 its next step, the home's session switches to teams by itself: the workspace's
 `origin` becomes the home, the approvals stay as they were (once per Unit at
 its checkpoint, or after every stage), and the teammate's build approves the
-same way; the Units it already built stay done there, and it says in one line
-who took which Unit. Nothing is asked again. The home looks for a teammate's
+same way; the Units it already built and approved stay done there, one whose
+approval was still open is put to the lead there once, for the whole Unit, and
+it says in one line who took which Unit. Nothing is asked again. The home looks for a teammate's
 take once its Units are being built: once when a chat starts, and before it
 starts its next Unit, so the lead never fetches for it and never starts a Unit
 a teammate took. Each look takes a few seconds at

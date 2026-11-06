@@ -23,11 +23,13 @@ import {
   loadStageGraphAll,
   markdownBlocks,
   parseBoltDag,
+  readAuditShardEvents,
   readStateFile,
   REQUEST_TEXT_DIR,
   slugify,
   unitDependencyPath,
 } from "./aidlc-lib.ts";
+import { applicableTeamUnitScopeStamp } from "./aidlc-record-core.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
 
@@ -177,15 +179,42 @@ export function teamUnitStageApplies(
   return names.length > 0 && filterProducesByKind(stage.produces_kinds, names, unitKind).length > 0;
 }
 
-// The Units built here, one at a time, before the work switched to teams:
-// done at the home as they were, never recorded as merged.
+// The Units built and approved here, one at a time, before the work switched
+// to teams: done at the home as they were, never recorded as merged. One whose
+// last gate (its checkpoint, or its stage's gate) was still open is not done:
+// the home's own walk puts that gate to the person here.
 export function unitsBuiltBeforeTeams(rows: readonly AuditShardEvent[], finalStage: string): Set<string> {
+  return builtBeforeTeams(rows, finalStage).approved;
+}
+
+// The Units built at the lead's project before teams whose last gate was still
+// open: the home's walk asks that gate once, at the Unit's end, as their
+// checkpoint did, and its approval covers the Unit's stages. None anywhere but
+// the lead's own project.
+export function unitsBuiltHereGateOpen(
+  projectDir: string,
+  stateContent: string,
+  finalStage: string,
+  rows?: readonly AuditShardEvent[],
+): Set<string> {
+  if (homeLocation(stateContent) === null || applicableTeamUnitScopeStamp(projectDir, stateContent) !== null) return new Set();
+  return builtBeforeTeams(rows ?? readAuditShardEvents(projectDir), finalStage).open;
+}
+
+function builtBeforeTeams(rows: readonly AuditShardEvent[], finalStage: string): { approved: Set<string>; open: Set<string> } {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   let teamsAt = -1;
   ordered.forEach((row, at) => {
     if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
   });
-  return teamsAt < 0 ? new Set() : soloUnitsProgress(ordered.slice(0, teamsAt), finalStage).done;
+  if (teamsAt < 0) return { approved: new Set(), open: new Set() };
+  const before = ordered.slice(0, teamsAt);
+  const gates = new Set<string | null>(before
+    .filter((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Stage") === finalStage)
+    .map((row) => auditBlockField(row.block, "Unit")));
+  const built = [...soloUnitsProgress(before, finalStage).done];
+  const approved = (unit: string) => gates.has(unit) || gates.has(null);
+  return { approved: new Set(built.filter(approved)), open: new Set(built.filter((unit) => !approved(unit))) };
 }
 
 // The space a team's label names: "Payments" and "payments" are one team.

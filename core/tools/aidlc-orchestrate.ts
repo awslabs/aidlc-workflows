@@ -695,6 +695,7 @@ import {
   theTeam,
   teamUnitStageApplies,
   unitsBuiltBeforeTeams,
+  unitsBuiltHereGateOpen,
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
@@ -17441,9 +17442,13 @@ function teamUnitMajorWalkStep(
     }
   }
   const finalStage = block[block.length - 1];
+  // A Unit built here before teams, its checkpoint still open, is asked once for
+  // the whole Unit, as its checkpoint was.
+  const builtAlone = finalStage ? unitsBuiltHereGateOpen(projectDir, stateContent, finalStage.slug, auditRows) : new Set<string>();
   // The Unit's first stop, or null when it is done.
   const stopFor = (unit: string): TeamUnitWalkStep | null => {
     const unitKind = kinds?.get(unit) ?? null;
+    const unitRhythm: UnitGateRhythm = builtAlone.has(unit) ? "unit-end" : rhythm;
     for (const stage of block) {
       if (!teamUnitStageApplies(stage, unitKind)) continue;
       const ledger = ledgers.get(stage.slug) ?? unitLedgerFor(projectDir, stage.slug);
@@ -17454,14 +17459,14 @@ function teamUnitMajorWalkStep(
       const confirmation = checkSummaryConfirmationEvidence(projectDir, stage, { stateContent, unit });
       if (!confirmation.ok) return { kind: "summary", stage, unit, confirmation };
       if (
-        rhythm === "per-stage" &&
+        unitRhythm === "per-stage" &&
         unitGateStatus(projectDir, stage.slug, unit, "per-stage", auditRows) !== "approved"
       ) {
         return { kind: "gate", stage, unit, gate: "per-stage" };
       }
     }
     if (
-      rhythm === "unit-end" &&
+      unitRhythm === "unit-end" &&
       finalStage &&
       unitGateStatus(projectDir, finalStage.slug, unit, "unit-end", auditRows) !== "approved"
     ) {

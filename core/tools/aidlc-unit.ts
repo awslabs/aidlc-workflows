@@ -207,6 +207,7 @@ import {
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
+  entrySkillInvocation,
   isCompiledExecutable,
   quoteCommandArgument,
 } from "./aidlc-runtime-paths.ts";
@@ -4381,6 +4382,15 @@ function claimUnit(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
+  // Where the work records its home, each team takes its Unit in its own clone
+  // (take), and the lead's project is never scoped to one Unit: one no team
+  // holds is built and approved here, on the home's own walk.
+  if (homeLocation(state) !== null) {
+    fail(
+      `Nothing is claimed here: this work's teams each take their Unit in their own clone, with ${entrySkillInvocation()} there. ` +
+        `${unit} is built and approved here unless a team holds it; ${entrySkillInvocation()} puts its next step to the person.`,
+    );
+  }
   const identity = activeIdentity(pd);
   validateClaimRefUnit(identity.intentId8, unit);
   const existingStamp = readUnitScopeStamp(pd);

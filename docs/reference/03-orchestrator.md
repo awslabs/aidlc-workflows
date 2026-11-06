@@ -940,8 +940,12 @@ the work's claims at its remote once per chat and fetches them only when there
 are any): it runs `set-unit-ownership team` and, when `readUnitGateRhythm`
 reads the solo work as once per Unit (checkpoints on), `set-unit-gate-rhythm
 unit-end`, so the home and the teammate's build approve the same way; the Units
-its own walk finished read as done through `unitsBuiltBeforeTeams` in the team
-progress model, with no `UNIT_MERGED`; the step carries one line. With `Lead Sign-off: on`, a claim with a result and no `signoff`
+its own walk finished and approved (a `GATE_APPROVED` of their last stage) read
+as done through `unitsBuiltBeforeTeams` in the team progress model, with no
+`UNIT_MERGED`; one whose checkpoint was still open (`unitsBuiltHereGateOpen`)
+stays on the home's walk with its one gate at its end (`teamUnitGateStages`),
+whatever the rhythm, and main's `unit claim` refuses at a project that records
+Home Location; the step carries one line. With `Lead Sign-off: on`, a claim with a result and no `signoff`
 makes the home's step `ask_type: unit-signoff` once (with `signoff_command`),
 and `checkTeamResults` records done only after the sign-off.
 

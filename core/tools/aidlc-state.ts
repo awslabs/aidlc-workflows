@@ -6615,7 +6615,7 @@ function teamGateContext(
   if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
     error(`Unit "${unit}" is not in the authoritative unit DAG.`);
   }
-  const { scope, stages } = teamUnitGateStages(pd, content, stage);
+  const { scope, stages } = teamUnitGateStages(pd, content, stage, unit);
   if (scope === "per-stage") {
     return { unit, scope, stages };
   }
