@@ -514,8 +514,8 @@ const TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX-]\]/;
 
 /**
  * The few lines the question shows for one plan. Step 2 asks for a
- * `## Summary` section with Builds / Touches / Tests lines; without one, the
- * engine counts plan steps instead of refusing.
+ * `## Summary` section with Builds / Touches / Tests / Adds lines; without one,
+ * the engine counts plan steps instead of refusing.
  */
 export function planSummaryLines(plan: string, instructions: string): string[] {
   // Only what renders: nothing hidden in a comment or a code block reaches the

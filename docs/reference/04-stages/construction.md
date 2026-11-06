@@ -971,6 +971,17 @@ This stage has a **two-part structure**: planning followed by generation.
    Number each plan step sequentially (Step 1, Step 2, etc.) for clear
    execution ordering and traceability.
 
+   Data-model elements are named, never implied: a step that creates or
+   changes an object, entity, table, field or column (a Salesforce custom
+   object or field, say) names each one with the requirement, acceptance
+   criterion, business rule or design element that asks for it. An element
+   nothing upstream asks for goes under the plan's `## Assumptions` with why
+   the work needs it, and the Summary's `Adds:` line names it, so the person
+   decides it at Plan Approval rather than finding it after deployment. The
+   developer agent creates only what the approved plan names; one the build
+   turns out to need goes into the plan's Assumptions first, which the
+   after-approval rules then treat as any other plan change.
+
    Resolve one code-generation record directory from the directive:
    `<record>/construction/<directive.unit>/code-generation/` when
    `directive.unit` is present, otherwise the zero-Unit stage directory
@@ -998,8 +1009,10 @@ This stage has a **two-part structure**: planning followed by generation.
    Unit or one of its paths gets its own Unit-scoped check.
 
 
-   The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
-   the engine shows the person when it asks for approval.
+   The plan opens with a short `## Summary` (Builds, Touches, Tests and Adds
+   lines) that the engine shows the person when it asks for approval; `Adds`
+   names the data-model elements no requirement asks for, or says `nothing
+   beyond the requirements`.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
    conductor runs `next`. A ready plan (non-empty plan and instructions, a
