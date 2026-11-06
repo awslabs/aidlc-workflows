@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:take, audit:UNIT_TAKEN_IN, function:unitBuildOf, function:onlyTheBuildsUnit, function:isHomesCopiedWork, function:recordKeptEntries, function:findUnitBuild
+// covers: subcommand:aidlc-unit:take, audit:UNIT_TAKEN_IN, function:unitBuildOf, function:onlyTheBuildsUnit, function:isHomesCopiedWork, function:recordKeptEntries, function:findUnitBuild, function:leadsPlanNotHere, function:planNotHereStep
 //
 // Taking a Unit (#2410, item 4). A team member opening a workspace with no work
 // of their own is offered the home's Units their team can take, from what the
@@ -9,16 +9,19 @@
 // shown as done and the team approving its own stages. Its registry row stays
 // in its own folder, so two builds share no file. A held or taken Unit is not
 // taken again; a build here is carried on; the home's work that git copied
-// into a team's workspace is never offered to carry on.
+// into a team's workspace is never offered to carry on. Before the lead's plan
+// reaches a clone, a bare /aidlc there says so, the teammate's words go on with
+// the one risk said, and no chat writes AI-DLC's root files there.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { leadsPlanNotHere, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
-import { fixtureIntentId8 } from "../harness/fixtures.ts";
+import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
+import { hostFor } from "../harness/scope-hosts.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
@@ -773,3 +776,59 @@ describe("a likely repo this workspace has no copy of", () => {
   });
 });
 
+
+// A live run on Codex: a teammate cloned the lead's workspace while its remote
+// held only the setup commit and the Units held for teams. Their first $aidlc
+// was told "Tell me what to build" and wrote AI-DLC's parts of .gitignore and
+// AGENTS.md there, which the lead's share then met: their git pull aborted.
+describe("a teammate's clone before the lead's project shared its plan", () => {
+  const LINE = "The lead's plan has not reached this clone yet, so there is no Unit here to take. Once the lead has " +
+    "shared it, run git pull here and I'll offer you the Units.";
+  const RISK = "The lead's plan has not reached this clone yet, so there is no Unit here to take, and work you start " +
+    "here can stop git pull from bringing the plan in later.";
+
+  function leadNotSharedYet(repos: Record<string, string>) {
+    const home = makeHome({ repos });
+    // The remote holds the install alone; the lead's record and root files are only in the lead's workspace.
+    const install = [".codex", ".agents"];
+    for (const name of install) cpSync(join(REPO_ROOT, "dist", "codex", name), join(home.dir, name), { recursive: true });
+    git(home.dir, ["rm", "-r", "-q", "--cached", "aidlc", ".gitignore"]);
+    git(home.dir, ["add", ...install]);
+    git(home.dir, ["commit", "-q", "-m", "setup"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    hostFor("codex", home.dir, GIT_ENV).sessionStart("startup");
+    const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
+    expect(teams.status, teams.out).toBe(0);
+    const assigned = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir);
+    expect(assigned.status, assigned.out).toBe(0);
+    const bob = cloneOf(home.remote, "bob");
+    const host = hostFor("codex", bob, GIT_ENV);
+    host.sessionStart("startup");
+    return { home, bob, host, orch: join(bob, ".codex", "tools", "aidlc-orchestrate.ts") };
+  }
+
+  test("the first chat writes no root file, a bare /aidlc says the plan is not here yet, and the lead's share pulls in", () => {
+    const { home, bob, orch } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") });
+    expect(git(bob, ["status", "--porcelain", "--", ".gitignore", "AGENTS.md"])).toBe("");
+    const first = next(bob, ENV, [], orch);
+    expect(first.narration, JSON.stringify(first)).toBe(LINE);
+    // The lead's own checkout, with its record, is never read as such a clone.
+    expect(leadsPlanNotHere(bob)).toBe(true);
+    expect(leadsPlanNotHere(home.dir)).toBe(false);
+    // What git shows them before the pull: AI-DLC's own working files, none of which the share brings.
+    console.log(`BEFORE-PULL: ${git(bob, ["status", "--porcelain", "--untracked-files=all"]).split("\n").join(" | ")}`);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const pulled = spawnSync("git", ["pull", "-q"], { cwd: bob, encoding: "utf-8", env: GIT_ENV });
+    expect(pulled.status, pulled.stderr).toBe(0);
+  });
+
+  test("a teammate's words there go on as their request with the risk said once, and a bare --resume hears the line", () => {
+    const { bob, orch } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api") });
+    const words = next(bob, ENV, ["build a refunds report for finance"], orch);
+    expect(words.narration, JSON.stringify(words)).not.toBe(LINE);
+    expect(words.change_notices, JSON.stringify(words)).toContain(RISK);
+    expect(String(words.message)).toContain("build a refunds report for finance");
+    expect(next(bob, ENV, ["--resume"], orch).narration).toBe(LINE);
+  });
+});

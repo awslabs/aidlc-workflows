@@ -91,6 +91,7 @@ import {
   writeSessionSelectionNotice,
   clearSessionRebindOffer,
   completeSubagentInflight,
+  leadsPlanNotHere,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
@@ -279,7 +280,9 @@ if (sessionId) {
 // Atomically materialize a clone's missing gitignored cursor, then bring the
 // copy the harness includes read up to date with the session's space, before
 // the no-workflow early exit. A copy that config never ran in first gets
-// AI-DLC's part of .gitignore and AGENTS.md, after the team's own content.
+// AI-DLC's part of .gitignore and AGENTS.md, after the team's own content,
+// except in a teammate's clone the lead's plan has not reached yet, where the
+// lead's share may bring those files.
 ensureActiveSpaceCursor(projectDir);
 // On Kiro (kiro-ide), a reviewer copy whose review in this chat's work is over
 // without its verdict (the Unit or the stage approved over it) leaves the
@@ -291,7 +294,7 @@ if (selection.intent !== null) sweepReviewCopies(projectDir, { intent: selection
 // here reaches their next request as it is, and the Kiro IDE tree never reads
 // it (its chats read the steering file); every other host read its include
 // when the chat loaded.
-let includeRepointed = addRootBlocks(projectDir).length > 0;
+let includeRepointed = !leadsPlanNotHere(projectDir) && addRootBlocks(projectDir).length > 0;
 let copyBehind: string[] = [];
 try {
   copyBehind = activeMemoryCopyDrift(projectDir, selection.space);

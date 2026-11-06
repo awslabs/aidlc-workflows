@@ -295,6 +295,7 @@ import {
   cachedClaimFanoutActive,
   engineAskMark,
   hasAnyUnitClaimRefs,
+  leadsPlanNotHere,
   noteEngineAskMark,
   teamSkeletonOn,
   memorySectionBody,
@@ -5347,6 +5348,24 @@ function noteTakeOfferedOnWords(projectDir: string): void {
     // Unnoted: the next words in this chat get the offer again.
   }
 }
+
+// In a teammate's clone the lead's plan has not reached (leadsPlanNotHere),
+// a bare /aidlc's answer in the take offer's place: nothing to take yet, and
+// nothing written here that the lead's share would meet.
+function planNotHereStep(projectDir: string): PrintDirective | null {
+  if (!leadsPlanNotHere(projectDir)) return null;
+  const step = turnEndingPrint(
+    "Nothing is in progress here yet. Say the line above, then wait: when they say what to build, run that as " +
+      `their request (${entrySkillInvocation()} "<their words>").`,
+  );
+  step.narration = "The lead's plan has not reached this clone yet, so there is no Unit here to take. Once the lead " +
+    "has shared it, run git pull here and I'll offer you the Units.";
+  return step;
+}
+
+// Their words there start their work as anywhere, with its one risk said once.
+const WORK_BEFORE_THE_PLAN = "The lead's plan has not reached this clone yet, so there is no Unit here to take, and " +
+  "work you start here can stop git pull from bringing the plan in later.";
 
 function offersOnce(projectDir: string, offers: StepOffer[]): StepOffer[] {
   const chat = engineSessionId;
@@ -14124,6 +14143,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(take);
       return;
     }
+    // Before the lead's plan reaches the clone there is nothing to take yet.
+    if (here === null && leadsPlanNotHere(pd)) sayWithStepOnce(pd, WORK_BEFORE_THE_PLAN);
     if (here !== null && here.selectable.length > 0) {
       const words = saveReadingQuestion(pd, flags.intent, "", "routing", {
         space: here.space,
@@ -14236,6 +14257,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (take) {
       if (take.kind === "ask") noteTakeOfferedOnWords(pd);
       emit(take);
+      return;
+    }
+    const notShared = planNotHereStep(pd);
+    if (notShared !== null) {
+      emit(notShared);
       return;
     }
     // Work in progress here with none selected (a teammate's fresh clone, or a
