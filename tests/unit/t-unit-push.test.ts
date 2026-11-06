@@ -1160,6 +1160,11 @@ describe("at the home", () => {
   test("after a turn-down the build asks whether to go back to Code Generation, and the person's yes takes it there", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
+    // The first build's code plan, as its Code Generation wrote it (a live run
+    // on Kiro CLI: after the turn-down this plan was put up for approval again).
+    const stage = join(record, "construction", "refunds", "code-generation");
+    writeFileSync(join(stage, "code-generation-plan.md"), "# Code plan\n\n- [ ] Write src/refunds.ts and lib/refund.ts.\n");
+    writeFileSync(join(stage, "unit-test-instructions.md"), "# Unit tests\n\nRun bun test.\n");
     // The person's chat ran the build: its prompt hook has run in this record.
     const chat = personsChat("t-unit-push-turned-down");
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-push-turned-down", prompt: "build refunds" }).status).toBe(0);

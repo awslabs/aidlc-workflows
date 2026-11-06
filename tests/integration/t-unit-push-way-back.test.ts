@@ -69,7 +69,7 @@ function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, 
   expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
   const intents = join(dir, "aidlc", "spaces", "payments", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
-  return { hosts, dir, host, person, agent, push, record };
+  return { hosts, home, dir, host, person, agent, push, record };
 }
 
 function choose(agent: AgentStandIn, person: PersonScript, d: Directive, label: string): { status: number; out: string } {
@@ -241,4 +241,30 @@ test("at the push question the person's ask goes through after the agent's own n
     tool_input: { file_path: join(dir, "billing", "README.md"), content: "# billing\n\nRefunds live here.\n" },
   });
   expect(write.status, write.stderr).toBe(0);
+});
+
+// Live runs on Kiro CLI (a turn-down) and Codex (a send-back): the person took
+// the Unit back to Code Generation, and the first build's code plan, written
+// before the lead's words, was put up for approval again.
+test("after a turn-down, the redo's code plan step carries the lead's words and asks for a revised plan, never the first one again", () => {
+  const { home, host, person, agent, push } = builtToPush("codex", false);
+  const pushed = choose(agent, person, push, "Push");
+  expect(pushed.status, pushed.out).toBe(0);
+  agent.next();
+  git(home.dir, ["fetch", "-q", "origin"]);
+  const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "rebuild it on the new main"], home.dir);
+  expect(down.status, down.out).toBe(0);
+  person.say("anything new for us?");
+  const ask = agent.next();
+  expect(ask.ask_type, JSON.stringify(ask).slice(0, 400)).toBe("unit-turned-down");
+  const back = choose(agent, person, ask, "Take refunds back to Code Generation");
+  expect(back.status, back.out).toBe(0);
+  const jump = /`([^`]*aidlc-jump\.ts execute --target code-generation[^`]*)`/.exec(back.out)?.[1];
+  expect(jump, back.out).toBeString();
+  const moved = host.bash(jump!);
+  expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+  const step = agent.next();
+  expect(step.ask_type ?? null, JSON.stringify(step).slice(0, 500)).not.toBe("plan-approval");
+  expect(step, JSON.stringify(step).slice(0, 500)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+  expect(String(step.plan_note)).toContain('refunds was turned down in billing at the home: "rebuild it on the new main".');
 });

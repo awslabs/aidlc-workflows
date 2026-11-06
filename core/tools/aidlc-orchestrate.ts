@@ -797,6 +797,7 @@ import {
   codeGenerationPlanWaitsStep,
   reviewClassOnRecord,
   codeGenerationResume,
+  codeGenerationRecordDir,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
   codeGenerationStepOnRecord,
@@ -2786,7 +2787,7 @@ function routePlanApproval(directive: Directive): Directive {
     }
   }
   try {
-    return withTurnDownForPlan(projectDir, routeCodeGenerationPlanApproval(projectDir, directive));
+    return withTurnDownForPlan(projectDir, routeCodeGenerationPlanApproval(projectDir, directive), directive);
   } catch (e) {
     recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
     return directive;
@@ -2795,15 +2796,32 @@ function routePlanApproval(directive: Directive): Directive {
 
 // A Unit's build back at Code Generation after its home turned it down or sent
 // it back: the plan to write is for what the home said, so the plan step
-// carries the home's words (planNote).
-function withTurnDownForPlan(projectDir: string, directive: Directive): Directive {
-  if (directive.kind !== "run-stage" || directive.plan_approval?.status !== "plan") return directive;
+// carries the home's words (planNote). A plan written before that is the first
+// build's, never put up for approval again as it stands: it is revised for the
+// home's words first, and the revised plan is the one asked about.
+function withTurnDownForPlan(projectDir: string, routed: Directive, issued: Directive): Directive {
+  const planStep = routed.kind === "run-stage" && routed.plan_approval?.status === "plan";
+  const asked = routed.kind === "ask" && routed.ask_type === PLAN_APPROVAL_ASK_TYPE && issued.kind === "run-stage";
+  if (!planStep && !asked) return routed;
   const state = loadStateFileIfPresent(projectDir);
   const build = unitBuildOf(state);
   const down = state === null || build === null ? null : turnedDownBuildWaits(projectDir, state);
-  if (build === null || down === null) return directive;
-  directive.plan_approval = { ...directive.plan_approval, feedback: turnedDownLine(build.unit, down) };
-  return directive;
+  if (build === null || down === null) return routed;
+  const feedback = turnedDownLine(build.unit, down);
+  if (planStep && routed.kind === "run-stage") {
+    routed.plan_approval = { ...routed.plan_approval!, feedback };
+    return routed;
+  }
+  let written: number;
+  try {
+    written = statSync(join(codeGenerationRecordDir(projectDir, build.unit), "code-generation-plan.md")).mtimeMs;
+  } catch {
+    return routed;
+  }
+  const at = down.at === undefined ? Number.NaN : Date.parse(down.at);
+  if (!(written < at) || issued.kind !== "run-stage") return routed;
+  issued.plan_approval = { status: "plan", feedback };
+  return issued;
 }
 
 // With plan approval off, a build keeps the record that its plan was built
@@ -9111,7 +9129,7 @@ function handFileStep(projectDir: string, path: string): AskDirective | PrintDir
 // A Unit's build its lead turned down or sent back, not redone since its
 // push: not finished, whatever its record says, so its step says so
 // (turnedDownStep) whether the person's words or a bare /aidlc reach it.
-function turnedDownBuildWaits(pd: string, stateContent: string): { repo: string; words?: string; from?: "build-and-test" } | null {
+function turnedDownBuildWaits(pd: string, stateContent: string): { repo: string; words?: string; at?: string; from?: "build-and-test" } | null {
   const build = unitBuildOf(stateContent);
   if (build === null || redoneSincePush(pd, build.unit)) return null;
   return reopenTurnedDownBuild(pd, stateContent);

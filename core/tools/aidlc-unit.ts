@@ -7029,7 +7029,7 @@ export function turnedDownLine(unit: string, down: { repo: string; words?: strin
 export function reopenTurnedDownBuild(
   projectDir: string,
   stateContent: string,
-): { repo: string; words?: string; from?: "build-and-test" } | null {
+): { repo: string; words?: string; at?: string; from?: "build-and-test" } | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
   try {
@@ -7041,7 +7041,12 @@ export function reopenTurnedDownBuild(
       withAuditLock(projectDir, () => writeStateFile(projectDir, setField(readStateFile(projectDir), "Status", "Running")));
     }
     const down = mine.payload.turned_down;
-    return { repo: down.repo, ...(down.words ? { words: down.words } : {}), ...(down.from ? { from: down.from } : {}) };
+    return {
+      repo: down.repo,
+      ...(down.words ? { words: down.words } : {}),
+      ...(down.at ? { at: down.at } : {}),
+      ...(down.from ? { from: down.from } : {}),
+    };
   } catch {
     return null;
   }
