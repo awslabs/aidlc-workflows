@@ -178,6 +178,28 @@ describe("a change to a shared input", () => {
     return taken;
   }
 
+  // A live run (S4 12): the team's second change to the same input reached the
+  // lead with the first change's text beside it, so the lead decided on words
+  // that were not the change asked.
+  test("a second change to the same input is asked about with its own text, never the first's", () => {
+    const { home, alice, record } = proposed();
+    // The first change is asked about, and the lead answers it.
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, partial refunds" }, home.dir);
+    const approved = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
+    expect(approved.status, approved.out).toBe(0);
+    const copy = join(record, ...REQUIREMENTS.split("/"));
+    writeFileSync(copy, "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "one currency only"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const ask = next(home.dir);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 400)).toBe("unit-amend");
+    expect(String(ask.question)).toContain('("one currency only")');
+    const at = /Their version is at (\S+)\./.exec(String(ask.question))?.[1];
+    expect(at, String(ask.question)).toBeString();
+    expect(readFileSync(join(home.dir, at!), "utf-8")).toContain("in one currency only");
+  });
+
   // A live run: the lead approved a newer version of a shared input after the
   // team took its copy; approving the team's small change then wrote the
   // team's whole file over it, and the lead's newer text was gone.

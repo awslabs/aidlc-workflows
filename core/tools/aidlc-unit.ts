@@ -7936,8 +7936,10 @@ export function changedInputs(projectDir: string, stateContent: string): Array<{
   });
 }
 
-export function amendAskName(unit: string, input: string): string {
-  return `amend-${unit}-${input.replace(/[^A-Za-z0-9.-]+/g, "_")}.json`;
+// One question per proposal: a second change to the same input, made after
+// the first was answered, is asked about with its own text.
+export function amendAskName(unit: string, input: string, at = ""): string {
+  return `amend-${unit}-${input.replace(/[^A-Za-z0-9.-]+/g, "_")}${at ? `-${at.replace(/[^0-9A-Za-z]+/g, "")}` : ""}.json`;
 }
 
 // One amendment onto a team's claim, with the text it carries: a claim that
