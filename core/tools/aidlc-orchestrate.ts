@@ -13444,7 +13444,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           sayWithStepOnce(
             pd,
             `The teams still see every Unit waiting on ${heldBack}, because your answer about ` +
-              `building a thin slice first hasn't been shared yet. Say "share the plan", or run \`${aidlcInvocation()} unit share\`.`,
+              `building a thin slice first hasn't been shared yet. I can share the plan when you say so, or you can run ` +
+              `\`${aidlcInvocation()} unit share\`.`,
           );
         }
         const overview = cachedUnitClaimOverview(pd, {

@@ -43,7 +43,7 @@ afterEach(cleanupTempDirs);
 const NO = "We do not build a thin end-to-end slice first: every Unit starts as soon as what it depends on is done.";
 const ALWAYS = "We always build a thin end-to-end slice first, before any other Unit.";
 const HELD_BACK = "The teams still see every Unit waiting on alpha, because your answer about building a " +
-  "thin slice first hasn't been shared yet. Say \"share the plan\", or run `";
+  "thin slice first hasn't been shared yet. I can share the plan when you say so, or you can run `";
 const CHAT = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000003652", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
 
 type Directive = Record<string, unknown> & {
