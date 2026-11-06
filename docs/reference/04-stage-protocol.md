@@ -1028,7 +1028,7 @@ and problem complexity.
 | poc | Minimal | Minimal | ~8 | Initialization + Ideation + core Inception |
 | bugfix | Minimal | Minimal | 9 | Targeted |
 | refactor | Minimal | Minimal | 10 | Targeted |
-| infra | Standard | Standard | ~13 | Infra-focused |
+| infra | Standard | Standard | ~15 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
 | classic | Standard | Standard | 18 | The implicit default: no Ideation, Inception and Construction through Build and Test, no CI Pipeline or Operation |
 | workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |

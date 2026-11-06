@@ -1144,7 +1144,7 @@ describe("t148 dist/kiro file structure", () => {
       .find((line) => line.startsWith("| Kiro IDE |"));
     expect(lifecycleRow).toBe(`| Kiro IDE | ${next[0].toUpperCase()}${next.slice(1)} |`);
     const gettingStarted = read("01-getting-started.md");
-    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) | `/aidlc` |");
+    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) | `/aidlc` |");
     expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) |");
     const doctorSteps = read("harnesses", "kiro-ide.md").split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
     expect(doctorSteps.length).toBeGreaterThanOrEqual(2);

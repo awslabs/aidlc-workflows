@@ -17,7 +17,7 @@ Source of truth: one file per scope under `.claude/scopes/aidlc-<name>.md` (iden
 | enterprise     | Comprehensive | (default)    | 33 / 33         |
 | express        | Minimal       | (default)    | 10 / 33         |
 | feature        | Standard      | (default)    | 33 / 33         |
-| infra          | Standard      | (default)    | 13 / 33         |
+| infra          | Standard      | (default)    | 15 / 33         |
 | mvp            | Standard      | (default)    | 23 / 33         |
 | poc            | Minimal       | (default)    | 8 / 33          |
 | refactor       | Minimal       | (default)    | 8 / 33          |

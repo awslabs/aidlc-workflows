@@ -19,6 +19,8 @@ import {
   KIRO_TERMINAL_ISSUE_ID,
   kiroTerminalApplies,
   kiroTerminalFix,
+  kiroTerminalIntegrationFix,
+  kiroTerminalIntegrationGap,
   kiroTerminalIssueMessage,
   readKiroIdeTerminal,
   readKiroTerminalAnswer,
@@ -66,6 +68,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
   kiroTreeLayout,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
@@ -234,7 +237,7 @@ export function workspaceShellRefreshCommand(
   distribution: string,
 ): string {
   const invoke = invocationForHarness(harnessDir);
-  return `${invoke} config --harness ${distribution}${invoke === "aidlc" ? "" : " --download"}`;
+  return `${invoke} config --harness ${typedHarnessName(distribution)}${invoke === "aidlc" ? "" : " --download"}`;
 }
 
 export type RuntimeBinaryProbe = {
@@ -1105,7 +1108,7 @@ export function runtimeIssues(diagnostics: RuntimeDiagnostics): DiagnosticIssue[
   ) {
     issues.push({
       id: "runtime-harness-cli-missing",
-      message: `${diagnostics.cli.command} is required for ${diagnostics.cli.harness} but is not on PATH`,
+      message: `${diagnostics.cli.command} is required for ${typedHarnessName(diagnostics.cli.harness)} but is not on PATH`,
       remediation: diagnostics.cli.remediation ?? "Install the selected harness CLI.",
     });
   } else if (
@@ -2351,10 +2354,10 @@ export function projectMcpNote(
   if (!record?.mcp) return null;
   const surface = projectMcpSurface(projectDir, harnessDir, harness);
   if (surface.kind === "always" && record.mcp === "none") {
-    return `${harness} ships ${surface.path} as a framework file; MCP none is an instruct-only preference and does not remove that file.`;
+    return `${typedHarnessName(harness)} ships ${surface.path} as a framework file; MCP none is an instruct-only preference and does not remove that file.`;
   }
   if (surface.kind === "none") {
-    return `${harness} has no shipped MCP surface; the recorded ${record.mcp} answer is informational.`;
+    return `${typedHarnessName(harness)} has no shipped MCP surface; the recorded ${record.mcp} answer is informational.`;
   }
   return null;
 }
@@ -2913,8 +2916,8 @@ export function workspaceSiblingIssues(
     remediation: `Run ${
       harnessDir
         ? workspaceShellRefreshCommand(harnessDir, harness)
-        : `aidlc config --harness ${harness}`
-    } to restore the complete ${harness} projection, including sibling directories.`,
+        : `aidlc config --harness ${typedHarnessName(harness)}`
+    } to restore the complete ${typedHarnessName(harness)} projection, including sibling directories.`,
   }));
 }
 
@@ -3561,64 +3564,68 @@ export function instructionFileDoctorCheck(
     };
   }
   const override = "AGENTS.override.md";
-  const loadedFile = states.some((item) => item.path === override)
-    ? `; Codex reads ${override} instead of AGENTS.md`
-    : "";
+  const overrideItem = states.find((item) => item.path === override);
+  // The override is the person's file, which AI-DLC never writes: doctor says
+  // what Codex reads there and offers AI-DLC's block.
+  const overrideWords = !overrideItem
+    ? undefined
+    : overrideItem.state === "intact"
+    ? `Codex reads ${override} instead of AGENTS.md`
+    : `Codex reads ${override}, ${
+      overrideItem.state === "missing"
+        ? "which has no AI-DLC block"
+        : overrideItem.notCurrent
+        ? "whose AI-DLC block is not the current one"
+        : "whose AI-DLC:agents markers are unmatched or duplicated"
+    }; AI-DLC keeps its block in AGENTS.md`;
+  // A clone of a team that keeps AGENTS.md personal has none to copy from
+  // until config writes it.
+  const writeFirst = existsSync(join(projectDir, "AGENTS.md"))
+    ? ""
+    : `run \`${invoke} config\` to write AI-DLC's block to AGENTS.md, then `;
+  const overrideFix = !overrideItem || overrideItem.state === "intact"
+    ? undefined
+    : overrideItem.state === "missing"
+    ? `if you want Codex to read it too, ${writeFirst}copy ${
+      writeFirst ? "it" : "the AI-DLC:agents block from AGENTS.md"
+    } into ${override}, keeping your own text`
+    : `if you want Codex to read the current one, ${writeFirst}replace the AI-DLC block and any unmatched or ` +
+      `duplicate AI-DLC:agents markers in ${override} with ${
+        writeFirst ? "it" : "the block from AGENTS.md"
+      }, keeping your own text`;
   const fixFor = (items: InstructionState[]): string => {
     const fixes: string[] = [];
-    const overrideIssue = items.find((item) => item.path === override);
-    if (overrideIssue) {
-      const action = overrideIssue.state === "conflict"
-        ? `replace the existing AI-DLC block and any unmatched or duplicate AI-DLC:agents markers in ${override} ` +
-          "with the current block from AGENTS.md"
-        : `copy the current AI-DLC:agents block from AGENTS.md into ${override}`;
-      fixes.push(
-        `${action}, preserving your own text; ` +
-          `if needed, refresh AGENTS.md with \`${invoke} config\` first (config does not update ${override})`,
-      );
+    const rootConflict = overrideItem && items.some((item) => item.path === "AGENTS.md" && item.state === "conflict");
+    if (rootConflict) {
+      fixes.push(`to keep your version, move AGENTS.md somewhere else, then run \`${invoke} config\` to recreate it`);
     }
-    const others = items.filter((item) => item.path !== override);
-    if (others.length > 0) {
-      const rootConflict = loadedFile && others.some((item) => item.path === "AGENTS.md" && item.state === "conflict");
-      if (rootConflict) {
-        fixes.push(`to keep your version, move AGENTS.md somewhere else, then run \`${invoke} config\` to recreate it`);
-      }
-      const conflicts = others.filter((item) => item.state === "conflict" && (!rootConflict || item.path !== "AGENTS.md"));
-      if (conflicts.length > 0) {
-        fixes.push(keepOrTakeShipped(conflicts.map((item) => item.path), invoke));
-      } else if (!rootConflict) {
-        fixes.push(`run \`${invoke} config\``);
-      }
+    const conflicts = items.filter((item) => item.state === "conflict" && (!rootConflict || item.path !== "AGENTS.md"));
+    if (conflicts.length > 0) {
+      fixes.push(keepOrTakeShipped(conflicts.map((item) => item.path), invoke));
+    } else if (!rootConflict) {
+      fixes.push(`run \`${invoke} config\``);
     }
     return fixes.join("; ");
   };
-  const conflicts = states.filter((item) => item.state === "conflict");
-  const missing = states.filter((item) => item.state === "missing");
-  const conflictWords = (items: InstructionState[]): string => {
-    const modified = items.filter((item) => !item.notCurrent).map((item) => item.path);
-    return [
-      ...(modified.length > 0 ? [`hand-modified - conflict (${modified.join(", ")})`] : []),
-      ...items.filter((item) => item.notCurrent).map((item) => `the AI-DLC block in ${item.path} is not the current one`),
-    ].join("; ");
-  };
-  if (conflicts.length > 0) {
-    const missingNote = loadedFile && missing.length > 0
-      ? `; block or file missing (${missing.map((item) => item.path).join(", ")})`
-      : "";
+  const others = states.filter((item) => item !== overrideItem);
+  const conflicts = others.filter((item) => item.state === "conflict");
+  const missing = others.filter((item) => item.state === "missing");
+  const missingWords = `block or file missing (${missing.map((item) => item.path).join(", ")})`;
+  const issues = conflicts.length > 0
+    ? {
+      label: `hand-modified - conflict (${conflicts.map((item) => item.path).join(", ")})` +
+        (overrideItem && missing.length > 0 ? `; ${missingWords}` : ""),
+      fix: fixFor(overrideItem ? [...conflicts, ...missing] : conflicts),
+    }
+    : missing.length > 0
+    ? { label: missingWords, fix: fixFor(missing) }
+    : undefined;
+  if (issues || overrideFix) {
     return {
       pass: false,
       severity: "warn",
-      label: `Instruction file: ${conflictWords(conflicts)}${missingNote}${loadedFile}`,
-      fix: fixFor(loadedFile ? [...conflicts, ...missing] : conflicts),
-    };
-  }
-  if (missing.length > 0) {
-    return {
-      pass: false,
-      severity: "warn",
-      label:
-        `Instruction file: block or file missing (${missing.map((item) => item.path).join(", ")})${loadedFile}`,
-      fix: fixFor(missing),
+      label: `Instruction file: ${[issues?.label, overrideWords].filter(Boolean).join("; ")}`,
+      fix: [issues?.fix, overrideFix].filter(Boolean).join("; "),
     };
   }
   const managed = states.some((item) => item.kind === "managed-block" || item.kind === "json-entries");
@@ -3629,7 +3636,7 @@ export function instructionFileDoctorCheck(
       ? "Instruction file: block present, user content preserved; framework-owned file intact"
       : managed
       ? "Instruction file: block present, user content preserved"
-      : "Instruction file: framework-owned file intact") + loadedFile,
+      : "Instruction file: framework-owned file intact") + (overrideWords ? `; ${overrideWords}` : ""),
   };
 }
 
@@ -3715,7 +3722,7 @@ export function runtimeDoctorChecks(
     label: cli.status === "found"
       ? `Harness CLI: ${cli.command} ${cli.version || ""} at ${cli.path}`.trim()
       : cli.status === "not-applicable"
-      ? `Harness CLI: none required for ${cli.harness}`
+      ? `Harness CLI: none required for ${typedHarnessName(cli.harness)}`
       : cli.status === "too-old"
       ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
       : cli.required
@@ -3792,6 +3799,19 @@ export function kiroIdeTerminalDoctorCheck(
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (selected?.harness !== "kiro-ide") return null;
   if (!kiroTerminalApplies(env, platform)) return null;
+  // Seen only when doctor runs in Kiro's terminal; doctor typed in a chat runs
+  // in Kiro's own environment and gets the profile rows below.
+  const gap = kiroTerminalIntegrationGap(env, platform);
+  if (gap !== null) {
+    return {
+      pass: false,
+      severity: "warn",
+      label:
+        "Kiro terminal: this terminal runs without Kiro's shell integration, so every command shows exit code -1 and " +
+        "output after its first second is cut off (AI-DLC keeps its own replies in a file)",
+      fix: kiroTerminalIntegrationFix(gap),
+    };
+  }
   const state = readKiroIdeTerminal(env, platform);
   if (!state.readable) {
     return {

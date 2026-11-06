@@ -38,6 +38,7 @@ scopes:
   - bugfix
   - refactor
   - security-patch
+  - infra
   - classic
   - workshop
   - express
@@ -55,8 +56,8 @@ Read code generation outputs across all units from
 `<record>/construction/*/code-generation/code-summary.md` and per-unit test
 instructions from
 `<record>/construction/*/code-generation/unit-test-instructions.md`. For a
-zero-Unit scope such as `express`, read the stage-level equivalents under
-`<record>/construction/code-generation/`.
+zero-Unit scope such as `express` or `infra`, read the stage-level equivalents
+under `<record>/construction/code-generation/`.
 
 Build a source-complete inventory of every measurable quality target before
 generating instructions. Read all applicable stage-level and per-unit sources:
@@ -90,6 +91,10 @@ Create `<record>/construction/build-and-test/build-instructions.md`:
 - Environment setup (env vars, config files, local services)
 - Build commands (compile, bundle, transpile)
 - Build verification steps
+- For infrastructure-as-code, the static checks for each changed IaC root or
+  app: format and validation (for example `terraform fmt -check` and
+  `terraform validate`, `cdk synth`, `cfn-lint`), plus any policy-as-code
+  rules the project runs
 - Troubleshooting common build issues
 
 ### Step 3-7: Generate Test Instructions (Strategy-Aware)
@@ -192,6 +197,11 @@ Attempt to execute the build and test commands documented in the instruction fil
    path. A deferred target remains `Unverified` and cannot contribute to a
    successful stage result. If no later owning stage is scheduled, the target
    is `Unverified`, not deferred successfully.
+   For infrastructure-as-code, a preview of the change against real
+   environments (`terraform plan`, `cdk diff`, a CloudFormation change set) is
+   such a check when it needs cloud credentials or remote state: Environment
+   Provisioning owns it when the plan runs that stage. Never apply or deploy
+   from this stage.
 5. **Finalize and report results**: Create or update
    `<record>/construction/build-and-test/test-results.md` and the Build and Test
    Summary on every exit path, including loop-back, halt-and-ask, abort, and

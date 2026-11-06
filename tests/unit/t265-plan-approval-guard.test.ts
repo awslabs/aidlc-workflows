@@ -510,7 +510,10 @@ function scratchProject(): string {
     "aidlc-learned-date.ts",
     "aidlc-git-name.ts",
     "aidlc-unit-landing.ts",
+    "aidlc-unit-holders.ts",
     "aidlc-kiro-chat-record.ts",
+    "aidlc-claude-turn-origin.ts",
+    "aidlc-claude-turn-pending.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
     "aidlc-channel.ts",
@@ -1914,7 +1917,7 @@ describe("t265b hook lifecycle", () => {
         for (const args of [
           "config --statusline maybe",
           "config --statusline",
-          "config --statusline off --harness kiro",
+          "config --statusline off --harness kiro-v2",
           "config --statusline off --frobnicate",
           "config --statusline off --mcp none",
           "config --statusline off extra",
@@ -1984,7 +1987,7 @@ describe("t265b hook lifecycle", () => {
         "config flags --local --yes",
         "config project --mcp none --completions none --yes",
         "config models --preset minimal --dry-run",
-        "config models --preset balanced --harness kiro --plan-token abc123 --yes",
+        "config models --preset balanced --harness kiro-v2 --plan-token abc123 --yes",
         `config models --preset balanced --project-dir '${proj}' --quiet --no-color --verbose --yes`,
         `config trust --show --project-dir='${proj}'`,
       ];
@@ -2019,8 +2022,8 @@ describe("t265b hook lifecycle", () => {
         "config project --from /tmp/release --yes",
         "config project --mcp none --from=/tmp/release --yes",
         "config flags --from /tmp/release --yes",
-        `config --harness kiro --download --project-dir '${proj}'`,
-        `config --harness kiro --project-dir '${proj}'`,
+        `config --harness kiro-v2 --download --project-dir '${proj}'`,
+        `config --harness kiro-v2 --project-dir '${proj}'`,
       ];
       // A bypass with extra flags is judged whole, whoever asked.
       const refused = ["config flags --default-scope feature --bypass AIDLC_DISABLE_SENSORS --local --yes"];

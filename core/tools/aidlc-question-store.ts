@@ -29,9 +29,10 @@ import { resolveAidlcSettings } from "./aidlc-settings.ts";
 // The copy of a request an engine question was asked about, so its answer
 // commands carry a short id instead of the request text. Each question gets
 // its own file in the gitignored session directory, written once and rewritten
-// only to mark it answered, with the same operating-system permissions as the
-// rest of the workspace. The file is removed when the question starts work; an
-// unanswered one is kept unless `question-retention-days` is set.
+// only to mark it answered or replaced, with the same operating-system
+// permissions as the rest of the workspace. The file is removed when the
+// question starts work; an unanswered one is kept unless
+// `question-retention-days` is set.
 
 // Which ask stored a question: a cold-start ask names new work; a
 // new-work-routing ask is about work that already exists. A `compose` entry is
@@ -72,6 +73,12 @@ export interface StoredQuestion {
    * repeated answer by it carries on with that work, and it is no longer open.
    */
   answeredBy?: string;
+  /**
+   * For a new-work request the person replaced with a newer one while its plan
+   * question waited and nothing had started: the newer request. It is no longer
+   * the plan question that waits, and its own commands still answer it.
+   */
+  replacedBy?: string;
   /**
    * For a routing question shown with options: the asked workflow's state
    * digest when it was asked, or asked while none was selected, the digest of
@@ -180,6 +187,8 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
       (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest))) &&
     (question.answeredBy === undefined ||
       (typeof question.answeredBy === "string" && QUESTION_ID.test(question.answeredBy))) &&
+    (question.replacedBy === undefined ||
+      (typeof question.replacedBy === "string" && QUESTION_ID.test(question.replacedBy))) &&
     (question.messageId === undefined || (typeof question.messageId === "string" && QUESTION_ID.test(question.messageId))) &&
     (question.asker === undefined || (typeof question.asker === "string" && validSessionId(question.asker) === question.asker))
   ) {
@@ -324,6 +333,35 @@ export function latestQuestion(projectDir: string): StoredQuestion | null {
   if (latest === null) return null;
   const { question } = latest;
   return question.origin === "compose" ? readComposeEntry(projectDir, question.id) : readQuestion(projectDir, question.id);
+}
+
+/** The new-work requests whose plan question still waits (unanswered, unexpired, not replaced), oldest first. */
+export function waitingFrontRequests(projectDir: string): StoredQuestion[] {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return [];
+  }
+  return names
+    .map((name) => (name.endsWith(".json") ? readQuestion(projectDir, name.slice(0, -".json".length)) : null))
+    .filter((question): question is StoredQuestion =>
+      question?.origin === "front" && question.replacedBy === undefined && !startedWorkUses(projectDir, question.id))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+}
+
+/** Mark each of `ids` replaced by request `by`, as an answer marks its chain: a copy that cannot be written stays. */
+export function markReplaced(projectDir: string, ids: readonly string[], by: string): void {
+  if (!QUESTION_ID.test(by)) return;
+  for (const id of ids) {
+    const kept = id === by ? null : readStoredQuestion(projectDir, id);
+    if (kept === null || kept.replacedBy !== undefined || kept.answeredBy !== undefined) continue;
+    try {
+      writeRecordFileNoFollow(projectDir, questionRel(projectDir, id), `${JSON.stringify({ ...kept, replacedBy: by })}\n`);
+    } catch {
+      // Best effort: the copy stays as it was.
+    }
+  }
 }
 
 /** The open questions kept from the person's message `messageId` (unanswered, unexpired), oldest first. */

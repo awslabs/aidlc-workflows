@@ -1986,6 +1986,36 @@ const PERSON_DECIDES_CHANGES =
   "Those are the person's own changes, so they decide: keep them (with their go-ahead, set Guard Policy relaxed " +
   "for this piece of work) or undo them themselves; then run the merge again.";
 
+// A landing finished after it stopped staged (a clash, a refused commit) does
+// not compare the checkout again, so the change of the person's it kept is the
+// row its first run wrote from the fingerprint this link opens at, since this
+// Unit last converged.
+function keptByStagedLanding(
+  pd: string,
+  record: BoundConvergedSourceRecord,
+  recorded: string,
+  intent?: string,
+  space?: string,
+): { kept?: string } {
+  const rows = readAuditShardEvents(pd, intent, space);
+  const converged = sortWorktreeAuditRows(rows.filter((row) =>
+    row.event === "SWARM_UNIT_CONVERGED" &&
+    auditBlockField(row.block, "Unit name") === record.unit &&
+    auditBlockField(row.block, "Stage") === record.stage &&
+    auditBlockField(row.block, "Run floor") === record.floor)).at(-1);
+  if (converged === undefined) return {};
+  const row = sortWorktreeAuditRows(rows.filter((candidate) =>
+    candidate.event === "CHANGE_ACCEPTED" &&
+    auditBlockField(candidate.block, "Checkpoint") === "swarm-batch" &&
+    auditBlockField(candidate.block, "Stage") === record.stage &&
+    auditBlockField(candidate.block, "Unit") === record.unit &&
+    auditBlockField(candidate.block, "Recorded") === recorded &&
+    !auditBlockField(candidate.block, "Message Id") &&
+    rowAfter(candidate, converged))).at(-1);
+  const kept = row === undefined ? null : auditBlockField(row.block, "Details");
+  return kept ? { kept } : {};
+}
+
 function assertAggregateSourceBeforeMerge(
   pd: string,
   slug: string,
@@ -1998,6 +2028,8 @@ function assertAggregateSourceBeforeMerge(
 ): {
   state: WorkspaceSourceState;
   openingFingerprint: string;
+  // The person's own change this landing keeps, said once it has landed.
+  kept?: string;
 } | null {
   if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceState(pd, intent, space);
@@ -2005,17 +2037,18 @@ function assertAggregateSourceBeforeMerge(
   // the build are kept: the merge starts from the checkout as it is, and the
   // change is recorded once so the merge chain stays readable. Under strict so
   // are the files the person asked to change (swarm allow-change), recorded
-  // with the message they asked in; that step already told them.
+  // with the message they asked in; that step already told them. The line is
+  // not said here: the merge can still stop, and a run that stopped already
+  // wrote the row the run that lands finds.
   const keepChange = (recorded: string, changed: string[] | null, asked: string[] | null = null) => {
     const notice = changed && changed.length > 0
       ? `You changed ${renderChangedPaths(changed)} during the build${asked ? ", as you asked" : ""}; kept them and merged unit ${record.unit}.`
       : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
-    const said = recordAcceptedChanges(pd, [{
+    recordAcceptedChanges(pd, [{
       checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
       recorded, current: current!.fingerprint, notice, ...(asked ? { messageIds: asked } : {}),
     }], { intent, space });
-    if (asked === null) for (const line of said) process.stderr.write(`note: ${line}\n`);
-    return { state: current!, openingFingerprint: current!.fingerprint };
+    return { state: current!, openingFingerprint: current!.fingerprint, ...(asked === null ? { kept: notice } : {}) };
   };
   // Under strict, the step for the person's own changes: theirs to keep, with
   // the message they asked in, or to undo.
@@ -2049,7 +2082,12 @@ function assertAggregateSourceBeforeMerge(
         `refusing to merge: unit "${record.unit}" already has current-attempt source-merge authority`,
       );
     }
-    if (resuming) return { state: current, openingFingerprint: chain.fingerprint };
+    if (resuming) {
+      return {
+        state: current, openingFingerprint: chain.fingerprint,
+        ...keptByStagedLanding(pd, record, chain.fingerprint, intent, space),
+      };
+    }
     const changed = sameWorkspaceSource(chain.fingerprint, current.fingerprint)
       ? []
       : swarmSourceChangedSince(pd, record.stage, chain.listing, current, intent, space);
@@ -2081,7 +2119,12 @@ function assertAggregateSourceBeforeMerge(
       `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`,
     );
   }
-  if (resuming) return { state: current, openingFingerprint: opening.fingerprint };
+  if (resuming) {
+    return {
+      state: current, openingFingerprint: opening.fingerprint,
+      ...keptByStagedLanding(pd, record, opening.fingerprint, intent, space),
+    };
+  }
   // The walking skeleton the person approved at its own checkpoint is where the
   // swarm starts, never a change of theirs. The link this landing records still
   // opens at the stage baseline: the chain's first link, as earlier releases
@@ -3092,6 +3135,7 @@ function handleMerge(args: string[]): void {
         `${cleanupTag} cannot bind the post-merge main-checkout source aggregate; worktree and retained source commit preserved`,
       );
     }
+    if (aggregateBefore.kept) landingNotices.push(aggregateBefore.kept);
     const landed = landedDifferences(
       repoCwd,
       wtPath,

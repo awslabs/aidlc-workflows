@@ -45,7 +45,8 @@ import { readsAlikeInDoubleQuotes } from "./aidlc-runtime-paths.ts";
 // STANCE, which an LLM resolves by reading a team's free-form `## Walking
 // Skeleton` practices prose (no parser turns free English into a stance). The
 // engine cannot decide it without smuggling an LLM into routing, so it DEFERS:
-// it emits `gate: "unresolved"` for that one stage, the conductor classifies
+// it emits `gate: "unresolved"` for that one stage (and for team work whose own
+// answer is still to be read, on the stage the work is on), the conductor classifies
 // the prose and feeds the stance back via `aidlc-orchestrate report
 // --skeleton-stance`, and the NEXT `next` emits the now-determined boolean gate.
 // The engine still owns the transition — only a typed stance ever crosses back
@@ -317,8 +318,9 @@ export interface RunStageDirective {
   // step that resumes there, until a row of the stage says the agent acted.
   parked_reply?: { words: string; note: string };
   // gate is a boolean for every deterministic case; the string sentinel
-  // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
-  // walking-skeleton gate, which the conductor resolves via report (the
+  // GATE_UNRESOLVED ("unresolved") appears ONLY for the walking-skeleton stance
+  // (the first Construction Bolt's gate, or team work's unread answer), which the
+  // conductor resolves via report (the
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
   // Beside an unresolved gate, a verification command awaiting approval, or a
@@ -1292,6 +1294,11 @@ export function questionNote(invocation: string, oneChoice = false, next = `${in
     "Anything else is their own words: read what they meant.";
 }
 
+// The Take question names the label a claim carries and offers another: the
+// person's name for their team is theirs to read, the flag is the tool's.
+const TEAM_NAME_NOTE = "When they take a Unit and give their team another name than the one the question offers, " +
+  "add `--team '<that name>'` to that Take choice's command.";
+
 // Which repos Reverse Engineering reads: the names are the person's, the
 // command takes them exactly; the engine checks each one. "Only some" has no
 // command of its own, so `next` waits until the names are set. A request that
@@ -1838,6 +1845,8 @@ export function withAgentNotes<T extends object>(
       ? routingRecordsQuestionNote(invocation)
       : d.ask_type === "repo-scope"
       ? repoScopeQuestionNote(invocation)
+      : d.ask_type === "team-handover" && Array.isArray(d.handovers) && d.handovers.includes("join")
+      ? `${questionNote(invocation, choices?.length === 1)} ${TEAM_NAME_NOTE}`
       : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
       // A question with no options (a guard that has no way on) is said as it is.

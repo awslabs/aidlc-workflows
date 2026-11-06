@@ -203,7 +203,13 @@ cards doing the work, and the guard notes nothing for them.
   alone when a Unit reopen moved the work back to it after that
   `STAGE_STARTED`, or in the same second in another clone's audit file (the
   reopen's rows carry `Moved From`): the move writes no start of its own, so
-  the last start names the stage the work left. Both
+  the last start names the stage the work left. It is also a no-op while the
+  step the engine issued is still current (`statusSyncLeavesCursor`, the
+  same rule as the task path's): `Current Stage` is where the engine put it
+  for that step. A checkout that claimed a Unit rests the cursor on the Unit's
+  stage, and a Unit step writes `UNIT_STARTED`, no `STAGE_STARTED`, so the
+  last start names another stage, and moving to it would retire the issued
+  step after every command. Both
   audit-tail hooks match `execute_bash`, Windows `execute_pwsh`, and the
   `shell` alias — the IDE surfaces no task event the sync could parse.
 - **front gate for the two audit-tail hooks**: they run once for every shell

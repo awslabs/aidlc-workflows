@@ -552,6 +552,21 @@ export function cleanupTestProject(proj: string | undefined): void {
   if (proj && existsSync(proj)) removeTreeWithRetry(proj);
 }
 
+/** What a refusal says for a project in a synced folder (syncFolderClause), whatever the service. */
+export const SYNC_FOLDER_WORDS = "folder; sync can change files AI-DLC checks. Move it out of the synced folder or pause sync for it.";
+
+/**
+ * The environment that puts `project` in a synced folder for a child process:
+ * on Windows its OneDrive folder; elsewhere a Dropbox root named in the
+ * .dropbox/info.json of `home`, a scratch folder the caller cleans up.
+ */
+export function syncedFolderEnv(project: string, home: string): Record<string, string> {
+  if (process.platform === "win32") return { OneDrive: project };
+  mkdirSync(join(home, ".dropbox"), { recursive: true });
+  writeFileSync(join(home, ".dropbox", "info.json"), JSON.stringify({ personal: { path: project } }));
+  return { HOME: home };
+}
+
 /**
  * Portable in-place text replace. `pattern` may be a string (replaced once) or a
  * RegExp (use the `g` flag for replace-all).

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { existsSync, readdirSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,6 +18,7 @@ import {
   PLUGIN_COMMAND_NAME_RE,
   type RouteNamespaceName,
   TRUSTED_ROUTE_NAMESPACE,
+  UNIT_GRAMMAR,
   UNIT_VERBS,
 } from "./aidlc-command.ts";
 import {
@@ -42,6 +44,7 @@ import {
   runtimeProjectDir,
   runtimeProjectDirFrom,
   runtimeHarnessName,
+  typedHarnessHosts,
 } from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
@@ -259,19 +262,7 @@ export const ROUTES: readonly Route[] = [
     ...PUBLIC_ENGINE,
     namespace: "public",
     mutationScope: "project",
-    all: [
-      "unit adopt <unit>",
-      "unit claim <unit>",
-      "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
-      "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--accept-released-attempt --user-input <text>]",
-      "unit merge-status <unit>",
-      "unit participate",
-      "unit pin <unit>",
-      "unit publish <unit> [--commit]",
-      "unit release <unit>",
-      "unit share",
-      "unit status",
-    ],
+    all: Object.values(UNIT_GRAMMAR).map((grammar) => grammar.usage),
   },
   {
     id: "top-compose",
@@ -460,7 +451,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes]"],
+    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes] [--json|--quiet]"],
   },
   {
     id: "top-use",
@@ -550,7 +541,7 @@ export const ROUTES: readonly Route[] = [
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "versions install", summary: "install a retained release" }],
     all: [
-      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>]",
+      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--dry-run] [--yes] [--json|--quiet]",
     ],
   },
   {
@@ -568,7 +559,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["prune [--yes]"],
+    all: ["prune [--yes] [--json|--quiet]"],
   },
   {
     id: "state-passthrough",
@@ -593,6 +584,8 @@ export const ROUTES: readonly Route[] = [
       "gate-start",
       // The review request runs it (aidlc-log.ts, completionChecksHold).
       "completion-checks",
+      // A Unit's checkpoint verify and ask run it (aidlc-construction-checkpoints.ts, unitGateChecks).
+      "checkpoint-checks",
       "approve",
       "reject",
       "revise",
@@ -1037,7 +1030,9 @@ export const ROUTES: readonly Route[] = [
     // this literal, because reading the route is exactly what missed it.
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help"],
+    // `read-pdf` is the built-in PDF reader's child-process entry in a compiled binary (aidlc-knowledge.ts
+    // extractDocument); it is routed but never listed in help.
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help", "read-pdf"],
     tool: TOOLS.knowledge,
     ...PUBLIC_ENGINE,
     // ONE line in the human help, which is capped at 20 lines: it is a summary
@@ -1700,6 +1695,14 @@ export function renderCommandHelp(command: PublicCommand): string {
   if (command === "config") {
     const sectionRow = (name: string, summary: string): string =>
       `  ${cmd(name, out)}${" ".repeat(12 - name.length)}${summary}`;
+    // Both Kiro trees' host is Kiro; these are the words the setup picker
+    // shows for them (t230 pins every row to the picker's words).
+    const harnessWords: Readonly<Record<string, string>> = {
+      kiro: "Kiro CLI (V2)",
+      "kiro-ide": "Kiro (Kiro IDE and Kiro CLI on its v3 engine)",
+    };
+    const harnesses = typedHarnessHosts();
+    const nameWidth = Math.max(...harnesses.map(({ name }) => name.length)) + 2;
     return [
       "Set up, refresh, or change AI-DLC project configuration",
       "",
@@ -1721,12 +1724,16 @@ export function renderCommandHelp(command: PublicCommand): string {
       `  ${cmd(`${invoke} config list`, out)}                List them all`,
       "",
       heading("COMMON FLAGS", out),
+      "  --harness <name>  The tool to set up, refresh or add in this project (names under HARNESSES); kiro and kiro-v2 switch a Kiro project in place",
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
       `  --channel [name]  Show or set the release channel this machine follows (stable, preview); ${invoke} update --channel switches for one run only`,
       "  --show            Show one section, or every section with no section named, without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
+      "",
+      heading("HARNESSES", out),
+      ...harnesses.map(({ id, name, host }) => `  ${name.padEnd(nameWidth)}${harnessWords[id] ?? host}`),
       "",
       heading("EXAMPLES", out),
       `  ${cmd(`${invoke} config`, out)}`,
@@ -3095,11 +3102,13 @@ async function runGroupMembers(
     // A payload this process cannot read goes to every member, which judges it.
   }
   let code = 0;
+  let printed = false;
   const refusals: string[] = [];
   const failures: string[] = [];
   for (const member of action.members) {
     if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
     const said = await runGroupMember(member, input);
+    printed ||= said.printed;
     if (said.code === 2) {
       code = 2;
       if (said.reason && !refusals.includes(said.reason)) refusals.push(said.reason);
@@ -3114,7 +3123,36 @@ async function runGroupMembers(
   // it builds the deny decision from it), so a direct descriptor write would
   // reach the person's terminal but leave that decision without its reason.
   if (said.length > 0) process.stderr.write(said.join(""));
+  // Every check passed and none printed (an answer beside a notice is not JSON to the host).
+  if (code === 0 && !printed && toolName === "Bash") {
+    const allow = await claudeOwnCommandAllow(input);
+    if (allow) process.stdout.write(allow);
+  }
   return code;
+}
+
+// Claude Code runs AI-DLC's own command without a prompt however a helper spells this project's
+// path (aidlc-claude-own-command.ts); its deny and ask rules still apply over this answer.
+// No reason text, so the person reads nothing new.
+async function claudeOwnCommandAllow(input: string): Promise<string> {
+  let payload: { hook_event_name?: unknown; tool_input?: { command?: unknown } };
+  try {
+    payload = JSON.parse(input);
+  } catch {
+    return "";
+  }
+  const command = payload.tool_input?.command;
+  if (payload.hook_event_name !== "PreToolUse" || typeof command !== "string") return "";
+  try {
+    if (runtimeHarnessName() !== "claude") return "";
+    const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
+    const { claudeAllowsOwnCommand } = await import("./aidlc-claude-own-command.ts");
+    if (!claudeAllowsOwnCommand(command, resolveProjectDirFromHook(import.meta.url))) return "";
+  } catch {
+    // Nothing to name or read: the host decides, as it did before.
+    return "";
+  }
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } })}\n`;
 }
 
 // One member, with what it said collected so the group can carry each refusal
@@ -3123,22 +3161,29 @@ async function runGroupMembers(
 async function runGroupMember(
   member: HookGroupMember & { path: string },
   input: string,
-): Promise<{ code: number; reason: string }> {
+): Promise<{ code: number; reason: string; printed: boolean }> {
   if (!existsSync(member.path)) {
     return {
       code: 1,
       reason: `aidlc engine hook ${member.hook}: not available in this install\n`,
+      printed: false,
     };
   }
   hookTrace("hook-group-member-begin", { hook: member.hook });
   const collected: string[] = [];
+  let printed = false;
   const stderrWrite = process.stderr.write;
+  const stdoutWrite = process.stdout.write;
   process.stderr.write = ((chunk: unknown) => {
     collected.push(
       typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8"),
     );
     return true;
   }) as typeof process.stderr.write;
+  process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+    printed = true;
+    return (stdoutWrite as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+  }) as typeof process.stdout.write;
   let code: number;
   try {
     // Named phases, because this process loads the hook's code where a hook of
@@ -3161,9 +3206,10 @@ async function runGroupMember(
     code = 1;
   } finally {
     process.stderr.write = stderrWrite;
+    process.stdout.write = stdoutWrite;
   }
   hookTrace("hook-group-member-end", { hook: member.hook, code });
-  return { code, reason: collected.join("") };
+  return { code, reason: collected.join(""), printed };
 }
 
 async function runSensorScriptFile(
@@ -3340,12 +3386,16 @@ async function execute(action: Action): Promise<number> {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
+    // A turn Claude Code started itself is settled before the hook reads a turn;
+    // the human-turn hook settles in its own process, which loads the engine anyway.
+    if (action.name !== "record-human-turn") settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHook({ ...action, projectDir }));
   }
   if (action.type === "hook-group") {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
+    settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHookGroup({ ...action, projectDir }));
   }
   if (action.type === "statusline") {
@@ -3847,10 +3897,41 @@ function validateSimplePublicGrammar(
   return null;
 }
 
+// A verb the lifecycle tool runs: the words that tool gets (the route's prefix,
+// the verb and what follows it up to a `--`, then this launcher's own flags,
+// which resolveActionFrom hands on at the end; --project-dir, which every
+// lifecycle grammar takes, is left out) and the verb's usage, its form from the
+// route, the line `aidlc system --help` prints for it.
+function lifecycleVerb(argv: readonly string[]): { args: string[]; usage: string } | null {
+  const route = routePolicyFor(argv);
+  if (route?.tool !== TOOLS.lifecycle) return null;
+  const clean = withoutProjectDirFlag(argv);
+  const delimiter = clean.indexOf("--");
+  const words = delimiter < 0 ? clean : clean.slice(0, delimiter);
+  const end = argv.indexOf("--");
+  const launcherFlags = (end < 0 ? argv : argv.slice(0, end)).filter((token) => LAUNCHER_GLOBAL_FLAGS.has(token));
+  const path = route.namespace === "public"
+    ? []
+    : route.group === "top" ? ["system"] : ["system", route.group];
+  const verb = words[path.length];
+  const form = route.all?.find((item) => item === verb || item.startsWith(`${verb} `));
+  if (!form) return null;
+  return {
+    args: [...(route.prefix ?? []), ...words.slice(path.length), ...launcherFlags],
+    usage: [aidlcInvocation(), ...path, form].join(" "),
+  };
+}
+
 async function publicCommandGrammarError(
   route: Route | null,
   argv: readonly string[],
 ): Promise<string | null> {
+  if (route?.namespace === "system") {
+    const lifecycle = lifecycleVerb(argv);
+    if (!lifecycle) return null;
+    const { validatePublicLifecycleArgs } = await import("./aidlc-lifecycle.ts");
+    return validatePublicLifecycleArgs(lifecycle.args);
+  }
   if (
     route?.namespace !== "public" ||
     route.group !== "top"
@@ -3918,7 +3999,12 @@ function renderPublicGrammarFailure(
     text(2, `For the full list, run '${invoke} config --help'.\n`);
     return 2;
   }
-  return renderDispatcherFailure(argv, 2, message);
+  const code = renderDispatcherFailure(argv, 2, message);
+  const usage = lifecycleVerb(argv)?.usage;
+  if (usage && requestedOutputMode(argv) === "human") {
+    text(2, `${heading("usage:", process.stderr)} ${usage}\n`);
+  }
+  return code;
 }
 
 function projectPolicyError(route: Route, argv: readonly string[]): string | null {
@@ -4206,6 +4292,14 @@ export async function main(rawArgv: string[]): Promise<void> {
     text(1, renderCommandHelp(commandHelp));
     return;
   }
+  // `aidlc system rollback --help` and the other lifecycle verbs under
+  // `system`: the lifecycle tool takes --help as one more word, so the verb's
+  // usage is printed here and nothing runs.
+  const lifecycleHelp = lifecycleVerb(argv);
+  if (lifecycleHelp?.args.some((token) => token === "--help" || token === "-h")) {
+    text(1, `usage: ${lifecycleHelp.usage}\n`);
+    return;
+  }
   const route = routePolicyFor(argv);
   if (route) {
     const error = basicPolicyError(route, argv);
@@ -4402,9 +4496,10 @@ if (import.meta.main) {
 }
 
 function startDispatcher(): void {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

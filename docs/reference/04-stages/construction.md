@@ -435,7 +435,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md (a Unit whose kind writes no `rules.md`, such as `ui`, names its `functional-spec.md` or `frontend-components.md` instead), `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -1190,7 +1190,11 @@ This stage has a **two-part structure**: planning followed by generation.
    files. Paths are POSIX-relative and use no globs or `..`; a trailing `/`
    claims a generated directory tree. In a main-workspace multi-repo run every
    entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
-   to that selected repo and omit `repo`.
+   to that selected repo and omit `repo`. An entry read in a recorded repo gives its path
+   from that repo's root: one the repo does not have counts as deleted only when the repo
+   had it (at HEAD, in a commit before it, or, for a file, in a folder still on disk), and
+   any other (`{"repo": "billing", "path": "billing/package.json"}`) is refused before the
+   review, every such entry named in one reason.
 
    The stage file gives this shape:
 

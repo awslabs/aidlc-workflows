@@ -10,8 +10,10 @@ hook wiring, activation) differs.
 Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
 whose `inclusion: always` frontmatter loads it automatically. The root
 `AGENTS.md` block is harness-neutral and shared with other installed harnesses;
-engine directories must still differ (the `kiro` and `kiro-ide` distributions cannot share `.kiro/`; in a project with
-`kiro`, `aidlc config --harness kiro-ide` switches `.kiro/` to this distribution in place).
+engine directories must still differ (the Kiro CLI (V2) and Kiro distributions cannot share `.kiro/`; in a project with
+Kiro CLI (V2), `aidlc config --harness kiro` switches `.kiro/` to this distribution in place; at a terminal it asks
+first, with `--yes` it switches, and without a terminal, or under `--quiet` or `--json`, it changes nothing and prints the
+command with `--yes`).
 
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro with Claude Opus 4.8.** The conductor drives a
@@ -59,7 +61,7 @@ curl -fsSL \
 sh "$tmp/install.sh"
 rm -rf "$tmp"
 cd your-project
-aidlc config --harness kiro-ide
+aidlc config --harness kiro
 aidlc doctor
 ```
 
@@ -125,7 +127,7 @@ if [ -f your-project/.kiro/settings/cli.json ]; then
 fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-ide
+cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro
 ```
 
 The first removal loop is the v2.5.57 hook-name migration. The second removes
@@ -227,11 +229,15 @@ The install ships:
 - `.kiro/hooks/aidlc-*.json` — the framework hooks in Kiro's v2 hook format.
   Both surfaces register them when a session starts; in Kiro IDE they appear
   in the Agent Hooks panel. Switching one off there writes `"enabled": false`
-  into its file; `/aidlc --doctor` reports it, the next AI-DLC step says it once
-  per change, and while `aidlc-record-human-turn` is off an approval tells you to
-  turn it back on under Agent Hooks rather than to trust the folder. AI-DLC never
-  turns a hook back on for you. The IDE 0.x `.kiro.hook` format is no longer
-  shipped: Kiro IDE 1.x never executes it.
+  into its file, and a file committed that way is off in Kiro CLI too, which has
+  no such panel; `/aidlc --doctor` reports it, the next AI-DLC step says it once
+  per change, and while `aidlc-record-human-turn` is off an approval tells you,
+  rather than to trust the folder, to turn it back on under Agent Hooks in Kiro
+  IDE, or in Kiro CLI to change `"enabled": false` to `true` in that file, then
+  quit Kiro and start `kiro-cli --v3` again in the folder, since the file is
+  read when a session starts. AI-DLC never turns a hook back on for you. The
+  IDE 0.x `.kiro.hook` format is no longer shipped: Kiro IDE 1.x never executes
+  it.
 
 ## First run
 
@@ -378,8 +384,10 @@ Kiro's own record of the chat (`~/.kiro/sessions/`, read only), and at the
 first approval question or Unit checkpoint after Kiro summarized the chat it
 says so in one line, with an offer to pause and carry on in a new chat. If you
 turned Kiro's auto-compaction off, the same offer comes once the chat is 80%
-full. Your answer decides: nothing pauses on its own, and the line is said once
-in a chat.
+full. When the chat already reached half full or more in its first turn on the
+work, and still runs on the model that filled it, a new chat on that model
+would start about as full, so the line says that instead of offering one. Your
+answer decides: nothing pauses on its own, and the line is said once in a chat.
 
 The line cannot appear in the middle of a stage (it comes only with a question
 you are asked anyway), for a chat with no record on this machine, or if a Kiro
@@ -404,7 +412,7 @@ over, which is why the end of a stage is the best moment (see
 
 Kiro IDE and Kiro CLI v3 register hooks through v2 hook JSON files
 (`{"version":"v1","hooks":[{name,trigger,matcher,action}]}`, PascalCase
-triggers) under `.kiro/hooks/` (a different mechanism from the `kiro` CLI
+triggers) under `.kiro/hooks/` (a different mechanism from the Kiro CLI (V2)
 distribution, which carries a `hooks` block inside the agent JSON). Native hook commands route through
 `aidlc engine adapter kiro-ide`; source/development copies route through the projected
 `aidlc-kiro-adapter.ts` shim. Both normalize the IDE event into the shape the
@@ -600,10 +608,10 @@ tool, so an effort recorded for one agent for another tool applies on Kiro too.
 An `aidlc config` run that writes a model or effort value into a Kiro agent
 file that differs from what the file had, other than a value that run changes
 itself, says so in one line and names
-`aidlc config models --show --harness kiro-ide`, which shows where each value
+`aidlc config models --show --harness kiro`, which shows where each value
 is set; `--effort default` (or `--model default`) for that agent, with
 `--project`, `--local` or `--global` (machine settings) for the file it is in,
-and `--harness kiro-ide` when the project has another harness, takes it out
+and `--harness kiro` when the project has another harness, takes it out
 (an effort taken out this way is gone for every tool).
 `effortLevel` is not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on
 its v3 engine and Kiro IDE 1.3.0.
@@ -668,12 +676,16 @@ Kiro reads the result one second after sending the command and shows exit code
 -1 for every run). Most AI-DLC steps take longer. So in Command Prompt every
 AI-DLC command prints one line first, `AI-DLC reply: aidlc/.aidlc-sessions/replies/<id>.txt`,
 and writes its reply to that file as well as to the terminal; when Kiro cuts
-the result off at that line, the agent reads the reply from the file instead
-of running the command again (the newest twenty replies are kept, in a folder
-git ignores). A value the agent wrote in single quotes, the PowerShell way,
-arrives from Command Prompt as several words with the quotes still on them;
-AI-DLC joins them back into the one value. Steps still take extra turns, so
-Kiro itself recommends PowerShell.
+the result off at that line or later in the reply, the agent goes on from the
+file instead of running the command again (the newest twenty replies are kept,
+in a folder git ignores). When a long command has not finished, the agent says
+so, and that it may be waiting for your answer in Kiro's terminal panel; when
+its reply still has not come on the next turn, the agent says so and checks
+what the command was meant to change. A
+value the agent wrote in single quotes, the PowerShell way, arrives from
+Command Prompt as several words with the quotes still on them; AI-DLC joins
+them back into the one value. Steps still take extra turns, so Kiro itself
+recommends PowerShell.
 
 When Kiro's terminal is Command Prompt and you have not answered before on this
 computer, AI-DLC asks you once whether to set it to PowerShell: during
@@ -697,6 +709,49 @@ terminal behaves and how to set PowerShell when you ask for it, so any chat can
 carry out "set Kiro's terminal to PowerShell". If you kept Command Prompt, the
 first time a step's reply is lost the agent tells you once what happened and
 that PowerShell avoids it; it does not ask again.
+
+### PowerShell without Kiro's shell integration on Windows
+
+Kiro's PowerShell terminal tells Kiro when a command finishes through Kiro's
+shell integration, a script Kiro loads as the terminal starts. When that script
+does not load, the terminal behaves like Command Prompt: every command shows
+exit code -1, even when it worked, and Kiro hands over only what a command
+printed within about a second. PowerShell's execution policy is one cause:
+`Restricted` or `AllSigned` stops Kiro's unsigned script without a message.
+Kiro's setting `terminal.integrated.shellIntegration.enabled` turned off has
+the same effect.
+
+AI-DLC notices this from its own commands. In such a terminal, in a project
+that has its `aidlc/` folder, every AI-DLC command the agent runs prints the
+`AI-DLC reply:` line first and keeps its reply in that file, as in Command
+Prompt (output sent to a pipe gets no such line), and when the result stops at
+that line or the reply after it is cut off, the agent goes on from that file
+instead of running the command again. The first time in a chat the agent tells
+you in one line that the terminal runs without its shell integration, then goes
+on with your request. `aidlc doctor` run in Kiro's terminal shows a
+`Kiro terminal` warning with what to change; `/aidlc --doctor` typed in the
+chat runs outside the terminal, so it cannot see this.
+
+To check, run this in Kiro's PowerShell terminal (Windows PowerShell and
+PowerShell 7 keep separate policies):
+
+```powershell
+Get-ExecutionPolicy -List
+$ExecutionContext.SessionState.LanguageMode
+```
+
+When `MachinePolicy` or `UserPolicy` is set, or the language mode is not
+`FullLanguage` (an organization's application control), your organization
+manages it; ask your IT team. When `Process` is set, Kiro took it from where it
+was started: start Kiro from the Start menu instead. When the policy in effect comes from `CurrentUser` or
+`LocalMachine` and is `Restricted` or `AllSigned`, you can let Kiro's script
+load for your own account, then restart Kiro:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+AI-DLC never changes the policy itself: it is your computer's security setting.
 
 ### Command cards end with "dministrator: ...powershell.exe" on Windows
 
@@ -753,16 +808,16 @@ files (`hooks/`), the personas' delegate shell deny (`delegate-shell-deny.ts`),
 and onboarding fills — edit those
 (or `core/`), never hand-edit the generated `dist/kiro-ide`.
 
-This harness differs from the `kiro` CLI harness (`harness/kiro/`) in four ways:
+This harness differs from the Kiro CLI (V2) harness (`harness/kiro/`) in four ways:
 the `/aidlc` skill and the Markdown `agents/aidlc-aidlc.md` are its conductor surfaces
 (`settings/cli.json` also makes that agent Kiro CLI's default); it ships v2 hook
-JSON files (the `kiro` harness relies on the agent-JSON `hooks` block); it preloads standing rules through
+JSON files (the Kiro CLI (V2) harness relies on the agent-JSON `hooks` block); it preloads standing rules through
 always-included steering rather than CLI agent resources; the shared Kiro
 projection removes the core persona's Claude-only `disallowedTools` key; and
 its manifest adds `permissions.rules` frontmatter to every persona, beside the
 `tools:` line both harnesses add (each persona a stage reads inline also ships without them, as
 `.kiro/aidlc-common/personas/<agent>.md`, the file the lead reads in its own chat).
-It does not ship the `kiro` harness's agent-v1 JSON.
+It does not ship the Kiro CLI (V2) harness's agent-v1 JSON.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Next steps

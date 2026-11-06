@@ -43,6 +43,7 @@ import {
   REPO_ROOT,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(120_000);
 
@@ -136,7 +137,7 @@ function configuredProject(harness: string, before?: (proj: string) => void): st
   projects.push(machine);
   const config = spawnSync(process.execPath, [
     join(proj, HARNESS_DIR[harness], "tools", "aidlc.ts"),
-    "config", "--from", join(REPO_ROOT, "dist", harness), "--harness", harness, "--yes",
+    "config", "--from", join(REPO_ROOT, "dist", harness), "--harness", typedHarnessName(harness), "--yes",
   ], {
     cwd: proj,
     encoding: "utf-8",
@@ -785,7 +786,7 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     projects.push(machine);
     const config = () => spawnSync(process.execPath, [
       join(REPO_ROOT, "core", "tools", "aidlc-init.ts"),
-      "config", "--project-dir", dir, "--from", release, "--harness", "kiro-ide", "--mcp", "none", "--yes",
+      "config", "--project-dir", dir, "--from", release, "--harness", "kiro", "--mcp", "none", "--yes",
     ], {
       cwd: dir,
       encoding: "utf-8",

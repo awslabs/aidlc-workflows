@@ -136,8 +136,15 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   runtimeHarnessDir,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+
+// A release's harnesses as a person types them after --harness; the JSON
+// result keeps the ids.
+function typedHarnessList(distributions: readonly string[]): string {
+  return distributions.map(typedHarnessName).join(",");
+}
 
 export class LifecycleCommandError extends Error {
   constructor(
@@ -170,12 +177,20 @@ function offline(argv: readonly string[]): boolean | undefined {
   return undefined;
 }
 
-type PublicLifecycleCommand = "update" | "use" | "uninstall";
+type PublicLifecycleCommand =
+  | "update"
+  | "use"
+  | "uninstall"
+  | "rollback"
+  | "versions install"
+  | "versions prune";
 
 type PublicLifecycleGrammar = {
   values: ReadonlySet<string>;
   bare: ReadonlySet<string>;
-  positionals: number;
+  // The most positionals the verb takes; a missing one is the verb's own to
+  // name. Rollback counts its own (typedRollbackVersion says which two it got).
+  positionals?: number;
 };
 
 // Exported so t230 can prove command help names every flag this grammar
@@ -232,18 +247,56 @@ export const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
     ]),
     positionals: 0,
   },
+  // The `aidlc system` lifecycle verbs read only their own words and pass over
+  // the rest, so a word they do not read (`--dry-run` on rollback) is refused
+  // here, before the verb runs.
+  rollback: {
+    values: new Set(["--project-dir", "--version"]),
+    bare: new Set([
+      "--allow-harness-loss",
+      "--json",
+      "--list",
+      "--no-color",
+      "--quiet",
+      "--yes",
+    ]),
+  },
+  "versions install": {
+    values: new Set([
+      "--ca-bundle",
+      "--from",
+      "--project-dir",
+      "--release-base-url",
+    ]),
+    bare: new Set([
+      "--dry-run",
+      "--json",
+      "--no-color",
+      "--offline",
+      "--quiet",
+      "--yes",
+    ]),
+    positionals: 1,
+  },
+  "versions prune": {
+    values: new Set(["--project-dir"]),
+    bare: new Set(["--json", "--no-color", "--quiet", "--yes"]),
+    positionals: 0,
+  },
 };
 
 export function validatePublicLifecycleArgs(
   argv: readonly string[],
 ): string | null {
-  const command = argv[0] as PublicLifecycleCommand | undefined;
+  const command = (argv[0] === "versions" ? `versions ${argv[1]}` : argv[0]) as
+    | PublicLifecycleCommand
+    | undefined;
   const grammar = command ? PUBLIC_LIFECYCLE_GRAMMARS[command] : undefined;
-  if (!grammar) return null;
+  if (!command || !grammar) return null;
 
   const seen = new Set<string>();
   const positionals: string[] = [];
-  let startIndex = 1;
+  let startIndex = command.split(" ").length;
   if (command === "use") {
     const version = argv[1];
     if (!version || version.startsWith("--")) {
@@ -271,13 +324,8 @@ export function validatePublicLifecycleArgs(
     seen.add(token);
   }
 
-  if (positionals.length !== grammar.positionals) {
-    if (command === "use" && positionals.length === 0) {
-      return "use requires exactly one version";
-    }
-    return `unexpected ${command} positional ${
-      JSON.stringify(positionals[grammar.positionals] ?? positionals[0])
-    }`;
+  if (grammar.positionals !== undefined && positionals.length > grammar.positionals) {
+    return `unexpected ${command} positional ${JSON.stringify(positionals[grammar.positionals])}`;
   }
   if (argv.includes("--json") && argv.includes("--quiet")) {
     return "--json and --quiet are mutually exclusive";
@@ -2020,7 +2068,7 @@ async function installVersion(options: {
       const root = join(candidate, "runtime", distribution);
       const { stamp } = projectionFiles(root);
       if (stamp.frameworkVersion !== version || stamp.distribution !== distribution) {
-        throw new Error(`${distribution} runtime stamp does not match release ${version}`);
+        throw new Error(`${typedHarnessName(distribution)} runtime stamp does not match release ${version}`);
       }
     }
     const baselinePath = join(candidate, basename(runtimeIntegrityPath(version)));
@@ -2130,7 +2178,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
     return success(
       (versions.length
         ? versions.map((item) =>
-            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${item.distributions.join(",")}]${item.pinPaths.length > 0 ? ` pinned by ${item.pinPaths.length} project(s)` : ""}${item.stalePinPaths.length > 0 ? ` ${item.stalePinPaths.length} stale pin(s)` : ""}${item.complete ? "" : " incomplete"}`
+            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${typedHarnessList(item.distributions)}]${item.pinPaths.length > 0 ? ` pinned by ${item.pinPaths.length} project(s)` : ""}${item.stalePinPaths.length > 0 ? ` ${item.stalePinPaths.length} stale pin(s)` : ""}${item.complete ? "" : " incomplete"}`
           ).join("\n")
         : "no retained versions") +
         (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
@@ -2188,7 +2236,6 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
   if (verb !== "install") return usage("usage: aidlc system versions <list|install|prune>");
   const version = argv[2];
   if (!version || version.startsWith("--")) return usage("versions install requires a release version");
-  if (argv.includes("--harness")) return usage("unknown argument: --harness");
   const result = await installVersion({
     version,
     from: valueAfter(argv, "--from"),
@@ -2612,7 +2659,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   }
   return success(
     dryRun
-      ? `update plan: ${current ?? "none"} -> ${result.version} [${result.distributions.join(",")}]${switched}`
+      ? `update plan: ${current ?? "none"} -> ${result.version} [${typedHarnessList(result.distributions)}]${switched}`
       : `updated ${current ?? "new install"} -> ${result.version}${switched}${
         pruned.length > 0 ? `; pruned ${pruned.join(", ")}` : ""
       }`,
@@ -2690,7 +2737,7 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     const eligible = versions.filter((item) => item.complete && !item.active);
     return success(
       (eligible.length
-        ? eligible.map((item) => `${item.version} [${item.distributions.join(",")}]`).join("\n")
+        ? eligible.map((item) => `${item.version} [${typedHarnessList(item.distributions)}]`).join("\n")
         : "no rollback target") +
         (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
       { versions: eligible, pinWarnings },
@@ -2720,7 +2767,7 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     : [];
   if (missing.length > 0 && !argv.includes("--allow-harness-loss")) {
     throw new Error(
-      `rollback target ${target} lacks harnesses: ${missing.join(", ")}; ` +
+      `rollback target ${target} lacks harnesses: ${missing.map(typedHarnessName).join(", ")}; ` +
         "to roll back anyway, without them, run it again with --allow-harness-loss",
     );
   }
@@ -2770,7 +2817,7 @@ export async function installPinnedRelease(options: {
           caBundle: options.caBundle,
         })).distributions;
     if (!distributions.includes(options.distribution)) {
-      commandError(`${version} does not contain the ${options.distribution} runtime`, EXIT.usage);
+      commandError(`${version} does not contain the ${typedHarnessName(options.distribution)} runtime`, EXIT.usage);
     }
   } finally {
     releaseReservation?.();
@@ -2927,7 +2974,7 @@ export async function configureProjectPin(
       }
       const distribution = projectDistribution(projectDir);
       if (distribution && !distributions.includes(distribution)) {
-        commandError(`${version} does not contain this project's ${distribution} runtime`, EXIT.usage);
+        commandError(`${version} does not contain this project's ${typedHarnessName(distribution)} runtime`, EXIT.usage);
       }
       if (dryRun) {
         return success(

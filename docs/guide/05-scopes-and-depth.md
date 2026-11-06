@@ -70,9 +70,10 @@ Each scope's stage count below is the stages it runs after Initialization's thre
 
 **Use when:** Making infrastructure changes (new environments, CDK/CloudFormation updates, cost optimization).
 
-- **Stages:** 10 of 30
+- **Stages:** 12 of 30
 - **Default depth:** Standard
 - **Skips:** User-facing stages (stories, mockups, user flows) — focuses on architecture, infrastructure, and deployment
+- **Writes the IaC in:** Code Generation, under Plan Approval, from the Infrastructure Design; Build and Test then runs the IaC checks, and Environment Provisioning applies it
 
 ### security-patch
 
@@ -175,7 +176,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `poc` | 8 / 33 | Minimal | Minimal | Prove feasibility fast |
 | `bugfix` | 9 / 33 | Minimal | Minimal | Fix and deploy a specific bug |
 | `refactor` | 10 / 33 | Minimal | Minimal | Clean up and deploy existing code |
-| `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
+| `infra` | 15 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
 | `classic` | 18 / 33 | Standard | Standard | V1-style Inception + Construction — the implicit default |
 | `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
@@ -216,8 +217,8 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |  |
 | 3.3 | NFR Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
 | 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
-| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
-| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
+| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  | ✓ |  |
 | 4.1 | Deployment Pipeline | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
 | 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  |  | ✓ |  |
@@ -226,7 +227,7 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
 | 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
 | 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |
-| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **18** | **26** | **10** |
+| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **15** | **10** | **18** | **26** | **10** |
 <!-- END scope-stage-matrix -->
 
 A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.

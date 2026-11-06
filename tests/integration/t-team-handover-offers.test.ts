@@ -10,12 +10,16 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationStepOnRecord } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import {
+  ORCH,
   UNIT,
   approveMerge,
   asLeadsOwnCheckout as ranTheWorkHere,
@@ -50,6 +54,12 @@ function commandFor(directive: Record<string, unknown>, label: string): string {
   return command as string;
 }
 
+function detailFor(directive: Record<string, unknown>, label: string): string | undefined {
+  return choicesOf(directive).find((choice) => choice.label === label)?.detail;
+}
+
+const PLAIN_PUSH = "main to origin as a plain push; it never overwrites what a team pushed.";
+
 function isHandover(directive: Record<string, unknown>, kind?: string): boolean {
   if (directive.kind !== "ask" || directive.ask_type !== "team-handover") return false;
   return kind === undefined || ((directive.handovers ?? []) as string[]).includes(kind);
@@ -72,6 +82,44 @@ function boardText(directive: Record<string, unknown>): string {
   return String(directive.message);
 }
 
+// A clone whose dependency folder nobody ignored: `count` files git does not
+// track, all but three deep in node_modules, and one file each one, two and
+// three levels down (z-deploy.env and src/x/y.ts sort after node_modules,
+// config/app.json before it).
+function addManyNewFiles(dir: string, count: number): void {
+  writeFileSync(join(dir, "z-deploy.env"), "KEY=untracked\n");
+  mkdirSync(join(dir, "config"), { recursive: true });
+  writeFileSync(join(dir, "config", "app.json"), "{}\n");
+  mkdirSync(join(dir, "src", "x"), { recursive: true });
+  writeFileSync(join(dir, "src", "x", "y.ts"), "export const y = 1;\n");
+  for (let i = 3; i < count; i++) {
+    const folder = join(dir, "node_modules", `pkg-${i % 100}`, "lib");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, `file-${i}.js`), "module.exports = 1;\n");
+  }
+}
+
+// The new files outside aidlc/ that a commit here takes, as git lists them.
+function newFilesOutsideRecord(dir: string): number {
+  return git(dir, ["ls-files", "--others", "--exclude-standard"]).split("\n")
+    .filter((path) => path !== "" && !path.startsWith("aidlc/")).length;
+}
+
+// However many new files there are, the question names ten, the ones nearest
+// the project's top first and git's order within a depth, in git's own
+// spelling (`/` on Windows too), and says how many more, so the step stays a
+// few KB, far under any harness's limit for one step.
+function expectTenNamedAndTheCount(directive: Record<string, unknown>, dir: string): void {
+  const question = String(directive.question);
+  const words = question.match(/\(new: (.*), and (\d+) more; `git status` shows the rest\)/);
+  expect(words, question).not.toBeNull();
+  const deepest = git(dir, ["ls-files", "--others", "--exclude-standard", "--", "node_modules"]).split("\n").slice(0, 7);
+  expect((words as RegExpMatchArray)[1].split(", ")).toEqual(["z-deploy.env", "config/app.json", "src/x/y.ts", ...deepest]);
+  expect(Number((words as RegExpMatchArray)[2])).toBe(newFilesOutsideRecord(dir) - 10);
+  expect(question.length).toBeLessThan(1_500);
+  expect(Buffer.byteLength(JSON.stringify(directive), "utf-8")).toBeLessThan(4 * 1024);
+}
+
 describe("step 1: the lead shares the plan with the teams", () => {
   test("Several teams, claims open, a remote: the first Unit step is the share offer, once", () => {
     const { seed: lead } = makeSeed();
@@ -83,6 +131,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(labels(offer)).toEqual(["Share them with the teams", "Build them here for now"]);
     expect(commandFor(offer, "Share them with the teams")).toMatch(/ unit share$/);
     expect(commandFor(offer, "Build them here for now")).toMatch(/ next$/);
+    expect(detailFor(offer, "Share them with the teams")).toBe(`Pushes ${PLAIN_PUSH}`);
     // No self-loop: the reply that does not take it runs next, and the walk goes on.
     const walk = nextDirective(lead);
     expect(isHandover(walk), JSON.stringify(walk)).toBe(false);
@@ -103,17 +152,27 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(board).toContain("# Team Construction Dispatcher");
   });
 
-  // Share commits every path git shows, so the question names every new one:
-  // a key in the sixth file is seen before it is pushed.
-  test("the share question names every new file outside aidlc/, however many", () => {
+  // Share commits every path git shows: with a handful of new files the
+  // question names every one, so a key in the sixth file is seen before it is
+  // pushed.
+  test("a handful of new files: the share question names every one outside aidlc/", () => {
     const { seed: lead } = makeSeed();
     asLeadsOwnCheckout(lead);
     for (const name of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]) {
       writeFileSync(join(lead, name), "untracked\n");
     }
     const question = String(nextDirective(lead).question);
-    expect(question).toContain("z-deploy.env");
-    expect(question).not.toContain("more)");
+    expect(question).toContain("(new: a.txt, b.txt, c.txt, d.txt, e.txt, z-deploy.env)");
+    expect(question).not.toContain(" more; ");
+  });
+
+  test("hundreds of new files: the share question is put, says how many and names ten", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    addManyNewFiles(lead, 400);
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "share"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
+    expectTenNamedAndTheCount(offer, lead);
   });
 
   test("share refused: the commit is kept, next offers share again and starts no Unit here", () => {
@@ -187,6 +246,110 @@ describe("step 2: another clone takes a Unit", () => {
   // The live run: a team built its first Unit in its own clone (that Unit's
   // rows are in the clone's own shard), the lead merged and pushed it, and the
   // team pulled main: its next Unit is offered, never a typed claim.
+  test("each Take choice says what waits on it, and the question names the team's label once", () => {
+    const { remote } = makeSeed();
+    const mate = clone(remote, "mate");
+    const offer = nextDirective(mate);
+    expect(isHandover(offer, "join"), JSON.stringify(offer)).toBe(true);
+    expect(labels(offer)).toEqual(["Take alpha", "Not now"]);
+    expect(detailFor(offer, "Take alpha")).toBe("beta waits on it.");
+    const label = "I'd label your team \"mate\"; say another name to use it instead.";
+    expect(String(offer.question).split(label).length - 1, String(offer.question)).toBe(1);
+    expect(String(offer.question_note)).toContain("--team '");
+    // The label the question names is the one a claim with no name of theirs writes.
+    const claimed = runMergeTool(UNIT, ["claim", "alpha"], mate);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout)).toMatchObject({ unit: "alpha", owner: "mate" });
+  });
+
+  test("the question says once which Units other teams hold", () => {
+    const { remote } = makeSeed(parallelDependencyBody());
+    const held = runMergeTool(UNIT, ["claim", "beta", "--team", "team-b"], clone(remote, "other"));
+    expect(held.status, held.out).toBe(0);
+    const offer = nextDirective(clone(remote, "mate"));
+    expect(labels(offer), JSON.stringify(offer)).toEqual(["Take alpha", "Not now"]);
+    expect(detailFor(offer, "Take alpha")).toBe("No other Unit waits on it.");
+    expect(String(offer.question).split("beta is with team-b").length - 1, String(offer.question)).toBe(1);
+  });
+
+  test("a team name the person gives goes through --team onto the claim, and the other clones see it", () => {
+    const { remote } = makeSeed(parallelDependencyBody());
+    const mate = clone(remote, "mate");
+    expect(commandFor(nextDirective(mate), "Take alpha")).toMatch(/ next --claim alpha$/);
+    const take = runMergeTool(ORCH, ["next", "--claim", "alpha", "--team", "Payments team"], mate);
+    expect(take.status, take.out).toBe(0);
+    // The name goes in a file the claim reads, which the claim spends.
+    const file = String(JSON.parse(take.stdout).message).match(/--claim alpha --request-file (\S+)`/)?.[1];
+    expect(file, take.stdout).toBeDefined();
+    expect(readFileSync(join(mate, file as string), "utf-8")).toBe("Payments team");
+    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--request-file", file as string], mate);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout)).toMatchObject({ owner: "Payments team" });
+    expect(existsSync(join(mate, file as string))).toBe(false);
+    const offer = nextDirective(clone(remote, "late"));
+    expect(labels(offer), JSON.stringify(offer)).toEqual(["Take beta", "Not now"]);
+    expect(String(offer.question)).toContain("alpha is with Payments team");
+  });
+
+  // The claim command next prints, run through the shell the agent runs it in:
+  // bash (Git Bash on Windows, Claude Code's), PowerShell (Kiro's and Codex's on
+  // Windows), cmd.exe (Copilot's and opencode's). No one quoting reads an
+  // apostrophe beside & the same in PowerShell and Git Bash. The board is every
+  // other clone's: the Take question's holders.
+  const NAMES = ["O'Brien", "Ops & QA", "QA\\", "O'Brien & QA"];
+  const SHELLS = [
+    { shell: "bash", skip: gitBashSkipReason() },
+    { shell: "PowerShell", skip: process.platform === "win32" ? null : "Windows only" },
+    { shell: "cmd.exe", skip: process.platform === "win32" ? null : "Windows only" },
+  ] as const;
+  for (const { shell, skip } of SHELLS) {
+    test.skipIf(skip !== null)(`a team name as given reaches the board, through ${shell}: ${NAMES.join(", ")}`, () => {
+      const units = ["alpha", "beta", "gamma", "delta", "epsilon"];
+      const { remote } = makeSeed(
+        "# Unit dependencies\n\n```yaml\nunits:\n  - name: skeleton\n    depends_on: []\n" +
+          units.map((unit) => `  - name: ${unit}\n    depends_on: [skeleton]\n`).join("") + "```\n",
+      );
+      NAMES.forEach((name, i) => {
+        const mate = clone(remote, `mate${i}`);
+        const take = runMergeTool(ORCH, ["next", "--claim", units[i], "--team", name], mate);
+        expect(take.status, take.out).toBe(0);
+        const printed = String(JSON.parse(take.stdout).message).match(/`[^`]*? (--claim [^`]*)`/)?.[1];
+        expect(printed, take.stdout).toBeDefined();
+        const dir = mkdtempSync(join(tmpdir(), "aidlc-claim-shell-"));
+        tempDirs.push(dir);
+        const words = [process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts")];
+        const [file, argv]: [string, string[]] = shell === "bash"
+          ? [join(dir, "claim.sh"), [process.platform === "win32" ? gitBashPath() : "bash"]]
+          : shell === "PowerShell"
+          ? [join(dir, "claim.ps1"), ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]]
+          : [join(dir, "claim.cmd"), ["cmd.exe", "/d", "/c"]];
+        const q = (word: string) => (shell === "cmd.exe" ? `"${word}"` : `'${word}'`);
+        writeFileSync(
+          file,
+          shell === "bash"
+            ? `${words.map(q).join(" ")} ${printed} --project-dir ${q(mate)}\n`
+            : shell === "PowerShell"
+            ? `& ${words.map(q).join(" ")} ${printed} --project-dir ${q(mate)}\r\nexit $LASTEXITCODE\r\n`
+            : `@${words.map(q).join(" ")} ${printed} --project-dir ${q(mate)}\r\n`,
+        );
+        const claimed = spawnSync(argv[0], [...argv.slice(1), file], {
+          cwd: mate,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+            AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+            AIDLC_SKIP_ARTIFACT_GUARD: "1",
+          },
+        });
+        expect(claimed.status, `${printed}\n${claimed.stdout}${claimed.stderr}`).toBe(0);
+        expect(JSON.parse(claimed.stdout).owner, printed).toBe(name);
+      });
+      const offer = nextDirective(clone(remote, "late"));
+      for (const [i, name] of NAMES.entries()) expect(String(offer.question)).toContain(`${units[i]} is with ${name}`);
+    });
+  }
+
   test("a team's clone after its Unit lands and it pulls is offered the next Unit", () => {
     const { seed: lead, remote } = makeSeed(parallelDependencyBody());
     const { checkout } = prepareCandidate(remote, "alpha", "team-a");
@@ -218,6 +381,15 @@ function doneIn(checkout: string): Record<string, unknown> {
   return nextDirective(checkout);
 }
 
+// What the Unit's Code Generation says it wrote (its source manifest): the
+// new files a publish commits as the Unit's own work.
+function claimAsUnitWork(checkout: string, paths: string[]): void {
+  writeFileSync(
+    join(seededRecordDir(checkout), "construction", "alpha", "code-generation", "source-manifest.json"),
+    `${JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: paths.map((path) => ({ path })) })}\n`,
+  );
+}
+
 describe("step 3: a team publishes its finished Unit", () => {
   test("a claimed Unit done: the publish offer, once; Not now gives the done notice; publish --commit publishes", () => {
     const { remote } = makeSeed();
@@ -238,6 +410,7 @@ describe("step 3: a team publishes its finished Unit", () => {
     expect(String(notice.message)).not.toContain("aidlc unit publish");
     expect(isHandover(nextDirective(checkout))).toBe(false);
     writeFileSync(join(checkout, "src", "alpha-extra.ts"), "export const extra = 1;\n");
+    claimAsUnitWork(checkout, ["src/alpha.ts", "src/alpha-extra.ts"]);
     const claimRef = readUnitScopeStamp(checkout)?.claim_ref as string;
     const claimBefore = git(remote, ["rev-parse", claimRef]);
     const published = runMergeTool(UNIT, ["publish", "alpha", "--commit"], checkout);
@@ -247,17 +420,44 @@ describe("step 3: a team publishes its finished Unit", () => {
     expect(git(remote, ["rev-parse", claimRef])).not.toBe(claimBefore);
   });
 
-  test("the publish question names every new file outside aidlc/, however many", () => {
+  test("a handful of the Unit's new files: the publish question names every one", () => {
     const { remote } = makeSeed();
     const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
     for (const name of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]) {
       writeFileSync(join(checkout, name), "untracked\n");
     }
+    claimAsUnitWork(checkout, ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]);
     const offer = doneIn(checkout);
     expect(isHandover(offer, "publish"), JSON.stringify(offer)).toBe(true);
-    expect(String(offer.question)).toContain("z-deploy.env");
-    expect(String(offer.question)).not.toContain("more)");
+    expect(String(offer.question)).toContain("(new: a.txt, b.txt, c.txt, d.txt, e.txt, z-deploy.env).");
+    expect(String(offer.question)).not.toContain(" more; ");
   });
+
+  // A Unit whose own work (its manifest claims it) is thousands of new files:
+  // the question is put, not a step too long to send, and its choices walk on
+  // as with a handful. The commit takes every one of them.
+  for (const count of [400, 10_000]) {
+    test(`${count} new files: the publish question is put, says how many and names ten; Not now walks on, never back`, () => {
+      const { remote } = makeSeed();
+      const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
+      addManyNewFiles(checkout, count);
+      claimAsUnitWork(checkout, ["z-deploy.env", "config/", "src/x/", "node_modules/"]);
+      const offer = doneIn(checkout);
+      expect(isHandover(offer, "publish"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
+      expect(String(offer.question)).toContain(`changed files of its work here (new: z-deploy.env, config/app.json, src/x/y.ts, `);
+      expectTenNamedAndTheCount(offer, checkout);
+      expect(labels(offer)).toEqual(["Commit and publish", "Not now"]);
+      expect(commandFor(offer, "Not now")).toMatch(/ next$/);
+      const notice = nextDirective(checkout);
+      expect(notice).toMatchObject({ kind: "notice", unit: "alpha" });
+      expect(isHandover(nextDirective(checkout))).toBe(false);
+      if (count > 1_000) return;
+      const published = runMergeTool(UNIT, ["publish", "alpha", "--commit"], checkout);
+      expect(published.status, published.out).toBe(0);
+      expect(git(checkout, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
+      expect(git(checkout, ["ls-files", "node_modules"]).split("\n")).toHaveLength(count - 3);
+    });
+  }
 
   test("publish without --commit still refuses a dirty tree, as today", () => {
     const { remote } = makeSeed();
@@ -318,7 +518,13 @@ describe("step 4: a published Unit is reviewed and merged", () => {
     const offer = nextDirective(fresh);
     expect(isHandover(offer, "review"), JSON.stringify(offer)).toBe(true);
     expect(isHandover(offer, "join")).toBe(true);
-    expect(labels(offer)).toEqual(["Review and merge alpha", "Take beta", "Not now"]);
+    expect(labels(offer)).toEqual(["Take beta", "Review and merge alpha", "Not now"]);
+    expect(String(offer.question)).toContain("Take one for your team, or review and merge?");
+    expect(String(offer.numbered_prose_question)).toContain("1. **Take beta**");
+    expect(detailFor(offer, "Review and merge alpha"))
+      .toBe("Shows what the team built and its checks, then asks whether to merge it.");
+    // No self-loop: Not now runs next, which never puts the same question again.
+    expect(commandFor(offer, "Not now")).toMatch(/ next$/);
     expect(isHandover(nextDirective(fresh))).toBe(false);
   });
 });
@@ -338,6 +544,7 @@ describe("step 5: main is pushed after a land", () => {
     expect(String(offer.question)).toContain("so the other teams see alpha");
     expect(labels(offer)).toEqual(["Push main", "Not now"]);
     expect(commandFor(offer, "Push main")).toMatch(/ unit share$/);
+    expect(["Pushes", "Commits, then pushes"].map((lead) => `${lead} ${PLAIN_PUSH}`)).toContain(String(detailFor(offer, "Push main")));
     expect(isHandover(nextDirective(lead), "push")).toBe(false);
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
@@ -345,6 +552,18 @@ describe("step 5: main is pushed after a land", () => {
     // What the push committed first, if anything, is named for the landing, never as the plan.
     expect(git(lead, ["log", "-1", "--format=%s"])).not.toBe("Share the plan with the teams");
     expect(git(lead, ["status", "--porcelain"])).toBe("");
+  });
+
+  test("hundreds of new files: the push question is put, says how many and names ten", () => {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    expect(runMergeTool(UNIT, ["land", "alpha"], lead).status).toBe(0);
+    addManyNewFiles(lead, 400);
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "push"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
+    expect(String(offer.question)).toMatch(/shows the rest\) first\.$/);
+    expectTenNamedAndTheCount(offer, lead);
   });
 
   test("a land already on origin is not offered", () => {

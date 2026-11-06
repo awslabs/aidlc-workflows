@@ -6,6 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -16,9 +17,12 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   askedQuestionFields,
+  commandChat,
+  latestAskedQuestion,
   QUESTION_ID_FIELD,
   questionEntryDigests,
   questionShows,
+  shownOnlyInOtherChats,
 } from "./aidlc-questions.ts";
 import {
   chatsSince,
@@ -246,6 +250,8 @@ import {
   summaryQuestionFileRelative,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
+  summaryAuthorizationThisAttempt,
+  readSummaryAuthorization,
   summaryConfirmationAnswer,
   summaryConfirmationContentHash,
   singleStageAttemptIsOpen,
@@ -993,6 +999,98 @@ function revisedSummaryNote(
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
 // choices) on a stage that owes one, refuse it and name the command that counts.
+// The questions file with its summary answer line put back to `[Answer]:
+// Looks correct`, every other byte as it was (line endings included): a chat
+// still showing the summary wrote over (or blanked) a confirmation another chat
+// already recorded, before the engine could say the stage was done. The one
+// summary reader (summaryConfirmationAnswer) says which `[Answer]:` line is the
+// summary's. Null when the section holds no single answer, or it reads Looks
+// correct.
+function summaryAnswerPutBack(content: string): string | null {
+  const answer = summaryConfirmationAnswer(content);
+  if (answer === null || answer === "Looks correct") return null;
+  const parts = content.split(/(\r\n|\r|\n)/);
+  for (let at = parts.length - 1; at >= 0; at -= 1) {
+    if (!/^(?:\uFEFF)?\[Answer\]:/.test(parts[at])) continue;
+    const candidate = [...parts];
+    candidate[at] = `${parts[at].startsWith("\uFEFF") ? "\uFEFF" : ""}[Answer]: Looks correct`;
+    const putBack = candidate.join("");
+    if (summaryConfirmationAnswer(putBack) === "Looks correct") return putBack;
+  }
+  return null;
+}
+
+// The positive summary confirmation this questions file stands on: the
+// stage's own for this attempt, or the Unit's.
+function summaryConfirmedOnRecord(pd: string, stage: string, unit: string | null, questions: string): boolean {
+  const authorization = unit === null ? summaryAuthorizationThisAttempt(pd, stage) : readSummaryAuthorization(pd, stage, unit);
+  return authorization !== null && authorization.choice === "Looks correct" &&
+    authorization.questions_file.replaceAll("\\", "/") === questions;
+}
+
+// A stage's own question asked or answered while its gate waits (a chat that
+// was still showing it when another chat finished the stage): the stage is
+// done, so the step is that gate, shown with `next`, the documents as they are,
+// and nothing is recorded. The summary is closed once the gate opens, whichever
+// chat asks; the stage's other questions only in a chat that never saw the
+// gate, opened in another chat of this clone (shownOnlyInOtherChats), since a
+// chat at its own gate may still ask the person something about it. The
+// summary's answer line the chat wrote over or blanked first (the stage
+// protocol has it written before it is recorded) is put back as confirmed, so
+// the gate's own check finds the file as the other chat left it. True when it
+// printed the step.
+function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "answer"): boolean {
+  if (flags.single !== undefined) return false;
+  // A Unit's own question at the stage's gate (Construction stage by stage):
+  // the Unit's summary and documents are done too.
+  const unit = flags.unit ?? null;
+  if (flags.checkpoint !== undefined && flags.checkpoint !== "summary-confirmation") return false;
+  const stage = flags.stage;
+  const pd = resolveActiveProjectDir(projectDir, stage);
+  let content: string;
+  try {
+    content = readFileSync(stateFilePath(pd), "utf-8");
+  } catch {
+    return false;
+  }
+  if (getField(content, "Current Stage")?.trim() !== stage) return false;
+  if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") return false;
+  if (stageBox(content, stage) !== "awaiting-approval") return false;
+  // Unit by Unit, a Unit the person asked to change is redone while the
+  // stage's box stays at its gate, and its summary is asked again: only built
+  // stage by stage is a Unit's question at that gate a late one.
+  if (unit !== null && getField(content, "Construction Iteration")?.trim() === "unit-major") return false;
+  const gate = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage });
+  const elsewhere = gate !== null && shownOnlyInOtherChats(pd, gate.id, commandChat(pd));
+  if (flags.checkpoint === undefined && !elsewhere) return false;
+  const node = loadStageGraphAll().find((entry) => entry.slug === stage);
+  const questions = node ? summaryQuestionFileRelative(pd, node, content, unit) : null;
+  // Only a confirmation on record for this attempt is put back: a summary the
+  // person asked to change, with summary confirmation off since, stays as it is.
+  if (questions !== null && summaryConfirmedOnRecord(pd, stage, unit, questions)) {
+    try {
+      const path = resolve(pd, questions);
+      const putBack = summaryAnswerPutBack(readFileSync(path, "utf-8"));
+      if (putBack !== null) writeFileAtomic(path, putBack);
+    } catch {
+      // The gate's own check says what is wrong with the file.
+    }
+  }
+  const next = aidlcDispatcherInvocation("orchestrate next");
+  const waits = `Stage "${stage}" is finished and waiting for the person's approval` +
+    `${elsewhere ? ", opened in another chat," : ""} with its documents as they are, so nothing was recorded`;
+  const change = `When it asked for a change, run \`${requestChangesReportCommand(pd, stage, flags.unit)}\` and ` +
+    "follow what it returns: their messages go on the record as what should change.";
+  const message = verb === "decision"
+    ? `${waits}: there is no question of it to ask now. When the person's last reply asked for nothing to change, ` +
+      `run \`${next}\` and show the gate it returns. ${change}`
+    : `${waits}: ${flags.checkpoint === undefined ? "its questions were answered" : "its summary was confirmed"} ` +
+      "before its documents were written. When the person's reply confirmed or answered it, it decides nothing at " +
+      `the gate: run \`${next}\` and show the gate it returns. ${change}`;
+  console.log(JSON.stringify({ recorded: null, message }));
+  return true;
+}
+
 function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
   if (flags.checkpoint !== undefined) return;
   // An answer names a summary choice by its label, with what to change after it.
@@ -1176,6 +1274,7 @@ function handleDecision(args: string[]): void {
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
+  if (stageWaitsAtItsGate(flags, "decision")) return;
   refusePlainSummaryConfirmation(flags, "decision");
   const pd = resolveActiveProjectDir(projectDir, flags.stage);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
@@ -2226,6 +2325,7 @@ function handleAnswer(args: string[]): void {
     console.log(JSON.stringify({ recorded: picked.op, message }));
     return;
   }
+  if (stageWaitsAtItsGate(flags, "answer")) return;
   refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
@@ -5469,6 +5569,8 @@ let projectDir: string | undefined;
 let readOnlyCommand = false;
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   // Extract --project-dir
@@ -5565,9 +5667,10 @@ function error(msg: string, changeNotices: readonly string[] = []): never {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

@@ -21,6 +21,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -127,7 +128,7 @@ function copiedProject(env: NodeJS.ProcessEnv, trees: { harness: Harness; versio
   for (const { harness, version } of trees) {
     const copy = copyRuntime(harness, version);
     cpSync(copy, project, { recursive: true });
-    const setup = run(project, harness, ["--from", copy, "--harness", harness, "--mcp", "none", "--yes"], env);
+    const setup = run(project, harness, ["--from", copy, "--harness", typedHarnessName(harness), "--mcp", "none", "--yes"], env);
     expect(setup.status, setup.out).toBe(0);
     expect(stampOf(project, harness)).toBe(version ?? AIDLC_VERSION);
   }
@@ -183,7 +184,7 @@ describe("a copied project's own config with a native aidlc on the machine", () 
     const refreshed = run(project, "claude", ["--harness", "claude", "--from", copyRuntime("claude"), "--yes"], env);
     expect(refreshed.status, refreshed.out).toBe(0);
     expect(refreshed.out).toContain(`Kiro CLI (.kiro) is still on 2.9.0. To bring it to ${AIDLC_VERSION}: get `);
-    expect(refreshed.out).toContain("then run `bun .claude/tools/aidlc.ts config --harness kiro --from <that file>`.");
-    expect(refreshed.out).not.toContain("`bun .claude/tools/aidlc.ts config --harness kiro`.");
+    expect(refreshed.out).toContain("then run `bun .claude/tools/aidlc.ts config --harness kiro-v2 --from <that file>`.");
+    expect(refreshed.out).not.toContain("`bun .claude/tools/aidlc.ts config --harness kiro-v2`.");
   });
 });

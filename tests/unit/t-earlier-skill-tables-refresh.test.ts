@@ -15,8 +15,10 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EARLIER_SKILL_SCOPE_GRID_BODY } from "../../core/tools/aidlc-init.ts";
 import { EARLIER_RELEASE_REGIONS } from "../../scripts/earlier-release-regions.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -57,7 +59,7 @@ function config(project: string, from: string, harness: string, ...extra: string
   const machine = temp("aidlc-t-earlier-tables-machine-");
   const result = spawnSync(
     BUN,
-    [INIT, "config", "--project-dir", project, "--from", from, "--harness", harness, "--mcp", "none", ...extra],
+    [INIT, "config", "--project-dir", project, "--from", from, "--harness", typedHarnessName(harness), "--mcp", "none", ...extra],
     {
       cwd: project,
       env: { ...process.env, AIDLC_INSTALL_ROOT: join(machine, "share"), AIDLC_BIN_DIR: join(machine, "bin") },
@@ -113,9 +115,12 @@ function earlierRelease(harness: Harness): string {
   const skillPath = join(prior, rel);
   const tablesPath = join(dirname(skillPath), "tables.md");
   const tables = lf(readFileSync(tablesPath, "utf-8"));
+  // The stage graph is this release's; the scope grid is the one those
+  // releases shipped, which this release's no longer is.
   const inline = TABLES.map((noun) => {
     const at = region(tables, noun);
-    return tables.slice(at.start, at.end);
+    if (noun !== "scope grid") return tables.slice(at.start, at.end);
+    return `${tables.slice(at.start, at.open)}${EARLIER_SKILL_SCOPE_GRID_BODY}${tables.slice(at.close, at.end)}`;
   }).join("\n\n");
   const shipped = lf(readFileSync(skillPath, "utf-8")).replace(`${EARLIER_RELEASE_REGIONS}\n`, "");
   writeFileSync(skillPath, `${shipped.trimEnd()}\n\n${inline}\n`);
@@ -150,21 +155,25 @@ function composedProject(harness: Harness): { project: string; rel: string } {
 }
 
 describe("a skill whose tables an earlier release's plugin sync rewrote refreshes as AI-DLC's", () => {
-  // The proof puts this release's tables back, so it holds only while they are
-  // the ones those releases shipped.
-  test.each(Object.keys(HARNESS_DIRS) as Harness[])("%s: the tables this release ships are the ones 2.9.0 to 2.11.0 shipped", (harness) => {
+  // The proof puts this release's stage graph back, so it holds only while it
+  // is the one those releases shipped. The scope grid has changed since, so
+  // earlierSkillTablesOnly also carries the one they shipped.
+  test("the scope grid earlierSkillTablesOnly puts back is the one 2.9.0 to 2.11.0 shipped", () => {
+    expect(createHash("sha256").update(EARLIER_SKILL_SCOPE_GRID_BODY).digest("hex")).toBe(EARLIER_BODIES["scope grid"]);
+  });
+
+  test.each(Object.keys(HARNESS_DIRS) as Harness[])("%s: the stage graph this release ships is the one 2.9.0 to 2.11.0 shipped", (harness) => {
     const tablesPath = join(dirname(join(release(harness), skillRel(release(harness), harness))), "tables.md");
     const tables = lf(readFileSync(tablesPath, "utf-8"));
-    for (const noun of TABLES) {
-      const at = region(tables, noun);
-      const body = createHash("sha256").update(tables.slice(at.open, at.close)).digest("hex");
-      expect(
-        body,
-        `the core ${noun} in ${tablesPath} is no longer the one 2.9.0 to 2.11.0 kept in their /aidlc skill, so ` +
-          "earlierSkillTablesOnly (core/tools/aidlc-init.ts) cannot prove those projects' skills and their config stops " +
-          `again: give it that ${noun} body (sha256 ${EARLIER_BODIES[noun]}) to put back as well, then pin this release's here`,
-      ).toBe(EARLIER_BODIES[noun]);
-    }
+    const noun = "stage graph";
+    const at = region(tables, noun);
+    const body = createHash("sha256").update(tables.slice(at.open, at.close)).digest("hex");
+    expect(
+      body,
+      `the core ${noun} in ${tablesPath} is no longer the one 2.9.0 to 2.11.0 kept in their /aidlc skill, so ` +
+        "earlierSkillTablesOnly (core/tools/aidlc-init.ts) cannot prove those projects' skills and their config stops " +
+        `again: give it that ${noun} body (sha256 ${EARLIER_BODIES[noun]}) to put back as well, as it does the scope grid`,
+    ).toBe(EARLIER_BODIES[noun]);
   });
 
   for (const harness of Object.keys(HARNESS_DIRS) as Harness[]) {

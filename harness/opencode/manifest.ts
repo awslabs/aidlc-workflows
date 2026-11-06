@@ -50,6 +50,8 @@ const manifest: HarnessManifest = {
       "person to answer again. Show the person this line and end your turn: " +
       '"Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on."',
   },
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "start a new session, then type <entry>" },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",

@@ -67,7 +67,7 @@ const ADAPTER_SRC = join(
 const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
 const LAUNCHER_VOUCHER_SRC = join(REPO_ROOT, "core", "tools", "aidlc-launcher-voucher.ts");
 // The adapter reads AI-DLC's own command routes from the real dispatcher table.
-const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts"]
+const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts", "aidlc-claude-turn-pending.ts"]
   .map((file) => join(REPO_ROOT, "core", "tools", file));
 
 // Core hooks the #657 adapter subprocess-dispatches (from its switch).

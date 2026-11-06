@@ -7,6 +7,7 @@
 // approved plan + unit test instructions. Both the dispatch guard and autonomous
 // swarm referee consume the same contract.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { gitSubmoduleNames } from "./aidlc-git.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
@@ -185,7 +186,7 @@ import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } fr
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
-import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
 } from "./aidlc-reply-reader.ts";
@@ -1952,6 +1953,25 @@ function approvedCopyForAttempt(
   });
   if (receipt?.choice !== "Approve Plan") return null;
   return { copy, built: receipt.status === "generation" };
+}
+
+function approvedCopyChangedFiles(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+  plan: string,
+  instructions: string,
+  recordedFingerprint: string | null,
+): string[] {
+  const copy = recordedFingerprint === null ? null : readApprovedPlanCopy(projectDir, authority);
+  if (copy === null || copy.fingerprint !== recordedFingerprint) return [];
+  const changed: string[] = [];
+  if (projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan)) {
+    changed.push(toPosix(relative(projectDir, join(authority.stageDir, "code-generation-plan.md"))));
+  }
+  if (instructions.replace(/\r\n/g, "\n") !== copy.instructions.replace(/\r\n/g, "\n")) {
+    changed.push(toPosix(relative(projectDir, join(authority.stageDir, "unit-test-instructions.md"))));
+  }
+  return changed;
 }
 
 /**
@@ -4268,6 +4288,9 @@ export interface PlanApprovalPickerQuestion {
   options: string[] | null;
   // A multi-select picker, or a reply carrying several picks.
   severalPicks: boolean;
+  // A box that asked several questions: each one read as a box asking it
+  // alone would be, with the reply the person gave it (null when left blank).
+  questions?: Array<Omit<PlanApprovalPickerQuestion, "questions"> & { reply: string | null }>;
 }
 
 // A picker reply answers the plan only when it was the recorded question,
@@ -4827,6 +4850,13 @@ function planApprovalQuestionEvidence(
     );
   }
   if (artifacts.recordedFingerprint !== artifacts.expectedFingerprint) {
+    const changed = approvedCopyChangedFiles(
+      projectDir,
+      authority,
+      artifacts.plan,
+      artifacts.instructions,
+      artifacts.recordedFingerprint,
+    );
     throw new Error(
       artifacts.recordedFingerprint === null
         ? `Plan Approval found no recorded fingerprint: ${missingPlanApprovalFingerprintReason(artifacts.questions)}`
@@ -4834,6 +4864,8 @@ function planApprovalQuestionEvidence(
         ? "The recorded Plan Approval fingerprint was written under an earlier format. " +
             "Re-run the fingerprint command, re-present the plan, and approve again."
         : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract. " +
+            (changed.length > 0 ? `Files that differ from the approved copy: ${renderChangedPaths(changed)}. ` : "") +
+            syncFolderClause(projectDir) +
             "Re-run the fingerprint command, re-present the plan, and approve again.",
     );
   }
@@ -6129,6 +6161,8 @@ function replySession(projectDir: string, argv: string[]): string {
 }
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const subcommand = argv.find((arg) => (TESTING_POSTURE_SUBCOMMANDS as readonly string[]).includes(arg));
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {

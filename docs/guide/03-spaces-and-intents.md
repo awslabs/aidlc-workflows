@@ -268,11 +268,11 @@ particular record.
 
 A chat you open while your cursor names a piece of work is on that work: `/aidlc`
 in it carries the work on from where it stands, with nothing asked. On Claude Code,
-Codex CLI, Kiro CLI and opencode, that work's checks (Plan Approval during Code
+Codex CLI, Kiro CLI (V2) and opencode, that work's checks (Plan Approval during Code
 Generation, the review freeze) hold the chat from its first AI-DLC step there
 (`/aidlc`, an answer, a review you ask for, a setting you change), so a chat you opened in the same
 folder for something else runs your requests as in a folder with no workflow. On
-Cursor, GitHub Copilot and Kiro IDE (and Kiro CLI v3), a command cannot tell AI-DLC
+Cursor, GitHub Copilot and Kiro (Kiro IDE, or Kiro CLI started with `kiro-cli --v3`), a command cannot tell AI-DLC
 which chat it runs in, so there the checks hold the chat from the start. A worktree
 AI-DLC made for the work, or a Unit claimed on this machine, holds the chat from
 the start on every host.
@@ -539,6 +539,11 @@ extra. By default AI-DLC auto-discovers every sibling repo (each immediate child
 of the workspace root that has its own `.git`) and records the set in the intent's
 `intents.json` row. During Construction, each git operation is then anchored to
 the right repo automatically.
+
+A git submodule is not one of them when the project holding it has code of its
+own beside it (a shared library added with `git submodule add`, say): that
+project is a one-repo project, the workspace folder is the work's repo, and the
+submodule is left alone. A project made only of submodules records them.
 
 Each repo is recorded by its folder's name as you gave it: a space, an accent,
 an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent). A few
