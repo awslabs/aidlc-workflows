@@ -5784,17 +5784,27 @@ function teamShareOffer(
 // At a home whose teams build across repos: once the Units are held for their
 // teams, the plan reaches the teams' clones only once the home's main is
 // pushed, so main's share question is put here too, once; Not now is kept.
+// A Unit the lead adds after sharing reaches the teams the same way, so the
+// question is put again, once for those Units.
 function buildOutShareOffer(projectDir: string, auditRows: readonly AuditShardEvent[]): AskDirective | null {
   if (!unitsAssignedSinceTeams(auditRows) || assignmentNotHeld(auditRows) !== null) return null;
-  const mark = teamHandoverMarkName("share", "plan");
-  if (handoverOffered(projectDir, mark) || shareBlocker(projectDir) !== null) return null;
+  if (shareBlocker(projectDir) !== null) return null;
   const target = shareTarget(projectDir);
-  if (target === null || !planUnshared(projectDir, target)) return null;
+  if (target === null) return null;
   // Every Unit held for a team went as a file, and none is open: no team takes
   // anything from the home.
   const reach = unitsTakenFromHome(auditRows);
   if (reach.held === 0 && reach.open === 0) return null;
-  const said = reach.held === 0 ? "The Units are open for any team to take." : "The teams have their Units.";
+  const added = planUnshared(projectDir, target)
+    ? null
+    : unitsNotShared(projectDir, target).filter((unit) => reach.units.includes(unit));
+  if (added !== null && added.length === 0) return null;
+  const mark = teamHandoverMarkName("share", added === null ? "plan" : `plan-${added.join("-")}`);
+  if (handoverOffered(projectDir, mark)) return null;
+  const said = added !== null
+    ? `${namesInProse(added)} ${added.length === 1 ? "was" : "were"} added to the plan since you shared it, so the ` +
+      `teams cannot take ${added.length === 1 ? "it" : "them"} yet.`
+    : reach.held === 0 ? "The Units are open for any team to take." : "The teams have their Units.";
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
@@ -5810,6 +5820,23 @@ function buildOutShareOffer(projectDir: string, auditRows: readonly AuditShardEv
     ],
     notNow: { label: "Not now", detail: "Nothing is pushed; a team's clone sees the plan once main is pushed." },
   });
+}
+
+// The plan's Units here that the remote's main, as this clone last fetched it,
+// does not list: a teammate's clone reads the plan from there.
+function unitsNotShared(projectDir: string, target: { remote: string; branch: string }): string[] {
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state !== "ok") return [];
+  const plan = relative(projectDir, unitDependencyPath(projectDir)).split("\\").join("/");
+  const shown = Bun.spawnSync({
+    cmd: ["git", "show", `refs/remotes/${target.remote}/${target.branch}:${plan}`],
+    cwd: projectDir, stdout: "pipe", stderr: "ignore",
+  });
+  if (shown.exitCode !== 0) return [];
+  const there = parseBoltDag(new TextDecoder().decode(shown.stdout));
+  if (!there.ok) return [];
+  const listed = new Set(there.batches.flat());
+  return dag.units.filter((unit) => !listed.has(unit)).sort(compareBoardKeys);
 }
 
 // The teams' clones see the work as a team home only once the remote's main

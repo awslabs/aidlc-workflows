@@ -12,14 +12,15 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8 } from "../harness/fixtures.ts";
+import { fixtureIntentId8, seededRecordDir } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
   cloneOf,
+  DEPENDENCIES,
   ENV,
   git,
   HOME_RECORD,
@@ -355,6 +356,30 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
     expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+    expect(isShare(next(home.dir))).toBe(false);
+  });
+
+  test("a Unit added after the plan was shared: the share is asked again, naming it, and Share takes the new plan", () => {
+    // A live run: the lead shared the plan, then added a fourth Unit and gave
+    // it to a team; the share was never asked again, so the remote kept the
+    // first plan and the team could not take the Unit held for it.
+    const home = makeHome();
+    chooseTeams(home.dir);
+    next(home.dir);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "reporting=data"], home.dir).status).toBe(0);
+    expect(isShare(next(home.dir))).toBe(true);
+    share(home.dir);
+    expect(isShare(next(home.dir))).toBe(false);
+    const plan = join(seededRecordDir(home.dir), "inception", "units-generation", "unit-of-work-dependency.md");
+    writeFileSync(plan, DEPENDENCIES.replace("```\n", "  - name: reporting2-email\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n"));
+    expect(run(UNIT, ["assign", "reporting2-email=data"], home.dir).status).toBe(0);
+    const ask = next(home.dir);
+    expect(isShare(ask), JSON.stringify(ask)).toBe(true);
+    expect(String(ask.question)).toContain("reporting2-email");
+    expect(String(ask.question)).toContain("since you shared it");
+    share(home.dir);
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+    expect(git(home.remote, ["show", `main:${relative(home.dir, plan).replaceAll("\\", "/")}`])).toContain("reporting2-email");
     expect(isShare(next(home.dir))).toBe(false);
   });
 

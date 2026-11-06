@@ -256,7 +256,7 @@ export function offersLearningsCorrectionChoices(has: (choice: string) => boolea
 // for a team that takes them from the home, and Units open for any team that
 // the home has not started itself. A Unit handed off by file comes to its team
 // as that file, never from the home.
-export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: number; open: number } {
+export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: number; open: number; units: string[] } {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   let teamsAt = -1;
   ordered.forEach((row, at) => {
@@ -283,7 +283,8 @@ export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: nu
     }
   }
   for (const row of ordered) if (row.event === "UNIT_STARTED") open.delete(auditBlockField(row.block, "Unit") ?? "");
-  return { held: [...byFile.values()].filter((file) => !file).length, open: open.size };
+  const held = [...byFile].filter(([, file]) => !file).map(([unit]) => unit);
+  return { held: held.length, open: open.size, units: [...held, ...open] };
 }
 
 // The Units the lead named for teams while the home could not be reached, with

@@ -138,7 +138,9 @@ it yourself with `git push origin main`). When every Unit held for a team went
 to it as a hand-off file and none is open, nothing is asked: no team takes the
 plan from here. When the remote does not answer, Share says so and keeps the
 commit, and the question is not put again; run `aidlc unit share --plan` once
-it can be reached.
+it can be reached. A Unit you add to the plan after sharing it, held for a team
+or left open, is not on the remote until you share again, so the question comes
+back once, naming it.
 
 Claims open by dependency batch. "Delivery planning is complete" does not mean
 every Unit is claimable; a Unit remains blocked until every `depends_on` row is
