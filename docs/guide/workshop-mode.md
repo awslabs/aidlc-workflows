@@ -249,11 +249,14 @@ Gate rhythm controls the team review points:
 
 When the Unit is complete and approved, `/aidlc` asks once whether to commit it
 and publish it for review on main. **Commit and publish** runs
-`aidlc unit publish payments --commit`, which commits what git shows changed
-here (the question names how many files and up to ten new ones outside
-`aidlc/`, as the share question does) and then publishes;
-**Not now** leaves it, and the step then says it is not published yet, so
-asking for it later publishes it. Publication requires a clean tracked checkout;
+`aidlc unit publish payments --commit`, which commits the Unit's own work (every
+tracked change, the record under `aidlc/` and the new files its source manifest
+lists; the question names how many files and up to ten new ones, as the share
+question does) and then publishes. Other new files, such as AI-DLC's own install
+or an unignored `node_modules`, stay on disk uncommitted, and the publish says
+once how many it left out; say which you want in and it publishes again with
+them (`--include <path>`). **Not now** leaves it, and the step then says it is
+not published yet, so asking for it later publishes it. Publication requires a clean tracked checkout;
 AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json`, which it
 writes when a session starts in a fresh clone, does not count. By hand:
 

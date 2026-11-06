@@ -268,7 +268,7 @@ export const ROUTES: readonly Route[] = [
       "unit merge-status <unit>",
       "unit participate",
       "unit pin <unit>",
-      "unit publish <unit> [--commit]",
+      "unit publish <unit> [--commit [--include <path>]...]",
       "unit release <unit>",
       "unit share",
       "unit status",

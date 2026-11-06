@@ -5295,9 +5295,10 @@ const NEW_FILES_NAMED = 10;
 // names the ten nearest the project's top, where an unignored key usually
 // sits (a stable sort by depth keeps git's order within a depth, the same ten
 // on every platform), and says how many more. The commit still takes them
-// all. Null when nothing.
-function workToCommitWords(projectDir: string): string | null {
-  const { paths, untracked } = workToCommit(projectDir);
+// all. For a Unit's publish (`unit`) these are its own work, as its commit
+// takes it. Null when nothing.
+function workToCommitWords(projectDir: string, unit?: string): string | null {
+  const { paths, untracked } = workToCommit(projectDir, unit === undefined ? undefined : { unit });
   if (paths.length === 0) return null;
   const outside = untracked.filter((path) => path !== "aidlc" && !path.startsWith("aidlc/"));
   const depth = (path: string): number => path.split("/").length;
@@ -5307,7 +5308,8 @@ function workToCommitWords(projectDir: string): string | null {
   const more = outside.length - shown.length;
   const rest = more > 0 ? `, and ${more} more; \`git status\` shows the rest` : "";
   const named = outside.length === 0 ? "" : ` (new: ${shown.join(", ")}${rest})`;
-  return `the ${paths.length} changed file${paths.length === 1 ? "" : "s"} here${named}`;
+  const of = unit === undefined ? "" : " of its work";
+  return `the ${paths.length} changed file${paths.length === 1 ? "" : "s"}${of} here${named}`;
 }
 
 // Before this session starts a Unit on the lead's walk, while claims are open
@@ -5357,7 +5359,7 @@ function teamPublishOffer(projectDir: string, unit: string): AskDirective | null
   const key = `${unit}-${head.exitCode === 0 ? new TextDecoder().decode(head.stdout).trim().slice(0, 12) : "none"}`;
   const mark = teamHandoverMarkName("publish", key);
   if (handoverOffered(projectDir, mark)) return null;
-  const work = workToCommitWords(projectDir);
+  const work = workToCommitWords(projectDir, unit);
   const name = unitPlainName(unit);
   return teamHandoverAsk(projectDir, {
     handovers: ["publish"],

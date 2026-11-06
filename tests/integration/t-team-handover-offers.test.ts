@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationStepOnRecord } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import {
   ORCH,
@@ -381,6 +381,15 @@ function doneIn(checkout: string): Record<string, unknown> {
   return nextDirective(checkout);
 }
 
+// What the Unit's Code Generation says it wrote (its source manifest): the
+// new files a publish commits as the Unit's own work.
+function claimAsUnitWork(checkout: string, paths: string[]): void {
+  writeFileSync(
+    join(seededRecordDir(checkout), "construction", "alpha", "code-generation", "source-manifest.json"),
+    `${JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: paths.map((path) => ({ path })) })}\n`,
+  );
+}
+
 describe("step 3: a team publishes its finished Unit", () => {
   test("a claimed Unit done: the publish offer, once; Not now gives the done notice; publish --commit publishes", () => {
     const { remote } = makeSeed();
@@ -401,6 +410,7 @@ describe("step 3: a team publishes its finished Unit", () => {
     expect(String(notice.message)).not.toContain("aidlc unit publish");
     expect(isHandover(nextDirective(checkout))).toBe(false);
     writeFileSync(join(checkout, "src", "alpha-extra.ts"), "export const extra = 1;\n");
+    claimAsUnitWork(checkout, ["src/alpha.ts", "src/alpha-extra.ts"]);
     const claimRef = readUnitScopeStamp(checkout)?.claim_ref as string;
     const claimBefore = git(remote, ["rev-parse", claimRef]);
     const published = runMergeTool(UNIT, ["publish", "alpha", "--commit"], checkout);
@@ -410,29 +420,31 @@ describe("step 3: a team publishes its finished Unit", () => {
     expect(git(remote, ["rev-parse", claimRef])).not.toBe(claimBefore);
   });
 
-  test("a handful of new files: the publish question names every one outside aidlc/", () => {
+  test("a handful of the Unit's new files: the publish question names every one", () => {
     const { remote } = makeSeed();
     const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
     for (const name of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]) {
       writeFileSync(join(checkout, name), "untracked\n");
     }
+    claimAsUnitWork(checkout, ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]);
     const offer = doneIn(checkout);
     expect(isHandover(offer, "publish"), JSON.stringify(offer)).toBe(true);
     expect(String(offer.question)).toContain("(new: a.txt, b.txt, c.txt, d.txt, e.txt, z-deploy.env).");
     expect(String(offer.question)).not.toContain(" more; ");
   });
 
-  // A team's clone with an unignored dependency folder: the question is put,
-  // not a step too long to send, and its choices walk on as with a handful.
-  // The commit still takes every file.
+  // A Unit whose own work (its manifest claims it) is thousands of new files:
+  // the question is put, not a step too long to send, and its choices walk on
+  // as with a handful. The commit takes every one of them.
   for (const count of [400, 10_000]) {
     test(`${count} new files: the publish question is put, says how many and names ten; Not now walks on, never back`, () => {
       const { remote } = makeSeed();
       const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
       addManyNewFiles(checkout, count);
+      claimAsUnitWork(checkout, ["z-deploy.env", "config/", "src/x/", "node_modules/"]);
       const offer = doneIn(checkout);
       expect(isHandover(offer, "publish"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
-      expect(String(offer.question)).toContain(`changed files here (new: z-deploy.env, config/app.json, src/x/y.ts, `);
+      expect(String(offer.question)).toContain(`changed files of its work here (new: z-deploy.env, config/app.json, src/x/y.ts, `);
       expectTenNamedAndTheCount(offer, checkout);
       expect(labels(offer)).toEqual(["Commit and publish", "Not now"]);
       expect(commandFor(offer, "Not now")).toMatch(/ next$/);
