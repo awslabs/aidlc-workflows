@@ -1056,6 +1056,10 @@ function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "
   if (getField(content, "Current Stage")?.trim() !== stage) return false;
   if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") return false;
   if (stageBox(content, stage) !== "awaiting-approval") return false;
+  // Unit by Unit, a Unit the person asked to change is redone while the
+  // stage's box stays at its gate, and its summary is asked again: only built
+  // stage by stage is a Unit's question at that gate a late one.
+  if (unit !== null && getField(content, "Construction Iteration")?.trim() === "unit-major") return false;
   const gate = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage });
   const elsewhere = gate !== null && shownOnlyInOtherChats(pd, gate.id, commandChat(pd));
   if (flags.checkpoint === undefined && !elsewhere) return false;

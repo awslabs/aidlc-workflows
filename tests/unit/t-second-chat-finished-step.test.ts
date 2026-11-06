@@ -432,6 +432,33 @@ describe("t-second-chat-finished-step: a stage finished in another chat is shown
     expect(readFileSync(questions, "utf-8")).toBe(confirmed);
   });
 
+  // A Unit redone at the stage's open gate, Unit by Unit (the person asked to
+  // change it there): its summary is asked again and recorded, never redirected.
+  test("built Unit by Unit, a Unit redone at the stage's gate asks its summary as today", () => {
+    const folder = new Folder({ stageMajorUnits: ["alpha", "beta"] });
+    const state = seededStateFile(folder.dir);
+    writeFileSync(state, readFileSync(state, "utf-8")
+      .replace("- **Construction Iteration**: stage-major", "- **Construction Iteration**: unit-major")
+      .replace(`- [ ] ${UNIT_STAGE} `, `- [?] ${UNIT_STAGE} `));
+    appendAuditEntry("STAGE_STARTED", { Stage: UNIT_STAGE }, folder.dir);
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", {
+      Stage: UNIT_STAGE, "Question Id": "f1a1da01", "Question Type": "gate", "Question Chat": FIRST,
+    }, folder.dir);
+    const unitDir = join(seededRecordDir(folder.dir), "construction", "alpha", UNIT_STAGE);
+    const questions = join(unitDir, `${UNIT_STAGE}-questions.md`);
+    const only = new Chat(folder, FIRST);
+    only.start();
+    only.said("change alpha's design: owners only");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(questions, questionsBody(""));
+    const asked = folder.json(only.tool("log", ["decision", "--stage", UNIT_STAGE, "--unit", "alpha", "--checkpoint",
+      "summary-confirmation", "--questions-file", questions, "--decision", SUMMARY_QUESTION,
+      "--options", "Looks correct,Request changes"]), "alpha's summary asked again");
+    expect(asked.recorded).toBeUndefined();
+    expect(asked.emitted).toBe("DECISION_RECORDED");
+    expect(readFileSync(questions, "utf-8")).toBe(questionsBody(""));
+  });
+
   test("a late answer to one of the stage's own questions names the waiting gate too", () => {
     const { folder, first } = secondChatFinishedTheStage();
     const answers = folder.rows("QUESTION_ANSWERED").length;
