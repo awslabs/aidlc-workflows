@@ -12,6 +12,8 @@ import {
   humanTurnMintAllowed,
   isReplyTurn,
   isRequestTurn,
+  listIntentDirs,
+  listSpaces,
   rowsAfterMark,
   mainCheckoutHeldByTeam,
   MESSAGE_SPENDING_EVENTS,
@@ -898,27 +900,88 @@ function rowAfter(a: AuditShardEvent, b: AuditShardEvent, crossShard: boolean): 
  * so a missing fact fails toward the person. It reads ids, times and the
  * engine's own rows, never words. A command that names its message proves that
  * one (proveMessage) instead. With `planApprovalOff`, the turn also stands for
- * turning plan approval off (planApprovalOffStands).
+ * turning plan approval off (planApprovalOffStands). With `broughtHere`, the
+ * chat's word from other work stands here too (turnBroughtHere).
  */
 export function personTurnStands(
   pd: string,
   mode: "request" | "plain",
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean } = {},
+  options: TurnOptions = {},
 ): boolean {
   return standingPersonTurn(pd, mode, options) !== null;
 }
 
-type TurnOptions = { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean };
+type TurnOptions = {
+  replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean; broughtHere?: boolean;
+};
 
 /**
  * The turn personTurnStands reads, when it stands: its HUMAN_TURN row (whose
  * Message Id names the message behind what the command does), else null. On
  * finished work, where the human-turn hook keeps the person's messages beside
  * the record and writes no turn on it, a message of theirs kept since the
- * finish stands too (turnKeptSinceFinished), read as a turn.
+ * finish stands too (turnKeptSinceFinished), read as a turn, and with
+ * `broughtHere` the chat's word from other work (turnBroughtHere).
  */
 export function standingPersonTurn(pd: string, mode: "request" | "plain", options: TurnOptions = {}): AuditShardEvent | null {
-  return turnOnTheRecord(pd, mode, options) ?? turnKeptSinceFinished(pd, options);
+  return turnOnTheRecord(pd, mode, options) ?? turnKeptSinceFinished(pd, options) ?? turnBroughtHere(pd, mode, options);
+}
+
+// What spends a turn in plain mode: a decision, or the work set to run on by
+// itself. Words sent on to separate work (REQUEST_ROUTED) do not.
+function spendsPlainTurn(row: AuditShardEvent): boolean {
+  return (MESSAGE_SPENDING_EVENTS.has(row.event) && row.event !== "REQUEST_ROUTED") ||
+    (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous");
+}
+
+/**
+ * With `broughtHere`, in plain mode, presence the chat brought from other work:
+ * the take of a team's build from the chat of another of its builds carries
+ * the person's word that asked for it, sent there, to the build it asked for
+ * here. It is this chat's latest message (none when no chat is named), when no
+ * turn on this work names it and nothing here spends it at or after its second,
+ * and it was not spent where it was sent: a turn naming it on another record of
+ * this checkout (with `requests`, a request turn) with nothing spending it
+ * after. Kept beside finished work, where no turn is written, nothing decides
+ * on it. A record that cannot be read gives no turn, and neither does turning
+ * plan approval off, which reads its own turn. Ids, times and the engine's own
+ * rows, never words.
+ */
+function turnBroughtHere(pd: string, mode: "request" | "plain", options: TurnOptions): AuditShardEvent | null {
+  if (options.broughtHere !== true || mode !== "plain" || options.replies === true || options.planApprovalOff === true) {
+    return null;
+  }
+  try {
+    const chat = invokingChat(pd);
+    const message = chat === null ? undefined : listMessages(pd).filter((entry) => entry.session === chat).at(-1);
+    if (message === undefined) return null;
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
+    if (unreadable.length > 0 || sentOnThisWork(rows)(message)) return null;
+    if (rows.some((row) => row.timestamp >= message.at && spendsPlainTurn(row))) return null;
+    const here = resolveWorkflowSelection(pd, { intent: options.intent, space: options.space });
+    for (const { name: space } of listSpaces(pd)) {
+      for (const dirName of listIntentDirs(pd, space)) {
+        if (space === here.space && dirName === here.intent) continue;
+        const there = readAuditShardEvents(pd, dirName, space, unreadable);
+        if (unreadable.length > 0) return null;
+        const turn = there.find((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
+        if (turn === undefined) continue;
+        if (options.requests === true && !isRequestTurn(turn)) return null;
+        if (there.some((row) => row !== turn && rowAfter(row, turn, true) && spendsPlainTurn(row))) return null;
+      }
+    }
+    return {
+      event: "HUMAN_TURN",
+      block: [`**Message Id**: ${message.id}`, `**Session**: ${chat}`].join("\n"),
+      timestamp: message.at,
+      shard: "",
+      shardIndex: -1,
+      pos: -1,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOptions): AuditShardEvent | null {

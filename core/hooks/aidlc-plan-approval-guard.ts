@@ -1797,7 +1797,9 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand, finis
 // On finished work (`finished`, read as the human-turn hook reads it) their
 // words are kept beside the record, and personTurnStands reads them there: a
 // redo of Code Generation after work finished at it, which `next --stage`
-// leaves to this door, is theirs once they asked.
+// leaves to this door, is theirs once they asked. Their word from other work
+// counts here too (broughtHere): "go back to it" said in the chat of a team's
+// finished build, whose take then moved the chat onto the build it named.
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
@@ -1808,7 +1810,7 @@ function jumpIsPersonsMove(
   finished: boolean,
 ): boolean | EngineInvocation {
   if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
-  if (!personTurnStands(projectDir, "plain", { requests: true })) return false;
+  if (!personTurnStands(projectDir, "plain", { requests: true, broughtHere: true })) return false;
   const last = lastStepAdmitsPersonsMoves(projectDir, jump, finished);
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }

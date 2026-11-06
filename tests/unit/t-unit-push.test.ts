@@ -1595,6 +1595,61 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
     expect(merges()).toBe(2);
   });
+
+  // A live run on Codex: payments said "yes, go back to it and fix it" in the
+  // chat of its finished refunds report; the take moved the chat onto
+  // u1-refunds, and the redo's own printed jump was refused by AI-DLC's hook
+  // ("Run AI-DLC's command exactly as the step gives it ..."), a dead end that
+  // passed only on the person's "please try again".
+  test("their yes in another build's chat takes the sent-back build to Code Generation: its printed jump runs", () => {
+    const session = "t-unit-push-yes-elsewhere";
+    const { alice, chat } = sentBackWhileOnFinishedBuild(session);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "anything new for us?" }).status).toBe(0);
+    next(alice, chat);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "yes, go back to it and fix it" }).status).toBe(0);
+    const back = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice, chat);
+    expect(back.json?.resumed, back.out).toBe(true);
+    const jump = redoJump(alice, chat);
+    const guard = jumpGuard(alice, chat, session, jump);
+    expect(guard.status, guard.out).toBe(0);
+    const ran = spawnSync("bash", ["-c", bashLine(jump)], { cwd: alice, encoding: "utf-8", env: chat });
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    const step = next(alice, chat);
+    expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
+    expect(step.stage).toBe("code-generation");
+  });
+
+  test("the jump still waits for the person: a word spent where it was said never stands for it", () => {
+    const session = "t-unit-push-jump-spent";
+    // The chat's latest word is "build checkout-ui", spent by checkout-ui's approval.
+    const { alice, chat } = sentBackWhileOnFinishedBuild(session, false);
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice, chat).json?.resumed).toBe(true);
+    expect(jumpGuard(alice, chat, session, redoJump(alice, chat)).status).toBe(2);
+  });
+
+  test("the jump still waits for the person: another chat's word, kept beside the finished build, is that chat's", () => {
+    const session = "t-unit-push-jump-other-chat";
+    const { alice, chat } = sentBackWhileOnFinishedBuild(session, false);
+    // Said in a second chat while the finished build is selected: kept beside it, no turn written.
+    const elsewhere = "t-unit-push-jump-other-chat-2";
+    expect(hook(alice, personsChat(elsewhere), { hook_event_name: "UserPromptSubmit", session_id: elsewhere, prompt: "yes, go back to it" })
+      .status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice, chat).json?.resumed).toBe(true);
+    expect(jumpGuard(alice, chat, session, redoJump(alice, chat)).status).toBe(2);
+  });
+
+  test("the work set to run on by itself after their yes spends it; their word on the build since stands, as before", () => {
+    const session = "t-unit-push-jump-autonomous";
+    const { alice, record, chat } = sentBackWhileOnFinishedBuild(session);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "yes, go back to it and fix it" }).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice, chat).json?.resumed).toBe(true);
+    const jump = redoJump(alice, chat);
+    appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, alice, basename(record), "payments");
+    expect(jumpGuard(alice, chat, session, jump).status).toBe(2);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "please try again" }).status).toBe(0);
+    const again = jumpGuard(alice, chat, session, jump);
+    expect(again.status, again.out).toBe(0);
+  });
 });
 
 // refunds and checkout-ui both in checkout-api for payments: one clone builds both.
@@ -1616,8 +1671,9 @@ const SENT_BACK_WORDS = "it's their refund-flow test that pulls billing into che
 
 // One chat of payments' clone builds refunds (pushed, merged, done at the
 // lead's project), then checkout-ui (pushed, merged, finished); then the
-// lead's Build and Test sends refunds back. The chat looked once before.
-function sentBackWhileOnFinishedBuild(session: string) {
+// lead's Build and Test sends refunds back. The chat looked once before, at
+// the person's /aidlc (`typedLook`) or on the agent's own.
+function sentBackWhileOnFinishedBuild(session: string, typedLook = true) {
   const { home, hosts, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=payments"], undefined, TWO_BUILDS_PLAN);
   const chat = personsChat(session);
   expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build refunds" }).status).toBe(0);
@@ -1648,7 +1704,7 @@ function sentBackWhileOnFinishedBuild(session: string) {
   git(home.dir, ["fetch", "-q", "origin"]);
   next(home.dir);
   // The chat's look at its finished build, before the lead's word.
-  expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "/aidlc" }).status).toBe(0);
+  if (typedLook) expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "/aidlc" }).status).toBe(0);
   next(alice, chat);
   const sent = run(UNIT, ["send-back", "refunds", "--person-words", SENT_BACK_WORDS], home.dir);
   expect(sent.status, sent.out).toBe(0);
@@ -1668,6 +1724,23 @@ function withReadOnlyGit<T>(dir: string, step: () => T): T {
     chmodSync(join(dir, ".git"), 0o755);
     chmodSync(head, 0o644);
   }
+}
+
+// The redo the unit-turned-down question offers, as the agent runs it for the
+// person's yes, up to the jump it prints; and the guard's verdict on that jump
+// as the agent runs it, from the project's own tool tree.
+function redoJump(alice: string, chat: NodeJS.ProcessEnv): string {
+  const ask = next(alice, chat);
+  expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-turned-down");
+  const redo = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", "code-generation"], alice, chat);
+  const jump = /`(bun \S+aidlc-jump\.ts execute [^`]+)`/.exec(String(redo.json?.message))?.[1];
+  expect(jump, redo.out).toBeDefined();
+  cpSync(AIDLC_SRC, join(alice, ".claude"), { recursive: true });
+  return jump!;
+}
+
+function jumpGuard(alice: string, chat: NodeJS.ProcessEnv, session: string, jump: string): { status: number; out: string } {
+  return hook(alice, chat, { hook_event_name: "PreToolUse", session_id: session, tool_name: "Bash", tool_input: { command: jump } });
 }
 
 // The lead's call on a live run: the lead sent a team's Unit back while that
