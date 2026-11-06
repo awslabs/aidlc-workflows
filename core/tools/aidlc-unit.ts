@@ -16,7 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
@@ -93,6 +93,8 @@ import {
   resolveProjectDir,
   resolveReviewClass,
   teamSkeletonOn,
+  loadScopeMetadata,
+  memorySectionBody,
   type UnitMergeEvidence,
   type UnitMergeTransaction,
   UNIT_MERGE_DIR,
@@ -123,7 +125,8 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
-import { beforePerUnitBlock } from "./aidlc-graph.ts";
+import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
+import { planMadeElsewhere } from "./aidlc-record-core.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
@@ -4777,6 +4780,65 @@ export function shareTarget(projectDir: string): { remote: string; branch: strin
   return { remote, branch: affirmedIntegrationBranch(projectDir)?.branch ?? integrationBranch(projectDir, remote) };
 }
 
+// A clone that took part or holds a claim is a team's, not the lead's.
+export function teamsClone(projectDir: string, stateContent: string): boolean {
+  return existsSync(unitParticipantPath(projectDir)) ||
+    readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
+}
+
+// The team's own answer on building a walking skeleton first, not read yet:
+// team work whose scope runs one, no stance recorded, and the team's or the
+// project's memory says something under `## Walking Skeleton` (Practices
+// Discovery writes the team's). org.md's section is the framework's default,
+// which reads as the scope's own answer, so it is not one. Which way the answer
+// goes is the agent's to read (the classify round-trip); this reads only
+// whether there is one.
+export function teamSkeletonAnswerUnread(projectDir: string, stateContent: string): boolean {
+  if (!isTeamUnitOwnership(stateContent) || getField(stateContent, "Skeleton Stance")) return false;
+  if (loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton !== true) return false;
+  let memory: string;
+  try {
+    memory = memoryDirFor(projectDir);
+  } catch {
+    return false;
+  }
+  return ["team.md", "project.md"].some((file) => {
+    try {
+      return memorySectionBody(readFileSync(join(memory, file), "utf-8"), "## Walking Skeleton").trim() !== "";
+    } catch {
+      return false;
+    }
+  });
+}
+
+// The team's own walking-skeleton answer is read on the lead's checkout before
+// any team step decides from it (the handout line, the share, a teammate's
+// claim): a team's clone reads the lead's record and never writes the stance.
+export function teamStanceToRead(projectDir: string, stateContent: string | null): boolean {
+  return stateContent !== null && teamSkeletonAnswerUnread(projectDir, stateContent) &&
+    !teamsClone(projectDir, stateContent) && !planMadeElsewhere(projectDir);
+}
+
+// The first Unit, when the plan as this checkout last shared or fetched it
+// holds every Unit behind it as a walking skeleton while this checkout's own
+// record opens them (its recorded answer is no thin slice first). Null when the
+// two agree or the shared plan cannot be read.
+export function skeletonHeldBackOnShare(projectDir: string): string | null {
+  try {
+    const pd = resolveProjectDir(projectDir);
+    const state = readStateFile(pd);
+    if (!isTeamUnitOwnership(state) || getField(state, "Skeleton Stance") === null || teamSkeletonOn(state)) return null;
+    const target = shareTarget(pd);
+    if (target === null) return null;
+    const ref = git(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${target.remote}/${target.branch}`]);
+    if (!ref.ok) return null;
+    const shared = openingStatus(pd, ref.stdout.trim());
+    return [...shared.blockers.values()].some((blockers) => blockers.includes("walking-skeleton")) ? shared.skeleton : null;
+  } catch {
+    return null;
+  }
+}
+
 // Whether a share can run here: team work, a checkout holding no Unit claim, a
 // remote, and HEAD on the integration branch. Null when it can; the reason
 // otherwise. The share offer is put only where this is null.
@@ -4807,6 +4869,24 @@ function shareMain(projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const blocker = shareBlocker(pd);
   if (blocker !== null) fail(blocker);
+  // The team's own answer on building a thin slice first is read before the
+  // plan goes to the teams, by the rule the reading step in `next` and the
+  // report go by (teamStanceToRead), so the shared plan carries it. Nothing is
+  // committed or pushed until it is; the offers stay due in case the share
+  // does not run again.
+  if (teamStanceToRead(pd, readStateFile(pd))) {
+    clearTeamHandoverMarks(pd, ["share", "push"]);
+    const memory = relative(pd, memoryDirFor(pd)).replaceAll("\\", "/");
+    console.log(JSON.stringify({
+      shared: false,
+      step: "Run these now, in this turn: read the \"## Walking Skeleton\" section of " +
+        `${memory}/project.md over ${memory}/team.md and settle what the team says it does: on if the team always ` +
+        "runs a walking skeleton, off if it says it does not run one, scope-dependent if it says neither. Run " +
+        `\`${aidlcToolInvocation("orchestrate")} report --skeleton-stance <on|off|scope-dependent>\` with that stance, ` +
+        `then run \`${aidlcInvocation()} unit share\` again and tell the person in plain words what it reports.`,
+    }));
+    return;
+  }
   const { remote, branch } = shareTarget(pd)!;
   const landed = landedNotOnRemote(pd).map((row) => row.unit);
   let committed: number;
