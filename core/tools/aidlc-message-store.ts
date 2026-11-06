@@ -963,8 +963,9 @@ export function standingPersonTurn(
  * record and writes no turn on it (hookStandsOutside). So the fact is a message
  * no turn on the work names (sentOnThisWork: a terminal message, which has no
  * chat, counts as on the work and stands for nothing here), kept at or after
- * the work's latest WORKFLOW_COMPLETED row, from this chat (any chat's when
- * the engine names none, as standingPersonTurn fails toward the person). Both
+ * the work's latest WORKFLOW_COMPLETED row, from this chat (with no chat
+ * named, any chat's message in this project counts: the guard names the chat
+ * of a participant, and stands aside for one that never joined). Both
  * times are whole seconds; a tie with the finish is harmless, as the message
  * that gave the finishing approval is named on the record. No completion row,
  * or a shard that cannot be read: false. The plan-approval guard reads it for

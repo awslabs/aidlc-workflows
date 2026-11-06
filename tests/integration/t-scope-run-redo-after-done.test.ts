@@ -5,10 +5,10 @@
 // skipped runs to done, so the work finishes at Code Generation. The person
 // then asks in their own words to redo it. The jump `next --stage` names goes
 // through the plan-approval guard, the code plan is asked about once, and the
-// redone build runs to its gate and back to done, with no refusal on the way.
-// Before, every redo here was refused and the refusal's `next` said the work
-// was finished, a loop with no way out; so was every file the person asked to
-// change once the work was done.
+// redone build runs to its gate and back to done, with no refusal on the way;
+// a file the person asks for after the finish is written. Work built Unit by
+// Unit keeps a Unit's reopen waiting there: that reopen leaves the work
+// finished, so letting it through would record a reopen that runs nothing.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
@@ -22,6 +22,11 @@ import {
 afterAll(cleanupScopeProjects);
 
 const SKIP = ["--skip", "build-and-test,deployment-pipeline,deployment-execution"];
+// Classic with two Units: the design stages that add no wiring skipped, and Build and Test, so it finishes at Code Generation.
+const CLASSIC_SKIP = [
+  "--skip", ["practices-discovery", "user-stories", "refined-mockups", "domain-design", "contract-design", "delivery-planning",
+    "nfr-requirements", "nfr-design", "infrastructure-design", "build-and-test"].join(","),
+];
 
 describe("a redo of Code Generation after a bugfix finished there", () => {
   test.each(["strict", "off"] as const)("Guard Policy %s: the person's redo runs, its plan is asked once, and the work is done again", (policy) => {
@@ -49,5 +54,20 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     expect(rows.filter((row) => row.event === "STAGE_JUMPED" && field(row.block, "Target") !== null).length).toBeGreaterThanOrEqual(1);
     expect(rows.filter((row) => row.event === "PLAN_APPROVAL_BLOCKED")).toHaveLength(0);
     expect(rows.filter((row) => row.event === "WORKFLOW_COMPLETED").length).toBe(finishedRows + 1);
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  test("Units built one at a time: a Unit's reopen after the finish still waits, and no reopen is recorded", () => {
+    const run = runScope("classic", { units: ["core", "extra"], flags: CLASSIC_SKIP });
+    const { host, person, agent, proj } = run;
+    expect(run.final.kind).toBe("done");
+    host.fullHost = true;
+    person.say("Redo code generation for the core unit.");
+    const print = agent.next("--stage", "code-generation", "--unit", "core");
+    const reopen = /`(bun \.claude\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(print.message ?? ""))?.[1];
+    expect(reopen, JSON.stringify(print)).toBeDefined();
+    const rejected = auditEvents(proj).filter((row) => row.event === "GATE_REJECTED").length;
+    expect(() => host.bash(reopen as string)).toThrow(/the guard refused/);
+    expect(auditEvents(proj).filter((row) => row.event === "GATE_REJECTED").length).toBe(rejected);
+    expect(agent.next().kind).toBe("done");
   }, SCOPE_RUN_TIMEOUT_MS);
 });

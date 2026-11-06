@@ -1,15 +1,14 @@
-// covers: function:jumpIsPersonsMove, function:lastStepAdmitsPersonsMoves, function:personSpokeSinceFinished, hook:aidlc-plan-approval-guard
+// covers: function:jumpIsPersonsMove, function:lastStepAdmitsPersonsMoves, function:personSpokeSinceFinished, function:selectedRecordIsFinished, hook:aidlc-plan-approval-guard
 //
 // Work whose last stage was Code Generation (every stage after it skipped) is
-// finished there: its Current Stage stays on Code Generation, so `next
-// --stage` leaves a jump to the plan-approval guard's `jump execute` door. Once
-// work is finished the human-turn hook keeps the person's messages beside its
-// record and writes no turn on it, and the guard read only the record: every
-// jump the person asked for was refused, and the refusal's `next` said the
-// work was finished, so a redo of Code Generation never ran (#3608, seen live
-// on Claude Code and Codex). A message of theirs in this chat since the work
-// finished is their ask: the redo runs and its plan is asked about once. A
-// jump nobody asked for is still refused, under every Guard Policy.
+// finished there with its Current Stage still on Code Generation, so `next
+// --stage` leaves a jump to the plan-approval guard's `jump execute` door, and
+// the human-turn hook keeps the person's messages beside that finished record
+// (#3608). A redo they ask for in this chat since the finish runs, and its plan
+// is asked about once; a change they ask for in their code goes through, as
+// past Code Generation. A jump nobody asked for, one another chat's message
+// asked for, one inside a line the guard cannot read, and a Unit's reopen that
+// would leave the work finished still wait, under every Guard Policy.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -33,7 +32,12 @@ import {
   type Step,
   writePlan,
 } from "../harness/code-generation-states.ts";
-import { activeDirectiveStorageDir, getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  activeDirectiveStorageDir,
+  getField,
+  resolveWorkflowSelection,
+  selectedRecordIsFinished,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(600_000);
 
@@ -48,10 +52,15 @@ const OTHER_CHAT = "01995000-7a11-7000-8000-0000000065b9";
 const claude = SHAPES[0];
 const copilot = SHAPES.find((shape) => shape.name === "copilot") as Shape;
 
-function finished(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off" = "on"): string {
-  const proj = finishedAtCodeGeneration(policy, planApproval);
+/** Work finished at Code Generation; with `join`, this chat has taken a step on it, as the agent's `next` does. */
+function finished(policy: "strict" | "relaxed" | "off", join = true): string {
+  const proj = finishedAtCodeGeneration(policy, "on");
   created.push(proj);
   expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Current Stage")).toBe("code-generation");
+  if (join) {
+    const joined = runNamed(proj, "bun .claude/tools/aidlc-orchestrate.ts next", { AIDLC_SESSION_OVERRIDE: SESSION });
+    expect(joined.status, joined.stdout + joined.stderr).toBe(0);
+  }
   return proj;
 }
 
@@ -103,7 +112,6 @@ describe("a redo of Code Generation the person asks for after their work finishe
       const proj = finished(policy);
       expect(reply(proj, ASK).status).toBe(0);
       const jump = jumpFor(proj, "code-generation");
-      const before = blocked(proj);
       const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
       expect(verdict.code, verdict.said).toBe(0);
       const ran = runNamed(proj, jump);
@@ -111,7 +119,13 @@ describe("a redo of Code Generation the person asks for after their work finishe
       const asked = afterRedo(proj);
       expect(asked.kind, JSON.stringify(asked)).toBe("ask");
       expect(asked.ask_type).toBe("plan-approval");
-      // Asked once: `next` again shows the same question, nothing new.
+      // The redone plan waits for them: the build does not start before their answer.
+      const early = await claude.call(proj, SESSION, { tool: "Write", path: join(proj, "src", "slugify.ts") });
+      expect(early.code, "the build's write ran before the redone plan was approved").toBe(2);
+      const earlyBrief = runNamed(proj, "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level");
+      const earlyDispatch = await claude.call(proj, SESSION, { tool: "Task", agent: DEVELOPER, prompt: earlyBrief.stdout });
+      expect(earlyDispatch.code, "the developer started before the redone plan was approved").toBe(2);
+      // The question stays the one step; the scope-run test counts it asked once.
       expect(next(proj).ask_type).toBe("plan-approval");
       const recordedBefore = auditEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_RECORDED").length;
       expect(reply(proj, "Approve Plan").status).toBe(0);
@@ -128,7 +142,6 @@ describe("a redo of Code Generation the person asks for after their work finishe
       const dispatch = await claude.call(proj, SESSION, { tool: "Task", agent: DEVELOPER, prompt: brief.stdout });
       expect(dispatch.code, dispatch.said).toBe(0);
       expect(next(proj).ask_type).not.toBe("plan-approval");
-      expect(blocked(proj)).toBe(before);
     },
   );
 
@@ -160,9 +173,6 @@ describe("a redo of Code Generation the person asks for after their work finishe
     "%s: still refused with no message of theirs since the finish, or with another chat's; this chat's own runs",
     async (policy) => {
       const proj = finished(policy);
-      // This chat as the engine knows it: its own `next` binds it, as the agent's does.
-      const bound = runNamed(proj, "bun .claude/tools/aidlc-orchestrate.ts next", { AIDLC_SESSION_OVERRIDE: SESSION });
-      expect(bound.status, bound.stdout + bound.stderr).toBe(0);
       const jump = jumpFor(proj, "code-generation");
       // The message that gave the finishing approval is on the record: it backed that decision.
       const own = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
@@ -176,6 +186,17 @@ describe("a redo of Code Generation the person asks for after their work finishe
       expect(mine.code, mine.said).toBe(0);
     },
   );
+
+  // A new chat: the person's words reach the message record before the
+  // agent's first `next` joins the chat to the work, as in the live runs.
+  test("a new chat: the person asks before the chat's first step, and the redo runs", async () => {
+    const proj = finished("relaxed", false);
+    expect(reply(proj, ASK).status).toBe(0);
+    const joined = runNamed(proj, "bun .claude/tools/aidlc-orchestrate.ts next", { AIDLC_SESSION_OVERRIDE: SESSION });
+    expect(joined.status, joined.stdout + joined.stderr).toBe(0);
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jumpFor(proj, "code-generation") });
+    expect(verdict.code, verdict.said).toBe(0);
+  });
 
   // The finish is the last step: an issued Code Generation step it outlived,
   // even one marked superseded since, holds nothing back.
@@ -258,12 +279,41 @@ describe("a change the person asks for after their work finished at Code Generat
     expect(refused).toEqual([]);
   });
 
+  // AI-DLC's own commands this guard holds keep their own conditions: a jump
+  // the guard cannot read is refused whoever asked.
+  test.each(["strict", "relaxed", "off"] as const)("%s: a jump the guard cannot read still waits", async (policy) => {
+    const proj = finished(policy);
+    const jump = jumpFor(proj, "code-generation");
+    const commands = [
+      `eval "${jump}"`,
+      // The spelling a native install prints, handed to a shell.
+      `sh -c "${jump.replace(/^bun \.claude\/tools\/aidlc-jump\.ts /, "aidlc engine jump ")}"`,
+    ];
+    for (const command of commands) {
+      expect((await claude.call(proj, SESSION, { tool: "Bash", command })).code, `${command} passed`).toBe(2);
+    }
+    expect(reply(proj, ASK).status).toBe(0);
+    for (const command of commands) {
+      expect((await claude.call(proj, SESSION, { tool: "Bash", command })).code, `${command} passed after the ask`).toBe(2);
+    }
+  });
+
+  // A Code Generation run on its own opened over the finished work is live
+  // work: the pass above reads it as not finished, so its build is judged as
+  // that run's, as it was.
+  test("an isolated Code Generation run opened on the finished work is not read as finished", () => {
+    const proj = finished("relaxed");
+    expect(selectedRecordIsFinished(proj, resolveWorkflowSelection(proj))).toBe(true);
+    expect(reply(proj, "/aidlc --stage code-generation --single").status).toBe(0);
+    const single = next(proj, ["--stage", "code-generation", "--single"]);
+    expect(single.single, JSON.stringify(single)).toBe(true);
+    expect(selectedRecordIsFinished(proj, resolveWorkflowSelection(proj))).toBe(false);
+  });
+
   test.each(["strict", "relaxed", "off"] as const)(
     "%s: the agent's own redo still waits; their edit, a shell command that writes and the developer run; next stays done",
     async (policy) => {
       const proj = finished(policy);
-      const bound = runNamed(proj, "bun .claude/tools/aidlc-orchestrate.ts next", { AIDLC_SESSION_OVERRIDE: SESSION });
-      expect(bound.status, bound.stdout + bound.stderr).toBe(0);
       const own = await claude.call(proj, SESSION, { tool: "Bash", command: jumpFor(proj, "code-generation") });
       expect(own.code, "the agent's own redo was admitted").toBe(2);
       expect(reply(proj, TYPO).status).toBe(0);

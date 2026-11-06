@@ -1290,6 +1290,8 @@ interface MutationIntent {
   readable?: boolean;
   /** AI-DLC's own command that the shell reading or engineCommandAdmitted refuses. */
   engineRefused?: boolean;
+  /** A line the lexer could not read whole that names AI-DLC, wrapped or not. */
+  hidesEngine?: boolean;
   /** AI-DLC's own `next` on the line that carries a request file, when its reading admits it. */
   ownNext?: EngineInvocation;
 }
@@ -1727,8 +1729,8 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 // personTurnStands's (no decision after it, so the approval they just gave
 // never also reopens what it approved). With no step on record there is
 // nothing to wait for.
-// Parked work's last step is the park, and finished work's the finish, which no
-// issued step outlives.
+// Parked work's last step is the park, which no issued step outlives; finished
+// work's is the finish, and no step issued before or after it holds a jump back.
 function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand, finished: boolean): boolean | EngineInvocation {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
@@ -1791,7 +1793,7 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand, finis
 // On finished work (`finished`, read as the human-turn hook reads it) their
 // words are kept beside the record, not on it, so what they asked since it
 // finished is read there (personSpokeSinceFinished): a redo of Code Generation
-// after work finished at it, which `next --stage` leaves to this door (#3608).
+// after work finished at it, which `next --stage` leaves to this door.
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
@@ -1802,6 +1804,9 @@ function jumpIsPersonsMove(
   finished: boolean,
 ): boolean | EngineInvocation {
   if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
+  // A Unit's reopen leaves finished work finished (aidlc-jump reopen moves no
+  // Status), so it would record a reopen that runs nothing: it waits as before.
+  if (finished && jump.verb !== "execute") return false;
   if (!(finished ? personSpokeSinceFinished(projectDir) : personTurnStands(projectDir, "plain", { requests: true }))) return false;
   const last = lastStepAdmitsPersonsMoves(projectDir, jump, finished);
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
@@ -2099,6 +2104,7 @@ async function mutationIntent(
   let shellCommand: string | null = null;
   let readable = true;
   let engineRefused = false;
+  let hidesEngine = false;
   let ownNext: EngineInvocation | undefined;
   if (toolName === "Bash") {
     const command = toolInput?.command;
@@ -2171,6 +2177,11 @@ async function mutationIntent(
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
       (dynamic && (ENGINE_WORD.test(analysed) || (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand))));
     engineRefused = looksLikeEngine && opaqueShell;
+    // The same reading without the dynamic condition: AI-DLC named inside text
+    // handed to a shell or evaluator (`eval "aidlc engine jump ..."`), which
+    // the pass for finished work keeps waiting.
+    hidesEngine = opaqueShell && (looksLikeEngine || ENGINE_WORD.test(analysed) ||
+      (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand)));
     // Its `next` that carries a request file, read where the engine reads the
     // flag (before `--`), however it was wrapped (judgedNext).
     for (const invocation of invocations) {
@@ -2216,6 +2227,7 @@ async function mutationIntent(
     shellCommand,
     ...(readable ? {} : { readable }),
     ...(engineRefused ? { engineRefused } : {}),
+    ...(hidesEngine ? { hidesEngine } : {}),
     ...(ownNext ? { ownNext } : {}),
   };
 }
@@ -2471,6 +2483,8 @@ async function evaluate(
   // it is written. A path or command the reason quotes stays on the one line.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
   const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
+  // Finished, read once, as the human-turn hook reads it (hookStandsOutside).
+  const finished = selectedRecordIsFinished(projectDir, workflow.selection);
   // A system package install nobody asked for waits for the person at every
   // stage and under every Guard Policy: it is not a fence (system-install.ts).
   // The run's state is the work's, or an isolated run's with no work, which
@@ -2478,7 +2492,7 @@ async function evaluate(
   if (toolName === "Bash" && typeof toolInput.command === "string") {
     try {
       const runState = runStateContent(projectDir);
-      if (runState !== null && !selectedRecordIsFinished(projectDir, workflow.selection)) {
+      if (runState !== null && !finished) {
         const command = oneLine(toolInput.command).trim();
         const refusal = unaskedSystemInstall(projectDir, toolInput.command, command.length > 160 ? `${command.slice(0, 160)}...` : command, {
           hook: HOOK_NAME,
@@ -2657,8 +2671,6 @@ async function evaluate(
       codeGenerationStepOnRecord(projectDir, state, activeDirective) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
-    // Finished, read as the human-turn hook reads it (hookStandsOutside).
-    const finished = selectedRecordIsFinished(projectDir, workflow.selection);
     const knownMutationTool =
       toolName === "Bash" || WRITE_TOOLS.has(toolName);
     // A call to one of the person's own MCP servers, as the harness adapter
@@ -2692,13 +2704,16 @@ async function evaluate(
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
       return 0;
     }
-    // Work that finished at Code Generation keeps Current Stage there, but
-    // nothing is built and no plan waits: what the person asks for afterwards
-    // (an edit, a shell command, the developer) goes through, under every Guard
-    // Policy, as once a walk is past Code Generation, where a handoff that names
-    // a plan is still judged. AI-DLC's own commands this guard holds (a jump
-    // nobody asked for, a switch) still wait.
-    if (finished && !mutation.engineRefused && !(guardedDispatch && explicitPlanDispatch)) return 0;
+    // Finished work whose walk ended at Code Generation keeps Current Stage
+    // there, but its walk is over: an edit, a shell command or the developer
+    // goes through, under every Guard Policy and whoever asked for it, as once
+    // a walk is past Code Generation, where a handoff that names a plan is
+    // still judged. AI-DLC's own commands this guard holds keep their own
+    // conditions (engineCommandAdmitted: a jump waits for the person's move, a
+    // switch for personAskedSinceGate), and so does a line the guard cannot
+    // read that names AI-DLC (`eval` or `sh -c` around a jump, in either
+    // spelling), which keeps its verdict.
+    if (finished && !mutation.engineRefused && !mutation.hidesEngine && !(guardedDispatch && explicitPlanDispatch)) return 0;
     // What the plan never governs, at any point of Code Generation and under
     // every Guard Policy: a command the lexer read whole that names no file it
     // writes and is not AI-DLC's own (a read, a scan, a test run), and a write
