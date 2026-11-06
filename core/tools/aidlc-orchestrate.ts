@@ -5284,16 +5284,32 @@ function handoverOffered(projectDir: string, mark: string): boolean {
   return engineAskMark(projectDir, mark) !== null;
 }
 
-// What a commit here takes, as the share and publish questions say it: the
-// count, and by path every file git does not track yet outside AI-DLC's
-// record, however many, since the commit takes them all (so an unignored
-// secret is seen before it is pushed). Null when nothing.
-function workToCommitWords(projectDir: string): string | null {
-  const { paths, untracked } = workToCommit(projectDir);
+// As many new files as the share, publish and push questions name before
+// "and N more", as the brought-files note does.
+const NEW_FILES_NAMED = 10;
+
+// What a commit here takes, as the share, publish and push questions say it:
+// the count, and by path the files git does not track yet outside AI-DLC's
+// record, every one of a handful in git's order. Past ten, an unignored
+// dependency folder would make the step too long to send, so the question
+// names the ten nearest the project's top, where an unignored key usually
+// sits (a stable sort by depth keeps git's order within a depth, the same ten
+// on every platform), and says how many more. The commit still takes them
+// all. For a Unit's publish (`unit`) these are its own work, as its commit
+// takes it. Null when nothing.
+function workToCommitWords(projectDir: string, unit?: string): string | null {
+  const { paths, untracked } = workToCommit(projectDir, unit === undefined ? undefined : { unit });
   if (paths.length === 0) return null;
   const outside = untracked.filter((path) => path !== "aidlc" && !path.startsWith("aidlc/"));
-  const named = outside.length === 0 ? "" : ` (new: ${outside.join(", ")})`;
-  return `the ${paths.length} changed file${paths.length === 1 ? "" : "s"} here${named}`;
+  const depth = (path: string): number => path.split("/").length;
+  const shown = outside.length <= NEW_FILES_NAMED
+    ? outside
+    : [...outside].sort((a, b) => depth(a) - depth(b)).slice(0, NEW_FILES_NAMED);
+  const more = outside.length - shown.length;
+  const rest = more > 0 ? `, and ${more} more; \`git status\` shows the rest` : "";
+  const named = outside.length === 0 ? "" : ` (new: ${shown.join(", ")}${rest})`;
+  const of = unit === undefined ? "" : " of its work";
+  return `the ${paths.length} changed file${paths.length === 1 ? "" : "s"}${of} here${named}`;
 }
 
 // Before this session starts a Unit on the lead's walk, while claims are open
@@ -5343,7 +5359,7 @@ function teamPublishOffer(projectDir: string, unit: string): AskDirective | null
   const key = `${unit}-${head.exitCode === 0 ? new TextDecoder().decode(head.stdout).trim().slice(0, 12) : "none"}`;
   const mark = teamHandoverMarkName("publish", key);
   if (handoverOffered(projectDir, mark)) return null;
-  const work = workToCommitWords(projectDir);
+  const work = workToCommitWords(projectDir, unit);
   const name = unitPlainName(unit);
   return teamHandoverAsk(projectDir, {
     handovers: ["publish"],

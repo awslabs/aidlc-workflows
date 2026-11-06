@@ -50,7 +50,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
-| `/aidlc unit publish <unit> [--commit]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the work first |
+| `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
 | `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
@@ -745,13 +745,20 @@ does not have yet.
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 
 Run from the scoped team checkout after committing its artifacts, source, state
-mirror, and audit shard, or with `--commit` to commit them first (what git shows
-changed, as `share` commits it); `/aidlc` offers that step itself when the
-Unit is complete and approved:
+mirror, and audit shard, or with `--commit` to commit them first; `/aidlc`
+offers that step itself when the Unit is complete and approved. `--commit`
+commits the Unit's own work: every change to a tracked file, the record under
+`aidlc/`, and the new files the Unit's source manifest lists (what its Code
+Generation says it wrote). Other new files, such as AI-DLC's own install or a
+`node_modules` your `.gitignore` does not list, stay on disk uncommitted, and
+the publish says once how many it left out. `--include <path>` puts a new file
+or folder in as well (give it once for each, or `.` for all of them); run it
+after a publish to publish again with them:
 
 ```bash
 /aidlc unit publish user-profile-api
 /aidlc unit publish user-profile-api --commit
+/aidlc unit publish user-profile-api --commit --include docs/diagrams --include README.md
 ```
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref
