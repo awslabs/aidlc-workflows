@@ -51,19 +51,25 @@ const SUMMARIZED_LINE =
   "picks it up from the saved files.";
 const offered = (text: string | undefined): boolean => /full by Kiro's count|Kiro has summarized this chat/.test(text ?? "");
 // A chat whose first turn on the work already took half the window: a new chat
-// on the same model would start about that full (#3642).
-const onSameModel = (model?: string) =>
-  `A new chat on the same model${model ? ` (${model})` : ""} will not help much: this chat reached about`;
+// on the same model would start about that full (#3642). The figure names
+// Kiro's count as its source: on Kiro CLI 3.1.0 the agent left out the sentence
+// that gave it bare, twice, and said the ones that name Kiro.
+const onSameModel = (n: number, model?: string) =>
+  `By Kiro's count this chat was about ${n}% full in its first turn on this work, so a new chat on the same ` +
+  `model${model ? ` (${model})` : ""} will not help much.`;
 const noRoomSummarized = (n: number, model?: string) =>
   "Kiro has summarized this chat to make room, so the agent now works from a summary of what came before. " +
-  `${onSameModel(model)} ${n}% in its first turn on this work, so a new chat would fill up and be summarized again soon.`;
+  onSameModel(n, model);
+// Every sentence of the line that gives a figure says whose figure it is.
+const figuresSourced = (line: string | undefined): boolean =>
+  (line ?? "").split(/(?<=\.) /).filter((sentence) => /\d+%/.test(sentence)).every((sentence) => /by Kiro's count/i.test(sentence));
 // The near-full line asks nothing, so it rides as a change notice, which the
 // agent says as written (left out of the narration, measured live on Kiro CLI
 // 3.1.0); today's offer stays in the narration.
 const notices = (reply: { change_notices?: string[] }) => reply.change_notices ?? [];
 const noRoomUsage = (figure: number, n: number, model?: string) =>
   `This chat is about ${figure}% full by Kiro's count, and once it fills the agent carries on from a summary. ` +
-  `${onSameModel(model)} ${n}% in its first turn on this work, so a new chat would fill up again soon.`;
+  onSameModel(n, model);
 
 function home(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "t-kiro-ctx-home-")));
@@ -383,6 +389,7 @@ describe("t-kiro-context-offer: a new chat on the same model would start about a
     const before = homeDigest(homeDir);
     const first = report(proj, { tree: "kiro", homeDir, chat });
     expect(notices(first)).toContain(noRoomSummarized(64, "claude-opus-4.5"));
+    expect(notices(first).filter((line) => /\d+%/.test(line)).every(figuresSourced)).toBe(true);
     expect(offered(first.narration)).toBe(false);
     expect(first.narration).not.toContain("I recommend it");
     const again = report(proj, { tree: "kiro", homeDir, chat });
@@ -482,7 +489,9 @@ describe("t-kiro-context-offer: a new chat on the same model would start about a
     v2Record(homeDir, chat, 85.2, [
       v2Turn(-3_600_000, 90, 91), v2Turn(20_000, 63.9, 64.2, "claude-opus-4.5"), v2Turn(400_000, 85.2, 85.2, "claude-opus-4.5"),
     ], "claude-opus-4.5");
-    expect(notices(report(proj, { tree: "kiro", homeDir, chat }))).toContain(noRoomUsage(85, 64, "claude-opus-4.5"));
+    const near = notices(report(proj, { tree: "kiro", homeDir, chat }));
+    expect(near).toContain(noRoomUsage(85, 64, "claude-opus-4.5"));
+    expect(near.filter((line) => /\d+%/.test(line)).every(figuresSourced)).toBe(true);
     const light = "34343434-3434-4343-8343-343434343434";
     const proj2 = project(light);
     v2Record(homeDir, light, 85.2, [v2Turn(20_000, 22.1, 30.4), v2Turn(400_000, 85.2, 85.2)]);
