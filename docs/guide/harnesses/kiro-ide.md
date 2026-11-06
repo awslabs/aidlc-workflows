@@ -229,11 +229,15 @@ The install ships:
 - `.kiro/hooks/aidlc-*.json` — the framework hooks in Kiro's v2 hook format.
   Both surfaces register them when a session starts; in Kiro IDE they appear
   in the Agent Hooks panel. Switching one off there writes `"enabled": false`
-  into its file; `/aidlc --doctor` reports it, the next AI-DLC step says it once
-  per change, and while `aidlc-record-human-turn` is off an approval tells you to
-  turn it back on under Agent Hooks rather than to trust the folder. AI-DLC never
-  turns a hook back on for you. The IDE 0.x `.kiro.hook` format is no longer
-  shipped: Kiro IDE 1.x never executes it.
+  into its file, and a file committed that way is off in Kiro CLI too, which has
+  no such panel; `/aidlc --doctor` reports it, the next AI-DLC step says it once
+  per change, and while `aidlc-record-human-turn` is off an approval tells you,
+  rather than to trust the folder, to turn it back on under Agent Hooks in Kiro
+  IDE, or in Kiro CLI to change `"enabled": false` to `true` in that file, then
+  quit Kiro and start `kiro-cli --v3` again in the folder, since the file is
+  read when a session starts. AI-DLC never turns a hook back on for you. The
+  IDE 0.x `.kiro.hook` format is no longer shipped: Kiro IDE 1.x never executes
+  it.
 
 ## First run
 

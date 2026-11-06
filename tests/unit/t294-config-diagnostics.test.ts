@@ -2622,7 +2622,7 @@ describe("t294 trust diagnostics", () => {
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Kiro hooks switched off in Agent Hooks: guards and the reply recorder fail, the rest warn", () => {
+  test("Kiro hooks switched off in their files: guards and the reply recorder fail, the rest warn", () => {
     const ide = temp("aidlc-t294-kiro-ide-hooks-off-");
     cpSync(join(DIST, "kiro-ide"), ide, { recursive: true });
     const hooks = join(ide, ".kiro", "hooks");
@@ -2646,19 +2646,19 @@ describe("t294 trust diagnostics", () => {
     expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([
       {
         pass: false,
-        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
-        fix: 'turn aidlc-guard-tool-call back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-guard-tool-call.json',
+        label: "AI-DLC hook aidlc-guard-tool-call is switched off: the approved plan, reviewed work and AI-DLC's records are not protected",
+        fix: 'in Kiro CLI, change "enabled": false to true in .kiro/hooks/aidlc-guard-tool-call.json, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn aidlc-guard-tool-call back on under Agent Hooks',
       },
       {
         pass: false,
-        label: "AI-DLC hook aidlc-record-human-turn is switched off in Kiro's Agent Hooks: your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
-        fix: 'turn aidlc-record-human-turn back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-record-human-turn.json',
+        label: "AI-DLC hook aidlc-record-human-turn is switched off: your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
+        fix: 'in Kiro CLI, change "enabled": false to true in .kiro/hooks/aidlc-record-human-turn.json, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn aidlc-record-human-turn back on under Agent Hooks',
       },
       {
         pass: true,
         severity: "warn",
-        label: "AI-DLC hooks switched off in Kiro's Agent Hooks: aidlc-log-subagent (a specialist agent's finished part is not recorded); aidlc-session-start (your first prompt starts the session instead)",
-        fix: 'turn them back on under Kiro\'s Agent Hooks, or set "enabled": true in their .kiro/hooks/ files',
+        label: "AI-DLC hooks switched off: aidlc-log-subagent (a specialist agent's finished part is not recorded); aidlc-session-start (your first prompt starts the session instead)",
+        fix: 'in Kiro CLI, change "enabled": false to true in their .kiro/hooks/ files, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn them back on under Agent Hooks',
       },
     ]);
 
@@ -2683,7 +2683,7 @@ describe("t294 trust diagnostics", () => {
     expect(kiroDisabledHookChecks(cli, ".kiro")).toEqual([]);
   });
 
-  test("doctor fails a Kiro IDE guard hook switched off in Agent Hooks", () => {
+  test("doctor fails a Kiro guard hook switched off in its file", () => {
     const project = install("kiro-ide");
     const guard = join(project, ".kiro", "hooks", "aidlc-guard-tool-call.json");
     writeFileSync(guard, JSON.stringify({ ...JSON.parse(readFileSync(guard, "utf-8")), enabled: false }));
@@ -2701,7 +2701,7 @@ describe("t294 trust diagnostics", () => {
     if (result.error) throw result.error;
     expect(JSON.parse(result.stdout).data.checks).toContainEqual(expect.objectContaining({
       pass: false,
-      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
+      label: "AI-DLC hook aidlc-guard-tool-call is switched off: the approved plan, reviewed work and AI-DLC's records are not protected",
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

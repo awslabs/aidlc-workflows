@@ -3670,8 +3670,9 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
-// What stops working when the person switches an AI-DLC hook off in Kiro's
-// Agent Hooks. Legacy names stay while config has not yet removed their files.
+// What stops working when an AI-DLC hook's file is switched off (Kiro IDE's
+// Agent Hooks writes the flag; a committed file carries it). Legacy names stay
+// while config has not yet removed their files.
 const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
   "aidlc-guard-tool-call": "the approved plan, reviewed work and AI-DLC's records are not protected",
   "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
@@ -3702,7 +3703,7 @@ export type KiroDisabledHook = {
   protects: string | null;
 };
 
-// Every AI-DLC hook file under `<harness>/hooks/` that Kiro has switched off,
+// Every AI-DLC hook file under `<harness>/hooks/` that is switched off,
 // in file order. The install manifest says which hook files are AI-DLC's;
 // without one, the aidlc- prefix does. Kiro's `enabled` key is read by the
 // library's one parse (aidlc-lib.ts), which doctor's rows below and the
@@ -3745,16 +3746,16 @@ export function kiroDisabledHookChecks(projectDir: string, harness: string): Doc
     }
     rows.push({
       pass: false,
-      label: `AI-DLC hook ${hook.name} is switched off in Kiro's Agent Hooks: ${hook.protects}`,
-      fix: `turn ${hook.name} back on under Kiro's Agent Hooks, or set "enabled": true in ${hook.file}`,
+      label: `AI-DLC hook ${hook.name} is switched off: ${hook.protects}`,
+      fix: `in Kiro CLI, change "enabled": false to true in ${hook.file}, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn ${hook.name} back on under Agent Hooks`,
     });
   }
   if (advisory.length > 0) {
     rows.push({
       pass: true,
       severity: "warn",
-      label: `AI-DLC hooks switched off in Kiro's Agent Hooks: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
-      fix: `turn them back on under Kiro's Agent Hooks, or set "enabled": true in their ${harness}/hooks/ files`,
+      label: `AI-DLC hooks switched off: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
+      fix: `in Kiro CLI, change "enabled": false to true in their ${harness}/hooks/ files, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn them back on under Agent Hooks`,
     });
   }
   return rows;

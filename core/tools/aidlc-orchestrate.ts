@@ -1816,7 +1816,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   if (switchOff.length > 0) {
     directive = withChangeNotices(directive, [...switchOff, ...(directive.change_notices ?? [])]);
   }
-  // A hook the person switched off in Kiro's Agent Hooks is said once per change, like a switch.
+  // An AI-DLC hook switched off in its Kiro hook file is said once per change, like a switch.
   const hooksOff = engineProjectDir ? kiroHooksOffNoticesOnce(engineProjectDir) : [];
   if (hooksOff.length > 0) {
     directive = withChangeNotices(directive, [...hooksOff, ...(directive.change_notices ?? [])]);
