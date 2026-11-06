@@ -116,14 +116,25 @@ function asKiroIde(project: string): Record<string, string> {
 
 const KIRO_IDE_ADVICE = ["Trust Folder & Continue", "Kiro IDE", "Reload Window", "agent picker"];
 
-// A PATH with a supported kiro-cli (a shell-script stand-in) or with none, and
-// the shell marks that say where doctor runs: Kiro IDE's (TERM_PROGRAM=kiro) or none.
+// A PATH with a supported kiro-cli (a stand-in doctor runs for its version: a
+// .cmd on Windows, a shell script elsewhere) or with none, and the shell marks
+// that say where doctor runs: Kiro IDE's (TERM_PROGRAM=kiro) or none.
 function withKiroCli(project: string, ide: boolean, cli = true): Record<string, string> {
   const bin = join(project, ".managed-policy", "bin");
   mkdirSync(bin, { recursive: true });
-  if (cli) writeFileSync(join(bin, "kiro-cli"), "#!/bin/sh\nprintf '%s\\n' 'kiro-cli 3.1.0'\n", { mode: 0o755 });
+  const windows = process.platform === "win32";
+  if (cli) {
+    writeFileSync(
+      join(bin, windows ? "kiro-cli.cmd" : "kiro-cli"),
+      windows ? "@echo off\r\necho kiro-cli 3.1.0\r\n" : "#!/bin/sh\nprintf '%s\\n' 'kiro-cli 3.1.0'\n",
+      { mode: 0o755 },
+    );
+  }
+  const path = cli ? `${bin}${delimiter}${process.env.PATH ?? ""}` : bin;
   return {
-    PATH: cli ? `${bin}${delimiter}${process.env.PATH ?? ""}` : bin,
+    PATH: path,
+    // Windows names the inherited variable Path; both spellings get the same value.
+    ...(windows ? { Path: path } : {}),
     TERM_PROGRAM: ide ? "kiro" : "",
     VSCODE_GIT_ASKPASS_NODE: "",
     VSCODE_IPC_HOOK: "",
@@ -243,8 +254,8 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
   });
 
   // Outside Kiro IDE, with a supported kiro-cli on the PATH, the same warning
-  // leads with Kiro CLI's restart (#3596). Doctor runs the stand-in for its version.
-  test.skipIf(process.platform === "win32")(
+  // leads with Kiro CLI's restart (#3596), Windows included.
+  test(
     "Kiro with no heartbeat, run outside Kiro IDE where kiro-cli is found, leads with Kiro CLI's step",
     () => {
       const project = freshProject();

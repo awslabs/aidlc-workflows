@@ -25,7 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, relative } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
@@ -2672,17 +2672,22 @@ describe("t299 first-run guidance helpers", () => {
 
   // Kiro's CLI-first lines (#3596) lead only outside Kiro IDE (neither its
   // shell marks nor its terminal), for a supported kiro-cli on an absolute
-  // PATH entry. The stand-in kiro-cli is a shell script the check runs for
-  // its version, and it leaves a mark when it runs.
-  test.skipIf(process.platform === "win32")(
+  // PATH entry. The stand-in kiro-cli, which the check runs for its version
+  // and which leaves a mark when it runs, is a .cmd on Windows (the issue's
+  // platform) and a shell script elsewhere.
+  test(
     "Kiro CLI's words lead only outside Kiro IDE, for a supported kiro-cli on an absolute PATH entry",
     () => {
       const kiroIdeMarks = ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"];
+      const windows = process.platform === "win32";
       const cli = (version: string) => {
         const bin = temp("aidlc-t299-kiro-cli-");
+        const ran = join(bin, "ran");
         writeFileSync(
-          join(bin, "kiro-cli"),
-          `#!/bin/sh\n: > "${join(bin, "ran")}"\nprintf '%s\\n' ${JSON.stringify(version)}\n`,
+          join(bin, windows ? "kiro-cli.cmd" : "kiro-cli"),
+          windows
+            ? `@echo off\r\ntype nul > "${ran}"\r\necho ${version}\r\n`
+            : `#!/bin/sh\n: > "${ran}"\nprintf '%s\\n' ${JSON.stringify(version)}\n`,
           { mode: 0o755 },
         );
         return bin;
@@ -2690,6 +2695,7 @@ describe("t299 first-run guidance helpers", () => {
       const leads = (env: NodeJS.ProcessEnv) => harnessCliLeads("kiro-ide", kiroIdeMarks, env);
       const current = cli("kiro-cli 3.1.0");
       expect(leads({ PATH: current })).toBe(true);
+      expect(existsSync(join(current, "ran"))).toBe(true);
       // Kiro CLI in VS Code's terminal: VS Code's own TERM_PROGRAM rules Kiro IDE out.
       expect(leads({ PATH: current, TERM_PROGRAM: "vscode", VSCODE_PID: "1" })).toBe(true);
       const inIde = cli("kiro-cli 3.1.0");
@@ -2706,9 +2712,13 @@ describe("t299 first-run guidance helpers", () => {
       // Below the Kiro row's 2.24.1 floor `kiro-cli --v3` is not there to start.
       expect(leads({ PATH: cli("kiro-cli 2.10.0") })).toBe(false);
       expect(leads({ PATH: temp("aidlc-t299-no-kiro-cli-") })).toBe(false);
+      // A temp folder on another drive than the checkout has no relative path.
       const relativeOnly = cli("kiro-cli 3.1.0");
-      expect(leads({ PATH: relative(process.cwd(), relativeOnly) })).toBe(false);
-      expect(existsSync(join(relativeOnly, "ran"))).toBe(false);
+      const relativePath = relative(process.cwd(), relativeOnly);
+      if (!isAbsolute(relativePath)) {
+        expect(leads({ PATH: relativePath })).toBe(false);
+        expect(existsSync(join(relativeOnly, "ran"))).toBe(false);
+      }
       // A harness with no CLI of this kind never leads with one.
       expect(harnessCliLeads("cursor", kiroIdeMarks, { PATH: current })).toBe(false);
     },
