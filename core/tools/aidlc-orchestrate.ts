@@ -707,8 +707,8 @@ import {
   workspaceSyncInvocation,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
-import { isProjectSubmodule, localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
-import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
+import { isProjectSubmodule, localRepoOverrideLines, readWorkspaceRepos, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
+import { noteReposManifestOffered, reposManifestListsOnlyAddedWorkspace, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
   builtFromAnotherMachine,
   lastCommittedByThisPerson,
@@ -5537,13 +5537,17 @@ function stageNotBegun(projectDir: string, slug: string): boolean {
 // nobody to answer. Null when the step goes on.
 function reposManifestAsk(projectDir: string, stateContent: string): AskDirective | null {
   if (process.env.AIDLC_UNATTENDED === "1") return null;
-  if (existsSync(join(projectDir, REPOS_FILE)) || reposManifestOffered(projectDir)) return null;
+  // The repos.json add-repo made for the workspace folder itself lists none of
+  // the repos found here, so the offer still stands for it; any other stands it back.
+  const addedWorkspace = existsSync(join(projectDir, REPOS_FILE)) && reposManifestListsOnlyAddedWorkspace(projectDir);
+  if ((existsSync(join(projectDir, REPOS_FILE)) && !addedWorkspace) || reposManifestOffered(projectDir)) return null;
   const teams = homeLocation(stateContent) !== null || isTeamUnitOwnership(stateContent);
   if (!teams && intentRepos(projectDir).length < 2) return null;
   // Only repos besides the workspace folder: teammates clone the workspace
   // itself, so work whose one repo it is needs no list (Arden 2026-11-06),
   // and its own submodules come with that clone.
-  const names = discoverSiblingRepos(projectDir).filter((name) => !isProjectSubmodule(projectDir, name));
+  const inFile = new Set(addedWorkspace ? readWorkspaceRepos(projectDir).manifest?.repos.map((repo) => repo.name) ?? [] : []);
+  const names = discoverSiblingRepos(projectDir).filter((name) => !isProjectSubmodule(projectDir, name) && !inFile.has(name));
   if (names.length === 0) return null;
   if (!isReadOnlyEngineProbe()) noteReposManifestOffered(projectDir);
   const listed = names.length === 1 ? `the repo found here (${names[0]})` : `the ${names.length} repos found here (${names.join(", ")})`;
@@ -5551,10 +5555,14 @@ function reposManifestAsk(projectDir: string, stateContent: string): AskDirectiv
     kind: "ask",
     ask_type: "repos-manifest",
     response_route: "command",
-    question: `Write repos.json from ${listed}? It lists each one's folder and the address its origin points to, ` +
+    question: `${addedWorkspace ? `Add ${listed} to repos.json?` : `Write repos.json from ${listed}?`} It lists each one's folder and the address its origin points to, ` +
       "so a teammate's clone knows where they go.",
     choices: [
-      { label: "Write it", detail: "You can edit or commit it like any file.", command: `${workspaceSyncInvocation()} --write-manifest` },
+      {
+        label: addedWorkspace ? (names.length === 1 ? "Add it" : "Add them") : "Write it",
+        detail: "You can edit or commit it like any file.",
+        command: `${workspaceSyncInvocation()} --write-manifest`,
+      },
       { label: "Not now", detail: "I won't ask again.", command: `${aidlcToolInvocation("orchestrate")} next` },
     ],
   };

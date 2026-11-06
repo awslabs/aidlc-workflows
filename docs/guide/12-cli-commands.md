@@ -3329,10 +3329,14 @@ aidlc system workspace-sync --write-manifest
 `--write-manifest` writes `repos.json` from the repos found here (each child
 repo, or the workspace itself as `"path": "."` when it is the one code repo),
 with the address each one's `origin` points to, read and never changed; it
-writes nothing when `repos.json` already exists, and leaves a user or token in
-an origin address out. AI-DLC offers to run it once per clone, at a stage
+writes nothing when `repos.json` already exists, except the one
+`intent add-repo` made for the workspace folder itself (`"path": "."`), unchanged
+since, which gains the repos found here; it leaves a user or token in an origin
+address out. AI-DLC offers to run it once per clone, at a stage
 boundary, the first time the work records repos or teams are chosen; one
-person's work on one repo is never offered it.
+person's work on one repo is never offered it. A `repos.json` that
+`intent add-repo` made for the workspace folder itself does not stop the offer,
+which then asks to add the repos found here to it.
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated

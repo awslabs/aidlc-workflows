@@ -43,6 +43,7 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const SYNC = join(AIDLC_SRC, "tools", "aidlc-workspace-sync.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const D = String.fromCharCode(0x2014);
 
 const dirs: string[] = [];
@@ -433,6 +434,16 @@ function next(proj: string): Record<string, unknown> {
   return result.directive;
 }
 
+function utility(proj: string, args: string[], env: NodeJS.ProcessEnv = ENV): { rc: number; out: string } {
+  const result = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+    cwd: proj,
+    encoding: "utf-8",
+    env: { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+}
+
 describe("the one offer to write repos.json", () => {
   test("work built by teams that records repos, in a workspace with none, is offered once at a stage boundary", () => {
     const proj = boundaryProject(["checkout-api", "checkout-web"]);
@@ -489,6 +500,70 @@ describe("the one offer to write repos.json", () => {
     writeFileSync(join(proj, "repos.json"), JSON.stringify({ repos: [{ name: "checkout-api" }, { name: "checkout-web" }] }));
     const step = next(proj);
     expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
+  });
+
+  // x2783-f8: one person's work over two child repos, no repos.json, the
+  // workspace a checkout of its own. A Unit's code put a file at the workspace
+  // root, so the agent added the workspace itself by its folder; that wrote a
+  // repos.json listing only the workspace. The offer to list the repos found
+  // here still comes, once, and adds them to that file.
+  test("the workspace itself added by its folder leaves the offer to list the repos found here, which adds them", () => {
+    const proj = boundaryProject(["tracker-core", "tracker-cli"], false);
+    git(proj, ["init", "-q", "-b", "main"]);
+    const added = utility(proj, ["intent", "add-repo", "habits", "--path", "."]);
+    expect(added.rc, added.out).toBe(0);
+    expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8"))).toEqual({ repos: [{ name: "habits", path: "." }] });
+    expect(added.out).toContain("repos.json is new: it lists habits as the workspace folder itself. Commit it to share it with your team.");
+    const ask = next(proj);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("repos-manifest");
+    expect(ask.question).toBe(
+      "Add the 2 repos found here (tracker-cli, tracker-core) to repos.json? It lists each one's folder and " +
+        "the address its origin points to, so a teammate's clone knows where they go.",
+    );
+    const written = sync(proj, ["--write-manifest"]);
+    expect(written.status, written.out).toBe(0);
+    expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8")).repos).toEqual([
+      { name: "habits", path: "." },
+      { name: "tracker-cli", url: "", path: "tracker-cli" },
+      { name: "tracker-core", url: "", path: "tracker-core" },
+    ]);
+    const after = next(proj);
+    expect(after.ask_type, JSON.stringify(after)).not.toBe("repos-manifest");
+  });
+
+  // Only the add's own file: a repos.json the person wrote, or changed after
+  // the add, is theirs, and the offer stands back for it as it always has.
+  test("a repos.json the person wrote listing only the workspace, or changed after the add, is never offered it", () => {
+    const own = boundaryProject(["tracker-core", "tracker-cli"], false);
+    git(own, ["init", "-q", "-b", "main"]);
+    const raw = `${JSON.stringify({ repos: [{ name: "habits", path: "." }] }, null, 2)}\n`;
+    writeFileSync(join(own, "repos.json"), raw);
+    const step = next(own);
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
+    const kept = sync(own, ["--write-manifest"]);
+    expect(kept.out).toContain("repos.json is already here; nothing was written.");
+    expect(readFileSync(join(own, "repos.json"), "utf-8")).toBe(raw);
+
+    const changed = boundaryProject(["tracker-core", "tracker-cli"], false);
+    git(changed, ["init", "-q", "-b", "main"]);
+    expect(utility(changed, ["intent", "add-repo", "habits", "--path", "."]).rc).toBe(0);
+    writeFileSync(join(changed, "repos.json"), `// ours\n${readFileSync(join(changed, "repos.json"), "utf-8")}`);
+    const later = next(changed);
+    expect(later.ask_type, JSON.stringify(later)).not.toBe("repos-manifest");
+  });
+
+  test("with a chat, the line about the repos.json the add wrote rides the next step the agent speaks from", () => {
+    const proj = boundaryProject(["tracker-core", "tracker-cli"], false);
+    git(proj, ["init", "-q", "-b", "main"]);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: SESSION };
+    for (const key of ["AIDLC_SESSION_OVERRIDE_SOURCE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CODEX_THREAD_ID", "KIRO_SESSION_ID"]) delete chat[key];
+    const added = utility(proj, ["intent", "add-repo", "habits", "--path", "."], chat);
+    expect(added.rc, added.out).toBe(0);
+    expect(added.out).not.toContain("repos.json is new");
+    const step = runOrchestrateNext(ORCH, proj, [], { env: chat }).directive;
+    expect((step?.change_notices as string[] | undefined) ?? [], JSON.stringify(step)).toContain(
+      "repos.json is new: it lists habits as the workspace folder itself. Commit it to share it with your team.",
+    );
   });
 
   test("the person's own approval moves the work on: the next step makes the offer once, then never again", async () => {

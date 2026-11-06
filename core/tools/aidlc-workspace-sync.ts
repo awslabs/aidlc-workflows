@@ -45,8 +45,10 @@ import {
   resolveProjectDir,
   withAuditLock,
 } from "./aidlc-lib.ts";
+import { reposManifestListsOnlyAddedWorkspace } from "./aidlc-workspace-repos.ts";
 import {
   displayRepoPath,
+  isProjectSubmodule,
   parseWorkspaceManifest,
   readWorkspaceRepos,
   repoNotThereLine,
@@ -55,6 +57,7 @@ import {
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
   WORKSPACE_GITIGNORE_GATE_END as GATE_END,
   workspaceGitignoreEntries,
+  workspaceManifestWith,
   withoutCredentials,
 } from "./aidlc-workspace-manifest.ts";
 
@@ -1506,14 +1509,33 @@ export function originUrl(dir: string): string | null {
 // repos.json written from the repos found here: each child repo, or the
 // workspace itself (`"path": "."`) when it is the one code repo, with the
 // address its own origin points to (read, never changed; any user and token
-// left out), blank when it has none.
+// left out), blank when it has none. The one add-repo made for the workspace
+// folder itself gains the repos found here that the offer named.
 function writeManifest(root: string): number {
   const manifestPath = join(root, "repos.json");
+  const origin = (dir: string): string => withoutCredentials(originUrl(dir) ?? "");
   if (pathEntryExists(manifestPath)) {
-    console.log("repos.json is already here; nothing was written.");
+    const raw = reposManifestListsOnlyAddedWorkspace(root) ? readFileSync(manifestPath, "utf-8") : null;
+    const manifest = raw === null ? null : parseWorkspaceManifest(raw);
+    const found = manifest === null ? [] : discoverSiblingRepos(root)
+      .filter((name) => !isProjectSubmodule(root, name) && !manifest.repos.some((repo) => repo.name === name));
+    const next = found.reduce<string | null>(
+      (text, name) => text === null ? null : workspaceManifestWith(text, manifest?.org, { name, url: origin(join(root, name)), path: name }),
+      raw,
+    );
+    if (raw === null || next === null || found.length === 0) {
+      console.log("repos.json is already here; nothing was written.");
+      return 0;
+    }
+    writeFileSync(manifestPath, next, "utf-8");
+    const blank = found.filter((name) => origin(join(root, name)) === "");
+    console.log(
+      `Added ${found.join(", ")} to repos.json: each one's folder and the address its origin points to. ` +
+        "Commit it so a teammate's clone knows where they go." +
+        (blank.length > 0 ? ` ${blank.join(", ")} has no origin, so its "url" is blank for now.` : ""),
+    );
     return 0;
   }
-  const origin = (dir: string): string => withoutCredentials(originUrl(dir) ?? "");
   const children = discoverSiblingRepos(root);
   const repos = children.length > 0
     ? children.map((name) => ({ name, url: origin(join(root, name)), path: name }))

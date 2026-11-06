@@ -168,6 +168,7 @@ import {
   type StagedWorkspaceRepo,
   stageWorkspaceRepo,
 } from "./aidlc-workspace-sync.ts";
+import { noteReposManifestWritten } from "./aidlc-workspace-repos.ts";
 import {
   composedPluginNames,
   copilotCliTrust,
@@ -9770,6 +9771,11 @@ function handleIntentRepos(
       die(`Could not clone ${name} from ${address}: ${why}. Nothing was changed. To clone it yourself, run ${byHand}, then add it again.`);
     }
   }
+  // A repos.json the add makes is noted by what it wrote, so the offer to list
+  // the repos found here still knows it for the add's, never the person's.
+  const madeManifest = mapping !== null && mapping.raw === null ? mapping.next
+    : clone !== null && clone.manifest.raw === null ? clone.manifest.next
+    : null;
   const outcome = withAuditLock(projectDir, () => {
     if (staged !== null && isGitRepoDir(target)) {
       // Cloned here meanwhile (another chat, workspace-sync): it is on disk.
@@ -9795,6 +9801,7 @@ function handleIntentRepos(
         die(`Could not write repos.json for ${name}: ${maskUserinfo(errorMessage(err))}. Nothing was changed.`);
       }
     }
+    if (madeManifest !== null && existsSync(join(projectDir, "repos.json"))) noteReposManifestWritten(projectDir, madeManifest);
     return withAuditLock(projectDir, () => {
       const list = readIntentRegistry(projectDir, space);
       const row = list.find((entry) => recordDirMatches(entry, dirName));
@@ -9882,8 +9889,17 @@ function handleIntentRepos(
       };
     }, dirName, space);
   });
-  // What the person hears: what happened and the way back, in their words.
+  // What the person hears: what happened and the way back, in their words. The
+  // line about a repos.json the add made (a file the team commits) rides the
+  // next step the agent speaks from, as its change notice; with no chat to keep
+  // it for, it is said here.
   const lines: string[] = [];
+  const sayNote = (note: string | null, written: { raw: string | null; next: string | null }): void => {
+    if (note === null || note === "") return;
+    const kept = written.raw === null && written.next !== null && selection.sessionId !== null &&
+      addPendingPersonLines(projectDir, selection.sessionId, [note]);
+    if (!kept) lines.push(note);
+  };
   switch (outcome.kind) {
     case "already":
       lines.push(`${name} is already one of this piece of work's repos; nothing changed.`);
@@ -9902,13 +9918,13 @@ function handleIntentRepos(
         `Cloned ${name} from ${maskUserinfo(clone!.address)} to ` +
           `${displayRepoPath(readWorkspaceRepos(projectDir).entries.get(name)?.path ?? name)}; it was already one of this piece of work's repos.`,
       );
-      if (clone!.note !== null) lines.push(clone!.note);
+      sayNote(clone!.note, clone!.manifest);
       break;
     case "changed":
       if (verb === "add-repo") {
         if (staged !== null && clone !== null) {
           lines.push(`Cloned ${name} from ${maskUserinfo(clone.address)} and added it to this piece of work's repos.`);
-          if (clone.note !== null) lines.push(clone.note);
+          sayNote(clone.note, clone.manifest);
         } else if (outcome.unit !== undefined) {
           lines.push(`Added ${name} to ${outcome.unit}'s repos: the lead's plan did not list it, and ${outcome.unit}'s change there goes to the lead's project with its push.`);
         } else if (outcome.first) {
@@ -9917,7 +9933,7 @@ function handleIntentRepos(
         } else {
           lines.push(`Added ${name} to this piece of work's repos.`);
         }
-        if (mapping !== null && mapping.note !== "") lines.push(mapping.note);
+        if (mapping !== null) sayNote(mapping.note, mapping);
         if (outcome.reState === "completed") {
           lines.push(`Reverse Engineering has not documented ${name} yet, so it and the stages that read the code knowledge may show as behind until you revisit them.`);
         } else if (outcome.reAction === "EXECUTE") {
@@ -10014,11 +10030,12 @@ function plannedRepoPath(
     ? "It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in repos.local.json."
     : "Commit it to share it with your team.";
   const stripped = kept !== address ? " Its address there leaves out the credential." : "";
+  const where = resolve(dir) === resolve(projectDir) ? "as the workspace folder itself" : `at ${shown}`;
   return {
     raw,
     next,
     shown,
-    note: `${raw === null ? "repos.json is new: it lists" : "repos.json now lists"} ${name} at ${shown}. ${share}${stripped}`,
+    note: `${raw === null ? "repos.json is new: it lists" : "repos.json now lists"} ${name} ${where}. ${share}${stripped}`,
     clone: there ? null : {
       repo: { name, path: shown, url: url! },
       org: repos.manifest?.org,

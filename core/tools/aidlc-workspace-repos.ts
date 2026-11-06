@@ -2,10 +2,11 @@
 // project and for the offer to write repos.json. repoDir in aidlc-lib.ts is the
 // one resolver; this module builds on it.
 
-import { mkdirSync, lstatSync, realpathSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, lstatSync, readFileSync, realpathSync, existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
-import { isoTimestamp, repoDir, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
-import { readWorkspaceRepos } from "./aidlc-workspace-manifest.ts";
+import { isoTimestamp, repoDir, repoIsWorkspace, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
+import { readWorkspaceRepos, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
 
 // The checkouts repos.json and repos.local.json place at a path of their own.
 function mappedRepoDirs(projectDir: string): string[] {
@@ -117,4 +118,40 @@ export function noteReposManifestOffered(projectDir: string): void {
   } catch {
     // Without the mark the offer comes once more.
   }
+}
+
+// The repos.json add-repo made in this clone, by the sha256 of what it wrote.
+// One a person wrote, or changed since, never matches it.
+const REPOS_WRITTEN_FILE = "repos-written.json";
+
+function textDigest(text: string): string {
+  return `sha256:${createHash("sha256").update(text, "utf-8").digest("hex")}`;
+}
+
+export function noteReposManifestWritten(projectDir: string, text: string): void {
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileAtomic(
+      join(sessionsDir(projectDir), REPOS_WRITTEN_FILE),
+      `${JSON.stringify({ digest: textDigest(text), written_at: isoTimestamp() })}\n`,
+    );
+  } catch {
+    // Without the mark the file counts as the person's: the offer stands back, as before.
+  }
+}
+
+// repos.json is the one add-repo made here for the workspace folder itself (a
+// Unit's file at the workspace root), unchanged since: it lists only the
+// workspace, so the offer to list the repos found here still stands for it,
+// and --write-manifest adds them to it. A repos.json the person wrote is never
+// this one.
+export function reposManifestListsOnlyAddedWorkspace(projectDir: string): boolean {
+  try {
+    const mark = JSON.parse(readFileSync(join(sessionsDir(projectDir), REPOS_WRITTEN_FILE), "utf-8")) as { digest?: unknown };
+    if (mark.digest !== textDigest(readFileSync(join(projectDir, REPOS_FILE), "utf-8"))) return false;
+  } catch {
+    return false;
+  }
+  const manifest = readWorkspaceRepos(projectDir).manifest;
+  return manifest !== null && manifest.repos.length > 0 && manifest.repos.every((repo) => repoIsWorkspace(projectDir, repo.name));
 }
