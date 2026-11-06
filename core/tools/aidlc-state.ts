@@ -2688,6 +2688,26 @@ function handleUnpark(_args: string[]): void {
   });
 }
 
+function unitCompletionAwaitsChecks(
+  pd: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  unit: string,
+  waveMode: boolean,
+): boolean {
+  try {
+    if (!artifactGuardDisabled(pd) && missingUnitArtifacts(pd, stage, unit).length > 0) return false;
+    if (unitCompletedReceipts(pd, stage.slug).has(unit)) return false;
+    const open = unitOpenCheckpoints(pd, stage.slug);
+    if (open.length > 0) {
+      return open.some((entry) => entry.unit === unit && entry.state === "in-progress");
+    }
+    return waveMode ||
+      guardRecoveryAskSelected(pd, readStateFile(pd), stage.slug, unit, "record-unit-completion");
+  } catch {
+    return false;
+  }
+}
+
 // unit <start|pause|resume|complete> --stage <slug> --unit <name>
 //        [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave]
 //
@@ -2757,6 +2777,11 @@ function handleUnit(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   validateLiveUnitScope(pd, unit);
+  const unitSensorChecks =
+    action === "complete" && unitCompletionAwaitsChecks(pd, stage, unit, waveMode)
+      ? fireUnitStageGateSensors(pd, slug, unit)
+      : { issues: [], fingerprints: new Map<string, string>(), failedFires: [] };
+  enforceBlockingUnitSensors(slug, unit, unitSensorChecks.issues);
   // One lock across read→validate→emit→write (the C2b idiom): the checkpoint
   // read and the receipt append must see one ledger snapshot, or two racing
   // `unit start` calls could both pass the single-active-unit check.
@@ -3006,6 +3031,7 @@ function handleUnit(args: string[]): void {
         `Refusing wave completion for unit "${unit}" of "${slug}": the final artifact fingerprint could not be computed.`,
       );
     }
+    verifyGateSensorArtifactsUnchanged(slug, unitSensorChecks);
 
     let eventType: string;
     if (action === "start") eventType = "UNIT_STARTED";
@@ -3784,14 +3810,14 @@ interface SensorFireVerdict {
   note?: string;
 }
 
-interface BlockingSensorIssue {
+export interface BlockingSensorIssue {
   sensorId: string;
   outputPath: string;
   detailPath: string | null;
   reason: string;
 }
 
-interface GateSensorEvaluation {
+export interface GateSensorEvaluation {
   issues: BlockingSensorIssue[];
   fingerprints: Map<string, string>;
   // The fires whose verdict reported findings (a detail file), advisory or not.
@@ -4212,7 +4238,7 @@ function fireGateSensors(
   return { issues, fingerprints, failedFires };
 }
 
-function verifyGateSensorArtifactsUnchanged(
+export function verifyGateSensorArtifactsUnchanged(
   slug: string,
   evaluation: GateSensorEvaluation,
 ): void {
@@ -4300,6 +4326,49 @@ function addBlockingSensorOverrideFields(
   fields["Blocking Sensor Reasons"] = issues
     .map((issue) => `${issue.sensorId}: ${issue.reason}`)
     .join("; ");
+}
+
+export function fireUnitStageGateSensors(
+  pd: string,
+  slug: string,
+  unit: string,
+): GateSensorEvaluation {
+  const stage = findStageBySlug(slug);
+  const blocking = (stage?.sensors_applicable ?? []).filter((sensor) =>
+    sensor.fire_on === "gate" && sensor.default_severity === "blocking"
+  );
+  const paths = stage === undefined || blocking.length === 0
+    ? []
+    : declaredOutputsForGate(pd, stage, unit);
+  if (stage === undefined || blocking.length === 0 || paths.length === 0) {
+    return { issues: [], fingerprints: new Map<string, string>(), failedFires: [] };
+  }
+  return fireGateSensors(pd, stage, readStateFile(pd), undefined, false, {
+    sensorIds: new Set(blocking.map((sensor) => sensor.id)),
+    paths,
+    unit,
+  });
+}
+
+export function enforceBlockingUnitSensors(
+  slug: string,
+  unit: string,
+  issues: BlockingSensorIssue[],
+): void {
+  if (issues.length === 0) return;
+  const sensorIds = [...new Set(issues.map((issue) => issue.sensorId))];
+  const detailPaths = issues.flatMap((issue) =>
+    issue.detailPath === null ? [] : [issue.detailPath]
+  );
+  const reasons = issues.map(
+    (issue) => `${issue.sensorId}@${issue.outputPath}: ${issue.reason}`,
+  );
+  error(
+    `Blocking gate sensor evaluation did not pass for unit "${unit}" of "${slug}". Sensors: ` +
+      `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
+      `Reasons: ${reasons.join("; ")}. Fix the findings in the Unit's deliverables, then ` +
+      "record the step again; the checks re-run on the bytes that enter it.",
+  );
 }
 
 function verifyGateOpeningGuards(

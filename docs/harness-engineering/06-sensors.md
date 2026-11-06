@@ -38,8 +38,11 @@ before you author anything:
   repository's files, and a failing file is named with its repository
   (`service-007/dependencies.md`). A gate the engine
   approves itself under Construction autonomy fires only blocking sensors, since
-  advisory evidence has no reader there. The dispatch stays outside the
-  transaction because the sensor dispatcher takes the audit lock.
+  advisory evidence has no reader there. A Unit-major run reaches `unit complete`
+  and the Unit's Construction checkpoint approval before that stage gate opens,
+  so both fire the same blocking checks on the Unit's own deliverables. The
+  dispatch stays outside the transaction because the sensor dispatcher takes the
+  audit lock.
 - **Advisory gate checks run once before the gate, too.** When the stage's
   documents are written and handed on, the first hand-off of the attempt (the
   review request, or the report that opens the gate when no review took them
