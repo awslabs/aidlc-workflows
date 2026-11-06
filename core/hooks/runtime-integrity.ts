@@ -1229,10 +1229,12 @@ let authoredScriptText = false;
 // One walk per script per tool call. The script-runs-script walk has no visited
 // record (bounded only by MAX_EXECUTION_DEPTH), so a script many parents reach
 // is re-walked once per path to it: exponential in depth, cycle or not. A verdict
-// is pure per tool call (cwd is fixed), so a clean walk is cached; a script still
-// on the stack returns at once, ending cycles without the depth cap. Only clean
-// verdicts are cached (a protected verdict ends the walk); both reset per call.
-const cleanScriptWalks = new Set<string>();
+// is pure per tool call (cwd is fixed), so a clean walk is cached with the depth
+// it was walked at, and reused only at that depth or deeper: a deeper walk may
+// have stopped at MAX_EXECUTION_DEPTH before reaching a protected write. A script
+// still on the stack returns at once, ending cycles without the depth cap. Only
+// clean verdicts are cached (a protected verdict ends the walk); both reset per call.
+const cleanScriptWalks = new Map<string, number>();
 const scriptWalksInProgress = new Set<string>();
 
 function protectedWriteTarget(path: string, cwd: string): boolean {
@@ -1389,7 +1391,8 @@ function protectedScriptFile(
   // cleanScriptWalks. Keyed by interpreter too, since the same file read as
   // shell and as JS are different walks.
   const key = `${absolute}\0${language ?? "auto"}`;
-  if (cleanScriptWalks.has(key) || scriptWalksInProgress.has(key)) return false;
+  const cleanAt = cleanScriptWalks.get(key);
+  if ((cleanAt !== undefined && cleanAt <= depth) || scriptWalksInProgress.has(key)) return false;
   try {
     const stat = statSync(absolute);
     if (!stat.isFile() || stat.size > MAX_SCRIPT_BYTES) return false;
@@ -1401,7 +1404,7 @@ function protectedScriptFile(
     try {
       const protectedScript = shell ? protectedShell(source, cwd, depth + 1)
         : protectedContent(source, cwd, depth + 1, language ? language === "python" : path.endsWith(".py"));
-      if (!protectedScript) cleanScriptWalks.add(key);
+      if (!protectedScript) cleanScriptWalks.set(key, depth);
       return protectedScript;
     } finally {
       scriptWalksInProgress.delete(key);

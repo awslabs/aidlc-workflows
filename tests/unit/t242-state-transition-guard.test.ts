@@ -2672,4 +2672,33 @@ describe("t242 state-transition ownership guard", () => {
     write("diamond.sh", "bash scripts/p1.sh\nbash scripts/p2.sh");
     expect(verdict("bash scripts/diamond.sh")).toBe(true);
   });
+
+  // A clean walk cut short by MAX_EXECUTION_DEPTH is not a clean script: when a
+  // long chain reaches x.sh too deep to see y.sh's write, the same tool call
+  // running x.sh directly must still be refused. The sweep runs past the limit
+  // so the test does not depend on how many depth steps one hop costs.
+  test("runtime integrity walks a script again when it reaches it shallower", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const scripts = join(project, "scripts");
+    mkdirSync(scripts, { recursive: true });
+    const write = (name: string, body: string) => writeFileSync(join(scripts, name), `#!/bin/bash\n${body}\n`);
+    const verdict = (command: string) =>
+      violatesRuntimeIntegrity({ cwd: project, tool_name: "Bash", tool_input: { command } });
+
+    write("x.sh", "bash scripts/y.sh");
+    write("y.sh", "rm -rf aidlc/.aidlc-sessions");
+    expect(verdict("bash scripts/x.sh")).toBe(true);
+    let cut = 0;
+    for (let length = 1; length <= 24; length++) {
+      for (let hop = 1; hop <= length; hop++) {
+        write(`c${length}_${hop}.sh`, hop < length ? `bash scripts/c${length}_${hop + 1}.sh` : "bash scripts/x.sh");
+      }
+      const chain = `bash scripts/c${length}_1.sh`;
+      if (!verdict(chain)) cut++;
+      expect(verdict(`${chain}; bash scripts/x.sh`), `chain of ${length}`).toBe(true);
+    }
+    // The sweep reached the limit: the longest chains alone come back clean.
+    expect(cut).toBeGreaterThan(0);
+  });
 });
