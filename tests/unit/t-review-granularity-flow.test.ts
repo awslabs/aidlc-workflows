@@ -260,6 +260,15 @@ describe("t-review-granularity-flow (phase mode, real CLI)", () => {
     expect(wrong.status).not.toBe(0);
     expect(wrong.out).toContain("--covered-by");
     expect(wrong.out).toContain("refined-mockups");
+    // A bare --person-asked (no proved message) lifts nothing: the person's
+    // ask is their words on record, not the agent's say-so.
+    const sayso = run(LOG_TOOL, [
+      "review", "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent", "--iteration", "1",
+      "--person-asked",
+    ], p);
+    expect(sayso.status).not.toBe(0);
+    expect(sayso.out).toContain("Refined Mockups");
     // No receipt or metrics row leaked from the refusals.
     expect(metricsFile(p)).toBeUndefined();
   });

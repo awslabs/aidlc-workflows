@@ -3832,13 +3832,25 @@ function handleReview(args: string[]): void {
       !retryPending &&
       flags.single !== "true" &&
       flags.unit === undefined &&
-      !autonomousCandidate &&
-      flags["person-asked"] !== "true"
+      !autonomousCandidate
     ) {
       const role = phaseReviewRole(node, getField(state, "Scope") ?? "", state);
       if (role.role === "deferred") {
         const coveredBy = flags["covered-by"];
-        if (coveredBy !== role.anchor) {
+        // A review the person asked for lifts the deferral the way it lifts
+        // the budget: the conductor's say-so alone (--person-asked with no
+        // proved message) lifts nothing.
+        const personAsked = flags["person-asked"] === "true" && flags.message !== undefined && (() => {
+          const proof = proveMessage(pd, flags.message, "request", { request: true });
+          if ("refusal" in proof) error(proof.refusal);
+          // The same recency rule as the budget lift: the message has to have
+          // been sent since this review was last requested, so a stale id
+          // cannot reopen the deferral.
+          return messageSinceReviewRequest(
+            pd, flags.stage as string, flags.reviewer as string, flags.unit, proof.message, intent, space,
+          );
+        })();
+        if (coveredBy !== role.anchor && !personAsked) {
           const anchorName = loadStageGraphAll().find((entry) => entry.slug === role.anchor)?.name ?? role.anchor;
           refuseReview(
             `Reviews are grouped per phase for this piece of work: "${flags.stage}"'s review runs at ` +
@@ -4294,6 +4306,17 @@ function handleReview(args: string[]): void {
         // The one request that still works when a pending review can never
         // finish (see replaceIteration below): named in every refusal that would
         // otherwise leave the conductor restoring bytes it cannot restore.
+        // A deferred stage's named next request carries --covered-by, so the
+        // step the refusal hands over is admitted first time (phase review).
+        const deferredAnchor = ((): string | null => {
+          try {
+            if (flags.unit !== undefined || flags.single === "true") return null;
+            const role = phaseReviewRole(node, getField(state, "Scope") ?? "", state);
+            return role.role === "deferred" ? role.anchor : null;
+          } catch {
+            return null;
+          }
+        })();
         const requestAgain = (n: number): string => renderReviewRequestCommand({
           projectDir: pd,
           stage: flags.stage,
@@ -4301,7 +4324,7 @@ function handleReview(args: string[]): void {
           ...(flags.unit ? { unit: flags.unit } : {}),
           ...(flags.single === "true" ? { single: true } : {}),
           iteration: n,
-        });
+        }) + (deferredAnchor === null ? "" : ` --covered-by "${deferredAnchor}"`);
         const startAgain = (n: number): string =>
           pendingStatus?.iteration === n && pendingStatus.replaceable
             ? ` It never got a verdict, so request it again instead: \`${requestAgain(n)}\`.`

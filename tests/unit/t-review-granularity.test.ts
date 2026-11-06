@@ -183,6 +183,21 @@ describe("phaseReviewRole", () => {
     }
   });
 
+  test("a not-yet-completed member never defers backward to an anchor that already completed", () => {
+    // A jump put the walk behind the anchor (or a covered stage was reopened):
+    // refined-mockups is done, user-stories is pending again.
+    const behindAnchor = MVP_PHASE_STATE
+      .replace("- [x] user-stories — EXECUTE", "- [ ] user-stories — EXECUTE")
+      .replace("- [-] refined-mockups — EXECUTE", "- [x] refined-mockups — EXECUTE");
+    expect(phaseReviewRole(node("user-stories"), "mvp", behindAnchor).role).toBe("stage");
+    // A completed member keeps its deferred reading: its receipt, when owed,
+    // was the anchor's to record.
+    expect(phaseReviewRole(node("requirements-analysis"), "mvp", behindAnchor)).toEqual({
+      role: "deferred",
+      anchor: "refined-mockups",
+    });
+  });
+
   test("construction, per-unit stages, capped scopes, and single-member groups stay per stage", () => {
     // Construction is never grouped, per-unit or not.
     expect(

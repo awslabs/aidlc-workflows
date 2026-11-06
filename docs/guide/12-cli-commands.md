@@ -71,7 +71,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --plan-approval <on\|off>` | Set whether each code plan is shown for approval before it is built, for this intent (only the person turns it off) |
 | `/aidlc --collaborators <on\|off>` | Set whether stages bring in their support agents or run with the lead agent only, for this intent |
 | `/aidlc --statusline <on\|off>` | Show AI-DLC's progress in the status line, or give yours back (Claude Code: for you only; Codex: for everyone in the project) |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `collaborators`, `guard.<fence>`) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `review-granularity`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `collaborators`, `guard.<fence>`) |
 | `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; the agent runs it for a setting typed as a flag or asked for in plain words |
 | `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
 | `/aidlc config list` | List all fourteen active workflow settings (`--json` for structured output) |

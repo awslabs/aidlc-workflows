@@ -1684,7 +1684,9 @@ function approveAcceptsLine(
       // No state to read: nothing is approving on its own or with this stage.
     }
   }
-  const accepted = unitGate === undefined ? acceptedRisk(stage) : acceptedRisk(unitGate.stages, unitGate.unit);
+  const accepted = unitGate === undefined
+    ? acceptedRisk(gateDispositionStages(projectDir, stage))
+    : acceptedRisk(unitGate.stages, unitGate.unit);
   if (accepted.length === 0) return null;
   const byUnit = new Set(accepted.map(({ unit }) => unit)).size > 1;
   const byStage = unitGate?.labelStages === true || new Set(accepted.map(({ stage: of }) => of.slug)).size > 1;
@@ -1742,8 +1744,9 @@ export function gateApproveAcceptsLine(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
+  scope?: ReturnType<typeof gateReviewScope>,
 ): string | null {
-  const { contextUnit, endOfUnit, earlier } = gateReviewScope(projectDir, stage, unit);
+  const { contextUnit, endOfUnit, earlier } = scope ?? gateReviewScope(projectDir, stage, unit);
   if (contextUnit === undefined) return approveAcceptsLine(projectDir, stage);
   if (endOfUnit === null) return null;
   const ownOpen = readReviewArtifactContexts(projectDir, stage, contextUnit, true)
@@ -2539,7 +2542,8 @@ export function renderReviewBrief(
   unit?: string,
   fallbackFinding?: string,
 ): string {
-  const { contextUnit, earlier, phaseCovered } = gateReviewScope(projectDir, stage, unit);
+  const gateScope = gateReviewScope(projectDir, stage, unit);
+  const { contextUnit, earlier, phaseCovered } = gateScope;
   // An open finding on work kept after its review (relaxed or off) shows as
   // Approve records it. The change itself was said once, as change_notices,
   // when it was recorded, so the brief does not say it again. Marked before the
@@ -2666,7 +2670,7 @@ export function renderReviewBrief(
   // nor the brief says it again: an agent retelling the brief in its own words
   // lost it. A Unit's Construction checkpoint (its command takes no finding
   // flag) and a per-stage team Unit gate keep the option as it was.
-  const acceptsLine = gateApproveAcceptsLine(projectDir, stage, unit);
+  const acceptsLine = gateApproveAcceptsLine(projectDir, stage, unit, gateScope);
   const openChanged = shown.flatMap((context) =>
     context.findings.filter(findingIsOpen).map((finding) => context.changedAfterReview?.includes(finding.id) === true)
   );
@@ -2706,13 +2710,13 @@ export function renderReviewBrief(
   return lines.join("\n");
 }
 
-// Phase granularity: the stages this anchor's grouped pass covers, with their
-// current reviews (stage-protocol-reviewer §12a, phase review). Empty for a
-// per-unit stage, a non-anchor, or when the state cannot be read.
-function phaseCoveredContexts(
+// Phase granularity: the stages this anchor's grouped pass covers (empty for
+// a per-unit stage, a non-anchor, or when the state cannot be read), and their
+// current reviews (stage-protocol-reviewer §12a, phase review).
+export function phaseCoveredStages(
   projectDir: string,
   stage: ReviewFingerprintStage,
-): ReviewedContext[] {
+): StageEntry[] {
   if (stage.for_each === "unit-of-work") return [];
   try {
     const statePath = stateFilePath(projectDir);
@@ -2724,13 +2728,31 @@ function phaseCoveredContexts(
       state,
     );
     if (role.role !== "anchor") return [];
-    const nodes = role.covers
+    return role.covers
       .map((covered) => findStageBySlug(covered.slug))
       .filter((node): node is NonNullable<ReturnType<typeof findStageBySlug>> => node !== undefined);
-    return reviewedContexts(projectDir, nodes, [undefined], true);
   } catch {
     return [];
   }
+}
+
+// The stages a prose gate's finding decisions cover: the phase-covered stages
+// ahead of the stage's own. One list feeds the Approve dispositions, the
+// reject/reopen/fix selectors, and the accepts line, so a finding the gate
+// shows is always one the gate can decide.
+export function gateDispositionStages(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+): ReviewFingerprintStage[] {
+  return [...phaseCoveredStages(projectDir, stage), stage];
+}
+
+function phaseCoveredContexts(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+): ReviewedContext[] {
+  const nodes = phaseCoveredStages(projectDir, stage);
+  return nodes.length === 0 ? [] : reviewedContexts(projectDir, nodes, [undefined], true);
 }
 
 export function renderSummaryConfirmationBrief(

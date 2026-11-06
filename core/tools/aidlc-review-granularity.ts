@@ -107,9 +107,15 @@ export function phaseReviewRole(
   if (group.length <= 1) return { role: "stage" };
   const anchor = group[group.length - 1];
   if (stage.slug !== anchor.slug) {
-    return group.some((node) => node.slug === stage.slug)
-      ? { role: "deferred", anchor: anchor.slug }
-      : { role: "stage" };
+    if (!group.some((node) => node.slug === stage.slug)) return { role: "stage" };
+    // A gate that already answered cannot re-open to run the grouped pass: a
+    // member that has NOT completed yet, whose anchor already has (a jump put
+    // the walk behind it, or a covered stage was reopened), reviews at its own
+    // step instead of deferring backward. A completed member keeps its
+    // deferred reading — its receipt, when owed, was the anchor's to record.
+    const anchorDone = checkboxes.find((c) => c.slug === anchor.slug)?.state === "completed";
+    const selfDone = checkboxes.find((c) => c.slug === stage.slug)?.state === "completed";
+    return anchorDone && !selfDone ? { role: "stage" } : { role: "deferred", anchor: anchor.slug };
   }
   // The anchor covers the earlier group members that have run: a stage still
   // pending has nothing on disk to review, and a skipped one left the plan.

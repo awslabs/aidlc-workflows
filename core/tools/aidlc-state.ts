@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
 import {
+  gateDispositionStages,
   approvalDispositionField,
   rejectedFindingDispositionField,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
@@ -8140,7 +8141,9 @@ function handleApprove(args: string[]): void {
   });
   const reviewFindingDispositions = approvalDispositionField(
     pd,
-    stage,
+    // An anchor's Approve decides the grouped pass's findings too (phase
+    // granularity); everywhere else this is just [stage].
+    gateDispositionStages(pd, stage),
     undefined,
     autonomousDecision ? "nobody" : "person",
     fixFindings,
@@ -8494,7 +8497,9 @@ function handleReject(args: string[]): void {
 
   const reviewFindingDispositions = rejectedFindingDispositionField(
     pd,
-    teamGate?.stages ?? stage,
+    // A covered stage's finding shown at the anchor's gate is decidable there
+    // (phase granularity); everywhere else this is just [stage].
+    teamGate?.stages ?? gateDispositionStages(pd, stage),
     rejectedFindings,
     teamGate?.unit,
     reopenedFindings,

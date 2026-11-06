@@ -2,6 +2,10 @@ import { existsSync } from "node:fs";
 import { appendAuditEntryUnlocked, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  freshReviewReceipts,
+  loadStageGraph,
+  parseCheckboxes,
+  resolveReviewClass,
   assertChangeControlLedgerWritable,
   auditBlockField,
   CONFIG_KEYS,
@@ -78,6 +82,7 @@ import {
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   asReviewGranularity,
+  PHASE_REVIEW_PHASES,
   resolveReviewGranularity,
   type ReviewGranularity,
 } from "./aidlc-review-granularity.ts";
@@ -833,6 +838,33 @@ export function applyIntentSettings(
     lines.push(!update.changed
       ? `Specialist reviews already run ${where(level)} for this work.`
       : `Specialist reviews now run ${where(level)} for the rest of this work. To change it back, ${back}.`);
+    // Switching back after stages already deferred their reviews drops those
+    // promised passes: a real skipped step, said once, with the way to still
+    // get one. A line, never a block.
+    if (update.changed && was === "phase" && level === "stage") {
+      try {
+        const done = new Set(
+          parseCheckboxes(content).filter((row) => row.state === "completed").map((row) => row.slug),
+        );
+        const unreviewed = loadStageGraph()
+          .filter((node) => {
+            if (!PHASE_REVIEW_PHASES.has(node.phase) || node.reviewer === undefined) return false;
+            if (node.for_each === "unit-of-work" || !done.has(node.slug)) return false;
+            const nodeClass = resolveReviewClass(node.review_class, target ?? "", content);
+            if (nodeClass === "none") return false;
+            return freshReviewReceipts(projectDir, content, node, { reviewClass: nodeClass }).stageVerdict === null;
+          })
+          .map((node) => node.name);
+        if (unreviewed.length > 0) {
+          lines.push(
+            `Heads up: ${unreviewed.join(", ")} ${unreviewed.length === 1 ? "was" : "were"} approved with ` +
+              "the review deferred, and that review now stays unrun; ask for a review of any of them at any time.",
+          );
+        }
+      } catch {
+        // The switch line was said; the scan adds color only.
+      }
+    }
   }
   // Persist scope-owned updates even while memory controls the effective value.
   // Explicit strict is also recordable; explicit relaxed was refused above.

@@ -247,7 +247,6 @@ import {
   firstPlannedStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
-  loadStageGraph,
   changeAlreadyAccepted,
   reviewerGateGuardDisabled,
   getField,
@@ -9366,7 +9365,7 @@ function buildRunStageDirective(
         const covers = role.covers.filter((covered) => {
           if (!codekbCtx) return true;
           try {
-            const coveredNode = loadStageGraph().find((entry) => entry.slug === covered.slug);
+            const coveredNode = nodeForSlug(covered.slug);
             if (!coveredNode) return false;
             return freshReviewReceipts(
               codekbCtx.projectDir,
@@ -9388,7 +9387,12 @@ function buildRunStageDirective(
     }
   }
   const protocolModules: ProtocolModule[] = [];
-  if (directive.reviewer && directive.review_class) {
+  // A deferred stage reads the reviewer module too: its gate's one deferred
+  // sentence lives there (§12a, phase review), and the module's flow steps are
+  // all gated on a reviewer field the directive deliberately lacks.
+  if (directive.review_deferred) {
+    protocolModules.push("reviewer");
+  } else if (directive.reviewer && directive.review_class) {
     protocolModules.push("reviewer");
     // A review that can repair: an adversarial one, or the one stale-receipt
     // recovery Guard Policy strict allows.

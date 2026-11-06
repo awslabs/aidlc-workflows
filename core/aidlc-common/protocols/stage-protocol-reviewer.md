@@ -1,6 +1,6 @@
 # Reviewer Protocol Module
 
-Load this module when a directive names a reviewer with an effective review class other than `none`.
+Load this module when a directive names a reviewer with an effective review class other than `none`, or carries `review_deferred` (whose gate says this module's one deferred sentence).
 
 ## 12a. Reviewer Invocation
 
