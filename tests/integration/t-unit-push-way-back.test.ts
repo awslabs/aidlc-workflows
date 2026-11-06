@@ -100,7 +100,7 @@ describe("a Unit's push and its way back stay the person's moves", () => {
       expect(completions(record)).toBe(0);
       const refused = choose(agent, person, push, "Push");
       expect(refused.status, refused.out).not.toBe(0);
-      expect(refused.out).toContain("by their path from the workspace");
+      expect(refused.out).toContain("back to Code Generation");
       const redo = /`([^`]* report --result resumed --choice redo --target code-generation)`/.exec(refused.out)?.[1];
       expect(redo, refused.out).toBeString();
       person.say("Yes, take refunds back to Code Generation.");

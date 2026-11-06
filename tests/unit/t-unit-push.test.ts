@@ -678,10 +678,9 @@ describe("at the home", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status).not.toBe(0);
     const said = String(pushed.json?.error);
-    expect(said, pushed.out).toStartWith(
-      "refunds's Code Generation wrote src/refunds.ts outside checkout-api, so nothing was pushed. Ask the person whether to " +
-        "take refunds back to Code Generation to write it in checkout-api; on their yes, run `",
-    );
+    // The source list's own check refuses it (its reason, whole), with the way back.
+    expect(said, pushed.out).toStartWith("refunds's Code Generation record names what it wrote in a way its repos do not have (");
+    expect(said).toContain("src/refunds.ts");
     expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
   });
@@ -705,11 +704,8 @@ describe("at the home", () => {
     expect(pushed.status).not.toBe(0);
     const said = String(pushed.json?.error);
     expect(said, pushed.out).not.toContain("outside checkout-api");
-    expect(said, pushed.out).toStartWith(
-      "refunds's Code Generation recorded checkout-api/src/refunds.ts and 1 more by their path from the workspace, not from " +
-        "checkout-api (in checkout-api, src/refunds.ts and 1 more), so nothing was pushed. Ask the person whether to take refunds " +
-        "back to Code Generation to record them by their path in checkout-api; on their yes, run `",
-    );
+    expect(said, pushed.out).toStartWith("refunds's Code Generation record names what it wrote in a way its repos do not have (");
+    expect(said).toContain("checkout-api/src/refunds.ts");
     expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
   });

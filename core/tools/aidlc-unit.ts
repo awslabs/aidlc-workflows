@@ -6234,7 +6234,16 @@ function pushUnit(args: string[], projectDir?: string): void {
     addedRepos.push(repo);
     manifest = readUnitSourceManifest(pd, "code-generation", unit);
   }
-  if (!manifest.ok) fail(`${unit} has no record of what its Code Generation wrote yet (${manifest.reason}).`);
+  if (!manifest.ok) {
+    // A record that is there but names writes its repos do not have (the
+    // source list's own check, readUnitSourceManifest) is that, with the way back.
+    const recorded = existsSync(join(activeRecordDir(pd), "construction", unit, "code-generation", "source-manifest.json"));
+    fail(recorded
+      ? `${unit}'s Code Generation record names what it wrote in a way its repos do not have (${manifest.reason}), so nothing ` +
+        `was pushed. Ask the person whether to take ${unit} back to Code Generation to write and record it again; on their yes, run ` +
+        `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` and follow what it returns.`
+      : `${unit} has no record of what its Code Generation wrote yet (${manifest.reason}).`);
+  }
   const byRepo = writesByRepo(pd, manifest.manifest.writes);
   // The person's pick of a push remote, per repo: `--remote <repo>=<name>[,...]`.
   const picked = new Map((flags.remote ?? "").split(",").map((pair) => pair.split("=").map((part) => part.trim()))
