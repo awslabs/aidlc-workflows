@@ -1885,7 +1885,11 @@ plan, the refusal and the edit-mode question name the answer to record (Request
 Changes when they handed the plan back, with their words as the change, or
 Approve Plan when they finished it), so the agent never goes round; a question
 about several Units keeps today's words, since a reply there can be about some
-of them.
+of them. In a checkout that claimed its team Unit after the plan question was
+shown, the person's turns go to the Unit's own record: a reply there sent after
+the question was shown answers it (`replyTurnsAfter`), and a switch-off they
+send there is taken as theirs, as when no plan question waits
+(`planApprovalOffStands`).
 
 **AI-DLC's records.** A file-tool or shell write whose every target is a stage's
 record output under `aidlc/spaces` passes in every Plan Approval state: a stage's
