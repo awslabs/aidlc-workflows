@@ -96,6 +96,7 @@ describe("a team's publish commits its own work", () => {
         "(`git status` shows them); tell me if you want any of them in.",
     );
     expect(String(result.left_out_include)).toMatch(/ unit publish alpha --commit --include '<path>'/);
+    expect(String(result.left_out_include)).toContain("or `--include .` for all of them");
     // No loop: the step after is the done notice, never the question again.
     expect(nextDirective(checkout)).toMatchObject({ kind: "notice", unit: "alpha" });
   });

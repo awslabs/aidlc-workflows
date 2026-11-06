@@ -2103,7 +2103,7 @@ function leftOutFields(unit: string, leftOut: string[], unmatched: string[]): Re
       `its own${which} (\`git status\` shows ${one ? "it" : "them"}); tell me if you want ${one ? "it" : "any of them"} in.`,
     left_out_include: "When they want any of them in, run " +
       `\`${aidlcInvocation()} unit publish ${quoteCommandArgument(unit)} --commit --include '<path>'\`` +
-      ", with one --include for each file or folder they name.",
+      ", with one --include for each file or folder they name, or `--include .` for all of them.",
   };
 }
 
