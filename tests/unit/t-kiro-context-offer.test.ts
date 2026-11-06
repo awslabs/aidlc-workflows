@@ -53,7 +53,7 @@ const offered = (text: string | undefined): boolean => /full by Kiro's count|Kir
 // A chat whose first turn on the work already took half the window: a new chat
 // on the same model would start about that full (#3642). The figure names
 // Kiro's count as its source: on Kiro CLI 3.1.0 the agent left out the sentence
-// that gave it bare, twice, and said the ones that name Kiro.
+// that gave it bare, twice.
 const onSameModel = (n: number, model?: string) =>
   `By Kiro's count this chat was about ${n}% full in its first turn on this work, so a new chat on the same ` +
   `model${model ? ` (${model})` : ""} will not help much.`;
