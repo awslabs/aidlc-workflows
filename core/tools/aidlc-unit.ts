@@ -18,7 +18,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
-import { scopeStampLanded, unitRowMerged } from "./aidlc-unit-landing.ts";
+import { completedUnits, scopeStampLanded, unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
 import { gitUserName, personGitNameField } from "./aidlc-git-name.ts";
 import {
   managedBlockMarkers,
@@ -69,6 +69,7 @@ import {
   readAuditShardEvents,
   readUnitClaimRegistryCache,
   readApplicableTeamUnitScopeStamp,
+  unitsWalkedWithoutClaim,
   readUnitMergeTransaction,
   recordFileTargetOrThrow,
   REQUEST_TEXT_DIR,
@@ -671,50 +672,6 @@ function dependencyBodyAtOid(projectDir: string, oid: string): string {
   return shown.stdout;
 }
 
-// The Unit Progress table's header and its Unit rows, each as its cells.
-function unitProgressTable(state: string): { header: string[]; rows: string[][] } | null {
-  const match = /^## Unit Progress\s*$/m.exec(state);
-  if (!match) return null;
-  const after = match.index + match[0].length;
-  const next = /^## /m.exec(state.slice(after));
-  const section = state.slice(after, next ? after + next.index : state.length);
-  const table = section
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("|"))
-    .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
-  const header = table.find((cells) => cells[0]?.toLowerCase() === "unit");
-  if (!header) return null;
-  const rows = table.filter((cells) =>
-    cells.length === header.length && cells.length >= 4 &&
-    !(cells[0].toLowerCase() === "unit" && cells[1].toLowerCase() === "owner") &&
-    !cells.every((cell) => /^-+$/.test(cell))
-  );
-  return { header, rows };
-}
-
-function completedUnits(state: string): Set<string> {
-  const table = unitProgressTable(state);
-  if (!table) return new Set();
-  const { header } = table;
-  const mergedIndex = header.findIndex(
-    (cell) => cell.toLowerCase() === "merged",
-  );
-  const done = new Set<string>();
-  for (const cells of table.rows) {
-    const workCells = cells.slice(
-      2,
-      mergedIndex >= 0 ? mergedIndex : undefined,
-    );
-    if (
-      workCells.every((cell) => cell === "[x]") &&
-      (mergedIndex < 0 || unitRowMerged(state, cells[0]))
-    ) {
-      done.add(cells[0]);
-    }
-  }
-  return done;
-}
-
 type OpeningStatus = {
   units: string[];
   blockers: Map<string, string[]>;
@@ -787,9 +744,12 @@ function allClaims(
   return claims;
 }
 
+// A Unit a checkout walks without a claim (the lead's own, begun before the
+// teams took the others) is that checkout's, so it is never claimable (#3610).
 function buildOverview(
   opening: ReturnType<typeof openingStatus>,
   claims: Map<string, UnitClaimView>,
+  walked: ReadonlySet<string>,
   warning?: string,
 ): UnitClaimOverview {
   const claimable: string[] = [];
@@ -813,6 +773,7 @@ function buildOverview(
       });
       continue;
     }
+    if (walked.has(unit)) continue;
     const blockedBy = opening.blockers.get(unit) ?? [];
     if (blockedBy.length > 0) waiting.push({ unit, blockedBy });
     else claimable.push(unit);
@@ -1000,7 +961,7 @@ export function cachedUnitClaimOverview(
   if (options.writeCache !== false && !isReadOnlyEngineProbe()) {
     claims = cacheClaims(pd, claims, cache?.warning);
   }
-  return buildOverview(opening, claims, cache?.warning);
+  return buildOverview(opening, claims, new Set(unitsWalkedWithoutClaim(pd).keys()), cache?.warning);
 }
 
 export function localUnitClaimOverviewForIntent(
@@ -1029,7 +990,9 @@ export function localUnitClaimOverviewForIntent(
     },
     true,
   );
-  return buildOverview(opening, claims);
+  // The walked Units are read from the active work's own record.
+  const active = selector.space === activeSpace(pd) && selector.intentUuid === activeIntentUuid(pd, selector.space);
+  return buildOverview(opening, claims, active ? new Set(unitsWalkedWithoutClaim(pd).keys()) : new Set());
 }
 
 export function unitClaimOverview(projectDir: string): UnitClaimOverview {
@@ -1043,7 +1006,7 @@ export function unitClaimOverview(projectDir: string): UnitClaimOverview {
   const opening = openingStatus(pd, integration.oid);
   const claims = allClaims(pd, integration.remote, identity.intentId8, opening.units);
   const observedClaims = cacheClaims(pd, claims);
-  return buildOverview(opening, observedClaims);
+  return buildOverview(opening, observedClaims, new Set(unitsWalkedWithoutClaim(pd).keys()));
 }
 
 function updateCachedClaim(

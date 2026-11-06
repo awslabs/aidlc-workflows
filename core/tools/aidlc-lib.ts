@@ -2,7 +2,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
-import { claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
+import { claimedCheckoutReopens, completedUnits } from "./aidlc-unit-landing.ts";
 import { KIRO_SESSION_DIR_RE, kiroChatRecordPaths } from "./aidlc-kiro-chat-record.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -30289,17 +30289,24 @@ export function worktreeClaimBoundaryMatches(
 // guard below and `next` in an unscoped team checkout (aidlc-orchestrate.ts,
 // routeNext) both read it, so `next` never hands out Unit work the guard refuses.
 export function cachedClaimFanoutActive(projectDir: string): boolean {
+  return claimedUnitsSeenHere(projectDir, true).size > 0;
+}
+
+// The Units a claim of the active intent says `claimed` for, as this checkout
+// has seen the claims (its registry cache and its local claim refs). With
+// `first`, the read stops at the first one.
+function claimedUnitsSeenHere(projectDir: string, first = false): Set<string> {
+  const claimed = new Set<string>();
   const cache = readUnitClaimRegistryCache(projectDir);
   const space = activeSpace(projectDir);
   const intentUuid = activeIntentUuid(projectDir, space);
-  if (!intentUuid) return false;
-  if (
-    cache &&
-    cache.space === space &&
-    cache.intent_uuid === intentUuid &&
-    Object.values(cache.claims).some((claim) => claim.status === "claimed")
-  ) {
-    return true;
+  if (!intentUuid) return claimed;
+  if (cache && cache.space === space && cache.intent_uuid === intentUuid) {
+    for (const [unit, claim] of Object.entries(cache.claims)) {
+      if (claim.status !== "claimed") continue;
+      claimed.add(unit);
+      if (first) return claimed;
+    }
   }
   const id8 = idSuffix(intentUuid);
   const refs = claimRegistryGit(projectDir, [
@@ -30308,7 +30315,7 @@ export function cachedClaimFanoutActive(projectDir: string): boolean {
     "refs/heads/claim/",
     "refs/remotes/",
   ], { localOnly: true });
-  if (!refs.ok) return false;
+  if (!refs.ok) return claimed;
   for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
     const [oid, ref] = line.trim().split(/\s+/, 2);
     if (
@@ -30333,13 +30340,88 @@ export function cachedClaimFanoutActive(projectDir: string): boolean {
         payload.intent_uuid === intentUuid &&
         payload.status === "claimed"
       ) {
-        return true;
+        claimed.add(typeof payload.unit === "string" ? payload.unit : ref.slice(ref.lastIndexOf("/") + 1));
+        if (first) return claimed;
       }
     } catch {
       // Malformed local claim refs are handled by notice composition.
     }
   }
-  return false;
+  return claimed;
+}
+
+// The Units a team checkout walks without a claim (#3610): the lead's own Unit,
+// begun in their checkout before the teams took the others, stays theirs. Each
+// Unit whose latest lifecycle row names no claim attempt (a claimed checkout's
+// rows carry claimAttemptFields), that no claim seen here holds and whose Unit
+// Progress row is not complete, with the audit shard that row is in, which
+// names the checkout that wrote it.
+export function unitsWalkedWithoutClaim(projectDir: string): Map<string, string> {
+  const walked = new Map<string, string>();
+  let state: string;
+  try {
+    state = readStateFile(projectDir);
+  } catch {
+    return walked;
+  }
+  if (!isTeamUnitOwnership(state)) return walked;
+  const latest = new Map<string, AuditShardEvent>();
+  for (const row of readAuditShardEvents(projectDir)) {
+    if (!UNIT_LIFECYCLE_ROW_EVENTS.has(row.event)) continue;
+    const unit = auditBlockField(row.block, "Unit");
+    if (!unit) continue;
+    const prior = latest.get(unit);
+    if (
+      !prior ||
+      prior.timestamp < row.timestamp ||
+      (prior.timestamp === row.timestamp &&
+        (prior.shardIndex < row.shardIndex || (prior.shardIndex === row.shardIndex && prior.pos < row.pos)))
+    ) {
+      latest.set(unit, row);
+    }
+  }
+  if (latest.size === 0) return walked;
+  const complete = completedUnits(state);
+  const claimed = claimedUnitsSeenHere(projectDir);
+  for (const [unit, row] of latest) {
+    if (auditBlockField(row.block, "Attempt Generation") !== null) continue;
+    if (complete.has(unit) || claimed.has(unit)) continue;
+    walked.set(unit, basename(row.shard));
+  }
+  return walked;
+}
+
+const UNIT_LIFECYCLE_ROW_EVENTS: ReadonlySet<string> = new Set([
+  "UNIT_STARTED",
+  "UNIT_PAUSED",
+  "UNIT_RESUMED",
+  "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
+]);
+
+// The Units whose work this checkout holds (#3610), one reading for the open
+// Unit steps, the Unit writes, the walk and the claim list. Null is every Unit:
+// solo work, and a team checkout before any team claims a Unit (its own walk). A
+// claimed checkout holds its claim's Unit. Once a team holds a claim, a checkout
+// without one holds the Units it walks without a claim in its own shard, or
+// null when it walks none, and then no Unit's work runs here.
+export function unitsHeldHere(projectDir: string): ReadonlySet<string> | null {
+  let state: string;
+  try {
+    state = readStateFile(projectDir);
+  } catch {
+    return null;
+  }
+  if (!isTeamUnitOwnership(state)) return null;
+  const stamp = applicableTeamUnitScopeStamp(projectDir, state);
+  if (stamp) return new Set([stamp.unit]);
+  if (!cachedClaimFanoutActive(projectDir)) return null;
+  const own = knownAuditShardName(projectDir);
+  if (own === null) return null;
+  const held = new Set(
+    [...unitsWalkedWithoutClaim(projectDir)].filter(([, shard]) => shard === own).map(([unit]) => unit),
+  );
+  return held.size > 0 ? held : null;
 }
 
 export function validateLiveUnitScope(
@@ -30352,8 +30434,13 @@ export function validateLiveUnitScope(
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
     if (cachedClaimFanoutActive(pd)) {
+      const held = unitsHeldHere(pd);
+      if (held && (requestedUnit === undefined || held.has(requestedUnit))) return null;
       throw new Error(
-        "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is " +
+        (held
+          ? `This checkout works ${[...held].map((unit) => `Unit "${unit}"`).join(", ")} without a claim, and no other ` +
+            "Unit's work runs here; another Unit is worked here once it is "
+          : "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is ") +
           `claimed with \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,
       );
     }
@@ -36357,12 +36444,15 @@ export interface UnitCheckpoint {
 }
 
 // Every Unit whose latest current-attempt row for the stage is open (started,
-// resumed, or paused), most recently touched first.
-function openUnitCheckpoints(rows: readonly UnitLifecycleRow[]): UnitCheckpoint[] {
+// resumed, or paused), most recently touched first. Only the Units this checkout
+// holds (unitsHeldHere; null is every Unit): another checkout's open Unit,
+// pushed with main, is that checkout's, and never stops one held here (#3610).
+function openUnitCheckpoints(rows: readonly UnitLifecycleRow[], held: ReadonlySet<string> | null): UnitCheckpoint[] {
   const open: UnitCheckpoint[] = [];
   const seen = new Set<string>();
   for (let i = rows.length - 1; i >= 0; i--) {
     const { unit, event, block } = rows[i];
+    if (held !== null && !held.has(unit)) continue;
     if (seen.has(unit)) continue;
     seen.add(unit);
     if (UNIT_TERMINAL_EVENTS.has(event)) continue;
@@ -36461,7 +36551,7 @@ export function unitLifecycleSnapshot(
       receipts.delete(row.unit);
     }
   }
-  const open = openUnitCheckpoints(rows);
+  const open = openUnitCheckpoints(rows, unitsHeldHere(projectDir));
   const checkpoint = open[0] ?? null;
   const unitEvents = new Set([
     "UNIT_STARTED",
@@ -36610,10 +36700,11 @@ export function unitLifecycleReceiptsInUse(
 // with its recorded
 // Reason / Next Action (for the resume path and the paused-first routing), or
 // the in-flight unit (started/resumed, not yet completed), or null when no
-// unit is mid-lifecycle. At most one unit can be non-terminal on the inline
-// path (the engine emits one unit at a time); if a corrupted ledger carries
-// several, the LATEST row wins — deterministic, and `unit start` refuses to
-// open a second active unit anyway.
+// unit is mid-lifecycle. Only a Unit this checkout holds counts (unitsHeldHere).
+// At most one of those can be non-terminal on the inline path (the engine emits
+// one unit at a time); if a corrupted ledger carries several, the LATEST row
+// wins (deterministic), and `unit start` refuses to open a second active unit
+// anyway.
 export function activeUnitCheckpoint(
   projectDir: string,
   slug: string,
@@ -36632,7 +36723,7 @@ export function unitOpenCheckpoints(
   const audit = readAllAuditShards(projectDir);
   if (!audit) return [];
   const unitMajor = unitMajorLifecycleMode(projectDir);
-  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor));
+  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor), unitsHeldHere(projectDir));
 }
 
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents

@@ -500,6 +500,7 @@ import {
   unitMergeTransactions,
   unitMergeTransactionsForIdentity,
   unitMajorConstructionStageSlugs,
+  unitsHeldHere,
   validateLiveUnitScope,
   validScopes,
   shellArg,
@@ -13312,6 +13313,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           // walk: no fan-out directive.
           throw new Error("claimless-team-mode");
         }
+        // The Unit this checkout walks without a claim is still its own once a
+        // team claims another (#3610): the walk goes on with it, never the board.
+        if (unitsHeldHere(pd) !== null) throw new Error("claimless-team-mode");
         const overview = cachedUnitClaimOverview(pd, {
           writeCache: !readOnlyBoard,
         });
@@ -16046,7 +16050,10 @@ function emitTeamUnitMajorRunStage(
       return;
     }
   }
-  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat();
+  const held = scopeStamp ? null : unitsHeldHere(projectDir);
+  const units = scopeStamp
+    ? [scopeStamp.unit]
+    : resolution.batches.flat().filter((unit) => held === null || held.has(unit));
   const kinds = resolution.unitKinds;
   const rhythm = effectiveUnitGateRhythm(projectDir, stateContent);
   const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
@@ -16379,7 +16386,10 @@ function teamUnitMajorWalkBeat(
   const block = constructionUnitMajorBlock(scope, stateContent, true);
   if (!block.some((stage) => stage.slug === currentSlug)) return null;
   const scopeStamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
-  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat();
+  const held = scopeStamp ? null : unitsHeldHere(projectDir);
+  const units = scopeStamp
+    ? [scopeStamp.unit]
+    : resolution.batches.flat().filter((unit) => held === null || held.has(unit));
   const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
     if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
     if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
