@@ -14,7 +14,7 @@ engine directories must still differ (the Kiro CLI (V2) and Kiro distributions c
 Kiro CLI (V2), `aidlc config --harness kiro` switches `.kiro/` to this distribution in place; at a terminal it asks
 first, with `--yes` it switches, and without a terminal, or under `--quiet` or `--json`, it changes nothing and prints the
 command with `--yes`).
-AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two Kiro names the other way: Kiro is `--harness kiro-ide` and Kiro CLI (V2) is `--harness kiro`, and they do not know `kiro-v2`. `--harness kiro-ide` names Kiro on older and newer releases alike
+AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two Kiro names the other way: Kiro is `--harness kiro-ide` and Kiro CLI (V2) is `--harness kiro`, and they do not know `kiro-v2`. `--harness kiro-ide` names Kiro on those releases and on this one
 ([Root Integrations and Ownership](../18-install-and-lifecycle.md#root-integrations-and-ownership)).
 
 > [!IMPORTANT]

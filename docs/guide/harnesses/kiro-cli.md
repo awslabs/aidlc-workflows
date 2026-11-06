@@ -24,8 +24,8 @@
 > AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and
 > 2026-11-05, read the two Kiro names the other way: Kiro CLI (V2) is
 > `--harness kiro` there and Kiro is `--harness kiro-ide`, and they do not
-> know `kiro-v2`; `--harness kiro-ide` names Kiro on older and newer releases
-> alike.
+> know `kiro-v2`; `--harness kiro-ide` names Kiro on those releases and on this
+> one.
 
 One of the framework's harnesses: the Kiro runtime runs the same AI-DLC
 methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core

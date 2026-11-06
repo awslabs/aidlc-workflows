@@ -1298,7 +1298,7 @@ a Kiro CLI (V2) project passes `--harness kiro-v2`. AI-DLC 2.11.3 and
 earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two
 names the other way (Kiro CLI (V2) is `--harness kiro`, Kiro is
 `--harness kiro-ide`, and `kiro-v2` is unknown); `--harness kiro-ide` names
-Kiro on older and newer releases alike. When a copied project's own tool from 2.11.1 or
+Kiro on those releases and on this one. When a copied project's own tool from 2.11.1 or
 later among them hands a refresh to newer files' own config ([Copy Channel](#copy-channel)),
 `--harness kiro` reaches it as Kiro CLI (V2), so on a Kiro project the switch
 is asked the same way, in that tool's names: at a terminal it asks first;
