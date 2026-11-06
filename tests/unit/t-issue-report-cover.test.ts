@@ -70,3 +70,11 @@ test("a tool the person named whose chat log held only this report is not said t
   const check = run("check.ts", out);
   expect([check.status, JSON.parse(check.stdout).hits]).toEqual([0, []]);
 });
+
+test("an entry holding its own line break is one cover line, so a line taken out is the entry that held the name", () => {
+  const out = folder({ environment: { tools: {} }, knownGaps: ["The first part\nand the second part", "A third\rand a fourth\u2028and a fifth"] });
+  expect(run("cover.ts", out).status).toBe(0);
+  const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
+  expect(cover).toContain("- The first part and the second part");
+  expect(cover).toContain("- A third and a fourth and a fifth");
+});

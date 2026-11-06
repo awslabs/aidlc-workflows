@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { LABEL, labelKind } from "../../core/skills/aidlc-issue-report/scripts/redact.ts";
 
 // AI-DLC's words as collect.ts keeps them for the check (local/vocab.json).
 function useWords(out: string, words: string[]) {
@@ -255,6 +256,31 @@ test("the cover's own words never carry a hidden name, so the check never refuse
   expect(cover).toContain("- product: 3");
   const hits = JSON.parse(bun("check.ts", ["--out", out]).stdout).hits.filter((h: { file: string }) => h.file === "aidlc-issue-report.md");
   expect(hits).toEqual([]);
+});
+
+test("the cover's label counts are of the lines left, after a line holding the only copy of a label is taken out", () => {
+  const out = reportFolder();
+  useWords(out, []);
+  const safe = { environment: { tools: {} }, trees: [{ row: "<custom-unit-1>" }] };
+  writeFileSync(join(out, "safe.json"), JSON.stringify(safe, null, 2));
+  // `Gathered` stands only on the cover's first prose line, which `Paths And` (across that line's end) takes out; this
+  // leans on the cover's own wording, which the take-out then shows.
+  bun("hide.ts", ["--out", out, "--kind", "org", "--name", "Gathered", "--kind", "org", "--name", "Paths And"]);
+  expect(bun("cover.ts", ["--out", out]).status).toBe(0);
+  const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
+  expect(cover).toContain("(A line here held a name the person hid, so it was left out.)");
+  // Each count is of the distinct numbered labels in safe.json and on the cover's lines, by redact.ts labelKind.
+  const lines = cover.split("\n").filter((l) => !/^- [a-z][a-z-]*: (?:\d+|one label for every value)$/.test(l));
+  const seen = new Map<string, Set<string>>();
+  for (const m of `${readFileSync(join(out, "safe.json"), "utf8")}\n${lines.join("\n")}`.matchAll(LABEL)) {
+    const { kind, numbered } = labelKind(m[0]);
+    if (numbered) seen.set(kind, (seen.get(kind) ?? new Set<string>()).add(m[0]));
+  }
+  const counts = [...cover.matchAll(/^- ([a-z][a-z-]*): (\d+)$/gm)].map(([, kind, n]) => [kind, Number(n)]);
+  expect(counts).toEqual([...seen].sort().map(([kind, set]) => [kind, set.size]));
+  expect(counts).toContainEqual(["unit", 1]);
+  expect(cover).not.toMatch(/^- org: /m);
+  expect(JSON.parse(bun("check.ts", ["--out", out]).stdout).hits.filter((h: { file: string }) => h.file === "aidlc-issue-report.md")).toEqual([]);
 });
 
 test("a hidden name that is a key of a data map in safe.json is replaced too", () => {

@@ -85,7 +85,8 @@ const stack = (safe.audit?.rows ?? []).some((r) => (r.fields ?? []).some(([name]
 if (stack) lines.push("- The project's languages and frameworks as AI-DLC's workspace scan recorded them.");
 
 lines.push("", "## Replaced by labels", "");
-// Filled in below, once the cover's own words have had the hidden names replaced (they may add labels).
+// Filled in below, once the cover's own words have had the hidden names replaced (they may add labels) and the lines
+// holding a hidden name are taken out.
 const inventoryAt = lines.length;
 
 lines.push("", "## Not in this folder", "");
@@ -108,37 +109,51 @@ lines.push("", "Each part of `safe.json` is described in the data guide among th
 
 // A name the person hid is kept out of the cover's own words too.
 const dict = loadDictionary(join(out, "local", "redaction-map.json"));
-const written = lines.map((l) => hideInWords(l, dict));
+// One cover line per entry: a value's own line breaks become spaces, so a line the check names is the entry it holds
+// and the line the person reads.
+const written = lines.map((l) => hideInWords(l.replace(/\r\n|[\r\n\u2028\u2029]/g, " "), dict));
 // Each distinct label once, in safe.json and on the cover, by its kind (redact.ts labelKind). A label with no number
 // (`<path>`, `<user>`, `<redacted>`) stands for every value of its kind, so it is listed without a count. The count
 // lines are not hidden: a hidden name that is also a kind word takes its line out below, as any line of the cover.
-const counted = new Map<string, Set<string>>();
-const uncounted = new Set<string>();
-for (const m of `${text}\n${written.join("\n")}`.matchAll(LABEL)) {
-  const { kind, numbered } = labelKind(m[0]);
-  if (!numbered) uncounted.add(kind);
-  else counted.set(kind, (counted.get(kind) ?? new Set<string>()).add(m[0]));
-}
-const kinds = [...new Set([...counted.keys(), ...uncounted])].sort();
-const inventory = kinds.flatMap((kind) => [
-  ...(counted.has(kind) ? [`- ${kind}: ${counted.get(kind)?.size}`] : []),
-  ...(uncounted.has(kind) ? [`- ${kind}: one label for every value`] : []),
-]);
-if (inventory.length === 0) inventory.push("- none");
-written.splice(inventoryAt, 0, ...inventory);
+const inSafe = new Set([...text.matchAll(LABEL)].map((m) => m[0]));
+const inventoryOf = (body: string[]): string[] => {
+  const counted = new Map<string, Set<string>>();
+  const uncounted = new Set<string>();
+  for (const label of [...inSafe, ...[...body.join("\n").matchAll(LABEL)].map((m) => m[0])]) {
+    const { kind, numbered } = labelKind(label);
+    if (!numbered) uncounted.add(kind);
+    else counted.set(kind, (counted.get(kind) ?? new Set<string>()).add(label));
+  }
+  const kinds = [...new Set([...counted.keys(), ...uncounted])].sort();
+  const counts = kinds.flatMap((kind) => [
+    ...(counted.has(kind) ? [`- ${kind}: ${counted.get(kind)?.size}`] : []),
+    ...(uncounted.has(kind) ? [`- ${kind}: one label for every value`] : []),
+  ]);
+  return counts.length ? counts : ["- none"];
+};
 // A hidden name the check would still find, across a line end or the cover's own markup, takes its lines out.
 const ctx = gateContext(withoutHidden(keptVocab(out), hiddenAnyway(out)), dict);
-for (let pass = 0; pass < written.length; pass++) {
-  const hit = new Set(namesIn(ctx, written.join("\n")).flatMap((n) => n.lines));
-  if (hit.size === 0) break;
-  // The note itself may hold a hidden word (`line`, `here`): then a line with no words, then an empty line, so each
-  // line changes at most three times.
-  const before = written.join("\n");
-  for (const l of hit) {
-    const w = written[l - 1];
-    written[l - 1] = w === "" ? "" : w === LEFT_OUT ? "- (...)" : w === "- (...)" ? "" : LEFT_OUT;
+const leaveOut = (doc: string[]) => {
+  for (let pass = 0; pass < doc.length; pass++) {
+    const hit = new Set(namesIn(ctx, doc.join("\n")).flatMap((n) => n.lines));
+    if (hit.size === 0) break;
+    // The note itself may hold a hidden word (`line`, `here`): then a line with no words, then an empty line, so each
+    // line changes at most three times.
+    const before = doc.join("\n");
+    for (const l of hit) {
+      const w = doc[l - 1];
+      doc[l - 1] = w === "" ? "" : w === LEFT_OUT ? "- (...)" : w === "- (...)" ? "" : LEFT_OUT;
+    }
+    if (doc.join("\n") === before) break;
   }
-  if (written.join("\n") === before) break;
-}
-writeFileSync(join(out, "aidlc-issue-report.md"), written.join("\n"));
+};
+// The lines holding a hidden name are taken out first, with an empty stand-in where the counts go (no words of its
+// own, so it takes nothing out); the labels are then counted on the lines left, so a count never names a label lost
+// with its line. The count lines go in its place and the cover is read once more, which takes out a count line whose
+// words make a hidden name, alone or with a line beside it.
+const cover = [...written.slice(0, inventoryAt), "", ...written.slice(inventoryAt)];
+leaveOut(cover);
+cover.splice(inventoryAt, 1, ...inventoryOf(cover));
+leaveOut(cover);
+writeFileSync(join(out, "aidlc-issue-report.md"), cover.join("\n"));
 console.log(JSON.stringify({ ok: true, cover: join(out, "aidlc-issue-report.md") }));
