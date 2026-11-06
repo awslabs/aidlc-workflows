@@ -87,7 +87,7 @@ describe("who builds which Unit is asked once, at the home", () => {
     chooseTeams(home.dir);
     next(home.dir);
     const words = "refunds goes to payments, checkout-ui to web, leave reporting open";
-    const assigned = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", words], home.dir);
+    const assigned = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--open", "reporting", "--person-words", words], home.dir);
     expect(assigned.status, assigned.out).toBe(0);
     expect(assigned.json?.notice).toBe(
       "Refunds: payments. Checkout-ui: web. Open for any team: reporting. Each team will approve its Unit after every " +
@@ -108,6 +108,7 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].block).toContain("**Assigned**: refunds=payments, checkout-ui=web");
     expect(rows[0].block).toContain("**Open**: reporting");
+    expect(rows[0].block).toContain("**Left Open**: reporting");
     expect(rows[0].block).toContain(`**Person Words**: ${words}`);
     // Asked once: the next step is not the question again.
     const after = next(home.dir);
@@ -165,7 +166,13 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(step.ask_type, JSON.stringify(step)).toBe("team-handover");
     expect(JSON.stringify(step)).not.toContain("Build them here for now");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
-    expect(next(home.dir).kind).toBe("run-stage");
+    // Every Unit waits for a team; the board offers to build one that could start here.
+    const board = next(home.dir);
+    expect(board.kind, JSON.stringify(board)).toBe("print");
+    expect(JSON.stringify(board.offers)).toContain("Build refunds here");
+    expect(JSON.stringify(board.offers)).not.toContain("Build reporting here");
+    expect(run(UNIT, ["assign", "--here", "refunds"], home.dir).status).toBe(0);
+    expect(next(home.dir)).toMatchObject({ kind: "run-stage", unit: "refunds" });
   });
 });
 
@@ -252,7 +259,11 @@ describe("the lead's answer is never asked for twice", () => {
       appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
       step = next(home.dir);
     }
-    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    // The Units wait for a team, and the board offers to build one here; the lead's word builds it.
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(JSON.stringify(step.offers)).toContain("Build refunds here");
+    expect(run(UNIT, ["assign", "--here", "refunds"], home.dir).status).toBe(0);
+    expect(next(home.dir)).toMatchObject({ kind: "run-stage", unit: "refunds" });
   });
 
   test("words with no turn of the lead's behind them are not recorded as the lead's", () => {
@@ -494,5 +505,47 @@ describe("work that is never asked", () => {
     const home = makeHome({ state: homeState(["- **Unit Ownership**: team"]) });
     const step = next(home.dir);
     expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-assignment");
+  });
+});
+
+describe("a Unit the lead leaves open waits for a team", () => {
+  // A live run: "U1 and U2 go to the billing team, U3 to the checkout team, and
+  // leave U4 open for whoever has time". The home started U4 the moment the
+  // assignment was done, asked her again, and could not put it back as open.
+  test("it is never started here until the lead says so, offered once on the board; a Unit left unnamed is built here", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
+    next(home.dir, chat);
+    const words = "refunds goes to payments, leave checkout-ui open for whoever has time";
+    const assigned = run(UNIT, ["assign", "refunds=payments", "--open", "checkout-ui", "--person-words", words], home.dir);
+    expect(assigned.status, assigned.out).toBe(0);
+    expect(String(assigned.json?.notice)).toStartWith("Refunds: payments. Open for any team: checkout-ui. Built here: reporting.");
+    const row = readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNITS_ASSIGNED").at(-1)!;
+    expect(row.block).toContain("**Left Open**: checkout-ui");
+    let step = next(home.dir, chat);
+    if (step.ask_type === "team-handover") {
+      appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+      step = next(home.dir, chat);
+    }
+    // Nothing is built here: checkout-ui waits for a team, reporting waits on refunds.
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(String(step.narration)).toContain("- checkout-ui, open: waiting for a team to take it");
+    expect(readAuditShardEvents(home.dir).some((entry) => entry.event === "UNIT_STARTED")).toBe(false);
+    const offers = (step.offers ?? []) as Array<{ question: string; choices: Array<{ label: string; command?: string; recommended?: boolean }> }>;
+    const offer = offers.find((entry) => entry.question.includes("checkout-ui"));
+    expect(offer?.question, JSON.stringify(step.offers)).toBe("checkout-ui is open for any team to take. Do you want me to build it here instead?");
+    expect(offer!.choices.map((choice) => choice.label)).toEqual(["Leave checkout-ui open", "Build checkout-ui here"]);
+    expect(offer!.choices[0].recommended).toBe(true);
+    expect(String(offer!.choices[1].command)).toContain("aidlc-unit.ts assign --here checkout-ui");
+    // Offered once in the chat; the board still shows it waiting.
+    const again = next(home.dir, chat);
+    expect(again.kind).toBe("print");
+    expect(JSON.stringify(again.offers ?? [])).not.toContain("Build checkout-ui here");
+    // The lead's word builds it here.
+    const here = run(UNIT, ["assign", "--here", "checkout-ui", "--person-words", "build it here after all"], home.dir);
+    expect(here.status, here.out).toBe(0);
+    expect(String(here.json?.notice)).toBe("Checkout-ui is built here now, no longer open for the teams.");
+    expect(next(home.dir, chat)).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
   });
 });

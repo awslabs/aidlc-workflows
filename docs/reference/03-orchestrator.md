@@ -754,12 +754,17 @@ unit-assignment` instead, asked once before any Unit starts: who builds which
 Unit, each named with its likely repos and the Units it waits on. The person
 answers in their own words; the agent runs `assign_command` (`unit assign
 <unit>=<team> ... --request-file <file>`, their words written to that file
-first) with the Units they named, or the **Leave
-them all open** choice's command. A `UNITS_ASSIGNED` row after the latest team
-`UNIT_OWNERSHIP_SET` settles it. The home then walks only the Units no team
-holds, skipping a Unit that waits, directly or through another, on one a team
-holds and has not merged; when none is left to it while a held Unit is
-unmerged, the step is the team board. Each step of teams building Units that
+first) with the Units they named and `--open <unit>,...` for the ones they
+left open for any team, or the **Leave them all open** choice's command
+(`--open` alone). A `UNITS_ASSIGNED` row after the latest team
+`UNIT_OWNERSHIP_SET` settles it; its `Left Open` field names the Units left
+open (`unitsLeftOpen`). The home then walks only the Units no team holds and
+none left open, skipping a Unit that waits, directly or through another, on
+one a team holds and has not merged or one left open; a Unit the answer left
+unnamed is the home's to build. When none is left to it while a held or open
+Unit is unmerged, the step is the team board, which offers once in a chat to
+build a Unit left open here (**Build <unit> here**, `unit assign --here
+<unit>`) when it could start now. Each step of teams building Units that
 says where things stand and waits for the person (the board, who builds which
 Unit after the person spoke without naming teams or while the home could not be
 reached, a turn-down asked again, a clone where nothing is ready to take) is a

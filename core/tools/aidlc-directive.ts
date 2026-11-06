@@ -1439,8 +1439,9 @@ export function unitAmendQuestionNote(invocation: string): string {
 // Who builds which Unit: the person's own words name a team per Unit.
 export function unitAssignmentQuestionNote(invocation: string): string {
   return questionNote(invocation) + " Their words name who builds which Unit: run assign_command with one " +
-    "<unit>=<team> for each Unit they gave a team (the team as they named it), after writing their words, as they " +
-    "typed them, to the file it names with your file tool, never a shell; a Unit they left out or called open stays open.";
+    "<unit>=<team> for each Unit they gave a team (the team as they named it) and --open with the Units they left " +
+    "open for any team (comma-separated; --open alone when they leave them all open), after writing their words, as " +
+    "they typed them, to the file it names with your file tool, never a shell. A Unit they left out is built here.";
 }
 
 // The routing question asked while no piece of work is selected: continue and

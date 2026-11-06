@@ -81,12 +81,15 @@ to (read, never changed; a user or token in the address is left out), or
 nothing meanwhile), naming each Unit with its likely repos and the Units it
 waits on. Answer in your own words, for example
 "refunds: payments, checkout-ui: web, leave reporting open": each Unit you name
-is held for that team, a Unit you leave out stays open for
-any team, and a Unit a team already holds stays with that team. **Leave them all
-open** holds none. Your checkout stays the home's, never scoped to one Unit. The
-home then builds only the Units no team holds, skipping a Unit that waits on one
-a team still builds, and shows the board while a team still builds a Unit
-([Teams across repos](#teams-across-repos)). Work on the workspace's own repo
+is held for that team, a Unit you leave open waits for any team to take it, a
+Unit you leave out is built here, and a Unit a team already holds stays with
+that team. **Leave them all open** holds none and leaves every Unit for the
+teams. Your checkout stays the home's, never scoped to one Unit. The home then
+builds the Units you left out, skipping a Unit that waits on one a team still
+builds or on one left open, and shows the board while a team still builds a
+Unit or a Unit waits for a team; the board offers once to build a Unit you left
+open here instead (**Build reporting here**), and nothing of it is built here
+until you say so ([Teams across repos](#teams-across-repos)). Work on the workspace's own repo
 records no home and keeps the claim, publish, pin, gate and land flow
 ([Teams on the workspace's own repo](#teams-on-the-workspaces-own-repo)).
 

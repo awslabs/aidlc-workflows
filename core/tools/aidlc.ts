@@ -233,7 +233,7 @@ export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
 const UNIT_FORMS = [
   "unit adopt <unit>",
   "unit amend <unit> --input <file> --answer <approve|reject> --person-words <text>",
-  "unit assign <unit>=<team> [<unit>=<team> ...] [--person-words <text>] | --open",
+  "unit assign <unit>=<team> [<unit>=<team> ...] [--open [<unit>,...]] [--person-words <text>] | --open | --here <unit>",
   "unit claim <unit>",
   "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
   "unit hand-off <unit> --team <team> [--person-words <text>]",

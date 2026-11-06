@@ -231,7 +231,7 @@ import { UNIT_VERBS } from "./aidlc-command.ts";
 const UNIT_USAGE: ReadonlyMap<string, string> = new Map([
   ["adopt", "adopt <unit>"],
   ["amend", "amend <unit> --input <file> --answer <approve|reject> [--file <text the lead approves>] (--request-file <file> | --person-words <text>)"],
-  ["assign", "assign <unit>=<team> [<unit>=<team> ...] | --open"],
+  ["assign", "assign <unit>=<team> [<unit>=<team> ...] [--open [<unit>,...]] | --here <unit>[,<unit>...]"],
   ["claim", "claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]"],
   ["gate", "gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)"],
   ["hand-off", "hand-off <unit> --team <team> [--request-file <file> | --person-words <text>]"],
@@ -5058,8 +5058,11 @@ function requireLeadsWord(pd: string, what: string): void {
 
 // Who builds which Unit, in the lead's own words at the home: one claim per
 // Unit they named, held for that team by the claim's compare-and-swap, with no
-// scope stamp, so the lead's checkout stays the home's. A Unit they left out
-// stays open. The walking skeleton, when on, is built here first.
+// scope stamp, so the lead's checkout stays the home's. A Unit they left open
+// (`--open <unit>`, or `--open` alone for every Unit not named) waits for a
+// team (`Left Open`); a Unit they left unnamed is built here. The walking
+// skeleton, when on, is built here first. `--here <unit>` is the lead's word to
+// build a Unit left open here after all.
 function assignUnits(args: string[], projectDir?: string): void {
   const { positional, flags, bareFlags } = parseArgs(args);
   const pd = resolveProjectDir(projectDir);
@@ -5069,9 +5072,20 @@ function assignUnits(args: string[], projectDir?: string): void {
   }
   if (readApplicableTeamUnitScopeStamp(pd)) fail("Units are given to teams at the home, not from a checkout scoped to one Unit.");
   const words = leadSpoke(pd) ? personWordsOf(pd, flags) : "";
-  const open = bareFlags.has("open") || flags.open !== undefined;
+  if (flags.here !== undefined) {
+    buildLeftOpenHere(pd, flags.here.split(",").map((entry) => entry.trim()).filter((entry) => entry && entry !== "true"), words);
+    return;
+  }
+  const openAll = bareFlags.has("open") || flags.open === "true";
+  const tokens = [...positional];
+  const openNamed: string[] = [];
+  for (const entry of openAll ? [] : (flags.open ?? "").split(",").map((part) => part.trim()).filter(Boolean)) {
+    if (entry.includes("=")) tokens.push(entry);
+    else openNamed.push(entry);
+  }
+  const open = openAll || openNamed.length > 0;
   const pairs: Array<{ unit: string; team: string }> = [];
-  for (const token of positional) {
+  for (const token of tokens) {
     const at = token.indexOf("=");
     const unit = at > 0 ? token.slice(0, at).trim() : "";
     const team = at > 0 ? token.slice(at + 1).trim() : "";
@@ -5091,6 +5105,10 @@ function assignUnits(args: string[], projectDir?: string): void {
     const already = named.get(unit);
     if (already !== undefined && already !== team) fail(`${unit} can go to one team; you named ${already} and ${team}.`);
     named.set(unit, team);
+  }
+  for (const unit of openNamed) {
+    if (!local.units.includes(unit)) fail(`${unit} is not one of this work's Units (${local.units.join(", ")}).`);
+    if (named.has(unit)) fail(`${unit} can go to a team or stay open; you named ${named.get(unit)} and open.`);
   }
   // The lead's own words win over the slice built together first: the part
   // they name a team for goes to that team, and nothing is built together
@@ -5118,9 +5136,11 @@ function assignUnits(args: string[], projectDir?: string): void {
   if (integration === null && named.size > 0) {
     // The home cannot be reached: the answer is kept, and the next step offers to hold it again.
     const kept = [...named].map(([unit, team]) => `${unit}=${team}`);
+    const leftOpen = openAll ? local.units.filter((unit) => unit !== skeleton && !named.has(unit)) : openNamed;
     appendAuditEntry("UNITS_ASSIGNED", {
       Assigned: kept.join(", ") || "none",
-      ...(open ? { Open: "all" } : {}),
+      ...(openAll ? { Open: "all" } : {}),
+      ...(leftOpen.length > 0 ? { "Left Open": leftOpen.join(", ") } : {}),
       Held: "not yet",
       ...(words ? { "Person Words": words } : {}),
     }, pd);
@@ -5128,7 +5148,7 @@ function assignUnits(args: string[], projectDir?: string): void {
       assigned: [],
       notice: "Nothing is held for the teams yet: the home could not be reached. I've kept who builds which Unit. " +
         "Do you want me to try again?",
-      offer: { choices: [{ label: "Try again", command: assignRetryCommand(kept, open) }, { label: "Not now" }] },
+      offer: { choices: [{ label: "Try again", command: assignRetryCommand(kept, openAll, openNamed) }, { label: "Not now" }] },
     }));
     return;
   }
@@ -5182,9 +5202,15 @@ function assignUnits(args: string[], projectDir?: string): void {
     unit !== skeleton && !held.has(unit) &&
     (named.has(unit) || integration === null ||
       currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit))?.status !== "claimed"));
+  // Left open, waiting for a team: every Unit open when they left them all
+  // open, else the ones they named open and any named for a team that could
+  // not be held for it. The rest of the open Units are built here.
+  const leftOpen = openUnits.filter((unit) => openAll || openNamed.includes(unit) || named.has(unit));
+  const builtHere = openUnits.filter((unit) => !leftOpen.includes(unit));
   appendAuditEntry("UNITS_ASSIGNED", {
     Assigned: assigned.map((row) => `${row.unit}=${row.team}`).join(", ") || "none",
     Open: openUnits.join(", ") || "none",
+    ...(leftOpen.length > 0 ? { "Left Open": leftOpen.join(", ") } : {}),
     ...(words.trim() ? { "Person Words": words.trim() } : {}),
   }, pd);
   const planChanging = homePlanChangingLine(state, assigned.map((row) => row.unit));
@@ -5192,7 +5218,8 @@ function assignUnits(args: string[], projectDir?: string): void {
   const sentence = (unit: string): string => unit.charAt(0).toUpperCase() + unit.slice(1);
   const summary = [
     ...assigned.map((row) => `${sentence(row.unit)}: ${row.team}.`),
-    ...(openUnits.length > 0 ? [`Open for any team: ${openUnits.join(", ")}.`] : []),
+    ...(leftOpen.length > 0 ? [`Open for any team: ${leftOpen.join(", ")}.`] : []),
+    ...(builtHere.length > 0 ? [`Built here: ${builtHere.join(", ")}.`] : []),
   ];
   // The rhythm is the lead's to change: the offer says what is set, what to do
   // and why, and gives the agent the command for the other choice.
@@ -5218,9 +5245,47 @@ function assignUnits(args: string[], projectDir?: string): void {
 }
 
 // The assignment the lead gave, run again.
-export function assignRetryCommand(pairs: string[], open: boolean): string {
-  return `${aidlcToolInvocation("unit")} assign ${pairs.length > 0 ? pairs.map(shellArg).join(" ") : ""}${open ? " --open" : ""} ` +
+export function assignRetryCommand(pairs: string[], open: boolean, leftOpen: readonly string[] = []): string {
+  const opened = open ? " --open" : leftOpen.length > 0 ? ` --open ${shellArg(leftOpen.join(","))}` : "";
+  return `${aidlcToolInvocation("unit")} assign ${pairs.length > 0 ? pairs.map(shellArg).join(" ") : ""}${opened} ` +
     unitWordsArg("assign");
+}
+
+// The lead's word to build a Unit they left open at the lead's project after
+// all (offered once on the board): it leaves the open list and the walk takes
+// it up. A Unit a team holds meanwhile stays with that team.
+function buildLeftOpenHere(pd: string, units: string[], words: string): void {
+  if (units.length === 0) fail(unitUsage("assign"));
+  const local = localOpeningStatus(pd);
+  for (const unit of units) {
+    if (!local.units.includes(unit)) fail(`${unit} is not one of this work's Units (${local.units.join(", ")}).`);
+  }
+  const identity = activeIdentity(pd);
+  let integration: ReturnType<typeof fetchIntegration> | null;
+  try {
+    integration = fetchIntegration(pd);
+  } catch {
+    integration = null;
+  }
+  const lines: string[] = [];
+  const here: string[] = [];
+  for (const unit of units) {
+    const current = integration === null ? null : currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit));
+    if (current?.status === "claimed") lines.push(`${unit} is held by ${current.owner}, so it stays with them.`);
+    else here.push(unit);
+  }
+  if (here.length > 0) {
+    appendAuditEntry("UNITS_ASSIGNED", {
+      Assigned: "none",
+      Here: here.join(", "),
+      ...(words.trim() ? { "Person Words": words.trim() } : {}),
+    }, pd);
+  }
+  const sentence = (unit: string): string => unit.charAt(0).toUpperCase() + unit.slice(1);
+  console.log(JSON.stringify({
+    here,
+    notice: [...here.map((unit) => `${sentence(unit)} is built here now, no longer open for the teams.`), ...lines].join(" "),
+  }));
 }
 
 // --- Taking a Unit: a team builds it as a piece of work of its own -----------

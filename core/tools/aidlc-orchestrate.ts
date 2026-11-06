@@ -722,6 +722,7 @@ import {
   unitsAssignedSinceTeams,
   assignmentNotHeld,
   unitsKeptForTeams,
+  unitsLeftOpen,
   unitsInPlanOrder,
   unknownLikelyReposLine,
   SIGN_OFF_CLAUSE,
@@ -5224,7 +5225,8 @@ function teamCommandsNote(): string {
     `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
     `${unitWordsArg("amend")}\`. ` +
     `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
-    `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`. ` +
+    `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`; when they ask to build a Unit ` +
+    `left open here, run \`${unitTool} assign --here <unit> ${unitWordsArg("assign")}\`. ` +
     `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> ${unitWordsArg("hand-off")}\`; ` +
     `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. ${UNIT_WORDS_NOTE} ` +
     "Say the notice line each prints.";
@@ -5935,7 +5937,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
       if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, UNIT_ASSIGNMENT_RETRY_ASK);
       const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. " +
         "Do you want me to try again?";
-      return lineEndingTurn(null, [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open) }, { label: "Not now" }] }]);
+      return lineEndingTurn(null, [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open, kept.leftOpen) }, { label: "Not now" }] }]);
     }
     const waiting = [...unitsKeptForTeams(rows)];
     if (waiting.length > 0) {
@@ -5965,7 +5967,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
     "builds on one working slice; to have one team build it instead, name a team for it. " : ""}` +
     `Who builds which Unit? ${described.join(", ")}. Name a team for each, or leave a Unit open for any team ` +
     "to take later.";
-  const assignCommand = `${unitTool} assign <unit>=<team> [<unit>=<team> ...] ${unitWordsArg("assign")}`;
+  const assignCommand = `${unitTool} assign <unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]] ${unitWordsArg("assign")}`;
   const open = { label: "Leave them all open", detail: "Any team takes a Unit when it is ready.", command: `${unitTool} assign --open` };
   // Asked once: after the lead spoke without naming teams, the step is where
   // it stands, with the same choice, and nothing is built here meanwhile.
@@ -5984,7 +5986,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
     choices: [
       {
         label: "Name the teams",
-        detail: "Which team builds which Unit, in your own words; a Unit you leave out stays open for any team.",
+        detail: "Which team builds which Unit, in your own words; a Unit you leave open waits for any team, and one you leave out is built here.",
       },
       open,
     ],
@@ -17102,7 +17104,10 @@ function teamHomeClaims(
     if (refreshed.fetched) overview = readOverview();
   }
   const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
-  for (const unit of teamHome ? unitsKeptForTeams(readAuditShardEvents(projectDir)).keys() : []) heldElsewhere.add(unit);
+  // Named for a team while the home could not be reached, or left open by the
+  // lead's answer: each waits for a team, never this project's to build.
+  const rows = teamHome ? readAuditShardEvents(projectDir) : [];
+  for (const unit of teamHome ? [...unitsKeptForTeams(rows).keys(), ...unitsLeftOpen(rows)] : []) heldElsewhere.add(unit);
   // What came back from the teams, checked against each repo once per step
   // (with the home unreached, the board is the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();
@@ -17196,6 +17201,7 @@ function unitBoardRows(
   const dependencies = unitDependencies(projectDir);
   const standing = unitProgressStanding(progress);
   const kept = unitsKeptForTeams(readAuditShardEvents(projectDir));
+  const leftOpen = unitsLeftOpen(readAuditShardEvents(projectDir));
   const done = (unit: string): boolean => {
     const claim = overview?.claims.get(unit);
     if (claim?.status === "claimed" && claim.payload.done === true) return true;
@@ -17207,6 +17213,7 @@ function unitBoardRows(
     if (done(unit)) return { unit, team: team ?? "here", status: "done" };
     // Named for a team while it could not be held for them: never this project's to build.
     if (team === null && kept.has(unit)) return { unit, team: kept.get(unit)!, status: `kept for ${kept.get(unit)}, not held yet` };
+    if (team === null && leftOpen.has(unit)) return { unit, team: null, status: "waiting for a team to take it" };
     if (team === null) {
       const waits = (dependencies.get(unit) ?? []).filter((dep) => !done(dep));
       return { unit, team: "here", status: unitHereStatus(standing.get(unit), waits) };
@@ -17559,8 +17566,21 @@ function emitTeamUnitMajorRunStage(
         }]
         : []),
     ]);
+    // A Unit the lead left open waits for a team; building it here is theirs
+    // to say, offered once for each Unit that could start here now.
+    const leftOpen = unitsLeftOpen(readAuditShardEvents(projectDir));
+    const dependencies = unitDependencies(projectDir);
+    const startable = [...leftOpen].filter((unit) => overview?.claims.get(unit)?.status !== "claimed" && !mergedHere.has(unit) &&
+      homeWalkUnits([unit], new Set([...heldElsewhere].filter((other) => other !== unit)), mergedHere, dependencies).length > 0);
+    const buildHere = unitsInPlanOrder(projectDir, startable).map((unit) => ({
+      question: `${unit} is open for any team to take. Do you want me to build it here instead?`,
+      choices: [
+        { label: `Leave ${unit} open`, recommended: true as const },
+        { label: `Build ${unit} here`, command: `${unitTool} assign --here ${shellArg(unit)} ${unitWordsArg("assign")}` },
+      ],
+    }));
     // Each offer is put once in a chat; its command stays in the board's note.
-    const allOffers = offersOnce(projectDir, [...answers, ...offers]);
+    const allOffers = offersOnce(projectDir, [...answers, ...offers, ...buildHere]);
     emit(lineEndingTurn(
       renderUnitBoard(workLabel(projectDir), rows),
       allOffers,
@@ -17762,7 +17782,7 @@ function teamUnitMajorWalkBeat(
     ? new Set(cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed.map((row) => row.unit))
     : new Set<string>();
   if (!scopeStamp && homeLocation(stateContent) !== null) {
-    for (const unit of unitsKeptForTeams(auditRows).keys()) heldElsewhere.add(unit);
+    for (const unit of [...unitsKeptForTeams(auditRows).keys(), ...unitsLeftOpen(auditRows)]) heldElsewhere.add(unit);
   }
   const units = scopeStamp
     ? [scopeStamp.unit]

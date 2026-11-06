@@ -133,16 +133,45 @@ export function unitsAssignedSinceTeams(rows: readonly AuditShardEvent[]): boole
 
 // The lead's answer to who builds which Unit, kept while the home could not
 // be reached (the newest UNITS_ASSIGNED since teams says `Held: not yet`).
-export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: string[]; open: boolean } | null {
+export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: string[]; open: boolean; leftOpen: string[] } | null {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   let teamsAt = -1;
   ordered.forEach((row, at) => {
     if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
   });
-  const last = ordered.slice(teamsAt + 1).filter((row) => row.event === "UNITS_ASSIGNED").at(-1);
+  // The lead's word to build a Unit here (`assign --here`) answers no one's assignment.
+  const last = ordered.slice(teamsAt + 1)
+    .filter((row) => row.event === "UNITS_ASSIGNED" && auditBlockField(row.block, "Here") === null).at(-1);
   if (last === undefined || auditBlockField(last.block, "Held") !== "not yet") return null;
   const pairs = (auditBlockField(last.block, "Assigned") ?? "").split(",").map((pair) => pair.trim()).filter((pair) => pair.includes("="));
-  return { pairs, open: auditBlockField(last.block, "Open") === "all" };
+  return { pairs, open: auditBlockField(last.block, "Open") === "all", leftOpen: listField(last.block, "Left Open") };
+}
+
+function listField(block: string, name: string): string[] {
+  const value = auditBlockField(block, name);
+  return value === null || value === "none" ? [] : value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
+// The Units the lead's own answer left open for any team (`assign --open`):
+// each waits for a team, and the lead's project builds one only on the lead's
+// word (`assign --here`, offered once on the board). A Unit the answer left
+// unnamed is not among them: it stays the lead's project's to build. A Unit
+// named for a team later, or started here, leaves the list.
+export function unitsLeftOpen(rows: readonly AuditShardEvent[]): Set<string> {
+  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  let teamsAt = -1;
+  ordered.forEach((row, at) => {
+    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
+  });
+  const open = new Set<string>();
+  for (const row of ordered.slice(teamsAt + 1)) {
+    if (row.event === "UNIT_STARTED") open.delete(auditBlockField(row.block, "Unit") ?? "");
+    if (row.event !== "UNITS_ASSIGNED") continue;
+    for (const unit of listField(row.block, "Left Open")) open.add(unit);
+    for (const pair of listField(row.block, "Assigned")) open.delete(pair.slice(0, Math.max(pair.indexOf("="), 0)));
+    for (const unit of listField(row.block, "Here")) open.delete(unit);
+  }
+  return open;
 }
 
 // A team's build that follows the lead's project rules too (Arden's call):
@@ -220,6 +249,7 @@ export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: nu
         open.add(unit);
       }
     }
+    for (const unit of listField(row.block, "Here")) open.delete(unit);
     const file = auditBlockField(row.block, "By File") !== null;
     for (const pair of (auditBlockField(row.block, "Assigned") ?? "").split(",").map((entry) => entry.trim())) {
       const at = pair.indexOf("=");

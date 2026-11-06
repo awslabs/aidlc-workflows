@@ -144,7 +144,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     // Who builds which Unit: the lead's words, run once; the question is not put again.
     const assignment = next(home.dir);
     expect(assignment.ask_type, JSON.stringify(assignment)).toBe("unit-assignment");
-    const assign = String(assignment.assign_command).replace("<unit>=<team> [<unit>=<team> ...]", "refunds=payments checkout-ui=web");
+    const assign = String(assignment.assign_command).replace("<unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]]", "refunds=payments checkout-ui=web");
     // Sharing the plan with the teams is asked once; its yes pushes it, and the board follows.
     const share = movesOn(home.dir, ENV, assignment, assign);
     expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
@@ -304,6 +304,24 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(kept.kind, JSON.stringify(kept)).toBe("print");
     git(other.dir, ["remote", "set-url", "origin", other.remote]);
     movesOn(other.dir, ENV, kept, offered(kept, "Try again"));
+  });
+
+  test("a Unit the lead left open: the board's Build it here moves on to building it", () => {
+    const home = teamsHome();
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-no-loops-lead" };
+    const assignment = next(home.dir, chat);
+    expect(assignment.ask_type, JSON.stringify(assignment)).toBe("unit-assignment");
+    const assign = String(assignment.assign_command)
+      .replace("<unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]]", "refunds=payments --open checkout-ui");
+    let board = movesOn(home.dir, chat, assignment, assign);
+    if (board.ask_type === "team-handover") {
+      // Not now: the step after it is the board, with its offers (put once in the chat).
+      appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+      board = next(home.dir, chat);
+    }
+    expect(board.kind, JSON.stringify(board)).toBe("print");
+    const built = movesOn(home.dir, chat, board, offered(board, "Build checkout-ui here"));
+    expect(built, JSON.stringify(built)).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
   });
 
   test("the lead's sign-off and a team's proposal after not now: the board's offer answers each, once", () => {
