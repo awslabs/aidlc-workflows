@@ -2453,6 +2453,75 @@ try {
   // Probe ONCE whether the installed engine accepts required_sections — writing
   // it into a stage an older engine can't parse would break every later compile.
   const requiredSectionsSafe = await installedSchemaAccepts("required_sections", ["Probe Section"]);
+  // An output added to a stage that maps every required output to Unit kinds
+  // needs a produces_kinds entry, and only the installed engine writes it,
+  // because only that engine's strip takes it out again and its refresh writes
+  // it back. An output that would still fail the compile (for example, because
+  // an older engine gives it no entry) is skipped with a drop, so the compile
+  // does not fail and roll back the whole plugin. The drop names the stage, the
+  // outputs, the kinds the review target does not cover, and what to change.
+  type AddPluginProducesKinds = (content: string, added: readonly string[]) => string;
+  const addPluginProducesKinds: AddPluginProducesKinds | null =
+    await import(join(HARNESS_DIR, "tools", "aidlc-plugin-produces-kinds.ts"))
+      .then((m) => typeof m.addPluginProducesKinds === "function" ? m.addPluginProducesKinds as AddPluginProducesKinds : null)
+      .catch(() => null);
+  const [installedLib, installedSchema] = await Promise.all([installedAidlcLib(), installedStageSchema()]);
+  const parsedStage = (content: string): Record<string, unknown> | null => {
+    if (typeof installedLib?.parseStageFrontmatter !== "function") return null;
+    try {
+      return installedLib.parseStageFrontmatter(content);
+    } catch {
+      return null;
+    }
+  };
+  // The review_artifact rule's error in aidlc-stage-schema.ts, found by its
+  // text, which every engine that has the rule words the same way; null when
+  // the stage passes the rule.
+  const reviewTargetGap = (content: string): string | null => {
+    const stage = parsedStage(content);
+    if (stage === null || typeof installedSchema?.validateStageFrontmatter !== "function") return null;
+    try {
+      const errors = installedSchema.validateStageFrontmatter(stage).errors ?? [];
+      return errors.find((error) => error.includes("is pruned for applicable unit kinds")) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const giveProducesKinds = (content: string, added: string[]): string => {
+    if (!addPluginProducesKinds || added.length === 0) return content;
+    try {
+      return addPluginProducesKinds(content, added);
+    } catch {
+      return content;
+    }
+  };
+  const withProducesKinds = (target: string, before: string, merged: string, added: string[]): string => {
+    const given = giveProducesKinds(merged, added);
+    const gap = reviewTargetGap(given);
+    if (gap === null || reviewTargetGap(before) !== null) return given;
+    // An output with no entry is what widens the stage. Merge only the outputs
+    // that have one, one at a time, and keep each that leaves the stage within
+    // its review target, so the drop names only the outputs that widen it.
+    const kinds = parsedStage(given)?.produces_kinds;
+    const mapped = added.filter((name) => typeof kinds === "object" && kinds !== null && Object.hasOwn(kinds, name));
+    const landed: string[] = [];
+    let kept = before;
+    for (const name of mapped) {
+      const one: string[] = [];
+      const next = giveProducesKinds(mergeListField(kept, "produces", [name], target, one), one);
+      if (one.length > 0 && reviewTargetGap(next) === null) {
+        kept = next;
+        landed.push(...one);
+      }
+    }
+    const skipped = added.filter((name) => !landed.includes(name));
+    const fix = addPluginProducesKinds
+      ? `; skipped — take ${skipped.length === 1 ? "it" : "them"} out of this contribution's adds.produces`
+      : ", and the installed engine cannot write produces_kinds entries; skipped — upgrade the engine, then re-run compose";
+    recordDrop(`contribution to ${target}: adds.produces ${skipped.join(", ")} would make the stage apply to Unit kinds its review target does not cover (${gap})${fix}`);
+    added.splice(0, added.length, ...landed);
+    return kept;
+  };
   const contribRoot = join(PLUGIN_ROOT, "contributions");
   // Per-plugin sidecar of what compose ACTUALLY merged into core stage source,
   // keyed by target stage. Structural additions need it for disable-time strip;
@@ -2926,7 +2995,11 @@ try {
         if (refusal) recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" ${refusal}; dropped`);
         return refusal === null;
       });
+      const beforeProduces = stageContent;
       stageContent = mergeListField(stageContent, "produces", listOf("produces"), target, addedProduces);
+      if (addedProduces.length > 0) {
+        stageContent = withProducesKinds(target, beforeProduces, stageContent, addedProduces);
+      }
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target, addedSensors);
       stageContent = mergeListField(stageContent, "scopes", mergeableScopes, target, addedScopes);
       stageContent = mergeConsumes(stageContent, consumes, target, addedConsumes);

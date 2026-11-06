@@ -60,6 +60,15 @@ describe("t326 pinned team Unit merge: a record outside the Unit's tree", () => 
     const refusedPin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(refusedPin.status).not.toBe(0);
     expect(refusedPin.out).toContain("outside claimed Unit record tree");
+    // Publish runs in the claimed checkout; pin runs in the main one, so it
+    // names the checkout to change.
+    expect(reply.records_outside_unit_tree_note).toContain(
+      "Take these out of this branch (git rm a file main does not have, or git checkout origin/main -- <path>",
+    );
+    expect(refusedPin.out).toContain(
+      "In the checkout where alpha-team claimed alpha (not this one), take these out of its branch " +
+        "(git rm a file main does not have, or git checkout origin/main -- <path> for one it does), commit, and publish again.",
+    );
 
     git(candidate.checkout, ["rm", "-q", "--", summary]);
     git(candidate.checkout, ["commit", "-m", "leave the contract summary to main"]);

@@ -33,6 +33,7 @@ import {
   resolveProjectDir,
   validScopes,
 } from "./aidlc-lib.ts";
+import { removeOrphanProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
 import { type PluginCommandSkip, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import { markdownBlocks } from "./aidlc-markdown.ts";
@@ -1052,7 +1053,7 @@ export function comparePluginState(
       state: provedMissing ? "installed-missing" : "inventory-unavailable",
       action: provedMissing ? "attention" : "current",
       message: provedMissing
-        ? `installed plugin missing; reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove what it added`
+        ? `installed plugin missing from your host's list; if you composed it from its folder, it keeps working and needs nothing; otherwise reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove it and everything it added to this project`
         : "not compared: no host plugin list",
     });
   }
@@ -1513,6 +1514,7 @@ export function stripRecordedAdds(content: string, record: StageContribRecord): 
     const items = record[field];
     if (items?.length) value = removeRecordedValues(value, field, new Set(items), false);
   }
+  if (record.produces?.length) value = removeOrphanProducesKinds(value, record.produces);
   if (record.consumes?.length) {
     const artifacts = record.consumes.flatMap((entry) =>
       typeof entry === "string"

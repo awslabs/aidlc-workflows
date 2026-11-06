@@ -5590,6 +5590,68 @@ describe("t243 project initialization", () => {
     expect(readFileSync(stagePath, "utf-8")).toContain("test-pro-refresh-artifact");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("refresh reapplies a plugin output on a stage that maps every output to Unit kinds with the entry the incoming stage gives it", () => {
+    const project = temp("aidlc-t240-plugin-kinds-refresh-");
+    mkdirSync(join(project, ".git"));
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+
+    // As compose writes it: the output, and an entry for the kinds the stage's
+    // own required outputs cover.
+    const rel = join(".claude", "aidlc-common", "stages", "construction", "functional-design.md");
+    const stagePath = join(project, rel);
+    const artifact = "test-pro-kinds-artifact";
+    const withOutput = (content: string) =>
+      content.replace(/^(produces:\n(?: {2}- .+\n)*)/m, `$1  - ${artifact}\n`);
+    const withEntry = (content: string, kinds: string) =>
+      content.replace(/^(produces_kinds:\n(?: {2}[a-z-]+: .+\n)*)/m, `$1  ${artifact}: [${kinds}]\n`);
+    writeFileSync(stagePath, withEntry(withOutput(readFileSync(stagePath, "utf-8")), "service, spec, ui, library"));
+    writeFileSync(
+      join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"),
+      `${JSON.stringify({
+        "functional-design": { produces: [artifact] },
+      }, null, 2)}\n`,
+    );
+
+    // Each incoming stage, and the file the refresh leaves: the entry follows
+    // the incoming stage, as a compose onto it would.
+    const covers = (content: string) => content.replace(
+      "  functional-spec: [service, spec, ui, library]\n",
+      "  functional-spec: [service, spec, ui, packaging, library]\n",
+    );
+    const cases: Array<[string, (content: string) => string, (incoming: string) => string]> = [
+      ["a changed body keeps the entry",
+        (content) => `${content}\nUpstream refresh marker.\n`,
+        (incoming) => withEntry(withOutput(incoming), "service, spec, ui, library")],
+      // The stage now applies to every kind, so the output needs no entry.
+      ["a stage that covers every kind drops it", covers, (incoming) => withOutput(incoming)],
+      // The output is core's now, with core's own entry.
+      ["a stage that ships the output itself keeps its own",
+        (content) => withEntry(withOutput(content), "ui"), (incoming) => incoming],
+    ];
+    for (const [label, edit, expected] of cases) {
+      const newer = temp("aidlc-t240-newer-kinds-");
+      cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+      const newerStage = join(newer, rel);
+      const incoming = edit(readFileSync(newerStage, "utf-8"));
+      writeFileSync(newerStage, incoming);
+      // The first refresh runs twice: the second finds the file it wrote.
+      for (const pass of label === cases[0][0] ? ["refresh", "again"] : ["refresh"]) {
+        const refreshed = run(INIT, ["config", "--project-dir", project, "--from", newer], project);
+        expect(refreshed.status, `${label} ${pass}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+        expect(readFileSync(stagePath, "utf-8"), `${label} ${pass}`).toBe(expected(incoming));
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("refresh reapplies a plugin consumes entry recorded in the object shape compose writes (#1247)", () => {
     const project = temp("aidlc-t240-plugin-consumes-refresh-");
     mkdirSync(join(project, ".git"));
