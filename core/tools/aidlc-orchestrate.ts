@@ -603,6 +603,7 @@ import {
   reopenTurnedDownBuild,
   turnedDownLine,
   buildTurnedDownNow,
+  buildCloneOffer,
   submoduleOverOwnCode,
   leadSignOffOn,
   signOffAskName,
@@ -9233,6 +9234,17 @@ function turnedDownStep(projectDir: string, unit: string, down: { repo: string; 
 // An input of a Unit's build whose copy the team changed here: asked once per
 // its text whether to send it home for the shared plan's owner to approve.
 // Null when nothing changed, or each change was asked about already.
+// The take's offer to clone the Unit's likely repos not checked out here
+// (buildCloneOffer), on the build's own step, once for those repos.
+function unitCloneAsk(projectDir: string, stateContent: string): AskDirective | null {
+  const offer = buildCloneOffer(projectDir, stateContent);
+  if (offer === null) return null;
+  const askName = `unit-clone-${offer.choices.map((choice) => choice.label).join("-").replace(/[^A-Za-z0-9.-]+/g, "_")}.json`;
+  if (engineAskMark(projectDir, askName) !== null) return null;
+  noteEngineAskMark(projectDir, askName);
+  return { kind: "ask", ask_type: "unit-clone", response_route: "command", question: offer.question, choices: offer.choices };
+}
+
 function unitProposeAsk(projectDir: string, stateContent: string): AskDirective | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
@@ -13394,6 +13406,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const propose = stateContent !== null && !isReadOnlyEngineProbe() ? unitProposeAsk(pd, stateContent) : null;
   if (propose) {
     emit(propose);
+    return;
+  }
+  // The Unit's likely repos not checked out here: cloning them is offered once.
+  const clone = stateContent !== null && !isReadOnlyEngineProbe() ? unitCloneAsk(pd, stateContent) : null;
+  if (clone) {
+    emit(clone);
     return;
   }
   // A Unit it started early on, merged at the home: moving onto what merged is offered once.

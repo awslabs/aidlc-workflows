@@ -6368,17 +6368,16 @@ function takeUnit(args: string[], projectDir?: string): void {
     (planChanging !== null
       ? ` The lead is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
       : "");
-  // A clone question goes with its choices, now; the take's own line otherwise
-  // waits for the build's next step.
-  const said = notThere.question === "" && saidWithNextStep(pd, taken);
+  // The take's own line waits for the build's next step, which also puts the
+  // offer to clone its repos not checked out here (buildCloneOffer).
+  const said = saidWithNextStep(pd, taken);
   console.log(JSON.stringify({
     taken: true,
     unit,
     team,
     space: build.space,
     record: build.dirName,
-    ...(said ? {} : { notice: taken + notThere.question }),
-    ...notThere.offer,
+    ...(said ? {} : { notice: taken }),
   }));
 }
 
@@ -8482,8 +8481,7 @@ function takeFromFile(pd: string, path: string): void {
       "from what the lead approved; its result goes back as a file when it is built." +
       (file.edited ? " This file was changed after the lead wrote it: it is taken in as it is." : "") +
       (fields["Waits On"] ? ` ${unit} waits on ${fields["Waits On"]}.` : "") +
-      notThere.lines + notThere.question,
-    ...notThere.offer,
+      notThere.lines,
   }));
 }
 
@@ -8500,6 +8498,17 @@ function codexWritableLine(pd: string, repos: string[]): string {
   if (outside.length === 0) return "";
   return ` Codex writes only inside this folder unless you start it with the others: to let it write in ${joinNames(outside)}, ` +
     `start Codex here with \`codex ${outside.map((path) => `--add-dir ${shellArg(path)}`).join(" ")}\`.`;
+}
+
+// The offer to clone a Unit build's likely repos that this workspace has no
+// checkout of and repos.json gives an address for: put by the build's own next
+// step, once, so it reaches the person whatever the agent did with the take's
+// output. Null when there is none to clone.
+export function buildCloneOffer(pd: string, stateContent: string): { question: string; choices: Array<{ label: string; command?: string }> } | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return null;
+  const notThere = likelyReposNotHere(pd, unitLikelyRepos(pd).get(build.unit) ?? [], intentRepos(pd));
+  return notThere.offer.offer === undefined ? null : { question: notThere.question.trim(), choices: notThere.offer.offer.choices };
 }
 
 // The likely repos of a taken Unit that this workspace has no checkout of: a

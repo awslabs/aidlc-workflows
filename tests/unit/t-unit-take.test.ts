@@ -784,7 +784,10 @@ describe("a team's own workspace, made from the home's", () => {
 // address (x2783-s9): the take offers to clone it where repos.json puts it, and
 // the offer's own command clones it, the Unit's repos as they were.
 describe("a likely repo this workspace has no copy of", () => {
-  test("the take offers to clone it from repos.json, and the offer's command clones it there", () => {
+  // A live run on opencode: the take's output carried the offer to clone a
+  // repo not checked out here, the agent went straight on to the build's first
+  // stage, and the person never heard it; Code Generation cloned it itself.
+  test("the build's next step offers to clone it from repos.json, once, and the offer's command clones it there", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
@@ -796,11 +799,17 @@ describe("a likely repo this workspace has no copy of", () => {
     cloneCode(hosts["checkout-api"], alice, "checkout-api", "alice");
     const took = run(UNIT, ["take", "refunds", "--home", HOME, "--team", "payments"], alice);
     expect(took.status, took.out).toBe(0);
-    expect(String(took.json?.notice)).toEndWith("billing is not at billing in this workspace yet. Do you want me to clone it there?");
-    expect(String(took.json?.notice)).not.toContain("give its path in repos.local.json");
-    const offer = took.json?.offer as { choices: Array<{ label: string; command?: string }> };
-    expect(offer.choices.map((choice) => choice.label)).toEqual(["Clone billing", "Not now"]);
-    expect(offer.choices[0].command).toEndWith("aidlc-utility.ts intent add-repo billing");
+    expect(String(took.json?.notice)).not.toContain("Do you want me to clone");
+    expect(took.json?.offer).toBeUndefined();
+    const offer = next(alice);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 500)).toBe("unit-clone");
+    expect(String(offer.question)).toBe("billing is not at billing in this workspace yet. Do you want me to clone it there?");
+    expect(String(offer.question)).not.toContain("give its path in repos.local.json");
+    const choices = offer.choices as Array<{ label: string; command?: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual(["Clone billing", "Not now"]);
+    expect(choices[0].command).toEndWith("aidlc-utility.ts intent add-repo billing");
+    // Asked once: the next step goes on to the build.
+    expect(next(alice).ask_type ?? null).not.toBe("unit-clone");
     const cloned = run(UTILITY, ["intent", "add-repo", "billing"], alice);
     expect(cloned.status, cloned.out).toBe(0);
     expect(cloned.out).toContain(`Cloned billing from ${hosts.billing} to billing; it was already one of this piece of work's repos.`);

@@ -655,9 +655,9 @@ work does: after every stage, or once at its end.
   held from your side: the lead holds it for your team at the lead's project.
 - A repo the lead's work records that your workspace has no checkout of is
   said once, with where to clone it or how to give its path in
-  `repos.local.json`. When `repos.json` has its address, the take asks instead:
-  "billing is not at ../billing yet, where repos.json puts it. Do you want me to
-  clone it there?" On your yes it is cloned there with your own git, and its
+  `repos.local.json`. When `repos.json` has its address, the build's first step
+  asks instead, once: "billing is not at ../billing yet, where repos.json puts
+  it. Do you want me to clone it there?" On your yes it is cloned there with your own git, and its
   files are nobody's change at the Unit's gates. While your own
   `repos.local.json` cannot be read, the take says what is wrong with it and
   offers no clone, since your copy may be where that file puts it.
