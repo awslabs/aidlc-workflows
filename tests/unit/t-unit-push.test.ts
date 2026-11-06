@@ -1234,6 +1234,23 @@ describe("at the home", () => {
     expect(merged[0]?.block).toContain('billing (by your word: "billing merged it by hand last night")');
   });
 
+  // A live run (by file): the member said the merge request merged and the
+  // agent ran the lead's merged at the team's build, which said the team had
+  // no result. By git, the lead's project checks the repos itself.
+  test("the lead's merged, run at a team's build by git, says the lead's project checks it and writes nothing", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const before = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing is merged now"], alice);
+    expect(said.status, said.out).not.toBe(0);
+    expect(String(said.json?.error), said.out).toBe(
+      "The lead's project checks at its own next step whether refunds merged; a merge it cannot see, the lead counts in " +
+        "their own words there. Nothing needs sending from here.",
+    );
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(before);
+  });
+
   test("the lead's word that a repo turned a Unit down or merged it counts only with a turn of theirs behind it", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);

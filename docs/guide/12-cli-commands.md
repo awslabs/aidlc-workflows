@@ -952,6 +952,8 @@ with your words in the request file its command names
 typed them in the message you said them in (the agent names another with
 `--message <id>`), go onto the Unit's claim, the repo counts as merged at the lead's project's next step, and the Unit's
 done record keeps them ("by your word").
+In a team's own build it names the way on instead: by file, `push` again writes the result file anew with
+the team's own check of each repo; by git, the lead's project checks the merge itself.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 

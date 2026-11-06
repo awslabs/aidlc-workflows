@@ -10,6 +10,9 @@
 // as it is, an older one with a line, one for other work changes nothing. A
 // result taken in once the work moved on past the Unit stages says it is not
 // recorded yet and where it is, and back on them it is recorded.
+// A result file changed by hand is read for its result; one whose result no
+// longer reads, and the lead's merged run at the team's build, name the team's
+// push again.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -17,6 +20,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { parseHandFile, type UnitResult } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, createTestProject, fixtureIntentId8, seedAidlcMemory } from "../harness/fixtures.ts";
 import {
   claimPayload,
@@ -29,6 +33,7 @@ import {
   HOME_RECORD,
   homeState,
   makeHome,
+  mergeOnHost,
   next,
   ORCH,
   run,
@@ -493,6 +498,77 @@ function resultSent(home: { dir: string }): string {
   expect(run(UNIT, ["push"], partner.dir).status).toBe(0);
   return deliver(partner.dir, "aidlc/handoff/fixture-reporting-result.md");
 }
+
+const RESULT = "aidlc/handoff/fixture-reporting-result.md";
+
+// The team builds reporting from the file and pushes it once.
+function firstResultSent(home: { dir: string }): { partner: { dir: string; ledgerHost: string }; first: UnitResult } {
+  const partner = partnerWorkspace();
+  expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+  const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+  const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+  mkdirSync(join(partner.dir, "ledger", "src"), { recursive: true });
+  writeFileSync(join(partner.dir, "ledger", "src", "report.ts"), "export const report = 1;\n");
+  const stage = join(record, "construction", "reporting", "code-generation");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+    stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/report.ts" }],
+  })}\n`);
+  const pushed = run(UNIT, ["push"], partner.dir);
+  expect(pushed.status, pushed.out).toBe(0);
+  const first = parseHandFile(readFileSync(join(partner.dir, ...RESULT.split("/")), "utf-8"))!.result!;
+  expect(Object.keys(first.repos[0].paths)).toEqual(["src/report.ts"]);
+  expect(first.repos[0].reported).toEqual({ merged: false });
+  return { partner, first };
+}
+
+describe("a team by file pushes again after its merge request merged", () => {
+  // A live run (Codex on Windows Server, by file): the member said the merge
+  // request was merged and asked to update the result file; the agent ran the
+  // lead's `merged`, which said the team had no result.
+  test("the lead's merged, run at the team's build, names the push that sends the merge in the result file", () => {
+    const { home } = handedOff();
+    const { partner } = firstResultSent(home);
+    mergeOnHost(partner.ledgerHost, "reporting", "squash");
+    const said = run(UNIT, ["merged", "reporting", "--repo", "ledger", "--person-words", "Our merge request for ledger is merged now"], partner.dir);
+    expect(said.status, said.out).not.toBe(0);
+    expect(String(said.json?.error), said.out).toBe(
+      "A merge reaches the lead in reporting's result file: run `bun .claude/tools/aidlc-unit.ts push` again, which checks " +
+        "whether each repo merged and writes the result file anew to send to the lead.",
+    );
+  });
+
+  // The same run: the agent then wrote the merge into the result file by hand,
+  // in a section of its own between the Result heading and its block, and the
+  // lead's take-in said only that the file held no result.
+  test("a result file changed by hand is taken in for its result, with the line that it was changed", () => {
+    const { home } = handedOff();
+    const { partner } = firstResultSent(home);
+    const edited = deliver(partner.dir, RESULT, (text) => text
+      .replace("## Result\n\n", "## Result\n\n## Merge Status\n\n- ledger merge request merged via squash, per data on 2026-11-06.\n\n")
+      .replace('"merged": false', '"merged": true'));
+    const step = next(home.dir, undefined, ["--hand-file", edited]);
+    expect(String(step.message), JSON.stringify(step).slice(0, 600)).toContain(`take-in '${edited}'`);
+    const taken = run(UNIT, ["take-in", edited], home.dir);
+    expect(taken.status, taken.out).toBe(0);
+    expect(taken.json?.notice).toBe(
+      "Took in reporting's result from data. This file was changed after the team wrote it: it is taken in as it is, and the result says so.",
+    );
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ result: { edited: true } });
+  });
+
+  test("a result file whose result no longer reads names the way on: the team pushes again", () => {
+    const { home } = handedOff();
+    const { partner } = firstResultSent(home);
+    const broken = deliver(partner.dir, RESULT, (text) => text.replace('"merged": false', '"merged": yes'));
+    const taken = run(UNIT, ["take-in", broken], home.dir);
+    expect(taken.status, taken.out).not.toBe(0);
+    expect(String(taken.json?.error), taken.out).toBe(
+      `${broken} is data's result file for reporting, but its result no longer reads as AI-DLC wrote it, so nothing was ` +
+        "taken in. Ask data to push reporting again and send you the new result file.",
+    );
+  });
+});
 
 // A live run: the lead skipped ahead from Functional Design to Build and Test,
 // then took in a team's result file. Take-in said "Took in", the board read

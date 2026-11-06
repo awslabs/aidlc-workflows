@@ -876,34 +876,57 @@ export function parseHandFile(raw: string): HandFile | null {
   const listed = new Map(tableRows(lines, blocks).filter((cells) => /^sha256:[0-9a-f]+$/.test(cells[1] ?? "")).map((cells) => [cells[0], cells[1]]));
   const files = new Map<string, string>();
   let result: UnitResult | undefined;
-  for (; at < lines.length; at++) {
-    if (blocks[at].kind !== "heading" || !top(at)) continue;
-    const file = /^## File: (.+)$/.exec(lines[at].trim());
-    const isResult = lines[at].trim() === "## Result";
-    if (!file && !isResult) continue;
-    let open = at + 1;
-    while (open < lines.length && blocks[open].kind === "blank") open++;
-    if (blocks[open]?.kind !== "codeFenced") continue;
+  // A fenced block from its opening line: its closing line and what it holds; null for one left open.
+  const fenced = (open: number): { close: number; body: string } | null => {
     const block = blocks[open].block;
     let close = open;
     while (close + 1 < lines.length && blocks[close + 1].block === block && blocks[close + 1].kind === "codeFenced") close++;
     const fence = /^\s*(~{3,}|`{3,})\s*(\S*)/.exec(lines[open]);
-    if (!fence || close === open || !lines[close].trim().startsWith(fence[1])) break;
-    const body = lines.slice(open + 1, close).join("\n");
-    if (isResult) {
-      try {
-        result = JSON.parse(body) as UnitResult;
-      } catch {
-        result = undefined;
+    if (!fence || close === open || !lines[close].trim().startsWith(fence[1])) return null;
+    return { close, body: lines.slice(open + 1, close).join("\n") };
+  };
+  const fileHeading = (at: number): RegExpExecArray | null =>
+    blocks[at].kind === "heading" && top(at) ? /^## File: (.+)$/.exec(lines[at].trim()) : null;
+  for (; at < lines.length; at++) {
+    if (blocks[at].kind !== "heading" || !top(at)) continue;
+    if (lines[at].trim() === "## Result") {
+      // The Result section runs to the next File section, and its result is
+      // the first fenced block in it that reads as one: a note a person or
+      // their agent wrote above the block (a merge status, say) changes nothing.
+      let scan = at + 1;
+      for (; scan < lines.length && fileHeading(scan) === null; scan++) {
+        if (blocks[scan].kind !== "codeFenced" || !top(scan)) continue;
+        const found = fenced(scan);
+        if (found === null) break;
+        result ??= resultIn(found.body);
+        scan = found.close;
       }
-    } else {
-      files.set(file![1], /noeol/.test(lines[open]) ? body : `${body}\n`);
+      at = scan - 1;
+      continue;
     }
-    at = close;
+    const file = fileHeading(at);
+    if (!file) continue;
+    let open = at + 1;
+    while (open < lines.length && blocks[open].kind === "blank") open++;
+    if (blocks[open]?.kind !== "codeFenced") continue;
+    const found = fenced(open);
+    if (found === null) break;
+    files.set(file[1], /noeol/.test(lines[open]) ? found.body : `${found.body}\n`);
+    at = found.close;
   }
   const edited = fields.Fingerprint !== filesFingerprint(files, result) ||
     [...files].some(([path, text]) => listed.get(path) !== textFingerprint(text));
   return { kind, fields, files, ...(result ? { result } : {}), edited };
+}
+
+// A fenced block's text as a Unit's result: a JSON object with its repos.
+function resultIn(body: string): UnitResult | undefined {
+  try {
+    const parsed = JSON.parse(body) as UnitResult | null;
+    return parsed !== null && typeof parsed === "object" && Array.isArray(parsed.repos) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // --- A shared input a team proposes to change -------------------------------------

@@ -8311,6 +8311,17 @@ function saidMerged(args: string[], projectDir?: string): void {
   const unit = positional[0];
   if (!unit || !flags.repo) fail(`usage: ${unitUsage("merged")}`);
   const pd = resolveProjectDir(projectDir);
+  // At a team's own build there is no claim of its result to write on: by
+  // file, the merge goes to the lead in the result file the push writes; by
+  // git, the lead's project checks the repos itself.
+  const state = readStateFile(pd);
+  if (unitBuildOf(state) !== null) {
+    fail(getField(state, "Home Result")?.trim() === "by file"
+      ? `A merge reaches the lead in ${unit}'s result file: run \`${aidlcToolInvocation("unit")} push\` again, which checks ` +
+        "whether each repo merged and writes the result file anew to send to the lead."
+      : `The lead's project checks at its own next step whether ${unit} merged; a merge it cannot see, the lead counts in ` +
+        "their own words there. Nothing needs sending from here.");
+  }
   const given = personWordsOf(pd, flags);
   const words = leadsWord(pd, flags, "That it merged").said ?? given;
   const identity = activeIdentity(pd);
@@ -8760,7 +8771,10 @@ function takeIn(args: string[], projectDir?: string): void {
       lines.push(`It brings a change ${live.owner} proposes to the ${inputName(input)}.`);
     }
   } else {
-    if (!file.result) fail(`${path} holds no result.`);
+    if (!file.result) {
+      fail(`${path} is ${live.owner}'s result file for ${unit}, but its result no longer reads as AI-DLC wrote it, so nothing ` +
+        `was taken in. Ask ${live.owner} to push ${unit} again and send you the new result file.`);
+    }
     // A result brings home only the Unit outputs the home's later stages read.
     const reads = new Set(unitOutputsHomeReads(unit, getField(readStateFile(pd), "Scope") ?? ""));
     const kept = [...file.files.keys()].filter((rel) => reads.has(rel));
