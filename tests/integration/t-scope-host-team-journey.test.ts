@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:release, function:checkTeamResults, function:unitMergeVerdict, function:localRepoOverrideLines
+// covers: subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:release, subcommand:aidlc-unit:assign, function:checkTeamResults, function:unitMergeVerdict, function:localRepoOverrideLines
 //
 // The build-out's journey (#2410, section 3), on every tool's tree, in one piece
 // of work. The home is the lead's clone on Claude Code; each team works in its
@@ -21,8 +21,8 @@
 // the order they were fixed, so on an older engine the journey stops at the
 // first route it still breaks. The cases after the journey are routes of their
 // own: the lead's project building a Unit while a team's Unit merges, a team's
-// next Unit asked for in the chat of its pushed build, and a take of another
-// team's Unit and its way back.
+// next Unit asked for in the chat of its pushed build, a take of another team's
+// Unit and its way back, and the lead's re-hold of a Unit.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -43,6 +43,7 @@ import {
   homeState,
   makeHome,
   mergeOnHost,
+  ORCH,
   run,
   STATE,
   tempDir,
@@ -437,5 +438,46 @@ describe("a teammate on Copilot CLI and the Units the lead held for teams", () =
     const back = sam.agent.host.bash(`bun ${sam.agent.host.dir}/tools/aidlc-unit.ts release checkout-ui`);
     expect(back.status, back.stdout + back.stderr).toBe(0);
     heldNotTaken(claimPayload(home.remote, id8, "checkout-ui"), "web");
+  });
+});
+
+describe("the lead holds a Unit for a team again", () => {
+  test("a re-hold after a release is a hold, assign makes a hand-off by file a hold again, and the approvals question is answered once", () => {
+    const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web") };
+    const { home, id8, assigned } = leadsProject(hosts, TWO_TEAMS, TWO_TEAMS.map((p) => `${p.unit}=${p.team}`));
+    const lead = homeStandIn(home);
+    const unitTool = `bun ${lead.agent.host.dir}/tools/aidlc-unit.ts`;
+    // The first assign asked how often the teams approve; the lead keeps the recommended answer.
+    const rhythm = (assigned.offer as { choices?: Array<{ label: string; command?: string }> } | undefined)?.choices ?? [];
+    const keep = rhythm.find((c) => c.label === "Keep approvals after every stage");
+    expect(keep, JSON.stringify(assigned)).toBeDefined();
+    lead.person.pick(String(assigned.notice), rhythm.map((c) => c.label), keep!.label);
+    if (keep!.command !== undefined) expect(lead.agent.host.bash(keep!.command).status).toBe(0);
+    lead.person.say("/aidlc");
+    const board = lead.agent.next();
+    expect(board.kind, JSON.stringify(board).slice(0, 400)).toBe("print");
+    // x2783-s9 3: the lead freed refunds, then said to hold it for payments again;
+    // the board's note gave the agent only the hand-off by file, which it ran.
+    lead.person.say("free refunds for now");
+    const freed = lead.agent.host.bash(`${unitTool} release refunds`);
+    expect(freed.status, freed.stdout + freed.stderr).toBe(0);
+    expect(String(board.board_note)).toMatch(/`[^`]*\bassign <unit>=<team>[^`]*`/);
+    const again = "No, the payments team builds it. Hold it for them again.";
+    lead.person.say(again);
+    const held = lead.agent.host.bash(`${unitTool} assign refunds=payments --person-words '${again}'`);
+    expect(held.status, held.stdout + held.stderr).toBe(0);
+    heldNotTaken(claimPayload(home.remote, id8, "refunds"), "payments");
+    // x2783-s9 4: the approvals question was answered at the first assign and is not asked again.
+    expect((JSON.parse(held.stdout.trim().split("\n").at(-1) ?? "{}") as { offer?: unknown }).offer).toBeUndefined();
+    // x2783-s9 12: a hand-off by file the lead asked for, then "no file": assign makes it a hold again.
+    lead.person.say("hand checkout-ui to web by file");
+    const file = lead.agent.host.bash(`${unitTool} hand-off checkout-ui --team web --person-words 'hand checkout-ui to web by file'`);
+    expect(file.status, file.stdout + file.stderr).toBe(0);
+    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ by_file: true });
+    lead.person.say("no file, the web team works in this workspace");
+    const hold = lead.agent.host.bash(`${unitTool} assign checkout-ui=web --person-words 'no file, the web team works in this workspace'`);
+    expect(hold.status, hold.stdout + hold.stderr).toBe(0);
+    heldNotTaken(claimPayload(home.remote, id8, "checkout-ui"), "web");
+    expect(run(ORCH, ["team-board"], home.dir).out).toContain("- checkout-ui, web: held for web, not taken yet");
   });
 });
