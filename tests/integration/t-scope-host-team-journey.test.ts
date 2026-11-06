@@ -19,7 +19,8 @@
 // repo is not checked out yet; a fresh clone's offer after a merge; the lead's
 // look at the board between a merge and the step that records it. They come in
 // the order they were fixed, so on an older engine the journey stops at the
-// first route it still breaks.
+// first route it still breaks. The cases after the journey are routes of their
+// own: the lead's project building a Unit while a team's Unit merges.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -349,5 +350,31 @@ describe("one piece of work, a team on every tool", () => {
       .toMatch(/^- \[x\] build-and-test /m);
     // Every team built under its own approvals, never the home's.
     for (const team of teams.values()) expect(team.agent.asked.some((a) => a.what === "plan approval")).toBe(true);
+  });
+});
+
+describe("the lead's project builds a Unit of its own while a team's Unit merges", () => {
+  test("the lead's next step records the merge the team's repo made, though the lead's chat read the claims before the team took it", () => {
+    const hosts: Record<string, string> = { "checkout-web": codeHost("checkout-web"), billing: codeHost("billing") };
+    const team: Plan = { unit: "refund-button", team: "storefront", tool: "copilot", person: "sam", repos: [{ repo: "checkout-web", merge: "merge" }] };
+    const here: Plan = { unit: "weekly-report", team: "here", tool: "claude", person: "lead", repos: [{ repo: "billing", merge: "squash" }] };
+    // The lead names a team for refund-button only, so weekly-report is built here.
+    const { home, id8 } = leadsProject(hosts, [team, here], ["refund-button=storefront"]);
+    // The lead's chat starts on the Unit built here, reading the claims once.
+    const lead = homeStandIn(home);
+    lead.person.say("/aidlc");
+    const first = lead.agent.next();
+    expect(first, JSON.stringify(first).slice(0, 400)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
+    // Meanwhile the storefront team takes, builds and pushes its Unit, and its repo merges it by a merge commit.
+    const sam = teamClone(home, hosts, team);
+    const { pushed } = takeBuildPush(sam);
+    expectResult(home.remote, id8, team, pushed);
+    mergeOnHost(hosts["checkout-web"], "refund-button", "merge");
+    // x2783-s9 16: the lead carries on in the same chat; the step went on to the
+    // Unit built here and recorded nothing, while the board said it would.
+    const step = goOn(lead, lead.agent.personTypes("/aidlc carry on"));
+    expect(step, JSON.stringify(step).slice(0, 400)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
+    expect(unitsMerged(home.dir)).toEqual(["refund-button"]);
+    expect(claimPayload(home.remote, id8, "refund-button")).toMatchObject({ done: true });
   });
 });
