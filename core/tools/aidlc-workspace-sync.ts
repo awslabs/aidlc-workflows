@@ -1048,11 +1048,18 @@ function snapshotOutputs(root: string): OutputSnapshots {
 }
 
 // Where each clone waits for its install, and the staging folders made beside
-// a checkout repos.json puts outside the workspace.
+// a checkout repos.json puts outside the workspace. `targets` holds a folder a
+// caller named for a clone (add-repo's --path, which repos.json lists only once
+// the install writes it); any other clone goes where repoDir puts it.
 interface StagedClones {
   transactionDir: string;
   stagePaths: Map<string, string>;
   outsideStages: string[];
+  targets: Map<string, string>;
+}
+
+function cloneDestination(root: string, staged: StagedClones, name: string): string {
+  return staged.targets.get(name) ?? repoDir(root, name);
 }
 
 // The slow part: a transaction folder under the root holding each clone, so
@@ -1065,15 +1072,16 @@ function stagePlan(
   manifest: WorkspaceManifest,
   repos: WorkspaceRepoEntry[],
   log: (line: string) => void,
+  targets: ReadonlyMap<string, string> = new Map(),
 ): StagedClones {
   const transactionDir = mkdtempSync(join(root, ".aidlc-workspace-sync-txn-"));
-  const staged: StagedClones = { transactionDir, stagePaths: new Map(), outsideStages: [] };
+  const staged: StagedClones = { transactionDir, stagePaths: new Map(), outsideStages: [], targets: new Map(targets) };
   try {
     for (const dir of ["clones", "generated", "backups", "orphans"]) {
       mkdirSync(join(transactionDir, dir));
     }
     for (const repo of repos) {
-      const destination = repoDir(root, repo.name);
+      const destination = cloneDestination(root, staged, repo.name);
       const rel = relative(root, destination);
       if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) {
         staged.stagePaths.set(repo.name, join(transactionDir, "clones", repo.name));
@@ -1178,7 +1186,7 @@ function commitPlan(
     if (manifestFile.next !== null) writeFileSync(stagedManifest, manifestFile.next, "utf-8");
 
     for (const repo of plan.toClone) {
-      const destination = repoDir(root, repo.name);
+      const destination = cloneDestination(root, staged, repo.name);
       if (pathEntryExists(destination) && !isEmptyDirectory(destination)) {
         throw new SyncFailure(
           `${repo.name} appeared while sync was staging; no changes were applied`,
@@ -1250,7 +1258,7 @@ function commitPlan(
       }
     }
     for (const repo of plan.toClone) {
-      const destination = repoDir(root, repo.name);
+      const destination = cloneDestination(root, staged, repo.name);
       if (isEmptyDirectory(destination)) {
         rmdirSync(destination);
         emptiedTargets.push(destination);
@@ -1376,9 +1384,19 @@ export interface StagedWorkspaceRepo {
   repo: WorkspaceRepoEntry;
 }
 
-/** Clone `repo` (its `url`, else `org`'s address) into a staging folder on the volume its checkout goes to. Throws CloneFailure. */
-export function stageWorkspaceRepo(root: string, org: string | undefined, repo: WorkspaceRepoEntry): StagedWorkspaceRepo {
-  return { clones: stagePlan(root, { ...(org === undefined ? {} : { org }), repos: [repo] }, [repo], () => {}), repo };
+/**
+ * Clone `repo` (its `url`, else `org`'s address) into a staging folder on the
+ * volume its checkout goes to: `target` when the caller names the folder, else
+ * where repoDir puts it. Throws CloneFailure.
+ */
+export function stageWorkspaceRepo(
+  root: string,
+  org: string | undefined,
+  repo: WorkspaceRepoEntry,
+  target?: string,
+): StagedWorkspaceRepo {
+  const targets = new Map(target === undefined ? [] : [[repo.name, target]]);
+  return { clones: stagePlan(root, { ...(org === undefined ? {} : { org }), repos: [repo] }, [repo], () => {}, targets), repo };
 }
 
 /**
@@ -1392,7 +1410,7 @@ export function installWorkspaceRepo(
   staged: StagedWorkspaceRepo,
   manifest: { raw: string | null; next: string | null },
 ): void {
-  const target = repoDir(root, staged.repo.name);
+  const target = cloneDestination(root, staged.clones, staged.repo.name);
   const text = manifest.next ?? manifest.raw;
   let committing = false;
   try {
@@ -1477,6 +1495,14 @@ function reconcile(root: string, force: boolean): number {
   return 2;
 }
 
+// The address a checkout's origin points to, read and never changed; null when
+// it has none. A caller writing it to repos.json leaves its credential out.
+export function originUrl(dir: string): string | null {
+  const result = git(dir, ["remote", "get-url", "origin"]);
+  const url = result.stdout.trim();
+  return result.status === 0 && url !== "" ? url : null;
+}
+
 // repos.json written from the repos found here: each child repo, or the
 // workspace itself (`"path": "."`) when it is the one code repo, with the
 // address its own origin points to (read, never changed; any user and token
@@ -1487,10 +1513,7 @@ function writeManifest(root: string): number {
     console.log("repos.json is already here; nothing was written.");
     return 0;
   }
-  const origin = (dir: string): string => {
-    const result = git(dir, ["remote", "get-url", "origin"]);
-    return result.status === 0 ? withoutCredentials(result.stdout.trim()) : "";
-  };
+  const origin = (dir: string): string => withoutCredentials(originUrl(dir) ?? "");
   const children = discoverSiblingRepos(root);
   const repos = children.length > 0
     ? children.map((name) => ({ name, url: origin(join(root, name)), path: name }))

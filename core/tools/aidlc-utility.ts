@@ -164,6 +164,7 @@ import {
   installWorkspaceRepo,
   workspaceCloneUrl,
   maskUserinfo,
+  originUrl,
   type StagedWorkspaceRepo,
   stageWorkspaceRepo,
 } from "./aidlc-workspace-sync.ts";
@@ -9744,17 +9745,21 @@ function handleIntentRepos(
     constructionHasStarted(readStateFile(projectDir, dirName, space), recordDir(projectDir, dirName, space));
   if (verb === "add-repo" && recorded.length === 0 && built()) die(checkoutWayOn(projectDir, "add-repo", [name], flags.path));
   const mapping = verb === "add-repo" && flags.path !== undefined && !recorded.includes(name)
-    ? plannedRepoPath(projectDir, name, flags.path)
+    ? plannedRepoPath(projectDir, name, flags.path, flags.url)
     : null;
   const target = verb === "add-repo" && flags.path !== undefined ? mappedRepoDir(projectDir, flags.path) : repoDir(projectDir, name);
-  // A repo the work records that is not on disk (a take's likely repo) is cloned the same way.
-  const clone = verb === "add-repo" && flags.path === undefined && !pathEntryExists(target)
+  // A repo the work records that is not on disk (a take's likely repo) is
+  // cloned the same way; one the person named a folder and an address for is
+  // cloned there (plannedRepoPath).
+  const clone = mapping !== null
+    ? mapping.clone
+    : verb === "add-repo" && flags.path === undefined && !pathEntryExists(target)
     ? plannedRepoClone(projectDir, name, flags.url)
     : null;
   let staged: StagedWorkspaceRepo | null = null;
   if (clone !== null) {
     try {
-      staged = stageWorkspaceRepo(projectDir, clone.org, clone.repo);
+      staged = stageWorkspaceRepo(projectDir, clone.org, clone.repo, target);
     } catch (err) {
       const url = clone.address;
       const address = maskUserinfo(url);
@@ -9782,7 +9787,8 @@ function handleIntentRepos(
         );
       }
     }
-    if (mapping !== null && mapping.next !== null) {
+    // A clone's install writes repos.json with it; one cloned there meanwhile only needs the entry.
+    if (mapping !== null && mapping.next !== null && staged === null) {
       try {
         installWorkspaceManifest(projectDir, { raw: mapping.raw, next: mapping.next });
       } catch (err) {
@@ -9958,38 +9964,78 @@ function repoIsWorkspaceChild(projectDir: string, name: string): boolean {
 }
 
 // The folder the person named for a repo (`--path`), read as repos.json reads a
-// path. It must be a real Git checkout before anything is written; repos.json
-// gains the entry, with the path as they gave it, unless it already puts the
-// repo there. A repo listed elsewhere is said with where, and how to change it.
+// path. A checkout there is listed as it is; with the address the person gave
+// (`--url`) and nothing there yet, it is cloned there first. repos.json gains
+// the entry, with the path as they gave it and the address they gave or its
+// origin's (any credential left out), unless it already puts the repo there. A
+// repo listed elsewhere is said with where, and how to change it.
 function plannedRepoPath(
   projectDir: string,
   name: string,
   typed: string,
-): { raw: string | null; next: string | null; note: string; shown: string } {
+  url: string | undefined,
+): {
+  raw: string | null;
+  next: string | null;
+  note: string;
+  shown: string;
+  clone: { repo: WorkspaceRepoEntry; org: string | undefined; address: string; manifest: { raw: string | null; next: string | null }; note: null } | null;
+} {
   const shown = displayRepoPath(typed);
   const dir = mappedRepoDir(projectDir, typed);
   const repos = readWorkspaceRepos(projectDir);
   if (repos.error !== undefined) die(`${name} could not be added: ${repos.error} Nothing was changed.`);
   const listed = repos.entries.get(name);
   if (listed !== undefined) {
-    if (resolve(repoDir(projectDir, name)) === resolve(dir)) return { raw: null, next: null, note: "", shown };
+    if (resolve(repoDir(projectDir, name)) === resolve(dir)) return { raw: null, next: null, note: "", shown, clone: null };
     const source = repos.pathSource.get(name) ?? "repos.json";
     die(
       `intent add-repo refused: ${source} puts ${name} at ${displayRepoPath(listed.path ?? name)}, not ${shown}. ` +
         "Change its path there (or in repos.local.json for your own copy), then add it again. Nothing was changed.",
     );
   }
-  if (!hasRealGitEntry(dir)) {
+  const there = hasRealGitEntry(dir);
+  if (!there && url !== undefined && pathEntryExists(dir) && !isEmptyFolder(dir)) {
+    die(
+      `intent add-repo refused: ${shown} is already there and is not a Git checkout, so ${name} cannot be cloned into it. ` +
+        "Give another folder, or move that one aside and add it again. Nothing was changed.",
+    );
+  }
+  if (!there && url === undefined) {
     die(`intent add-repo refused: ${shown} is not a Git checkout (no .git entry there). Clone ${name} there first, or give the folder it is in. Nothing was changed.`);
   }
+  const address = url ?? originUrl(dir) ?? undefined;
+  const kept = address === undefined ? undefined : withoutCredentials(address);
   const file = join(projectDir, "repos.json");
   const raw = existsSync(file) ? readFileSync(file, "utf-8") : null;
-  const next = workspaceManifestWith(raw, repos.manifest?.org, { name, path: shown });
+  const next = workspaceManifestWith(raw, repos.manifest?.org, { name, path: shown, ...(kept === undefined ? {} : { url: kept }) });
   if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
   const share = isAbsolute(shown) || /^[A-Za-z]:\//.test(shown)
     ? "It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in repos.local.json."
     : "Commit it to share it with your team.";
-  return { raw, next, shown, note: `${raw === null ? "repos.json is new: it lists" : "repos.json now lists"} ${name} at ${shown}. ${share}` };
+  const stripped = kept !== address ? " Its address there leaves out the credential." : "";
+  return {
+    raw,
+    next,
+    shown,
+    note: `${raw === null ? "repos.json is new: it lists" : "repos.json now lists"} ${name} at ${shown}. ${share}${stripped}`,
+    clone: there ? null : {
+      repo: { name, path: shown, url: url! },
+      org: repos.manifest?.org,
+      address: url!,
+      manifest: { raw, next },
+      note: null,
+    },
+  };
+}
+
+// An empty folder a clone can go into, as workspace-sync's install takes one.
+function isEmptyFolder(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory() && readdirSync(path).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 // After a change to the repos lands: under relaxed or off, a change since Units

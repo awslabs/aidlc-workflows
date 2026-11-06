@@ -561,6 +561,92 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(readFileSync(join(proj, "repos.json"), "utf-8")).toBe(raw);
     expect(existsSync(join(proj, "payments", ".git"))).toBe(true);
   });
+
+  // x2783-f3: a workspace that keeps its repos under src/; the person says to
+  // clone notify from an address into src/notify. The add clones it there and
+  // repos.json keeps the address with the folder, so a teammate's clone gets it.
+  test("--path with --url: cloned into the folder the person named, and repos.json keeps the address with it", () => {
+    const bare = bareRepo("local", "notify");
+    writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }] }, null, 2)}\n`);
+    const r = utility(["intent", "add-repo", "notify", "--path", "src/notify", "--url", bare]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out.trim()).toBe(
+      `Cloned notify from ${bare} and added it to this piece of work's repos. repos.json now lists notify at src/notify. ` +
+        "Commit it to share it with your team. Reverse Engineering will cover notify when it runs. You can remove it again any time.",
+    );
+    expect(existsSync(join(proj, "src", "notify", "src", "api.ts"))).toBe(true);
+    expect(existsSync(join(proj, "notify"))).toBe(false);
+    expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8")).repos).toEqual([
+      { name: "app-a" },
+      { name: "notify", path: "src/notify", url: bare },
+    ]);
+    expect(repos()).toEqual(["app-a", "notify"]);
+    const rows = audit();
+    expect(rows).toContain(`**Cloned From**: ${bare}`);
+    expect(rows).toContain("**Listed At**: src/notify");
+    expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toContain("/src/notify/\n");
+    expect(stagingLeft()).toEqual([]);
+  });
+
+  test("--path to a checkout already there with --url: repos.json keeps the address, the credential left out", () => {
+    bareRepo("acme", "notify");
+    insteadOf("https://user:s3cret-tok@example.invalid/acme/", "acme");
+    const address = "https://user:s3cret-tok@example.invalid/acme/notify.git";
+    const cloned = spawnSync("git", ["clone", "-q", address, join(proj, "src", "notify")], { encoding: "utf-8", env: gitEnv() });
+    expect(cloned.status, cloned.stderr).toBe(0);
+    writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }] }, null, 2)}\n`);
+    const r = utility(["intent", "add-repo", "notify", "--path", "src/notify", "--url", address]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain(
+      "Added notify to this piece of work's repos. repos.json now lists notify at src/notify. " +
+        "Commit it to share it with your team. Its address there leaves out the credential.",
+    );
+    expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8")).repos).toEqual([
+      { name: "app-a" },
+      { name: "notify", path: "src/notify", url: "https://example.invalid/acme/notify.git" },
+    ]);
+    expect(r.out).not.toContain("s3cret-tok");
+    expect(audit()).not.toContain("s3cret-tok");
+  });
+
+  // x2783-f3 r1a: the agent added two checkouts by their folders with no
+  // address given; repos.json listed paths only, so a teammate's clone had
+  // nothing to clone them from. The address each one's origin points to is kept.
+  test("--path to a checkout with an origin and no --url: repos.json keeps the origin's address, the credential left out", () => {
+    const dir = join(proj, "src", "storefront");
+    mkdirSync(dir, { recursive: true });
+    git(dir, ["init", "-q"]);
+    git(dir, ["remote", "add", "origin", "https://user:s3cret-tok@example.invalid/acme/storefront.git"]);
+    writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }] }, null, 2)}\n`);
+    const r = utility(["intent", "add-repo", "storefront", "--path", "src/storefront"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain(
+      "repos.json now lists storefront at src/storefront. Commit it to share it with your team. Its address there leaves out the credential.",
+    );
+    expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8")).repos).toEqual([
+      { name: "app-a" },
+      { name: "storefront", path: "src/storefront", url: "https://example.invalid/acme/storefront.git" },
+    ]);
+    expect(r.out).not.toContain("s3cret-tok");
+    expect(audit()).not.toContain("s3cret-tok");
+  });
+
+  test("--path to a folder in the way with --url: one line names the way on, and nothing changes", () => {
+    const bare = bareRepo("local", "notify");
+    mkdirSync(join(proj, "src", "notify"), { recursive: true });
+    writeFileSync(join(proj, "src", "notify", "notes.txt"), "not a repo\n");
+    const raw = `${JSON.stringify({ repos: [{ name: "app-a" }] }, null, 2)}\n`;
+    writeFileSync(join(proj, "repos.json"), raw);
+    const r = utility(["intent", "add-repo", "notify", "--path", "src/notify", "--url", bare]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain(
+      "intent add-repo refused: src/notify is already there and is not a Git checkout, so notify cannot be cloned into it. " +
+        "Give another folder, or move that one aside and add it again. Nothing was changed.",
+    );
+    expect(readFileSync(join(proj, "repos.json"), "utf-8")).toBe(raw);
+    expect(repos()).toEqual(["app-a"]);
+    expect(stagingLeft()).toEqual([]);
+  });
 });
 
 // Work that records no repos works on the workspace folder itself (x2783-s11,
