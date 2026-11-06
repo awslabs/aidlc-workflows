@@ -4283,7 +4283,14 @@ function overrodeAtEarlierUnits(pd: string, slug: string, unit: string, kind: st
   const pickUnits = new Map<AuditShardEvent, string | null>();
   const questions = new Map<AuditShardEvent, AuditShardEvent>();
   const carried = new Map<string, string>();
-  for (const [pick, choice] of blockingSensorPicks(rows, slug, pickUnits, questions)) {
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(pd);
+  } catch {
+    stateContent = null;
+  }
+  // Read as the verification that carried the pick reads it (blockingSensorPicks, with the state).
+  for (const [pick, choice] of blockingSensorPicks(rows, slug, pickUnits, questions, stateContent)) {
     const at = pickUnits.get(pick) ?? null;
     if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE || at === null || at === unit || carried.has(at)) continue;
     if (!optionsList(auditBlockField(questions.get(pick)?.block ?? "", "Options")).includes(SWITCH_CHECKS_OFF_CHOICE)) continue;

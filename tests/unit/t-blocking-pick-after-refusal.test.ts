@@ -72,7 +72,7 @@ const question = (unit?: string): Row => ["DECISION_RECORDED", {
 }];
 const answer = (details: string, unit?: string): Row => ["QUESTION_ANSWERED", { Stage: SLUG, Details: details, ...(unit ? { Unit: unit } : {}) }];
 const picks = (list: AuditShardEvent[], state: string | null = WALK): string[] =>
-  [...blockingSensorPicks(list, SLUG, undefined, state).values()];
+  [...blockingSensorPicks(list, SLUG, undefined, undefined, state).values()];
 
 describe("a pick recorded after the person's reply to the refusal", () => {
   test("counts when the reply came after the refusal's fire, at the late gate and at a Unit's checkpoint", () => {
