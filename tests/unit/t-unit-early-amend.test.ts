@@ -23,6 +23,7 @@ import {
   cloneCode,
   cloneOf,
   codeGenerated,
+  DEPENDENCIES,
   codeHost,
   ENV,
   git,
@@ -45,8 +46,8 @@ const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
 
 // refunds pushed by payments; a data member's clone with billing, ready to take
 // reporting, which waits on refunds.
-function refundsPushed() {
-  const taken = refundsTaken();
+function refundsPushed(dependencies?: string) {
+  const taken = refundsTaken(undefined, undefined, dependencies);
   codeGenerated(taken.alice, taken.record);
   expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
   git(taken.home.dir, ["fetch", "-q", "origin"]);
@@ -71,12 +72,44 @@ describe("starting early", () => {
     const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain(
-      "It starts early on the pushed branch of refunds in checkout-api and billing. It may still change before it merges.",
+      "It starts early on the pushed branch of refunds in billing. It may still change before it merges.",
     );
     expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
     expect(git(join(dana, "billing"), ["rev-parse", "HEAD"])).toBe(git(hosts.billing, ["rev-parse", "refunds"]));
     // The home's board shows it started early.
     expect(String(next(home.dir).narration)).toContain("- reporting, data: building early on refunds, taken by dana");
+  });
+
+  // A live run (x2783-s4b, data team, its own uncommitted edit in billing): "Start reporting early for data" put
+  // checkout-api, a repo reporting does not list, on a new branch at refunds' head.
+  test("an early start touches only the Unit's own repos: a repo the Unit does not list is left as it is", () => {
+    const { dana, home } = refundsPushed();
+    writeFileSync(join(dana, "billing", "README.md"), "# billing\n\nTheir own note.\n");
+    const apiBefore = git(join(dana, "checkout-api"), ["rev-parse", "HEAD"]);
+    const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana);
+    expect(took.status, took.out).toBe(0);
+    const notice = String(took.json?.notice);
+    expect(notice).toContain("It starts early on the pushed branch of refunds in billing.");
+    expect(notice).toContain("Branch reporting in billing starts there; your uncommitted changes kept you on your branch");
+    expect(notice).not.toContain("checkout-api");
+    expect(git(join(dana, "checkout-api"), ["branch", "--show-current"])).toBe("main");
+    expect(git(join(dana, "checkout-api"), ["rev-parse", "HEAD"])).toBe(apiBefore);
+    expect(git(join(dana, "checkout-api"), ["branch", "--list", "reporting"])).toBe("");
+    const early = (claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting") ?? {}) as { early_on?: Array<{ repos: Array<{ repo: string }> }> };
+    expect(early.early_on?.flatMap((dep) => dep.repos.map((repo) => repo.repo))).toEqual(["billing"]);
+  });
+
+  test("an early start whose dependency changed none of the Unit's repos switches nothing, says so, and a turn-down of it says nothing of a branch", () => {
+    const { home, dana } = refundsPushed(DEPENDENCIES.replace("repos: [billing]\n    depends_on: [refunds]", "repos: [ledger]\n    depends_on: [refunds]"));
+    const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(
+      "It starts early, before refunds is done; refunds changed none of reporting's repos, so nothing here was switched.",
+    );
+    for (const repo of ["billing", "checkout-api"]) expect(git(join(dana, repo), ["branch", "--show-current"]), repo).toBe("main");
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger"], home.dir).status).toBe(0);
+    git(dana, ["fetch", "-q", "origin"]);
+    expect(JSON.stringify(notices(next(dana)))).not.toContain("started on its branch");
   });
 
   test("without the dependency pushed, the Unit waits, and the line says when it opens", () => {

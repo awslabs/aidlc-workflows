@@ -43,6 +43,7 @@ import {
   codeGenerated,
   codeGeneratedAgain,
   codeHost,
+  DEPENDENCIES,
   ENV,
   finishBuild,
   git,
@@ -674,11 +675,14 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 });
 
-// refunds pushed; dana of data takes reporting early on its branch (and, when
-// pushedFirst, pushes it); refunds then merges into main the given way in both
-// repos and the home records it done.
+// refunds pushed; dana of data takes reporting, whose plan lists both repos,
+// early on its branch (and, when pushedFirst, pushes it); refunds then merges
+// into main the given way in both repos and the home records it done.
+const REPORTING_IN_BOTH = DEPENDENCIES.replace("repos: [billing]\n    depends_on: [refunds]", "repos: [checkout-api, billing]\n    depends_on: [refunds]");
+
 function earlyThenMerged(how: "squash" | "merge" | "rebase", pushedFirst: boolean) {
-  const taken = refundsTaken();
+  expect(REPORTING_IN_BOTH).not.toBe(DEPENDENCIES);
+  const taken = refundsTaken(undefined, undefined, REPORTING_IN_BOTH);
   codeGenerated(taken.alice, taken.record);
   expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
   git(taken.home.dir, ["fetch", "-q", "origin"]);

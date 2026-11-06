@@ -293,10 +293,11 @@ export function stateOf(dir: string): string {
 export const HOME_RECORD = "fixture-8000000000000001";
 
 // The home of work across checkout-api and billing, refunds held for payments,
-// pushed; a payments member's clone with both repos and refunds taken.
-export function refundsTaken(assign: string[] = ["refunds=payments", "checkout-ui=web"], beforeTake?: (alice: string) => void) {
+// pushed; a payments member's clone with both repos and refunds taken. Another
+// Unit plan (`dependencies`) replaces DEPENDENCIES.
+export function refundsTaken(assign: string[] = ["refunds=payments", "checkout-ui=web"], beforeTake?: (alice: string) => void, dependencies?: string) {
   const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
-  const home = makeHome({ repos: hosts });
+  const home = makeHome({ repos: hosts, ...(dependencies === undefined ? {} : { dependencies }) });
   const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
   expect(teams.status, teams.out).toBe(0);
   expect(run(UNIT, ["assign", ...assign], home.dir).status).toBe(0);

@@ -6257,14 +6257,20 @@ function takeUnit(args: string[], projectDir?: string): void {
         (pushedDeps ? `, or starts early on ${blockers.length === 1 ? "its" : "their"} pushed branches if you ask.` : "."),
     );
   }
+  // The Unit's own repos, as its Unit plan lists them (its likely repos; one
+  // that lists none works in all of the work's): an early start branches only
+  // these, never a repo a dependency pushed that this Unit does not use.
+  const likely = unitLikelyRepos(pd, home.dirName, home.space).get(unit) ?? [];
+  const ownRepos = new Set(likely.map((repo) => repo.split("/")[0]));
   const earlyOn = early
     ? blockers.map((dep) => ({
       unit: dep,
-      repos: (depClaims.get(dep)?.payload.result?.repos ?? []).map((repo) => ({
-        repo: repo.repo,
-        branch: repo.branch,
-        head: repo.heads.at(-1) ?? "",
-      })),
+      repos: (depClaims.get(dep)?.payload.result?.repos ?? []).filter((repo) => ownRepos.size === 0 || ownRepos.has(repo.repo))
+        .map((repo) => ({
+          repo: repo.repo,
+          branch: repo.branch,
+          head: repo.heads.at(-1) ?? "",
+        })),
     }))
     : undefined;
   // An open Unit is taken for a team: the one the person names, or the space they are in.
@@ -6342,13 +6348,13 @@ function takeUnit(args: string[], projectDir?: string): void {
   }
   if (earlyOn) {
     const names = [...new Set(earlyOn.flatMap((dep) => dep.repos.map((repo) => (repo.repo === "." ? "the repo" : repo.repo))))];
-    earlyLines.unshift(
-      `It starts early on the pushed branch of ${joinNames(earlyOn.map((dep) => dep.unit))} in ${joinNames(names)}. ` +
-        "It may still change before it merges.",
-    );
+    const deps = joinNames(earlyOn.map((dep) => dep.unit));
+    earlyLines.unshift(names.length > 0
+      ? `It starts early on the pushed branch of ${deps} in ${joinNames(names)}. It may still change before it merges.`
+      : `It starts early, before ${deps} ${earlyOn.length === 1 ? "is" : "are"} done; ${deps} changed none of ${unit}'s repos, ` +
+        "so nothing here was switched.");
   }
   // The likely repos this workspace has no checkout of, said with the way to one.
-  const likely = unitLikelyRepos(pd, home.dirName, home.space).get(unit) ?? [];
   const notThere = likelyReposNotHere(pd, likely, home.repos);
   if (resultByFile) {
     withAuditLock(pd, () => {
@@ -7499,9 +7505,10 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
   }
   // A Unit it started early on that is now done is offered as the move onto
   // the integration branch (earlyBaseMerged), not as a line.
+  // One that changed none of this Unit's repos left nothing here on its branch.
   for (const dep of mine.payload.early_on ?? []) {
     const theirs = claims.get(dep.unit)?.payload;
-    if (!theirs?.done && theirs?.turned_down) {
+    if (!theirs?.done && theirs?.turned_down && dep.repos.length > 0) {
       lines.push(`${dep.unit} was turned down by the lead; ${unit} started on its branch. Nothing else changes: wait for it, ` +
         "or rebase when you are ready.");
     }

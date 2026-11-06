@@ -463,7 +463,9 @@ describe("scenario 6: when things go wrong", () => {
     cloneCode(hosts["checkout-api"], dana, "checkout-api", "dana");
     const early = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana);
     expect(early.status, early.out).toBe(0);
-    expect(String(early.json?.notice)).toContain("It starts early on the pushed branch of refunds in checkout-api and billing. It may still change before it merges.");
+    // reporting's plan lists billing only: checkout-api, which refunds also pushed, stays as it is.
+    expect(String(early.json?.notice)).toContain("It starts early on the pushed branch of refunds in billing. It may still change before it merges.");
+    expect(git(join(dana, "checkout-api"), ["branch", "--show-current"])).toBe("main");
     const host = hostFor("claude", dana, GIT_ENV);
     const person = new PersonScript(host);
     const agent = new AgentStandIn(host, person, {
