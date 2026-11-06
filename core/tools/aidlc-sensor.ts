@@ -935,6 +935,16 @@ export function stripStdoutNoise(stdout: string, startChar: string): string {
 	return idx >= 0 ? stdout.slice(idx) : stdout;
 }
 
+const DECLARED_NOTE_PREFIX = "tool-unavailable: ";
+function declaredCouldNotRunNote(stderr: unknown): string | null {
+	if (typeof stderr !== "string") return null;
+	const declared = stderr
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.find((line) => line.startsWith(DECLARED_NOTE_PREFIX));
+	return declared ?? null;
+}
+
 // --- Truth table ---
 //
 // Branch ordering is LOAD-BEARING: branch a (timeout) precedes branch 0
@@ -1044,10 +1054,11 @@ function decideOutcome(
 		};
 	}
 	if (result.status !== null) {
+		const declared = declaredCouldNotRunNote(result.stderr);
 		return {
 			kind: "could-not-run",
 			durationMs: elapsedMs,
-			note: `script-error: exit-${result.status}`,
+			note: declared ?? `script-error: exit-${result.status}`,
 		};
 	}
 	// Non-SIGTERM signals (SIGKILL, SIGINT, SIGSEGV, …) — status is null,
