@@ -92,8 +92,8 @@ import {
   writeSessionSelectionNotice,
   clearSessionRebindOffer,
   completeSubagentInflight,
-  leadsPlanNotHere,
 } from "../tools/aidlc-lib.ts";
+import { leadsPlanNotHere } from "../tools/aidlc-unit-holders.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
 import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";

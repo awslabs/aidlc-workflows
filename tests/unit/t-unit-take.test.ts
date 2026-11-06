@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:take, audit:UNIT_TAKEN_IN, function:unitBuildOf, function:onlyTheBuildsUnit, function:isHomesCopiedWork, function:recordKeptEntries, function:findUnitBuild, function:leadsPlanNotHere, function:planNotHereStep, function:ignoreOwnWorkingFiles, function:dropOwnWorkingFilesIgnore
+// covers: subcommand:aidlc-unit:take, audit:UNIT_TAKEN_IN, function:unitBuildOf, function:onlyTheBuildsUnit, function:isHomesCopiedWork, function:recordKeptEntries, function:findUnitBuild, function:leadsPlanNotHere, function:ignoreOwnWorkingFiles, function:dropOwnWorkingFilesIgnore
 //
 // Taking a Unit (#2410, item 4). A team member opening a workspace with no work
 // of their own is offered the home's Units their team can take, from what the
@@ -19,7 +19,8 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { leadsPlanNotHere, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";

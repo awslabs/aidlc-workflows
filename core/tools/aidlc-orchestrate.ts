@@ -295,7 +295,6 @@ import {
   cachedClaimFanoutActive,
   engineAskMark,
   hasAnyUnitClaimRefs,
-  leadsPlanNotHere,
   noteEngineAskMark,
   teamSkeletonOn,
   memorySectionBody,
@@ -854,6 +853,7 @@ import {
 } from "./aidlc-steering.ts";
 import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
 import { dropOwnWorkingFilesIgnore, refreshActiveMemory } from "./aidlc-includes.ts";
+import { leadsPlanNotHere } from "./aidlc-unit-holders.ts";
 import { gateApproveAcceptsLine } from "./aidlc-review-brief.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
@@ -5347,20 +5347,6 @@ function noteTakeOfferedOnWords(projectDir: string): void {
   } catch {
     // Unnoted: the next words in this chat get the offer again.
   }
-}
-
-// In a teammate's clone the lead's plan has not reached (leadsPlanNotHere),
-// a bare /aidlc's answer in the take offer's place: nothing to take yet, and
-// nothing written here that the lead's share would meet.
-function planNotHereStep(projectDir: string): PrintDirective | null {
-  if (!leadsPlanNotHere(projectDir)) return null;
-  const step = turnEndingPrint(
-    "Nothing is in progress here yet. Say the line above, then wait: when they say what to build, run that as " +
-      `their request (${entrySkillInvocation()} "<their words>").`,
-  );
-  step.narration = "The lead's plan has not reached this clone yet, so there is no Unit here to take. Once the lead " +
-    "has shared it, run git pull here and I'll offer you the Units.";
-  return step;
 }
 
 // Their words there start their work as anywhere, with its one risk said once.
@@ -14261,9 +14247,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(take);
       return;
     }
-    const notShared = planNotHereStep(pd);
-    if (notShared !== null) {
-      emit(notShared);
+    // In a teammate's clone the lead's plan has not reached (leadsPlanNotHere),
+    // a bare /aidlc's answer in the take offer's place: nothing to take yet, and
+    // nothing written here that the lead's share would meet.
+    if (leadsPlanNotHere(pd)) {
+      const wait = turnEndingPrint(
+        "Nothing is in progress here yet. Say the line above, then wait: when they say what to build, run that as " +
+          `their request (${entrySkillInvocation()} "<their words>").`,
+      );
+      wait.narration = "The lead's plan has not reached this clone yet, so there is no Unit here to take. Once the lead " +
+        "has shared it, run git pull here and I'll offer you the Units.";
+      emit(wait);
       return;
     }
     // Work in progress here with none selected (a teammate's fresh clone, or a

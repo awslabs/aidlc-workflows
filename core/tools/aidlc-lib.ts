@@ -30334,18 +30334,6 @@ export function hasAnyUnitClaimRefs(projectDir: string): boolean {
     Object.keys(cache.claims).length > 0;
 }
 
-// A teammate's clone of a lead's project whose plan has not reached it: the
-// remote it came from carries Units held for teams (claim refs git tracks
-// under it) and this checkout holds no AI-DLC record yet. Its chats write none
-// of AI-DLC's parts of the root files here, so the lead's share pulls in.
-export function leadsPlanNotHere(projectDir: string): boolean {
-  if (listSpaces(projectDir).some(({ name }) => existsSync(join(spacesRoot(projectDir), name, "intents", "intents.json")))) {
-    return false;
-  }
-  const refs = claimRegistryGit(projectDir, ["for-each-ref", "--format=%(refname)", "refs/remotes/"], { localOnly: true });
-  return refs.ok && refs.stdout.split(/\r?\n/).some((ref) => /^refs\/remotes\/[^/]+\/claim\/[^/]+\/./.test(ref));
-}
-
 export function writeUnitScopeStamp(
   projectDir: string,
   stamp: UnitScopeStamp,
