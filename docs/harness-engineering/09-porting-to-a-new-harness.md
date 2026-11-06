@@ -86,11 +86,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `cliFirst` (`{ env, configNextStep, firstRunSteps }`) is for a tree an
   editor and a CLI both run: the CLI's words for those two lines, used
   instead when a supported harness CLI (its `--version` at or above the
-  harness's minimum) is on an absolute PATH entry and `aidlc config` runs
-  outside the editor (no shell `env` names, read like
+  harness's minimum, when one is set) is on an absolute PATH entry and
+  `aidlc config` runs outside the editor (no shell `env` names, read like
   `missedReplyInHost`, and not the terminal of its `TERM_PROGRAM=<name>`
   entry); Kiro IDE declares it, with `hookActivation.notRunYetCliFirst`
-  (`{ env, text }`) for doctor's line.
+  (`{ env, text }`) for doctor's line. Only a harness whose CLI AI-DLC
+  already probes (`probeHarnessCli` in `core/tools/aidlc-config-diagnostics.ts`)
+  can lead with its CLI's words; a new port adds that probe first.
   `hookActivation` is for a host that may run no hooks until the person acts.
   Every text in it names only the person's own step, in the host's own words,
   never hooks, the engine, or why; `<entry>`, `<folder>` and `<next>` are
