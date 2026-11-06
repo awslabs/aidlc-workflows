@@ -381,9 +381,9 @@ first approval question or Unit checkpoint after Kiro summarized the chat it
 says so in one line, with an offer to pause and carry on in a new chat. If you
 turned Kiro's auto-compaction off, the same offer comes once the chat is 80%
 full. When the chat already reached half full or more in its first turn on the
-work, a new chat on the same model would start about as full, so the line says
-that instead of offering one. Your answer decides: nothing pauses on its own,
-and the line is said once in a chat.
+work, and still runs on the model that filled it, a new chat on that model
+would start about as full, so the line says that instead of offering one. Your
+answer decides: nothing pauses on its own, and the line is said once in a chat.
 
 The line cannot appear in the middle of a stage (it comes only with a question
 you are asked anyway), for a chat with no record on this machine, or if a Kiro

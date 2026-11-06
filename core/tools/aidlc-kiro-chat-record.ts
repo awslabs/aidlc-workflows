@@ -24,12 +24,17 @@ export function kiroChatRecordPaths(sessionId: string | undefined, file = "messa
  * picks the work up on the same model starts about that full. The first turn is
  * the first one with a figure at or after `since` (this chat's first turn on the
  * work); a turn Kiro summarized part way counts at its figure before the summary.
- * Kiro CLI's default engine saves each turn's figures in
- * ~/.kiro/sessions/cli/<session id>.json; Kiro CLI v3 and Kiro IDE put them in
- * `contextUsage` rows that carry the turn's `executionId`, and the model in the
- * session.json beside. `auto` names no model: Kiro picks it. Kiro keeps no
- * record of the other models a person can pick. Read only; null when nothing is
- * known.
+ * The figure is a share of the window of the model that ran the turn, so it
+ * counts only when the record names that model and the model now, the same: a
+ * chat switched with /model since would start a new chat on another window.
+ * Kiro CLI's default engine saves each turn's figures and model in
+ * ~/.kiro/sessions/cli/<session id>.json. Kiro CLI v3 and Kiro IDE put the
+ * figures in `contextUsage` rows that carry the turn's `executionId`; the model
+ * that ran it is in Kiro's own `context_snapshot_` note before the turn ("The
+ * current model is <model>.", written at a chat's first prompt and after each
+ * summary), and the model now in the session.json beside, with the model that
+ * note last named. `auto` names no model: Kiro picks it. Kiro keeps no record
+ * of the other models a person can pick. Read only; null when nothing is known.
  */
 export function kiroFirstTurnFill(
   sessionId: string | undefined,
@@ -45,13 +50,11 @@ export function kiroFirstTurnFill(
         if (!(Date.parse(String(recordField(turn, "end_timestamp"))) >= since)) continue;
         const figures = [recordField(turn, "context_usage_percentage"), recordField(turn, "final_context_usage_percentage")]
           .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-        if (figures.length === 0) break;
-        const model = recordField(recordField(state, "rts_model_state"), "model_info");
-        return {
-          percent: Math.max(...figures),
-          model: modelName(recordField(model, "model_id")) ??
-            modelName(recordField(recordField(recordField(state, "conversation_metadata"), "last_context_usage"), "model_id")),
-        };
+        if (figures.length === 0) return null;
+        const now = recordField(recordField(recordField(state, "rts_model_state"), "model_info"), "model_id") ??
+          recordField(recordField(recordField(state, "conversation_metadata"), "last_context_usage"), "model_id");
+        if (typeof now !== "string" || !now || recordField(turn, "model") !== now) return null;
+        return { percent: Math.max(...figures), model: modelName(now) };
       }
     }
   } catch {
@@ -66,6 +69,8 @@ export function kiroFirstTurnFill(
     }
     let turn: string | null = null;
     let percent: number | null = null;
+    let noted: string | null = null;
+    let ranOn: string | null = null;
     for (const line of text.split("\n")) {
       let row: unknown;
       try {
@@ -74,6 +79,14 @@ export function kiroFirstTurnFill(
         continue;
       }
       const payload = recordField(row, "payload");
+      if (turn === null && recordField(payload, "type") === "agent_note") {
+        const id = recordField(row, "id");
+        const content = recordField(payload, "content");
+        if (typeof id === "string" && id.startsWith("context_snapshot_") && typeof content === "string") {
+          noted = /^The current model is (.+)\.$/m.exec(content.replaceAll("\r", ""))?.[1] ?? null;
+        }
+        continue;
+      }
       if (recordField(payload, "type") !== "session_metadata" || recordField(payload, "key") !== "contextUsage") continue;
       const figure = recordField(recordField(payload, "value"), "usagePercentage");
       const execution = recordField(payload, "executionId");
@@ -81,19 +94,26 @@ export function kiroFirstTurnFill(
       if (turn === null) {
         if (!(Date.parse(String(recordField(row, "timestamp"))) >= since)) continue;
         turn = execution;
+        ranOn = noted;
       } else if (execution !== turn) {
         break;
       }
       percent = Math.max(percent ?? figure, figure);
     }
     if (percent === null) continue;
-    let model: string | null = null;
+    let session: unknown;
     try {
-      model = modelName(recordField(JSON.parse(readFileSync(join(dirname(path), "session.json"), "utf-8")), "modelId"));
+      session = JSON.parse(readFileSync(join(dirname(path), "session.json"), "utf-8"));
     } catch {
-      // A settings file that cannot be read names no model.
+      return null;
     }
-    return { percent, model };
+    const now = recordField(session, "modelId");
+    const told = recordField(session, "contextSnapshotModelDisplay");
+    if (
+      ranOn === null || typeof now !== "string" || recordField(told, "modelId") !== now ||
+      recordField(told, "display") !== ranOn
+    ) return null;
+    return { percent, model: modelName(now) };
   }
   return null;
 }
