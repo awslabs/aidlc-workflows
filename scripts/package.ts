@@ -636,6 +636,8 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
   // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
   if (m.hookActivation) data.hookActivation = m.hookActivation;
+  // And only a host whose own step to a clean chat is known.
+  if (m.newChatStep) data.newChatStep = m.newChatStep;
   // Only the Kiro rows declare a layout; the runtime reads it in place of the row name.
   if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
   // And only a host that cuts a shell result below the engine's cap.
