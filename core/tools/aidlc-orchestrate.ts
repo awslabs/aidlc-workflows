@@ -11623,13 +11623,32 @@ function nodeForSlug(slug: string): GraphStage | undefined {
 // naming them and what the change asks of them. null when nothing is claimed.
 function claimsOpenAtPlanChange(projectDir: string, stateContent: string, targetSlug: string): string | null {
   if (!isTeamUnitOwnership(stateContent) || !beforePerUnitBlock(loadGraph(), targetSlug)) return null;
-  let claimed: UnitClaimOverview["claimed"];
+  let overview: UnitClaimOverview;
   try {
-    claimed = cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed;
+    overview = cachedUnitClaimOverview(projectDir, { writeCache: false });
   } catch {
     return null;
   }
+  const claimed = overview.claimed;
   if (claimed.length === 0) return null;
+  // Teams across repos build each Unit as work of their own, and never publish
+  // or land here: a build under way keeps the plan it took, and a Unit only
+  // held is taken on the plan as it stands then (takeUnit).
+  if (homeLocation(stateContent) !== null) {
+    const started = (unit: string) => {
+      const payload = overview.claims.get(unit)?.payload;
+      return payload?.taken_by !== undefined || payload?.by_file !== undefined;
+    };
+    const named = claimed.map((claim) => {
+      const payload = overview.claims.get(claim.unit)?.payload;
+      if (payload?.by_file) return `${claim.unit} (handed to ${claim.owner} by file)`;
+      if (payload?.taken_by) return `${claim.unit} (being built by ${payload.taken_by} for ${claim.owner})`;
+      return `${claim.unit} (held for ${claim.owner}, not taken yet)`;
+    });
+    return `Still with teams: ${named.join(", ")}.` +
+      (claimed.some((claim) => started(claim.unit)) ? " A build under way carries on from the plan it took." : "") +
+      (claimed.some((claim) => !started(claim.unit)) ? " A Unit not taken yet is taken on the plan as it stands then." : "");
+  }
   return `Still claimed: ${claimed.map((claim) => `${claim.unit} (${claim.owner})`).join(", ")}. Their work carries ` +
     "on and lands as it is; one whose own entry the revised plan changes brings in the new main and publishes " +
     "again first.";

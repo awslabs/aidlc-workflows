@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:team-board, function:unitBoardRows, function:teamHomeBoardText, function:unitProgressStanding, function:unitTakeLook, function:checkTeamResults
+// covers: subcommand:aidlc-orchestrate:team-board, function:unitBoardRows, function:teamHomeBoardText, function:unitProgressStanding, function:unitTakeLook, function:checkTeamResults, function:claimsOpenAtPlanChange
 //
 // The board at the lead's project says only what the record says (#2410, the
 // board). A Unit no team holds reads where it stands in the Unit Progress the
@@ -8,7 +8,8 @@
 // that could not be held for them yet is theirs, never the lead's project's.
 // A teammate's take offer never names a Unit done on its claim as being built.
 // A look at the board (`team-board`) records nothing: a merge it sees that the
-// record does not have yet says so, and the next step records it.
+// record does not have yet says so, and the next step records it. Going back
+// to change the Unit plan names the Units still with teams as they stand.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -176,5 +177,20 @@ describe("a look at the board records nothing, and says so", () => {
     const after = teamBoard(home.dir);
     expect(after).toContain("- refunds, payments: done");
     expect(after).not.toContain("not recorded yet");
+  });
+});
+
+describe("going back to change the Unit plan while teams hold Units", () => {
+  test("names each Unit as it stands with its team, never main's claim, land and publish words", () => {
+    const { home } = refundsTaken();
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const step = next(home.dir, undefined, ["--stage", "units-generation"]);
+    const notices = (step.change_notices ?? []) as string[];
+    expect(notices, JSON.stringify(step)).toContain(
+      "Still with teams: refunds (being built by alice for payments), checkout-ui (held for web, not taken yet). " +
+        "A build under way carries on from the plan it took. A Unit not taken yet is taken on the plan as it stands then.",
+    );
+    expect(JSON.stringify(step)).not.toContain("Still claimed");
+    expect(JSON.stringify(step)).not.toContain("publishes again");
   });
 });
