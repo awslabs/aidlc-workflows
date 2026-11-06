@@ -7,7 +7,7 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
-import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -88,6 +88,7 @@ import {
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  pendingPersonLines,
   resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   runtimeSessionHint,
@@ -1465,6 +1466,18 @@ function handleDecision(args: string[]): void {
     }
   }
 
+  // The question the agent asks now is the reply the person reads, so the lines
+  // kept for that reply (a landing settled by hand under Continue
+  // automatically) ride with it, once, with their order; a run that keeps none
+  // prints as before.
+  let forReply: { lines: string[]; said(): void } = { lines: [], said: () => {} };
+  try {
+    const chat = fields.Session || resolveInvokingSessionId(pd);
+    if (chat) forReply = pendingPersonLines(pd, chat, { replyOnly: true });
+  } catch {
+    // The next reply says them.
+  }
+  for (const line of forReply.lines) if (!changeNotices.includes(line)) changeNotices.push(line);
   console.log(
     JSON.stringify({
       emitted: "DECISION_RECORDED",
@@ -1487,8 +1500,10 @@ function handleDecision(args: string[]): void {
           }
         : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+      ...(forReply.lines.length > 0 ? { change_notices_note: CHANGE_NOTICES_NOTE } : {}),
     })
   );
+  forReply.said();
 }
 
 // What a logged question shows the person (aidlc-questions.ts): the command or

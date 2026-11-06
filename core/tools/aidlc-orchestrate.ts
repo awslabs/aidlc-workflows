@@ -579,6 +579,7 @@ import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-reco
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
+  autonomyGrantedOnRecord,
   checkpointPolicyEnabled,
   loadConstructionEvidence,
   resolveConstructionCheckpoint,
@@ -1676,10 +1677,11 @@ function withPersonLine(transported: Directive, line: string | null): Directive 
 
 // Person lines kept from steps the agent passed through this turn are said,
 // in order and once, with the step it speaks from, in its change_notices and
-// under their note (`withAgentNotes` again). One that would push the step over
-// its size limit waits for the next one. They count as said only once that
-// step is written (the returned callback), so a step replaced by an error
-// leaves them for the error, or for the next step.
+// under their note (`withAgentNotes` again); a line kept for the reply rides
+// each such step until the person writes (pendingPersonLines). One that would
+// push the step over its size limit waits for the next one. They count as said
+// only once that step is written (the returned callback), so a step replaced by
+// an error leaves them for the error, or for the next step.
 function sayPendingPersonLines(
   requested: Directive,
   transported: Directive,
@@ -1704,6 +1706,10 @@ function sayPendingPersonLines(
     return { directive: withLead() };
   }
   const pending = pendingPersonLines(projectDir, sessionId);
+  // A line kept for the reply rides every step the agent speaks from, even one
+  // with no line of its own, so the one it stops on carries it whenever that is
+  // (the agent knows when it stops); a rules part never takes it.
+  if (pending.reply && transported.kind !== "load-steering") leadsToSpeech.add(requested);
   if (pending.lines.length === 0) return { directive: transported };
   // A kept pick-up line makes the stage or question step it reaches speak,
   // even one with no line of its own (a waiting Unit checkpoint).
@@ -22082,6 +22088,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // A gate the agent approves itself is passed on its way: what its report
+    // says for the person waits for their reply. A gate they are shown is it.
+    const agentApproves = (flags.result === "awaiting-approval" || flags.result === "revised") &&
+      agentApprovesGate(pd, stateContent, node);
+    const gateNotices = changeNoticesFromToolOutput(res.stdout);
     const gateReply = withChangeNotices(
       printDirective(
         revalidatingOpenGate
@@ -22095,7 +22106,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
             personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)) +
             (flags.result === "rejected" ? reReviewRequestSentence(pd, node, scope) : ""),
       ),
-      changeNoticesFromToolOutput(res.stdout),
+      agentApproves ? keptForReply(pd, gateNotices) : gateNotices,
     );
     // The gate shown again ends the turn, as the gate-only step does: the
     // person's reply that led here (a change, a review they asked for) is
@@ -22473,6 +22484,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
   const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
   const narration = [unbuilt, progress].filter(Boolean).join("\n");
+  const continues = workflowContinues(pd);
+  // The agent's own approval goes on to the next stage, so its lines wait for the reply.
+  const approvalNotices = flags.result === "approved" && continues.workflow_continues === true &&
+      agentApprovesGate(pd, stateContent, node)
+    ? keptForReply(pd, changeNotices)
+    : changeNotices;
   emit(
     withChangeNotices(
       {
@@ -22481,11 +22498,28 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           `Committed ${committed.join(" + ")} for "${approvedTogether.join('", "')}" (scope: ${scope}). ` +
           `State advanced; run next to continue.${keepNote}`,
         ...(narration ? { narration } : {}),
-        ...workflowContinues(pd),
+        ...continues,
       },
-      changeNotices,
+      approvalNotices,
     ),
   );
+}
+
+// A gate the agent approves itself: a Construction gate that needs no person
+// (isAutonomousConstructionGate) under the person's Continue automatically
+// grant. The grant is required: in a gated unit-major run the per-Unit stage
+// gates need no person once each Unit's checkpoint is approved, and their
+// lines ride the next step as before (settleBookkeepingGate).
+function agentApprovesGate(pd: string, stateContent: string, node: StageEntry): boolean {
+  return autonomyGrantedOnRecord(pd, stateContent) && isAutonomousConstructionGate(stateContent, node, pd);
+}
+
+// Lines for the person from a checkpoint the agent approves itself, kept for
+// the reply they read (sayPendingPersonLines); the ones this chat cannot keep
+// ride the step as before.
+function keptForReply(pd: string, lines: string[]): string[] {
+  if (lines.length === 0 || !engineSessionId || isReadOnlyEngineProbe()) return lines;
+  return addPendingPersonLines(pd, engineSessionId, lines, { forReply: true }) ? [] : lines;
 }
 
 // The `park` handler (issue #367). Parks the workflow at the current inter-stage

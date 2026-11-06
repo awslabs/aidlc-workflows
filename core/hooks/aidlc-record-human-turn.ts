@@ -888,6 +888,14 @@ try {
       keepClaudeKey(kept, false);
       const tookPart = workflow.participation === "participant" && selectedRecordIsFinished(projectDir, workflow.selection);
       sayMessageId(kept, typedParse?.command === true, tookPart);
+      // The person wrote after work they took part in finished: a line kept for
+      // their reply that its last steps carried was said there, so it goes, as
+      // on open work (that carry, below, never runs here).
+      if (tookPart && personHere && sessionId) {
+        const session = sessionId;
+        const afterPrompt = pickerQuestion === undefined;
+        forThePerson.push(() => carryPendingPersonLines(projectDir, session, { afterPrompt }));
+      }
     }
     sayIfKeyShaped();
     return 0;
@@ -978,6 +986,8 @@ try {
       })}\n`);
       return 0;
     }
+    // Whether the box they answered asked a question the agent logged first.
+    let boxLogged = false;
     if (personHere) {
       // A command to AIDLC (an `/aidlc` line with no words after its flags, or
       // with its words behind `--`) is an instruction to the framework, not an
@@ -1065,6 +1075,7 @@ try {
               // The question it answered, by its id, when the box asked one
               // open here in the question's own words.
               const id = boxQuestionId(projectDir, sessionId, question);
+              if (id !== null) boxLogged = true;
               const recommended = options === undefined ? [] : recommendedChoices(options);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
@@ -1099,10 +1110,14 @@ try {
     // This turn is now the one lines are keyed to. Anything the person has not
     // heard yet follows them into it: a line queued for the turn before is still
     // about what they asked for, and they may have answered a question the agent
-    // asked of its own accord in between.
+    // asked of its own accord in between. A line kept for their reply that a
+    // step carried in the turn they now answer was said there, so it goes;
+    // after a box the agent showed without logging it, no step stood just
+    // before the box, so the line rides on to the reply that ends the turn.
     if (sessionId) {
       const session = sessionId;
-      forThePerson.push(() => carryPendingPersonLines(projectDir, session));
+      const afterPrompt = pickerQuestion === undefined || boxLogged;
+      forThePerson.push(() => carryPendingPersonLines(projectDir, session, { afterPrompt }));
     }
   }
   // Before any work exists: the reply to this chat's plan question.
