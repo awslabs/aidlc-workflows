@@ -1064,6 +1064,22 @@ function hostNamedChat(projectDir: string): string | null {
 // tree, which the chats of one window share.
 export const CHAT_NAMING_HOSTS: ReadonlySet<string> = new Set(["claude", "codex", "kiro", "opencode"]);
 
+// Whether the host itself names the chat this command runs in (its own
+// variable in the agent's shell, or the id its plugin hands each command), not
+// the process tree, which the chats of one window share and a restart renames.
+// Read per command, not per host: Kiro CLI V3 runs Kiro IDE's tree and names
+// its chat in KIRO_SESSION_ID, while Kiro IDE's own chats name none.
+export function hostNamesThisChat(projectDir: string): boolean {
+  if (validSessionId(process.env.AIDLC_SESSION_OVERRIDE) !== null) {
+    return process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+  }
+  try {
+    return hostNamedChat(projectDir) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function claudeNamedChat(): { pid: number; session: string } | null {
   const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
   const session = Number.isSafeInteger(pid) && processIsAlive(pid)

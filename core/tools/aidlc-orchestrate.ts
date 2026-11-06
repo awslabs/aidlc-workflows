@@ -570,7 +570,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { CHAT_NAMING_HOSTS, chatTookStep, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -13801,9 +13801,9 @@ function applyGateOnlyShape(
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
     // A gate another chat of this clone opened, shown in this one for the first
     // time, says so first; QUESTION_SHOWN then names this chat, so it is said
-    // once. Only where the host names its chats: on the others two chats of one
-    // window share an id, and a restart takes a new one.
-    const elsewhere = gateQuestion !== null && CHAT_NAMING_HOSTS.has(runtimeHarnessName(projectDir)) &&
+    // once. Only where the host named this chat: the process tree gives the
+    // chats of one window one id, and a restart a new one.
+    const elsewhere = gateQuestion !== null && hostNamesThisChat(projectDir) &&
       shownOnlyInOtherChats(projectDir, gateQuestion.id, engineSessionId ?? null);
     // The rules Approve adds to the project's rules, what the person left out
     // of the build, the files of theirs it changed, and a check that still

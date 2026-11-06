@@ -25,6 +25,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { cleanupTestProject, seededRecordDir, setupIntegrationProject } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { hostNamesThisChat } from "../../dist/kiro-ide/.kiro/tools/aidlc-record-core.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
@@ -467,5 +468,30 @@ describe("t-second-chat-finished-step: a stage finished in another chat is shown
       "--options", "Yes,No"]), "a question at its own gate");
     expect(asked.recorded).toBeUndefined();
     expect(asked.emitted).toBe("DECISION_RECORDED");
+  });
+
+  // Live on Kiro CLI V3, which runs Kiro IDE's tree, the gate came with no line:
+  // the split by host name left out the one Kiro that names its chats.
+  test("a Kiro command names its chat when Kiro CLI gives it one, and not from the process tree", () => {
+    const saved = { kiro: process.env.KIRO_SESSION_ID, override: process.env.AIDLC_SESSION_OVERRIDE,
+      source: process.env.AIDLC_SESSION_OVERRIDE_SOURCE };
+    try {
+      delete process.env.AIDLC_SESSION_OVERRIDE;
+      delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
+      process.env.KIRO_SESSION_ID = "sess_a3337cb2-93ec-4fe6-80e4-81c74d73ad7f";
+      expect(hostNamesThisChat(tmpdir())).toBe(true);
+      delete process.env.KIRO_SESSION_ID;
+      expect(hostNamesThisChat(tmpdir())).toBe(false);
+      process.env.AIDLC_SESSION_OVERRIDE = SECOND;
+      expect(hostNamesThisChat(tmpdir())).toBe(false);
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+      expect(hostNamesThisChat(tmpdir())).toBe(true);
+    } finally {
+      for (const [key, value] of [["KIRO_SESSION_ID", saved.kiro], ["AIDLC_SESSION_OVERRIDE", saved.override],
+        ["AIDLC_SESSION_OVERRIDE_SOURCE", saved.source]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
