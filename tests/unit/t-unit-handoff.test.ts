@@ -538,6 +538,36 @@ describe("a hand-off of a Unit that waits on one the lead's project builds", () 
     expect(String(again.json?.notice)).not.toContain("waits on refunds");
     expect(readFileSync(join(home.dir, ...REPORTING.split("/")), "utf-8")).not.toContain("Waits On");
   });
+
+  // A live run, on work begun before a project's own submodule stopped being
+  // recorded: the work records the submodule as its only repo, the lead's
+  // project built refunds in the project itself and has not pushed it, and the
+  // hand-off said nothing of it, so the team met a Code Generation stop.
+  test("under work that records only the project's submodule, it says the code it waits on is not on the project's remote yet", () => {
+    const vendorHost = codeHost("vendor");
+    const deps = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
+      "  - name: checkout-ui\n    depends_on: []\n  - name: reporting\n    depends_on: [refunds]\n```\n";
+    const home = makeHome({ dependencies: deps, repos: { vendor: vendorHost } });
+    writeFileSync(join(home.dir, ".gitignore"), readFileSync(join(home.dir, ".gitignore"), "utf-8").replace("/vendor/\n", ""));
+    git(home.dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", vendorHost, "vendor"]);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "vendor"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "checkout-ui=web"], home.dir).status).toBe(0);
+    mkdirSync(join(home.dir, "src"), { recursive: true });
+    writeFileSync(join(home.dir, "src", "refunds.ts"), "export const refunds = 1;\n");
+    const stage = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }],
+    }, null, 2)}\n`);
+    const handed = run(UNIT, ["hand-off", "reporting", "--team", "data"], home.dir);
+    expect(handed.status, handed.out).toBe(0);
+    expect(String(handed.json?.notice)).toContain(
+      "reporting waits on refunds, which this project builds: its code is not on origin/main in the repo yet.",
+    );
+  });
 });
 
 // The lead's assign over a Unit handed off by file (x2783-s9): with nothing

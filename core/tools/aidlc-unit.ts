@@ -8313,7 +8313,10 @@ function leadsCodeNotThere(pd: string, unit: string): Array<{ dep: string; now: 
   const found: Array<{ dep: string; now: string; written: string }> = [];
   for (const dep of unitDependencies(pd).get(unit) ?? []) {
     if (claims.get(dep)?.status === "claimed" || kept.has(dep) || open.has(dep)) continue;
-    const manifest = readUnitSourceManifest(pd, "code-generation", dep);
+    // Its code in the project's own repo under work that records only a
+    // submodule of it (submoduleOverOwnCode): read as the project's repo's.
+    const own = submoduleOverOwnCode(pd, dep) !== null;
+    const manifest = readUnitSourceManifest(pd, "code-generation", dep, own ? { recordedRepos: [] } : {});
     if (!manifest.ok) {
       if (!existsSync(join(activeRecordDir(pd), "construction", dep, "code-generation", "source-manifest.json"))) {
         found.push({ dep, now: "it is still being built here", written: "it was still being built at the lead's project" });
@@ -8321,7 +8324,8 @@ function leadsCodeNotThere(pd: string, unit: string): Array<{ dep: string; now: 
       continue;
     }
     const missing: string[] = [];
-    for (const [repo, paths] of writesByRepo(pd, manifest.manifest.writes)) {
+    const byRepo = own ? new Map([[".", manifest.manifest.writes.map((write) => write.path)]]) : writesByRepo(pd, manifest.manifest.writes);
+    for (const [repo, paths] of byRepo) {
       const dir = repo === "." ? pd : repoDir(pd, repo);
       const remote = isGitRepoDir(dir) ? repositoryRemote(dir) : null;
       if (remote === null) continue;
