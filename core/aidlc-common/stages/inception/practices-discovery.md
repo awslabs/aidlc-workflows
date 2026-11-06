@@ -145,8 +145,9 @@ Working, Walking Skeleton, Testing Posture, Deployment, and Code Style.
 - **Re-run:** show the matching `memory/team.md` content as the default.
 
 The Way of Working answer settles the one branch the team's work merges into
-(Step 5). Ask which only when the evidence, the current `memory/team.md` and
-the answers name no branch or more than one.
+(Step 5); when nothing names one, it is the branch `memory/org.md` names. Ask
+which only when one answer names two branches and you cannot tell which the
+work merges into.
 
 The `memory/*.md` sections you draw the suggested answers from are written for
 this framework's own resolution rules, so they carry vocabulary the person
