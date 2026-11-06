@@ -821,8 +821,11 @@ While they build, the partner may send a progress file whenever they like
 (`aidlc unit progress`); nobody has to. A change they propose to something the
 Unit was approved with (`aidlc unit propose`) goes into the progress file too:
 the lead is asked about it once they take the file in, as for a team that
-reaches the workspace. An approval sends a newer hand-off file; a turn-down
-reaches them only by the lead's own word. When they push, the result goes into a
+reaches the workspace. An approval sends a newer hand-off file; a repo turn-down
+reaches them only by the lead's own word. A send-back from the lead's Build and
+Test goes in a newer hand-off file too: the partner takes it in as the first,
+hears the failure, and their build goes back to Code Generation at their word;
+the next result file they send is their answer. When they push, the result goes into a
 result file instead of the claim: "The result file is
 aidlc/handoff/<work>-<unit>-result.md; send it to the lead." For each repo the
 lead cannot fetch, the file carries the partner's own check of whether it

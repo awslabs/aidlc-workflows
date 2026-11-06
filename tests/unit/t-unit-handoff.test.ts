@@ -31,6 +31,7 @@ import {
   cloneOf,
   codeHost,
   ENV,
+  finishBuild,
   git,
   HOME_RECORD,
   homeState,
@@ -774,5 +775,85 @@ describe("the lead's assign over a Unit its team builds from the hand-off file",
     expect(again.status, again.out).toBe(0);
     expect(String(again.json?.notice)).toContain("reporting is being built by data from its hand-off file, so it stays by file.");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")?.by_file).toBe(true);
+  });
+});
+
+// A live run (the lead on Linux, every team by file): Build and Test failed and
+// the lead picked sending both Units back to their teams with the failure. The
+// engine said "Sent <unit> back to the <team> team with your words", but nothing
+// was written for a team that cannot reach the lead's project, so the lead
+// waited for fixed results from teams never told.
+describe("the lead's Build and Test sends back a Unit a team builds by file", () => {
+  const FAILURE = "the refund route never calls the notices handler";
+  // A request file with paragraphs is stock: both reach the team.
+  const PARAGRAPHS = `${FAILURE}\n\nRegister it at startup and add one test through the service.`;
+
+  // data's build pushed by file, its result taken in at the lead's project.
+  function resultTakenIn() {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+    const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    mkdirSync(join(partner.dir, "ledger", "src"), { recursive: true });
+    writeFileSync(join(partner.dir, "ledger", "src", "report.ts"), "export const report = 1;\n");
+    const stage = join(record, "construction", "reporting", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/report.ts" }],
+    })}\n`);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], partner.dir);
+    expect(pushed.status, pushed.out).toBe(0);
+    const firstResult = deliver(partner.dir, "aidlc/handoff/fixture-reporting-result.md");
+    const taken = run(UNIT, ["take-in", firstResult], home.dir);
+    expect(taken.status, taken.out).toBe(0);
+    return { home, partner, record, firstResult };
+  }
+
+  test("the send-back is written into a newer hand-off file the lead sends, never said as sent when nothing went", () => {
+    const { home } = resultTakenIn();
+    const sent = run(UNIT, ["send-back", "reporting", "--person-words", FAILURE], home.dir);
+    expect(sent.status, sent.out).toBe(0);
+    expect(sent.json?.notice).toBe(`reporting goes back with your words in a newer hand-off file, ${FILE}: send it to the ` +
+      "data team. They take it in by pointing AI-DLC at it in their own workspace. It waits for them here; nothing of it is rebuilt here.");
+    expect(sent.json?.file).toBe(FILE);
+    expect(readFileSync(join(home.dir, ...FILE.split("/")), "utf-8")).toContain(FAILURE);
+    expect(String(next(home.dir).narration)).toContain("- reporting, data: sent back from your Build and Test, back with data");
+  });
+
+  test("the team takes the newer file in by its path, hears the failure, and its build asks for the way back", () => {
+    const { home, partner } = resultTakenIn();
+    expect(run(UNIT, ["send-back", "reporting", "--person-words", PARAGRAPHS], home.dir).status).toBe(0);
+    const delivered = deliver(home.dir, FILE);
+    const pointed = next(partner.dir, undefined, ["--hand-file", delivered]);
+    expect(String(pointed.message), JSON.stringify(pointed).slice(0, 600)).toContain(`take --file '${delivered}'`);
+    const taken = run(UNIT, ["take", "--file", delivered], partner.dir);
+    expect(taken.status, taken.out).toBe(0);
+    expect(String(taken.json?.notice)).toContain(`reporting was sent back from the lead's Build and Test: "${PARAGRAPHS}".`);
+    // The team's workspace asks its own repos.json question once first.
+    let step = next(partner.dir);
+    if (step.ask_type === "repos-manifest") step = next(partner.dir);
+    expect(step.ask_type, JSON.stringify(step).slice(0, 600)).toBe("unit-turned-down");
+    // Taken in once, the same file is not offered again.
+    const again = next(partner.dir, undefined, ["--hand-file", delivered]);
+    expect(String(again.message ?? "")).not.toContain("take --file");
+  });
+
+  test("the team's next result file is its answer: taken in, the Unit is no longer sent back", () => {
+    const { home, partner, firstResult } = resultTakenIn();
+    expect(run(UNIT, ["send-back", "reporting", "--person-words", FAILURE], home.dir).status).toBe(0);
+    // The result it set aside, taken in again, is not an answer: it stays sent back.
+    expect(run(UNIT, ["take-in", firstResult], home.dir).status).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")?.turned_down).toBeDefined();
+    expect(String(next(home.dir).narration)).toContain("- reporting, data: sent back from your Build and Test, back with data");
+    expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+    writeFileSync(join(partner.dir, "ledger", "src", "report.ts"), "export const report = 2;\n");
+    const pushed = run(UNIT, ["push"], partner.dir);
+    expect(pushed.status, pushed.out).toBe(0);
+    const taken = run(UNIT, ["take-in", deliver(partner.dir, "aidlc/handoff/fixture-reporting-result.md")], home.dir);
+    expect(taken.status, taken.out).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")?.turned_down).toBeUndefined();
+    expect(String(next(home.dir).narration)).not.toContain("sent back from your Build and Test");
   });
 });
