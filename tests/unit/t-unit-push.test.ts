@@ -1367,7 +1367,8 @@ describe("at the home", () => {
   });
 
   test("a team whose pushed build waits on the home hears a turn-down at its next step in the same chat, and the build never reads as finished", () => {
-    const { home, alice, record } = refundsTaken();
+    // reporting left open, so the team is offered it next.
+    const { home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "--open", "reporting"]);
     codeGenerated(alice, record);
     // The person's chat ran the build: its prompt hook has run in this record.
     const chat = personsChat("t-unit-push-waits");
@@ -1403,7 +1404,8 @@ describe("at the home", () => {
   });
 
   test("after a turn-down the build asks whether to go back to Code Generation, and the person's yes takes it there", () => {
-    const { home, alice, record } = refundsTaken();
+    // reporting left open, so the team is offered it next.
+    const { home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "--open", "reporting"]);
     codeGenerated(alice, record);
     // The first build's code plan, as its Code Generation wrote it (a live run
     // on Kiro CLI: after the turn-down this plan was put up for approval again).

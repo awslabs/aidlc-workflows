@@ -522,7 +522,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(after.out).not.toContain("Start checkout-ui");
     // An open Unit nobody started, from the default space: started for a team the lead named.
     const other = teamsHome();
-    expect(run(UNIT, ["assign", "refunds=payments"], other.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "--open", "checkout-ui"], other.dir).status).toBe(0);
     git(other.dir, ["add", "-A"]);
     git(other.dir, ["commit", "-q", "-m", "teams"]);
     git(other.dir, ["push", "-q", "origin", "main"]);

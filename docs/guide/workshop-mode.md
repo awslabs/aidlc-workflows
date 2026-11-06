@@ -636,7 +636,9 @@ space every Unit nobody has taken is offered, with the team it is held for; an
 open one is offered for each team the lead named, or for another team you name.
 A Unit that waits on another is listed as waiting until that Unit is done at the
 lead's project, and a Unit already being built (by a teammate, or at the lead's project) or held for
-another team is listed with where it is. AI-DLC reads the lead's project's claims as the
+another team is listed with where it is. A Unit the lead kept for the lead's project (named
+for no team and not left open, or built there on the lead's word) is listed as the lead's
+project's and never offered. AI-DLC reads the lead's project's claims as the
 lead's project has them now, once per chat and at each look while nothing is ready, so
 nobody has to fetch.
 

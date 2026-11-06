@@ -103,7 +103,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect(ask.response_route).toBe("command");
     expect(ask.question).toBe(
       "fixture is built by teams. Ready to take: refunds (for payments; likely checkout-api, billing), " +
-        "checkout-ui (for web; likely checkout-web). Waiting: reporting (on refunds). Taking a Unit starts it as your " +
+        "checkout-ui (for web; likely checkout-web). The lead's project builds: reporting. Taking a Unit starts it as your " +
         "team's own piece of work here, from what the lead approved.",
     );
     const choices = ask.choices as Array<{ label: string; command: string }>;
@@ -293,7 +293,7 @@ describe("a team member's clone of the home's workspace", () => {
       "  - name: reporting\n    depends_on: [refunds]\n```\n";
     const home = makeHome({ dependencies, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--open", "reporting"], home.dir).status).toBe(0);
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -695,7 +695,7 @@ describe("who takes what", () => {
   });
 
   test("an open Unit in a fresh clone is offered for each team the lead named, and its build is that team's", () => {
-    const home = homeWithTeams(["refunds=payments"]);
+    const home = homeWithTeams(["refunds=payments", "--open", "checkout-ui"]);
     const carol = cloneOf(home.remote, "carol");
     const ask = next(carol);
     const choices = ask.choices as Array<{ label: string; command: string }>;
@@ -713,6 +713,33 @@ describe("who takes what", () => {
     const took = take(carol, "checkout-ui", ["--team", "payments"]);
     expect(took.status, took.out).toBe(0);
     expect(took.json?.space).toBe("payments");
+  });
+
+  // A live run: the lead kept a Unit at the lead's project, and a teammate's
+  // first screen offered it, first, as open.
+  test("a Unit the lead named for no team is the lead's in a fresh clone, never offered", () => {
+    const home = homeWithTeams(["checkout-ui=web"]);
+    const ask = next(cloneOf(home.remote, "riley"));
+    expect(ask.question).toBe(
+      "fixture is built by teams, one Unit each. Ready to take: checkout-ui (for web; likely checkout-web). " +
+        "The lead's project builds: refunds, reporting. Taking a Unit starts it as your team's own piece of work here, " +
+        "from what the lead approved.",
+    );
+    const labels = (ask.choices as Array<{ label: string }>).map((choice) => choice.label);
+    expect(labels[0]).toBe("Start checkout-ui for web");
+    expect(labels.filter((label) => /refunds|reporting/.test(label))).toEqual([]);
+  });
+
+  test("a Unit left open and then built here on the lead's word is the lead's in a fresh clone, never offered", () => {
+    const home = homeWithTeams(["--open"]);
+    expect(run(UNIT, ["assign", "--here", "refunds"], home.dir).status).toBe(0);
+    commitAll(home.dir, "refunds here");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ask = next(cloneOf(home.remote, "riley"));
+    expect(String(ask.question)).toContain("Ready to take: checkout-ui (open; likely checkout-web).");
+    expect(String(ask.question)).toContain("The lead's project builds: refunds.");
+    expect(String(ask.question)).not.toContain("refunds (open");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label).filter((label) => label.includes("refunds"))).toEqual([]);
   });
 
   test("every Unit taken or held for other teams: the clone hears where each is, and none of the home's work is offered", () => {

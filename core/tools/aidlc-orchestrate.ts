@@ -9074,7 +9074,13 @@ function unitTakeLook(
         (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
       const likely = unitLikelyRepos(projectDir, intent.dirName, space);
       // A Unit no team holds that the home started is the home's.
-      const startedAtHome = unitsStartedAtLeadsProject(readAuditShardEvents(projectDir, intent.dirName, space));
+      const rows = readAuditShardEvents(projectDir, intent.dirName, space);
+      const startedAtHome = unitsStartedAtLeadsProject(rows);
+      // Once the lead answered who builds which Unit, one no team holds that
+      // waits for none (unitsKeptForTeams, unitsLeftOpen) is the lead's
+      // project's own, as its walk reads the same answer.
+      const forTeamsLater = new Set([...unitsKeptForTeams(rows).keys(), ...unitsLeftOpen(rows)]);
+      const leadKeeps = (unit: string): boolean => unitsAssignedSinceTeams(rows) && !forTeamsLater.has(unit);
       // The teams the lead named: an open Unit is started for one of them, or another the person names.
       const named = [...new Set([...overview.claims.values()].filter((claim) => claim.status === "claimed").map((claim) => claim.owner))];
       const forTeams = (unit: string, holder: string | null, label: string, detail: string, extra = ""): AskChoice[] => {
@@ -9110,6 +9116,7 @@ function unitTakeLook(
       const ready: string[] = [];
       const waiting: string[] = [];
       const building: string[] = [];
+      const leads: string[] = [];
       const others: string[] = [];
       for (const unit of unitsInPlanOrder(projectDir, opening.units)) {
         const claim = overview.claims.get(unit);
@@ -9128,6 +9135,10 @@ function unitTakeLook(
         }
         if (holder === null && startedAtHome.has(unit)) {
           building.push(`${unit} (at the lead's project)`);
+          continue;
+        }
+        if (holder === null && leadKeeps(unit)) {
+          leads.push(unit);
           continue;
         }
         if (team !== null && holder !== null && teamSpaceOf(holder) !== team) {
@@ -9162,13 +9173,14 @@ function unitTakeLook(
       }
       const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (the lead's project is at ${homeLocation(state)})` : "";
       const label = intentDisplayLabel(intent);
-      if (ready.length > 0 || waiting.length > 0 || building.length > 0 || others.length > 0) {
+      if (ready.length > 0 || waiting.length > 0 || building.length > 0 || leads.length > 0 || others.length > 0) {
         sentences.push(
           `${label}${elsewhere} is built by teams.` +
             (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the lead's project first.` : "") +
             (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
             (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : "") +
             (building.length > 0 ? ` Being built: ${building.join(", ")}.` : "") +
+            (leads.length > 0 ? ` The lead's project builds: ${leads.join(", ")}.` : "") +
             (others.length > 0 ? ` Held for other teams: ${others.join(", ")}.` : ""),
         );
       }

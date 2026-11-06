@@ -144,7 +144,8 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
 
 describe("a teammate's take offer", () => {
   test("a fresh clone never names a Unit done on its claim as being built, and what waited on it is ready", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    // reporting left open, so it is a team's to take once refunds is done.
+    const { hosts, home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "--open", "reporting"]);
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
