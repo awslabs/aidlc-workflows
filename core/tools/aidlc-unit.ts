@@ -881,6 +881,27 @@ function completedUnits(state: string): Set<string> {
   return done;
 }
 
+// Each Unit's row in the Unit Progress table, as the board at a team home
+// says it: its stage cells in order, its gate cell, and whether it is done by
+// the opening rule (completedUnits), the one reading of done.
+export interface UnitProgressStanding {
+  stages: Array<{ stage: string; cell: string }>;
+  gate: string;
+  done: boolean;
+}
+
+export function unitProgressStanding(state: string): Map<string, UnitProgressStanding> {
+  const table = unitProgressTable(state);
+  const gateAt = table?.header.findIndex((cell) => cell.toLowerCase() === "gate") ?? -1;
+  if (!table || gateAt < 2) return new Map();
+  const done = completedUnits(state);
+  return new Map(table.rows.map((cells) => [cells[0], {
+    stages: table.header.slice(2, gateAt).map((stage, at) => ({ stage, cell: cells[2 + at] })),
+    gate: cells[gateAt],
+    done: done.has(cells[0]),
+  }]));
+}
+
 type OpeningStatus = {
   units: string[];
   blockers: Map<string, string[]>;

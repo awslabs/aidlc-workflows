@@ -625,6 +625,8 @@ import {
   unitsTaken,
   type UnitClaimOverview,
   type UnitClaimView,
+  unitProgressStanding,
+  type UnitProgressStanding,
   workToCommit,
 } from "./aidlc-unit.ts";
 import {
@@ -17046,8 +17048,34 @@ function homeMergedUnits(projectDir: string, model: TeamUnitProgressModel | null
   return model?.mergedUnits ?? new Set([...unitMergedReceipts(projectDir, auditRows), ...unitsBuiltBeforeTeams(auditRows, finalStage)]);
 }
 
+// Where a Unit the lead's project builds stands, from its Unit Progress row:
+// the stage it is at, or its open gate; `waits` its dependencies not done.
+// Under unit-end approval the open gate is the gate cell; per stage, the
+// stage's own. teamUnitProgressModel writes a skipped stage as [x], so [S]
+// reads as done here as it does for completedUnits.
+function unitHereStatus(row: UnitProgressStanding | undefined, waits: string[]): string {
+  const label = (slug: string) => stageLabel(findStageBySlug(slug), slug) ?? slug;
+  const stages = row?.stages ?? [];
+  const asking = stages.find((entry) => entry.cell === "[?]");
+  if (asking) return `waiting for your approval at ${label(asking.stage)}`;
+  const revising = stages.find((entry) => entry.cell === "[R]");
+  if (revising) return `revising ${label(revising.stage)}, as you asked`;
+  const open = stages.find((entry) => entry.cell !== "[x]" && entry.cell !== "[S]");
+  if (row !== undefined && open === undefined) {
+    if (row.gate === "[R]") return "revising, as you asked";
+    return row.gate === "[x]" ? "built, not done yet" : "built, waiting for your approval";
+  }
+  if (open !== undefined && stages.some((entry) => entry.cell === "[x]" || entry.cell === "[-]")) {
+    return `building, at ${label(open.stage)}`;
+  }
+  return waits.length > 0 ? `waits on ${waits.join(", ")}` : "not started yet";
+}
+
 // Where each Unit of a team home stands: the board's rows, the one builder for
-// the home's step and for `team-board`.
+// the home's step and for `team-board`. A Unit no team holds reads its row in
+// `progress` (a state, or the Unit Progress the step derived): done by the
+// opening rule, else the stage it is at; `mergedHere` only where the table
+// has no row for it. A Unit done on its claim is done.
 function unitBoardRows(
   projectDir: string,
   stateContent: string,
@@ -17055,16 +17083,26 @@ function unitBoardRows(
   overview: UnitClaimOverview | null,
   results: ReturnType<typeof checkTeamResults>,
   mergedHere: ReadonlySet<string>,
+  progress: string,
 ): { rows: UnitBoardRow[]; heldNotTaken: Array<{ unit: string; team: string }> } {
   const heldNotTaken: Array<{ unit: string; team: string }> = [];
   const dependencies = unitDependencies(projectDir);
+  const standing = unitProgressStanding(progress);
+  const kept = unitsKeptForTeams(readAuditShardEvents(projectDir));
+  const done = (unit: string): boolean => {
+    const claim = overview?.claims.get(unit);
+    if (claim?.status === "claimed" && claim.payload.done === true) return true;
+    return standing.get(unit)?.done ?? mergedHere.has(unit);
+  };
   const rows = unitsInPlanOrder(projectDir, planUnits).map((unit): UnitBoardRow => {
     const claim = overview?.claims.get(unit);
     const team = claim?.status === "claimed" ? claim.owner : null;
-    if (mergedHere.has(unit)) return { unit, team: team ?? "here", status: "done" };
+    if (done(unit)) return { unit, team: team ?? "here", status: "done" };
+    // Named for a team while it could not be held for them: never this project's to build.
+    if (team === null && kept.has(unit)) return { unit, team: kept.get(unit)!, status: `kept for ${kept.get(unit)}, not held yet` };
     if (team === null) {
-      const waits = (dependencies.get(unit) ?? []).filter((dep) => !mergedHere.has(dep));
-      return { unit, team: "here", status: waits.length > 0 ? `waits on ${waits.join(", ")}` : "built here" };
+      const waits = (dependencies.get(unit) ?? []).filter((dep) => !done(dep));
+      return { unit, team: "here", status: unitHereStatus(standing.get(unit), waits) };
     }
     const payload = claim!.payload;
     if (payload.turned_down) return { unit, team, status: `turned down in ${payload.turned_down.repo}, back with ${team}` };
@@ -17103,7 +17141,7 @@ function teamHomeBoardText(projectDir: string, stateContent: string): string {
     // The audit alone says what merged.
   }
   const { rows } = unitBoardRows(projectDir, stateContent, dag.batches.flat(), overview, results,
-    homeMergedUnits(projectDir, model, auditRows, finalStage));
+    homeMergedUnits(projectDir, model, auditRows, finalStage), model?.section ?? stateContent);
   return [renderUnitBoard(workLabel(projectDir), rows), ...settledNotices].join("\n");
 }
 
@@ -17363,7 +17401,7 @@ function emitTeamUnitMajorRunStage(
     }
   }
   if ([...heldElsewhere].some((unit) => !mergedHere.has(unit))) {
-    const { rows, heldNotTaken } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere);
+    const { rows, heldNotTaken } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere, refreshedState);
     // A team the home holds a Unit for may not reach this workspace: the lead
     // is offered once to hand the Unit to them as a file.
     const unitTool = aidlcToolInvocation("unit");

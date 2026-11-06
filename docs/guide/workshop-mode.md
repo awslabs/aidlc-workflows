@@ -686,6 +686,10 @@ Units of checkout-revamp:
 - reporting, here: waits on refunds
 ```
 
+A Unit the lead's project builds itself reads where its Unit Progress has it:
+done once it is through its gate, the stage it is at, waiting for your
+approval while its gate is open, or not started yet.
+
 A Unit is done when every repo it changed has merged, however it merged (when a
 repo merged it in a way the board cannot see, tell the lead's chat at the home and
 AI-DLC runs `aidlc unit merged <unit> --repo <repo>` with your words): the
