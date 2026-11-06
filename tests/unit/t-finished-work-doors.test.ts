@@ -1,4 +1,4 @@
-// covers: function:standingPersonTurn, function:turnKeptSinceFinished, function:personAskedSinceGate, function:recordedSwitchChangeAdmitted, function:configToolAdmitted, hook:aidlc-plan-approval-guard
+// covers: function:standingPersonTurn, function:turnKeptSinceFinished, function:keptSinceFinished, function:personAskedSinceGate, function:recordedSwitchChangeAdmitted, function:configToolAdmitted, hook:aidlc-plan-approval-guard
 //
 // Every door that asks whether the person spoke since the last decision reads
 // one owner (standingPersonTurn). On work finished at Code Generation the
@@ -10,9 +10,19 @@
 // pass once the person asked and still wait when they did not, under every
 // Guard Policy. Park and a scope change on finished work answer as before (the
 // work is done; a scope change already went through), so they are not here.
+// Work archived before it finished has no completion: the person's message kept
+// since the archive is their ask there, in a chat still on the work.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cleanupTestProject } from "../harness/fixtures.ts";
-import { finishedAtCodeGeneration, next, reply, runNamed, SESSION, SHAPES } from "../harness/code-generation-states.ts";
+import { cleanupTestProject, DEFAULT_RECORD_DIR } from "../harness/fixtures.ts";
+import {
+  finishedAtCodeGeneration,
+  next,
+  openCodeGenerationGate,
+  reply,
+  runNamed,
+  SESSION,
+  SHAPES,
+} from "../harness/code-generation-states.ts";
 
 setDefaultTimeout(600_000);
 
@@ -76,6 +86,24 @@ describe.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, work fini
       expect(next(proj).kind).toBe("done");
     });
   }
+});
+
+describe.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, work archived before it finished", (policy) => {
+  test(`${DOORS[0].name}: waits in a chat still on the work until the person asks there, then goes through`, async () => {
+    const proj = openCodeGenerationGate(policy, "on");
+    created.push(proj);
+    const first = runNamed(proj, "bun .claude/tools/aidlc-orchestrate.ts next", IN_CHAT);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const archived = runNamed(proj, `bun .claude/tools/aidlc.ts engine intent archive ${DEFAULT_RECORD_DIR}`, {
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    });
+    expect(archived.status, archived.stdout + archived.stderr).toBe(0);
+    const unasked = await claude.call(proj, CHAT, { tool: "Bash", command: DOORS[0].command });
+    expect(unasked.code, `${DOORS[0].command} passed with nobody asking`).toBe(2);
+    expect(reply(proj, DOORS[0].ask, CHAT).status).toBe(0);
+    const asked = await claude.call(proj, CHAT, { tool: "Bash", command: DOORS[0].command });
+    expect(asked.code, asked.said).toBe(0);
+  });
 });
 
 // What nobody asked for waits on finished work, and its refusal says so in

@@ -2493,13 +2493,13 @@ async function evaluate(
   // Finished, read once, as the human-turn hook reads it (hookStandsOutside).
   const finished = selectedRecordIsFinished(projectDir, workflow.selection);
   // A system package install nobody asked for waits for the person at every
-  // stage and under every Guard Policy: it is not a fence (system-install.ts).
-  // The run's state is the work's, or an isolated run's with no work, which
-  // has no state file and names its stage on its step.
+  // stage, on finished work too, and under every Guard Policy: it is not a
+  // fence (system-install.ts). The run's state is the work's, or an isolated
+  // run's with no work, which has no state file and names its stage on its step.
   if (toolName === "Bash" && typeof toolInput.command === "string") {
     try {
       const runState = runStateContent(projectDir);
-      if (runState !== null && !finished) {
+      if (runState !== null) {
         const command = oneLine(toolInput.command).trim();
         const refusal = unaskedSystemInstall(projectDir, toolInput.command, command.length > 160 ? `${command.slice(0, 160)}...` : command, {
           hook: HOOK_NAME,
@@ -2716,7 +2716,8 @@ async function evaluate(
     // over: an edit, a shell command or the developer
     // goes through, under every Guard Policy and whoever asked for it, as once
     // a walk is past Code Generation, where a handoff that names a plan is
-    // still judged. AI-DLC's own commands this guard holds keep their own
+    // still judged and a system package install nobody asked for (above)
+    // still waits. AI-DLC's own commands this guard holds keep their own
     // conditions (engineCommandAdmitted: a jump waits for the person's move, a
     // switch for personAskedSinceGate), and so does a line the guard cannot
     // read that names AI-DLC (`eval` or `sh -c` around a jump, in either

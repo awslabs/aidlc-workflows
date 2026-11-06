@@ -974,8 +974,11 @@ function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOpt
  * This chat's messages (with no chat named, any chat's in this project) kept
  * beside finished work since its latest WORKFLOW_COMPLETED row, oldest first:
  * the window turnKeptSinceFinished stands on, and a change asked there is read
- * from. Empty when the record is not
- * finished, has no completion row, or cannot be read.
+ * from. Work archived before it finished has no such row; its latest
+ * WORKFLOW_ARCHIVED row is its finish. Never the later of the two: an archive
+ * spends nothing, so a message between the completion and the archive still
+ * stands. Empty when the record is not finished, has neither row, or cannot be
+ * read.
  */
 export function keptSinceFinished(pd: string, options: { intent?: string; space?: string } = {}): StoredMessage[] {
   try {
@@ -985,7 +988,8 @@ export function keptSinceFinished(pd: string, options: { intent?: string; space?
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
     if (unreadable.length > 0) return [];
-    const finishedAt = rows.filter((row) => row.event === "WORKFLOW_COMPLETED").map((row) => row.timestamp).sort().at(-1);
+    const latest = (event: string) => rows.filter((row) => row.event === event).map((row) => row.timestamp).sort().at(-1);
+    const finishedAt = latest("WORKFLOW_COMPLETED") ?? latest("WORKFLOW_ARCHIVED");
     if (finishedAt === undefined) return [];
     const onThisWork = sentOnThisWork(rows);
     const chat = invokingChat(pd);
@@ -1002,7 +1006,7 @@ export function keptSinceFinished(pd: string, options: { intent?: string; space?
  * person's messages beside its record and writes no turn on it. So the turn is
  * their latest message no turn on the work names (sentOnThisWork: a terminal
  * message, which has no chat, counts as on the work and stands for nothing
- * here), kept at or after the work's latest WORKFLOW_COMPLETED row, from this
+ * here), kept at or after the work's finish (keptSinceFinished), from this
  * chat (with no chat named, any chat's message in this project). With
  * `requests` every kept message counts, as every turn the hook writes today
  * does (only an older record's question row is left out on the record); with
@@ -1011,7 +1015,7 @@ export function keptSinceFinished(pd: string, options: { intent?: string; space?
  * the finish, so no decision spends it. It is handed back in a turn's shape
  * (its Message Id, Session and time), which is all a caller reads. Both times
  * are whole seconds; a tie with the finish is harmless, as the message that
- * gave the finishing approval is named on the record. No completion row, or a
+ * gave the finishing approval is named on the record. No finish row, or a
  * shard that cannot be read: null. Ids, times and the engine's own rows, never
  * words.
  */
