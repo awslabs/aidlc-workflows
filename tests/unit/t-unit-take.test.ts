@@ -107,6 +107,22 @@ describe("a team member's clone of the home's workspace", () => {
     expect(choices[2].command).toEndWith(`next --pick ${HOME}`);
   });
 
+  // A live run on opencode: its skill enters a bare /aidlc with `next --resume`,
+  // which picked up the home's work (the only open work) and showed the lead's
+  // board; the take offer never came, and the agent released a team's Unit.
+  test("a bare --resume is offered the same Units to take, never the home's work picked up", () => {
+    const home = homeWithTeams(["refunds=payments", "checkout-ui=web"]);
+    const alice = cloneOf(home.remote, "alice");
+    const ask = next(alice, ENV, ["--resume"]);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect(JSON.stringify(ask)).not.toContain("Picked up");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).toEqual([
+      "Start refunds",
+      "Start checkout-ui",
+      "Carry on fixture here, as its home",
+    ]);
+  });
+
   test("while the home builds the walking skeleton, hears that every Unit waits on it, and nothing of the home's work runs", () => {
     const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n  - name: orders\n    depends_on: []\n" +
       "  - name: refunds\n    depends_on: [orders]\n  - name: checkout-ui\n    depends_on: [orders]\n" +

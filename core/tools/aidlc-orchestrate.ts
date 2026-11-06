@@ -12099,11 +12099,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // picked up the way the pick question's answer picks it, not asked about.
   // Anything typed with it (a stage to jump to, a setting) keeps its own
   // route; two pieces, words on the line, or a record that cannot be selected
-  // here keep the question.
+  // here keep the question. A home whose Units teams build is not picked up:
+  // its clone is offered the Units to take, carrying it on as the home among
+  // the choices (unitTakeAsk), as a bare `next` is.
   if (args.length === 1 && args[0] === "--resume" && !flags.workspaceCommand && !flags.intent?.trim()) {
     const records = unselectedRecords(resolveProjectDir(projectDir));
     const only = records !== null && records.presentCount === 1 && records.selectable.length === 1 ? records.selectable[0] : null;
-    if (only !== null) {
+    if (only !== null && !(isTeamUnitOwnership(only.state) && homeLocation(only.state) !== null)) {
       const picked = parseNextFlags(["--pick", only.selector]);
       flags.workspaceCommand = picked.workspaceCommand;
       flags.carryOn = picked.carryOn;
