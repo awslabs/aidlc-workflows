@@ -1040,11 +1040,15 @@ export const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
 // whose folder exists under <workspace>/spaces/; anything else is the default
 // space.
 export function knownActiveSpace(workspaceRootDir: string, cursorText: string | null | undefined): string {
+  return namedKnownSpace(workspaceRootDir, cursorText) ?? "default";
+}
+
+export function namedKnownSpace(workspaceRootDir: string, cursorText: string | null | undefined): string | null {
   const name = (cursorText ?? "").trim();
-  if (!SPACE_NAME_REGEX.test(name)) return "default";
+  if (!SPACE_NAME_REGEX.test(name)) return null;
   try {
-    return statSync(join(workspaceRootDir, "spaces", name)).isDirectory() ? name : "default";
+    return statSync(join(workspaceRootDir, "spaces", name)).isDirectory() ? name : null;
   } catch {
-    return "default";
+    return null;
   }
 }
