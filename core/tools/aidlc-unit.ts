@@ -68,6 +68,7 @@ import {
   engineAskMark,
   noteEngineAskMark,
   parseArgs,
+  namesSourceCheckout,
   asksForHelp,
   printUsageAndExit,
   recordDir,
@@ -200,6 +201,7 @@ import {
   unitDependencies,
   unitsKeptForTeams,
   unitsLeftOpen,
+  unitWriteTargets,
   unitWordsArg,
   TEAM_RHYTHM_OFFER,
   theTeam,
@@ -6344,7 +6346,8 @@ function pushUnit(args: string[], projectDir?: string): void {
         `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` and follow what it returns.`
       : `${unit} has no record of what its Code Generation wrote yet (${manifest.reason}).`);
   }
-  const byRepo = writesByRepo(pd, manifest.manifest.writes);
+  const targets = unitWriteTargets(pd, manifest.manifest.writes);
+  const byRepo = new Map([...targets].map(([repo, target]) => [repo, target.paths]));
   // The person's pick of a push remote, per repo: `--remote <repo>=<name>[,...]`.
   const picked = new Map((flags.remote ?? "").split(",").map((pair) => pair.split("=").map((part) => part.trim()))
     .filter((pair): pair is [string, string] => pair.length === 2 && pair[0] !== "" && pair[1] !== ""));
@@ -6372,8 +6375,15 @@ function pushUnit(args: string[], projectDir?: string): void {
   // Every repo first: there, and a remote to push to.
   const planned: Array<{ repo: string; dir: string; name: string; remote: string; paths: string[] }> = [];
   for (const [repo, paths] of byRepo) {
-    const dir = repo === "." ? pd : repoDir(pd, repo);
+    const dir = targets.get(repo)?.dir ?? (repo === "." ? pd : repoDir(pd, repo));
     if (!isGitRepoDir(dir)) fail(repoNotThereLine(pd, repo));
+    // Written in a folder recorded as a checkout that is no repo of this work's.
+    const strayCheckout = repo === "." ? paths.find((path) => namesSourceCheckout(path)) : undefined;
+    if (strayCheckout !== undefined) {
+      fail(`${unit}'s Code Generation wrote ${strayCheckout} in a folder recorded as a checkout that is not a checkout of any repo ` +
+        `this work records, so nothing was pushed. If it is one of the repos ${unit} changes, add that repo to the work ` +
+        `(\`${aidlcToolInvocation("utility")} intent add-repo <its name>\`), then push again.`);
+    }
     const name = repo === "." ? "the repo" : repo;
     // A merge, rebase, cherry-pick or revert of theirs under way: a commit now
     // would be made over it, so nothing is committed until it is finished.

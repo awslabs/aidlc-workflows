@@ -711,7 +711,7 @@ import {
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
-  writesByRepo,
+  unitWriteTargets,
   mergedStatus,
   renderUnitBoard,
   type UnitBoardRow,
@@ -9051,19 +9051,18 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     };
   }
   const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
-  const byRepo = manifest.ok ? writesByRepo(projectDir, manifest.manifest.writes) : new Map<string, string[]>();
+  const targets = manifest.ok ? unitWriteTargets(projectDir, manifest.manifest.writes) : new Map<string, { dir: string; paths: string[] }>();
+  const byRepo = new Map([...targets].map(([repo, target]) => [repo, target.paths]));
   const repos = [...byRepo.keys()];
   // Their own changes in the way of the Unit's branch: the push would be
   // refused the same way, so it is offered once they are out of the way.
   const branch = unitBranchOf(stateContent, unit);
   // A merge, rebase, cherry-pick or revert of theirs under way in a repo: the
   // push would be refused, so it is offered once that is finished.
-  const underWay = repos.find((repo) => {
-    const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
-    return existsSync(join(dir, ".git")) && gitOperationUnderWay(dir) !== null;
-  });
+  const dirOf = (repo: string): string => targets.get(repo)?.dir ?? (repo === "." ? projectDir : repoDir(projectDir, repo));
+  const underWay = repos.find((repo) => existsSync(join(dirOf(repo), ".git")) && gitOperationUnderWay(dirOf(repo)) !== null);
   if (underWay !== undefined) {
-    const dir = underWay === "." ? projectDir : repoDir(projectDir, underWay);
+    const dir = dirOf(underWay);
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed: ${underWay === "." ? "the repo" : underWay} is in the middle of ` +
       `${gitOperationUnderWay(dir)!.what}. Once it is finished or put aside, do you want me to push it?`);
     return null;

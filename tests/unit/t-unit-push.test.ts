@@ -257,6 +257,39 @@ describe("the push", () => {
     expect(git(hosts.billing, ["show", "refunds:MERGED.md"])).toBe("on main since");
   });
 
+  test("the agent built in worktrees of its own and recorded them as checkouts: the push reads each as its repo's and sends both home", () => {
+    const { hosts, alice, record } = refundsTaken();
+    // Worktrees the agent made for the Unit, recorded with intent add-checkout.
+    const trees = join(alice, ".aidlc-worktrees", "refunds");
+    for (const repo of ["checkout-api", "billing"]) {
+      git(join(alice, repo), ["worktree", "add", "-q", "-b", `payments/refunds-${repo}`, join(trees, repo)]);
+      const added = run(UTILITY, ["intent", "add-checkout", join(".aidlc-worktrees", "refunds", repo)], alice);
+      expect(added.status, added.out).toBe(0);
+    }
+    mkdirSync(join(trees, "checkout-api", "src"), { recursive: true });
+    writeFileSync(join(trees, "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
+    mkdirSync(join(trees, "billing", "lib"), { recursive: true });
+    writeFileSync(join(trees, "billing", "lib", "refund.ts"), "export const refund = 1;\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation",
+      unit: "refunds",
+      version: 1,
+      writes: [{ path: "checkout-api@checkout/src/refunds.ts" }, { path: "billing@checkout/lib/refund.ts" }],
+    }, null, 2)}\n`);
+    writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
+    finishBuild(record);
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
+    expect(String(ask.question)).toContain("It changed checkout-api and billing.");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toStartWith("Pushed branch refunds in checkout-api and billing.");
+    expect(git(hosts["checkout-api"], ["show", "refunds:src/refunds.ts"])).toBe("export const refunds = 1;");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
+  });
+
   test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);

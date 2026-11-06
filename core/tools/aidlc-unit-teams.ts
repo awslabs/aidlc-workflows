@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
   type AuditShardEvent,
@@ -25,7 +25,10 @@ import {
   markdownBlocks,
   parseBoltDag,
   readAuditShardEvents,
+  readRecordedSourceCheckouts,
   readStateFile,
+  recordedCheckoutOfListingPath,
+  repoDir,
   REQUEST_TEXT_DIR,
   slugify,
   unitDependencyPath,
@@ -587,17 +590,63 @@ export function unitOutputsHomeReads(unit: string, scope: string): string[] {
   return [...outputs].sort();
 }
 
-// A Unit's writes by the repo each is in, as its source manifest records them:
-// a write names its repo, or is in the work's one recorded repo, or in the
-// workspace's own repo (".").
-export function writesByRepo(projectDir: string, writes: ReadonlyArray<{ path: string; repo?: string }>): Map<string, string[]> {
+// A Unit's writes by the repo each is in, as its source manifest records them,
+// with the folder its push runs in: a write names its repo; or is a recorded
+// checkout's (`<label>@checkout/<path>`, a worktree or clone the agent built
+// in and recorded), read as the recorded repo that checkout is of by git's own
+// repository, in the checkout's folder; or is in the work's one recorded repo;
+// or in the workspace's own repo ("."). A checkout of no recorded repo keeps
+// its write at the workspace, where the push names it.
+export function unitWriteTargets(
+  projectDir: string,
+  writes: ReadonlyArray<{ path: string; repo?: string }>,
+): Map<string, { dir: string; paths: string[] }> {
   const recorded = intentRepos(projectDir);
-  const byRepo = new Map<string, string[]>();
+  const checkouts = writes.some((write) => write.repo === undefined) ? readRecordedSourceCheckouts(projectDir) : [];
+  const commonDir = (dir: string): string | null => {
+    const read = spawnSync("git", ["rev-parse", "--git-common-dir"], { cwd: dir, encoding: "utf-8" });
+    return read.status === 0 && read.stdout.trim() ? resolve(dir, read.stdout.trim()) : null;
+  };
+  const originOf = (dir: string): string | null => {
+    const read = spawnSync("git", ["remote", "get-url", "origin"], { cwd: dir, encoding: "utf-8" });
+    return read.status === 0 && read.stdout.trim() ? read.stdout.trim() : null;
+  };
+  const repoOfCheckout = new Map<string, string | null>();
+  const targets = new Map<string, { dir: string; paths: string[] }>();
+  const add = (repo: string, dir: string, path: string): void => {
+    const at = targets.get(repo) ?? { dir, paths: [] };
+    at.paths.push(path);
+    targets.set(repo, at);
+  };
   for (const write of writes) {
+    const inCheckout = write.repo === undefined ? recordedCheckoutOfListingPath(write.path, checkouts) : null;
+    if (inCheckout !== null && inCheckout.rest !== "") {
+      const { checkout, rest } = inCheckout;
+      if (!repoOfCheckout.has(checkout.real)) {
+        // A worktree shares its repo's own git folder; a clone of it, its origin.
+        const own = commonDir(checkout.real);
+        const origin = originOf(checkout.real);
+        repoOfCheckout.set(checkout.real,
+          recorded.find((repo) => own !== null && commonDir(repoDir(projectDir, repo)) === own) ??
+            recorded.find((repo) => origin !== null && originOf(repoDir(projectDir, repo)) !== null &&
+              sameGitAddress(origin, originOf(repoDir(projectDir, repo))!)) ??
+            null);
+      }
+      const repo = repoOfCheckout.get(checkout.real);
+      if (repo) {
+        add(repo, checkout.real, rest);
+        continue;
+      }
+    }
     const repo = write.repo ?? (recorded.length === 1 ? recorded[0] : ".");
-    byRepo.set(repo, [...(byRepo.get(repo) ?? []), write.path]);
+    add(repo, repo === "." ? projectDir : repoDir(projectDir, repo), write.path);
   }
-  return byRepo;
+  return targets;
+}
+
+// The same, by repo only.
+export function writesByRepo(projectDir: string, writes: ReadonlyArray<{ path: string; repo?: string }>): Map<string, string[]> {
+  return new Map([...unitWriteTargets(projectDir, writes)].map(([repo, target]) => [repo, target.paths]));
 }
 
 // --- The board ----------------------------------------------------------------
