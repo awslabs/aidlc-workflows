@@ -57,6 +57,10 @@ const onSameModel = (model?: string) =>
 const noRoomSummarized = (n: number, model?: string) =>
   "Kiro has summarized this chat to make room, so the agent now works from a summary of what came before. " +
   `${onSameModel(model)} ${n}% in its first turn on this work, so a new chat would fill up and be summarized again soon.`;
+// The near-full line asks nothing, so it rides as a change notice, which the
+// agent says as written (left out of the narration, measured live on Kiro CLI
+// 3.1.0); today's offer stays in the narration.
+const notices = (reply: { change_notices?: string[] }) => reply.change_notices ?? [];
 const noRoomUsage = (figure: number, n: number, model?: string) =>
   `This chat is about ${figure}% full by Kiro's count, and once it fills the agent carries on from a summary. ` +
   `${onSameModel(model)} ${n}% in its first turn on this work, so a new chat would fill up again soon.`;
@@ -378,9 +382,11 @@ describe("t-kiro-context-offer: a new chat on the same model would start about a
     v3Session(homeDir, chat, sessionOn(chat, "claude-opus-4.5"));
     const before = homeDigest(homeDir);
     const first = report(proj, { tree: "kiro", homeDir, chat });
-    expect(first.narration?.split("\n").at(-1)).toBe(noRoomSummarized(64, "claude-opus-4.5"));
+    expect(notices(first)).toContain(noRoomSummarized(64, "claude-opus-4.5"));
+    expect(offered(first.narration)).toBe(false);
     expect(first.narration).not.toContain("I recommend it");
-    expect(offered(report(proj, { tree: "kiro", homeDir, chat }).narration)).toBe(false);
+    const again = report(proj, { tree: "kiro", homeDir, chat });
+    expect(offered([again.narration, ...notices(again)].join(" "))).toBe(false);
     // Read only: no model or setting of Kiro's changed.
     expect(homeDigest(homeDir)).toBe(before);
   });
@@ -395,8 +401,7 @@ describe("t-kiro-context-offer: a new chat on the same model would start about a
       turnRow(20, at(61_010), "t1"), turnRow(34.5, at(90_000), "t1"), turnRow(39.9, at(400_000), "t2"),
     ]);
     v3Session(homeDir, chat, sessionOn(chat, "claude-opus-4.5"));
-    expect(report(proj, { tree: "kiro-ide", homeDir, ideChat: chat }).narration?.split("\n").at(-1))
-      .toBe(noRoomSummarized(80, "claude-opus-4.5"));
+    expect(notices(report(proj, { tree: "kiro-ide", homeDir, ideChat: chat }))).toContain(noRoomSummarized(80, "claude-opus-4.5"));
   });
 
   test("a model Kiro picks (auto) names no model; a settings file that does not parse keeps today's line", () => {
@@ -409,7 +414,7 @@ describe("t-kiro-context-offer: a new chat on the same model would start about a
     const proj = project(chat);
     v3Record(homeDir, chat, rows);
     v3Session(homeDir, chat, sessionOn(chat, "auto"));
-    expect(report(proj, { tree: "kiro", homeDir, chat }).narration?.split("\n").at(-1)).toBe(noRoomSummarized(60));
+    expect(notices(report(proj, { tree: "kiro", homeDir, chat }))).toContain(noRoomSummarized(60));
     const other = "sess_0b1d2c3e-4f50-4617-8829-3a4b5c6d7e8f";
     const proj2 = project(other);
     v3Record(homeDir, other, rows);
@@ -477,8 +482,7 @@ describe("t-kiro-context-offer: a new chat on the same model would start about a
     v2Record(homeDir, chat, 85.2, [
       v2Turn(-3_600_000, 90, 91), v2Turn(20_000, 63.9, 64.2, "claude-opus-4.5"), v2Turn(400_000, 85.2, 85.2, "claude-opus-4.5"),
     ], "claude-opus-4.5");
-    expect(report(proj, { tree: "kiro", homeDir, chat }).narration?.split("\n").at(-1))
-      .toBe(noRoomUsage(85, 64, "claude-opus-4.5"));
+    expect(notices(report(proj, { tree: "kiro", homeDir, chat }))).toContain(noRoomUsage(85, 64, "claude-opus-4.5"));
     const light = "34343434-3434-4343-8343-343434343434";
     const proj2 = project(light);
     v2Record(homeDir, light, 85.2, [v2Turn(20_000, 22.1, 30.4), v2Turn(400_000, 85.2, 85.2)]);
