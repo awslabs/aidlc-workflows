@@ -5359,15 +5359,17 @@ function teamsClone(projectDir: string, stateContent: string): boolean {
 
 // The one offer to write repos.json from the repos found here (decision 21):
 // at a stage boundary, the first time the work records repos or teams are
-// chosen (open question 7), in a workspace that has none, once per clone. One
-// person's work on one repo is never offered it, nor an unattended run, which
-// has nobody to answer. Null when the step goes on.
+// chosen (open question 7), in a workspace that has none, once per clone, and
+// only where there are repos besides the workspace folder. Work on one repo is
+// never offered it, nor an unattended run, which has nobody to answer. Null
+// when the step goes on.
 function reposManifestAsk(projectDir: string, stateContent: string): AskDirective | null {
   if (process.env.AIDLC_UNATTENDED === "1") return null;
   if (existsSync(join(projectDir, REPOS_FILE)) || reposManifestOffered(projectDir)) return null;
   if (homeLocation(stateContent) === null && intentRepos(projectDir).length === 0) return null;
-  const found = discoverSiblingRepos(projectDir);
-  const names = found.length > 0 ? found : existsSync(join(projectDir, ".git")) ? [basename(resolve(projectDir))] : [];
+  // Only repos besides the workspace folder: teammates clone the workspace
+  // itself, so work whose one repo it is needs no list (Arden 2026-11-06).
+  const names = discoverSiblingRepos(projectDir);
   if (names.length === 0) return null;
   if (!isReadOnlyEngineProbe()) noteReposManifestOffered(projectDir);
   const listed = names.length === 1 ? `the repo found here (${names[0]})` : `the ${names.length} repos found here (${names.join(", ")})`;
