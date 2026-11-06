@@ -641,6 +641,7 @@ import {
   unitBranchInTheWay,
   gitOperationUnderWay,
   unitMergeToFinish,
+  unitBuildOwnBranch,
   unitsTaken,
   type UnitClaimOverview,
   type UnitClaimView,
@@ -9357,12 +9358,16 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     : new Map<string, { dir: string; paths: string[] }>();
   const byRepo = new Map([...targets].map(([repo, target]) => [repo, target.paths]));
   const repos = [...byRepo.keys()];
+  const dirOf = (repo: string): string => targets.get(repo)?.dir ?? (repo === "." ? projectDir : repoDir(projectDir, repo));
   // Their own changes in the way of the Unit's branch: the push would be
   // refused the same way, so it is offered once they are out of the way.
-  const branch = unitBranchOf(stateContent, unit);
+  // A redo built on a branch of its own is pushed from it (unitBuildOwnBranch).
+  const recordedBranch = unitBranchOf(stateContent, unit);
+  const ownBranch = repos.map((repo) =>
+    existsSync(join(dirOf(repo), ".git")) ? unitBuildOwnBranch(dirOf(repo), recordedBranch) : null).find((entry) => entry !== null) ?? null;
+  const branch = ownBranch ?? recordedBranch;
   // A merge, rebase, cherry-pick or revert of theirs under way in a repo: the
   // push would be refused, so it is offered once that is finished.
-  const dirOf = (repo: string): string => targets.get(repo)?.dir ?? (repo === "." ? projectDir : repoDir(projectDir, repo));
   const underWayHere = repos.filter((repo) => existsSync(join(dirOf(repo), ".git")) && gitOperationUnderWay(dirOf(repo)) !== null);
   // A merge on the Unit's own branch with nothing left to resolve is the
   // push's to finish on their yes (unitMergeToFinish); anything else waits.
@@ -9389,7 +9394,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     ? "The merge is finished first, with your git; then only the files its Code Generation wrote, nothing else of yours."
     : "Only the files its Code Generation wrote; nothing else of yours is committed.";
   const verb = finishing ? "Finish the merge and push" : "Push";
-  const finishFlag = finishing ? " --finish-merge" : "";
+  const finishFlag = `${finishing ? " --finish-merge" : ""}${ownBranch !== null ? ` --branch ${shellArg(ownBranch)}` : ""}`;
   const pushes = pick.length === 0
     ? [{ label: verb, detail, command: `${unitTool} push${finishFlag}` }]
     : pick[0].remotes.map((remote) => {

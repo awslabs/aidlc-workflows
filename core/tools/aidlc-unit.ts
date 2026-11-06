@@ -6816,6 +6816,14 @@ function pushUnit(args: string[], projectDir?: string): void {
       fail(`${name} is in the middle of ${underWay.what}, so nothing was committed or pushed. Finish it (${underWay.finish}) ` +
         `or put it aside (${underWay.abort}), then I can push ${unit}.`);
     }
+    // A redo built on a branch of its own from the newer integration branch is
+    // pushed from that branch, never moved back onto the first build's.
+    const own = flags.branch === undefined ? unitBuildOwnBranch(dir, branch) : null;
+    if (own !== null) {
+      fail(`${name} has ${unit}'s build on branch ${own}, which holds commits ${branch} does not, so nothing was switched or ` +
+        `pushed. Ask the person whether to push it on ${own}, the branch it was built on; on their yes, run ` +
+        `\`${aidlcToolInvocation("unit")} push --branch ${own}\`, and the lead's project follows that branch.`);
+    }
     const remote = pushRemoteOf(dir, unit, picked.get(repo));
     if (remote === null) fail(`${name} has no remote to push ${unit} to.`);
     if (typeof remote === "object") {
@@ -7635,6 +7643,22 @@ export function earlyBaseMerged(
 // nothing staged that the merge did not bring (a redo that merged the newer
 // main, say): the push question offers to finish it, and `push --finish-merge`
 // concludes it with the person's own git before the Unit's commit.
+// The branch a Unit's build sits on in a repo when it is a branch of its own:
+// the repo is on a branch that is neither the Unit's recorded one nor its
+// integration branch, and holds commits the recorded branch lacks (a redo built
+// on a new branch from the newer integration branch, say). Moving onto the
+// recorded branch would leave those commits out of the push, so the push goes
+// from this branch. Null otherwise.
+export function unitBuildOwnBranch(dir: string, unitBranch: string): string | null {
+  const current = git(dir, ["branch", "--show-current"]).stdout.trim();
+  if (current === "" || current === unitBranch) return null;
+  if (!git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${unitBranch}`]).ok) return null;
+  const remote = repositoryRemote(dir);
+  const integration = remote === null ? null : repoIntegration(dir, remote);
+  if (integration !== null && current === integration.slice(remote!.length + 1)) return null;
+  return git(dir, ["merge-base", "--is-ancestor", "HEAD", `refs/heads/${unitBranch}`]).ok ? null : current;
+}
+
 export function unitMergeToFinish(dir: string, branch: string): boolean {
   if (gitOperationUnderWay(dir)?.what !== "a merge") return false;
   if (git(dir, ["branch", "--show-current"]).stdout.trim() !== branch) return false;

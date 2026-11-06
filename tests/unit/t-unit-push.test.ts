@@ -577,6 +577,45 @@ describe("the push", () => {
     expect(next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "second" }).ask_type).toBe("unit-push");
   });
 
+  // A live run on Kiro CLI: the redo after a turn-down was built on a new
+  // branch from the newer main; the push switched back to the Unit's first
+  // branch, committed the redo there without main's newer code, and pushed it.
+  test("a redo built on its own branch from the newer main is pushed from that branch, never moved back onto the first build's", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "rebuild it on the newer main"], home.dir).status).toBe(0);
+    expect(next(alice).ask_type).toBe("unit-turned-down");
+    for (const [name, host] of Object.entries(hosts)) {
+      const other = cloneOf(host, `bob-${name}`);
+      writeFileSync(join(other, "MERGED.md"), "on main since\n");
+      git(other, ["add", "MERGED.md"]);
+      git(other, ["commit", "-q", "-m", "main moves on"]);
+      git(other, ["push", "-q", "origin", "HEAD:main"]);
+      const repo = join(alice, name);
+      git(repo, ["fetch", "-q", "origin"]);
+      git(repo, ["switch", "-q", "-c", "refunds-v2", "origin/main"]);
+    }
+    codeGeneratedAgain(alice);
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
+    const asked = next(alice);
+    expect(asked.ask_type, JSON.stringify(asked).slice(0, 500)).toBe("unit-push");
+    expect(String(asked.question)).toContain("branch refunds-v2");
+    const push = (asked.choices as Array<{ label: string; command?: string }>)[0];
+    expect(push.command).toEndWith("aidlc-unit.ts push --branch refunds-v2");
+    // A push that names no branch never moves it back onto the first build's.
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(String(refused.json?.error)).toContain("push --branch refunds-v2");
+    expect(git(join(alice, "billing"), ["branch", "--show-current"])).toBe("refunds-v2");
+    const pushed = run(UNIT, ["push", "--branch", "refunds-v2"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["show", "refunds-v2:MERGED.md"])).toBe("on main since");
+    expect(git(hosts.billing, ["show", "refunds-v2:lib/refund.ts"])).toBe("export const refund = 2;");
+  });
+
   test("back on main after a push, with the Unit's files changed again: the next push carries them onto its branch, and nothing of theirs moves", () => {
     const { hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);
