@@ -6422,9 +6422,12 @@ export const SWITCH_CHECKS_OFF_CHOICE = "Switch all checks off for this work";
 // is the blocking check's (its Decision), at a Unit's checkpoint under
 // whichever of its block's stages logged it for that Unit (the stage whose
 // file failed, which need not be Current Stage), elsewhere under Current
-// Stage. From STAGE_STARTED, as the open stage question reads, so a question
-// of an earlier attempt is not taken. Read from the record, never from the
-// person's words; null when another question waits or none does.
+// Stage. Each stage is read as openStageQuestion reads it: from its start (from
+// its latest Request Changes while it is revised), so a question of an earlier
+// attempt is not taken, and a block stage with no start of its own (the Unit
+// block's later stages are started per Unit) from the workflow attempt, as the
+// stage ahead is read there. From the record, never from the person's words;
+// null when another question waits or none does.
 function switchAnswersOpenCheck(
   pd: string,
   scope: string,
@@ -6439,8 +6442,13 @@ function switchAnswersOpenCheck(
     const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
     const atCheckpoint = walk !== null && walk.step.kind === "checkpoint" ? walk.step.unit : null;
     const slugs = walk !== null && atCheckpoint !== null ? walk.block.map((stage) => stage.slug) : [current];
+    const started = new Set(readAuditShardEvents(pd).filter((row) => row.event === "STAGE_STARTED")
+      .map((row) => auditBlockField(row.block, "Stage")));
+    const boxes = parseCheckboxes(stateContent);
     for (const slug of slugs) {
-      const block = openPendingDecision(pd, slug, "STAGE_STARTED");
+      const block = started.has(slug)
+        ? openDecisionMenu(pd, slug, stageQuestionBoundary(boxes.find((row) => row.slug === slug)?.state)).at(-1) ?? null
+        : hasPendingDecision(pd, slug, undefined, undefined, true) ? openDecisionMenu(pd, slug).at(-1) ?? null : null;
       if (block === null || auditBlockField(block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION) continue;
       const unit = auditBlockField(block, "Unit");
       if (atCheckpoint !== null && unit !== atCheckpoint) continue;

@@ -199,6 +199,28 @@ describe("switching the checks off answers the check's open question", () => {
     expect(r.d).toMatchObject({ kind: "done" });
   }, SCOPE_RUN_TIMEOUT_MS);
 
+  // A Unit walk with a design stage before Code Generation (as classic runs it): the Unit's
+  // later stages are started per Unit, with no stage start of their own on the record.
+  const WITH_DESIGN = SKIPPED.filter((slug) => slug !== "functional-design");
+
+  test("a Unit walk with a design stage first, the check failing on Code Generation: the answer lands on that question", () => {
+    const r = walk({ skipped: WITH_DESIGN });
+    expect(r.stop).toEqual({ slug: "code-generation", unit: "core" });
+    expect(r.first.message).toContain(`--stage code-generation --unit core --details "${SWITCH}"`);
+    expect(r.first.ranNext).toBe(true);
+    expect(r.answers.length).toBe(1);
+    expect(r.d).toMatchObject({ kind: "done" });
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  test("the stage gate after the last Unit of a walk with a design stage first: the answer is recorded and the gate goes on", () => {
+    const r = walk({ late: true, skipped: WITH_DESIGN });
+    expect(r.stop).toEqual({ slug: "code-generation", unit: null });
+    expect(r.first.message).toContain(`--stage code-generation --details "${SWITCH}"`);
+    expect(r.first.ranNext).toBe(true);
+    expect(r.answers.length).toBe(1);
+    expect(r.d).toMatchObject({ kind: "done" });
+  }, SCOPE_RUN_TIMEOUT_MS);
+
   for (const policy of ["strict", "relaxed", "off"]) {
     test(`under Guard Policy ${policy}: the same answer, the same next step`, () => {
       const r = walk({ flags: ["--guard-policy", policy] });

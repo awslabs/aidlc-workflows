@@ -8,8 +8,9 @@
 // structure is read from the record, never from the person's words: the first
 // Unit's question offered the work's switch and was answered with the
 // Override, and the verification that carried that answer overrode this check.
-// A plain Override, a Fix, another check or an Override later undone read as
-// before. The lines the person hears name the Unit by its plain name and leave
+// A plain Override, a Fix, another check, or a check failing beside the one
+// they clarified (the Override would cover it too) read as before; an Override
+// later undone keeps their answer. The lines the person hears name the Unit by its plain name and leave
 // the check's name to the agent ("the <check>"), never a slug or a check id.
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -157,6 +158,11 @@ describe("a later Unit, the same words: the person's earlier pick", () => {
     expect(r.refusals[0].said).not.toMatch(SAME_PICK);
     expect(r.refusals[1].said).toMatch(SAME_PICK);
     expect(r.refusals[1].said).toContain("--unit extra --details \"Override blocking sensors\"");
+    // The answer it names takes their reply itself: no message id for the agent to look up.
+    expect(/run `([^`]*log(\.ts)? answer[^`]*)`/.exec(r.refusals[1].said)?.[1]).not.toContain("--message");
+    const extraAnswer = r.rows.filter((row) => row.event === "QUESTION_ANSWERED" && field(row.block, "Unit") === "extra").at(-1);
+    expect(field(extraAnswer!.block, "Person Reply")).toBe(WORDS);
+    expect(field(extraAnswer!.block, "Message Id")).not.toBeNull();
     expect(r.refusals[1].said).toContain("\"Same as for the core Unit: I've overridden the <check> for this one too.\"");
     expect(r.d).toMatchObject({ kind: "done" });
     expect(field(r.verified("extra")!.block, "Blocking Checks")).toMatch(/:retention@[0-9a-f]{12}=overridden$/);
@@ -185,6 +191,36 @@ describe("a later Unit, the same words: the person's earlier pick", () => {
       expect(r.d).toMatchObject({ kind: "done" });
     }, SCOPE_RUN_TIMEOUT_MS);
   }
+
+  test("a new check failing at extra beside the one they clarified at core: no shortcut, both get extra's own question", () => {
+    const r = walk({
+      checks: [{ id: "retention", failOn: ["core", "extra"] }, { id: "rollback", failOn: ["extra"] }],
+      first: { offerSwitch: true, pick: OVERRIDE },
+      later: "override",
+    });
+    expect(r.refusals.map((x) => x.unit)).toEqual(["core", "extra"]);
+    expect(r.refusals[1].said).toMatch(/Sensors: (retention, rollback|rollback, retention)\./);
+    expect(r.refusals[1].said).not.toMatch(/that same pick/);
+    // What they overrode at core is still said, for that check alone.
+    expect(quoted(r.refusals[1].said)).toEqual(["You overrode the <check> for the core Unit."]);
+    expect(r.d).toMatchObject({ kind: "done" });
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  test("both checks failing at both Units, both overridden at core after the one ask: extra takes the same pick for both", () => {
+    const r = walk({
+      checks: [{ id: "retention", failOn: ["core", "extra"] }, { id: "rollback", failOn: ["core", "extra"] }],
+      first: { offerSwitch: true, pick: OVERRIDE },
+      later: "same words",
+    });
+    expect(r.refusals[1].said).toMatch(/a request to switch these checks off again is that same pick/);
+    expect(r.refusals[1].said).toContain("(<check>: the retention check");
+    expect(r.refusals[1].said).toContain("(<check>: the rollback check");
+    expect(r.d).toMatchObject({ kind: "done" });
+    const checks = field(r.verified("extra")!.block, "Blocking Checks") ?? "";
+    expect(checks).toMatch(/:retention@[0-9a-f]{12}=overridden/);
+    expect(checks).toMatch(/:rollback@[0-9a-f]{12}=overridden/);
+    expect(r.switched).toBe(false);
+  }, SCOPE_RUN_TIMEOUT_MS);
 
   test("another check failing at extra after the one ask at core: extra's refusal reads as before for it", () => {
     const r = walk({

@@ -4254,8 +4254,11 @@ type BlockingCheckAt =
 // that Unit, the same pick for the same words here. Read from the record alone:
 // the question's offered choices, the pick, and the verification that carried
 // it (that one, not the Unit's latest, so an Override later undone keeps their
-// answer). The check's name in these lines is the agent's (<check>): its id is
-// the team's internal name. Null when there is nothing to say.
+// answer). Only when that verification overrode every check failing here: the
+// retry is this Unit's Override, which covers all of its findings, so a check
+// they never overrode, failing beside one they did, gets its own question. The
+// check's name in these lines is the agent's (<check>): its id is the team's
+// internal name. Null when there is nothing to say.
 function overrodeAtEarlierUnits(pd: string, slug: string, unit: string, kind: string, sensorIds: string[]): string | null {
   const rows = sortAttemptEvents(readAuditShardEvents(pd));
   const latest = new Map<string, string>();
@@ -4288,23 +4291,25 @@ function overrodeAtEarlierUnits(pd: string, slug: string, unit: string, kind: st
   };
   const slot = (id: string): string => `(<check>: the ${checkName(id)}, named by what it checks, as you name it in the question.)`;
   const said = sensorIds.flatMap((id) => {
-    const lines: string[] = [];
     const before = [...latest].filter(([, checks]) => overrode(checks, id)).map(([at]) => at);
-    if (before.length > 0) {
-      lines.push(`Say to the person, just before the question: "You overrode the <check> for ${plain(before)}." ${slot(id)}`);
-    }
-    const same = [...carried].find(([, checks]) => overrode(checks, id))?.[0];
-    if (same !== undefined) {
-      lines.push(
-        `At ${plain([same])} they were asked what switching this check off meant and picked the Override for that Unit, ` +
-          `so a request to switch this check off again is that same pick: run \`${aidlcToolInvocation("log")} answer ` +
-          `--stage ${slug} --unit ${shellArg(unit)} --details "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" --message '<id>'\` ` +
-          `(<id>: the message they said it in), then \`${blockingSensorOverrideVerify(unit, kind)}\`, and once that verify ` +
-          `succeeds say in one line: "Same as for ${plain([same])}: I've overridden the <check> for this one too." ${slot(id)}`,
-      );
-    }
-    return lines;
+    return before.length === 0
+      ? []
+      : [`Say to the person, just before the question: "You overrode the <check> for ${plain(before)}." ${slot(id)}`];
   });
+  const same = [...carried].find(([, checks]) => sensorIds.every((id) => overrode(checks, id)))?.[0];
+  if (same !== undefined) {
+    const these = sensorIds.length === 1 ? "this check" : "these checks";
+    said.push(
+      `At ${plain([same])} they were asked what switching ${these} off meant and picked the Override for that Unit, ` +
+        `so a request to switch ${these} off again is that same pick: run \`${aidlcToolInvocation("log")} answer ` +
+        // No --message: the answer takes their reply since the question itself, as at the first Unit (an id
+        // the agent had to look up put a search of the record in front of the person).
+        `--stage ${slug} --unit ${shellArg(unit)} --details "${BLOCKING_SENSOR_OVERRIDE_CHOICE}"\`, ` +
+        `then \`${blockingSensorOverrideVerify(unit, kind)}\`, and once that verify ` +
+        `succeeds say, one line for each check: "Same as for ${plain([same])}: I've overridden the <check> for this one too." ` +
+        sensorIds.map(slot).join(" "),
+    );
+  }
   return said.length === 0 ? null : said.join(" ");
 }
 
