@@ -62,7 +62,8 @@ before you author anything:
   Unit's own outputs at that Unit's checkpoint, before the person is asked to
   approve it, and the Fix or Override is for that Unit; the stage gate after
   the last Unit checks again only a file changed since its Unit's checkpoint,
-  a check added or changed since, and a Unit approved without one. Guard Policy
+  a check added since or whose severity, match or timing changed, and a Unit
+  approved without one. Guard Policy
   never softens a blocking check, at any value. Blocking
   enforcement applies only to `fire_on: gate` in this release. A write-fired
   sensor may declare `blocking`, but its result remains advisory.

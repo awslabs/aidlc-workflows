@@ -361,8 +361,11 @@ optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
 
 In solo work built Unit by Unit with checkpoints, a Unit's checkpoint `verify`
 fires its stages' blocking gate checks on that Unit's own declared outputs
-(`aidlc-state.ts checkpoint-checks`), after the verification command and before
-the checkpoint question, with the same `fireGateSensors` and the same refusal.
+(`aidlc-state.ts checkpoint-checks`), before the verification command runs and
+before the checkpoint question, with the same `fireGateSensors` and the same
+refusal; when the verification command changes the Unit's files, `verify` runs
+once more and the checks read them again, an Override from the first run covering
+only the check and file it was given for.
 The refusal names the Unit for `log decision` and `log answer`, and the retry is
 the checkpoint's `verify --override-blocking-sensors --user-input "Override
 blocking sensors"`; the pick is that Unit's and covers the findings shown with

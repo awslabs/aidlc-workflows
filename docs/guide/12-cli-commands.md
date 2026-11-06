@@ -2417,7 +2417,7 @@ does not accept a command argument. If `construction_checkpoint.command_authoriz
 is false, do not run `verify`: complete the
 [recorded-command flow](#construction-verification-command-record-human-authorization),
 then re-run `next`. A skeleton's command must prove the integrated slice end to
-end and check ordinary Units' working results. In solo work, `verify` then runs
+end and check ordinary Units' working results. In solo work built Unit by Unit, `verify` first runs
 the blocking gate checks of the checkpoint's stages on the Unit's own outputs; a
 failing one refuses with the Unit named for the check's Fix or Override question,
 and the person's Override is retried with `--override-blocking-sensors --user-input

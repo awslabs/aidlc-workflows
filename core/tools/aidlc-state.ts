@@ -7513,6 +7513,11 @@ function handleCheckpointChecks(args: string[]): void {
     return;
   }
   const stateContent = readStateFile(pd);
+  // Stage-major work (a skeleton checkpoint included) keeps its checks at the stage gate, which asks once.
+  if (!unitCheckpointChecksApply(stateContent)) {
+    console.log(JSON.stringify({ fields, overridden: [] }));
+    return;
+  }
   const keysFlag = getFlagValue(args, "--override-keys");
   const allowedKeys = keysFlag === undefined ? null : new Set(keysFlag.split(",").filter((key) => key !== ""));
   // What the person was last shown for each stage of this Unit (the refusal
@@ -7590,6 +7595,15 @@ function handleCheckpointChecks(args: string[]): void {
   console.log(JSON.stringify({ fields, overridden: overriddenKeys }));
 }
 
+// Where a Unit's checkpoint runs its stages' blocking checks, and the late
+// stage gate leaves out what those checkpoints checked: solo work built Unit by
+// Unit with checkpoints. Anywhere else (stage-major work, its skeleton
+// checkpoint included; team-owned Units) the stage gate checks every file.
+function unitCheckpointChecksApply(stateContent: string): boolean {
+  return !isTeamUnitOwnership(stateContent) && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major";
+}
+
 // What a blocking check's verdict at a checkpoint stood on besides the files:
 // the check as the stage graph binds it (its severity, matches and when it
 // fires); its script is not in it.
@@ -7613,9 +7627,7 @@ function sensorEntryDigest(sensor: { id: string; fire_on?: string; default_sever
 // ran on a file is not run on it again. Null: not such a gate, every check
 // reads every file as it always has.
 function lateGateChecks(pd: string, stage: GateStage, stateContent: string, artifacts?: string): Map<string, string[]> | null {
-  if (stage.for_each !== "unit-of-work" || isTeamUnitOwnership(stateContent) ||
-    !constructionCheckpointsApply(stateContent) ||
-    getField(stateContent, "Construction Iteration") !== "unit-major") return null;
+  if (stage.for_each !== "unit-of-work" || !unitCheckpointChecksApply(stateContent)) return null;
   const blocking = (stage.sensors_applicable ?? []).filter((sensor) =>
     sensor.fire_on === "gate" && sensor.default_severity === "blocking"
   );

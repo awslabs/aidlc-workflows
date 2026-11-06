@@ -13,7 +13,9 @@
 // always has, and an Override is refused there. Two Units failing the same check are each
 // asked, and the second Unit's refusal gives the line saying where the person overrode it.
 // One ask that also offers the work's switch (the person named one check to switch off)
-// takes either reach: the Override for this Unit, or every check off for the work.
+// takes either reach: the Override for this Unit, or every check off for the work. Work
+// built stage by stage keeps its checks at the stage gate, its skeleton checkpoint
+// included, so the person is asked there, as before, and not first at the skeleton.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -77,18 +79,33 @@ function run(options: {
   // when the person named one check to switch off.
   offerSwitch?: boolean;
   flags?: string[];
+  // Stage by stage, with the walking skeleton on (its checkpoint still asks the person).
+  stageMajorSkeleton?: boolean;
   autonomy?: "Continue automatically" | "Review each checkpoint";
   beforeCore?: (host: ScopeHost, agent: AgentStandIn) => void;
 }) {
   const { proj, host } = createScopeProject("empty");
   projects.push(proj);
   installBlockingCheck(proj, options.failOn);
+  if (options.stageMajorSkeleton) {
+    // The team's practice says skeleton on: the stance the agent reports.
+    const engine = host.engine.bind(host);
+    host.engine = (...args: string[]) =>
+      engine(...args.map((arg, i) => (args[i - 1] === "--skeleton-stance" ? "on" : arg)));
+  }
   expect(host.engine("graph", "compile").status).toBe(0);
   const person = new PersonScript(host);
   const agent = new AgentStandIn(host, person, {
     units: ["core", "extra"],
     until: (d: Directive) => BLOCKING.test(JSON.stringify(d)),
     answers: { autonomy: () => options.autonomy ?? "Review each checkpoint" },
+    // The person asks for stage by stage once the Units are approved, in that message.
+    afterApproval: (stage, self) => {
+      if (options.stageMajorSkeleton && stage === "units-generation") {
+        self.must("state", "set-construction-iteration", "stage-major", "--message", self.latestMessageId());
+      }
+      return undefined;
+    },
   });
   const stops: Stop[] = [];
   let d = agent.begin("build the classic work", [
@@ -220,6 +237,18 @@ describe("a team's blocking check in solo work built Unit by Unit", () => {
     expect(switched).toBeGreaterThan(-1);
     expect(r.rows.slice(switched).filter((row) => row.event === "SENSOR_FIRED" && field(row.block, "Sensor ID") === "retention"))
       .toEqual([]);
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  test("stage by stage with the skeleton on: the check is met at the stage gate, as before, never at the skeleton's checkpoint", () => {
+    const r = run({ move: "Fix findings", stageMajorSkeleton: true });
+    expect(r.d).toMatchObject({ kind: "done" });
+    expect(r.rows.some((row) => row.event === "GATE_APPROVED" && field(row.block, "Checkpoint") === "walking-skeleton"))
+      .toBe(true);
+    expect(r.stops.map((s) => s.where)).toEqual(["late gate code-generation"]);
+    expect(r.checkAsked).toBe(1);
+    // The skeleton's checkpoint fired no check: the stage gate is the one place.
+    const verification = r.rows.find((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED" && field(row.block, "Unit") === "core");
+    expect(field(verification!.block, "Blocking Checks")).toBeNull();
   }, SCOPE_RUN_TIMEOUT_MS);
 
   test("with the checks off for the work, nothing fires and nothing is asked, at the checkpoint or the late gate", () => {
