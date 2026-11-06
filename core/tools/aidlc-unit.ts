@@ -7476,9 +7476,19 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     // Building, it looks again once each time its chat reaches a new stage,
     // so a change the lead approves meanwhile is heard there.
     const waits = getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed";
+    // Started early on a Unit that is not done yet: its merge is news this
+    // build waits on before its push, so each step looks, as a pushed one does.
+    const waitsOnEarly = ((): boolean => {
+      try {
+        const cached = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false);
+        return (cached.get(build.unit)?.payload.early_on ?? []).some((dep) => dep.repos.length > 0 && cached.get(dep.unit)?.payload.done !== true);
+      } catch {
+        return false;
+      }
+    })();
     const atStage = `${recordDir(projectDir) ?? ""}:${getField(stateContent, "Current Stage")?.trim() ?? ""}`;
     const newStage = buildStageLooked(projectDir, sessionId) !== atStage;
-    const refreshed = home === null ? null : refreshHomeClaims(projectDir, { home, sessionId, now: waits || newStage });
+    const refreshed = home === null ? null : refreshHomeClaims(projectDir, { home, sessionId, now: waits || newStage || waitsOnEarly });
     if (refreshed?.unreached) lines.push("The lead's project could not be reached just now, so news from it may be behind.");
     if (refreshed?.refused) lines.push(newsNotTakenIn("the lead's project"));
     if (home !== null && newStage) noteBuildStageLooked(projectDir, sessionId, atStage);

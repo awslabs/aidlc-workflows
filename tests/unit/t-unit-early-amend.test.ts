@@ -120,6 +120,21 @@ describe("starting early", () => {
     expect(early.out).toContain("reporting waits on refunds, which is not done at the lead's project yet. It opens once it is done.");
   });
 
+  // A live run: data, building early on refunds' branch, heard refunds was
+  // merged only after its own push, since its chat stayed in one stage.
+  test("the early team's next step hears its dependency's merge in the same stage, with no fetch by hand", () => {
+    const { home, hosts, dana } = refundsPushed();
+    expect(run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana).status).toBe(0);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "dana-chat" };
+    expect(next(dana, chat).kind).toBe("run-stage");
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const step = next(dana, chat);
+    expect(step.ask_type, JSON.stringify(step).slice(0, 400)).toBe("unit-move-onto");
+  });
+
   test("the early team hears once when its dependency is done, with the offer to move onto what merged, and keeps its work", () => {
     const { home, hosts, dana } = refundsPushed();
     expect(run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana).status).toBe(0);
