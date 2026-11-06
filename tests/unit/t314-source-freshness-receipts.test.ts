@@ -51,6 +51,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -6816,6 +6817,66 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     expect(r.out).not.toContain("payments/");
     expect(r.out).not.toContain("aidlc.code-workspace");
     expect(r.rc, r.out).toBe(0);
+    rmSync(bare, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The same repo cloned by git itself, inside the stage (a live run's Code
+  // Generation plan, step 1: "Clone the reports repo"): nothing records the
+  // clone, and its files as its remote holds them are still nobody's change.
+  function clonedByGitAfterTheStageBegan(cloneFlags: string[] = []): string {
+    // A link and a script, so the repo as its remote holds it lists as the walk lists it on disk.
+    mkdirSync(join(proj, "payments", "bin"), { recursive: true });
+    writeFileSync(join(proj, "payments", "bin", "run.sh"), "#!/bin/sh\necho run\n", "utf-8");
+    chmodSync(join(proj, "payments", "bin", "run.sh"), 0o755);
+    symlinkSync("api.ts", join(proj, "payments", "src", "api-link.ts"));
+    git(join(proj, "payments"), ["add", "-A"]);
+    git(join(proj, "payments"), ["commit", "-qm", "link and script"]);
+    const bare = join(proj, "..", `${basename(proj)}-payments.git`);
+    git(join(proj, "payments"), ["clone", "-q", "--bare", ".", bare]);
+    rmSync(join(proj, "payments"), { recursive: true, force: true });
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a", "payments"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    restartBaseline(proj);
+    git(proj, ["clone", "-q", ...cloneFlags, bare, "payments"]);
+    git(join(proj, "payments"), ["config", "user.email", "t@test"]);
+    git(join(proj, "payments"), ["config", "user.name", "t"]);
+    return bare;
+  }
+
+  // Git for Windows writes a committed link as a plain file holding its text
+  // (core.symlinks false); here the clone is told to do the same.
+  test.each([
+    ["", [] as string[]],
+    [", its links written as plain files", ["-c", "core.symlinks=false"]],
+  ])("a repo the work records, cloned by git itself after the stage began%s: its files are no Unit's change", (_how, flags) => {
+    const bare = clonedByGitAfterTheStageBegan(flags);
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/");
+    expect(r.rc, r.out).toBe(0);
+    rmSync(bare, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test.each([
+    ["changed", (): void => writeFileSync(join(proj, "payments", "README.md"), "# payments, edited after the clone\n", "utf-8"), "payments/README.md"],
+    ["committed", (): void => commitIn("payments", "src/consent.ts", "export const consent = true;\n"), "payments/src/consent.ts"],
+    ["committed and pushed", (): void => {
+      commitIn("payments", "src/consent.ts", "export const consent = true;\n");
+      git(join(proj, "payments"), ["push", "-q", "origin", "HEAD"]);
+    }, "payments/src/consent.ts"],
+  ] as const)("a repo cloned by git itself after the stage began: a file %s there since is still named", (_how, since, named) => {
+    const bare = clonedByGitAfterTheStageBegan();
+    since();
+    reviewUnitsInAppA();
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    const r = gate.rc === 0 ? guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]) : gate;
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain(named);
+    for (const kept of ["payments/src/api.ts", "payments/src/api-link.ts", "payments/bin/run.sh", "payments/README.md"]) {
+      if (kept !== named) expect(r.out).not.toContain(kept);
+    }
     rmSync(bare, { recursive: true, force: true });
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 

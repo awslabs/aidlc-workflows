@@ -4,6 +4,7 @@
 // module imports only modules that never import aidlc-lib.ts, so aidlc-lib.ts
 // can read it without an import cycle.
 
+import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, resolve } from "node:path";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
@@ -470,4 +471,34 @@ export function isProjectSubmodule(projectDir: string, name: string): boolean {
     return false;
   }
   return parseGitmodules(content).some((entry) => submodulePath(entry.path) === name);
+}
+
+// A repo of the workspace as git cloned it here: the listing `read` makes of
+// the commit the clone checked out, which the first entry of the repo's HEAD
+// reflog (git's own record of the clone) names, so whatever was committed,
+// pushed or pulled there since still reads as a change. A clone that writes
+// links as plain files (core.symlinks false, Git for Windows' default) checked
+// each link out as a file holding its text, so the listing has it as that
+// file, its target unread. Null when git keeps no record of a clone there.
+// Kept per folder and commit for the process.
+const clonedListings = new Map<string, Map<string, string> | null>();
+export function clonedRepoListing(
+  dir: string,
+  read: (commit: string, followLinks: boolean) => ReadonlyMap<string, string> | null,
+): Map<string, string> | null {
+  const git = (args: string[]): string | null => {
+    const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+    return result.status === 0 ? result.stdout.trim() : null;
+  };
+  const first = git(["reflog", "show", "--format=%H %gs", "HEAD"])?.split(/\r?\n/).filter(Boolean).at(-1);
+  const commit = first === undefined ? null : /^([0-9a-f]{40}|[0-9a-f]{64}) clone: /.exec(first)?.[1] ?? null;
+  if (commit === null) return null;
+  const key = `${resolve(dir)}\0${commit}`;
+  if (!clonedListings.has(key)) {
+    const plainLinks = git(["config", "--bool", "core.symlinks"]) === "false";
+    const listing = read(commit, !plainLinks);
+    clonedListings.set(key, listing === null ? null : new Map([...listing].map(([path, entry]) =>
+      [path, plainLinks && entry.startsWith("120000 ") ? `100644 ${entry.slice(7)}` : entry])));
+  }
+  return clonedListings.get(key) ?? null;
 }

@@ -525,7 +525,7 @@ export {
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
 import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
-import { mappedRepoDir, readWorkspaceRepos, repoNotThereLine } from "./aidlc-workspace-manifest.ts";
+import { clonedRepoListing, mappedRepoDir, readWorkspaceRepos, repoNotThereLine } from "./aidlc-workspace-manifest.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -27502,11 +27502,14 @@ function readStageBaseline(
 // add-repo, a Source Baseline Addition on its INTENT_REPOS_CHANGED row) joins
 // the baseline as it was at the add, so its existing files are nobody's change;
 // so do the workspace files a clone's install, or the install of a repos.json
-// entry for a folder the person named, wrote (CLONE_WRITES_AT_ROOT). A
-// repo the baseline already lists is never touched; the latest addition for a
-// repo wins. A repo no longer in the work leaves the baseline, as it left the
-// walk (workspaceSourceState walks intentRepos). An addition missing on this
-// machine leaves the baseline missing, as a missing baseline is.
+// entry for a folder the person named, wrote (CLONE_WRITES_AT_ROOT). A repo of
+// the work cloned since by git itself (the agent's own clone in a plan step)
+// has no addition: it joins as the commit the clone checked out holds it
+// (clonedRepoListing). A repo the baseline already lists is never touched;
+// the latest addition for a repo wins. A repo no longer in the work leaves the
+// baseline, as it left the walk (workspaceSourceState walks intentRepos). An
+// addition missing on this machine leaves the baseline missing, as a missing
+// baseline is.
 function withRepoBaselineAdditions(
   projectDir: string,
   stageSlug: string,
@@ -27526,7 +27529,6 @@ function withRepoBaselineAdditions(
     row.event === "INTENT_REPOS_CHANGED" &&
     auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) !== null &&
     !attemptEventDefinitelyBefore(row, from)));
-  if (additions.length === 0) return kept.size === baseline.listing.size ? baseline : { state: "ready", listing: kept };
   const listed = new Set([...kept.keys()].map((key) => splitSourcePathKey(key)?.repo ?? ""));
   const joined = new Map<string, WorkspaceSourceListing>();
   const written = new Map<string, string>();
@@ -27549,8 +27551,26 @@ function withRepoBaselineAdditions(
     }
     for (const [repo, entries] of byRepo) joined.set(repo, entries);
   }
+  const arrived = [...repos].sort().filter((repo) => !listed.has(repo) && !joined.has(repo)).flatMap((repo) => {
+    const dir = repoDir(projectDir, repo);
+    const cloned = isGitRepoDir(dir)
+      ? clonedRepoListing(dir, (commit, followLinks) => {
+        const failure = lastSourceFailure;
+        try {
+          return gitCommitSourceListing(dir, commit, rootCarriesWorkspaceShell(projectDir, dir), followLinks);
+        } finally {
+          lastSourceFailure = failure;
+        }
+      })
+      : null;
+    return cloned === null ? [] : [new Map([...cloned].map(([key, entry]) => [`${repo}${key}`, entry]))];
+  });
+  if (additions.length === 0 && arrived.length === 0) {
+    return kept.size === baseline.listing.size ? baseline : { state: "ready", listing: kept };
+  }
   const listing: WorkspaceSourceListing = new Map(kept);
   for (const entries of joined.values()) for (const [key, entry] of entries) listing.set(key, entry);
+  for (const entries of arrived) for (const [key, entry] of entries) listing.set(key, entry);
   for (const [key, entry] of written) listing.set(key, entry);
   return { state: "ready", listing };
 }
