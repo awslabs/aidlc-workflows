@@ -6564,6 +6564,9 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
   const record = recordDir(projectDir);
   for (const amendment of mine.payload.amendments ?? []) {
     if (record === null) break;
+    // The team's own proposed copy is theirs while the lead decides: never
+    // written back while that proposal waits.
+    if ((mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input && entry.answer === undefined)) continue;
     const shown = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/amendments/${amendment.input}`, "--"]);
     const path = join(record, ...amendment.input.split("/"));
     if (!shown.ok || (existsSync(path) && textFingerprint(readFileSync(path, "utf-8")) === textFingerprint(shown.stdout))) continue;
@@ -6792,6 +6795,27 @@ function proposeChange(args: string[], projectDir?: string): void {
   }));
 }
 
+// The team's proposed text put onto the current one: as proposed when the
+// current text is still the copy the team changed (`taken`); else a three-way
+// merge of that copy, the current text and theirs, or null when the two
+// changes meet.
+function changeOntoCurrent(projectDir: string, path: string, taken: string | null, theirs: string): string | null {
+  const current = existsSync(path) ? readFileSync(path, "utf-8") : null;
+  if (current === null || taken === null || textFingerprint(taken) === textFingerprint(current)) return theirs;
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-amend-"));
+  try {
+    const files = [current, taken, theirs].map((content, i) => {
+      const file = join(scratch, `merge-${i}`);
+      writeFileSync(file, content, "utf-8");
+      return file;
+    });
+    const merged = spawnSync("git", ["merge-file", "-p", ...files], { cwd: projectDir, encoding: "utf-8" });
+    return merged.status === 0 ? merged.stdout : null;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 // The text a team proposes for an input, written beside the home's record
 // (never committed) so its owner can read it before deciding: the path, or
 // null when the claim does not carry it.
@@ -6883,7 +6907,23 @@ function amendInput(args: string[], projectDir?: string): void {
     const shown = git(pd, ["show", `${live.oid}:${RESULT_FILES_ROOT}/proposals/${proposal.input}`, "--"]);
     if (!shown.ok) fail(`The proposed ${name} is not on ${unit}'s claim; ask the team to send it again.`);
     const path = join(activeRecordDir(pd), ...proposal.input.split("/"));
-    writeFileSync(path, shown.stdout, "utf-8");
+    // Only the team's change goes in: made on the copy the team took, it is put
+    // onto the text approved here since, never written over it.
+    // The copy the team changed: the lead's last change it took in, else the one it took.
+    const amendedBefore = git(pd, ["show", `${live.oid}:${RESULT_FILES_ROOT}/amendments/${proposal.input}`, "--"]);
+    const taken = amendedBefore.ok
+      ? amendedBefore
+      : git(pd, ["show", `${live.payload.base_oid}:${relative(pd, path).split(sep).join("/")}`, "--"]);
+    const text = changeOntoCurrent(pd, path, taken.ok ? taken.stdout : null, shown.stdout);
+    if (text === null) {
+      const theirs = writeProposedText(pd, live, proposal.input);
+      fail(
+        `${live.owner}'s change was made on an older copy of the ${name}, and it does not fit onto the ${name} as it ` +
+          `stands here now, so nothing was changed. Show the lead both: their version${theirs === null ? "" : ` (${theirs})`} ` +
+          `and the current one (${relative(pd, path).split(sep).join("/")}); the team can send the change again on the current one.`,
+      );
+    }
+    writeFileSync(path, text, "utf-8");
     renewForAmendedInput(pd, proposal.input, { "Proposed By": `${proposal.by} (${live.owner})`, "Person Words": words });
     const amendment: Amendment = { input: proposal.input, at: isoTimestamp(), words };
     const readers = unitsReading(pd, proposal.input);
@@ -6897,7 +6937,7 @@ function amendInput(args: string[], projectDir?: string): void {
         amendments: [...(current.payload.amendments ?? []).filter((entry) => entry.input !== proposal.input), amendment],
         ...(other === unit ? { proposals: (current.payload.proposals ?? []).map((entry) => (entry.input === proposal.input && entry.answer === undefined ? answered : entry)) } : {}),
       }, undefined, undefined, {
-        [`${RESULT_FILES_ROOT}/amendments/${proposal.input}`]: shown.stdout,
+        [`${RESULT_FILES_ROOT}/amendments/${proposal.input}`]: text,
       }), current.oid);
       let current = currentClaim(pd, remote, claim.ref);
       if (current?.status !== "claimed") continue;

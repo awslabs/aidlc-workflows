@@ -125,6 +125,31 @@ describe("a change to a shared input", () => {
     return taken;
   }
 
+  // A live run: the lead approved a newer version of a shared input after the
+  // team took its copy; approving the team's small change then wrote the
+  // team's whole file over it, and the lead's newer text was gone.
+  test("a change made on an older copy is put onto the lead's newer text, never over it", () => {
+    const { home } = proposed();
+    const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/"));
+    writeFileSync(homeCopy, "# Requirements, with staff refunds (u4) approved by the lead\n\nFR1 refunds.\n");
+    next(home.dir);
+    const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
+    expect(amended.status, amended.out).toBe(0);
+    expect(readFileSync(homeCopy, "utf-8")).toBe("# Requirements, with staff refunds (u4) approved by the lead\n\nFR1 refunds, partial amounts too.\n");
+  });
+
+  test("a change that does not fit onto the lead's newer text changes nothing and says so, with both to read", () => {
+    const { home } = proposed();
+    const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/"));
+    writeFileSync(homeCopy, "# Requirements\n\nFR1 refunds, full amounts only.\n");
+    next(home.dir);
+    const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
+    expect(amended.status, amended.out).not.toBe(0);
+    expect(readFileSync(homeCopy, "utf-8")).toBe("# Requirements\n\nFR1 refunds, full amounts only.\n");
+    expect(String(amended.json?.error ?? amended.out)).toContain("was made on an older copy of the requirements");
+    expect(String(amended.json?.error ?? amended.out)).toContain(".aidlc-engine/proposed/refunds/");
+  });
+
   test("the owner is asked once at the home, and their approval reaches every team building with it", () => {
     const { home, alice } = proposed();
     const bob = cloneOf(home.remote, "bob");
@@ -157,6 +182,45 @@ describe("a change to a shared input", () => {
     // The team that proposed it hears the answer.
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice))).toContain("The home approved your change to the requirements.");
+  });
+
+  // A live run: a team's own proposed copy was written back to an older
+  // change of the lead's at its next step, while it was told it carries on
+  // with its version until the lead decides, and again after the lead
+  // approved it.
+  test("a team's proposed copy stays its own while the proposal waits; once approved, that is the copy it builds on", () => {
+    const { home, alice, record } = refundsTaken();
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    const bobIntents = join(bob, "aidlc", "spaces", "web", "intents");
+    const bobRecord = join(bobIntents, readdirSync(bobIntents).find((name) => name.endsWith("-checkout-ui"))!);
+    // The lead approves web's change first; it reaches payments too.
+    writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds.\n\nFR2 the checkout shows refunds.\n");
+    expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "show refunds"], bob).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    next(alice);
+    const copy = join(record, ...REQUIREMENTS.split("/"));
+    expect(readFileSync(copy, "utf-8")).toBe("# Requirements\n\nFR1 refunds.\n\nFR2 the checkout shows refunds.\n");
+    // payments then proposes its own change on that copy: it keeps its version while the lead decides.
+    const theirs = "# Requirements\n\nFR1 refunds, partial amounts too.\n\nFR2 the checkout shows refunds.\n";
+    writeFileSync(copy, theirs);
+    expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "partial refunds"], alice).status).toBe(0);
+    next(alice);
+    expect(readFileSync(copy, "utf-8")).toBe(theirs);
+    // The lead approves it: that is the copy everyone builds on, never rewritten back.
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    next(alice);
+    next(alice);
+    expect(readFileSync(copy, "utf-8")).toBe(theirs);
+    git(bob, ["fetch", "-q", "origin"]);
+    next(bob);
+    expect(readFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "utf-8")).toBe(theirs);
   });
 
   test("a team that changed its copy is asked once whether to send it home, and the send is not asked again", () => {
