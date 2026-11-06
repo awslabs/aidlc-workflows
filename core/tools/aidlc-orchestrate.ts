@@ -603,6 +603,7 @@ import {
   reopenTurnedDownBuild,
   turnedDownLine,
   buildTurnedDownNow,
+  submoduleOverOwnCode,
   leadSignOffOn,
   signOffAskName,
   switchSoloToTeams,
@@ -9298,7 +9299,14 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     };
   }
   const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
-  const targets = manifest.ok ? unitWriteTargets(projectDir, manifest.manifest.writes) : new Map<string, { dir: string; paths: string[] }>();
+  // Code in the project's own repo under work that records only a submodule
+  // of it (submoduleOverOwnCode): the push goes from the project's repo once
+  // the person takes the submodule off, so the question names that repo.
+  const own = submoduleOverOwnCode(projectDir, unit) === null ? null
+    : readUnitSourceManifest(projectDir, "code-generation", unit, { recordedRepos: [] });
+  const targets = own?.ok ? new Map([[".", { dir: projectDir, paths: own.manifest.writes.map((write) => write.path) }]])
+    : manifest.ok ? unitWriteTargets(projectDir, manifest.manifest.writes)
+    : new Map<string, { dir: string; paths: string[] }>();
   const byRepo = new Map([...targets].map(([repo, target]) => [repo, target.paths]));
   const repos = [...byRepo.keys()];
   // Their own changes in the way of the Unit's branch: the push would be

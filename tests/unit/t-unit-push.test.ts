@@ -993,6 +993,52 @@ describe("at the home", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
   });
 
+  // A live run: the same work in a teammate's fresh clone, where git leaves the
+  // submodule's folder empty until it is checked out: the push question named
+  // the submodule as the repo it changed, and the push stopped at "not at vendor
+  // in this workspace", a dead end.
+  test("in a fresh clone that has not checked the submodule out, the push question names the project's repo and the push names the same way on", () => {
+    const vendorHost = codeHost("vendor");
+    const home = makeHome({ repos: { vendor: vendorHost } });
+    writeFileSync(join(home.dir, ".gitignore"), readFileSync(join(home.dir, ".gitignore"), "utf-8").replace("/vendor/\n", ""));
+    git(home.dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", vendorHost, "vendor"]);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    mkdirSync(join(alice, "src"), { recursive: true });
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const refunds = 1;\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }],
+    })}\n`);
+    writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
+    finishBuild(record);
+    const asked = next(alice);
+    expect(asked.ask_type, JSON.stringify(asked).slice(0, 400)).toBe("unit-push");
+    expect(String(asked.question)).toContain("It changed the repo.");
+    expect(String(asked.question)).not.toContain("It changed vendor.");
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error);
+    expect(said, refused.out).toStartWith(
+      "refunds's Code Generation wrote its code in this project's own repo, and this work records vendor, a submodule of the " +
+        "project, as its only repo, so nothing was pushed.",
+    );
+    expect(said).not.toContain("is not at vendor");
+    expect(run(UTILITY, ["intent", "remove-repo", "vendor"], alice).status).toBe(0);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toContain("src/refunds.ts");
+  });
+
   test("a home moved on past the Unit stages records no Unit: the result stays on its claim, said once, and is recorded back on the Unit stages", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
