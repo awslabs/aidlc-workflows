@@ -14462,6 +14462,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     emit(teamWordsReplyDirective(words.id, pd));
     return;
   }
+  // A Unit's build its lead turned down or sent back waits for the team's way
+  // back: a request there goes with that step, which says what the home said
+  // and offers the way back, never asked where it belongs.
+  const waitingBuild = flags.intent && !flags.scope && !flags.positionalScope && !flags.resume ? unitBuildOf(stateContent) : null;
+  const waitingDown = waitingBuild === null ? null : turnedDownBuildWaits(pd, stateContent);
+  if (waitingBuild !== null && waitingDown !== null) {
+    emit(turnedDownStep(pd, waitingBuild.unit, waitingDown));
+    return;
+  }
   // A plan named by its word before the description (`/aidlc bugfix Fix login`)
   // is the scope that new work would get, asked about the same way.
   if (

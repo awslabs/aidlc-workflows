@@ -1251,6 +1251,15 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     expect(JSON.stringify(next(alice, chat))).toContain(
       "refunds is not finished: it was sent back from the lead's Build and Test and waits for your change and a new push.",
     );
+    // A live run on Kiro CLI: the agent read "anything new for us?" as a request,
+    // and the request was put the new-work question. In a build that waits for
+    // its way back, the request goes with it, never asked where it belongs.
+    const asked = next(alice, chat, ["--", "hi again, anything new for us?"]);
+    const request = /--request (\S+)/.exec(String(asked.message))?.[1];
+    expect(request, String(asked.message)).toBeString();
+    const answered = next(alice, chat, ["--request", request!.replace(/[`'"]/g, "")]);
+    expect(JSON.stringify(answered), JSON.stringify(answered).slice(0, 600)).not.toContain("Separate new piece of work");
+    expect(JSON.stringify(answered)).toContain("Take refunds back to Code Generation");
   });
 
   test("goes back to its team in the failure's words, is not done here meanwhile, and is recorded again once it merges again", () => {
