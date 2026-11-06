@@ -2119,7 +2119,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
   // refused either way; only the person's own chat gets the way back to aidlc.
   describe("5e2: a helper's refusal in the person's own chat names /agent and aidlc", () => {
     const CHAT = "369a3cd4-55a1-4d61-a812-d6b8fe4fba99";
-    const LINE = "\"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more.\"";
+    const LINE = "\"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more.";
     const REFUSED = 'Delegated agent "aidlc-architect-agent" cannot run';
     function helperReports(session: string | undefined, chat: string | undefined) {
       const dir = scratchProject(true);

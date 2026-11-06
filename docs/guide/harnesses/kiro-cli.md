@@ -300,15 +300,20 @@ From Kiro CLI 2.37, Kiro makes that upgrade by itself when it starts on v3
 `chat.enableAutoAgentUpgrade` is `false` in your own Kiro CLI settings. It
 rewrites every agent file in `.kiro/agents/` and keeps each original beside it
 as `<name>.json.bak` (`.json.bak.1` and on when one is already there), so
-`git status` shows 15 changed and 15 new files that AI-DLC did not write. On
-Kiro CLI 3.1.0 this happened before Kiro asked whether to trust the folder,
-also when the answer was not to trust it, and Kiro said nothing about it on
-screen. After that, the hooks run on v3 too. `aidlc doctor --verbose` counts
-those files as upgraded by Kiro, not as your changes, and `aidlc config` keeps
-them (see [Refresh Safety](../18-install-and-lifecycle.md#refresh-safety)). To
-undo the upgrade, first run `kiro-cli settings chat.enableAutoAgentUpgrade
-false`, or Kiro upgrades the files again at its next start on v3, then rename
-each `.json.bak` back to `.json`.
+`git status` shows each agent file there changed and a new backup beside it,
+files AI-DLC did not write. On
+Kiro CLI 3.1.0 the files had changed while Kiro was still asking whether to
+trust the folder, and they stayed changed when the answer was not to trust it;
+Kiro said nothing about it on screen. After that, the hooks run on v3 too.
+`aidlc doctor --verbose` counts those agent files as upgraded by Kiro, not as
+your changes, and a refresh keeps them as Kiro left them except where
+[Refresh Safety](../18-install-and-lifecycle.md#refresh-safety) says
+otherwise. To undo the upgrade, first run `kiro-cli settings
+chat.enableAutoAgentUpgrade false`, or Kiro upgrades the files again at its
+next start on v3, then rename each agent file's newest backup (the highest
+`.json.bak.N`, or `.json.bak` when there is no other) back to `.json`, and
+start Kiro CLI with `kiro-cli --v2`: v3 runs none of the hooks of files it has
+not upgraded.
 
 Kiro does not upgrade the files while that setting is `false`, and
 `kiro-cli acp --agent-engine v3` upgraded nothing on Kiro CLI 3.1.0. A session
@@ -324,11 +329,11 @@ chat record says which is which, and anything unknown is yours.
 After the first workflow stage, `/aidlc --doctor` reports this as "Hooks have
 never executed". Before that, doctor warns that AI-DLC's hooks have not run in
 this project yet and names the same step. With another agent picked, type
-`/agent` and pick `aidlc`, then carry on in the same chat. When Kiro says
-`agent "aidlc" needs upgrading for this agent engine` (when it starts, or under
-its replies), Kiro is on v3 with the files not upgraded, and restarting on v3
-alone does not fix it. Take one of
-these ways:
+`/agent` and pick `aidlc`, then carry on in the same chat. When `aidlc` is not
+in that list, Kiro is on v3 with the files not upgraded (Kiro says `agent
+"aidlc" needs upgrading for this agent engine` on its start screen), and
+restarting on v3 alone does not fix it. AI-DLC's line then names these ways;
+take one:
 
 - Type `/upgrade-agent`, choose the workspace agents, then quit Kiro and start
   `kiro-cli --v3` again in this folder. The chat you typed it in stays on Kiro's

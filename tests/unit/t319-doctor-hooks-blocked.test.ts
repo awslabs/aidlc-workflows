@@ -328,8 +328,8 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     });
   }
 
-  // #1487: Kiro CLI's engines read disjoint registrations. The kiro tree's
-  // hooks live in the agent JSON, which the v3 engine runs only once Kiro has
+  // #1487: the kiro tree's hooks live in the agent JSON, which Kiro CLI's v2
+  // engine runs and the v3 engine runs only once Kiro has
   // upgraded it, so the generic "fully restart the harness" advice could never
   // work there. The shipped kiro hookActivation names Kiro's upgrade, the
   // switch to Kiro in the install's own command, v2, and the ACP flag instead.
@@ -342,13 +342,16 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
     expect(text).toContain("In Kiro CLI, type /agent and pick aidlc, then carry on.");
     expect(text).toContain(
-      'If Kiro says agent "aidlc" needs upgrading for this agent engine, type /upgrade-agent and choose the ' +
+      "If aidlc is not in that list, Kiro is on its v3 engine with this project's agent files not upgraded: " +
+        "type /upgrade-agent and choose the " +
         "workspace agents, then quit Kiro and start `kiro-cli --v3` again in this folder; or, to switch this " +
         `project to Kiro, quit Kiro, run \`${KIRO_SWITCH}\` in a terminal in this folder and, once it has ` +
         "finished, start `kiro-cli --v3`; or quit Kiro and start it again in this folder with: kiro-cli --v2 " +
         "--agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide). " +
-        "From an ACP client, start `kiro-cli acp --agent-engine v2`, or switch this project to Kiro and start " +
-        "the client as the AI-DLC guide for Kiro says.",
+        "From an ACP client, start `kiro-cli acp --agent-engine v2`; or switch this project to Kiro with " +
+        `\`${KIRO_SWITCH}\` in a terminal in this folder and start \`kiro-cli acp --agent-engine v3\` with Kiro's ` +
+        "client hooks turned on " +
+        "(the AI-DLC guide for Kiro names them).",
     );
     expect(text).not.toContain("{{INVOKE}}");
     // A native install names its own command there.

@@ -637,7 +637,10 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest, invoke: string):
   // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
   // Its lines can name the install's own command, so `{{INVOKE}}` is filled per tree.
   if (m.hookActivation) {
-    data.hookActivation = JSON.parse(substituteInvocationTokens(JSON.stringify(m.hookActivation), m.harnessDir, invoke));
+    data.hookActivation = JSON.parse(
+      JSON.stringify(m.hookActivation),
+      (_key, value) => typeof value === "string" ? substituteInvocationTokens(value, m.harnessDir, invoke) : value,
+    );
   }
   // And only a host whose own step to a clean chat is known.
   if (m.newChatStep) data.newChatStep = m.newChatStep;

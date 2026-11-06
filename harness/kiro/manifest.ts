@@ -53,7 +53,6 @@ const KIRO_V3_WAYS_BACK =
   "in a terminal in this folder and, once it has finished, start `kiro-cli --v3`; or quit Kiro and start " +
   "it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, " +
   "see the AI-DLC Kiro CLI guide)";
-const KIRO_V3_WAYS_BACK_SENTENCE = `T${KIRO_V3_WAYS_BACK.slice(1)}.`;
 
 const manifest: HarnessManifest = {
   name: "kiro",
@@ -85,21 +84,25 @@ const manifest: HarnessManifest = {
   // engine; the spellings for older releases are in the Kiro CLI guide's
   // Prerequisites, so each line stays one command.
   // Measured live: with another agent picked, `/agent` and aidlc bring the
-  // hooks back in the same chat. On v3 with the files not upgraded, `/agent`
-  // cannot: Kiro's needs-upgrading line tells that case apart, and its ways
-  // back are Kiro's upgrade and a start on v3, the switch to Kiro (the tree made
-  // for v3), or a start on v2. The packager fills `{{INVOKE}}` with the
-  // install's own command. Its execute_bash hooks (review-freeze,
-  // plan-approval-guard) beat in the record before each engine command, ahead
-  // of their own off switches.
+  // hooks back in the same chat. On v3 with the files not upgraded `/agent`
+  // cannot: aidlc is not in its list (kiro-cli 3.1.0), and Kiro's own
+  // needs-upgrading line shows only on its launch screen, which the agent does
+  // not see (it showed the `/agent` line there). So every line gives the person
+  // both steps, keyed to what they see in that list, and the ways back from v3:
+  // Kiro's upgrade and a start on v3, the switch to Kiro (the tree made for
+  // v3), or a start on v2. The packager fills `{{INVOKE}}` with the install's
+  // own command. Its execute_bash hooks (review-freeze, plan-approval-guard)
+  // beat in the record before each engine command, ahead of their own off
+  // switches.
   // The prompt adapter runs the human-turn hook on every message, which leaves
   // a heartbeat before the first workflow too.
   hookActivation: {
     recovery:
-      "In Kiro CLI, type /agent and pick aidlc, then carry on. If Kiro says agent \"aidlc\" " +
-      `needs upgrading for this agent engine, ${KIRO_V3_WAYS_BACK}. From an ACP client, start ` +
-      "`kiro-cli acp --agent-engine v2`, or switch this project to Kiro and start the client as the AI-DLC " +
-      "guide for Kiro says.",
+      "In Kiro CLI, type /agent and pick aidlc, then carry on. If aidlc is not in that list, Kiro is on its " +
+      `v3 engine with this project's agent files not upgraded: ${KIRO_V3_WAYS_BACK}. From an ACP client, start ` +
+      "`kiro-cli acp --agent-engine v2`; or switch this project to Kiro with `{{INVOKE}} config --harness kiro` " +
+      "in a terminal in this folder and start `kiro-cli acp --agent-engine v3` with Kiro's client hooks " +
+      "turned on (the AI-DLC guide for Kiro names them).",
     // A session without the aidlc agent runs none of these hooks, even after
     // an earlier session did, so the person's reply can go unrecorded. Measured
     // live: with the hooks running, a reply typed to another agent picked in
@@ -107,23 +110,17 @@ const manifest: HarnessManifest = {
     // with the agent files not upgraded, an earlier v2 session's heartbeat
     // sends this text, not agentStep, and the ways back are those of agentStep.
     missedReply:
-      "If the person already replied, that reply was not recorded for this question. If Kiro has said " +
-      '`agent "aidlc" needs upgrading for this agent engine, using "default"` in this chat (when it started ' +
-      "or under your replies), tell them exactly this, with nothing about why: \"Your answer didn't reach " +
-      `AI-DLC. ${KIRO_V3_WAYS_BACK_SENTENCE} Then give it once more." ` +
-      "Otherwise tell them exactly this, with nothing about why: \"Your answer didn't reach AI-DLC. Type /agent " +
-      "and pick aidlc, then give it once more.\"",
+      "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +
+      "with nothing about why: \"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once " +
+      `more. If aidlc is not in that list, ${KIRO_V3_WAYS_BACK}, and give it there."`,
     notRunYet:
       "This is expected before your first Kiro CLI chat in this folder. If you already started one, type /agent " +
-      `and pick aidlc; if Kiro says agent "aidlc" needs upgrading for this agent engine, ${KIRO_V3_WAYS_BACK}. ` +
-      "Then run doctor again.",
+      `and pick aidlc; if aidlc is not in that list, ${KIRO_V3_WAYS_BACK}. Then run doctor again.`,
     agentStep:
       "Kiro is not running this project's aidlc agent in this session. You cannot change that " +
-      "from inside it: do not approve, retry, or ask the person to answer again. If Kiro has said " +
-      '`agent "aidlc" needs upgrading for this agent engine, using "default"` in this chat (when it ' +
-      `started or under your replies), show the person this line: "${KIRO_V3_WAYS_BACK_SENTENCE} Then ` +
-      'type <entry> to carry on." Otherwise show this line: "Type ' +
-      '/agent and pick aidlc, then carry on." Then end your turn.',
+      "from inside it: do not approve, retry, or ask the person to answer again. Show the person this " +
+      `line: "Type /agent and pick aidlc, then carry on. If aidlc is not in that list, ${KIRO_V3_WAYS_BACK}, ` +
+      'and type <entry> there to carry on." Then end your turn.',
   },
   // Kiro CLI names the chat in every command its agent runs (KIRO_SESSION_ID).
   hostShell: { env: ["KIRO_SESSION_ID"] },

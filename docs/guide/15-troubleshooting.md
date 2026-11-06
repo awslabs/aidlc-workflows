@@ -262,8 +262,9 @@ changes nothing.
   CLI settings (it keeps each original as `<name>.json.bak`; see
   [Kiro CLI](harnesses/kiro-cli.md#usage)). With
   another agent picked, type `/agent` and pick `aidlc`, then carry on in the
-  same chat. If Kiro says `agent "aidlc" needs upgrading for this agent
-  engine`, the session is on v3 with the files not upgraded: type
+  same chat. If `aidlc` is not in that list (Kiro says `agent "aidlc" needs
+  upgrading for this agent engine` when it starts), the session is on v3 with
+  the files not upgraded: type
   `/upgrade-agent`, choose the workspace agents, then quit Kiro and start
   `kiro-cli --v3` again in this folder; or switch to Kiro (below) with
   `aidlc config --harness kiro`; or quit Kiro and start it again in this folder
