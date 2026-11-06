@@ -155,11 +155,13 @@ interface GitBytesResult {
 // Unit's audit shard outgrows that in one long attempt, so the cap is lifted
 // the way the other git readers lift it. A run that could not start, was killed
 // or overflowed is a failed run, whatever its exit status.
-function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
+// `input` is what git reads on its standard input.
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
     env: { ...process.env, ...env },
     maxBuffer: 512 * 1024 * 1024,
+    ...(input === undefined ? {} : { input }),
   });
   const failure = result.error
     ? `${result.error.message}\n`
@@ -174,8 +176,8 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
   };
 }
 
-function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
-  const result = gitBytes(projectDir, args, env);
+function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): GitResult {
+  const result = gitBytes(projectDir, args, env, input);
   return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
@@ -4743,7 +4745,17 @@ function commitWorkHere(
 ): { committed: number; leftOut: string[]; unmatched: string[] } {
   const { paths, leftOut, unmatched } = workToCommit(projectDir, work);
   if (paths.length === 0) return { committed: 0, leftOut, unmatched };
-  const added = git(projectDir, ["add", "-A", "--", ...paths]);
+  // One call whatever the count: Windows caps a command line at 32,767
+  // characters, so the paths go to git on its standard input, NUL-separated,
+  // each read as the same name an argument would be (git 2.25; core already
+  // needs 2.29). An empty list never gets here: with -A and no path git would
+  // take the whole tree.
+  const added = git(
+    projectDir,
+    ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+    undefined,
+    paths.map((path) => `${path}\0`).join(""),
+  );
   if (!added.ok) fail(`git add failed: ${added.stderr.trim()}`);
   const committed = git(projectDir, ["commit", "-q", "-m", message]);
   if (!committed.ok) {
