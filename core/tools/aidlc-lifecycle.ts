@@ -1214,6 +1214,17 @@ function removeStoppedExeCommandAsides(bin: string): void {
   }
 }
 
+// What an activation runs `version` through to check the release it made
+// active. With AI-DLC's bin\aidlc.exe in place it runs that file alone: the
+// default PATHEXT finds it before aidlc.cmd, and aidlc.cmd starts
+// aidlc-shim.ps1 with -File, which a Group Policy execution policy (AllSigned,
+// Restricted) refuses whatever -ExecutionPolicy it passes, so probing aidlc.cmd
+// would roll back a release the person's `aidlc` runs. The text of aidlc.cmd
+// and its helper is still checked (windowsLauncherOwnedByInstaller).
+export function activationProbeCommands(command: string, exe: string | null): string[] {
+  return exe === null ? [command] : [exe];
+}
+
 function activateReserved(version: string, options: { failAfter?: number } = {}): void {
   if (!completeVersion(version)) {
     commandError(`retained version ${version} is incomplete`, EXIT.unavailable);
@@ -1359,7 +1370,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
         ) {
           throw new Error(`command pointer validation failed for ${version}`);
         }
-        for (const command of [commandPath(), ...(exeInPlace ? [exe as string] : [])]) {
+        for (const command of activationProbeCommands(commandPath(), exeInPlace ? exe : null)) {
           const probe = Bun.spawnSync([command, "version"], {
             stdin: "ignore",
             stdout: "pipe",
