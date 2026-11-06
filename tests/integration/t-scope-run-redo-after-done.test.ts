@@ -1,4 +1,4 @@
-// covers: function:jumpIsPersonsMove, function:turnKeptSinceFinished, function:standingPersonTurn, hook:aidlc-plan-approval-guard, hook:aidlc-record-human-turn, scope:bugfix, function:reconstructTimeline, function:changeAsked, subcommand:aidlc-utility:doctor
+// covers: function:jumpIsPersonsMove, function:turnKeptSinceFinished, function:standingPersonTurn, hook:aidlc-plan-approval-guard, hook:aidlc-record-human-turn, scope:bugfix, function:reconstructTimeline, function:changeAsked, function:keptSinceFinished, subcommand:aidlc-utility:doctor
 //
 // #3608, driven with no model through the real engine and hooks
 // (tests/harness/scope-run.ts): a bugfix with the stages after Code Generation
@@ -94,22 +94,29 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
   }, SCOPE_RUN_TIMEOUT_MS);
 
   // A change the person asks for one Unit after the finish is kept in their
-  // own words, with the message it came in, as a change at a gate is.
+  // own words, every message of theirs since the finish in this chat, with the
+  // messages they came in, as a change at a gate is.
   test.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, Units built one at a time: a Unit's change after the finish keeps the person's words", (policy) => {
     const run = runScope("classic", { units: ["core", "extra"], flags: [...CLASSIC_SKIP, "--guard-policy", policy] });
     const { host, person, agent, proj } = run;
     expect(run.final.kind).toBe("done");
     host.fullHost = true;
-    const words = "Change the core unit's code so slugs keep their dashes.";
+    const words = "Change the slug code so it keeps its dashes.";
     person.say(words);
+    // The agent asks which Unit; the person's answer is the second message, a
+    // moment later (the message record keeps whole seconds).
+    Bun.sleepSync(1100);
+    person.say("core");
     const print = agent.next("--stage", "code-generation", "--unit", "core", "--change");
     const reopen = /`(bun \.claude\/tools\/aidlc-jump\.ts reopen [^`]+--via change[^`]*)`/.exec(String(print.message ?? ""))?.[1];
     expect(reopen, JSON.stringify(print)).toBeDefined();
     const ran = host.bash(reopen as string);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
     const change = auditEvents(proj).filter((row) => row.event === "GATE_REJECTED").at(-1);
-    expect(field(change?.block ?? "", "Feedback")).toBe(words);
+    // The record keeps a newline in a field as \n, as a gate's Request Changes row does.
+    expect(field(change?.block ?? "", "Feedback")).toBe(`${words}\\ncore`);
     expect(field(change?.block ?? "", "Message Id")).not.toBeNull();
+    expect((field(change?.block ?? "", "Message Ids") ?? "").split(",")).toHaveLength(2);
     expect(host.refusals).toEqual([]);
   }, SCOPE_RUN_TIMEOUT_MS);
 

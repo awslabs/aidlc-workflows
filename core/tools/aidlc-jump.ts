@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import { beforePerUnitBlock, withStageProgressRow } from "./aidlc-graph.ts";
-import { readMessage, standingPersonTurn } from "./aidlc-message-store.ts";
+import { keptSinceFinished } from "./aidlc-message-store.ts";
 import { isNonAnswer } from "./aidlc-reply-reader.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
@@ -52,7 +52,6 @@ import {
   writeStateFile,
   REDO_REUSE_SOURCE,
   answerModeStageStartedFields,
-  auditBlockField,
   type GateReply,
   personsGateReply,
   personsWordsText,
@@ -303,17 +302,27 @@ function parseFlags(
 // it again.
 
 // The change the person asked for, in their words. On finished work the
-// human-turn hook keeps their message beside the record and writes no turn on
-// it, so the change is the message the presence owner reads there
-// (standingPersonTurn), as the guard read it when it let this reopen through.
+// human-turn hook keeps their messages beside the record and writes no turn on
+// them, so the change is every message of theirs kept there since the finish
+// (keptSinceFinished, the window the guard let this reopen through on), read
+// as personsGateReply reads a gate's window: their words joined in order, only
+// when the engine names this chat and none was cut, beside every message's id.
 function changeAsked(pd: string, content: string, stage: string): GateReply {
-  const reply = personsGateReply(pd, resolveInvokingSessionId(pd), stage);
+  const session = resolveInvokingSessionId(pd);
+  const reply = personsGateReply(pd, session, stage);
   if (reply.words !== null || getField(content, "Status")?.trim() !== "Completed") return reply;
-  const id = auditBlockField(standingPersonTurn(pd, "plain", { requests: true })?.block ?? "", "Message Id");
-  const message = id === null ? null : readMessage(pd, id);
-  if (id === null || message === null) return reply;
-  const words = message.words && message.cut !== true ? personsWordsText(message.words) : "";
-  return { words: isNonAnswer(words) ? null : words, messageId: id, replies: [{ id, at: message.at }], elsewhere: [] };
+  const kept = keptSinceFinished(pd);
+  if (kept.length === 0) return reply;
+  const said = kept
+    .map((message) => (message.words ? personsWordsText(message.words) : ""))
+    .filter((text) => !isNonAnswer(text));
+  const whole = session !== null && kept.every((message) => message.cut !== true);
+  return {
+    words: whole && said.length > 0 ? said.join("\n") : null,
+    messageId: kept.at(-1)?.id ?? null,
+    replies: kept.map((message) => ({ id: message.id, at: message.at })),
+    elsewhere: [],
+  };
 }
 
 function handleReopen(args: string[]): void {

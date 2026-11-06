@@ -983,21 +983,35 @@ function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOpt
  * shard that cannot be read: null. Ids, times and the engine's own rows, never
  * words.
  */
-function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEvent | null {
-  if (options.replies === true) return null;
+/**
+ * This chat's messages kept beside finished work since its latest
+ * WORKFLOW_COMPLETED row, oldest first: the window turnKeptSinceFinished stands
+ * on, and a change asked there is read from. Empty when the record is not
+ * finished, has no completion row, or cannot be read.
+ */
+export function keptSinceFinished(pd: string, options: { intent?: string; space?: string } = {}): StoredMessage[] {
   try {
     if (!selectedRecordIsFinished(pd, resolveWorkflowSelection(pd, { intent: options.intent, space: options.space }))) {
-      return null;
+      return [];
     }
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
-    if (unreadable.length > 0) return null;
+    if (unreadable.length > 0) return [];
     const finishedAt = rows.filter((row) => row.event === "WORKFLOW_COMPLETED").map((row) => row.timestamp).sort().at(-1);
-    if (finishedAt === undefined) return null;
+    if (finishedAt === undefined) return [];
     const onThisWork = sentOnThisWork(rows);
     const chat = invokingChat(pd);
-    const kept = listMessages(pd).filter((message) =>
-      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat)).at(-1);
+    return listMessages(pd).filter((message) =>
+      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat));
+  } catch {
+    return [];
+  }
+}
+
+function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEvent | null {
+  if (options.replies === true) return null;
+  try {
+    const kept = keptSinceFinished(pd, options).at(-1);
     if (kept === undefined) return null;
     const turn: AuditShardEvent = {
       event: "HUMAN_TURN",
