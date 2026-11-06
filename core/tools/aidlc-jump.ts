@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,6 +139,8 @@ function stageReviewPaths(pd: string, stage: StageEntry): string[] {
 let projectDir: string | undefined;
 
 export async function main(argv: string[]): Promise<void> {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = [...argv];
 
   const filteredArgs: string[] = [];

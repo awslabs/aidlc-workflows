@@ -417,15 +417,15 @@ describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
     expect(out.record.extractor?.version).toBeTruthy();
   });
 
-  test("a missing extractor is extractor_unavailable with NAME ONLY", () => {
-    // Nothing ran, so there is no version -- recording one would be a fabricated
-    // fact about a program that never executed.
+  test("a missing pdftotext hands the PDF to AI-DLC's own reader, which records what it found", () => {
+    // The default PDF extractor is missing, so the built-in reader runs instead
+    // of recording `extractor_unavailable`; this file is not a PDF it can open.
     const p = scratchProject();
     const abs = doc(p, "a.pdf", "%PDF-1.4\n");
     const out = extractWithoutPdfTool(p, abs);
-    expect(out.record.state).toBe("extractor_unavailable");
-    expect(out.record.extractor?.name).toBe("pdftotext");
-    expect(out.record.extractor?.version).toBeUndefined();
+    expect(out.record.state).toBe("extraction_failed");
+    expect(out.record.extractor).toEqual({ name: "builtin-pdf", version: "1" });
+    expect(out.record.reason).toStartWith("AI-DLC could not read it as a PDF:");
   });
 
   // `extractor_unavailable` records `detectedType`. Without it,
@@ -435,11 +435,11 @@ describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
   // installing a Word extractor later had no mime to re-probe against, because
   // the row's guessed mime was never
   // "application/...wordprocessingml.document" in the first place.
-  test("extractor_unavailable ALSO records detectedType -- the mime a retry needs to re-probe", () => {
+  test("the built-in reader's failure ALSO records detectedType -- the mime a retry needs to re-probe", () => {
     const p = scratchProject();
     const abs = doc(p, "a.pdf", "%PDF-1.4\n");
     const out = extractWithoutPdfTool(p, abs);
-    expect(out.record.state).toBe("extractor_unavailable");
+    expect(out.record.state).toBe("extraction_failed");
     expect(out.record.detectedType).toBe("application/pdf");
   });
 

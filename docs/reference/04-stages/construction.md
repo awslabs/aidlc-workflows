@@ -200,15 +200,19 @@ routes only the stamped Unit and carries the claim generation on lifecycle,
 review, gate, and fork evidence. Unscoped main emits a terminal fan-out notice
 while claims are live. `aidlc-unit.ts release <unit>` writes a tombstone instead
 of deleting the ref, invalidating stale attempts while preserving history. A
-participant clone opts into the guided claim picker once with
-`aidlc-unit.ts participate`; facilitator main deliberately omits that marker.
+team's clone of the work (every stage or gate row of the plan's own, the ones that
+name no Unit, in another clone's shard, `planMadeElsewhere`) is offered the Units open to take without the participant
+marker, which still opts a clone into the picker by hand
+(`aidlc-unit.ts participate`); facilitator main omits it.
 Scoped routing and receipt writes are offline-first: the claim-time stamp is
 authoritative. Registry liveness is rechecked only at claim-sensitive
 boundaries such as fork/release; an unavailable remote warns and proceeds from
 the stamp, while an online stale or released attempt is refused.
 
-Completed teams commit and run `aidlc unit publish <unit>`. Unscoped main then
-pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
+A completed team is asked once whether to commit and publish
+(`aidlc unit publish <unit> --commit`). An unscoped checkout reads the teams'
+claim refs from the remote on each `next` and offers a published Unit for
+review, then pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
 Plan Approval without materializing a worktree, records one human merge gate,
 and lands the candidate through `aidlc unit land`. Git content lands before the
 Unit row is folded; main-owned state/runtime markers are retained, the team's
@@ -431,7 +435,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md (a Unit whose kind writes no `rules.md`, such as `ui`, names its `functional-spec.md` or `frontend-components.md` instead), `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`

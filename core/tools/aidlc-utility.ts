@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { hasStoredMessages, proveMessage, requestMessageStep, type StoredMessage } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -3972,6 +3973,37 @@ function pluginCatalogueDoctorCheck(active: string | null): DoctorCheck | null {
   return { pass: true, label: `Plugin marketplace: ${path}` };
 }
 
+export function registeredRepoDoctorChecks(projectDir: string): DoctorCheck[] {
+  const rows: DoctorCheck[] = [];
+  let intent: string | null = null;
+  let space: string | undefined;
+  try {
+    const selection = resolveWorkflowSelection(projectDir, { bind: false });
+    intent = selection.intent;
+    space = selection.space;
+  } catch {
+    return rows;
+  }
+  if (intent === null) return rows;
+  const entry = readIntentRegistry(projectDir, space)
+    .find((candidate) => recordDirMatches(candidate, intent));
+  for (const repo of entry?.repos ?? []) {
+    const dir = repoDir(projectDir, repo);
+    // codekbSourceRoot's own test for falling back to the whole workspace; it
+    // cannot be called here, since its repo read binds the chat.
+    if (existsSync(dir) && statSync(dir).isDirectory()) continue;
+    rows.push({
+      pass: false,
+      severity: "warn",
+      label:
+        `Registered repo "${repo}" has no folder in the workspace: Reverse Engineering would analyse the whole workspace under its name`,
+      fix: `restore or clone "${repo}" into the workspace folder; if this work no longer covers it, ` +
+        `\`${aidlcDispatcherInvocation(`intent remove-repo ${repo}`)}\``,
+    });
+  }
+  return rows;
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -3980,6 +4012,23 @@ export async function collectDoctorReport(
   const hooksLastFired = firingHooksLastFired(projectDir);
   results.push(...runtimeDoctorChecks(projectDir, harnessDir(), hooksLastFired ? { hooksLastFired } : {}));
   results.push(instructionFileDoctorCheck(projectDir, harnessDir()));
+  // The documents the agents cannot read yet, as the engine's step names them
+  // (advisory: the exit code is unchanged).
+  try {
+    const kb = await import("./aidlc-knowledge.ts");
+    const space = activeSpace(projectDir);
+    const unread = kb.unreadDocuments(projectDir, space);
+    if (unread.length > 0) {
+      results.push({
+        pass: true,
+        severity: "warn",
+        label: kb.unreadDocumentsLabel(projectDir, space, unread),
+        fix: `do what the row says for each file, then run \`${aidlcInvocation()} knowledge sync\``,
+      });
+    }
+  } catch {
+    // A space that cannot be read here has no row; `knowledge list` says why.
+  }
   const compiled = isCompiledExecutable();
 
   const installedVersion = activeVersion();
@@ -7246,6 +7295,7 @@ export async function collectDoctorReport(
   // severity:"warn" rows remain visible without changing the exit code.
   try {
     for (const row of workspaceManifestChecks(projectDir)) results.push(row);
+    for (const row of registeredRepoDoctorChecks(projectDir)) results.push(row);
   } catch {
     // Advisory only; a scan failure must not hide the main doctor report.
   }
@@ -13842,6 +13892,8 @@ function handleResolveEnvScope(): void {
 // ---------------------------------------------------------------------------
 
 export async function main(argv: string[]): Promise<void> {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
   errorArgs = [...rawArgs];
   const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
@@ -14072,9 +14124,10 @@ export async function main(argv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

@@ -7,6 +7,7 @@
 // approved plan + unit test instructions. Both the dispatch guard and autonomous
 // swarm referee consume the same contract.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { gitSubmoduleNames } from "./aidlc-git.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
@@ -182,7 +183,7 @@ import {
   recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
 import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } from "./aidlc-swarm-source.ts";
-import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
+import { BACKGROUND_SYNC_CAUSE, CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
@@ -1954,6 +1955,25 @@ function approvedCopyForAttempt(
   return { copy, built: receipt.status === "generation" };
 }
 
+function approvedCopyChangedFiles(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+  plan: string,
+  instructions: string,
+  recordedFingerprint: string | null,
+): string[] {
+  const copy = recordedFingerprint === null ? null : readApprovedPlanCopy(projectDir, authority);
+  if (copy === null || copy.fingerprint !== recordedFingerprint) return [];
+  const changed: string[] = [];
+  if (projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan)) {
+    changed.push(toPosix(relative(projectDir, join(authority.stageDir, "code-generation-plan.md"))));
+  }
+  if (instructions.replace(/\r\n/g, "\n") !== copy.instructions.replace(/\r\n/g, "\n")) {
+    changed.push(toPosix(relative(projectDir, join(authority.stageDir, "unit-test-instructions.md"))));
+  }
+  return changed;
+}
+
 /**
  * The one line the person hears when the plan they approved changed, or null
  * when it did not (or nothing was approved in this attempt). Before the build
@@ -2747,8 +2767,10 @@ export function codeGenerationIssuance(
  * approved here: the Unit's stages are the checkout's whole walk, so Code
  * Generation is over there, as it is once a workflow's walk moves past it,
  * though Current Stage stays on it. The engine records that notice as the step
- * on record on every harness (prepareEmission), the one notice it records. A
- * stamp that cannot be read leaves the step as it was.
+ * on record on every harness (prepareEmission), the one notice it records, and
+ * so the offer to publish that Unit it puts there first (a team-handover ask
+ * naming the Unit) is that same step. A stamp that cannot be read leaves the
+ * step as it was.
  */
 export function codeGenerationStepOnRecord(
   projectDir: string,
@@ -2756,7 +2778,8 @@ export function codeGenerationStepOnRecord(
   marker: ActiveDirectiveMarker | null,
 ): boolean {
   if (!codeGenerationIsTheStep(marker?.stage ?? "", getField(stateContent, "Current Stage") ?? "")) return false;
-  if (marker?.version !== 2 || marker.kind !== "notice" || !marker.unit) return true;
+  const doneStep = marker?.kind === "notice" || (marker?.kind === "ask" && marker.ask_type === "team-handover");
+  if (marker?.version !== 2 || !doneStep || !marker.unit) return true;
   try {
     return readApplicableTeamUnitScopeStamp(projectDir, stateContent)?.unit !== marker.unit;
   } catch {
@@ -4824,6 +4847,13 @@ function planApprovalQuestionEvidence(
     );
   }
   if (artifacts.recordedFingerprint !== artifacts.expectedFingerprint) {
+    const changed = approvedCopyChangedFiles(
+      projectDir,
+      authority,
+      artifacts.plan,
+      artifacts.instructions,
+      artifacts.recordedFingerprint,
+    );
     throw new Error(
       artifacts.recordedFingerprint === null
         ? `Plan Approval found no recorded fingerprint: ${missingPlanApprovalFingerprintReason(artifacts.questions)}`
@@ -4831,6 +4861,8 @@ function planApprovalQuestionEvidence(
         ? "The recorded Plan Approval fingerprint was written under an earlier format. " +
             "Re-run the fingerprint command, re-present the plan, and approve again."
         : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract. " +
+            (changed.length > 0 ? `Files that differ from the approved copy: ${renderChangedPaths(changed)}. ` : "") +
+            `${BACKGROUND_SYNC_CAUSE} ` +
             "Re-run the fingerprint command, re-present the plan, and approve again.",
     );
   }
@@ -6126,6 +6158,8 @@ function replySession(projectDir: string, argv: string[]): string {
 }
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const subcommand = argv.find((arg) => (TESTING_POSTURE_SUBCOMMANDS as readonly string[]).includes(arg));
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {

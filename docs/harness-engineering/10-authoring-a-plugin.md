@@ -233,7 +233,14 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
 §5/§8 — implement or demote, never a silent no-op):
 
 - `adds.produces` / `adds.consumes` / `adds.sensors` — ✅ set-unioned into the
-  target stage's source frontmatter.
+  target stage's source frontmatter. On a per-Unit stage that maps every
+  required output to Unit kinds with `produces_kinds` (today functional-design
+  and infrastructure-design), an output you add gets an entry for the kinds
+  those outputs cover, so the stage runs for the same Units as before; you do
+  not write the entry yourself. This needs a plugin built with this release or
+  later (the compose hook ships inside the plugin): rebuild it with
+  `aidlc plugin build <harness>` and drop it in again. On an engine older than
+  this release, compose skips that output with a drop and composes the rest.
 - `adds.required_sections` — ✅ merged into the stage's `required_sections`. Note
   it is **not machine-enforced today**: the field is written and validates, but it
   does not reach the compiled graph node, and the shipped `required-sections`

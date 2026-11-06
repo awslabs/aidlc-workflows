@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -63,6 +64,7 @@ import {
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { cmdScriptLaunch } from "../../core/tools/aidlc-executable-path.ts";
+import { addRootBlocks } from "../../core/tools/aidlc-includes.ts";
 import { collectDoctorReport, firingHooksLastFired, kiroDisabledHookChecks } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
 
@@ -2983,9 +2985,84 @@ describe("t294 instruction-file doctor row", () => {
       );
       const result = instructionFileDoctorCheck(project, ".codex");
       expect(result.pass).toBe(false);
-      expect(result.label).toContain("the AI-DLC block in AGENTS.override.md is not the current one");
+      expect(result.label).toContain("Codex reads AGENTS.override.md, whose AI-DLC block is not the current one");
       expect(result.label).not.toContain("hand-modified");
-      expect(result.fix).toContain("with the current block from AGENTS.md");
+      expect(result.fix).toContain("with the block from AGENTS.md");
+    });
+
+    // The override is the person's file: doctor says what Codex reads there and
+    // offers AI-DLC's block, never orders it or calls the file a conflict.
+    test(`${setup}: doctor states what Codex reads in AGENTS.override.md and offers the copy`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      const end = "<!-- END AI-DLC:agents -->";
+      const overridePath = join(project, "AGENTS.override.md");
+      const unchanged = instructionFileDoctorCheck(project, ".codex");
+      expect(unchanged.pass).toBe(true);
+      expect(unchanged.label).not.toContain("AGENTS.override.md");
+      const copy = "if you want Codex to read it too, copy the AI-DLC:agents block from AGENTS.md " +
+        "into AGENTS.override.md, keeping your own text";
+      const replace = "if you want Codex to read the current one, replace the AI-DLC block and any unmatched " +
+        "or duplicate AI-DLC:agents markers in AGENTS.override.md with the block from AGENTS.md, keeping your own text";
+      for (const [content, fact, fix] of [
+        ["# Team instructions\n", "which has no AI-DLC block", copy],
+        ["", "which has no AI-DLC block", copy],
+        [block.replace(end, `Earlier guidance.\n${end}`), "whose AI-DLC block is not the current one", replace],
+        [block.replace(end, ""), "whose AI-DLC:agents markers are unmatched or duplicated", replace],
+        [`${block}\n${block}`, "whose AI-DLC:agents markers are unmatched or duplicated", replace],
+      ]) {
+        writeFileSync(overridePath, content);
+        expect(instructionFileDoctorCheck(project, ".codex")).toEqual({
+          pass: false,
+          severity: "warn",
+          label: `Instruction file: Codex reads AGENTS.override.md, ${fact}; AI-DLC keeps its block in AGENTS.md`,
+          fix,
+        });
+        expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      }
+      writeFileSync(overridePath, `# Team instructions\n\n${block}`);
+      expect(instructionFileDoctorCheck(project, ".codex")).toEqual({
+        pass: true,
+        label: `${unchanged.label}; Codex reads AGENTS.override.md instead of AGENTS.md`,
+      });
+    });
+
+    // A team that commits its override and keeps AGENTS.md personal: a clone
+    // has no AGENTS.md to copy from until config writes it.
+    test(`${setup}: with no AGENTS.md, the offer says config writes it first`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      rmSync(join(project, "AGENTS.md"));
+      const overridePath = join(project, "AGENTS.override.md");
+      for (const [content, fix] of [
+        ["# Team instructions\n", /^if you want Codex to read it too, run `[^`]* config` to write AI-DLC's block to AGENTS\.md, then copy it into AGENTS\.override\.md, keeping your own text$/],
+        [
+          block.replace("<!-- END AI-DLC:agents -->", "Earlier guidance.\n<!-- END AI-DLC:agents -->"),
+          /^if you want Codex to read the current one, run `[^`]* config` to write AI-DLC's block to AGENTS\.md, then replace /,
+        ],
+      ] as const) {
+        writeFileSync(overridePath, content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.severity).toBe("warn");
+        expect(result.fix).toMatch(fix);
+        expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      }
+    });
+
+    // Windows file symlinks require privileges a contributor may not have.
+    test.skipIf(process.platform === "win32")(`${setup}: doctor follows a symlinked override and only reads it`, () => {
+      const project = codexProject();
+      const target = join(project, "team-instructions.md");
+      writeFileSync(target, "# Team instructions\n");
+      const link = join(project, "AGENTS.override.md");
+      symlinkSync(target, link);
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.label).toBe(
+        "Instruction file: Codex reads AGENTS.override.md, which has no AI-DLC block; AI-DLC keeps its block in AGENTS.md",
+      );
+      expect(result.fix).toStartWith("if you want Codex to read it too, copy");
+      expect(readlinkSync(link)).toBe(target);
+      expect(readFileSync(target, "utf-8")).toBe("# Team instructions\n");
     });
 
     test(`${setup}: empty Codex override still hides AGENTS.md`, () => {
@@ -2994,7 +3071,7 @@ describe("t294 instruction-file doctor row", () => {
         writeFileSync(join(project, "AGENTS.override.md"), content);
         const result = instructionFileDoctorCheck(project, ".codex");
         expect(result.pass).toBe(false);
-        expect(result.label).toContain("missing (AGENTS.override.md)");
+        expect(result.label).toContain("Codex reads AGENTS.override.md, which has no AI-DLC block");
         expect(result.fix).toContain("copy");
       }
     });
@@ -3041,7 +3118,7 @@ describe("t294 instruction-file doctor row", () => {
       const both = instructionFileDoctorCheck(project, ".codex");
       expect(both.pass).toBe(false);
       expect(both.label).toContain("AGENTS.md");
-      expect(both.label).toContain("missing (AGENTS.override.md)");
+      expect(both.label).toContain("Codex reads AGENTS.override.md, which has no AI-DLC block");
       expect(both.fix).toContain("copy");
       expect(both.fix).toContain("AGENTS.override.md");
       writeFileSync(agentsPath, "# Personal instructions\n");
@@ -3070,6 +3147,50 @@ describe("t294 instruction-file doctor row", () => {
       });
     }
   }
+
+  // AGENTS.override.md stays the person's: config and session start keep
+  // AI-DLC's block in AGENTS.md and never write the override.
+  test("config leaves Codex's AGENTS.override.md as it is", () => {
+    const project = install("codex");
+    const overridePath = join(project, "AGENTS.override.md");
+    const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+    for (const content of [
+      "# Team instructions\n",
+      block.replace("<!-- END AI-DLC:agents -->", "Earlier guidance.\n<!-- END AI-DLC:agents -->"),
+    ]) {
+      writeFileSync(overridePath, content);
+      const result = run([
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, "codex"),
+        "--harness",
+        "codex",
+        "--mcp",
+        "defaults",
+        "--yes",
+      ], project);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      const record = JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-manifest.json"), "utf-8"));
+      expect(Object.keys(record.rootContributions)).not.toContain("AGENTS.override.md");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("session start leaves Codex's AGENTS.override.md as it is", () => {
+    const project = temp("aidlc-t294-copy-override-start-");
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+    writeFileSync(join(project, "AGENTS.md"), "# Shop\n");
+    const overridePath = join(project, "AGENTS.override.md");
+    writeFileSync(overridePath, "# Team instructions\n");
+    const written = addRootBlocks(project);
+    expect(written).toContain("AGENTS.md");
+    expect(written).not.toContain("AGENTS.override.md");
+    expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toContain("<!-- BEGIN AI-DLC:agents -->");
+    expect(readFileSync(overridePath, "utf-8")).toBe("# Team instructions\n");
+  });
 
   test("non-Codex instruction checks ignore AGENTS.override.md", () => {
     for (const harness of ["claude", "kiro", "kiro-ide", "cursor", "opencode", "copilot"]) {

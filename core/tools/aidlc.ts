@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { existsSync, readdirSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -267,8 +268,9 @@ export const ROUTES: readonly Route[] = [
       "unit merge-status <unit>",
       "unit participate",
       "unit pin <unit>",
-      "unit publish <unit>",
+      "unit publish <unit> [--commit]",
       "unit release <unit>",
+      "unit share",
       "unit status",
     ],
   },
@@ -1036,7 +1038,9 @@ export const ROUTES: readonly Route[] = [
     // this literal, because reading the route is exactly what missed it.
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help"],
+    // `read-pdf` is the built-in PDF reader's child-process entry in a compiled binary (aidlc-knowledge.ts
+    // extractDocument); it is routed but never listed in help.
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help", "read-pdf"],
     tool: TOOLS.knowledge,
     ...PUBLIC_ENGINE,
     // ONE line in the human help, which is capped at 20 lines: it is a summary
@@ -3094,11 +3098,13 @@ async function runGroupMembers(
     // A payload this process cannot read goes to every member, which judges it.
   }
   let code = 0;
+  let printed = false;
   const refusals: string[] = [];
   const failures: string[] = [];
   for (const member of action.members) {
     if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
     const said = await runGroupMember(member, input);
+    printed ||= said.printed;
     if (said.code === 2) {
       code = 2;
       if (said.reason && !refusals.includes(said.reason)) refusals.push(said.reason);
@@ -3113,7 +3119,36 @@ async function runGroupMembers(
   // it builds the deny decision from it), so a direct descriptor write would
   // reach the person's terminal but leave that decision without its reason.
   if (said.length > 0) process.stderr.write(said.join(""));
+  // Every check passed and none printed (an answer beside a notice is not JSON to the host).
+  if (code === 0 && !printed && toolName === "Bash") {
+    const allow = await claudeOwnCommandAllow(input);
+    if (allow) process.stdout.write(allow);
+  }
   return code;
+}
+
+// Claude Code runs AI-DLC's own command without a prompt however a helper spells this project's
+// path (aidlc-claude-own-command.ts); its deny and ask rules still apply over this answer.
+// No reason text, so the person reads nothing new.
+async function claudeOwnCommandAllow(input: string): Promise<string> {
+  let payload: { hook_event_name?: unknown; tool_input?: { command?: unknown } };
+  try {
+    payload = JSON.parse(input);
+  } catch {
+    return "";
+  }
+  const command = payload.tool_input?.command;
+  if (payload.hook_event_name !== "PreToolUse" || typeof command !== "string") return "";
+  try {
+    if (runtimeHarnessName() !== "claude") return "";
+    const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
+    const { claudeAllowsOwnCommand } = await import("./aidlc-claude-own-command.ts");
+    if (!claudeAllowsOwnCommand(command, resolveProjectDirFromHook(import.meta.url))) return "";
+  } catch {
+    // Nothing to name or read: the host decides, as it did before.
+    return "";
+  }
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } })}\n`;
 }
 
 // One member, with what it said collected so the group can carry each refusal
@@ -3122,22 +3157,29 @@ async function runGroupMembers(
 async function runGroupMember(
   member: HookGroupMember & { path: string },
   input: string,
-): Promise<{ code: number; reason: string }> {
+): Promise<{ code: number; reason: string; printed: boolean }> {
   if (!existsSync(member.path)) {
     return {
       code: 1,
       reason: `aidlc engine hook ${member.hook}: not available in this install\n`,
+      printed: false,
     };
   }
   hookTrace("hook-group-member-begin", { hook: member.hook });
   const collected: string[] = [];
+  let printed = false;
   const stderrWrite = process.stderr.write;
+  const stdoutWrite = process.stdout.write;
   process.stderr.write = ((chunk: unknown) => {
     collected.push(
       typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8"),
     );
     return true;
   }) as typeof process.stderr.write;
+  process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+    printed = true;
+    return (stdoutWrite as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+  }) as typeof process.stdout.write;
   let code: number;
   try {
     // Named phases, because this process loads the hook's code where a hook of
@@ -3160,9 +3202,10 @@ async function runGroupMember(
     code = 1;
   } finally {
     process.stderr.write = stderrWrite;
+    process.stdout.write = stdoutWrite;
   }
   hookTrace("hook-group-member-end", { hook: member.hook, code });
-  return { code, reason: collected.join("") };
+  return { code, reason: collected.join(""), printed };
 }
 
 async function runSensorScriptFile(
@@ -3339,12 +3382,16 @@ async function execute(action: Action): Promise<number> {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
+    // A turn Claude Code started itself is settled before the hook reads a turn;
+    // the human-turn hook settles in its own process, which loads the engine anyway.
+    if (action.name !== "record-human-turn") settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHook({ ...action, projectDir }));
   }
   if (action.type === "hook-group") {
     const projectDir = action.hostResolved && action.projectDir
       ? hookSessionProjectDir(action.projectDir, await readStdin())
       : action.projectDir;
+    settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
     return await withProjectDir(projectDir, () => runHookGroup({ ...action, projectDir }));
   }
   if (action.type === "statusline") {
@@ -4401,9 +4448,10 @@ if (import.meta.main) {
 }
 
 function startDispatcher(): void {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

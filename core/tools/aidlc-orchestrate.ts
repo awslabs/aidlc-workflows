@@ -78,6 +78,7 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import {
   createHash,
   randomBytes,
@@ -134,6 +135,7 @@ import {
 } from "./aidlc-message-store.ts";
 import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices, SUMMARY_CONFIRMATION_CHOICES } from "./aidlc-reply-reader.ts";
 import {
+  type AskChoice,
   type AskDirective,
   type Directive,
   type RepoFacts,
@@ -153,6 +155,7 @@ import {
   type RunStageWaveEntry,
   type ScopeCommandRow,
   type StageValidityAdvisory,
+  type TeamHandover,
   bodyRuns,
   numberedProseQuestion,
   otherWorkNote,
@@ -287,7 +290,9 @@ import {
   planWithChanges,
   splitSlugList,
   cachedClaimFanoutActive,
+  engineAskMark,
   hasAnyUnitClaimRefs,
+  noteEngineAskMark,
   teamSkeletonOn,
   harnessDirectiveLimit,
   installedKiroLayout,
@@ -565,7 +570,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { chatTookStep } from "./aidlc-record-core.ts";
+import { chatTookStep, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -580,9 +585,20 @@ import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./a
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
+  claimsOpenHere,
+  defaultTeamLabel,
+  landedNotOnRemote,
+  namesInProse,
   localUnitClaimOverviewForIntent,
+  publishedAtHead,
+  refreshClaimRefs,
+  shareBlocker,
+  shareTarget,
+  teamHandoverMarkName,
+  teamSharedHere,
   type UnitClaimOverview,
   type UnitClaimView,
+  workToCommit,
 } from "./aidlc-unit.ts";
 import {
   type ApprovedComposerPlan,
@@ -736,7 +752,12 @@ import {
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
-import { documentsCard } from "./aidlc-knowledge.ts";
+import {
+  documentsCard,
+  markUnreadDocumentsSaid,
+  type UnreadDocumentsNotice,
+  unreadDocumentsNotice,
+} from "./aidlc-knowledge.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   readRuleBundle,
@@ -976,15 +997,41 @@ function switchOffNoticesOnce(projectDir: string): string[] {
 // strings, so a directive that does not carry a line gets no instruction for it.
 function switchBackOnFollowUps(directive: Directive): string[] {
   const carried = directive.change_notices ?? [];
-  return (activeSwitchOffNotices ?? []).flatMap((notice) =>
-    notice.backOn !== null && carried.includes(notice.line) ? [notice.backOn] : []
-  );
+  return [
+    ...(activeSwitchOffNotices ?? []).flatMap((notice) =>
+      notice.backOn !== null && carried.includes(notice.line) ? [notice.backOn] : []
+    ),
+    ...[...handoverFollowUps].flatMap(([line, followUp]) => carried.includes(line) ? [followUp] : []),
+  ];
 }
+
+// A hand-over the person turned down for now, said once with the step that
+// follows (its line), and the command the agent runs when they ask for it
+// after all: the line itself never names the command.
+const handoverFollowUps = new Map<string, string>();
 
 let activeKiroHooksOffNotices: string[] | null = null;
 function kiroHooksOffNoticesOnce(projectDir: string): string[] {
   activeKiroHooksOffNotices ??= kiroHooksOffNotices(projectDir, harnessDir());
   return activeKiroHooksOffNotices;
+}
+
+// Documents the agents cannot read yet, named once per work. A chat that has
+// not joined the work keeps no mark in it, so it says nothing either.
+let activeUnreadDocuments: UnreadDocumentsNotice | null | undefined;
+function unreadDocumentsOnce(projectDir: string): UnreadDocumentsNotice | null {
+  if (activeUnreadDocuments === undefined) {
+    activeUnreadDocuments = engineUnjoined || isReadOnlyEngineProbe()
+      ? null
+      : (() => {
+        try {
+          return unreadDocumentsNotice(projectDir, engineSelections.get(projectDir));
+        } catch {
+          return null;
+        }
+      })();
+  }
+  return activeUnreadDocuments;
 }
 
 function redefinedStagesNotice(
@@ -1740,6 +1787,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   if (hooksOff.length > 0) {
     directive = withChangeNotices(directive, [...hooksOff, ...(directive.change_notices ?? [])]);
   }
+  const unread = engineProjectDir ? unreadDocumentsOnce(engineProjectDir) : null;
+  if (unread !== null) directive = withChangeNotices(directive, [...(directive.change_notices ?? []), unread.line]);
   if (restartUnmarkedNotice) {
     directive = withChangeNotices(directive, [RESTART_UNMARKED_LINE, ...(directive.change_notices ?? [])]);
     restartUnmarkedNotice = false;
@@ -2320,6 +2369,10 @@ function writePrepared(prepared: PreparedEmission): void {
     !isReadOnlyEngineProbe() && !isHookPreDispatch()
   ) {
     markPersonLinesHeard(engineProjectDir, engineSessionId, [validity.warning]);
+  }
+  if (engineProjectDir && activeUnreadDocuments && kind !== "load-steering" && !isReadOnlyEngineProbe()) {
+    markUnreadDocumentsSaid(engineProjectDir, activeUnreadDocuments);
+    activeUnreadDocuments = null;
   }
 }
 
@@ -4084,6 +4137,7 @@ function openGateReplyDirective(
   requestId: string,
   folder: string,
   replies: Array<{ id: string; at: string }>,
+  wordsAlone: boolean,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   const named = replyIdsNote(replies, "report");
@@ -4095,7 +4149,7 @@ function openGateReplyDirective(
       `--user-input "Request Changes"\`. Then follow what it returns. If it asks about what the stage found or ` +
       `produced, answer it from the files in ${folder ? `${folder}/` : "the stage's folder"}, then ask the approval ` +
       `question again. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(stage)}\` and ` +
-      "follow what it returns. If it is about something else, such as new " +
+      `follow what it returns. ${openDecisionQuestionReading(wordsAlone)}If it is about something else, such as new ` +
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       `person in one short question and follow their answer.${named}`,
@@ -4213,6 +4267,7 @@ function openQuestionReplyDirective(
   requestId: string,
   { replies, wordsKept }: ReturnType<typeof chatReplies>,
   stateContent: string,
+  wordsAlone: boolean,
   before: string | null = null,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
@@ -4227,7 +4282,8 @@ function openQuestionReplyDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet${asked}. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
       `\`${orchestrate} next\` the next time you need the engine. If it asks to skip this stage, run ` +
-      `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. If it is about something else, such as new work ` +
+      `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. ${openDecisionQuestionReading(wordsAlone)}` +
+      "If it is about something else, such as new work " +
       `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       `person in one short question and follow their answer.${replyIdsNote(replies, "`log answer`")}`,
@@ -4247,13 +4303,14 @@ function recoveryQuestionChoices(marker: ActiveDirectiveMarker): string {
 // Words while the recovery question holds the person's reply may pick one of
 // its choices: the conductor reads which, the same split as
 // openQuestionReplyDirective.
-function openRecoveryReplyDirective(marker: ActiveDirectiveMarker, requestId: string): PrintDirective {
+function openRecoveryReplyDirective(marker: ActiveDirectiveMarker, requestId: string, wordsAlone: boolean): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   return printDirective(
     `The recovery question for "${marker.stage}" is open, and ${recoveryQuestionChoices(marker)}. The person's ` +
       "reply may answer it. Read it. If it picks one of those choices, run that choice's command and follow what it " +
       `returns. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(marker.stage)}\` and follow ` +
-      "what it returns. If it is about something else, such as new work or a change to the plan, run " +
+      `what it returns. ${openDecisionQuestionReading(wordsAlone)}If it is about something else, such as new work or a ` +
+      "change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person once in plain words, with the " +
       "question's choices, and follow their answer.",
@@ -4446,6 +4503,7 @@ function openPlanQuestionReplyDirective(
   // Every plan has its answer and nothing is built yet: their words may change it.
   answered = false,
   replies: Array<{ id: string; at: string }> = [],
+  wordsAlone = false,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // Settings typed on the same line ("/aidlc --guard-policy off approve the
@@ -4472,7 +4530,8 @@ function openPlanQuestionReplyDirective(
       `${record}, then run bare \`${orchestrate} next\`.${typed}`;
   return printDirective(
     `${undo}${answer} If it asks to skip Code Generation, run \`${orchestrate} next --skip code-generation\` and ` +
-      "follow what it returns. If it is about something else, such as new work or a change to the plan, run " +
+      `follow what it returns. ${openDecisionQuestionReading(wordsAlone)}If it is about something else, such as new work ` +
+      "or a change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
       `their answer.${replyIdsNote(replies, "`log answer`")}`,
@@ -4573,6 +4632,13 @@ function workQuestionReading(about: string, status = readOnlyCommand("status")):
 const WORK_ITSELF = "the work itself (where it stands, which stage comes next, how much remains)";
 const FINISHED_ABOUT = "(what it built, whether anything remains)";
 const FINISHED_WORK = `the finished work ${FINISHED_ABOUT}`;
+
+// At an open decision the status reading is for words that came alone: a
+// setting typed beside them rides the request reading, which a status-only
+// answer would leave unset.
+function openDecisionQuestionReading(wordsAlone: boolean): string {
+  return wordsAlone ? `${workQuestionReading(WORK_ITSELF)} ` : "";
+}
 
 // Words while a workflow is active may ask to redo, jump to a stage, or start
 // fresh ("/aidlc take me back to requirements analysis"), or be new work or a
@@ -5170,12 +5236,219 @@ function constructionStaffingAsk(
 }
 
 // No team has taken a Unit in this checkout's view: no participant marker,
-// no claim ref and no merge journal. Team routing then keeps the
-// single-checkout walk, and the lead hears how a team takes a Unit.
+// no claim ref and no merge journal; nor did this checkout share the plan with
+// the teams, nor is it a fresh clone of work run elsewhere whose claims are
+// open. Team routing then keeps the single-checkout walk, and the lead hears
+// how a team takes a Unit. Facts of this checkout, never who the person is:
+// the lead's own checkout keeps the plan's rows, so a push of main for backup
+// while it builds a Unit here never turns it into the board.
 function claimlessTeamCheckout(projectDir: string): boolean {
   const journal = unitMergeTransactions(projectDir);
-  return !existsSync(unitParticipantPath(projectDir)) && !hasAnyUnitClaimRefs(projectDir) && journal.length === 0;
+  if (existsSync(unitParticipantPath(projectDir)) || hasAnyUnitClaimRefs(projectDir) || journal.length > 0) return false;
+  if (teamSharedHere(projectDir)) return false;
+  return !(planMadeElsewhere(projectDir) && claimsOpenHere(projectDir));
 }
+
+const NOT_NOW_DETAIL = "Nothing changes now.";
+
+// A team hand-over question, put once in its state: the mark is written as it
+// is put (never by a read-only probe), so the reply that does not take it runs
+// `next` and meets the step after it, never the question again. The last
+// choice is that reply: "Not now", or the offer's own words for it.
+function teamHandoverAsk(
+  projectDir: string,
+  offer: {
+    handovers: TeamHandover[];
+    marks: string[];
+    question: string;
+    choices: AskChoice[];
+    notNow?: Pick<AskChoice, "label" | "detail">;
+    unit?: string;
+  },
+): AskDirective {
+  if (!isReadOnlyEngineProbe()) for (const mark of offer.marks) noteEngineAskMark(projectDir, mark);
+  const notNow = offer.notNow ?? { label: "Not now", detail: NOT_NOW_DETAIL };
+  return {
+    kind: "ask",
+    ask_type: "team-handover",
+    response_route: "command",
+    handovers: offer.handovers,
+    question: offer.question,
+    choices: [...offer.choices, { ...notNow, command: `${aidlcToolInvocation("orchestrate")} next` }],
+    ...(offer.unit !== undefined ? { unit: offer.unit } : {}),
+  };
+}
+
+function handoverOffered(projectDir: string, mark: string): boolean {
+  return engineAskMark(projectDir, mark) !== null;
+}
+
+// What a commit here takes, as the share and publish questions say it: the
+// count, and by path every file git does not track yet outside AI-DLC's
+// record, however many, since the commit takes them all (so an unignored
+// secret is seen before it is pushed). Null when nothing.
+function workToCommitWords(projectDir: string): string | null {
+  const { paths, untracked } = workToCommit(projectDir);
+  if (paths.length === 0) return null;
+  const outside = untracked.filter((path) => path !== "aidlc" && !path.startsWith("aidlc/"));
+  const named = outside.length === 0 ? "" : ` (new: ${outside.join(", ")})`;
+  return `the ${paths.length} changed file${paths.length === 1 ? "" : "s"} here${named}`;
+}
+
+// Before this session starts a Unit on the lead's walk, while claims are open
+// and the plan can go to a remote: share it with the teams instead? Asked once
+// per Unit about to start here. Null when not due.
+function teamShareOffer(
+  projectDir: string,
+  unit: string,
+  unitsLeft: number,
+  auditRows: readonly AuditShardEvent[],
+): AskDirective | null {
+  if (unitsLeft < 1) return null;
+  if (auditRows.some((row) => row.event === "UNIT_STARTED" && auditBlockField(row.block, "Unit") === unit)) return null;
+  const mark = teamHandoverMarkName("share", unit);
+  if (handoverOffered(projectDir, mark) || shareBlocker(projectDir) !== null || !claimsOpenHere(projectDir)) return null;
+  const target = shareTarget(projectDir);
+  if (target === null) return null;
+  const work = workToCommitWords(projectDir);
+  const plural = unitsLeft === 1 ? "The plan's last Unit is ready for the teams. Share it now?" :
+    `The plan's ${unitsLeft} Units are ready for the teams. Share them now?`;
+  return teamHandoverAsk(projectDir, {
+    handovers: ["share"],
+    marks: [mark],
+    question: `${plural} I'd ${work === null ? "" : `commit ${work} and `}` +
+      `push ${target.branch} to ${target.remote}, so each team can take a Unit by opening its own clone and running ` +
+      `${entrySkillInvocation()}.`,
+    choices: [
+      {
+        label: "Share them with the teams",
+        detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
+        command: `${aidlcInvocation()} unit share`,
+      },
+    ],
+    notNow: {
+      label: "Build them here for now",
+      detail: `This session builds the ${unitPlainName(unit)} Unit here; I'll ask again before the next one.`,
+    },
+  });
+}
+
+// In a claimed checkout whose Unit is complete and approved: commit it and
+// publish it for review on main? Asked once per HEAD; not once it is published
+// at this HEAD. Null when not due.
+function teamPublishOffer(projectDir: string, unit: string): AskDirective | null {
+  if (publishedAtHead(projectDir)) return null;
+  const head = Bun.spawnSync({ cmd: ["git", "rev-parse", "HEAD"], cwd: projectDir, stdout: "pipe", stderr: "ignore" });
+  const key = `${unit}-${head.exitCode === 0 ? new TextDecoder().decode(head.stdout).trim().slice(0, 12) : "none"}`;
+  const mark = teamHandoverMarkName("publish", key);
+  if (handoverOffered(projectDir, mark)) return null;
+  const work = workToCommitWords(projectDir);
+  const name = unitPlainName(unit);
+  return teamHandoverAsk(projectDir, {
+    handovers: ["publish"],
+    marks: [mark],
+    unit,
+    question: `${name.charAt(0).toUpperCase()}${name.slice(1)} is complete and you approved it. ` +
+      (work === null
+        ? "Publish it for review on main?"
+        : `Commit it and publish it for review on main? I'd commit ${work}.`),
+    choices: [
+      {
+        label: work === null ? "Publish" : "Commit and publish",
+        detail: "The lead reviews and merges it on main; nothing is forced.",
+        command: `${aidlcInvocation()} unit publish ${quoteCommandArgument(unit)} --commit`,
+      },
+    ],
+  });
+}
+
+// On a checkout that holds no Unit claim: the Units a team published and that
+// wait for review here, and, in a fresh clone of the work that did not share
+// it, the Units it can take. One question for both, so neither the lead nor a
+// teammate meets a question that is only the other's; taking comes first, as
+// only a teammate's clone meets both. Each Unit is asked about once per
+// published commit, each set of Units to take once. The person picks from the
+// board's own facts (what waits on each Unit, who holds the others) and hears
+// the label their claim would carry; a name of theirs reaches the claim through
+// the agent's --team (withAgentNotes).
+function teamReviewOrJoinOffer(
+  projectDir: string,
+  overview: UnitClaimOverview,
+  board: TeamConstructionBoard,
+): AskDirective | null {
+  const ready = board.ready.filter((row) => !handoverOffered(projectDir, teamHandoverMarkName("review", row.key)));
+  const joining = !existsSync(unitParticipantPath(projectDir)) && !teamSharedHere(projectDir) &&
+    planMadeElsewhere(projectDir) && overview.claimable.length > 0;
+  const joinMark = teamHandoverMarkName("join", [...overview.claimable].sort().join("-"));
+  const join = joining && !handoverOffered(projectDir, joinMark) ? [...overview.claimable].sort(compareBoardKeys) : [];
+  if (ready.length === 0 && join.length === 0) return null;
+  const readyWords = ready.map((row) => `${row.unit} is ready from ${row.owner}`).join(", and ");
+  const holders = new Map<string, string[]>();
+  for (const row of overview.claimed) {
+    if (!ready.some((entry) => entry.unit === row.unit)) holders.set(row.owner, [...(holders.get(row.owner) ?? []), row.unit]);
+  }
+  const held = [...holders].map(([owner, units]) =>
+    `; ${namesInProse(units.sort(compareBoardKeys))} ${units.length === 1 ? "is" : "are"} with ${owner}`
+  );
+  const joinWords = `${join.length === 1 ? "1 Unit is" : `${join.length} Units are`} open for a team to take: ` +
+    `${namesInProse(join)}${held.join("")}.`;
+  const label = `I'd label your team "${defaultTeamLabel(projectDir)}"; say another name to use it instead.`;
+  const question = ready.length > 0 && join.length > 0
+    ? `${joinWords} ${readyWords}. Take one for your team, or review and merge? ${label}`
+    : ready.length > 0
+    ? `${readyWords}: review and merge ${ready.length === 1 ? "it" : "them"}?`
+    : `${joinWords} Take one for your team? ${label}`;
+  const waitingOn = (unit: string): string[] =>
+    [...overview.waiting, ...overview.claimed].filter((row) => row.blockedBy?.includes(unit)).map((row) => row.unit)
+      .sort(compareBoardKeys);
+  return teamHandoverAsk(projectDir, {
+    handovers: [...(ready.length > 0 ? ["review" as const] : []), ...(join.length > 0 ? ["join" as const] : [])],
+    marks: [...ready.map((row) => teamHandoverMarkName("review", row.key)), ...(join.length > 0 ? [joinMark] : [])],
+    question,
+    choices: [
+      ...join.map((unit) => {
+        const waiting = waitingOn(unit);
+        return {
+          label: `Take ${unit}`,
+          detail: waiting.length === 0
+            ? "No other Unit waits on it."
+            : `${namesInProse(waiting)} ${waiting.length === 1 ? "waits" : "wait"} on it.`,
+          command: `${aidlcToolInvocation("orchestrate")} next --claim ${shellArg(unit)}`,
+        };
+      }),
+      ...ready.map((row) => ({
+        label: `Review and merge ${row.unit}`,
+        detail: "Shows what the team built and its checks, then asks whether to merge it.",
+        command: `${aidlcInvocation()} unit pin ${quoteCommandArgument(row.unit)}`,
+      })),
+    ],
+  });
+}
+
+// A Unit landed here that origin does not have yet: push main so the other
+// teams see it? Asked once per landed commit. Null when not due.
+function teamPushOffer(projectDir: string): AskDirective | null {
+  const landed = landedNotOnRemote(projectDir);
+  const fresh = landed.filter((row) => !handoverOffered(projectDir, teamHandoverMarkName("push", row.commit.slice(0, 12))));
+  if (fresh.length === 0 || shareBlocker(projectDir) !== null) return null;
+  const target = shareTarget(projectDir);
+  if (target === null) return null;
+  const units = landed.map((row) => row.unit);
+  const work = workToCommitWords(projectDir);
+  return teamHandoverAsk(projectDir, {
+    handovers: ["push"],
+    marks: fresh.map((row) => teamHandoverMarkName("push", row.commit.slice(0, 12))),
+    question: `Push ${target.branch} to ${target.remote} now so the other teams see ${units.join(" and ")} landed?` +
+      (work === null ? "" : ` I'd commit ${work} first.`),
+    choices: [{
+      label: `Push ${target.branch}`,
+      detail: `${work === null ? "Pushes" : "Commits, then pushes"} ${target.branch} to ${target.remote} as a plain push; ` +
+        "it never overwrites what a team pushed.",
+      command: `${aidlcInvocation()} unit share`,
+    }],
+  });
+}
+
 
 // How the Units reach the teams, said on the lead's checkout while none has
 // been taken (#3363): until then this session builds them, from the first
@@ -5188,14 +5461,20 @@ function teamHandoutLine(projectDir: string, stateContent: string, first: string
   } catch {
     return null;
   }
-  const take = `then each team runs \`${aidlcInvocation()} unit participate\` in its own clone and ` +
-    `\`${entrySkillInvocation()}\` to take one.`;
+  // With a remote, the step that starts a Unit here offers to share the work
+  // (teamShareOffer); without one, the line says how.
+  const offered = shareBlocker(projectDir) === null;
+  const take = `each team then runs \`${entrySkillInvocation()}\` in its own clone to take one.`;
   const building = `No team has taken a Unit yet, so this session builds them here, starting with the ` +
     `${unitPlainName(first)} Unit`;
-  return teamSkeletonOn(stateContent)
-    ? `${building}, the walking skeleton the others build on. To hand the others to teams, share this work ` +
-      `through git once it is built and approved; ${take}`
-    : `${building}. To hand Units to teams instead, share this work through git; ${take}`;
+  if (teamSkeletonOn(stateContent)) {
+    return offered
+      ? `${building}, the walking skeleton the others build on. Once it is built and approved, I'll offer to share ` +
+        "the work so each team can take one of the others."
+      : `${building}, the walking skeleton the others build on. To hand the others to teams, share this work ` +
+        `through git once it is built and approved; ${take}`;
+  }
+  return offered ? null : `${building}. To hand Units to teams instead, share this work through git; ${take}`;
 }
 
 // What reading a large repo set costs, said once with the step that starts
@@ -5433,6 +5712,10 @@ export interface TeamConstructionBoard {
   }>;
   claimable: string[];
   blocked: Array<{ unit: string; blockedBy: string[] }>;
+  /** Claimed Units a team published that wait for review here (not pinned at that commit, nothing left to land first). */
+  ready: Array<{ unit: string; owner: string; key: string }>;
+  /** Units landed here that the remote's integration branch does not have yet, and where a share pushes. */
+  unpushed: { units: string[]; remote: string; branch: string } | null;
   warning?: string;
 }
 
@@ -5657,6 +5940,17 @@ function assembleTeamConstructionBoard(
         transaction.released_after_git !== undefined,
     }));
   const claimable = [...overview.claimable].sort();
+  const ready = overview.claimed
+    .filter((row) => row.blockedBy === undefined)
+    .flatMap((row) => {
+      const claim = overview.claims.get(row.unit);
+      if (!claim?.payload.candidate_tree_oid) return [];
+      if (transactions.some((transaction) => transaction.unit === row.unit && transaction.pinned_oid === claim.oid)) return [];
+      return [{ unit: row.unit, owner: row.owner, key: `${row.unit}-${claim.oid.slice(0, 12)}` }];
+    })
+    .sort((a, b) => compareBoardKeys(a.unit, b.unit));
+  const landedHere = landedNotOnRemote(projectDir);
+  const target = landedHere.length > 0 && shareBlocker(projectDir) === null ? shareTarget(projectDir) : null;
   const blocked = overview.waiting
     .map((row) => ({
       unit: row.unit,
@@ -5672,6 +5966,8 @@ function assembleTeamConstructionBoard(
     awaitingMerge,
     claimable,
     blocked,
+    ready,
+    unpushed: target === null ? null : { units: landedHere.map((row) => row.unit), ...target },
     ...(overview.warning ? { warning: overview.warning } : {}),
   };
 }
@@ -5744,6 +6040,17 @@ export function renderTeamConstructionBoard(
         `- Revise, publish, and re-pin \`${row.unit}\` before requesting another merge gate.`,
       );
     }
+  }
+  for (const row of board.ready) {
+    nextActions.push(
+      `- \`${row.unit}\` is ready from ${row.owner} to review and merge: \`${aidlcInvocation()} unit pin ${row.unit}\`.`,
+    );
+  }
+  if (board.unpushed !== null) {
+    nextActions.push(
+      `- ${board.unpushed.branch} has ${board.unpushed.units.join(" and ")} landed here and not on ` +
+        `${board.unpushed.remote} yet: \`${aidlcInvocation()} unit share\`.`,
+    );
   }
   const claimedUnits = board.claims.filter((claim) => claim.status === "claimed");
   if (nextActions.length === 0) {
@@ -12826,7 +13133,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const settings = typedSettingModifiers(flags);
       emit(openPlanQuestionReplyDirective(
         planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings), planQuestion.answered,
-        replyIds(pd, "code-generation"),
+        replyIds(pd, "code-generation"), nextArgsAreOnlyWords(args),
       ));
       return;
     }
@@ -12841,7 +13148,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // this chat joined the work (a teammate's clone): the answer names them.
       const replies = chatReplies(pd, open.stage);
       const before = replies.replies.length === 0 ? messageBeforeJoining(pd, words.messageId) : null;
-      emit(openQuestionReplyDirective(open, words.id, replies, stateContent, before));
+      emit(openQuestionReplyDirective(open, words.id, replies, stateContent, nextArgsAreOnlyWords(args), before));
       return;
     }
     // Words at the engine's recovery question, once it holds the person's
@@ -12853,7 +13160,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openRecoveryReplyDirective(recovery, words.id));
+      emit(openRecoveryReplyDirective(recovery, words.id, nextArgsAreOnlyWords(args)));
       return;
     }
     // Words at an approval gate the person is looking at ("approve") may be
@@ -12871,7 +13178,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const gateFolder = gateNode && !(isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(gateScope, stateContent))
         ? commonFolder(resolveProduces(gateNode, null, engineRelativeRecordDir(pd), codekbCtxFor(pd)))
         : "";
-      emit(openGateReplyDirective(gateStage, words.id, gateFolder, replyIds(pd, gateStage)));
+      emit(openGateReplyDirective(gateStage, words.id, gateFolder, replyIds(pd, gateStage), nextArgsAreOnlyWords(args)));
       return;
     }
     // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
@@ -12981,16 +13288,30 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       }
     } else if (!beforeTeamUnitWork(pd, stateContent)) {
       try {
+        const readOnlyBoard = isReadOnlyEngineProbe();
+        // The teams' claims as the remote has them now, before walk or board is
+        // decided, so a checkout that fetched nothing since the teams claimed
+        // and published still sees them (one fetch of the claim refs only).
+        const reached = readOnlyBoard || refreshClaimRefs(pd);
+        const lastSeen = (): void => {
+          if (!reached) {
+            sayWithStepOnce(pd, "The shared repository did not answer just now, so this shows the teams' work as this clone last saw it.");
+          }
+        };
         const participant = existsSync(unitParticipantPath(pd));
         if (claimlessTeamCheckout(pd)) {
           // Exact claim-less team mode remains the increment-1 single-checkout
-          // walk: no registry access and no fan-out directive.
+          // walk: no fan-out directive.
           throw new Error("claimless-team-mode");
         }
-        const readOnlyBoard = isReadOnlyEngineProbe();
         const overview = cachedUnitClaimOverview(pd, {
           writeCache: !readOnlyBoard,
         });
+        const push = teamPushOffer(pd);
+        if (push) {
+          emit(push);
+          return;
+        }
         if (participant && overview.claimable.length > 0) {
           emit(unitClaimAskDirective(overview));
           return;
@@ -13007,13 +13328,23 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           overview,
           model,
         });
+        const offer = teamReviewOrJoinOffer(pd, overview, board);
+        if (offer) {
+          lastSeen();
+          emit(offer);
+          return;
+        }
         // While the guard's fan-out check holds (a landed Unit's claim
         // included) it refuses Unit work in this checkout, so the board stays
-        // up until the walk has no Unit left to take: every Unit merged.
+        // up until the walk has no Unit left to take: every Unit merged. A
+        // checkout that shared the plan, or a fresh clone of it, shows the
+        // board before the first claim too: its Units are the teams'.
         const dag = resolveBoltBatches(pd);
         const unitWorkLeft = dag.state === "ok" &&
           dag.batches.flat().some((unit) => !model.mergedUnits.has(unit));
-        if (board.awaitingMerge.length > 0 || (unitWorkLeft && cachedClaimFanoutActive(pd))) {
+        const teamsTakeUnits = cachedClaimFanoutActive(pd) || teamSharedHere(pd) || planMadeElsewhere(pd);
+        if (board.awaitingMerge.length > 0 || (unitWorkLeft && teamsTakeUnits)) {
+          lastSeen();
           emit(noticeDirective(
             renderTeamConstructionBoard(board, "dispatcher"),
           ));
@@ -15785,6 +16116,22 @@ function emitTeamUnitMajorRunStage(
     );
     return;
   }
+  if (!scopeStamp && step.kind === "work") {
+    const merged = model?.mergedUnits ?? new Set<string>();
+    let claimless = false;
+    try {
+      claimless = claimlessTeamCheckout(projectDir);
+    } catch {
+      // A record that cannot be read puts no offer; the walk goes on.
+    }
+    const share = claimless
+      ? teamShareOffer(projectDir, step.unit, units.filter((entry) => !merged.has(entry)).length, auditRows)
+      : null;
+    if (share) {
+      emit(share);
+      return;
+    }
+  }
   if (step.kind === "work" || step.kind === "gate") {
     const { stage, unit } = step;
     const unitKind = kinds?.get(unit) ?? null;
@@ -15854,12 +16201,26 @@ function emitTeamUnitMajorRunStage(
   if (scopeStamp) {
     // Named, so the step on record says which Unit is done here: the notice
     // is that step on every harness, and the plan-approval guard reads it.
+    const publish = teamPublishOffer(projectDir, scopeStamp.unit);
+    if (publish) {
+      emit(publish);
+      return;
+    }
+    const published = publishedAtHead(projectDir);
+    if (!published) {
+      const line = "It is not published yet: say when you want me to commit it and publish it for review on main.";
+      handoverFollowUps.set(
+        line,
+        `When the person asks to publish it, run \`${aidlcInvocation()} unit publish ${quoteCommandArgument(scopeStamp.unit)} ` +
+          "--commit` and tell them in plain words what it reports.",
+      );
+      sayWithStepOnce(projectDir, line);
+    }
     emit({
       ...noticeDirective(
-        `Unit "${scopeStamp.unit}" is complete and approved in this checkout. ` +
-          `Commit the completed candidate and run \`aidlc unit publish ${scopeStamp.unit}\` here; then pin, ` +
-          "gate and land it from a checkout of this project that holds no Unit claim (a fresh clone of it). " +
-          "Once it lands, pull main here and this checkout is free again.",
+        `Unit "${scopeStamp.unit}" is complete and approved in this checkout` +
+          (published ? ", and published for review on main." : ".") +
+          " Once it lands on main, pull main here and this checkout is free again.",
       ),
       unit: scopeStamp.unit,
     });
@@ -22246,6 +22607,8 @@ function nextArgsWithRequestFile(
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
   // Every route answers for the workflow unless it is an isolated Code
   // Generation run (emitSingleRunStage, handleContinue say so).
@@ -22468,9 +22831,10 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

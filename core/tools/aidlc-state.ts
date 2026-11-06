@@ -1,5 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
+import { BACKGROUND_SYNC_CAUSE, CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -286,7 +287,7 @@ import {
   swarmWorkerWorktreeMeta,
   UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
-import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { chatTookStepHere, withdrawnTurnPositions } from "./aidlc-record-core.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
@@ -748,7 +749,9 @@ function unrecordedRevisionSinceGateOpen(
     file: string | null;
     recovered: boolean;
   }[] = [];
+  const withdrawn = withdrawnTurnPositions(blocks);
   for (let i = 0; i < blocks.length; i++) {
+    if (withdrawn.has(i)) continue;
     const ev = auditField(blocks[i], "Event");
     if (!ev || !RELEVANT.has(ev)) continue;
     events.push({
@@ -937,6 +940,8 @@ function assertWorkflowNotArchived(content: string, operation: string): void {
 class UnitWaveRouteRefusalError extends StateCommandError {}
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const args = [...argv];
 
   // Extract --project-dir flag
@@ -1181,9 +1186,10 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
@@ -5805,6 +5811,7 @@ function staleSourcePreconditionError(
     const message =
       `Refusing to complete "${slug}": the workspace source changed again after ` +
         `the one recovery review by ${reviewer} (source-fingerprint mismatch).${whatChanged} ` +
+        `${BACKGROUND_SYNC_CAUSE} ` +
         `${recoveryGuidance(pd, content, slug)} ` +
         (requestChangesResetIsExecutable(content, slug)
           ? "Only a human Request Changes decision resets the review attempt; do not " +
@@ -5820,8 +5827,8 @@ function staleSourcePreconditionError(
   }
   const message =
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
-      `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
-      `the verdict, or revert the source change, then try again.${whatChanged}`;
+      `reviewed it.${whatChanged} ${BACKGROUND_SYNC_CAUSE} Ask ${reviewer} to review the current ` +
+      `source once more and record the verdict, or revert the source change, then try again.`;
   // On a per-unit stage the review that covered the source is the newest
   // Unit's, so the one recovery review is that Unit's.
   const reviewUnit = receipts.newestSourceUnit ?? undefined;
@@ -5900,12 +5907,15 @@ function staleReviewPreconditionError(
   action: ReviewerPreconditionAction = "complete",
 ): never {
   const slug = stage.slug;
+  const written = receipts.stageWrittenPaths.length > 0
+    ? ` Files written after that review: ${renderChangedPaths(receipts.stageWrittenPaths)}.`
+    : "";
   const recoverySpent =
     receipts.stageStaleProgress?.recoverySpent === true;
   if (recoverySpent) {
     const message =
       `${reviewerPreconditionPrefix(slug, action)}: this stage's output document ` +
-        `changed again after the one recovery review by ${reviewer}. ` +
+        `changed again after the one recovery review by ${reviewer}.${written} ${BACKGROUND_SYNC_CAUSE} ` +
         recoveryGuidance(pd, content, slug) +
         (requestChangesResetIsExecutable(content, slug)
           ? " Only a human Request Changes decision resets the review attempt; do not " +
@@ -5921,7 +5931,7 @@ function staleReviewPreconditionError(
   }
   const message =
     `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
-      `${reviewer} reviewed it. Run ` +
+      `${reviewer} reviewed it.${written} ${BACKGROUND_SYNC_CAUSE} Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
