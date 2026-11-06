@@ -36,6 +36,7 @@ import {
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
   maximalAttemptEvents,
+  ownShardRows,
   readAuditShardEvents,
   readCommittedUnitSourceManifest,
   readRegularFileNoFollowOrThrow,
@@ -494,4 +495,31 @@ export function rejectSwarmCheckpoint(
     consumeProtectedQuestion(pd, session);
     return snapshot(pd, batch, units).result;
   });
+}
+
+/** The person took a side-by-side batch over in the chat they asked in (`aidlc-swarm.ts take-over`). */
+const SWARM_TAKEN_OVER = "SWARM_TAKEN_OVER";
+
+/**
+ * The chat building a side-by-side batch in this Code Generation attempt: the
+ * one named on the latest of its SWARM_STARTED and SWARM_TAKEN_OVER rows on this
+ * clone's own shard, with that row. Null when the latest names none (a host that
+ * names no chat, a row from before chats were named) or there is none.
+ */
+export function swarmBuildingChat(
+  projectDir: string, batch: number, stage: string,
+): { chat: string; row: AuditShardEvent } | null {
+  try {
+    const floor = latestMainWorkflowStageRunFloorForProject(projectDir, stage);
+    const rows = ownShardRows(projectDir).mine.filter((row) =>
+      (row.event === "SWARM_STARTED" || row.event === SWARM_TAKEN_OVER) &&
+      auditBlockField(row.block, "Batch number") === String(batch) &&
+      auditBlockField(row.block, "Stage") === stage &&
+      auditBlockField(row.block, "Run floor") === floor);
+    const latest = rows.at(-1);
+    const chat = latest === undefined ? null : auditBlockField(latest.block, "Session");
+    return latest === undefined || !chat ? null : { chat, row: latest };
+  } catch {
+    return null;
+  }
 }

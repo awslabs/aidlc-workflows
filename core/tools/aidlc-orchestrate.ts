@@ -587,7 +587,7 @@ import {
 } from "./aidlc-construction-checkpoints.ts";
 import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import { newChatStep } from "./aidlc-new-chat.ts";
-import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
+import { resolveSwarmCheckpoint, swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
   claimsOpenHere,
@@ -8885,8 +8885,10 @@ const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
 const runStageQuestionsFiles = new WeakMap<RunStageDirective, string>();
 // Prints the agent stops after (turnEndingPrint).
 const turnEndingPrints = new WeakSet<Directive>();
-// A plan change the person asked for while the code plan's question is open:
-// the question stays the published step (emit does not replace it).
+// Prints that leave the published step as it is (emit does not replace it): a
+// plan change the person asked for while the code plan's question is open, and
+// a second chat's line about a batch another chat builds, whose step that chat
+// and its commands (allow-change, the plan question) still read.
 const planWaitPrints = new WeakSet<Directive>();
 const hookRefusalAsks = new WeakSet<Directive>();
 const publicationContexts = new WeakMap<
@@ -14272,6 +14274,35 @@ function swarmRevisionNeedsPreparation(
   });
 }
 
+// Said in a chat that did not start the side-by-side batch it reached.
+const BUILDING_IN_OTHER_CHAT = "Your other chat started building these Units.";
+
+// A batch another chat of this clone started (or took over) and has not
+// landed is that chat's (#3633): this chat says so and hands out nothing to run
+// for it. Only where the host named this chat; a chat that ended since its row
+// leaves the batch to whichever chat asks. The person's own words take it over.
+function batchBuiltElsewhereStep(projectDir: string, stage: string, batch: number, units: string[]): Directive | null {
+  const chat = engineSessionId ?? null;
+  if (chat === null || !hostNamesThisChat(projectDir)) return null;
+  const building = swarmBuildingChat(projectDir, batch, stage);
+  if (building === null || building.chat === chat) return null;
+  const rows = ownShardRows(projectDir).mine;
+  const at = rows.findIndex((row) => row.shard === building.row.shard && row.pos === building.row.pos);
+  if (rows.slice(at + 1).some((row) => row.event === "SESSION_ENDED" &&
+    auditBlockField(row.block, "Session") === building.chat)) return null;
+  const take = `${aidlcToolInvocation("swarm")} take-over --batch ${batch} --message <id>`;
+  const step = printDirective(
+    `The side-by-side build of ${units.join(", ")} was started from another chat on this machine and has not ` +
+      "landed, so run nothing for it here and end your turn. When the person asks to build these Units in this chat " +
+      `instead, run \`${take}\`, with <id> the message they asked in, then run bare ` +
+      `\`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
+  );
+  step.narration = BUILDING_IN_OTHER_CHAT;
+  turnEndingPrints.add(step);
+  planWaitPrints.add(step);
+  return step;
+}
+
 function tryEmitSwarm(
   slug: string,
   scope: string,
@@ -14415,6 +14446,11 @@ function tryEmitSwarm(
     "swarm",
   ];
   if (ceremonyPolicyValues(scope, stateContent).sensors === "on") protocolModules.push("sensors");
+  const elsewhere = batchBuiltElsewhereStep(projectDir, slug, pendingBatch, pendingUnits);
+  if (elsewhere !== null) {
+    emit(elsewhere);
+    return true;
+  }
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
     swarmRevisionNeedsPreparation(projectDir, slug, pendingBatch, pendingUnits);
   if (repos.length === 1) {

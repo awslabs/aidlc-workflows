@@ -2589,6 +2589,20 @@ Unit being built names in its plan (that change goes through the Unit's own
 checkpoint). Under a strict Guard Policy the team holds in memory it changes
 nothing and says in one line where that is set.
 
+### `aidlc engine swarm take-over` - build in this chat the Units another chat started
+
+```bash
+aidlc engine swarm take-over --batch <n> --message <id>
+```
+
+While Units are built side by side from one chat, `next` in another chat on the
+same machine says "Your other chat started building these Units." and hands out
+nothing to run for them. When the person asks that second chat to build them
+instead, this command proves the message they asked in, records it with this
+chat as `SWARM_TAKEN_OVER`, and `next` then hands this chat the batch. It refuses
+where the tool cannot tell its chats apart (there nothing holds the batch for
+another chat) and when the batch is not being built from another chat.
+
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 
 After a swarm batch settles, the engine may return `swarm_checkpoint` before
