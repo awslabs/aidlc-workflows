@@ -143,6 +143,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   displayRepoPath,
   hostedAddressOwner,
+  mappedRepoDir,
   repoCloneable,
   parseWorkspaceManifest,
   readWorkspaceRepos,
@@ -390,7 +391,6 @@ import {
   readProjectDescriptionAuthority,
   singleRunRequest,
   repoDir,
-  mappedRepoDir,
   repoIsWorkspace,
   registerIntentRecord,
   leaveCreationReceipt,

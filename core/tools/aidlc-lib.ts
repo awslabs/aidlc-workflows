@@ -30,8 +30,9 @@ import {
   SPACE_NAME_REGEX,
   repoNameProblem,
   repoNameRefusal,
+  normalizeDriveLetter,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation, normalizeDriveLetter, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
@@ -493,7 +494,7 @@ export {
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
 import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
-import { readWorkspaceRepos, repoNotThereLine } from "./aidlc-workspace-manifest.ts";
+import { mappedRepoDir, readWorkspaceRepos, repoNotThereLine } from "./aidlc-workspace-manifest.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -1356,18 +1357,6 @@ export function resolveProjectDirFromHook(importMetaUrl: string): string {
 }
 
 // --- File paths ---
-
-// Upper-case a leading Windows drive letter and leave every other character
-// alone. VS Code-based hosts (Kiro IDE) report written files as `c:\...` while
-// the project dir carries `C:\...`, and the drive letter is the one path
-// component Windows never compares case-sensitively (per-directory case
-// sensitivity applies to names, not the volume designator), so this makes root
-// prefix checks agree without conflating directories whose names differ only
-// in case. A POSIX absolute path never starts with `<letter>:`, so the call is
-// a no-op there.
-export function normalizeDriveLetter(p: string): string {
-  return /^[a-z]:(?:[\\/]|$)/.test(p) ? p[0].toUpperCase() + p.slice(1) : p;
-}
 
 // --- Terminal-command classification (the deterministic-dispatch seam) ---
 //
@@ -21189,11 +21178,6 @@ export function isValidRepoName(name: string): boolean {
 export function repoDir(projectDir: string, repoName: string): string {
   const mapped = readWorkspaceRepos(projectDir).entries.get(repoName)?.path;
   return mapped === undefined ? join(projectDir, repoName) : mappedRepoDir(projectDir, mapped);
-}
-
-// Where a repos.json `path` puts a checkout, read against the workspace.
-export function mappedRepoDir(projectDir: string, path: string): string {
-  return normalizeDriveLetter(resolvePath(projectDir, path.replace(/\\/g, "/")));
 }
 
 // The repo is the workspace folder itself (repos.json gives it `"path": "."`).

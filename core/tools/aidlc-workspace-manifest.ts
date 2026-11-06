@@ -5,9 +5,9 @@
 // can read it without an import cycle.
 
 import { readFileSync, statSync } from "node:fs";
-import { isAbsolute, join, normalize } from "node:path";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
-import { repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
+import { normalizeDriveLetter, repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
 
 export const REPOS_FILE = "repos.json";
 // One person's own paths, never committed (AI-DLC's marked .gitignore block).
@@ -294,6 +294,13 @@ export function readWorkspaceRepos(root: string): WorkspaceRepos {
   }
   cache.set(root, { stamp, repos });
   return repos;
+}
+
+// Where a repos.json `path` puts a checkout, read against the workspace: the one
+// reading repoDir (aidlc-lib.ts) and add-repo --path use. A path written on
+// Windows ("..\\billing") reads the same on every platform.
+export function mappedRepoDir(projectDir: string, path: string): string {
+  return normalizeDriveLetter(resolve(projectDir, path.replace(/\\/g, "/")));
 }
 
 // A path as the person wrote it, with forward slashes, for the lines they read.
