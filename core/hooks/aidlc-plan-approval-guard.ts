@@ -163,7 +163,7 @@ import {
   LOCK_FOLDER_HELD_SAID_KEY,
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
-import { mainCheckoutChangeStep, personSpokeSinceFinished, personTurnStands } from "../tools/aidlc-message-store.ts";
+import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
@@ -1791,9 +1791,9 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand, finis
 // The harness name says which, never the step's attempt: freshActiveDirectiveMarker
 // gives every harness a settled attempt, so a Claude Code step can carry one.
 // On finished work (`finished`, read as the human-turn hook reads it) their
-// words are kept beside the record, not on it, so what they asked since it
-// finished is read there (personSpokeSinceFinished): a redo of Code Generation
-// after work finished at it, which `next --stage` leaves to this door.
+// words are kept beside the record, and personTurnStands reads them there: a
+// redo of Code Generation after work finished at it, which `next --stage`
+// leaves to this door, is theirs once they asked.
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
@@ -1807,7 +1807,7 @@ function jumpIsPersonsMove(
   // A Unit's reopen leaves finished work finished (aidlc-jump reopen moves no
   // Status), so it would record a reopen that runs nothing: it waits as before.
   if (finished && jump.verb !== "execute") return false;
-  if (!(finished ? personSpokeSinceFinished(projectDir) : personTurnStands(projectDir, "plain", { requests: true }))) return false;
+  if (!personTurnStands(projectDir, "plain", { requests: true })) return false;
   const last = lastStepAdmitsPersonsMoves(projectDir, jump, finished);
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }
@@ -2181,7 +2181,7 @@ async function mutationIntent(
     // handed to a shell or evaluator (`eval "aidlc engine jump ..."`), which
     // the pass for finished work keeps waiting.
     hidesEngine = opaqueShell && (looksLikeEngine || ENGINE_WORD.test(analysed) ||
-      (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand)));
+      (/\baidlc\b(?![\\/])/i.test(analysed) && invocations.some(runsHiddenCommand)));
     // Its `next` that carries a request file, read where the engine reads the
     // flag (before `--`), however it was wrapped (judgedNext).
     for (const invocation of invocations) {

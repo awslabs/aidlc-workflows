@@ -1,4 +1,4 @@
-// covers: function:jumpIsPersonsMove, function:lastStepAdmitsPersonsMoves, function:personSpokeSinceFinished, function:selectedRecordIsFinished, hook:aidlc-plan-approval-guard
+// covers: function:jumpIsPersonsMove, function:lastStepAdmitsPersonsMoves, function:turnKeptSinceFinished, function:standingPersonTurn, function:selectedRecordIsFinished, hook:aidlc-plan-approval-guard
 //
 // Work whose last stage was Code Generation (every stage after it skipped) is
 // finished there with its Current Stage still on Code Generation, so `next

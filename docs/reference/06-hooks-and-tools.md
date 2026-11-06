@@ -1813,12 +1813,14 @@ compaction), the refusal names `next`, which records it again.
 
 **Work that finished at Code Generation.** When Code Generation was the last stage that ran (the stages after it
 skipped), the finished work keeps Current Stage on it, but its walk is over: an edit, a shell command or the
-developer passes this hook under every Guard Policy, whoever asked for it, as once a
-workflow's walk is past Code Generation, where a developer handoff that names a plan is still judged. AI-DLC's own
-commands this hook holds keep their own conditions, and so does a line it cannot read that names AI-DLC (`eval`
-or `sh -c` around a jump, as a tools script or as `aidlc`): a jump passes as the person's move (above), so the agent's own redo, with no message of theirs since
-the work finished, is refused. A Code Generation run on its own opened over the finished work is live work, and its
-build is judged as that run's.
+developer passes this hook under every Guard Policy, whoever asked for it, as once a workflow's walk is past Code
+Generation, where a developer handoff that names a plan is still judged. AI-DLC's own commands this hook holds keep
+their own conditions, and so does a line it cannot read that names AI-DLC (`eval` or `sh -c` around a jump, as a
+tools script or as `aidlc`). Each reads the person's message kept since the finish ([State Machine](12-state-machine.md),
+`HUMAN_TURN`): a jump passes as their move (above), and a check turned off or a `config` form that waits for them
+passes once they asked, so the agent's own redo or switch, with no message of theirs since the work finished, is
+refused. A Code Generation run on its own opened over the finished work is live work, and its build is judged as
+that run's.
 
 **What the plan never governs.** At any point of Code Generation, under every
 Guard Policy and whatever the current step (the plan being written, the engine's

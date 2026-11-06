@@ -1,4 +1,4 @@
-// covers: function:jumpIsPersonsMove, function:personSpokeSinceFinished, hook:aidlc-plan-approval-guard, hook:aidlc-record-human-turn, scope:bugfix
+// covers: function:jumpIsPersonsMove, function:turnKeptSinceFinished, function:standingPersonTurn, hook:aidlc-plan-approval-guard, hook:aidlc-record-human-turn, scope:bugfix
 //
 // #3608, driven with no model through the real engine and hooks
 // (tests/harness/scope-run.ts): a bugfix with the stages after Code Generation
