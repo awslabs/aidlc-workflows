@@ -204,6 +204,16 @@ function goOn(who: { agent: AgentStandIn }, said: Directive): Directive {
   return who.agent.drive(who.agent.next());
 }
 
+// The person picks a choice whose command prints words, not a result, and the agent runs it.
+function choose(team: Team, question: string, choices: Array<{ label: string; command?: string }>, label: string): string {
+  const choice = choices.find((c) => c.label === label);
+  expect(choice?.command, `${label} in ${JSON.stringify(choices)}`).toBeString();
+  team.person.pick(question, choices.map((c) => c.label), label);
+  const ran = team.agent.host.bash(choice!.command!);
+  expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+  return ran.stdout;
+}
+
 // The lead's chat at the home; the journey ends at the first step after Build
 // and Test (the fixture's state lists Construction only).
 function homeStandIn(home: Home) {
@@ -280,7 +290,7 @@ describe("one piece of work, a team on every tool", () => {
     const cloneAsk = wendy.agent.next();
     expect(cloneAsk.ask_type, JSON.stringify(cloneAsk)).toBe("unit-clone");
     expect((cloneAsk.choices as Array<{ label: string }>).map((c) => c.label)).toEqual(["Clone checkout-web", "Not now"]);
-    pick(wendy, cloneAsk, "Clone checkout-web");
+    choose(wendy, String(cloneAsk.question), cloneAsk.choices as Array<{ label: string; command?: string }>, "Clone checkout-web");
     expect(existsSync(join(wendy.dir, "checkout-web", "README.md"))).toBe(true);
     const wendyEnd = wendy.agent.drive(wendy.agent.next());
     expect(wendyEnd.ask_type, JSON.stringify(wendyEnd)).toBe("unit-push");
