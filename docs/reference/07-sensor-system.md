@@ -358,6 +358,26 @@ blocking check named in its latest result; a check that named no Unit's output,
 or stage-major work, starts every Unit again.
 A successful override records the sensor ids,
 optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
+
+In solo work built Unit by Unit with checkpoints, a Unit's checkpoint `verify`
+fires its stages' blocking gate checks on that Unit's own declared outputs
+(`aidlc-state.ts checkpoint-checks`), after the verification command and before
+the checkpoint question, with the same `fireGateSensors` and the same refusal.
+The refusal names the Unit for `log decision` and `log answer`, and the retry is
+the checkpoint's `verify --override-blocking-sensors --user-input "Override
+blocking sensors"`; the pick is that Unit's and covers the findings shown with
+it, so a later Unit failing the same check is asked again, with one line saying
+at which Unit the person overrode it. A re-logged question does not spend a pick
+that still stands; a `verify` that verified with it does. The
+`CHECKPOINT_VERIFICATION_RECORDED` row records `Blocking Checks`
+(`<stage>:<sensor>@<binding digest>=passed|overridden`), `Checked Outputs` (each
+file's line-ending-normalized SHA-256) and the override fields. At the stage gate
+after the last Unit, each blocking check skips a file its Unit's current
+checkpoint checked while the file's hash is unchanged and the check's binding is
+the same; it reads every other file once. A checkpoint no person answers
+(Construction autonomy) fires nothing, and the late gate halts on the findings as
+before. Guard Policy, at any value, never softens a blocking check: only the
+person's Override or the work's checks switched off lets work past one.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.
 In this release, a write-fired sensor may declare `blocking`, but PostToolUse

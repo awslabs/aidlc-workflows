@@ -1402,8 +1402,13 @@ async function handleCheckpoint(args: string[]): Promise<void> {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
   const overUnfinishedReview = args.includes("--over-unfinished-review");
-  const flagArgs = args.filter((arg) => arg !== "--over-unfinished-review");
+  // The person's Override at a blocking check on the Unit, retried as the refusal names it.
+  const overrideBlockingSensors = args.includes("--override-blocking-sensors");
+  const flagArgs = args.filter((arg) => arg !== "--over-unfinished-review" && arg !== "--override-blocking-sensors");
   const flags = parseFlags(flagArgs);
+  if (overrideBlockingSensors && flags.action !== "verify") {
+    error("checkpoint --override-blocking-sensors goes with --action verify.");
+  }
   if (overUnfinishedReview && flags.action !== "verify") {
     error("checkpoint --over-unfinished-review goes with --action verify.");
   }
@@ -1435,6 +1440,7 @@ async function handleCheckpoint(args: string[]): Promise<void> {
       result = await verifyConstructionCheckpoint(
         pd, flags.unit, checkpointKind, {
           overUnfinishedReview, message: flags.message,
+          overrideBlockingSensors, userInput: flags["user-input"],
           timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]),
         },
       );
@@ -1533,7 +1539,7 @@ function boltUsage(subcommand: string | undefined): string {
       "  Sets the Construction autonomy mode. Required: --mode.",
     ],
     checkpoint: [
-      `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
+      `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}] [--override-blocking-sensors --user-input <choice>]`,
       "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
       `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
       "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",

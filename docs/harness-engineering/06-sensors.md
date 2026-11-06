@@ -57,7 +57,13 @@ before you author anything:
   unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts
   stop gate entry. An override is a separate logged human decision, not a bare
   flag, and is forbidden in autonomous mode; a successful override records ids,
-  optional detail paths, and reasons on `STAGE_AWAITING_APPROVAL`. Blocking
+  optional detail paths, and reasons on `STAGE_AWAITING_APPROVAL`. In work
+  built Unit by Unit with checkpoints, a stage's blocking checks run on each
+  Unit's own outputs at that Unit's checkpoint, before the person is asked to
+  approve it, and the Fix or Override is for that Unit; the stage gate after
+  the last Unit checks again only a file changed since its Unit's checkpoint,
+  a check added or changed since, and a Unit approved without one. Guard Policy
+  never softens a blocking check, at any value. Blocking
   enforcement applies only to `fire_on: gate` in this release. A write-fired
   sensor may declare `blocking`, but its result remains advisory.
 

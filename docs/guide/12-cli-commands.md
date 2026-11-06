@@ -2408,6 +2408,7 @@ before does not count) is required under every Guard Policy: `rereview` carries
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --over-unfinished-review --message <id>
+aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --override-blocking-sensors --user-input "Override blocking sensors"
 ```
 
 Verification runs the recorded, human-authorized `Construction Verification
@@ -2416,7 +2417,11 @@ does not accept a command argument. If `construction_checkpoint.command_authoriz
 is false, do not run `verify`: complete the
 [recorded-command flow](#construction-verification-command-record-human-authorization),
 then re-run `next`. A skeleton's command must prove the integrated slice end to
-end and check ordinary Units' working results. Approval requires a current
+end and check ordinary Units' working results. In solo work, `verify` then runs
+the blocking gate checks of the checkpoint's stages on the Unit's own outputs; a
+failing one refuses with the Unit named for the check's Fix or Override question,
+and the person's Override is retried with `--override-blocking-sensors --user-input
+"Override blocking sensors"` ([blocking checks at a Unit's checkpoint](../reference/07-sensor-system.md#default_severity)). Approval requires a current
 verified proof. Show "Verified with `<full command>` (exit 0)" in the human
 approval question, copying the complete `verification_command` from the current
 tool output into a code span without abbreviation. This display label is the full
