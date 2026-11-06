@@ -214,8 +214,10 @@ describe("a teammate opens solo work built from another machine", () => {
     // The lead fetches nothing by hand: the home looks for a teammate's take itself.
     const step = next(home.dir);
     expect((step.change_notices ?? []) as string[]).toContain(
-      "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time.",
+      "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.",
     );
+    // The step itself carries their sign-off, for an agent that reads no board.
+    expect(String(step.change_notices_note)).toContain("lead-sign-off on --request-file aidlc/.aidlc-request-text/unit-lead-sign-off.txt");
     const state = stateOf(home.dir);
     expect(field(state, "Unit Ownership")).toBe("team");
     expect(field(state, "Home Location")).toBe(home.remote);
@@ -247,7 +249,7 @@ describe("the lead's own chat hears a teammate's take once a chat starts and bet
     expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
     const trace = join(tempDir("trace"), "trace2.json");
     const traced = { ...chat, GIT_TRACE2_EVENT: trace };
-    const notice = "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time.";
+    const notice = "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.";
     for (let message = 0; message < 3; message++) {
       typed(home.dir);
       const step = next(home.dir, traced);
@@ -271,7 +273,7 @@ describe("the lead's own chat hears a teammate's take once a chat starts and bet
     const other: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat-2" };
     const step = next(home.dir, other);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
-      "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time.",
+      "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.",
     );
   });
 
@@ -290,7 +292,7 @@ describe("the lead's own chat hears a teammate's take once a chat starts and bet
     // The agent's own next step in the same turn, the person silent.
     const step = next(home.dir, chat);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
-      `Your teammate bob took ${unit}; this session carries on with the rest, one Unit at a time.`,
+      `Your teammate bob took ${unit}; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.`,
     );
     expect(step.unit ?? null, JSON.stringify(step)).not.toBe(unit);
   });
@@ -358,6 +360,16 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
 });
 
 describe("the lead's sign-off", () => {
+  test("asked for in the lead's own words: the setting is on, and the record keeps their words whole", () => {
+    const { home } = refundsTaken();
+    const on = run(UNIT, ["lead-sign-off", "on", "--person-words", "I want to sign off Bob's tool myself before it counts as done"], home.dir);
+    expect(on.status, on.out).toBe(0);
+    expect(field(stateOf(home.dir), "Lead Sign-off")).toBe("on");
+    const set = readAuditShardEvents(home.dir).filter((row) => row.event === "LEAD_SIGN_OFF_SET");
+    expect(set).toHaveLength(1);
+    expect(set[0].block).toContain("**Person Words**: I want to sign off Bob's tool myself before it counts as done");
+  });
+
   test("off by default: a merged Unit is done with no sign-off asked", () => {
     const { home, hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);

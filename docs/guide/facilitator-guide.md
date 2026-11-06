@@ -213,7 +213,8 @@ When a participant opens the facilitator's solo work in their own clone while
 the facilitator builds it, AI-DLC offers them an open Unit to take as their
 own, the whole work to carry on, or to follow along. When they take one, the
 facilitator's next step says so in one line ("Your teammate <name> took
-checkout-ui; this session carries on with the rest, one Unit at a time.") and
+checkout-ui; this session carries on with the rest, one Unit at a time, and you
+can ask to sign off a teammate's result yourself before it counts as done.") and
 the work carries on as team work, with nothing asked again. See
 [A second person on solo work](workshop-mode.md#a-second-person-on-solo-work-and-the-leads-sign-off).
 

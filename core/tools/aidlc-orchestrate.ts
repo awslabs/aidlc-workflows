@@ -720,6 +720,7 @@ import {
   unitsKeptForTeams,
   unitsInPlanOrder,
   unknownLikelyReposLine,
+  SIGN_OFF_CLAUSE,
   UNIT_WORDS_NOTE,
   unitWordsArg,
   TEAM_RHYTHM_OFFER,
@@ -1071,6 +1072,11 @@ function switchBackOnFollowUps(directive: Directive): string[] {
       notice.backOn !== null && carried.includes(notice.line) ? [notice.backOn] : []
     ),
     ...[...handoverFollowUps].flatMap(([line, followUp]) => carried.includes(line) ? [followUp] : []),
+    // Read off the line itself, so every part of a step delivered in parts carries it.
+    ...(carried.some((line) => line.includes(SIGN_OFF_CLAUSE))
+      ? [`When the person asks to sign off a teammate's result themselves, run \`${aidlcToolInvocation("unit")} lead-sign-off on ` +
+        `${unitWordsArg("lead-sign-off")}\` and tell them in plain words what it reports. ${UNIT_WORDS_NOTE}`]
+      : []),
   ];
 }
 

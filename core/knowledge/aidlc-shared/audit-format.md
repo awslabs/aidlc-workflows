@@ -73,7 +73,7 @@ it would be without it. The rows that carry it:
   with `Source: you`.
 - `CHANGE_ACCEPTED` that carries the person's `Message Id`.
 
-## Event Registry (136 events, 27 categories)
+## Event Registry (137 events, 27 categories)
 
 ### Workflow Lifecycle (9 events)
 
@@ -272,7 +272,7 @@ record. A question in a questions file is digested entry by entry with its
 and Windows line endings change nothing. The ids are recorded only: nothing
 reads them to decide anything yet.
 
-### Unit Configuration and Lifecycle Events (12 events, unit-major Construction)
+### Unit Configuration and Lifecycle Events (13 events, unit-major Construction)
 
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
@@ -300,6 +300,7 @@ once no unit owes it.
 |-------|------|-----------------|---------|
 | `UNIT_OWNERSHIP_SET` | Unit-major ownership mode is set before unit activity starts, or solo work switches to teams because a teammate took a Unit from another machine | Timestamp, Mode; optional Home Location, Reason | `tools/aidlc-state.ts set-unit-ownership`, `tools/aidlc-unit.ts` (the switch) |
 | `UNIT_GATE_RHYTHM_SET` | Team-owned gate rhythm is set before the first team Unit gate | Timestamp, Rhythm | `tools/aidlc-state.ts set-unit-gate-rhythm` |
+| `LEAD_SIGN_OFF_SET` | The lead switched their own sign-off of each team's result on or off at the home | Timestamp, Mode; optional Person Words (the lead's own words, whole) | `tools/aidlc-unit.ts lead-sign-off` |
 | `UNITS_ASSIGNED` | The lead named, at the home, which team builds which Unit and which stay open for any team | Timestamp, Assigned, Open; optional Person Words; By File for a hand-off (no Open) | `tools/aidlc-unit.ts assign`, `hand-off` |
 | `UNIT_TAKEN_IN` | A team took one Unit of a home's work in, as a build of its own in its space | Timestamp, Unit, Team, Home Location, Home Work, Home Record, Home Attempt, Home Commit, Copy Fingerprint, Home Approvals | `tools/aidlc-unit.ts take` |
 | `UNIT_PUSHED` | A team pushed its Unit's branch in each repo it changed and sent the result home | Timestamp, Unit, Branch, Repos | `tools/aidlc-unit.ts push` |
@@ -507,7 +508,7 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses the authority-bearing receipts in `CLI_PROTECTED_EVENT_TYPES` (`tools/aidlc-audit.ts`), which only their owning tool or hook may emit: `STAGE_COMPLETED`, `STATE_UPGRADED`, `STAGE_DEFINITION_CHANGED`, `SHARED_INPUT_AMENDED`, `STAGE_OUTPUT_AMENDED`, `SOURCE_WORK_NOT_FOUND`, `HUMAN_TURN`, `HOST_TURN`, `QUESTION_UNANSWERED`, `QUESTION_REPLIED`, `REQUEST_ROUTED`, `QUESTION_ASKED`, `QUESTION_SHOWN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_OVERRIDDEN`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `MAIN_CHECKOUT_CHANGE_ALLOWED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNITS_ASSIGNED`, `UNIT_TAKEN_IN`, `UNIT_PUSHED`, `UNIT_GATE_RHYTHM_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`, `BOLT_STARTED`, `BOLT_COMPLETED`, `BOLT_FAILED`, `AUDIT_FORKED`, `AUDIT_MERGED`, `STATE_FORKED`, `STATE_MERGED`, `WORKTREE_CREATED`, `WORKTREE_MERGED`, `WORKTREE_DISCARDED`, `SOURCE_COMMITTED`, `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET`, `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE`, `SYSTEM_INSTALL_ALLOWED`, `CEREMONY_SET`. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event or an empty `**Event**:` line, and refuses line-breaking headings; the event readers take an `**Event**:` value from its own line only.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses the authority-bearing receipts in `CLI_PROTECTED_EVENT_TYPES` (`tools/aidlc-audit.ts`), which only their owning tool or hook may emit: `STAGE_COMPLETED`, `STATE_UPGRADED`, `STAGE_DEFINITION_CHANGED`, `SHARED_INPUT_AMENDED`, `STAGE_OUTPUT_AMENDED`, `SOURCE_WORK_NOT_FOUND`, `HUMAN_TURN`, `HOST_TURN`, `QUESTION_UNANSWERED`, `QUESTION_REPLIED`, `REQUEST_ROUTED`, `QUESTION_ASKED`, `QUESTION_SHOWN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_OVERRIDDEN`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `MAIN_CHECKOUT_CHANGE_ALLOWED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNITS_ASSIGNED`, `UNIT_TAKEN_IN`, `UNIT_PUSHED`, `UNIT_GATE_RHYTHM_SET`, `LEAD_SIGN_OFF_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`, `BOLT_STARTED`, `BOLT_COMPLETED`, `BOLT_FAILED`, `AUDIT_FORKED`, `AUDIT_MERGED`, `STATE_FORKED`, `STATE_MERGED`, `WORKTREE_CREATED`, `WORKTREE_MERGED`, `WORKTREE_DISCARDED`, `SOURCE_COMMITTED`, `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET`, `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE`, `SYSTEM_INSTALL_ALLOWED`, `CEREMONY_SET`. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event or an empty `**Event**:` line, and refuses line-breaking headings; the event readers take an `**Event**:` value from its own line only.
 
 ## Format Standards
 

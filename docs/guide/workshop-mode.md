@@ -836,7 +836,11 @@ the home, a team's result waits for the lead's own word: the home asks once
 as the result arrives ("refunds came back from payments: ... Sign it off?"),
 and the Unit counts as done only once it is signed off and every repo it
 changed has merged; the board says "waiting for your sign-off" meanwhile, and
-keeps **Sign it off** there after a **Not now**.
+keeps **Sign it off** there after a **Not now**. When solo work switches to
+teams because a teammate took a Unit, the one line the lead hears says they can
+ask for this; asked in their own words ("I want to sign off Bob's part myself"),
+AI-DLC switches it on, and the record keeps their words whole
+(`LEAD_SIGN_OFF_SET`).
 
 ---
 

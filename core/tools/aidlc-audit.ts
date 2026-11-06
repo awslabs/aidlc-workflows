@@ -284,6 +284,7 @@ const VALID_EVENT_TYPES = new Set([
   "UNIT_TAKEN_IN",
   "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
   "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
   // Worktree lifecycle:
@@ -621,6 +622,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_TAKEN_IN",
   "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
   // The applied Construction policy decides which stage starts are attempt
   // boundaries for Unit receipts, so only its typed setters may record it.
   "CONSTRUCTION_POLICY_SET",
@@ -723,6 +725,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "UNITS_ASSIGNED",
   "UNIT_TAKEN_IN",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
   "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",

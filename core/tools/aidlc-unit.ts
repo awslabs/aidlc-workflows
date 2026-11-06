@@ -164,6 +164,7 @@ import {
   homeLocation,
   inputName,
   LEAD_RULES_FIELD,
+  SIGN_OFF_CLAUSE,
   lastCommittedByThisPerson,
   parseHandFile,
   patchIdOf,
@@ -231,7 +232,7 @@ const UNIT_USAGE: ReadonlyMap<string, string> = new Map([
   ["gate", "gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)"],
   ["hand-off", "hand-off <unit> --team <team> [--request-file <file> | --person-words <text>]"],
   ["land", "land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] [--accept-released-attempt --user-input <human acknowledgment>]"],
-  ["lead-sign-off", "lead-sign-off on|off"],
+  ["lead-sign-off", "lead-sign-off on|off [--request-file <file>]"],
   ["merge-status", "merge-status <unit>"],
   ["merged", "merged <unit> --repo <repo> (--request-file <file> | --person-words <text>)"],
   ["participate", "participate"],
@@ -7610,7 +7611,10 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
     const set = spawnSync(command, args, { cwd: projectDir, encoding: "utf-8", env: process.env });
     if (set.status !== 0) return null;
   }
-  return `Your teammate ${who} took ${units}; this session carries on with the rest, one Unit at a time.`;
+  // The lead's sign-off is theirs to ask for; the line says so once, and the
+  // step that carries the line carries its setter (SIGN_OFF_CLAUSE), never only the board.
+  const signOff = leadSignOffOn(readStateFile(projectDir)) ? "" : `, ${SIGN_OFF_CLAUSE}`;
+  return `Your teammate ${who} took ${units}; this session carries on with the rest, one Unit at a time${signOff}.`;
 }
 
 // --- The lead's sign-off ------------------------------------------------------------
@@ -7628,7 +7632,12 @@ function leadSignOffSetting(args: string[], projectDir?: string): void {
   if (value !== "on" && value !== "off") fail(unitUsage("lead-sign-off"));
   const pd = resolveProjectDir(projectDir);
   if (!isTeamUnitOwnership(readStateFile(pd))) fail("The lead's sign-off is for work that teams build.");
-  withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", LEAD_SIGNOFF_FIELD, value)));
+  // The lead's own words for it, recorded whole beside the setting.
+  const words = personWordsOf(pd, parseArgs(args.slice(1)).flags);
+  withAuditLock(pd, () => {
+    writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", LEAD_SIGNOFF_FIELD, value));
+    appendAuditEntryUnlocked("LEAD_SIGN_OFF_SET", { Mode: value, ...(words ? { "Person Words": words } : {}) }, pd);
+  });
   console.log(JSON.stringify({
     lead_sign_off: value,
     notice: value === "on"

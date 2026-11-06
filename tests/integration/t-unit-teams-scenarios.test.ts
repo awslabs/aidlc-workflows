@@ -382,7 +382,7 @@ describe("scenario 5: solo work, then a second person joins", () => {
 
     git(home.dir, ["fetch", "-q", "origin"]);
     const step = next(home.dir);
-    expect(notices(step)).toContain("Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time.");
+    expect(notices(step)).toContain("Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.");
     expect(field(stateOf(home.dir), "Unit Ownership")).toBe("team");
     expect(step.unit).toBe("reporting");
     expect(next(home.dir).ask_type).toBeUndefined();

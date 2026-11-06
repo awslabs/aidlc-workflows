@@ -419,6 +419,10 @@ export function unitWordsArg(verb: string, unit?: string): string {
   return `--request-file ${REQUEST_TEXT_DIR}/unit-${name}.txt`;
 }
 
+// The clause of the line solo work's switch to teams says, while the lead's
+// sign-off is off: the step carrying it carries the setter too.
+export const SIGN_OFF_CLAUSE = "and you can ask to sign off a teammate's result yourself before it counts as done";
+
 export const UNIT_WORDS_NOTE =
   "Where a command names a --request-file, write the person's words to it first, as they typed them, with your " +
   "file tool, never a shell, then run the command.";
