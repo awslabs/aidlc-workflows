@@ -1,0 +1,1 @@
+"""CLI-specific adapter implementations."""

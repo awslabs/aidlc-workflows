@@ -1,0 +1,4 @@
+# Nova Pro — override executor model only; all other settings inherit from default.yaml
+models:
+  executor:
+    model_id: "us.amazon.nova-pro-v1:0"
