@@ -1668,15 +1668,17 @@ bucket's `audit/` prefix, or tees a log inside an `audit` folder while another
 path in it cannot be placed, passes, and its text is read again as a command
 when it runs. Before any of this the command's
 backslash-newline continuations are joined, as the shell joins them. Literal
-assignments are dequoted by the shell's rules and expanded over every value the
-command gives a variable, and relative words are resolved against every
-directory a literal `cd` could leave the shell in; each result is checked
-against the anchored path, so a project's own `src/audit/` stays writable. A
-word that still cannot be decided (a computed assignment or a command
-substitution such as `$(printf au)dit`) is refused when the command names an
-`audit` folder in any quoting (`x/audit`, `audit/x`; not `npm audit` or
-`audit-service`), or reaches into `aidlc/spaces/`, or already runs inside that
-tree. The folders the shell stands in and above are the person's own path, so a
+assignments, and the words a `for` loop gives its variable, are dequoted by the
+shell's rules and expanded over every value the command gives a variable, and
+relative words are resolved against every directory a literal `cd` could leave
+the shell in; each result is checked against the anchored path, so a project's
+own `src/audit/` stays writable. A word that still cannot be decided (a
+computed assignment or a command substitution such as `$(printf au)dit`) is
+refused when the command names an `audit` folder in any quoting (`x/audit`,
+`audit/x`; not `npm audit` or `audit-service`), or reaches into `aidlc/spaces/`,
+or already runs inside that tree, or a literal `cd` in the command leaves the
+shell there (a split `cd aidlc; cd spaces/...` counts like the joined
+spelling). The folders the shell stands in and above are the person's own path, so a
 project under a folder named audit does not count. Any other
 unresolvable write keeps the fail-open treatment the runtime-record check gives
 such targets. This is a guardrail against prose-driven and casual writes, not a
