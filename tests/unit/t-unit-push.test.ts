@@ -1597,6 +1597,79 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
   });
 });
 
+// refunds and checkout-ui both in checkout-api for payments: one clone builds both.
+const TWO_BUILDS_PLAN = `# Unit dependencies
+
+\`\`\`yaml
+units:
+  - name: refunds
+    kind: service
+    repos: [checkout-api, billing]
+    depends_on: []
+  - name: checkout-ui
+    kind: ui
+    repos: [checkout-api]
+    depends_on: []
+\`\`\`
+`;
+const SENT_BACK_WORDS = "it's their refund-flow test that pulls billing into checkout-api's coverage";
+
+// One chat of payments' clone builds refunds (pushed, merged, done at the
+// lead's project), then checkout-ui (pushed, merged, finished); then the
+// lead's Build and Test sends refunds back. The chat looked once before.
+function sentBackWhileOnFinishedBuild(session: string) {
+  const { home, hosts, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=payments"], undefined, TWO_BUILDS_PLAN);
+  const chat = personsChat(session);
+  expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build refunds" }).status).toBe(0);
+  codeGenerated(alice, record);
+  finishBuild(record);
+  appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
+  expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
+  mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+  mergeOnHost(hosts.billing, "refunds", "squash");
+  git(home.dir, ["fetch", "-q", "origin"]);
+  next(home.dir);
+  expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "payments"], alice, chat).status).toBe(0);
+  const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+  const ui = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+  expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build checkout-ui" }).status).toBe(0);
+  writeFileSync(join(alice, "checkout-api", "src", "ui.ts"), "export const ui = 1;\n");
+  const stage = join(ui, "construction", "checkout-ui", "code-generation");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+    stage: "code-generation", unit: "checkout-ui", version: 1, writes: [{ repo: "checkout-api", path: "src/ui.ts" }],
+  }, null, 2)}\n`);
+  writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nThe refunds page.\n");
+  finishBuild(ui);
+  appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(ui), "payments");
+  appendAuditEntry("WORKFLOW_COMPLETED", {}, alice, basename(ui), "payments");
+  expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
+  mergeOnHost(hosts["checkout-api"], "checkout-ui", "squash");
+  git(home.dir, ["fetch", "-q", "origin"]);
+  next(home.dir);
+  // The chat's look at its finished build, before the lead's word.
+  expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "/aidlc" }).status).toBe(0);
+  next(alice, chat);
+  const sent = run(UNIT, ["send-back", "refunds", "--person-words", SENT_BACK_WORDS], home.dir);
+  expect(sent.status, sent.out).toBe(0);
+  return { home, hosts, alice, record, chat };
+}
+
+// This .git's FETCH_HEAD cannot be written while `step` runs: git's own stop in
+// Codex's sandbox, which keeps the repository's .git read-only.
+function withReadOnlyGit<T>(dir: string, step: () => T): T {
+  const head = join(dir, ".git", "FETCH_HEAD");
+  if (!existsSync(head)) writeFileSync(head, "");
+  chmodSync(head, 0o444);
+  chmodSync(join(dir, ".git"), 0o555);
+  try {
+    return step();
+  } finally {
+    chmodSync(join(dir, ".git"), 0o755);
+    chmodSync(head, 0o644);
+  }
+}
+
 // The lead's call on a live run: the lead sent a team's Unit back while that
 // team's chat was on another of its builds, and "any news from the lead?"
 // heard nothing; the lead's words reached only the build they were about.
@@ -1617,5 +1690,47 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 600)).toContain(line);
     expect(String(step.change_notices_note)).toContain(`take refunds --home ${HOME_RECORD}`);
     expect((personsNext(alice, chat, "alice-chat").change_notices ?? []) as string[]).not.toContain(line);
+  });
+
+  // Live runs on Kiro IDE and Codex: in the chat of the team's finished build,
+  // the first "anything new for us?" heard nothing; only a second ask heard
+  // that the lead's Build and Test sent refunds back.
+  const sentBack = `refunds was sent back from the lead's Build and Test: "${SENT_BACK_WORDS}". Its build is waiting for you; ` +
+    "say so to go back to it.";
+
+  test("in a finished build's chat, their first bare /aidlc hears the send-back of another build, once", () => {
+    const session = "t-unit-push-finished-bare";
+    const { alice, chat } = sentBackWhileOnFinishedBuild(session);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "anything new for us?" }).status).toBe(0);
+    const step = next(alice, chat);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 900)).toContain(sentBack);
+    expect(String(step.change_notices_note)).toContain(`take refunds --home ${HOME_RECORD}`);
+    expect((next(alice, chat).change_notices ?? []) as string[]).not.toContain(sentBack);
+  });
+
+  test("their first words hear it too, after a look this .git could not write stopped once for write access", () => {
+    const session = "t-unit-push-finished-words";
+    const { alice, chat } = sentBackWhileOnFinishedBuild(session);
+    const words = "anything new for payments?";
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: words }).status).toBe(0);
+    // Codex's sandbox: the step stops with the way on, once.
+    const stopped = withReadOnlyGit(alice, () => run(ORCH, ["next", words], alice, chat));
+    expect(stopped.status, stopped.out).not.toBe(0);
+    expect(String(stopped.json?.error), stopped.out).toContain("Run the same command again with write access");
+    // The same command with write access looks again and hears it.
+    const again = run(ORCH, ["next", words], alice, chat);
+    expect(again.status, again.out).toBe(0);
+    expect((again.json?.change_notices ?? []) as string[], again.out.slice(0, 900)).toContain(sentBack);
+  });
+
+  test("a look this .git still cannot write after its one stop goes on, never a second stop", () => {
+    const session = "t-unit-push-finished-refused";
+    const { alice, chat } = sentBackWhileOnFinishedBuild(session);
+    const words = "anything new for payments?";
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: words }).status).toBe(0);
+    const [first, second, third] = withReadOnlyGit(alice, () => [1, 2, 3].map(() => run(ORCH, ["next", words], alice, chat)));
+    expect(first.status, first.out).not.toBe(0);
+    expect(second.status, second.out).toBe(0);
+    expect(third.status, third.out).toBe(0);
   });
 });

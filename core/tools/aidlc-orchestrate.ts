@@ -1105,7 +1105,7 @@ function switchBackOnFollowUps(directive: Directive): string[] {
     ...[...handoverFollowUps].flatMap(([line, followUp]) => carried.includes(line) ? [followUp] : []),
     // Read off the lines themselves, so every part of a step delivered in parts carries them.
     ...(engineProjectDir && carried.some((line) => line.endsWith(BUILD_WAITING_CLAUSE))
-      ? otherBuildsTurnedDown(engineProjectDir, engineSelection(engineProjectDir).intent ?? null)
+      ? otherBuildsTurnedDown(engineProjectDir, engineSelection(engineProjectDir).intent ?? null, undefined, false)
         .filter((entry) => carried.includes(entry.line))
         .map((entry) => `When the person asks to go back to it, run \`${entry.command}\` and follow what it returns.`)
       : []),

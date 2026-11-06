@@ -6575,8 +6575,9 @@ function quietFetch(dir: string, args: string[]): GitResult {
 // side sent. Once per chat, at every step that shows or acts on the claims
 // (`now`), and with `sincePerson` again after each message of the person's
 // once the last fetch reached the home (both stamps are to the second, so a
-// message in the fetch's own second counts as after it). `unreached` is the
-// remote or address that could not be reached: the last fetch stands.
+// message in the fetch's own second counts as after it). A look this .git
+// could not take in is taken again once, at the chat's next look. `unreached`
+// is the remote or address that could not be reached: the last fetch stands.
 const CLAIMS_FETCHED_FILE = "claims-fetched.json";
 
 export function refreshHomeClaims(
@@ -6587,7 +6588,7 @@ export function refreshHomeClaims(
   const { target, id8 } = options.home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
   if (target === null) return { fetched: false, unreached: null };
   const mark = join(sessionsDir(pd), CLAIMS_FETCHED_FILE);
-  let chats: Record<string, string | { chat: string; at: string; reached: boolean; refused?: boolean }> = {};
+  let chats: Record<string, string | { chat: string; at: string; reached: boolean; refused?: boolean; again?: boolean }> = {};
   try {
     chats = JSON.parse(readFileSync(mark, "utf-8")) as typeof chats;
   } catch {
@@ -6596,15 +6597,20 @@ export function refreshHomeClaims(
   const chat = options.sessionId ?? "no chat";
   const noted = chats[id8];
   const last = typeof noted === "string" ? { chat: noted, at: "", reached: false } : noted;
-  // Their message since that fetch: a turn on the record, or on finished work
-  // the message kept beside it (standingPersonTurn), read by time only.
+  // Their message since that fetch, read by time only: a turn on the record,
+  // or any message of this chat's (any chat's when none is named) the
+  // human-turn hook kept, beside finished work too, where it writes no turn.
   const spoke = options.sincePerson === true && last?.chat === chat && last.reached &&
     (readAuditShardEvents(pd).some((row) => isRequestTurn(row) && row.timestamp >= last.at) ||
       ((): boolean => {
-        const { standingPersonTurn } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
-        return (standingPersonTurn(pd, "request", { requests: true })?.timestamp ?? "") >= last.at;
+        const { listMessages } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+        return listMessages(pd).some((message) =>
+          (options.sessionId === undefined || message.session === options.sessionId) && message.at >= last.at);
       })());
-  if (!options.now && !spoke && last?.chat === chat) return { fetched: false, unreached: null };
+  // The look .git refused stopped the step with its way on: the same command
+  // run again with write access, which looks again whether or not they spoke.
+  const again = last?.chat === chat && last.refused === true && last.again !== true;
+  if (!options.now && !spoke && !again && last?.chat === chat) return { fetched: false, unreached: null };
   const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
   const at = isoTimestamp();
   const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]);
@@ -6619,7 +6625,9 @@ export function refreshHomeClaims(
   const stopped = refused !== null && last?.chat === chat && last.refused === true;
   try {
     mkdirSync(dirname(mark), { recursive: true });
-    writeFileAtomic(mark, `${JSON.stringify({ ...chats, [id8]: { chat, at, reached: ok, ...(refused !== null ? { refused: true } : {}) } })}\n`);
+    writeFileAtomic(mark, `${JSON.stringify({
+      ...chats, [id8]: { chat, at, reached: ok, ...(refused !== null ? { refused: true, ...(stopped ? { again: true } : {}) } : {}) },
+    })}\n`);
   } catch {
     // Unnoted, the next step fetches again.
   }
@@ -7692,8 +7700,14 @@ export const BUILD_WAITING_CLAUSE = "Its build is waiting for you; say so to go 
 // The lead's turn-down of another of this clone's Unit builds, said in a chat
 // on any of its work, not only the build it is about: each line once per chat
 // (the caller's), with the step that takes that build up again. The claims are
-// read as this clone last fetched them, fetched once per chat.
-export function otherBuildsTurnedDown(projectDir: string, selected: string | null, sessionId?: string): Array<{ line: string; command: string }> {
+// read as this clone last fetched them, fetched once per chat; with `look`
+// false (the step's follow-up, after its own look) not fetched again.
+export function otherBuildsTurnedDown(
+  projectDir: string,
+  selected: string | null,
+  sessionId?: string,
+  look = true,
+): Array<{ line: string; command: string }> {
   const found: Array<{ line: string; command: string }> = [];
   let spaces: string[];
   try {
@@ -7717,7 +7731,7 @@ export function otherBuildsTurnedDown(projectDir: string, selected: string | nul
         const home = buildsHome(projectDir, build);
         // Again after each message of the person's in this chat: news that came
         // after the chat's first look is heard at their next word.
-        if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { home, sessionId, sincePerson: true });
+        if (look && !isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { home, sessionId, sincePerson: true });
         const mine = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
           .get(build.unit);
         const down = mine?.payload.turned_down;
@@ -7728,8 +7742,10 @@ export function otherBuildsTurnedDown(projectDir: string, selected: string | nul
           command: `${aidlcToolInvocation("unit")} take ${shellArg(build.unit)} --home ${shellArg(homeDir)}` +
             (homeSpace === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(homeSpace)}`),
         });
-      } catch {
-        // A home this clone cannot read says nothing here.
+      } catch (e) {
+        // The way on when this .git cannot be written stops the step, as at
+        // every look; a home this clone cannot read says nothing here.
+        if (e instanceof GitWriteRefused) throw e;
       }
     }
   }
