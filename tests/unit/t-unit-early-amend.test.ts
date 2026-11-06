@@ -13,7 +13,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { latestCompletionBasesFromAudit } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
@@ -229,7 +229,7 @@ describe("a change to a shared input", () => {
     git(alice, ["fetch", "-q", "origin"]);
     const beside = `${REQUIREMENTS.replace(/\.md$/, "")}.from-lead.md`;
     const line = "The requirements changed at the home, and your copy has your own edits, so I kept yours as you left it " +
-      `and put the new version beside it, at aidlc/spaces/payments/intents/${record.split("/").at(-1)}/${beside}: compare the two and keep what you want.`;
+      `and put the new version beside it, at aidlc/spaces/payments/intents/${basename(record)}/${beside}: compare the two and keep what you want.`;
     expect(notices(next(alice))).toContain(line);
     expect(readFileSync(copy, "utf-8")).toBe("# Requirements\n\nFR1 refunds. FR9 the payments team's own note.\n");
     expect(readFileSync(join(record, ...beside.split("/")), "utf-8")).toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
