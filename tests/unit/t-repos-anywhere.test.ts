@@ -457,6 +457,17 @@ describe("the one offer to write repos.json", () => {
     expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
   });
 
+  // A live run: a one-repo project holding a git submodule, teams chosen; the
+  // submodule comes with every clone of the workspace, yet the offer named it.
+  test("a project's own submodule is no repo besides the workspace: teams on the project are never offered it", () => {
+    const proj = boundaryProject([]);
+    writeFileSync(seededStateFile(proj), boundaryState().replace("## Scope Configuration", "## Runtime State\n- **Unit Ownership**: team\n\n## Scope Configuration"));
+    repoAt(join(proj, "shared-utils"));
+    writeFileSync(join(proj, ".gitmodules"), '[submodule "shared-utils"]\n\tpath = shared-utils\n\turl = ../shared-utils\n');
+    const step = next(proj);
+    expect(step.ask_type ?? null, JSON.stringify(step).slice(0, 400)).not.toBe("repos-manifest");
+  });
+
   test("work that records repos is offered it too when one person builds it, or teams build it with no home recorded", () => {
     expect(next(boundaryProject(["checkout-api", "checkout-web"], false)).ask_type).toBe("repos-manifest");
     const today = boundaryProject(["checkout-api", "checkout-web"], false);

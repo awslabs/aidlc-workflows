@@ -705,7 +705,7 @@ import {
   workspaceSyncInvocation,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
-import { localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
+import { isProjectSubmodule, localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
   builtFromAnotherMachine,
@@ -5498,8 +5498,9 @@ function reposManifestAsk(projectDir: string, stateContent: string): AskDirectiv
   const teams = homeLocation(stateContent) !== null || isTeamUnitOwnership(stateContent);
   if (!teams && intentRepos(projectDir).length < 2) return null;
   // Only repos besides the workspace folder: teammates clone the workspace
-  // itself, so work whose one repo it is needs no list (Arden 2026-11-06).
-  const names = discoverSiblingRepos(projectDir);
+  // itself, so work whose one repo it is needs no list (Arden 2026-11-06),
+  // and its own submodules come with that clone.
+  const names = discoverSiblingRepos(projectDir).filter((name) => !isProjectSubmodule(projectDir, name));
   if (names.length === 0) return null;
   if (!isReadOnlyEngineProbe()) noteReposManifestOffered(projectDir);
   const listed = names.length === 1 ? `the repo found here (${names[0]})` : `the ${names.length} repos found here (${names.join(", ")})`;
