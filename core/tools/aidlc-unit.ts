@@ -6833,7 +6833,13 @@ function pushUnit(args: string[], projectDir?: string): void {
     claim = currentClaim(pd, home.target, ref);
   }
   const label = getField(state, "Home Label")?.trim() || build.homeRecord;
-  const earlier = new Map((claim?.payload.result?.repos ?? []).map((repo) => [repo.repo, repo]));
+  // What this Unit sent before keeps each repo's base and heads across pushes:
+  // its claim's result, or by file the result file it wrote, so a push again
+  // after a merge still lists the files the Unit changed. A file the team's
+  // agent edited by hand carries the base and heads it holds; one that does
+  // not read is measured afresh.
+  const sentBefore = claim?.payload.result ?? (byFile ? resultSentByFile(pd, build, label) : undefined);
+  const earlier = new Map((sentBefore?.repos ?? []).map((repo) => [repo.repo, repo]));
   const results: RepoResult[] = [];
   const takeTree = readTakeTree(activeRecordDir(pd));
   const leftOut: string[] = [];
@@ -7042,8 +7048,17 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     results.push(entry);
   }
-  const names = results.map((repo) => (repo.repo === "." ? "the repo" : repo.repo));
-  const lines = [`Pushed branch ${branch} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.${whereNow(true)}`];
+  const nameOf = (repo: RepoResult): string => (repo.repo === "." ? "the repo" : repo.repo);
+  const names = results.map(nameOf);
+  // By file, the team's own check of each repo is in hand: one it found merged needs no PR.
+  const merged = results.filter((repo) => repo.reported?.merged).map(nameOf);
+  const open = names.filter((name) => !merged.includes(name));
+  const lines = [
+    `Pushed branch ${branch} in ${joinNames(names)}.` +
+      (open.length === 0 ? "" : ` Open a PR in ${open.length < names.length ? joinNames(open) : names.length === 1 ? "it" : "each"} your usual way.`) +
+      (merged.length === 0 ? "" : ` ${unit} is merged in ${joinNames(merged)} already.`) +
+      whereNow(true),
+  ];
   if (addedRepos.length > 0) {
     lines.push(`${joinNames(addedRepos)} ${addedRepos.length === 1 ? "was" : "were"} not in the lead's plan; ${unit} changed ` +
       `${addedRepos.length === 1 ? "it" : "them"}, so ${addedRepos.length === 1 ? "it is" : "they are"} now among ${unit}'s repos and went with the push.`);
@@ -7123,6 +7138,19 @@ function pushUnit(args: string[], projectDir?: string): void {
   });
   if (homeHasIt) finishBuildRecord(pd);
   console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), notice: lines.join(" ") }));
+}
+
+// The result a build by file sent last: its own result file, when it is for
+// the same work, Unit and attempt.
+function resultSentByFile(pd: string, build: UnitBuild, label: string): UnitResult | undefined {
+  try {
+    const file = parseHandFile(readFileSync(join(pd, ...handFilePath(label, build.unit, "-result").split("/")), "utf-8"));
+    const same = file?.kind === "result" && file.fields["Home Work"] === build.homeWork && file.fields.Unit === build.unit &&
+      file.fields.Attempt === String(build.attempt);
+    return same ? file.result : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // The build's record finishes once its push reached home or the person put it
@@ -8723,8 +8751,10 @@ export function handFileActedOn(projectDir: string, file: HandFile): boolean {
     const live = currentClaim(projectDir, repositoryRemote(projectDir), claimRef(identity.intentId8, unit));
     if (live?.status !== "claimed") return false;
     if (file.kind === "progress") return live.payload.progress?.at === (file.fields.Written ?? "");
-    const heads = (result: UnitResult | undefined) => JSON.stringify(result?.repos.map((repo) => repo.heads) ?? null);
-    return file.result !== undefined && heads(live.payload.result) === heads(file.result);
+    // The same repos as the claim's result (heads, base, files and the team's
+    // own check): a newer file with only a merge in it is taken in.
+    const repos = (result: UnitResult | undefined) => JSON.stringify(result?.repos ?? null);
+    return file.result !== undefined && repos(live.payload.result) === repos(file.result);
   } catch {
     return false;
   }

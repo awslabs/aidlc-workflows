@@ -13,6 +13,8 @@
 // A result file changed by hand is read for its result; one whose result no
 // longer reads, and the lead's merged run at the team's build, name the team's
 // push again.
+// A push again after the merge request merged keeps the files the first push
+// listed, and the lead takes that newer file in by its path.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -522,7 +524,46 @@ function firstResultSent(home: { dir: string }): { partner: { dir: string; ledge
   return { partner, first };
 }
 
+// The same, and the lead takes that first result file in.
+function firstResultTaken(home: { dir: string }): ReturnType<typeof firstResultSent> {
+  const sent = firstResultSent(home);
+  const taken = run(UNIT, ["take-in", deliver(sent.partner.dir, RESULT)], home.dir);
+  expect(taken.status, taken.out).toBe(0);
+  return sent;
+}
+
+// A live run (Claude Code on Windows Server, by file): the team's merge request
+// was merged by merge commit, and the push again the guide names wrote the
+// result with the branch tip as its base and no changed files, so the lead's
+// agent read that the code was never committed and held the Unit back.
 describe("a team by file pushes again after its merge request merged", () => {
+  for (const how of ["merge", "squash", "rebase"] as const) {
+    test(`merged by ${how === "merge" ? "a merge commit" : how}: the newer file keeps the files it changed and the lead takes it in by its path`, () => {
+      const { home } = handedOff();
+      const { partner, first } = firstResultTaken(home);
+      mergeOnHost(partner.ledgerHost, "reporting", how);
+      // The member's checkout has the merge, as a pull or fetch after merging gives it.
+      git(join(partner.dir, "ledger"), ["fetch", "-q", "origin"]);
+      const again = run(UNIT, ["push"], partner.dir);
+      expect(again.status, again.out).toBe(0);
+      // Merged, it needs no PR: the push's own line says so.
+      expect(again.json?.notice).toBe(
+        "Pushed branch reporting in ledger. reporting is merged in ledger already. The result file is " +
+          "aidlc/handoff/fixture-reporting-result.md; send it to the lead.",
+      );
+      const second = parseHandFile(readFileSync(join(partner.dir, ...RESULT.split("/")), "utf-8"))!.result!;
+      expect(second.repos[0]).toMatchObject({ base: first.repos[0].base, paths: first.repos[0].paths, reported: { merged: true } });
+      // Its path at the lead's project is the step that takes it in, never "already done".
+      const resultFile = deliver(partner.dir, RESULT);
+      const step = next(home.dir, undefined, ["--hand-file", resultFile]);
+      expect(String(step.message), JSON.stringify(step).slice(0, 600)).toContain(`take-in '${resultFile}'`);
+      const taken = run(UNIT, ["take-in", resultFile], home.dir);
+      expect(taken.status, taken.out).toBe(0);
+      next(home.dir);
+      expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ done: true });
+    });
+  }
+
   // A live run (Codex on Windows Server, by file): the member said the merge
   // request was merged and asked to update the result file; the agent ran the
   // lead's `merged`, which said the team had no result.
