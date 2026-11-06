@@ -655,29 +655,40 @@ function checkoutRepoReader(projectDir: string, recorded: readonly string[]): (r
 }
 
 // A Unit output as the lead's project reads it: a traceability table's targets
-// in a folder recorded as a checkout of one of the work's repos are spelled
-// `<repo>/<path>`, where the lead's checks find the file; the team's own record
-// stays as written. Anything else, or a table that does not read, as it is.
+// in one of the work's repos, as this workspace has it (the folder
+// repos.local.json gives it, or a folder recorded as a checkout of it), are
+// spelled `<repo>/<path>`, where the lead's checks find the file; the team's
+// own record stays as written. Anything else, or a table that does not read,
+// as it is.
 export function outputForLead(projectDir: string, rel: string, text: string): string {
   if (!rel.endsWith("/traceability.json")) return text;
   try {
     const table = JSON.parse(text) as { coverage?: Array<{ target?: unknown }> };
     if (!Array.isArray(table.coverage)) return text;
+    const recorded = intentRepos(projectDir).filter((repo) => repo !== ".");
     const checkouts = readRecordedSourceCheckouts(projectDir);
-    if (checkouts.length === 0) return text;
-    const repoOf = checkoutRepoReader(projectDir, intentRepos(projectDir));
+    if (checkouts.length === 0 && recorded.length === 0) return text;
+    const repoOf = checkoutRepoReader(projectDir, recorded);
+    // Each folder a target may sit in, with the repo it is of.
+    const roots: Array<{ roots: string[]; repo: () => string | null }> = [
+      ...checkouts.map((checkout) => ({ roots: [checkout.real, resolve(projectDir, checkout.path)], repo: () => repoOf(checkout.real) })),
+      ...recorded.map((repo) => ({ roots: [resolve(repoDir(projectDir, repo))], repo: () => repo })),
+    ];
     let changed = false;
     for (const entry of table.coverage) {
       if (typeof entry?.target !== "string") continue;
       const at = resolve(projectDir, entry.target.trim().replace(/\\/g, "/"));
-      for (const checkout of checkouts) {
-        const within = [checkout.real, resolve(projectDir, checkout.path)]
-          .map((root) => relative(root, at))
+      for (const root of roots) {
+        const within = root.roots
+          .map((folder) => relative(folder, at))
           .find((path) => path !== "" && !path.startsWith("..") && !isAbsolute(path));
-        const repo = within === undefined ? null : repoOf(checkout.real);
+        const repo = within === undefined ? null : root.repo();
         if (within !== undefined && repo) {
-          entry.target = `${repo}/${within.split(sep).join("/")}`;
-          changed = true;
+          const spelled = `${repo}/${within.split(sep).join("/")}`;
+          if (spelled !== entry.target) {
+            entry.target = spelled;
+            changed = true;
+          }
           break;
         }
       }

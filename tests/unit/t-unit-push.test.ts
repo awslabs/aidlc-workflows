@@ -342,6 +342,51 @@ describe("the push", () => {
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts.billing }).status).not.toBe(0);
   });
 
+  // A live run: a teammate kept the repos in folders of their own
+  // (repos.local.json), so the Unit's traceability went home naming those
+  // folders, and the lead's Build and Test trace missed 21 items.
+  test("a teammate's repos kept elsewhere by repos.local.json: what goes home names the repos, never their folders", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as "billing"], join(alice, ".."), `${name}-mine`, "alice");
+    writeFileSync(join(alice, "repos.local.json"), `${JSON.stringify({ repos: [
+      { name: "checkout-api", path: "../checkout-api-mine" },
+      { name: "billing", path: "../billing-mine" },
+    ] })}\n`);
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    mkdirSync(join(alice, "..", "checkout-api-mine", "src"), { recursive: true });
+    writeFileSync(join(alice, "..", "checkout-api-mine", "src", "refunds.ts"), "export const refunds = 1;\n");
+    mkdirSync(join(alice, "..", "billing-mine", "lib"), { recursive: true });
+    writeFileSync(join(alice, "..", "billing-mine", "lib", "refund.ts"), "export const refund = 1;\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1,
+      writes: [{ repo: "checkout-api", path: "src/refunds.ts" }, { repo: "billing", path: "lib/refund.ts" }],
+    }, null, 2)}\n`);
+    writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
+    const table = { coverage: [
+      { id: "FR-1", status: "OK", target: "../checkout-api-mine/src/refunds.ts" },
+      { id: "FR-2", status: "OK", target: "../billing-mine/lib/refund.ts" },
+    ], upstream_ids: ["FR-1", "FR-2"] };
+    writeFileSync(join(stage, "traceability.json"), `${JSON.stringify(table, null, 2)}\n`);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const tip = git(home.remote, ["rev-parse", `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`]).trim();
+    const sent = JSON.parse(git(home.remote, ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
+    expect(sent.coverage.map((entry) => entry.target)).toEqual(["checkout-api/src/refunds.ts", "billing/lib/refund.ts"]);
+    expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain("../checkout-api-mine/src/refunds.ts");
+  });
+
   test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
