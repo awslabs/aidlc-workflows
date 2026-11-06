@@ -30646,6 +30646,8 @@ export function unitMergedReceipts(
     if (row.event !== "UNIT_MERGED") continue;
     const unit = auditBlockField(row.block, "Unit");
     if (!unit || !eventMatchesClaimAttempt(projectDir, row.block, unit)) continue;
+    // A merge the lead's Build and Test sent back since no longer stands.
+    if (!unitTeams().unitMergesStanding(rows, unit).includes(row)) continue;
     merged.add(unit);
   }
   return merged;

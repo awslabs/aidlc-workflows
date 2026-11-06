@@ -18385,6 +18385,31 @@ function unitMajorReopen(
   const blockSlugs = walk.block.map((stage) => stage.slug);
   const targetIndex = blockSlugs.indexOf(targetSlug);
   if (targetIndex === -1) return null;
+  // A Unit a team built as work of its own goes back to that team with the
+  // failure (send-back), never reopened at the lead's project; past the Unit
+  // stages, the lead's project goes back to them to wait for it.
+  const sentBack = flags.jumpUnit;
+  if (sentBack !== undefined && homeLocation(stateContent) !== null && !readApplicableTeamUnitScopeStamp(projectDir, stateContent)) {
+    let claim: UnitClaimView | undefined;
+    try {
+      claim = cachedUnitClaimOverview(projectDir, { writeCache: false }).claims.get(sentBack);
+    } catch {
+      claim = undefined;
+    }
+    if (claim?.status === "claimed" && (claim.payload.result !== undefined || claim.payload.done === true)) {
+      const back = blockSlugs.includes(getField(stateContent, "Current Stage")?.trim() ?? "")
+        ? ""
+        : `, then \`${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${blockSlugs.slice(targetIndex).join(",")} ` +
+          `--units ${sentBack} --scope ${scopeArg(scope)}\` to wait for it here`;
+      return {
+        kind: "print",
+        message: `${sentBack} was built by ${theTeam(claim.owner)} as work of their own, so it goes back to them with this failure and ` +
+          `is never reopened here. Write the failure, in the words you showed the person, to the request file its command names with your ` +
+          `file tool, never a shell, then run \`${aidlcToolInvocation("unit")} send-back ${shellArg(sentBack)} ` +
+          `${unitWordsArg("send-back", sentBack)}\`${back}; tell the person its notice line and re-run \`next\`.`,
+      };
+    }
+  }
   const step = walk.step;
   const inFlight = walkStepUnit(step);
   const liveStage = step.kind === "work" || step.kind === "summary"

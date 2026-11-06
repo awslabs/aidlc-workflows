@@ -229,6 +229,7 @@ export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
   ["take", true],
   ["take-in", true],
   ["turned-down", true],
+  ["send-back", true],
 ]);
 
 /**

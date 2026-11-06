@@ -913,3 +913,56 @@ describe("at the home", () => {
     expect((next(alice).change_notices ?? []) as string[]).toContain(line);
   });
 });
+
+// The lead's call on a live run: Build and Test at the lead's project failed on
+// a Unit a team built; its retry reopened that Unit's Code Generation at the
+// lead's project, where nothing of it is built, and the board still said done.
+describe("a team's done Unit that the lead's Build and Test sends back", () => {
+  test("goes back to its team in the failure's words, is not done here meanwhile, and is recorded again once it merges again", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    const id8 = fixtureIntentId8(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+    const merges = () => readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED" && row.block.includes("**Unit**: refunds")).length;
+    expect(merges()).toBe(1);
+    // The retry for refunds sends it back to payments; nothing of it is reopened here.
+    const retry = next(home.dir, undefined, ["--stage", "code-generation", "--unit", "refunds"]);
+    expect(String(retry.message), JSON.stringify(retry)).toContain("send-back refunds --request-file");
+    expect(String(retry.message)).not.toContain("reopen --target");
+    const words = "checkout-api sends no CORS headers for the web page";
+    const sent = run(UNIT, ["send-back", "refunds", "--person-words", words], home.dir);
+    expect(sent.status, sent.out).toBe(0);
+    expect(sent.json?.notice).toBe("Sent refunds back to the payments team with your words. It waits for them here; nothing of it is rebuilt here.");
+    const claim = claimPayload(home.remote, id8, "refunds") as Record<string, unknown>;
+    expect(claim.done).toBeUndefined();
+    expect(claim.result).toBeUndefined();
+    expect(String(next(home.dir).narration ?? "")).not.toContain("refunds, payments: done");
+    // payments hears it once, in the failure's words.
+    git(alice, ["fetch", "-q", "origin"]);
+    const line = `refunds was sent back from the lead's Build and Test: "${words}".`;
+    expect((next(alice).change_notices ?? []) as string[]).toContain(line);
+    // Built again (the fix in files of its own) and merged again: the lead's project records it again.
+    for (const [repo, path] of [["checkout-api", "src/cors.ts"], ["billing", "lib/cors.ts"]]) {
+      mkdirSync(join(alice, repo, path.split("/")[0]), { recursive: true });
+      writeFileSync(join(alice, repo, ...path.split("/")), "export const cors = true;\n");
+    }
+    writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1,
+      writes: [{ repo: "checkout-api", path: "src/cors.ts" }, { repo: "billing", path: "lib/cors.ts" }],
+    }, null, 2)}\n`);
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+    expect(merges()).toBe(2);
+  });
+});

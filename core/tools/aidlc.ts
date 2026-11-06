@@ -253,6 +253,7 @@ const UNIT_FORMS = [
   "unit take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] | --file <file>",
   "unit take-in <file>",
   "unit turned-down <unit> --repo <repo> --person-words <text>",
+  "unit send-back <unit> --person-words <text>",
 ] as const;
 
 // ROUTES_TABLE_START

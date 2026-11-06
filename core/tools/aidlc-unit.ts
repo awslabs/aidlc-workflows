@@ -187,6 +187,7 @@ import {
   unitBuildOf,
   unitLikelyRepos,
   unitMergeVerdict,
+  unitMergesStanding,
   unitOutputsHomeReads,
   type UnitResult,
   unitsInPlanOrder,
@@ -249,6 +250,7 @@ const UNIT_USAGE: ReadonlyMap<string, string> = new Map([
   ["take", "take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] [--lead-rules] | take --file <hand-off file>"],
   ["take-in", "take-in <file>"],
   ["turned-down", "turned-down <unit> --repo <repo> (--request-file <file> | --person-words <text>)"],
+  ["send-back", "send-back <unit> (--request-file <file> | --person-words <text>)"],
 ]);
 
 function unitUsage(verb: string): string {
@@ -356,7 +358,7 @@ export interface UnitClaimPayload {
   result?: UnitResult;
   verdicts?: Array<{ repo: string; merged: boolean; commit?: string; how?: string }>;
   done?: true;
-  turned_down?: { repo: string; words: string; at: string };
+  turned_down?: { repo: string; words: string; at: string; from?: "build-and-test" };
   // Handed off by file; the team's progress file, when it sent one.
   by_file?: true;
   progress?: { stage: string; at: string };
@@ -6590,8 +6592,7 @@ export function homeResultsPastUnitStages(projectDir: string, stateContent: stri
 
 // Once per Unit and attempt: its outputs written into the home's record, then UNIT_MERGED.
 function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonNullable<UnitClaimPayload["verdicts"]>): void {
-  const recorded = (): boolean => readAuditShardEvents(projectDir).some((row) =>
-    row.event === "UNIT_MERGED" && auditBlockField(row.block, "Unit") === claim.unit &&
+  const recorded = (): boolean => unitMergesStanding(readAuditShardEvents(projectDir), claim.unit).some((row) =>
     auditBlockField(row.block, "Attempt Generation") === String(claim.generation)
   );
   if (recorded()) return;
@@ -6712,7 +6713,9 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
   const unit = build.unit;
   const down = mine.payload.turned_down;
   if (down) {
-    lines.push(`${unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}.`);
+    lines.push(down.from === "build-and-test"
+      ? `${unit} was sent back from the lead's Build and Test${down.words ? `: "${down.words}"` : ""}.`
+      : `${unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}.`);
   }
   for (const proposal of mine.payload.proposals ?? []) {
     if (proposal.answer === "approved") lines.push(`The home approved your change to the ${inputName(proposal.input)}.`);
@@ -7184,6 +7187,39 @@ function amendInput(args: string[], projectDir?: string): void {
 
 // The home's person turned a Unit's repo down: their words go on the claim,
 // and the team hears them, once, at its next step.
+// The lead's Build and Test found a Unit a team built wanting: it goes back to
+// that team in the failure's words, a turn-down from Build and Test. Its result
+// and done come off its claim, and UNIT_SENT_BACK sets aside its earlier merge
+// here, so it waits for the team and its next merge is recorded again.
+function sendBack(args: string[], projectDir?: string): void {
+  const { positional, flags } = parseArgs(args);
+  const unit = positional[0];
+  if (!unit) fail(unitUsage("send-back"));
+  const pd = resolveProjectDir(projectDir);
+  const words = personWordsOf(pd, flags);
+  requireLeadsWord(pd, "Sending a Unit back");
+  const identity = activeIdentity(pd);
+  const remote = repositoryRemote(pd);
+  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+  if (live?.status !== "claimed" || (!live.payload.result && !live.payload.done)) fail(`${unit} has no result from a team to send back.`);
+  const { done: _done, verdicts: _verdicts, result: _result, ...rest } = live.payload;
+  const payload: UnitClaimPayload = {
+    ...rest,
+    predecessor_oid: live.oid,
+    turned_down: { repo: "", words: words.trim(), at: isoTimestamp(), from: "build-and-test" },
+  };
+  const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
+  if (!sent.ok) fail(`${unit} could not be sent back: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`);
+  invalidateLiveClaimPayloadCache(pd, unit);
+  appendAuditEntry("UNIT_SENT_BACK", {
+    Unit: unit, Owner: live.owner, "Attempt Generation": String(live.generation), ...(words ? { "Person Words": words } : {}),
+  }, pd);
+  console.log(JSON.stringify({
+    unit,
+    notice: `Sent ${unit} back to ${theTeam(live.owner)} with your words. It waits for them here; nothing of it is rebuilt here.`,
+  }));
+}
+
 function turnedDown(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
@@ -7710,6 +7746,7 @@ export function main(argv: string[]): void {
     else if (command === "lead-sign-off") leadSignOffSetting(args, projectDir);
     else if (command === "sign-off") signOff(args, projectDir);
     else if (command === "turned-down") turnedDown(args, projectDir);
+    else if (command === "send-back") sendBack(args, projectDir);
     else if (command === "merged") saidMerged(args, projectDir);
     else if (command === "adopt") adoptUnit(args, projectDir);
     else if (command === "claim") claimUnit(args, projectDir);

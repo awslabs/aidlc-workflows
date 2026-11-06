@@ -53,6 +53,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit hand-off <unit> --team <team>` | At the home, hold a Unit for a team that cannot reach it and write its hand-off file |
 | `/aidlc unit progress` | In a Unit's build by file, write a progress file for the lead |
 | `/aidlc unit take-in <file>` | At the home, take a team's result or progress file in |
+| `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the home a change to an input the Unit was approved with |
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
 | `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the home, answer a team's proposed change, in your own words |
@@ -845,6 +846,15 @@ written with `--file <that text>`. An approved change is written into the home's
 record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
 onto the claim of every Unit whose stages read it; a team it did not reach is
 named, and a team by file gets a newer hand-off file.
+
+### `/aidlc unit send-back` - Send a team's Unit back from Build and Test
+
+At the lead's project, when Build and Test finds a Unit a team built wanting,
+`send-back <unit> --request-file <file>` sends it back to that team in the
+failure's own words (written to the file first): its result and its done come
+off its claim, the board shows it back with the team, the team hears it once
+with the words, and the lead's project records it again once it merges again
+(`UNIT_SENT_BACK`). Nothing of it is rebuilt at the lead's project.
 
 ### `/aidlc unit rebase` - Move an early build onto what merged
 

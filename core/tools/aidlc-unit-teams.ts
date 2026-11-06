@@ -174,6 +174,16 @@ export function leadProjectRuleNames(projectDir: string, homeSpace: string): str
   return names;
 }
 
+// A Unit's UNIT_MERGED rows that still stand: none recorded before the lead's
+// Build and Test last sent it back (UNIT_SENT_BACK), in audit order.
+export function unitMergesStanding(rows: readonly AuditShardEvent[], unit: string): AuditShardEvent[] {
+  const ordered = [...rows].sort((a, b) => (a.timestamp !== b.timestamp ? (a.timestamp < b.timestamp ? -1 : 1)
+    : a.shardIndex !== b.shardIndex ? a.shardIndex - b.shardIndex : a.pos - b.pos));
+  const mine = ordered.filter((row) => auditBlockField(row.block, "Unit") === unit);
+  const back = mine.findLastIndex((row) => row.event === "UNIT_SENT_BACK");
+  return mine.slice(back + 1).filter((row) => row.event === "UNIT_MERGED");
+}
+
 // At the lead's project teams build for, a project learning is offered to any
 // team that takes a Unit (its project rules, at the take), and the learnings
 // choice says so (Arden's call).

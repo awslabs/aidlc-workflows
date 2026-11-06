@@ -73,7 +73,7 @@ it would be without it. The rows that carry it:
   with `Source: you`.
 - `CHANGE_ACCEPTED` that carries the person's `Message Id`.
 
-## Event Registry (137 events, 27 categories)
+## Event Registry (138 events, 27 categories)
 
 ### Workflow Lifecycle (9 events)
 
@@ -272,7 +272,7 @@ record. A question in a questions file is digested entry by entry with its
 and Windows line endings change nothing. The ids are recorded only: nothing
 reads them to decide anything yet.
 
-### Unit Configuration and Lifecycle Events (13 events, unit-major Construction)
+### Unit Configuration and Lifecycle Events (14 events, unit-major Construction)
 
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
@@ -311,6 +311,7 @@ once no unit owes it.
 | `UNIT_COMPLETED` | The unit's work is done AND its required artifacts are regular files on disk (verified at emit) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit complete` |
 | `UNIT_SKIPPED` | Under unit-major, the stage's condition does not apply to this unit (or the person asked to skip it for this unit), reported for the walk's live (stage, unit) beat, or a forward jump moves this unit past the stage | Timestamp, Stage, Unit, Reason, Run floor | `tools/aidlc-state.ts skip --unit` (internally, by `aidlc-orchestrate.ts report --result skipped --unit`, or by `aidlc-jump.ts execute --units` for each step the jump skips) |
 | `UNIT_MERGED` | Main landed the pinned candidate content and folded this Unit's row; transported receipts now satisfy main's floors. For a Unit a team built as work of its own: every repo it changed merged, by the home's check | Timestamp, Unit, Owner, Pinned OID, Merge commit OID, Attempt Generation; for a team's build Built By and Merged In in place of the two OIDs | `tools/aidlc-state.ts fold-unit-merge`, `tools/aidlc-unit.ts` (the home's merge check) |
+| `UNIT_SENT_BACK` | The lead's Build and Test sent a Unit a team built back to that team, in the failure's words; its earlier `UNIT_MERGED` no longer stands, so its next merge is recorded again | Timestamp, Unit, Owner, Attempt Generation; optional Person Words | `tools/aidlc-unit.ts send-back` |
 
 ### Artifact Events (3 events — hook-emitted)
 
@@ -508,7 +509,7 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses the authority-bearing receipts in `CLI_PROTECTED_EVENT_TYPES` (`tools/aidlc-audit.ts`), which only their owning tool or hook may emit: `STAGE_COMPLETED`, `STATE_UPGRADED`, `STAGE_DEFINITION_CHANGED`, `SHARED_INPUT_AMENDED`, `STAGE_OUTPUT_AMENDED`, `SOURCE_WORK_NOT_FOUND`, `HUMAN_TURN`, `HOST_TURN`, `QUESTION_UNANSWERED`, `QUESTION_REPLIED`, `REQUEST_ROUTED`, `QUESTION_ASKED`, `QUESTION_SHOWN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_OVERRIDDEN`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `MAIN_CHECKOUT_CHANGE_ALLOWED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNITS_ASSIGNED`, `UNIT_TAKEN_IN`, `UNIT_PUSHED`, `UNIT_GATE_RHYTHM_SET`, `LEAD_SIGN_OFF_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`, `BOLT_STARTED`, `BOLT_COMPLETED`, `BOLT_FAILED`, `AUDIT_FORKED`, `AUDIT_MERGED`, `STATE_FORKED`, `STATE_MERGED`, `WORKTREE_CREATED`, `WORKTREE_MERGED`, `WORKTREE_DISCARDED`, `SOURCE_COMMITTED`, `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET`, `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE`, `SYSTEM_INSTALL_ALLOWED`, `CEREMONY_SET`. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event or an empty `**Event**:` line, and refuses line-breaking headings; the event readers take an `**Event**:` value from its own line only.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses the authority-bearing receipts in `CLI_PROTECTED_EVENT_TYPES` (`tools/aidlc-audit.ts`), which only their owning tool or hook may emit: `STAGE_COMPLETED`, `STATE_UPGRADED`, `STAGE_DEFINITION_CHANGED`, `SHARED_INPUT_AMENDED`, `STAGE_OUTPUT_AMENDED`, `SOURCE_WORK_NOT_FOUND`, `HUMAN_TURN`, `HOST_TURN`, `QUESTION_UNANSWERED`, `QUESTION_REPLIED`, `REQUEST_ROUTED`, `QUESTION_ASKED`, `QUESTION_SHOWN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_OVERRIDDEN`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `MAIN_CHECKOUT_CHANGE_ALLOWED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNITS_ASSIGNED`, `UNIT_TAKEN_IN`, `UNIT_PUSHED`, `UNIT_GATE_RHYTHM_SET`, `LEAD_SIGN_OFF_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `UNIT_SENT_BACK`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`, `BOLT_STARTED`, `BOLT_COMPLETED`, `BOLT_FAILED`, `AUDIT_FORKED`, `AUDIT_MERGED`, `STATE_FORKED`, `STATE_MERGED`, `WORKTREE_CREATED`, `WORKTREE_MERGED`, `WORKTREE_DISCARDED`, `SOURCE_COMMITTED`, `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET`, `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE`, `SYSTEM_INSTALL_ALLOWED`, `CEREMONY_SET`. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event or an empty `**Event**:` line, and refuses line-breaking headings; the event readers take an `**Event**:` value from its own line only.
 
 ## Format Standards
 
