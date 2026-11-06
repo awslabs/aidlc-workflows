@@ -13435,7 +13435,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !flags.stage &&
     !flags.phase &&
     !flags.resume &&
-    workflowFinished(stateContent, scope)
+    workflowFinished(stateContent, scope) &&
+    // A Unit's build is not over while its push is still to offer.
+    !unitPushToOffer(pd, stateContent)
   ) {
     const typedScope = flags.scope ?? flags.positionalScope;
     if (typedScope) {

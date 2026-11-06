@@ -564,6 +564,21 @@ describe("at the home", () => {
     expect(next(home.dir).ask_type).not.toBe("project-type");
   });
 
+  // A live run on opencode: the push was asked, the person went to run the
+  // tests themselves, and their next chat's "where were we?" heard that the
+  // work is finished, with no push offered.
+  test("a built Unit whose push is still to offer is never called finished: a new chat's words get the push", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[-? ]\] (functional-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+    expect(next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-1" }).ask_type).toBe("unit-push");
+    const words = next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-2" }, ["where were we?"]);
+    expect(JSON.stringify(words)).not.toContain("is finished");
+  });
+
   test("code written outside the Unit's repo is said in plain words, with the way back to Code Generation, and nothing is pushed", () => {
     const { hosts, alice, record } = refundsTaken();
     // Code Generation put the file at the workspace root, not in checkout-api.
