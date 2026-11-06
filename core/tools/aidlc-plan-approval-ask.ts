@@ -1787,13 +1787,27 @@ function pickerAsksThisQuestion(picker: PlanApprovalPickerQuestion, record: Plan
   return pickerOffersChoices(picker.options, record.choices);
 }
 
+// What a picker carried back for this question: the box's reply when it asked
+// this question alone; in a box of several questions, the reply to the one
+// question among them that is this one, never another question's. Null when
+// the box answered some other question, asked this one twice, or left it blank.
+function pickerReplyToThisQuestion(
+  picker: PlanApprovalPickerQuestion,
+  record: PlanApprovalAskRecord,
+  text: string,
+): string | null {
+  if (picker.questions === undefined) return pickerAsksThisQuestion(picker, record) ? text : null;
+  const own = picker.questions.filter((question) => pickerAsksThisQuestion(question, record));
+  return own.length === 1 ? own[0].reply : null;
+}
+
 /**
  * The human-turn hook's part while the engine's Plan Approval question is
  * open: keep the person's message, for the conductor to read and record the
  * choice it makes. A pick in a question box that offered this question's
  * choices is the host's own structure and is recorded now. True when the
- * question kept the reply; false when no question is open or a picker answered
- * some other question.
+ * question kept the reply; false when no question is open or a picker carried
+ * no answer to this one.
  */
 export function notePlanApprovalAskReply(
   projectDir: string,
@@ -1812,8 +1826,9 @@ export function notePlanApprovalAskReply(
     const answeredAll = record.mode === "ask" &&
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
-    if (picker && !pickerAsksThisQuestion(picker, record)) return false;
-    const reply = text.trim();
+    const asked = picker === undefined ? text : pickerReplyToThisQuestion(picker, record, text);
+    if (asked === null) return false;
+    const reply = asked.trim();
     if (!reply || isNonAnswer(reply)) return true;
     const replies = [
       ...(record.replies ?? []),

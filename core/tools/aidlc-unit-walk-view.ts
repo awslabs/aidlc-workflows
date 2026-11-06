@@ -3,17 +3,16 @@
 // render, so this stays a few file reads.
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { parseBoltDag, validateUnitName } from "./aidlc-unit-dag.ts";
 
-const UNIT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-
-// The planned Units, in order: the names in the Unit DAG's edge block, or,
-// when that file is not there, in the engine's compiled copy of the same DAG
-// (runtime-graph.json, the view Construction walks). Empty when neither reads.
+// The planned Units, in the order Construction walks them: read from the Unit
+// DAG's edge block with the engine's own parser, or, when that file is not
+// there, from the engine's compiled copy of the same DAG (runtime-graph.json).
+// A file the parser refuses gives none, as the engine reads no Units from it.
 function plannedUnits(recordDir: string): string[] {
+  let dag: string;
   try {
-    const dag = readFileSync(join(recordDir, "inception", "units-generation", "unit-of-work-dependency.md"), "utf-8");
-    const block = /## Machine-Readable Edge Block[\s\S]*?```ya?ml\r?\n([\s\S]*?)```/.exec(dag)?.[1] ?? "";
-    return [...block.matchAll(/^\s*-\s+name:\s*([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s*$/gm)].map((m) => m[1]);
+    dag = readFileSync(join(recordDir, "inception", "units-generation", "unit-of-work-dependency.md"), "utf-8");
   } catch {
     try {
       const graph = JSON.parse(readFileSync(join(recordDir, "runtime-graph.json"), "utf-8")) as {
@@ -21,23 +20,33 @@ function plannedUnits(recordDir: string): string[] {
       };
       return (graph.bolt_dag?.units ?? [])
         .map((unit) => unit.name)
-        .filter((name): name is string => typeof name === "string" && UNIT_NAME.test(name));
+        .filter((name): name is string => typeof name === "string" && validateUnitName(name) === null);
     } catch {
       return [];
     }
   }
+  const parsed = parseBoltDag(dag);
+  return parsed.ok ? parsed.batches.flat() : [];
 }
 
 // Working one Unit at a time, the stage checkboxes tick only once every Unit
 // has finished a stage, so the stage count reads 0 until the last Unit. While
 // a Unit is still open the count is of Units instead: the one the person is
-// on, of the Units planned. A Unit counts as done from its approval
-// (GATE_APPROVED at the construction-unit checkpoint) until a later rejection
-// of it. Null when the walk is not Unit-by-Unit, the DAG cannot be read, or
-// every Unit is done.
+// on, of the Units planned. `stepUnit` is the Unit the engine's step on record is
+// for (its place in the walk's order is the count, so the count and the step
+// beside it agree); without one, the Units done plus one, a Unit counting as
+// done from its approval (GATE_APPROVED at the construction-unit checkpoint)
+// until a later rejection of it. That fallback, for `/aidlc --status` on
+// another record than the work's own, is a light copy of the walk's own rule
+// (unitWalkStanding in aidlc-orchestrate.ts, which status reads for the work's
+// own record): it misses a skeleton's approval and a walk without checkpoints,
+// so the status line counts only with a step. Null
+// when the walk is not Unit-by-Unit, the DAG cannot be read, or every Unit is
+// done.
 export function unitProgress(
   recordDir: string,
   constructionIteration: string,
+  stepUnit?: string,
 ): { current: number; total: number } | null {
   if (constructionIteration.trim() !== "unit-major") return null;
   try {
@@ -72,7 +81,8 @@ export function unitProgress(
       else done.delete(row.unit);
     }
     if (done.size >= units.length) return null;
-    return { current: done.size + 1, total: units.length };
+    const place = stepUnit === undefined ? -1 : units.indexOf(stepUnit);
+    return { current: place === -1 ? done.size + 1 : place + 1, total: units.length };
   } catch {
     return null;
   }

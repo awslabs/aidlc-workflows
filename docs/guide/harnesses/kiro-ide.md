@@ -14,6 +14,8 @@ engine directories must still differ (the Kiro CLI (V2) and Kiro distributions c
 Kiro CLI (V2), `aidlc config --harness kiro` switches `.kiro/` to this distribution in place; at a terminal it asks
 first, with `--yes` it switches, and without a terminal, or under `--quiet` or `--json`, it changes nothing and prints the
 command with `--yes`).
+AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two Kiro names the other way: Kiro is `--harness kiro-ide` and Kiro CLI (V2) is `--harness kiro`, and they do not know `kiro-v2`. `--harness kiro-ide` names Kiro on those releases and on this one
+([Root Integrations and Ownership](../18-install-and-lifecycle.md#root-integrations-and-ownership)).
 
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro with Claude Opus 4.8.** The conductor drives a
@@ -229,11 +231,15 @@ The install ships:
 - `.kiro/hooks/aidlc-*.json` — the framework hooks in Kiro's v2 hook format.
   Both surfaces register them when a session starts; in Kiro IDE they appear
   in the Agent Hooks panel. Switching one off there writes `"enabled": false`
-  into its file; `/aidlc --doctor` reports it, the next AI-DLC step says it once
-  per change, and while `aidlc-record-human-turn` is off an approval tells you to
-  turn it back on under Agent Hooks rather than to trust the folder. AI-DLC never
-  turns a hook back on for you. The IDE 0.x `.kiro.hook` format is no longer
-  shipped: Kiro IDE 1.x never executes it.
+  into its file, and a file committed that way is off in Kiro CLI too, which has
+  no such panel; `/aidlc --doctor` reports it, the next AI-DLC step says it once
+  per change, and while `aidlc-record-human-turn` is off an approval tells you,
+  rather than to trust the folder, to turn it back on under Agent Hooks in Kiro
+  IDE, or in Kiro CLI to change `"enabled": false` to `true` in that file, then
+  quit Kiro and start `kiro-cli --v3` again in the folder, since the file is
+  read when a session starts. AI-DLC never turns a hook back on for you. The
+  IDE 0.x `.kiro.hook` format is no longer shipped: Kiro IDE 1.x never executes
+  it.
 
 ## First run
 
@@ -385,8 +391,10 @@ Kiro's own record of the chat (`~/.kiro/sessions/`, read only), and at the
 first approval question or Unit checkpoint after Kiro summarized the chat it
 says so in one line, with an offer to pause and carry on in a new chat. If you
 turned Kiro's auto-compaction off, the same offer comes once the chat is 80%
-full. Your answer decides: nothing pauses on its own, and the line is said once
-in a chat.
+full. When the chat already reached half full or more in its first turn on the
+work, and still runs on the model that filled it, a new chat on that model
+would start about as full, so the line says that instead of offering one. Your
+answer decides: nothing pauses on its own, and the line is said once in a chat.
 
 The line cannot appear in the middle of a stage (it comes only with a question
 you are asked anyway), for a chat with no record on this machine, or if a Kiro

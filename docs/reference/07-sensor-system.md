@@ -379,7 +379,22 @@ after the last Unit, each blocking check skips a file its Unit's current
 checkpoint checked while the file's hash is unchanged and the check's binding is
 the same; it reads every other file once. A checkpoint no person answers
 (Construction autonomy) fires nothing, and the late gate halts on the findings as
-before. Guard Policy, at any value, never softens a blocking check: only the
+before. That late gate's refusal is the agent's step, as the checkpoint's is: the
+state tool marks it (`agent_guidance: "blocking-check"`), and `report`, or the
+`next` that settles the gate itself, hands it over as a `print` carrying
+`ends_turn: true`, never an `error` a hook relays or a skill prints; the agent
+asks Fix or Override and ends its turn there, which ends it under Construction
+autonomy too. In this walk the refusal puts the question to the person, so their
+reply may come before the agent records the question: a reply after the
+refusal's own fire (the stage's latest `SENSOR_FAILED` or `SENSOR_COULD_NOT_RUN`
+of a blocking check before the question, with no boundary between, and the
+pick's Unit at a checkpoint) backs the pick, when nothing else was asked or
+answered between that reply and the question (`blockingSensorPicks`). The
+Override opens the late gate, and `next` then records its approval without
+running its checks again, and goes on. An advisory gate check whose latest result on the Unit's files did not
+pass fires again at that `verify`, and what it still finds is said once beside
+the checkpoint question (`check_findings` on `ask`, `checkpoint-checks --notices`),
+with no new stop or question. Guard Policy, at any value, never softens a blocking check: only the
 person's Override or the work's checks switched off lets work past one.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.

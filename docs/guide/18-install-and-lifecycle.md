@@ -1294,7 +1294,21 @@ first; with `--yes` it says so once and switches; without a terminal, or
 under `--quiet` or `--json`, it changes nothing and prints both commands, the
 switch with `--yes` and the refresh with `--harness kiro-v2`; a dry run's
 `--plan-token` applies the switch as planned), so a script that refreshes
-a Kiro CLI (V2) project passes `--harness kiro-v2`. The switch is a
+a Kiro CLI (V2) project passes `--harness kiro-v2`. AI-DLC 2.11.3 and
+earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two
+names the other way (Kiro CLI (V2) is `--harness kiro`, Kiro is
+`--harness kiro-ide`, and `kiro-v2` is unknown); `--harness kiro-ide` names
+Kiro on those releases and on this one. When a copied project's own tool from 2.11.1 or
+later among them hands a refresh to newer files' own config ([Copy Channel](#copy-channel)),
+`--harness kiro` reaches it as Kiro CLI (V2), so on a Kiro project the switch
+is asked the same way, in that tool's names: at a terminal it asks first;
+with `--yes` it says so once and switches; without a terminal, or under
+`--quiet` or `--json`, it changes nothing and prints both commands for the
+tool you ran, the switch with `--yes` and the refresh with
+`--harness kiro-ide`; a dry run's `--plan-token` applies the switch as
+planned. A copied tool from 2.11.0 or earlier hands no refresh over: it
+reads `--harness kiro` itself, as Kiro CLI (V2), and asks none of this. The
+switch is a
 refresh planned from the installed row's ownership baseline: it removes the files
 only that row shipped, keeps `aidlc/`, reports a locally modified file it would
 replace or remove as a conflict, and, like any refresh, is done while work is open.
@@ -1979,7 +1993,10 @@ to fetch elsewhere and pass with `--from`.
 When a refresh (`config` with `--from` or `--download`) brings in files from a
 newer release than the project's own tool, that release's own config runs the
 command as you typed it, and a `Note:` line names the release whose tool ran
-it. A same or older release is refreshed by the project's own tool.
+it. A same or older release is refreshed by the project's own tool. Either
+way the project's own tool reads the command first, so its `--harness`
+names are the ones that tool's release reads (for Kiro, see
+[Root Integrations and Ownership](#root-integrations-and-ownership)).
 
 The archive is assembled from the freshly regenerated Bun projections under
 `dist/`. Its generated hooks and tools invoke the included TypeScript through

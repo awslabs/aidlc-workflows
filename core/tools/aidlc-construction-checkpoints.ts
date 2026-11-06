@@ -407,6 +407,29 @@ function proofRelativePath(unit: string, kind: ConstructionCheckpointKind): stri
   return `${PROOF_DIR}/${unit}/${kind}.json`;
 }
 
+// The person's "Continue automatically": the state says autonomous and their
+// latest grant on record (WORKFLOW_STARTED or AUTONOMY_MODE_SET, one frontier
+// row) set it. A checkpoint the agent approves under it needs no person.
+export function autonomyGranted(stateContent: string | null, grant: AuditShardEvent | null | undefined): boolean {
+  return isAutonomousMode(stateContent) && grant?.event === "AUTONOMY_MODE_SET" &&
+    auditBlockField(grant.block, "Mode") === "autonomous";
+}
+
+// The same grant read from the record (the main workflow's rows; an isolated
+// run's own rows are not the person's grant).
+export function autonomyGrantedOnRecord(
+  projectDir: string,
+  stateContent: string | null,
+  intent?: string,
+  space?: string,
+): boolean {
+  if (!isAutonomousMode(stateContent)) return false;
+  const frontier = maximalAttemptEvents(readAuditShardEvents(projectDir, intent, space).filter((row) =>
+    (row.event === "AUTONOMY_MODE_SET" || row.event === "WORKFLOW_STARTED") &&
+    !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")));
+  return autonomyGranted(stateContent, frontier.length === 1 ? frontier[0] : null);
+}
+
 function onlyLatest(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
   const frontier = maximalAttemptEvents(rows);
   return frontier.length === 1 ? frontier[0] : null;
@@ -858,9 +881,7 @@ function snapshot(
   if (!enabled) errors.push("Construction Checkpoints: enabled requires solo Units with an in-scope source-producing stage.");
   if (stages.length === 0) errors.push("No applicable per-unit Construction stages.");
   if (!workflow) errors.push("A current, unambiguous WORKFLOW_STARTED record is required.");
-  const autonomous = isAutonomousMode(state) &&
-    grant?.event === "AUTONOMY_MODE_SET" &&
-    auditBlockField(grant.block, "Mode") === "autonomous";
+  const autonomous = autonomyGranted(state, grant);
   const humanRequired = kind === "skeleton" || !autonomous;
   const floors: Record<string, string> = {};
   const evidence: unknown[] = [];
@@ -1520,6 +1541,20 @@ function lastJson(text: string | null | undefined): Record<string, unknown> | nu
   }
 }
 
+// What the Unit's checks still find, beside its checkpoint question: read
+// from their latest results (the checkpoint's verify fired them), nothing
+// fired here. None, or an unreadable record, says nothing.
+function unitCheckNotices(projectDir: string, unit: string, kind: ConstructionCheckpointKind, stages: readonly string[]): string[] {
+  const [command, ...args] = aidlcEngineCommand("state", [
+    "checkpoint-checks", "--unit", unit, "--kind", kind, "--stages", stages.join(","), "--notices", "--project-dir", projectDir,
+  ], fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)));
+  const result = spawnSync(command, args, {
+    encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: projectDir }, timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
+  });
+  const notices = result.status === 0 ? lastJson(result.stdout)?.notices : null;
+  return Array.isArray(notices) ? notices.filter((line): line is string => typeof line === "string") : [];
+}
+
 // The Unit's gate checks, fired on its own outputs before its verification:
 // the state tool's `checkpoint-checks` (fireGateSensors and
 // enforceBlockingGateSensors, which this module cannot load). A blocking check
@@ -1821,9 +1856,11 @@ export function askConstructionCheckpoint(
     const carried = changedFiles !== null && earlier !== null &&
       addPendingPersonLines(projectDir, session, [changedFiles.line]);
     if (changedFiles !== null && (earlier === null || carried)) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
+    const findings = unitCheckNotices(projectDir, unit, kind, current.result.stages);
     const result = {
       ...current.result,
       question_id: asked[QUESTION_ID_FIELD],
+      ...(findings.length === 0 ? {} : { check_findings: findings.join(" ") }),
       ...(leftOut === null ? {} : { left_out: leftOut }),
       ...(changedFiles === null || carried ? {} : { changed_files: changedFiles.line }),
       ...(offer === null ? {} : { check_offer: offer.offer }),

@@ -1,15 +1,17 @@
 // Review records and their findings: the finding types, statuses and
 // fingerprints, the reviewer's findings report and its parser, the review
 // section readers, and the paths of review records and drafts. With them ride
-// the helpers they use: toPosix, the unit-name check (validateUnitName,
-// UNIT_NAME_REGEX, UNIT_NAME_MAX_LENGTH), REVIEW_REQUEST_ID_RE and
-// ReviewVerdict. aidlc-lib.ts re-exports the names it exported before, so its
-// callers are unchanged, and it loads this module at start: nothing here may
-// import aidlc-lib.ts.
+// the helpers they use: toPosix, REVIEW_REQUEST_ID_RE and ReviewVerdict, and
+// the unit-name check (validateUnitName, UNIT_NAME_REGEX, UNIT_NAME_MAX_LENGTH),
+// which aidlc-unit-dag.ts owns and this module re-exports. aidlc-lib.ts
+// re-exports the names it exported before, so its callers are unchanged, and it
+// loads this module at start: nothing here may import aidlc-lib.ts.
 import { createHash } from "node:crypto";
 import { join, sep } from "node:path";
 import { engineDirFor, errorMessage } from "./aidlc-locks.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
+import { validateUnitName } from "./aidlc-unit-dag.ts";
+export { UNIT_NAME_MAX_LENGTH, UNIT_NAME_REGEX, validateUnitName } from "./aidlc-unit-dag.ts";
 const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
 
 export function toPosix(p: string): string {
@@ -657,29 +659,4 @@ export function isReviewRecordRelativePath(path: string): boolean {
     REVIEW_RECORD_SEGMENT_RE.test(parts[3]) &&
     /^[0-9a-f]{16}$/.test(parts[4]) &&
     /^[1-9][0-9]*\.json$/.test(parts[5]);
-}
-// New workflows author lowercase kebab-case names, but pre-lifecycle DAGs
-// accepted other filesystem-safe names. Keep those existing identifiers
-// routable while still excluding separators, traversal, whitespace, and
-// control characters.
-export const UNIT_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-export const UNIT_NAME_MAX_LENGTH = 64;
-
-// Unit names become path components under construction/<unit>/ and are also
-// mirrored into single-line state fields. Keep one canonical validator for the
-// authored DAG, cached runtime graph, and lifecycle CLI. Lowercase kebab-case is
-// the authoring convention; leading digits, uppercase letters, underscores,
-// and dots remain accepted for safe legacy DAG names.
-export function validateUnitName(name: string): string | null {
-  if (!name) return "Unit name is empty";
-  if (name.length > UNIT_NAME_MAX_LENGTH) {
-    return `Unit name "${name.slice(0, 32)}..." is ${name.length} chars; max is ${UNIT_NAME_MAX_LENGTH}`;
-  }
-  if (!UNIT_NAME_REGEX.test(name)) {
-    return (
-      `Invalid Unit name "${name}" - must match ${UNIT_NAME_REGEX} ` +
-      "(ASCII letter/digit, then ASCII letters/digits/dot/underscore/hyphen)"
-    );
-  }
-  return null;
 }

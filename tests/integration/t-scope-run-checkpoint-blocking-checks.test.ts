@@ -15,7 +15,9 @@
 // One ask that also offers the work's switch (the person named one check to switch off)
 // takes either reach: the Override for this Unit, or every check off for the work. Work
 // built stage by stage keeps its checks at the stage gate, its skeleton checkpoint
-// included, so the person is asked there, as before, and not first at the skeleton.
+// included, so the person is asked there, as before, and not first at the skeleton. An
+// advisory check still failing on a Unit's files is said once beside that Unit's
+// checkpoint question, with no stop.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -37,12 +39,12 @@ const SKIPPED = [
 ];
 const OK = "RETENTION-OK";
 
-// The team's check, blocking on Code Generation, failing on the code summary
+// The team's check on Code Generation (blocking unless said), failing on the code summary
 // of each Unit named (core by default) until it carries the line the team wants.
-function installBlockingCheck(proj: string, failOn: string[] = ["core"]): void {
+function installBlockingCheck(proj: string, failOn: string[] = ["core"], severity = "blocking"): void {
   writeFileSync(join(proj, ".claude", "sensors", "aidlc-retention.md"), [
     "---", "id: retention", "kind: deterministic", "command: bun .claude/tools/aidlc-sensor-retention.ts",
-    "default_severity: blocking", "description: The team's check on a Unit's summary", "category: document-shape",
+    `default_severity: ${severity}`, "description: The team's check on a Unit's summary", "category: document-shape",
     "fire_on: gate", 'matches: "**/intents/**"', "input_schema:", "  output_path: string", "  stage_slug: string",
     "output_schema:", "  pass: boolean", "  findings: string[]", "  findings_count: number", "timeout_seconds: 60",
     "---", "", "# retention", "",
@@ -78,6 +80,9 @@ function run(options: {
   // The check's question also offers the work's switch, as the sensors module asks
   // when the person named one check to switch off.
   offerSwitch?: boolean;
+  severity?: "blocking" | "advisory";
+  // What each Unit's checkpoint question was said beside (check_findings on its ask).
+  findings?: Map<string, string[]>;
   flags?: string[];
   // Stage by stage, with the walking skeleton on (its checkpoint still asks the person).
   stageMajorSkeleton?: boolean;
@@ -86,7 +91,19 @@ function run(options: {
 }) {
   const { proj, host } = createScopeProject("empty");
   projects.push(proj);
-  installBlockingCheck(proj, options.failOn);
+  installBlockingCheck(proj, options.failOn, options.severity);
+  if (options.findings) {
+    const engine = host.engine.bind(host);
+    host.engine = (...args: string[]) => {
+      const ran = engine(...args);
+      const unit = args[args.indexOf("--unit") + 1];
+      if (args[0] === "bolt" && args.includes("ask") && ran.status === 0) {
+        const said = (JSON.parse(ran.stdout.trim().split("\n").at(-1) ?? "{}") as { check_findings?: string }).check_findings;
+        options.findings?.set(unit, [...(options.findings.get(unit) ?? []), ...(said === undefined ? [] : [said])]);
+      }
+      return ran;
+    };
+  }
   if (options.stageMajorSkeleton) {
     // The team's practice says skeleton on: the stance the agent reports.
     const engine = host.engine.bind(host);
@@ -200,7 +217,7 @@ describe("a team's blocking check in solo work built Unit by Unit", () => {
     expect(r.stops.map((s) => s.where)).toEqual(["checkpoint core", "checkpoint extra"]);
     expect(r.checkAsked).toBe(2);
     expect(r.stops[0].said).not.toContain("You overrode");
-    expect(r.stops[1].said).toMatch(/Say to the person, just before the question: \\?"You overrode this check at core\.\\?"/);
+    expect(r.stops[1].said).toMatch(/Say to the person, just before the question: \\?"You overrode the <check> for the core Unit\.\\?"/);
     const overridden = (unit: string) => r.rows.filter((row) =>
       row.event === "CHECKPOINT_VERIFICATION_RECORDED" && field(row.block, "Unit") === unit && field(row.block, "Verified") === "true")
       .at(-1);
@@ -249,6 +266,21 @@ describe("a team's blocking check in solo work built Unit by Unit", () => {
     // The skeleton's checkpoint fired no check: the stage gate is the one place.
     const verification = r.rows.find((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED" && field(row.block, "Unit") === "core");
     expect(field(verification!.block, "Blocking Checks")).toBeNull();
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  test("an advisory check still failing on core's summary is said once beside core's checkpoint question, with no stop", () => {
+    const findings = new Map<string, string[]>();
+    const r = run({ move: "Fix findings", severity: "advisory", findings });
+    expect(r.d).toMatchObject({ kind: "done" });
+    expect(r.stops).toEqual([]);
+    expect(r.checkAsked).toBe(0);
+    expect(r.approvals("core")).toBe(1);
+    expect(r.approvals("extra")).toBe(1);
+    expect(findings.get("core")).toHaveLength(1);
+    expect(findings.get("core")?.[0]).toMatch(/retention/);
+    expect(findings.get("core")?.[0]).toMatch(/code-summary\.md/);
+    // extra's summary passes the team's check: its line, if any, is about another check.
+    expect((findings.get("extra") ?? []).join(" ")).not.toMatch(/retention/);
   }, SCOPE_RUN_TIMEOUT_MS);
 
   test("with the checks off for the work, nothing fires and nothing is asked, at the checkpoint or the late gate", () => {

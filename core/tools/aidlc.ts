@@ -37,7 +37,9 @@ import {
   isCompiledExecutable,
   kiroTreeLayout,
   packagedDistributionRoot,
-  discoverableRuntimeHarnessDir,
+  discoverableRuntimeHarness,
+  keepRuntimeHarnessPin,
+  pinRuntimeHarness,
   resolveHarnessPath,
   runtimeHarnessDir,
   hookSessionProjectDir,
@@ -765,7 +767,7 @@ export const ROUTES: readonly Route[] = [
     group: "swarm",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["prepare", "check", "finalize", "allow-change"],
+    verbs: ["prepare", "check", "finalize", "allow-change", "take-over"],
     tool: TOOLS.swarm,
     ...HIDDEN_ENGINE,
   },
@@ -2983,10 +2985,10 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   // resolve the matching packaged runtime even when the hook cwd carries no
   // harness metadata (.aidlc is shared by copilot and opencode; the
   // metadata-free fallback names opencode).
-  const previousHarness = process.env.AIDLC_HARNESS_DIR;
+  const restorePin = keepRuntimeHarnessPin();
   const previousHarnessName = process.env.AIDLC_HARNESS_NAME;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
+  pinRuntimeHarness(ADAPTER_HARNESS_LEAF[action.harness]);
   process.env.AIDLC_HARNESS_NAME = action.harness;
   if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
@@ -3060,8 +3062,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     hookTrace("adapter-run-end", { code });
     return code;
   } finally {
-    if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
-    else process.env.AIDLC_HARNESS_DIR = previousHarness;
+    restorePin();
     if (previousHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
     else process.env.AIDLC_HARNESS_NAME = previousHarnessName;
     if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -4335,13 +4336,15 @@ export async function main(rawArgv: string[]): Promise<void> {
     // from $bunfs, and embedded data may be Claude-flavoured. Every delegate
     // and sibling tool reads these envs, so pin both identifiers once here,
     // before lazy delegate imports, so same-directory harnesses retain
-    // identity. Falls back to .claude when no install is present. A working
-    // directory that cannot be read pins neither: commands that need no
-    // harness (such as version and the installer's own check) still run, and
-    // a command that needs one reports the error when it resolves its harness.
+    // identity. With several installed, the one whose tool runs this command,
+    // else the first one as a guess. Falls back to .claude when no install is
+    // present. A working directory that cannot be read pins neither: commands
+    // that need no harness (such as version and the installer's own check)
+    // still run, and a command that needs one reports the error when it
+    // resolves its harness.
     if (!process.env.AIDLC_HARNESS_DIR) {
-      const harnessDir = discoverableRuntimeHarnessDir();
-      if (harnessDir) process.env.AIDLC_HARNESS_DIR = harnessDir;
+      const discovered = discoverableRuntimeHarness();
+      if (discovered) pinRuntimeHarness(discovered.harnessDir, discovered.guessed);
     }
     if (process.env.AIDLC_HARNESS_DIR && !process.env.AIDLC_HARNESS_NAME) {
       process.env.AIDLC_HARNESS_NAME = runtimeHarnessName();

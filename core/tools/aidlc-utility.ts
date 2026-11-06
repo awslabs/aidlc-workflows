@@ -44,7 +44,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
-import { hasStateUpgrade, stateUpgradeRecord } from "./aidlc-state-upgrade.ts";
+import { hasStateUpgrade, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -417,7 +417,6 @@ import {
   setPhaseProgress,
   setStageSuffix,
   intentRepos,
-  discoverSiblingRepos,
   INTENT_SELECTOR_REGEX,
   SPACE_NAME_REGEX,
   scopeGridPath,
@@ -886,7 +885,7 @@ Utilities:
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
   intent add-repo <name> [--url <address>] [--reason <text>] [--person-words <their words>]  Add a sibling repo to the active piece of work, cloning it first when it is not here yet (from repos.json, or --url)
-  intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one); its folder and its repos.json line stay
+  intent remove-repo <name>  Take a sibling repo out of the active piece of work; its folder and its repos.json line stay
   intent set-repos <name,...> | --all  Set exactly which sibling repos the active piece of work covers, or keep them all
   intent add-checkout <path>  Record a checkout outside the review's reach (a harness-folder worktree, or one outside the project) so the review covers the code there
   intent remove-checkout <path>  Take a recorded checkout out of the active piece of work's review
@@ -2023,7 +2022,33 @@ function workHereStatus(projectDir: string, space: string): string | null {
     `To start new work: ${entry} "build the auth service"\n`;
 }
 
-function handleStatus(projectDir: string, flags: Record<string, string>): void {
+// Work built one Unit at a time, as the walk the engine routes by has it:
+// where each Unit stands and what comes next (unitWalkStanding). The
+// orchestrator is loaded only here, with an awaited import as aidlc-jump.ts
+// loads it (the compiled build takes no require() of it), and only for the
+// work's own record in Construction, which is the record the walk reads, and
+// not while an older AI-DLC's record waits for the next step to bring it up:
+// reading the walk would bring it up in place, and status writes nothing. Null
+// otherwise, or when it cannot be read: status then gives the light count
+// (unitProgress) and the Next Stage field.
+async function soloUnitWalk(
+  projectDir: string,
+  flags: Record<string, string>,
+  scope: string,
+  content: string,
+): Promise<{ clause: string; current: number | null; total: number; next: string | null } | null> {
+  if (flags.intent || flags.space || isTeamUnitOwnership(content) || waitsToBeBroughtUp(content)) return null;
+  if ((getField(content, "Construction Iteration") ?? "").trim() !== "unit-major") return null;
+  if (findStageBySlug((getField(content, "Current Stage") ?? "").trim())?.phase !== "construction") return null;
+  try {
+    const { unitWalkStanding } = await import("./aidlc-orchestrate.ts");
+    return unitWalkStanding(projectDir, scope, content);
+  } catch {
+    return null;
+  }
+}
+
+async function handleStatus(projectDir: string, flags: Record<string, string>): Promise<void> {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
   const selection = resolveWorkflowSelection(projectDir, {
@@ -2057,6 +2082,7 @@ To get started:
   const phase = getField(content, "Lifecycle Phase") || "Unknown";
   const currentStage = getField(content, "Current Stage") || "Unknown";
   const status = getField(content, "Status") || "Unknown";
+  const walk = await soloUnitWalk(projectDir, flags, scope, content);
   // Who is on it and what was done or comes next, in the names the person
   // sees elsewhere; a setup step or an empty value says nothing.
   const agentSlug = (getField(content, "Active Agent") ?? "").trim();
@@ -2083,7 +2109,10 @@ To get started:
     }
   }
   const lastLine = lastName === null ? "" : `Last Completed: ${lastName}${approvedBy}\n`;
-  const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
+  // On a Unit walk the Next Stage field stays on the stage after the block's
+  // first one, so the walk's own next step is said instead.
+  const shownNext = walk === null ? nextName : walk.next;
+  const nextLine = shownNext === null ? "" : `Next Stage:     ${shownNext}\n`;
   const plan = getField(content, PLAN_FIELD);
   // A plan composed for this work runs on a stock scope the person never
   // chose, so a setting that came from that scope reads as the approved
@@ -2294,12 +2323,16 @@ To get started:
     ).length;
     // Working one Unit at a time, the stage boxes tick only when the last Unit
     // finishes a stage, so while a Unit is open the count is of Units: the one
-    // the person is on, of those planned (the status line counts the same way).
-    const units = p === "construction"
+    // the person is on, of those planned, and where each Unit stands. Without
+    // the walk (another record named, or it cannot be read), the light count,
+    // while Current Stage is on the Units' stages.
+    const units = p === "construction" && walk === null && currentEntry !== undefined && isPerUnitStage(currentEntry)
       ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
       : null;
     const phaseSkipped = phaseCheckboxes.filter((c) => c.state === "skipped").length;
-    const count = units
+    const count = p === "construction" && walk !== null
+      ? walk.current === null ? walk.clause : `Unit ${walk.current} of ${walk.total}: ${walk.clause}`
+      : units
       ? `Unit ${units.current} of ${units.total}`
       : phaseSkipped === phaseCheckboxes.length
       ? "skipped"
@@ -3671,8 +3704,9 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
-// What stops working when the person switches an AI-DLC hook off in Kiro's
-// Agent Hooks. Legacy names stay while config has not yet removed their files.
+// What stops working when an AI-DLC hook's file is switched off (Kiro IDE's
+// Agent Hooks writes the flag; a committed file carries it). Legacy names stay
+// while config has not yet removed their files.
 const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
   "aidlc-guard-tool-call": "the approved plan, reviewed work and AI-DLC's records are not protected",
   "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
@@ -3703,7 +3737,7 @@ export type KiroDisabledHook = {
   protects: string | null;
 };
 
-// Every AI-DLC hook file under `<harness>/hooks/` that Kiro has switched off,
+// Every AI-DLC hook file under `<harness>/hooks/` that is switched off,
 // in file order. The install manifest says which hook files are AI-DLC's;
 // without one, the aidlc- prefix does. Kiro's `enabled` key is read by the
 // library's one parse (aidlc-lib.ts), which doctor's rows below and the
@@ -3746,16 +3780,16 @@ export function kiroDisabledHookChecks(projectDir: string, harness: string): Doc
     }
     rows.push({
       pass: false,
-      label: `AI-DLC hook ${hook.name} is switched off in Kiro's Agent Hooks: ${hook.protects}`,
-      fix: `turn ${hook.name} back on under Kiro's Agent Hooks, or set "enabled": true in ${hook.file}`,
+      label: `AI-DLC hook ${hook.name} is switched off: ${hook.protects}`,
+      fix: `in Kiro CLI, change "enabled": false to true in ${hook.file}, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn ${hook.name} back on under Agent Hooks`,
     });
   }
   if (advisory.length > 0) {
     rows.push({
       pass: true,
       severity: "warn",
-      label: `AI-DLC hooks switched off in Kiro's Agent Hooks: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
-      fix: `turn them back on under Kiro's Agent Hooks, or set "enabled": true in their ${harness}/hooks/ files`,
+      label: `AI-DLC hooks switched off: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
+      fix: `in Kiro CLI, change "enabled": false to true in their ${harness}/hooks/ files, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn them back on under Agent Hooks`,
     });
   }
   return rows;
@@ -5738,9 +5772,9 @@ export async function collectDoctorReport(
     try {
       const auditContent = auditAllShards;
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // The latest run recorded a completion that no later stage start
-      // reopened (a scope change on finished work starts the stage it adds,
-      // #2261). One owner for the rule, the doctor bundle's timeline, which
+      // The latest run recorded a completion that nothing reopened since (a
+      // scope change on finished work starts the stage it adds, #2261; a
+      // Unit's reopen there writes its reopen rows, #3608). One owner for the rule, the doctor bundle's timeline, which
       // reads every shard in time order: shards joined by file name put a
       // teammate's earlier completion after this clone's reopen.
       if (reconstructTimeline(auditContent, stateContent).workflowCompleted) {
@@ -7709,14 +7743,16 @@ interface DirSignals {
   buildSystem: string;
 }
 
-function scanSignals(dir: string, fileScanDepth: number): DirSignals {
+// `leftOut`: entries of dir read as if they were not there (a submodule at
+// lib/ is not the project's own source folder).
+function scanSignals(dir: string, fileScanDepth: number, leftOut: ReadonlySet<string> = new Set()): DirSignals {
   let entries: string[] = [];
   try {
     entries = readdirSync(dir);
   } catch {
     // dir doesn't exist yet (caller should scaffold first)
   }
-  const entrySet = new Set(entries.filter((e) => !SCAN_EXCLUDE.has(e)));
+  const entrySet = new Set(entries.filter((e) => !SCAN_EXCLUDE.has(e) && !leftOut.has(e)));
 
   // Source-file count. countFilesByLang(dir, counts, 0) counts files directly
   // under dir (its recursion guard returns immediately at depth -1), matching
@@ -7816,10 +7852,25 @@ function scanSubmodules(projectDir: string): SubmoduleEntry[] {
   }));
 }
 
-export function detectWorkspace(projectDir: string): ScanResult {
+// A path .gitmodules lists, as the '/'-joined path from the project the scan
+// walks (a Windows path's backslashes, a leading ./ and a trailing slash read
+// the same).
+function submodulePath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+}
+
+// `ownCodeBeside` leaves these folders and the ones the project's .gitmodules
+// lists out of the root's signals and the nested walk, and drops the signal
+// those declarations give: Brownfield then means code of the project's own,
+// outside its submodules and the other repos in it.
+export function detectWorkspace(projectDir: string, { ownCodeBeside }: { ownCodeBeside?: readonly string[] } = {}): ScanResult {
+  const submodules = scanSubmodules(projectDir);
+  const leftOut: ReadonlySet<string> = new Set(
+    ownCodeBeside === undefined ? [] : [...ownCodeBeside, ...submodules.map((entry) => submodulePath(entry.path))],
+  );
   // Root scan (depth 0 for the top-level file sweep, byte-identical to the
   // base inline loop plus the SCAN_SOURCE_DIRS recurse, both inside scanSignals).
-  const root = scanSignals(projectDir, 0);
+  const root = scanSignals(projectDir, 0, leftOut);
   const langCounts = { ...root.langCounts };
   const frameworks = [...root.frameworks];
   let buildSystem = root.buildSystem;
@@ -7855,7 +7906,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
 
       let found = false;
       for (const entry of entries) {
-        if (skipNestedScanDir(entry)) continue;
+        if (skipNestedScanDir(entry) || leftOut.has([...parentParts, entry].join("/"))) continue;
         const full = join(parentDir, entry);
         let st: import("node:fs").Stats;
         try {
@@ -7916,8 +7967,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
   // SCANNED (Unknown is truthful until the submodules are fetched). A root
   // signal: folded in after the nested fallback so nested aggregation (and
   // nestedRoot attribution) still runs when submodules are the only signal.
-  const submodules = scanSubmodules(projectDir);
-  if (submodules.length > 0) brownfield = true;
+  if (submodules.length > 0 && ownCodeBeside === undefined) brownfield = true;
 
   const result: ScanResult = {
     projectType: brownfield ? "Brownfield" : "Greenfield",
@@ -7928,6 +7978,25 @@ export function detectWorkspace(projectDir: string): ScanResult {
   };
   if (nestedHits.length > 0) result.nestedRoot = nestedRoots.join(", ");
   return result;
+}
+
+// Whether `name` is a folder the project's .gitmodules lists.
+function isProjectSubmodule(projectDir: string, name: string): boolean {
+  return scanSubmodules(projectDir).some((entry) => submodulePath(entry.path) === name);
+}
+
+// The repos a piece of work records when it starts, one rule for its creation
+// and for existing code declared before Construction: the set the person named
+// (`--repos`) as named; otherwise the repos found in the folder, less the
+// submodules of a project with code of its own beside them (outside them and
+// the other repos found), which is then the work's repo as in any one-repo
+// project. A project made only of submodules records them.
+function startingRepoSet(projectDir: string, explicitReposCsv?: string): string[] {
+  const repos = resolveIntentRepoSet(projectDir, explicitReposCsv);
+  if (explicitReposCsv && explicitReposCsv.trim().length > 0) return repos;
+  if (!repos.some((name) => isProjectSubmodule(projectDir, name))) return repos;
+  if (detectWorkspace(projectDir, { ownCodeBeside: repos }).projectType !== "Brownfield") return repos;
+  return repos.filter((name) => !isProjectSubmodule(projectDir, name));
 }
 
 // ---------------------------------------------------------------------------
@@ -8403,14 +8472,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
   }
 
-  // Resolve the repo set the intent touches (P7 multi-repo): an explicit
-  // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
-  // root's immediate children for a `.git`. An empty result (legacy single-repo /
-  // fresh greenfield) records no repos row — the lone repo is inferred on the
-  // construction path. Validated up front so a bad name fails before any mutation.
+  // Resolve the repo set the intent touches (P7 multi-repo, startingRepoSet):
+  // an explicit `--repos a,b` wins; absent it, the workspace root's immediate
+  // children with a `.git`, a project's own submodules aside. An empty result
+  // (legacy single-repo / fresh greenfield) records no repos row; the lone repo
+  // is inferred on the construction path. Validated up front so a bad name fails
+  // before any mutation.
   let repos: string[];
   try {
-    repos = resolveIntentRepoSet(projectDir, flags.repos);
+    repos = startingRepoSet(projectDir, flags.repos);
   } catch (e) {
     die(errorMessage(e));
   }
@@ -9710,6 +9780,8 @@ function handleIntentRepos(
       }
       const current = row.repos ?? [];
       if (current.length === 0) {
+        // Nothing to take out: the workspace folder is already the work's repo.
+        if (verb === "remove-repo") return { kind: "none" as const };
         die(`intent ${verb} refused: this piece of work treats the workspace folder itself as its code repo, so it records no repos to change.`);
       }
       const state = readStateFile(projectDir, dirName, space);
@@ -9721,7 +9793,9 @@ function handleIntentRepos(
         }
       } else {
         if (!current.includes(name)) return { kind: "absent" as const, current };
-        if (current.length === 1) {
+        // A submodule of a project that is a checkout itself leaves the
+        // project folder as the work's repo, as in any one-repo project.
+        if (current.length === 1 && !(hasRealGitEntry(projectDir) && isProjectSubmodule(projectDir, name))) {
           die(`intent remove-repo refused: "${name}" is the only repo this piece of work records; removing it would leave none.`);
         }
       }
@@ -9751,6 +9825,7 @@ function handleIntentRepos(
         reState: boxes.get("reverse-engineering"),
         reAction,
         units: unitsRepoChangeAtChange(projectDir, state, stage, dirName, space),
+        none: next.length === 0,
       };
     }, dirName, space);
   });
@@ -9762,6 +9837,9 @@ function handleIntentRepos(
       break;
     case "absent":
       lines.push(`${name} is not one of this piece of work's repos (${outcome.current.join(", ")}); nothing changed.`);
+      break;
+    case "none":
+      lines.push("This piece of work records no repos: it works on the workspace folder itself. Nothing changed.");
       break;
     case "changed":
       if (verb === "add-repo") {
@@ -9781,11 +9859,12 @@ function handleIntentRepos(
       } else {
         const listed = workspaceManifestNames(projectDir).includes(name);
         lines.push(
-          `Removed ${name} from this piece of work's repos. Its folder stays` +
+          `Removed ${name} from this piece of work's repos${outcome.none ? "; it now works on the workspace folder itself" : ""}. Its folder stays` +
             (listed ? ", and so does its line in repos.json (delete that line to take it off the workspace's list)." : "."),
         );
         if (outcome.units !== null) lines.push(outcome.units);
-        lines.push("You can add it back any time.");
+        // add-repo serves work that records repos, so with none left it is no way back.
+        if (!outcome.none) lines.push("You can add it back any time.");
       }
       break;
   }
@@ -12060,10 +12139,11 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       ).content;
     }
     // Repos added after creation, recorded as creation would have recorded
-    // them; only names a repo may have, since each becomes a path segment.
+    // them (startingRepoSet); only names a repo may have, since each becomes a
+    // path segment.
     const repos = declared === "Brownfield" && !started && intent !== undefined &&
         intentRepos(projectDir, intent, space).length === 0
-      ? discoverSiblingRepos(projectDir).filter(isValidRepoName)
+      ? startingRepoSet(projectDir).filter(isValidRepoName)
       : [];
     content = setField(content, "Last Updated", isoTimestamp());
 
@@ -14053,7 +14133,7 @@ export async function main(argv: string[]): Promise<void> {
       process.stdout.write(`${isoTimestamp()}\n`);
       break;
     case "status":
-      handleStatus(projectDir, flags);
+      await handleStatus(projectDir, flags);
       break;
     case "claim":
       unitMain([

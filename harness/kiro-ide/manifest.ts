@@ -315,6 +315,10 @@ const manifest: HarnessManifest = {
       text: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_IDE_TRUST_STEP}" Then end your turn.`,
     },
   },
+  // Kiro CLI v3 and Kiro IDE name the chat in the commands their agent runs
+  // (KIRO_SESSION_ID; measured on Kiro IDE 1.2.37, #2167). Not TERM_PROGRAM=kiro:
+  // Kiro IDE's own terminal sets it too, so a tool started there would read as Kiro.
+  hostShell: { env: ["KIRO_SESSION_ID"] },
   // A clean chat for new work started beside other work. Kiro CLI has its own
   // command and opens on the aidlc agent; Kiro IDE opens a new chat on its
   // Default agent, so its step picks aidlc, told apart as the hook lines are.
