@@ -371,6 +371,19 @@ describe("the home's plan goes to the teams the way main's share question asks i
     expect(isShare(next(home.dir))).toBe(false);
   });
 
+  test("an open Unit the home built itself is not open to the teams: with the rest handed off by file, nothing is asked", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    next(home.dir);
+    expect(run(UNIT, ["assign", "--open"], home.dir).status).toBe(0);
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
+    for (const [unit, team] of [["checkout-ui", "web"], ["reporting", "data"]]) {
+      const handed = run(UNIT, ["hand-off", unit, "--team", team], home.dir);
+      expect(handed.status, handed.out).toBe(0);
+    }
+    expect(isShare(next(home.dir))).toBe(false);
+  });
+
   test("a home that cannot be reached: Share says so, keeps the commit, and the question is not put again each turn", () => {
     const home = makeHome();
     chooseTeams(home.dir);

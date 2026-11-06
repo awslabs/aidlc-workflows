@@ -144,8 +144,9 @@ export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: st
 }
 
 // What the plan's share reaches, from the lead's answers since teams: Units held
-// for a team that takes them from the home, and Units open for any team. A
-// Unit handed off by file comes to its team as that file, never from the home.
+// for a team that takes them from the home, and Units open for any team that
+// the home has not started itself. A Unit handed off by file comes to its team
+// as that file, never from the home.
 export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: number; open: number } {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   let teamsAt = -1;
@@ -171,6 +172,7 @@ export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: nu
       byFile.set(pair.slice(0, at), file);
     }
   }
+  for (const row of ordered) if (row.event === "UNIT_STARTED") open.delete(auditBlockField(row.block, "Unit") ?? "");
   return { held: [...byFile.values()].filter((file) => !file).length, open: open.size };
 }
 
