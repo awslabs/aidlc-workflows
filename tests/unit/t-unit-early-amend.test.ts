@@ -12,7 +12,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { latestCompletionBasesFromAudit } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
@@ -23,15 +23,18 @@ import {
   cloneCode,
   cloneOf,
   codeGenerated,
+  codeHost,
   ENV,
   git,
   HOME_RECORD,
+  makeHome,
   mergeOnHost,
   next,
   personsChat,
   personsNext,
   refundsTaken,
   run,
+  STATE,
   UNIT,
 } from "../harness/team-build.ts";
 
@@ -268,6 +271,29 @@ describe("a change to a shared input", () => {
     expect(notices(step).join(" ")).not.toContain("after checkout-ui was pushed");
   });
 
+  // A live run (decision 34): the lead changed the requirements and approved
+  // the redone Requirements Analysis; no team's claim got the change, the
+  // team heard nothing, and the agent made up its own question about it.
+  test("the lead's own approved change to an input teams build with reaches each of them once; an edit not approved does not", () => {
+    const { home, alice } = refundsTaken();
+    const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/"));
+    writeFileSync(homeCopy, "# Requirements\n\nFR1 refunds. FR2 no alerts on refunds.\n");
+    // Not approved yet: nothing goes to the teams.
+    next(home.dir);
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments ?? []).toEqual([]);
+    appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
+    const lead = personsChat("lead-chat");
+    const step = personsNext(home.dir, lead, "lead-chat");
+    expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain(
+      "The requirements you changed reach the teams building with it (payments): they hear it once and carry on.",
+    );
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
+    git(alice, ["fetch", "-q", "origin"]);
+    expect(notices(next(alice)).join(" ")).toContain("The requirements changed at the home");
+    // Said once at the lead's project.
+    expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).not.toContain("you changed reach");
+  });
+
   test("a team that left its copy as it was takes the lead's new version, as before", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
@@ -435,5 +461,73 @@ describe("an amended input's receipt", () => {
       block("STAGE_COMPLETED", "2026-10-18T01:00:00Z", basis("a")) +
       block("SHARED_INPUT_AMENDED", "2026-10-18T02:00:00Z", basis("b"));
     expect(latestCompletionBasesFromAudit(audit).get("requirements-analysis")?.outputs[0].contentHash).toBe("b");
+  });
+});
+
+// The lead's 08:19Z rule (RFC #2410: every team using the changed input hears
+// it once; a team whose Unit does not take part in the changed contract is not
+// using it): a change to the contract summary goes to the Units party to the
+// contract it touches, read from the summary's own Contracts table.
+describe("who hears a change to the contract summary", () => {
+  const CONTRACTS = "inception/contract-design/contract-summary.md";
+  const UNITS = "# Unit dependencies\n\n```yaml\nunits:\n" +
+    "  - name: refunds\n    kind: service\n    repos: [checkout-api]\n    depends_on: []\n" +
+    "  - name: checkout-ui\n    kind: ui\n    repos: [checkout-web]\n    depends_on: []\n" +
+    "  - name: reporting\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n";
+  const summary = (refundSpec: string, uiSpec: string, rules = "Breaking changes are agreed by both teams.") =>
+    "# Contract Summary\n\n## Contracts\n\n| # | Provider Unit | Consumer | Mechanism | Owner |\n| --- | --- | --- | --- | --- |\n" +
+    "| 1 | refunds | reporting | REST | refunds |\n| 2 | checkout-ui | refunds | REST | checkout-ui |\n\n" +
+    `### Contract 1: refunds to reporting\n\n\`\`\`yaml\n${refundSpec}\n\`\`\`\n\n` +
+    `### Contract 2: checkout-ui to refunds\n\n\`\`\`yaml\n${uiSpec}\n\`\`\`\n\n## Contract ownership rules\n\n${rules}\n`;
+  // Three teams, one Unit each, all taken; the summary was approved before they took.
+  function threeTaken(first = summary("openapi: 3.0.0 # refunds", "openapi: 3.0.0 # ui")) {
+    const hosts = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts, dependencies: UNITS });
+    const record = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
+    mkdirSync(join(record, "inception", "contract-design"), { recursive: true });
+    writeFileSync(join(record, ...CONTRACTS.split("/")), first);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "reporting=data"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    for (const [unit, person] of [["refunds", "alice"], ["checkout-ui", "bob"], ["reporting", "dana"]]) {
+      const took = run(UNIT, ["take", unit, "--home", HOME_RECORD], cloneOf(home.remote, person));
+      expect(took.status, took.out).toBe(0);
+    }
+    git(home.dir, ["fetch", "-q", "origin"]);
+    return { home, record };
+  }
+  const amendments = (home: { dir: string; remote: string }, unit: string) =>
+    ((claimPayload(home.remote, fixtureIntentId8(home.dir), unit) as { amendments?: unknown[] } | null)?.amendments ?? []).length;
+  const approveContracts = (home: { dir: string }) =>
+    appendAuditEntry("GATE_APPROVED", { Stage: "contract-design", "User Input": "Approve" }, home.dir);
+
+  test("a change to one contract reaches the Units party to it, and no other team", () => {
+    const { home, record } = threeTaken();
+    writeFileSync(join(record, ...CONTRACTS.split("/")), summary("openapi: 3.0.0 # refunds", "openapi: 3.1.0 # ui, with totals"));
+    approveContracts(home);
+    const step = next(home.dir);
+    expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain(
+      "The contract summary you changed reaches the teams building with it (web and payments): they hear it once and carry on.",
+    );
+    expect([amendments(home, "refunds"), amendments(home, "checkout-ui"), amendments(home, "reporting")]).toEqual([1, 1, 0]);
+  });
+
+  test("a change no contract's heading ties reaches every team using it", () => {
+    const { home, record } = threeTaken();
+    writeFileSync(join(record, ...CONTRACTS.split("/")), summary("openapi: 3.0.0 # refunds", "openapi: 3.0.0 # ui", "Breaking changes need a new version."));
+    approveContracts(home);
+    next(home.dir);
+    expect([amendments(home, "refunds"), amendments(home, "checkout-ui"), amendments(home, "reporting")]).toEqual([1, 1, 1]);
+  });
+
+  test("a summary with no Contracts table keeps the per-file rule: every team using it hears", () => {
+    const plain = (spec: string) => `# Contract Summary\n\n### checkout-ui to refunds\n\n${spec}\n`;
+    const { home, record } = threeTaken(plain("version 1"));
+    writeFileSync(join(record, ...CONTRACTS.split("/")), plain("version 2"));
+    approveContracts(home);
+    next(home.dir);
+    expect([amendments(home, "refunds"), amendments(home, "checkout-ui"), amendments(home, "reporting")]).toEqual([1, 1, 1]);
   });
 });

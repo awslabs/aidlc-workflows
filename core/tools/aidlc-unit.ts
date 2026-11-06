@@ -157,6 +157,8 @@ import {
   type Amendment,
   approvedInputsOf,
   artifactAt,
+  CONTRACT_SUMMARY_INPUT,
+  contractPartiesChanged,
   blobsAt,
   builtFromAnotherMachine,
   findUnitBuild,
@@ -203,6 +205,7 @@ import { displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable
 import { loadGraph } from "./aidlc-graph.ts";
 import {
   captureStageValidationBasis,
+  diffStageValidationBasis,
   latestCompletionBasesFromAudit,
   sharedInputAmendedFields,
   stageLabel,
@@ -5438,10 +5441,15 @@ function homeInputPaths(stages: string[]): string[] {
 
 // The home's audit as its commit has it.
 function homeAuditAt(projectDir: string, home: HomeWork, oid: string): AuditShardEvent[] {
-  const listed = git(projectDir, ["ls-tree", "--name-only", `${oid}:${home.recordPrefix}/audit`]);
+  return auditRowsAt(projectDir, home.recordPrefix, oid);
+}
+
+// A record's audit as a commit holds it.
+function auditRowsAt(projectDir: string, recordPrefix: string, oid: string): AuditShardEvent[] {
+  const listed = git(projectDir, ["ls-tree", "--name-only", `${oid}:${recordPrefix}/audit`]);
   if (!listed.ok) return [];
   return listed.stdout.split(/\r?\n/).filter((name) => name.endsWith(".md")).flatMap((shard, index) => {
-    const text = git(projectDir, ["show", `${oid}:${home.recordPrefix}/audit/${shard}`, "--"]);
+    const text = git(projectDir, ["show", `${oid}:${recordPrefix}/audit/${shard}`, "--"]);
     return text.ok ? parseAuditShardEvents(text.stdout, shard, index) : [];
   });
 }
@@ -7335,6 +7343,154 @@ export function amendAskName(unit: string, input: string): string {
   return `amend-${unit}-${input.replace(/[^A-Za-z0-9.-]+/g, "_")}.json`;
 }
 
+// One amendment onto a team's claim, with the text it carries: a claim that
+// moved meanwhile is read again and written once more. "missed" when it could
+// not be written, null when the claim is no longer held; else the lines for
+// the lead (a newer hand-off file for a team that builds by file).
+function amendClaim(
+  pd: string,
+  remote: string | null,
+  claim: UnitClaimView,
+  amendment: Amendment,
+  text: string,
+  extra?: (payload: UnitClaimPayload) => Partial<UnitClaimPayload>,
+  stillNeeded: (current: UnitClaimView) => boolean = () => true,
+): string[] | "missed" | null {
+  const amended = (current: UnitClaimView): ReturnType<typeof updateClaimRef> => updateClaimRef(pd, remote, current.ref, createClaimCommit(pd, current.oid, {
+    ...current.payload,
+    predecessor_oid: current.oid,
+    amendments: [...(current.payload.amendments ?? []).filter((entry) => entry.input !== amendment.input), amendment],
+    ...(extra?.(current.payload) ?? {}),
+  }, undefined, undefined, {
+    [`${RESULT_FILES_ROOT}/amendments/${amendment.input}`]: text,
+  }), current.oid);
+  let current = currentClaim(pd, remote, claim.ref);
+  if (current?.status !== "claimed" || !stillNeeded(current)) return null;
+  // A claim that moved meanwhile is read again, and written once more if it still needs it.
+  if (!amended(current).ok) {
+    current = currentClaim(pd, remote, claim.ref);
+    if (current?.status !== "claimed" || !stillNeeded(current)) return null;
+    if (!amended(current).ok) return "missed";
+  }
+  invalidateLiveClaimPayloadCache(pd, claim.unit);
+  return current.payload.by_file && !current.payload.taken_by
+    ? [`A newer hand-off file for ${claim.unit} is at ${writeHandOffFile(pd, claim.unit, current.owner, current.generation)}: send it to ${current.owner}.`]
+    : [];
+}
+
+// At the home: the lead's own change to an input teams build with (a redo of
+// Requirements Analysis, say), once its stage's gate approved it: each team
+// building a Unit that hears it (unitsHearing) and still has an older copy
+// (its last amendment of it, else the copy it took) gets it on its claim, as
+// an approved proposal does, and hears it once (buildClaimNotes). Approved
+// means by the record: the stage's own approval row is newer than that copy
+// (not in the audit the copy was taken with, or after the amendment), and the
+// text is the one its completion recorded, so an edit since then sends
+// nothing. A team building by file is reached by a newer hand-off file, never
+// by its claim, so it is left to that. The lines for the lead, once per change.
+export function sendLeadsApprovedChanges(projectDir: string): string[] {
+  const pd = resolveProjectDir(projectDir);
+  return quietly(() => {
+    const lines: string[] = [];
+    const claims = [...cachedClaims(pd).values()].filter((claim) =>
+      claim.status === "claimed" && !claim.payload.done && claim.payload.taken_by !== undefined && !claim.payload.by_file
+    );
+    const recordRel = relativeRecordDir(pd)?.split(sep).join("/") ?? null;
+    if (claims.length === 0 || recordRel === null) return lines;
+    const record = activeRecordDir(pd);
+    const remote = repositoryRemote(pd);
+    const state = readStateFile(pd);
+    const graph = loadGraph();
+    const rows = readAuditShardEvents(pd);
+    const receipts = latestCompletionBasesFromAudit(readAllAuditShards(pd));
+    const approval = (stage: string): AuditShardEvent | undefined => rows
+      .filter((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Stage") === stage && !auditBlockField(row.block, "Unit"))
+      .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0)).at(-1);
+    // Per commit a team took its copies from: the inputs that differ here now
+    // (one diff), and the approval rows its audit already held.
+    const taken = new Map<string, { changed: Set<string>; approvals: Set<string> }>();
+    const takenFrom = (base: string) => {
+      if (!taken.has(base)) {
+        const diff = git(pd, ["diff", "--name-only", "--relative", base, "--", recordRel]);
+        taken.set(base, {
+          changed: new Set(diff.ok ? diff.stdout.split("\n").filter(Boolean).map((path) => path.slice(recordRel.length + 1)) : []),
+          approvals: new Set(auditRowsAt(pd, recordRel, base).filter((row) => row.event === "GATE_APPROVED").map((row) => row.block)),
+        });
+      }
+      return taken.get(base)!;
+    };
+    for (const input of approvedInputPathsHere(pd)) {
+      const at = artifactAt(input);
+      const approved = at === null ? undefined : approval(at.producer);
+      if (at === null || approved === undefined) continue;
+      // Edited since its completion recorded it: not what the gate approved.
+      const node = graph.find((entry) => entry.slug === at.producer);
+      const receipt = receipts.get(at.producer);
+      if (node !== undefined && receipt !== undefined &&
+          diffStageValidationBasis(receipt, captureStageValidationBasis(pd, node, state, graph)).includes(`output:${at.artifact}`)) continue;
+      let text: string;
+      try {
+        text = readFileSync(join(record, ...input.split("/")), "utf-8");
+      } catch {
+        continue;
+      }
+      const reached: string[] = [];
+      for (const claim of claims) {
+        // A team's own change waiting for the lead's answer is that answer's to settle.
+        if ((claim.payload.proposals ?? []).some((entry) => entry.input === input && entry.answer === undefined)) continue;
+        const last = (claim.payload.amendments ?? []).find((entry) => entry.input === input);
+        let copy: string;
+        if (last !== undefined) {
+          const shown = git(pd, ["show", `${claim.oid}:${RESULT_FILES_ROOT}/amendments/${input}`, "--"]);
+          if (!shown.ok || Date.parse(approved.timestamp) <= Date.parse(last.at)) continue;
+          copy = shown.stdout;
+        } else {
+          const base = takenFrom(claim.payload.base_oid);
+          if (!base.changed.has(input) || base.approvals.has(approved.block)) continue;
+          const shown = git(pd, ["show", `${claim.payload.base_oid}:${recordRel}/${input}`, "--"]);
+          if (!shown.ok) continue;
+          copy = shown.stdout;
+        }
+        if (textFingerprint(copy) === textFingerprint(text) || !unitsHearing(pd, input, copy, text).has(claim.unit)) continue;
+        const differs = (current: UnitClaimView): boolean => {
+          const now = git(pd, ["show", `${current.oid}:${RESULT_FILES_ROOT}/amendments/${input}`, "--"]);
+          return !now.ok || textFingerprint(now.stdout) !== textFingerprint(text);
+        };
+        const sent = amendClaim(pd, remote, claim, { input, at: isoTimestamp(), words: "" }, text, undefined, differs);
+        if (sent === null || sent === "missed") continue;
+        reached.push(claim.owner);
+        lines.push(...sent);
+      }
+      if (reached.length > 0) {
+        const name = inputName(input);
+        lines.unshift(`The ${name} you changed ${name.endsWith("s") ? "reach" : "reaches"} the teams building with it ` +
+          `(${joinNames([...new Set(reached)])}): they hear it once and carry on.`);
+      }
+    }
+    return lines;
+  });
+}
+
+// Who hears a change to an input: each Unit whose stages read it; for the
+// contract summary, only the Units party to a contract the change touches,
+// when its own Contracts table can say (contractPartiesChanged).
+function unitsHearing(pd: string, input: string, before: string | null, after: string): Set<string> {
+  const readers = unitsReading(pd, input);
+  if (input !== CONTRACT_SUMMARY_INPUT || before === null) return readers;
+  const dag = resolveBoltDag(pd);
+  const parties = dag.state === "ok" ? contractPartiesChanged(before, after, dag.units) : null;
+  return parties === null ? readers : new Set([...readers].filter((unit) => parties.has(unit)));
+}
+
+// The inputs a team's build here is approved with: the Inception outputs the
+// work's per-Unit stages read, the Unit plan left out (a plan change has its
+// own way to the teams).
+function approvedInputPathsHere(pd: string): string[] {
+  const state = readStateFile(pd);
+  return homeInputPaths(unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true))
+    .filter((rel) => !rel.endsWith("unit-of-work-dependency.md"));
+}
+
 // At the home: the owner of the shared plan answers a team's proposal, in their
 // own words, under the rules for a person's answer (their reply after it was
 // shown, not empty, not a cancellation, not the agent's). An approved change
@@ -7384,36 +7540,20 @@ function amendInput(args: string[], projectDir?: string): void {
           `${unitWordsArg("amend", unit)}\`.`,
       );
     }
+    const before = existsSync(path) ? readFileSync(path, "utf-8") : null;
     writeFileSync(path, text, "utf-8");
     renewForAmendedInput(pd, proposal.input, { "Proposed By": `${proposal.by} (${live.owner})`, "Person Words": words });
     const amendment: Amendment = { input: proposal.input, at: isoTimestamp(), words };
-    const readers = unitsReading(pd, proposal.input);
+    const readers = unitsHearing(pd, proposal.input, before, text);
     const missed: string[] = [];
     for (const [other, claim] of cachedClaims(pd)) {
       // Only the Units whose stages read it hear it; the proposing team always hears its answer.
       if (claim.status !== "claimed" || (other !== unit && !readers.has(other))) continue;
-      const amended = (current: UnitClaimView): ReturnType<typeof updateClaimRef> => updateClaimRef(pd, remote, current.ref, createClaimCommit(pd, current.oid, {
-        ...current.payload,
-        predecessor_oid: current.oid,
-        amendments: [...(current.payload.amendments ?? []).filter((entry) => entry.input !== proposal.input), amendment],
-        ...(other === unit ? { proposals: (current.payload.proposals ?? []).map((entry) => (entry.input === proposal.input && entry.answer === undefined ? answered : entry)) } : {}),
-      }, undefined, undefined, {
-        [`${RESULT_FILES_ROOT}/amendments/${proposal.input}`]: text,
-      }), current.oid);
-      let current = currentClaim(pd, remote, claim.ref);
-      if (current?.status !== "claimed") continue;
-      // A claim that moved meanwhile is read again and written once more.
-      if (!amended(current).ok) {
-        current = currentClaim(pd, remote, claim.ref);
-        if (current?.status !== "claimed" || !amended(current).ok) {
-          missed.push(claim.owner);
-          continue;
-        }
-      }
-      invalidateLiveClaimPayloadCache(pd, other);
-      if (current.payload.by_file && !current.payload.taken_by) {
-        lines.push(`A newer hand-off file for ${other} is at ${writeHandOffFile(pd, other, current.owner, current.generation)}: send it to ${current.owner}.`);
-      }
+      const sent = amendClaim(pd, remote, claim, amendment, text, other === unit
+        ? (payload) => ({ proposals: (payload.proposals ?? []).map((entry) => (entry.input === proposal.input && entry.answer === undefined ? answered : entry)) })
+        : undefined);
+      if (sent === "missed") missed.push(claim.owner);
+      if (sent !== null && sent !== "missed") lines.push(...sent);
     }
     lines.unshift(`The ${name} is changed at the home. The teams building with it hear it once and carry on; nobody approves anything again.`);
     if (missed.length > 0) {

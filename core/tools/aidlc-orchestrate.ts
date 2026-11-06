@@ -618,6 +618,7 @@ import {
   writeProposedText,
   refreshHomeClaims,
   refreshListedHome,
+  sendLeadsApprovedChanges,
   earlyBaseMerged,
   moveRefusedMark,
   shareBlocker,
@@ -17108,6 +17109,16 @@ function teamHomeClaims(
   // lead's answer: each waits for a team, never this project's to build.
   const rows = teamHome ? readAuditShardEvents(projectDir) : [];
   for (const unit of teamHome ? [...unitsKeptForTeams(rows).keys(), ...unitsLeftOpen(rows)] : []) heldElsewhere.add(unit);
+  // The lead's own approved change to an input the teams build with goes onto
+  // their claims, said once (a look writes nothing).
+  if (heldElsewhere.size > 0 && !query && !isReadOnlyEngineProbe() && unreached.length === 0) {
+    try {
+      // Each is said with the step that wrote it: the write itself happens once.
+      settledNotices.push(...sendLeadsApprovedChanges(projectDir));
+    } catch (e) {
+      sayWithStepOnce(projectDir, `A change you approved could not be sent to the teams just now: ${errorMessage(e)}`);
+    }
+  }
   // What came back from the teams, checked against each repo once per step
   // (with the home unreached, the board is the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();

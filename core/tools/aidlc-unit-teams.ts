@@ -788,6 +788,127 @@ export function approvedInputsOf(recordDir: string): Array<{ path: string; finge
     .map((cells) => ({ path: cells[0], fingerprint: cells[1] }));
 }
 
+// The contract summary teams build with (Contract Design's output).
+export const CONTRACT_SUMMARY_INPUT = "inception/contract-design/contract-summary.md";
+
+// Who a change to the contract summary is for: the Units that are a party to a
+// contract it changed (the Provider Unit and the Consumer cells of its row in
+// the Contracts table), read from structure only: the table's cells, and the
+// headings a changed section sits under. A changed row is its parties'; a
+// changed section is a row's when the nearest heading above it that ties names,
+// as whole tokens, both of that row's party Units or its # and one of them, for
+// exactly one row. Null, so every Unit that reads it hears, when either text
+// has no Contracts table, a change cannot be tied to one row, or a tied row
+// names no Unit on one side.
+export function contractPartiesChanged(before: string, after: string, units: readonly string[]): Set<string> | null {
+  const was = contractStructure(before);
+  const now = contractStructure(after);
+  if (was === null || now === null) return null;
+  const known = new Set(units);
+  const tokens = (text: string) => new Set(text.split(/[^A-Za-z0-9_-]+/).filter(Boolean));
+  const rowsById = (rows: ContractRow[]) => new Map(rows.map((row) => [row.id, row]));
+  const rowsBefore = rowsById(was.rows);
+  const rowsAfter = rowsById(now.rows);
+  const changedRows: ContractRow[] = [];
+  for (const id of new Set([...rowsBefore.keys(), ...rowsAfter.keys()])) {
+    const left = rowsBefore.get(id);
+    const right = rowsAfter.get(id);
+    if (left?.cells.join("|") !== right?.cells.join("|")) changedRows.push(...[left, right].filter((row): row is ContractRow => row !== undefined));
+  }
+  const rows = now.rows.length > 0 ? now.rows : was.rows;
+  const partiesOf = (row: ContractRow): string[] | null => {
+    const provider = [...tokens(row.provider)].filter((token) => known.has(token));
+    const consumer = [...tokens(row.consumer)].filter((token) => known.has(token));
+    return provider.length === 0 || consumer.length === 0 ? null : [...provider, ...consumer];
+  };
+  const tie = (path: readonly string[]): ContractRow | null => {
+    for (const heading of [...path].reverse()) {
+      const named = tokens(heading);
+      const hits = rows.filter((row) => {
+        const parties = [...tokens(row.provider), ...tokens(row.consumer)].filter((token) => known.has(token));
+        const both = parties.length >= 2 && parties.every((unit) => named.has(unit));
+        return both || (named.has(row.id) && parties.some((unit) => named.has(unit)));
+      });
+      if (hits.length === 1) return hits[0];
+      if (hits.length > 1) return null;
+    }
+    return null;
+  };
+  const changed: ContractRow[] = [...changedRows];
+  for (const key of new Set([...was.sections.keys(), ...now.sections.keys()])) {
+    if (was.sections.get(key)?.body === now.sections.get(key)?.body) continue;
+    const row = tie((now.sections.get(key) ?? was.sections.get(key))!.path);
+    if (row === null) return null;
+    changed.push(row);
+  }
+  const parties = new Set<string>();
+  for (const row of changed) {
+    const named = partiesOf(row);
+    if (named === null) return null;
+    for (const unit of named) parties.add(unit);
+  }
+  return parties;
+}
+
+interface ContractRow {
+  id: string;
+  provider: string;
+  consumer: string;
+  cells: string[];
+}
+
+// The Contracts table's rows (header cells #, Provider Unit and Consumer) and
+// every section's text outside that table, keyed by its heading path.
+function contractStructure(text: string): { rows: ContractRow[]; sections: Map<string, { path: string[]; body: string }> } | null {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const blocks = markdownBlocks(normalized).lines;
+  const cellsAt = (at: number) => lines[at].trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+  let header: { block: number; id: number; provider: number; consumer: number } | null = null;
+  const rows: ContractRow[] = [];
+  const tableLines = new Set<number>();
+  for (let at = 0; at < lines.length; at++) {
+    const line = blocks[at];
+    if (line?.kind !== "table" || line.containers.length > 0) continue;
+    const cells = cellsAt(at);
+    const lower = cells.map((cell) => cell.toLowerCase());
+    if (header === null || header.block !== line.block) {
+      const id = lower.indexOf("#");
+      const provider = lower.indexOf("provider unit");
+      const consumer = lower.indexOf("consumer");
+      if (id < 0 || provider < 0 || consumer < 0) continue;
+      header = { block: line.block, id, provider, consumer };
+    }
+    tableLines.add(at);
+    if (cells.every((cell) => /^:?-+:?$/.test(cell)) || cells[header.id]?.toLowerCase() === "#") continue;
+    rows.push({ id: cells[header.id] ?? "", provider: cells[header.provider] ?? "", consumer: cells[header.consumer] ?? "", cells });
+  }
+  if (header === null) return null;
+  const sections = new Map<string, { path: string[]; body: string }>();
+  const path: Array<{ level: number; title: string }> = [];
+  let key = "";
+  let body: string[] = [];
+  const close = () => {
+    if (body.join("\n").trim() !== "" || sections.has(key)) sections.set(key, { path: path.map((entry) => entry.title), body: body.join("\n").trim() });
+    body = [];
+  };
+  for (let at = 0; at < lines.length; at++) {
+    const line = blocks[at];
+    const atx = line?.kind === "heading" && line.containers.length === 0 ? /^ {0,3}(#{1,6})[ \t]+(.*?)[ \t#]*$/.exec(lines[at]) : null;
+    if (atx !== null) {
+      close();
+      const level = atx[1].length;
+      while (path.length > 0 && path[path.length - 1].level >= level) path.pop();
+      path.push({ level, title: atx[2] });
+      key = path.map((entry) => entry.title).join("\u0000");
+      continue;
+    }
+    if (!tableLines.has(at)) body.push(lines[at]);
+  }
+  close();
+  return { rows, sections };
+}
+
 // An input's name for the person: "contract summary" for
 // inception/contract-design/contract-summary.md.
 export function inputName(rel: string): string {
