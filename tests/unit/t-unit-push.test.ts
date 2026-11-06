@@ -986,7 +986,11 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     const claim = claimPayload(home.remote, id8, "refunds") as Record<string, unknown>;
     expect(claim.done).toBeUndefined();
     expect(claim.result).toBeUndefined();
-    expect(String(next(home.dir).narration ?? "")).not.toContain("refunds, payments: done");
+    // Nothing of it is built here: the board says it was sent back, never a turn-down in no repo.
+    const board = String(next(home.dir).narration ?? "");
+    expect(board).not.toContain("refunds, payments: done");
+    expect(board, board).toContain("- refunds, payments: sent back from your Build and Test, back with payments");
+    expect(board).not.toContain("turned down in ,");
     // payments hears it once, in the failure's words.
     git(alice, ["fetch", "-q", "origin"]);
     const line = `refunds was sent back from the lead's Build and Test: "${words}".`;

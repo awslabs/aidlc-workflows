@@ -11665,7 +11665,7 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
     };
     const named = open.map((claim) => {
       const payload = payloadOf(claim.unit);
-      if (payload?.turned_down) return `${claim.unit} (turned down in ${payload.turned_down.repo}, back with ${claim.owner})`;
+      if (payload?.turned_down) return `${claim.unit} (${turnedDownStatus(payload.turned_down, claim.owner)})`;
       if (payload?.result) return `${claim.unit} (pushed by ${payload.result.by ?? payload.taken_by ?? claim.owner} for ${claim.owner}, not merged yet)`;
       if (payload?.by_file) return `${claim.unit} (handed to ${claim.owner} by file)`;
       if (payload?.taken_by) return `${claim.unit} (being built by ${payload.taken_by} for ${claim.owner})`;
@@ -17105,6 +17105,11 @@ function teamHomeClaims(
     if (refreshed.fetched) overview = readOverview();
   }
   const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
+  // A Unit a team holds that is not done on its claim (one Build and Test
+  // sent back after its merge, whose progress row still reads complete).
+  for (const [unit, claim] of overview?.claims ?? []) {
+    if (claim.status === "claimed" && claim.payload.done !== true && claim.payload.turned_down) heldElsewhere.add(unit);
+  }
   // Named for a team while the home could not be reached, or left open by the
   // lead's answer: each waits for a team, never this project's to build.
   const rows = teamHome ? readAuditShardEvents(projectDir) : [];
@@ -17148,6 +17153,14 @@ function teamHomeClaims(
     sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what your last fetch brought.`);
   }
   return { overview, results, heldElsewhere };
+}
+
+// A Unit back with its team: turned down in one of its repos, or sent back
+// from the lead's own Build and Test (which names no repo).
+function turnedDownStatus(down: { repo: string; from?: string }, team: string): string {
+  return down.from === "build-and-test"
+    ? `sent back from your Build and Test, back with ${team}`
+    : `turned down in ${down.repo}, back with ${team}`;
 }
 
 // The Units merged at a team home, read from the audit too when no progress
@@ -17220,6 +17233,7 @@ function unitBoardRows(
   const done = (unit: string): boolean => {
     const claim = overview?.claims.get(unit);
     if (claim?.status === "claimed" && claim.payload.done === true) return true;
+    if (claim?.status === "claimed" && claim.payload.turned_down) return false;
     return standing.get(unit)?.done ?? mergedHere.has(unit);
   };
   const rows = unitsInPlanOrder(projectDir, planUnits).map((unit): UnitBoardRow => {
@@ -17234,7 +17248,7 @@ function unitBoardRows(
       return { unit, team: "here", status: unitHereStatus(standing.get(unit), waits) };
     }
     const payload = claim!.payload;
-    if (payload.turned_down) return { unit, team, status: `turned down in ${payload.turned_down.repo}, back with ${team}` };
+    if (payload.turned_down) return { unit, team, status: turnedDownStatus(payload.turned_down, team) };
     if (payload.result) {
       const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
         payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
@@ -17793,9 +17807,13 @@ function teamUnitMajorWalkBeat(
   }
   // At a home teams build for, the Units its own walk works, from the claims
   // as this clone last fetched them.
-  const heldElsewhere = !scopeStamp && homeLocation(stateContent) !== null && hasAnyUnitClaimRefs(projectDir)
-    ? new Set(cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed.map((row) => row.unit))
-    : new Set<string>();
+  const claimsHere = !scopeStamp && homeLocation(stateContent) !== null && hasAnyUnitClaimRefs(projectDir)
+    ? cachedUnitClaimOverview(projectDir, { writeCache: false })
+    : null;
+  const heldElsewhere = new Set(claimsHere?.claimed.map((row) => row.unit) ?? []);
+  for (const [unit, claim] of claimsHere?.claims ?? []) {
+    if (claim.status === "claimed" && claim.payload.done !== true && claim.payload.turned_down) heldElsewhere.add(unit);
+  }
   if (!scopeStamp && homeLocation(stateContent) !== null) {
     for (const unit of [...unitsKeptForTeams(auditRows).keys(), ...unitsLeftOpen(auditRows)]) heldElsewhere.add(unit);
   }
