@@ -284,6 +284,46 @@ describe("progress and the result come back as files", () => {
     const ask = next(home.dir);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-amend");
     expect(String(ask.question)).toStartWith('data proposes a change to the requirements for reporting ("report refunds by month").');
+    expect(ask.ask_type).toBe("unit-amend");
+  });
+
+  // A live run: after the lead approved a by-file team's change, the newer
+  // hand-off file was taken with "Carrying on" and nothing else: the build's
+  // copy stayed the old one and nothing said the change was approved.
+  test("approved, the newer hand-off file brings the approved text into the team's build, and says it was approved", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+    const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    const copy = join(record, "inception", "requirements-analysis", "requirements.md");
+    writeFileSync(copy, "# Requirements\n\nFR1 refunds, by month.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "report refunds by month"], partner.dir).status).toBe(0);
+    expect(run(UNIT, ["take-in", deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md")], home.dir).status).toBe(0);
+    next(home.dir);
+    const approved = run(UNIT, ["amend", "reporting", "--input", "inception/requirements-analysis/requirements.md", "--answer", "approve",
+      "--person-words", "yes, by month"], home.dir);
+    expect(approved.status, approved.out).toBe(0);
+    const newer = /A newer hand-off file for reporting is at (\S+): send it/.exec(String(approved.json?.notice))?.[1];
+    expect(newer, String(approved.json?.notice)).toBeString();
+    const taken = run(UNIT, ["take", "--file", deliver(home.dir, newer!)], partner.dir);
+    expect(taken.status, taken.out).toBe(0);
+    expect(String(taken.json?.notice)).toContain("The lead approved your change to the requirements.");
+    expect(readFileSync(copy, "utf-8").replace(/\r\n/g, "\n")).toBe(
+      readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", "fixture-8000000000000001", "inception", "requirements-analysis", "requirements.md"), "utf-8").replace(/\r\n/g, "\n"),
+    );
+  });
+
+  test("a turned-down by-file change says nothing reaches the team from here", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+    const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, by month.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "report refunds by month"], partner.dir).status).toBe(0);
+    expect(run(UNIT, ["take-in", deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md")], home.dir).status).toBe(0);
+    next(home.dir);
     // Turned down, nothing reaches a team that builds from a file: the line says to tell them.
     const down = run(UNIT, ["amend", "reporting", "--input", "inception/requirements-analysis/requirements.md", "--answer", "reject",
       "--person-words", "not this month"], home.dir);

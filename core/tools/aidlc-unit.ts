@@ -6684,12 +6684,37 @@ export function reopenTurnedDownBuild(projectDir: string, stateContent: string):
 // result says to the lead. Kept in the build's engine folder, never committed.
 const INPUTS_TAKEN_FILE = "inputs-taken.json";
 
-function inputsTakenFile(record: string): { taken: Record<string, string>; kept: string[] } {
+function inputsTakenFile(record: string): { taken: Record<string, string>; kept: string[]; proposed?: string[] } {
   try {
-    const read = JSON.parse(readFileSync(join(record, ".aidlc-engine", INPUTS_TAKEN_FILE), "utf-8")) as { taken?: Record<string, string>; kept?: string[] };
-    return { taken: read.taken ?? {}, kept: read.kept ?? [] };
+    const read = JSON.parse(readFileSync(join(record, ".aidlc-engine", INPUTS_TAKEN_FILE), "utf-8")) as {
+      taken?: Record<string, string>; kept?: string[]; proposed?: string[];
+    };
+    return { taken: read.taken ?? {}, kept: read.kept ?? [], proposed: read.proposed ?? [] };
   } catch {
-    return { taken: {}, kept: [] };
+    return { taken: {}, kept: [], proposed: [] };
+  }
+}
+
+function noteInputProposedAnswered(record: string, input: string): void {
+  const file = inputsTakenFile(record);
+  file.proposed = (file.proposed ?? []).filter((entry) => entry !== input);
+  try {
+    writeFileAtomic(join(record, ".aidlc-engine", INPUTS_TAKEN_FILE), `${JSON.stringify(file)}\n`);
+  } catch {
+    // Kept: the next newer file says it again.
+  }
+}
+
+// An input a by-file build proposed a change to, in its progress file: the
+// approved version that comes back replaces its copy, as a claim's does.
+function noteInputProposed(record: string, input: string): void {
+  const file = inputsTakenFile(record);
+  file.proposed = [...new Set([...(file.proposed ?? []), input])];
+  try {
+    mkdirSync(join(record, ".aidlc-engine"), { recursive: true });
+    writeFileAtomic(join(record, ".aidlc-engine", INPUTS_TAKEN_FILE), `${JSON.stringify(file)}\n`);
+  } catch {
+    // Unnoted: the approved version is put beside the copy instead.
   }
 }
 
@@ -6718,6 +6743,43 @@ function noteInputTaken(record: string, input: string, fingerprint: string | nul
 // The inputs whose own edit this build kept over the home's newer version.
 export function inputsKeptOverNewer(record: string): string[] {
   return inputsTakenFile(record).kept;
+}
+
+// A newer version of one input this build was approved with, from its claim's
+// amendments or a newer hand-off file: the copy here takes it, and the stages
+// that used it read as current, on every Guard Policy; a copy the team edited
+// since it took it, and never sent home as a proposal, stays as they left it,
+// with the new version beside it and their result saying so to the lead. The
+// one line to say, or null when the copy already holds it.
+function takeNewerInput(
+  projectDir: string,
+  record: string,
+  unit: string,
+  input: string,
+  text: string,
+  how: { at: string; done: boolean; pushed: boolean; proposedHere: boolean },
+): string | null {
+  const path = join(record, ...input.split("/"));
+  if (existsSync(path) && textFingerprint(readFileSync(path, "utf-8")) === textFingerprint(text)) return null;
+  const name = inputName(input);
+  const taken = inputsTaken(record).get(input);
+  if (!how.proposedHere && existsSync(path) && taken !== undefined && textFingerprint(readFileSync(path, "utf-8")) !== taken) {
+    const beside = path.replace(/\.md$/, "") + ".from-lead.md";
+    if (existsSync(beside) && textFingerprint(readFileSync(beside, "utf-8")) === textFingerprint(text)) return null;
+    writeFileSync(beside, text, "utf-8");
+    noteInputTaken(record, input, null);
+    return `The ${name} changed at the home, and your copy has your own edits, so I kept yours as you left it and put ` +
+      `the new version beside it, at ${relative(projectDir, beside).split(sep).join("/")}: compare the two and keep what you want.`;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text, "utf-8");
+  noteInputTaken(record, input, textFingerprint(text));
+  const renewed = renewForAmendedInput(projectDir, input, { Unit: unit, "Amended At Home": how.at });
+  if (how.done) return `The ${name} changed at the home after ${unit} was done. Do you want me to start follow-up work for it?`;
+  // Pushed and waiting on the home: it hears the change and nothing of it is reopened.
+  if (how.pushed) return `The ${name} changed at the home after ${unit} was pushed; ${unit} stays as you pushed it.`;
+  if (renewed.length > 0) return staleStageLine(stageLabel(loadGraph().find((stage) => stage.slug === renewed[0]), renewed[0]) ?? renewed[0]);
+  return `The ${name} changed at the home; ${unit} uses the new one from here.`;
 }
 
 // What the home said about this build's Unit, read from the claims git last
@@ -6782,37 +6844,14 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     // written back while that proposal waits.
     if ((mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input && entry.answer === undefined)) continue;
     const shown = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/amendments/${amendment.input}`, "--"]);
-    const path = join(record, ...amendment.input.split("/"));
-    if (!shown.ok || (existsSync(path) && textFingerprint(readFileSync(path, "utf-8")) === textFingerprint(shown.stdout))) continue;
-    const name = inputName(amendment.input);
-    // A copy the team edited since it took it, and never sent home as a
-    // proposal, stays as they left it: the new version goes beside it, said
-    // once, and their result says so to the lead.
-    const taken = inputsTaken(record).get(amendment.input);
-    const proposedHere = (mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input);
-    if (!proposedHere && existsSync(path) && taken !== undefined && textFingerprint(readFileSync(path, "utf-8")) !== taken) {
-      const beside = path.replace(/\.md$/, "") + ".from-lead.md";
-      if (existsSync(beside) && textFingerprint(readFileSync(beside, "utf-8")) === textFingerprint(shown.stdout)) continue;
-      writeFileSync(beside, shown.stdout, "utf-8");
-      noteInputTaken(record, amendment.input, null);
-      lines.push(`The ${name} changed at the home, and your copy has your own edits, so I kept yours as you left it and put ` +
-        `the new version beside it, at ${relative(projectDir, beside).split(sep).join("/")}: compare the two and keep what you want.`);
-      continue;
-    }
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, shown.stdout, "utf-8");
-    noteInputTaken(record, amendment.input, textFingerprint(shown.stdout));
-    const renewed = renewForAmendedInput(projectDir, amendment.input, { Unit: unit, "Amended At Home": amendment.at });
-    if (mine.payload.done) {
-      lines.push(`The ${name} changed at the home after ${unit} was done. Do you want me to start follow-up work for it?`);
-    } else if (getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed") {
-      // Pushed and waiting on the home: it hears the change and nothing of it is reopened.
-      lines.push(`The ${name} changed at the home after ${unit} was pushed; ${unit} stays as you pushed it.`);
-    } else if (renewed.length > 0) {
-      lines.push(staleStageLine(stageLabel(loadGraph().find((stage) => stage.slug === renewed[0]), renewed[0]) ?? renewed[0]));
-    } else {
-      lines.push(`The ${name} changed at the home; ${unit} uses the new one from here.`);
-    }
+    if (!shown.ok) continue;
+    const line = takeNewerInput(projectDir, record, unit, amendment.input, shown.stdout, {
+      at: amendment.at,
+      done: mine.payload.done === true,
+      pushed: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed",
+      proposedHere: (mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input),
+    });
+    if (line !== null) lines.push(line);
   }
   return lines;
 }
@@ -7048,6 +7087,7 @@ function proposeChange(args: string[], projectDir?: string): void {
     const rel = writeProgressFile(pd, state, build, {
       input: match.path, by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate", words: personWordsOf(pd, flags), text,
     });
+    noteInputProposed(record, match.path);
     console.log(JSON.stringify({
       proposed: true,
       file: rel,
@@ -7503,8 +7543,25 @@ function takeFromFile(pd: string, path: string): void {
   if (existing !== null) {
     setActiveSpaceCursor(pd, existing.space);
     selectIntentForSession(pd, existing.dirName, existing.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
+    // A newer hand-off file (the lead approved a change since): its inputs
+    // reach the build as an amendment on a claim does.
+    const record = join(intentsDir(pd, existing.space), existing.dirName);
+    const state = readStateFile(pd, existing.dirName, existing.space);
+    const proposed = inputsTakenFile(record).proposed ?? [];
+    const lines = approvedInputsOf(record).flatMap(({ path: input }) => {
+      const text = file.files.get(input);
+      if (text === undefined) return [];
+      const line = takeNewerInput(pd, record, unit, input, text, {
+        at: fields["Handed Off"] ?? isoTimestamp(), done: false,
+        pushed: getField(state, UNIT_PUSH_FIELD)?.trim() === "pushed", proposedHere: proposed.includes(input),
+      });
+      // A change it proposed comes back in the newer file: the lead approved it (said once).
+      const approved = proposed.includes(input) ? [`The lead approved your change to the ${inputName(input)}.`] : [];
+      if (approved.length > 0) noteInputProposedAnswered(record, input);
+      return [...approved, ...(line === null ? [] : [line])];
+    });
     console.log(JSON.stringify({ taken: true, resumed: true, unit, space: existing.space, record: existing.dirName,
-      notice: `Carrying on ${unit}, ${theTeam(existing.space)}'s build here.` }));
+      notice: [`Carrying on ${unit}, ${theTeam(existing.space)}'s build here.`, ...lines].join(" ") }));
     return;
   }
   const state = file.files.get("aidlc-state.md");
