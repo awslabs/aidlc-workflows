@@ -551,7 +551,7 @@ export const ROUTES: readonly Route[] = [
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "versions install", summary: "install a retained release" }],
     all: [
-      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--dry-run] [--json|--quiet]",
+      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--dry-run] [--yes] [--json|--quiet]",
     ],
   },
   {
@@ -3894,14 +3894,18 @@ function validateSimplePublicGrammar(
 }
 
 // A verb the lifecycle tool runs: the words that tool gets (the route's prefix,
-// the verb and what follows it, up to a `--`) and the verb's usage, its form
-// from the route, the line `aidlc system --help` prints for it.
+// the verb and what follows it up to a `--`, then this launcher's own flags,
+// which resolveActionFrom hands on at the end; --project-dir, which every
+// lifecycle grammar takes, is left out) and the verb's usage, its form from the
+// route, the line `aidlc system --help` prints for it.
 function lifecycleVerb(argv: readonly string[]): { args: string[]; usage: string } | null {
   const route = routePolicyFor(argv);
   if (route?.tool !== TOOLS.lifecycle) return null;
   const clean = withoutProjectDirFlag(argv);
   const delimiter = clean.indexOf("--");
   const words = delimiter < 0 ? clean : clean.slice(0, delimiter);
+  const end = argv.indexOf("--");
+  const launcherFlags = (end < 0 ? argv : argv.slice(0, end)).filter((token) => LAUNCHER_GLOBAL_FLAGS.has(token));
   const path = route.namespace === "public"
     ? []
     : route.group === "top" ? ["system"] : ["system", route.group];
@@ -3909,7 +3913,7 @@ function lifecycleVerb(argv: readonly string[]): { args: string[]; usage: string
   const form = route.all?.find((item) => item === verb || item.startsWith(`${verb} `));
   if (!form) return null;
   return {
-    args: [...(route.prefix ?? []), ...words.slice(path.length)],
+    args: [...(route.prefix ?? []), ...words.slice(path.length), ...launcherFlags],
     usage: [aidlcInvocation(), ...path, form].join(" "),
   };
 }

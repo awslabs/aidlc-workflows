@@ -2307,10 +2307,10 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
 
   // `aidlc system --help` lists rollback and versions, and every lifecycle
   // verb's usage error says "rerun with --help". Asked for its usage, or given a
-  // word it does not read, a verb used to run: rollback --help and --dry-run
-  // rolled back, prune --help deleted a retained release. Each case here leaves
-  // the whole machine (the active pointer, every retained release and harness
-  // tree, the launcher) and the person's profile as they were.
+  // word it does not read, a verb prints its usage and runs nothing (run, rollback
+  // --help or --dry-run would roll back, and prune --help would delete a retained
+  // release). Each case leaves the whole machine (the active pointer, every
+  // retained release and harness tree, the launcher) and the profile as they were.
   test("a lifecycle verb's --help prints its usage, and a word it does not know is refused with its usage, changing nothing", () => {
     const machine = temp("aidlc-t244-verb-help-");
     const project = temp("aidlc-t244-verb-help-project-");
@@ -2351,7 +2351,7 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
       visit(root);
       return found;
     };
-    // The home folder is Bun's too (its own cache lands there), so only the profile is watched in it.
+    // Bun writes its install cache under $HOME/.bun, so only the profile is watched in the home folder.
     const profile = join(home, ".profile");
     const snapshot = () => [...entries(machine), existsSync(profile) ? readFileSync(profile, "utf-8") : "no profile"];
     const help = (form: string) => ({ code: 0, says: [`usage: `, form] });
@@ -2379,6 +2379,8 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
       { args: ["uninstall", "--help", "--yes"], code: 0, says: ["USAGE"] },
       { args: ["system", "rollback", "--dry-run"], ...unknown("unknown rollback option --dry-run", rollbackForm) },
       { args: ["system", "rollback", "--bogus"], ...unknown("unknown rollback option --bogus", rollbackForm) },
+      // A launcher flag rollback does not read is the same: the usage, not only "rerun with --help".
+      { args: ["system", "rollback", "--offline"], ...unknown("unknown rollback option --offline", rollbackForm) },
       { args: ["system", "versions", "prune", "--bogus", "--yes"], ...unknown("unknown versions prune option --bogus", pruneForm) },
       {
         args: ["system", "versions", "install", STALE_PIN_VERSION, "--from", releases[STALE_PIN_VERSION], "--bogus"],
@@ -2411,7 +2413,11 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     expect(JSON.parse(json.stdout).message).toBe("unknown rollback option --dry-run");
     expect(active()).toBe(NEXT_VERSION);
 
-    // The words rollback does know still work.
+    // The words these verbs do know still work; --yes on versions install, as on every other one.
+    const planned = run(DISPATCHER, [
+      "system", "versions", "install", STALE_PIN_VERSION, "--from", releases[STALE_PIN_VERSION], "--dry-run", "--yes",
+    ], project, env);
+    expect(planned.status, planned.stdout + planned.stderr).toBe(0);
     const listed = run(DISPATCHER, ["system", "rollback", "--list"], project, env);
     expect(listed.status, listed.stdout + listed.stderr).toBe(0);
     expect(listed.stdout).toContain(AIDLC_VERSION);

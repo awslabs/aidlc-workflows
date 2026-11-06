@@ -274,6 +274,7 @@ export const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
       "--no-color",
       "--offline",
       "--quiet",
+      "--yes",
     ]),
     positionals: 1,
   },
