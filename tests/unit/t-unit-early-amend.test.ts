@@ -376,15 +376,20 @@ describe("a change to a shared input", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
-    const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/"));
-    writeFileSync(homeCopy, "# Requirements\n\nFR1 refunds, said the new way.\n");
+    const homeRecord = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
+    writeFileSync(join(homeRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, said the new way.\n");
+    writeFileSync(join(homeRecord, "inception", "units-generation", "unit-of-work.md"), "# Units of work\n\nrefunds, checkout-ui, reporting, said the new way.\n");
     appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
+    appendAuditEntry("GATE_APPROVED", { Stage: "units-generation", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
     expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).toContain("The requirements you changed reach the teams");
     git(alice, ["fetch", "-q", "origin"]);
-    expect(notices(next(alice))).toContain(
-      "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
+    // One offer for both, never one per file.
+    const heard = notices(next(alice));
+    expect(heard).toContain(
+      "The lead changed the requirements and the unit of work, and refunds is already done. Do you want me to start follow-up work for them?",
     );
+    expect(heard.filter((line) => line.includes("follow-up work"))).toHaveLength(1);
   });
 
   test("a team that left its copy as it was takes the lead's new version, as before", () => {

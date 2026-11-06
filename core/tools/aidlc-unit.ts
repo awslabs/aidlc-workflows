@@ -7552,6 +7552,8 @@ function takeNewerInput(
   input: string,
   text: string,
   how: { at: string; done: boolean; pushed: boolean; proposedHere: boolean },
+  // A done Unit's changed inputs, gathered for one follow-up offer for all.
+  doneNames?: string[],
 ): string | null {
   const path = join(record, ...input.split("/"));
   // The copy already holds it (the team's own change, approved as it was):
@@ -7576,6 +7578,10 @@ function takeNewerInput(
   const renewed = renewForAmendedInput(projectDir, input, { Unit: unit, "Amended At Home": how.at });
   // Said without "after": the lead may have changed it before the Unit was
   // done or pushed, and it reaches the team only now.
+  if (how.done && doneNames !== undefined) {
+    doneNames.push(name);
+    return null;
+  }
   if (how.done) return `The lead changed the ${name}, and ${unit} is already done. Do you want me to start follow-up work for it?`;
   // Pushed and waiting on the home: it hears the change and nothing of it is reopened.
   if (how.pushed) return `The lead changed the ${name}; ${unit} stays as you pushed it.`;
@@ -7653,6 +7659,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
   }
   if (isReadOnlyEngineProbe()) return lines;
   const record = recordDir(projectDir);
+  const doneNames: string[] = [];
   for (const amendment of mine.payload.amendments ?? []) {
     if (record === null) break;
     // The team's own proposed copy is theirs while the lead decides: never
@@ -7669,8 +7676,13 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
       done: mine.payload.done === true,
       pushed: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed" && (pushedAt === undefined || amendment.at >= pushedAt),
       proposedHere: (mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input),
-    });
+    }, doneNames);
     if (line !== null) lines.push(line);
+  }
+  // One offer for everything that changed after the Unit was done, never one per file.
+  if (doneNames.length > 0) {
+    lines.push(`The lead changed ${joinNames(doneNames.map((name) => `the ${name}`))}, and ${unit} is already done. ` +
+      `Do you want me to start follow-up work for ${doneNames.length === 1 ? "it" : "them"}?`);
   }
   return lines;
 }
