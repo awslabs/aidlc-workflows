@@ -259,8 +259,8 @@ function approve(proj: string): void {
   if (recorded.status !== 0) throw new Error(`Approve Plan was not recorded:\n${recorded.stdout}${recorded.stderr}`);
 }
 
-function askOpen(proj: string): Step {
-  writePlan(proj);
+function askOpen(proj: string, planExtra = ""): Step {
+  writePlan(proj, planExtra);
   const step = next(proj);
   if (step.kind !== "ask" || step.ask_type !== "plan-approval") {
     throw new Error(`expected the plan question, got ${JSON.stringify(step)}`);
@@ -276,6 +276,7 @@ function builtCodeGeneration(
   policy: "strict" | "relaxed" | "off",
   planApproval: "on" | "off",
   lastStage = false,
+  planExtra = "",
 ): string {
   const proj = createCodeGenerationProject(policy, planApproval);
   // What a poc run has here: this stage in progress (the previous stage's
@@ -294,11 +295,11 @@ function builtCodeGeneration(
   writeFileSync(stateFile, state, "utf-8");
   next(proj);
   if (planApproval === "on") {
-    askOpen(proj);
+    askOpen(proj, planExtra);
     approve(proj);
     next(proj);
   } else {
-    writePlan(proj);
+    writePlan(proj, planExtra);
     const step = next(proj);
     if (step.kind !== "run-stage" || step.plan_approval?.status !== "approved") {
       throw new Error(`expected the build without asking, got ${JSON.stringify(step)}`);
@@ -330,8 +331,9 @@ export function openCodeGenerationGate(
   policy: "strict" | "relaxed" | "off" = "relaxed",
   planApproval: "on" | "off" = "on",
   lastStage = false,
+  planExtra = "",
 ): string {
-  const proj = builtCodeGeneration(policy, planApproval, lastStage);
+  const proj = builtCodeGeneration(policy, planApproval, lastStage, planExtra);
   const reviewFile = askReview(proj);
   mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
   writeFileSync(join(proj, reviewFile), reviewText(REVIEWER), "utf-8");
@@ -346,13 +348,15 @@ export function openCodeGenerationGate(
 /**
  * The work finished at Code Generation: every stage after it skipped, the gate
  * opened as above, and the person's approval reported, so the work is
- * Completed with Current Stage still on Code Generation.
+ * Completed with Current Stage still on Code Generation. `planExtra`: steps the
+ * approved plan carries beyond its one.
  */
 export function finishedAtCodeGeneration(
   policy: "strict" | "relaxed" | "off" = "relaxed",
   planApproval: "on" | "off" = "on",
+  planExtra = "",
 ): string {
-  const proj = openCodeGenerationGate(policy, planApproval, true);
+  const proj = openCodeGenerationGate(policy, planApproval, true, planExtra);
   reply(proj, "approve");
   const approved = run(proj, [DISPATCHER, "engine", "orchestrate", "report", "--stage", "code-generation",
     "--result", "approved", "--user-input", "Approve"]);
