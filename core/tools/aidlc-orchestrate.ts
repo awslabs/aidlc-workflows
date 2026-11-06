@@ -11636,6 +11636,12 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
   if (!isTeamUnitOwnership(stateContent) || !beforePerUnitBlock(loadGraph(), targetSlug)) return null;
   let overview: UnitClaimOverview;
   try {
+    // At a project teams build for, the line names each Unit as its team has
+    // it now: the claims are looked at as it is said, not as this chat's last
+    // look had them (a home that cannot be reached leaves that last look).
+    if (homeLocation(stateContent) !== null && !isReadOnlyEngineProbe()) {
+      refreshHomeClaims(projectDir, { sessionId: engineSessionId, now: true });
+    }
     overview = cachedUnitClaimOverview(projectDir, { writeCache: false });
   } catch {
     return null;

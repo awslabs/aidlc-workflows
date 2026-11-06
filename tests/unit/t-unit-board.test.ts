@@ -26,8 +26,10 @@ import {
   cloneOf,
   codeGenerated,
   codeHost,
+  ENV,
   git,
   GIT_ENV,
+  HOME_RECORD,
   makeHome,
   mergeOnHost,
   next,
@@ -192,6 +194,26 @@ describe("going back to change the Unit plan while teams hold Units", () => {
     );
     expect(JSON.stringify(step)).not.toContain("Still claimed");
     expect(JSON.stringify(step)).not.toContain("publishes again");
+  });
+
+  test("a Unit taken after the lead's chat last looked reads as taken: the line looks at the claims as they are when it is said", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    // The lead's chat looks at the teams' claims once; alice takes refunds after that.
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
+    next(home.dir, chat);
+    const alice = cloneOf(home.remote, "alice");
+    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+    expect(took.status, took.out).toBe(0);
+    const step = next(home.dir, chat, ["--stage", "units-generation"]);
+    const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));
+    expect(line, JSON.stringify(step)).toContain("refunds (being built by alice for payments)");
+    expect(line).not.toContain("refunds (held for payments");
   });
 
   test("a Unit whose team pushed it reads pushed and not merged yet, never as being built", () => {
