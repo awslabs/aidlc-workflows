@@ -12731,8 +12731,8 @@ export function constructionSkeletonOn(stateContent: string): boolean {
 
 // Team Units wait on the walking skeleton, the first DAG Unit built on main,
 // when the scope runs one and the work has not recorded `Skeleton Stance: off`.
-// Unrecorded keeps the scope's answer: the stance is recorded only at the first
-// Construction stage, after claims could already open.
+// Unrecorded keeps the scope's answer only while the team has given none of its
+// own: one it gave is read first (teamSkeletonAnswerUnread, aidlc-orchestrate.ts).
 export function teamSkeletonOn(stateContent: string): boolean {
   return getField(stateContent, "Skeleton Stance") !== "off" &&
     loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton === true;

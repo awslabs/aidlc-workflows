@@ -45,7 +45,8 @@ import { readsAlikeInDoubleQuotes } from "./aidlc-runtime-paths.ts";
 // STANCE, which an LLM resolves by reading a team's free-form `## Walking
 // Skeleton` practices prose (no parser turns free English into a stance). The
 // engine cannot decide it without smuggling an LLM into routing, so it DEFERS:
-// it emits `gate: "unresolved"` for that one stage, the conductor classifies
+// it emits `gate: "unresolved"` for that one stage (and for team work whose own
+// answer is still to be read, on the stage the work is on), the conductor classifies
 // the prose and feeds the stance back via `aidlc-orchestrate report
 // --skeleton-stance`, and the NEXT `next` emits the now-determined boolean gate.
 // The engine still owns the transition — only a typed stance ever crosses back
@@ -317,8 +318,9 @@ export interface RunStageDirective {
   // step that resumes there, until a row of the stage says the agent acted.
   parked_reply?: { words: string; note: string };
   // gate is a boolean for every deterministic case; the string sentinel
-  // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
-  // walking-skeleton gate, which the conductor resolves via report (the
+  // GATE_UNRESOLVED ("unresolved") appears ONLY for the walking-skeleton stance
+  // (the first Construction Bolt's gate, or team work's unread answer), which the
+  // conductor resolves via report (the
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
   // Beside an unresolved gate, a verification command awaiting approval, or a
