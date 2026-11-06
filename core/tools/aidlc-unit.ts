@@ -21,6 +21,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
+import { QUESTION_TYPE_FIELD } from "./aidlc-questions.ts";
 import { completedUnits, scopeStampLanded, unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
 import { gitUserName, personGitNameField } from "./aidlc-git-name.ts";
 import {
@@ -8099,6 +8100,8 @@ function amendInput(args: string[], projectDir?: string): void {
   appendAuditEntry("QUESTION_ANSWERED", {
     Question: `${live.owner} proposes a change to the ${name} for ${unit}`,
     Answer: answer === "approve" ? "Approve it" : "Turn it down",
+    // The engine's own question this answers, which the row closes (the ledger's answered).
+    [QUESTION_TYPE_FIELD]: "unit-amend",
     ...lead.fields,
   }, pd);
   console.log(JSON.stringify({ answered: answered.answer, unit, notice: lines.join(" ") }));
@@ -8821,7 +8824,9 @@ function signOff(args: string[], projectDir?: string): void {
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
   invalidateLiveClaimPayloadCache(pd, unit);
-  appendAuditEntry("QUESTION_ANSWERED", { Question: `Sign off ${unit} from ${live.owner}`, Answer: "Sign it off", ...lead.fields }, pd);
+  appendAuditEntry("QUESTION_ANSWERED", {
+    Question: `Sign off ${unit} from ${live.owner}`, Answer: "Sign it off", [QUESTION_TYPE_FIELD]: "unit-signoff", ...lead.fields,
+  }, pd);
   console.log(JSON.stringify({ unit, notice: `Signed off ${unit}; it counts as done once every repo it changed has merged.` }));
 }
 

@@ -163,3 +163,47 @@ describe("the message the agent names", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.said_merged).toBeUndefined();
   });
 });
+
+// A live run on Claude Code: the lead signed refunds off when asked, then said billing turned it down; the hook
+// held that message for the sign-off question already answered, so the turn-down kept none of the lead's words.
+describe("once the lead answers the engine's question, their next words are their own", () => {
+  test("a turn-down after a sign-off, in the same chat and in the next", () => {
+    const taken = refundsTaken();
+    const { home } = taken;
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    codeGenerated(taken.alice, taken.record);
+    expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(next(home.dir).ask_type).toBe("unit-signoff");
+    const session = "t-unit-lead-words-after-signoff";
+    leadSays(home.dir, session, "looks right, sign refunds off");
+    expect(run(UNIT, ["sign-off", "refunds", "--person-words", "Sign it off"], home.dir, personsChat(session)).status).toBe(0);
+    const words = "billing just turned refunds down in review: it needs the ledger entry first";
+    leadSays(home.dir, session, words);
+    expect(auditBlockField(lastRow(home.dir, "HUMAN_TURN"), "Open Question")).toBeNull();
+    const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"],
+      home.dir, personsChat(session));
+    expect(down.status, down.out).toBe(0);
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down as { person_reply?: string })?.person_reply)
+      .toBe(words);
+    leadSays(home.dir, "t-unit-lead-words-after-signoff-2", "and how is checkout-ui coming along?");
+    expect(auditBlockField(lastRow(home.dir, "HUMAN_TURN"), "Open Question")).toBeNull();
+  });
+
+  test("the lead's words after answering a team's proposed change", () => {
+    const taken = refundsTaken();
+    writeFileSync(join(taken.record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], taken.alice).status).toBe(0);
+    git(taken.home.dir, ["fetch", "-q", "origin"]);
+    const { home } = taken;
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    const session = "t-unit-lead-words-after-amend";
+    leadSays(home.dir, session, "no, keep refunds whole for now");
+    const answered = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "reject", "--person-words", "Turn it down"],
+      home.dir, personsChat(session));
+    expect(answered.status, answered.out).toBe(0);
+    expect(auditBlockField(lastRow(home.dir, "QUESTION_ANSWERED"), "Question Type")).toBe("unit-amend");
+    leadSays(home.dir, session, "what else is waiting on me?");
+    expect(auditBlockField(lastRow(home.dir, "HUMAN_TURN"), "Open Question")).toBeNull();
+  });
+});
