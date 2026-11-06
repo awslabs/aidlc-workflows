@@ -212,6 +212,7 @@ import {
   hasBlockingSensorOverrideAuthorization,
   type CheckboxState,
   CHANGE_CONTROL_FIELD,
+  BLOCKING_SENSOR_OVERRIDE_DECISION,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
   guardFenceConfigKey,
@@ -6469,6 +6470,54 @@ function settingEndsTurn(pd: string, scope: string, stateContent: string): boole
   } catch {
     return true;
   }
+}
+
+// The one-ask choice for a person who names one check to switch off (the
+// sensors module's question), and the answer the switch records when it is
+// their answer to the check's question.
+export const SWITCH_CHECKS_OFF_CHOICE = "Switch all checks off for this work";
+
+// The check's own open question that switching the checks off answers: the
+// typed settings turn the checks off, and the question waiting on the person
+// is the blocking check's (its Decision), at a Unit's checkpoint under
+// whichever of its block's stages logged it for that Unit (the stage whose
+// file failed, which need not be Current Stage), elsewhere under Current
+// Stage. Each stage is read as openStageQuestion reads it: from its start (from
+// its latest Request Changes while it is revised), so a question of an earlier
+// attempt is not taken, and a block stage with no start of its own (the Unit
+// block's later stages are started per Unit) from the workflow attempt, as the
+// stage ahead is read there. From the record, never from the person's words;
+// null when another question waits or none does.
+function switchAnswersOpenCheck(
+  pd: string,
+  scope: string,
+  stateContent: string,
+  modifiers: readonly string[],
+): { stage: string; unit: string | null } | null {
+  if (!modifiers.includes(`${CEREMONY_FLAGS.sensors.slice(2)} off`)) return null;
+  try {
+    if (planApprovalAskIsOpen(pd) || composeGateOpen(pd)) return null;
+    const current = (getField(stateContent, "Current Stage") ?? "").trim();
+    if (current.length === 0) return null;
+    const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
+    const atCheckpoint = walk !== null && walk.step.kind === "checkpoint" ? walk.step.unit : null;
+    const slugs = walk !== null && atCheckpoint !== null ? walk.block.map((stage) => stage.slug) : [current];
+    const started = new Set(readAuditShardEvents(pd).filter((row) => row.event === "STAGE_STARTED")
+      .map((row) => auditBlockField(row.block, "Stage")));
+    const boxes = parseCheckboxes(stateContent);
+    for (const slug of slugs) {
+      const block = started.has(slug)
+        ? openDecisionMenu(pd, slug, stageQuestionBoundary(boxes.find((row) => row.slug === slug)?.state)).at(-1) ?? null
+        : hasPendingDecision(pd, slug, undefined, undefined, true) ? openDecisionMenu(pd, slug).at(-1) ?? null : null;
+      if (block === null || auditBlockField(block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION) continue;
+      const unit = auditBlockField(block, "Unit");
+      if (atCheckpoint !== null && unit !== atCheckpoint) continue;
+      return { stage: slug, unit };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 // For the agent, after the still-paused line: what a yes to it runs.
@@ -12940,6 +12989,29 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         emit(printDirective(
           `Run \`${command}\` to update the configuration${fill}, then print its output verbatim and run \`${jump}\` ` +
             "and follow what it returns.",
+        ));
+        return;
+      }
+      // Switching the checks off as the answer to the check's own open question
+      // is that answer: the setter turns them off, the answer records it on the
+      // question with their words, and the work goes on, with nothing left for
+      // the person to say first (a live run stopped there for "carry on", and
+      // the question stayed open). The setter runs first, so a refusal leaves
+      // the question as it was.
+      const answered = planChanges || stillParked !== null
+        ? null
+        : switchAnswersOpenCheck(pd, currentStateScope, stateContent, modifiers);
+      if (answered !== null) {
+        const answer = [
+          `${aidlcToolInvocation("log")} answer --stage ${shellArg(answered.stage)}`,
+          ...(answered.unit === null ? [] : [`--unit ${shellArg(answered.unit)}`]),
+          `--details "${SWITCH_CHECKS_OFF_CHOICE}"`,
+          ...(unnamed ? [`--message '${MESSAGE_SLOT}'`] : []),
+        ].join(" ");
+        emit(printDirective(
+          `Run \`${command}\` to switch the checks off${fill}, then \`${answer}\`${unnamed ? " with the same message" : ""}, ` +
+            "which records the switch as their answer to the check's question; print the first command's output verbatim " +
+            `and run \`${aidlcToolInvocation("orchestrate")} next\` to carry on with the work.`,
         ));
         return;
       }

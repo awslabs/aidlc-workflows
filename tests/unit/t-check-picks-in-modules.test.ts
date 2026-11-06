@@ -15,6 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BLOCKING_SENSOR_OVERRIDE_DECISION, BLOCKING_SENSOR_OVERRIDE_OPTIONS } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { SWITCH_CHECKS_OFF_CHOICE } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const protocolModule = (name: string): string =>
@@ -32,12 +33,13 @@ describe("a team's check's own question, in the modules", () => {
     const sensors = protocolModule("sensors");
     const bullet = sensors.split("\n").find((line) => line.startsWith("- **One check named to switch off**")) ?? "";
     expect(bullet).toContain("there is no switch for one check");
-    expect(bullet).toContain("Never ask which they meant a second time.");
+    expect(bullet).toContain("Never ask which they meant a second time: a request to switch this check off again at a later Unit takes their earlier pick");
     expect(bullet).toContain("next --sensors off");
     const options = /--options "([^"]+)"/.exec(bullet)?.[1]?.split(",") ?? [];
     // The Override is still the check's own pick: its question offers both of the check's choices.
     for (const option of BLOCKING_SENSOR_OVERRIDE_OPTIONS) expect(options).toContain(option);
-    expect(options).toContain("Switch all checks off for this work");
+    // The engine's label for that choice, which the switch records as their answer to the check's question.
+    expect(options).toContain(SWITCH_CHECKS_OFF_CHOICE);
     expect(sensors).toContain(`--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}"`);
   });
 });
