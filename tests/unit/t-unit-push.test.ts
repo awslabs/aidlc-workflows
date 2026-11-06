@@ -203,6 +203,33 @@ describe("the push", () => {
     expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: fixture", "wip: log billing calls"]);
   });
 
+  test("their commit-msg hook refuses the Unit's commit and they commit its files on main themselves: the push carries that commit along, never branches past it", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    // Their hook turns the first commit away.
+    writeFileSync(join(billing, ".git", "refuse-once"), "");
+    writeFileSync(join(billing, ".git", "hooks", "commit-msg"),
+      "#!/bin/sh\nif [ -f .git/refuse-once ]; then rm .git/refuse-once; echo 'commit messages need a ticket' >&2; exit 1; fi\nexit 0\n");
+    chmodSync(join(billing, ".git", "hooks", "commit-msg"), 0o755);
+    codeGenerated(alice, record);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toContain("The commit in billing did not go through");
+    // Back on main, they commit the Unit's file with their own words.
+    git(billing, ["switch", "-q", "main"]);
+    git(billing, ["add", "lib/refund.ts"]);
+    git(billing, ["commit", "-q", "-m", "REF-7 refund handler"]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      'Branch refunds in billing starts from where you were, so your commit not yet on origin/main comes along: "REF-7 refund handler".',
+    );
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["REF-7 refund handler"]);
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
+    expect(git(billing, ["branch", "--show-current"])).toBe("refunds");
+    expect(git(billing, ["log", "-1", "--format=%s", "main"])).toBe("REF-7 refund handler");
+  });
+
   test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);

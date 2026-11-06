@@ -6411,21 +6411,28 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     const from = git(dir, ["branch", "--show-current"]).stdout.trim();
     if (from !== branch) {
-      const exists = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
+      const integration = repoIntegration(dir, remote);
+      // A Unit branch an earlier, refused run made from the integration branch
+      // holds nothing of its own yet: it is made again, as on a first push, so
+      // their commits since then are never branched past.
+      const leftover = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok &&
+        !git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]).ok &&
+        git(dir, ["merge-base", "--is-ancestor", `refs/heads/${branch}`, integration]).ok;
+      const exists = !leftover && git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
+      const make = leftover ? "-C" : "-c";
       let switched = false;
       let said = "";
       if (exists) ({ ok: switched, said } = switchOntoUnitBranch(dir, branch, paths));
       else {
         // From the shared integration branch, fetched, when their working tree
         // allows; the workspace itself, which holds AI-DLC's record of this
-        // build, and a tree that does not allow it start where they are.
-        const integration = repoIntegration(dir, remote);
-        if (repo !== ".") {
-          git(dir, ["fetch", "-q", remote, integration.slice(remote.length + 1)]);
-          switched = git(dir, ["switch", "-q", "-c", branch, integration]).ok;
-        }
+        // build, a tree that does not allow it, and their own commits holding
+        // the Unit's files start where they are.
+        if (repo !== ".") git(dir, ["fetch", "-q", remote, integration.slice(remote.length + 1)]);
+        const committedHere = paths.length > 0 && !git(dir, ["diff", "--quiet", integration, "HEAD", "--", ...paths]).ok;
+        if (repo !== "." && !committedHere) switched = git(dir, ["switch", "-q", make, branch, integration]).ok;
         if (!switched) {
-          const tried = git(dir, ["switch", "-q", "-c", branch]);
+          const tried = git(dir, ["switch", "-q", make, branch]);
           switched = tried.ok;
           said = tried.stderr;
           const comesAlong = switched ? comesAlongLine(dir, name, branch, remote, git(dir, ["rev-parse", "HEAD"]).stdout.trim()) : null;
