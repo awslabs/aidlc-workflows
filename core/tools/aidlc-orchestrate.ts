@@ -838,13 +838,16 @@ function producedLine(node: GraphStage, unit: string | null, unitFolders: boolea
 }
 
 // The files the person brought that the build changed or deleted, said with the
-// gate that approves Code Generation (aidlc-brought-files.ts). Counted as heard
-// when a step that carries the line is written (writePrepared): a rules part
-// that goes out first carries none, and a read-only probe is shown to nobody.
+// gate that approves Code Generation, or a team Unit's (`unit`), from
+// aidlc-brought-files.ts. Counted as heard when a step that carries the line is
+// written (writePrepared): a rules part that goes out first carries none, and a
+// read-only probe is shown to nobody.
 const broughtFilesLines: { key: string; line: string }[] = [];
-function broughtFilesGateLine(projectDir: string, node: { slug: string }, stateContent: string | null): string | null {
+function broughtFilesGateLine(
+  projectDir: string, node: { slug: string }, stateContent: string | null, unit: string | null = null,
+): string | null {
   if (node.slug !== "code-generation") return null;
-  const unheard = unheardBroughtFilesLine(projectDir, stateContent, engineSessionId);
+  const unheard = unheardBroughtFilesLine(projectDir, stateContent, engineSessionId, false, unit);
   if (unheard === null) return null;
   if (!isReadOnlyEngineProbe()) broughtFilesLines.push(unheard);
   return unheard.line;
@@ -1929,7 +1932,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
     // the build changes them.
     if (directive.stage === "code-generation") {
       const pd = route.codekbCtx.projectDir;
-      const names = broughtFileNames(pd, loadStateFileIfPresent(pd), directive.single === true);
+      const unit = directive.unit !== undefined && directive.unit !== UNIT_NAME_PLACEHOLDER ? directive.unit : null;
+      const names = broughtFileNames(pd, loadStateFileIfPresent(pd), directive.single === true, unit);
       if (names !== null) directive.brought_files_note = broughtFilesNote(names);
     }
   }
@@ -14028,7 +14032,8 @@ function applyGateOnlyShape(
     // the produced sentence stays whole.
     const narration = [
       elsewhere ? FINISHED_IN_OTHER_CHAT : null, line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
-      unitsWithoutInputsNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
+      unitsWithoutInputsNotice(projectDir, gateNode, unit),
+      broughtFilesGateLine(projectDir, gateNode, stateContent, directive.unit_gate ? unit : null),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
@@ -21800,7 +21805,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // change line.
       if (unitReply.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
         const lines = [
-          leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, loadStateFileIfPresent(pd)),
+          leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, loadStateFileIfPresent(pd), unit),
           failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean);
         if (lines.length > 0) unitReply.narration = lines.join("\n");
