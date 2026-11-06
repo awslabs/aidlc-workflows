@@ -253,8 +253,11 @@ agent -p "/aidlc --status" --output-format text --trust   # /aidlc --status thro
 
 The doctor's Cursor-specific checks: the hook wiring at `.cursor/hooks.json`,
 the permission pre-approval for AI-DLC's commands at `.cursor/cli.json`, the standing
-rule at `.cursor/rules/aidlc.mdc`, all four phase-rule pointers, and whether
-the project is in a git repository.
+rule at `.cursor/rules/aidlc.mdc`, all four phase-rule pointers, whether
+the project is in a git repository, and a warning when the latest chat ran
+tools but Cursor never passed it your messages (the adapter stamps each
+`sessionStart` and `beforeSubmitPrompt` call under
+`aidlc/.aidlc-sessions/host-hooks/` before anything else runs).
 
 > **Scripting trap: Cursor CLI always exits 0.** Headless `agent -p "<prompt>"
 > --output-format text --trust` returns exit code 0 even when the run errors, so
