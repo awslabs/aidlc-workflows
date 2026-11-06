@@ -77,6 +77,7 @@ import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directi
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { stageValidationAuditFields } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { noteReposManifestOffered } from "../../dist/claude/.claude/tools/aidlc-workspace-repos.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -199,6 +200,8 @@ function addRepo(proj: string, name = "ui-repo"): void {
   writeFileSync(join(repo, "package.json"), JSON.stringify({ name, dependencies: { react: "18.0.0" } }));
   writeFileSync(join(repo, "src", "App.tsx"), "export const App = () => null;\n");
   expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+  // The one offer to write repos.json is t-repos-anywhere's; here it was made.
+  noteReposManifestOffered(proj);
 }
 
 function auditText(proj: string): string {
