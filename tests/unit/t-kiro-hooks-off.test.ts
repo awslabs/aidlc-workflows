@@ -21,7 +21,6 @@ import {
 } from "../harness/test-budget.ts";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, REPO_ROOT, resetAidlcEnv, seedAidlcMemory, seedStateFile } from "../harness/fixtures.ts";
 import {
-  KIRO_HOOKS_OFF_STEP,
   kiroHookOffLine,
   kiroHooksOff,
   kiroHooksOffNotices,
@@ -149,16 +148,20 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
     expect(kiroHooksOff(proj).map((hook) => hook.name)).toEqual([GUARD]);
   });
 
-  test("the line names the hook, since when, what is no longer protected, and the Agent Hooks step, in doctor's words", () => {
+  test("the line names the hook, since when, what is no longer protected, and the way back: the hook's file, or Kiro IDE's panel, in doctor's words", () => {
     switchOff(GUARD, new Date("2026-10-06T23:09:18.000Z"));
     const [hook] = kiroHooksOff(proj);
     // The clock is the person's own (local time): today's time alone, else the date too.
     const at = new Date(hook.since);
     const line = kiroHookOffLine(hook, at);
-    expect(line).toMatch(/^AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks since \d{2}:\d{2}: /);
-    expect(line).toEndWith(`${hook.protects}. ${KIRO_HOOKS_OFF_STEP}`);
+    expect(line).toMatch(/^AI-DLC hook aidlc-guard-tool-call is switched off since \d{2}:\d{2}: /);
+    // Kiro CLI has no Agent Hooks panel and registers hook files when a session
+    // starts: the file, its setting and a new session are the way back there.
+    expect(line).toEndWith(
+      `${hook.protects}. In Kiro CLI, change \`"enabled": false\` to \`true\` in \`.kiro/hooks/aidlc-guard-tool-call.json\`, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn it back on under Agent Hooks.`,
+    );
     expect(kiroHookOffLine(hook, new Date(at.getTime() + 3 * 24 * 3600 * 1000))).toMatch(/ since \d{4}-\d{2}-\d{2} \d{2}:\d{2}: /);
-    expect(kiroDisabledHookChecks(proj, ".kiro")[0].label).toBe(`AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: ${hook.protects}`);
+    expect(kiroDisabledHookChecks(proj, ".kiro")[0].label).toBe(`AI-DLC hook aidlc-guard-tool-call is switched off: ${hook.protects}`);
   });
 
   test("the engine's next step says a switch-off once, and again only after the hook was on and off again", () => {
@@ -167,22 +170,24 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
     switchOff(GUARD, new Date("2026-10-06T23:09:18.000Z"));
     const first = nextDirective();
     const notices = (first.change_notices as string[] | undefined) ?? [];
-    expect(notices.some((line) => line.startsWith("AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks since")), JSON.stringify(first)).toBe(true);
+    expect(notices.some((line) => line.startsWith("AI-DLC hook aidlc-guard-tool-call is switched off since")), JSON.stringify(first)).toBe(true);
     const second = nextDirective();
-    expect(((second.change_notices as string[] | undefined) ?? []).some((line) => line.includes("Agent Hooks"))).toBe(false);
+    expect(((second.change_notices as string[] | undefined) ?? []).some((line) => line.startsWith("AI-DLC hook aidlc-guard-tool-call is switched off since"))).toBe(false);
     switchOn(GUARD);
-    expect(((nextDirective().change_notices as string[] | undefined) ?? []).some((line) => line.includes("Agent Hooks"))).toBe(false);
+    expect(((nextDirective().change_notices as string[] | undefined) ?? []).some((line) => line.startsWith("AI-DLC hook aidlc-guard-tool-call is switched off since"))).toBe(false);
     switchOff(GUARD, new Date("2026-10-07T01:00:00.000Z"));
-    expect(((nextDirective().change_notices as string[] | undefined) ?? []).some((line) => line.includes("Agent Hooks"))).toBe(true);
+    expect(((nextDirective().change_notices as string[] | undefined) ?? []).some((line) => line.startsWith("AI-DLC hook aidlc-guard-tool-call is switched off since"))).toBe(true);
   });
 
-  test("a reply not recorded while the reply hook is off names Agent Hooks, not the trust step", () => {
+  test("a reply not recorded while the reply hook is off names Agent Hooks and the hook's file, not the trust step", () => {
     withKiroHarness(() => {
       const before = unattendedHumanPresenceHint(proj);
       expect(before).not.toContain("Agent Hooks");
       switchOff(REPLY);
       const hint = unattendedHumanPresenceHint(proj);
-      expect(hint).toContain("switched off under Agent Hooks in Kiro");
+      expect(hint).toContain(
+        "In Kiro CLI, change `\"enabled\": false` to `true` in `.kiro/hooks/aidlc-record-human-turn.json`, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn it back on under Agent Hooks. Then give your answer once more.",
+      );
       expect(hint).toContain("Do not ask them to answer again");
       expect(hint).toContain("Never offer to turn a check off for them.");
       expect(hint).not.toMatch(/Trust Folder|Reload Window|Restricted Mode/);
@@ -203,7 +208,9 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
       expect(hooksOff).not.toContain("Agent Hooks");
       switchOff(REPLY);
       const hint = unattendedHumanPresenceHint(proj);
-      expect(hint).toContain("switched off under Agent Hooks in Kiro");
+      expect(hint).toContain(
+        "change `\"enabled\": false` to `true` in `.kiro/hooks/aidlc-record-human-turn.json`, then quit Kiro and start `kiro-cli --v3` again in this folder",
+      );
       expect(hint).not.toContain("Kiro is not running AI-DLC's hooks");
       expect(hint).not.toMatch(/Trust Folder|Reload Window|Restricted Mode/);
     });
@@ -216,7 +223,7 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
       switchOff(REPLY);
       const notYet = unattendedHumanPresenceHint(proj, { missedReply: false });
       expect(notYet).not.toMatch(/not recorded|Agent Hooks|answer again|once more/);
-      expect(unattendedHumanPresenceHint(proj)).toContain("switched off under Agent Hooks in Kiro");
+      expect(unattendedHumanPresenceHint(proj)).toContain("change `\"enabled\": false` to `true` in `.kiro/hooks/aidlc-record-human-turn.json`");
     });
   });
 

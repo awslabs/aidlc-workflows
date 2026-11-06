@@ -1197,6 +1197,44 @@ describe("t243 project initialization", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Windows runners may lack the permissions this fixture needs.
+  test.skipIf(process.platform === "win32")("a Kiro switch recognises a dropped plugin's registration only when it is a plain file", () => {
+    const project = temp("aidlc-t243-kiro-switch-plugin-entry-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro-v2", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const projection = join(temp("aidlc-t243-plugin-entry-"), "kiro-ide");
+    const built = run(join(REPO_ROOT, "scripts", "package.ts"), ["plugin", "build", "test-pro", "kiro-ide", projection], REPO_ROOT);
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    cpSync(join(projection, ".kiro"), join(project, ".kiro"), { recursive: true });
+    const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+    const written = readFileSync(registration, "utf-8");
+    const switchArgs = [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro", "--mcp", "none", "--dry-run",
+    ];
+
+    const outside = join(temp("aidlc-t243-plugin-entry-target-"), "aidlc-test-pro-compose.json");
+    writeFileSync(outside, written);
+    rmSync(registration);
+    symlinkSync(outside, registration);
+    const linked = run(INIT, switchArgs, project);
+    expect(linked.status, linked.stdout + linked.stderr).toBe(4);
+    expect(linked.stdout).toContain(
+      "Kiro would run hooks through entries that are not regular files in .kiro/hooks (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")",
+    );
+    expect(lstatSync(registration).isSymbolicLink()).toBe(true);
+    expect(readFileSync(outside, "utf-8")).toBe(written);
+
+    rmSync(registration);
+    writeFileSync(registration, written);
+    const owned = run(INIT, switchArgs, project);
+    expect(owned.status, owned.stdout + owned.stderr).toBe(0);
+    expect(owned.stdout).toContain("(switches .kiro in place from kiro-v2 to kiro)");
+    expect(owned.stdout).not.toContain("AI-DLC does not own");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a Kiro switch that would let Kiro run unowned hook files applies only the approved set", () => {
     const project = temp("aidlc-t243-kiro-switch-hooks-");
     mkdirSync(join(project, ".git"));

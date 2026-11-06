@@ -693,6 +693,13 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(print()).valid).toBe(true);
   });
 
+  test("print accepts only literal true for the turn-end marker", () => {
+    expect(errs({ ...print(), ends_turn: true })).toBe("VALID");
+    for (const value of [false, "yes", 1]) {
+      expect(errs({ ...print(), ends_turn: value })).toContain("print: ends_turn must be true when present");
+    }
+  });
+
   test("error well-formed -> VALID", () => {
     expect(validateDirective(error()).valid).toBe(true);
   });

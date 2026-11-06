@@ -39,6 +39,11 @@ const manifest: HarnessManifest = {
   name: "cursor",
   productName: "Cursor",
   configNextStep: "open this project in Cursor, then run `/aidlc --doctor`",
+  // Cursor sets CURSOR_AGENT in its agent's terminal (Cursor's terminal docs;
+  // not yet measured live).
+  hostShell: { env: ["CURSOR_AGENT"] },
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "open a new chat, then type <entry>" },
   harnessDir: ".cursor",
   orchestratorSkillPath: ".cursor/skills/aidlc/SKILL.md",
   tierFlavor: "cursor",

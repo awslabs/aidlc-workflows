@@ -138,6 +138,31 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `notRunYet`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
   been allowed to run commands in, no AI-DLC command can run, so Kiro IDE
   also keeps that step in its orchestrator skill.
+- `newChatStep` (optional) - `{ text, inHost? }`: how the person starts a clean
+  chat in this host, in its own words, with `<entry>` filled in. When new work
+  starts beside other work in a chat, its first stage step says once, as it
+  comes and before the stage's work, "To start this in a clean chat instead,
+  <text>."; without it nothing is said. `inHost` (`{ env, text }`) gives one
+  host this tree runs in its own step, told apart as `missedReplyInHost` is:
+  Kiro IDE uses it beside Kiro CLI's `/chat new`. A native engine in a project
+  with more than one harness installed says no step when no harness's
+  `hostShell` names the tool the person is in.
+- `hostShell` (optional) - `{ env }`: the variables this host sets in every
+  command its agent runs, read as `missedReplyInHost`'s `env` is. In a project
+  with more than one harness installed, the native engine runs each command on
+  the harness whose `hostShell` the command carries, so every tool gets its own
+  steps and entry, as the copy channel and a project with one harness do. With
+  no harness's variables there, or more than one harness's (a tool started from
+  another's shell), it runs on the first one installed (`.claude`, `.kiro`,
+  `.codex`, `.cursor`, `.aidlc`) and names no tool's step: no `agentStep`, the
+  plain missed-reply line, no `newChatStep`, and `/aidlc` as the entry; doctor
+  keeps that harness's lines, and files written into a tree keep its own entry.
+  Name only variables the host sets for its agent, never one a person's own
+  terminal carries (an editor's `TERM_PROGRAM`), or a tool started there reads
+  as this host. Claude Code declares `CLAUDECODE` and `CLAUDE_CODE_SESSION_ID`,
+  Codex CLI `CODEX_SESSION_ID` and `CODEX_THREAD_ID`, Copilot `COPILOT_CLI`
+  (Copilot CLI only), Cursor `CURSOR_AGENT`, Kiro CLI and Kiro IDE
+  `KIRO_SESSION_ID`, opencode `OPENCODE`.
 - `directiveMaxBytes` (optional) - for a host that keeps less of one shell
   result than the engine's 28 KiB directive cap. The engine keeps every
   directive at or under it: stage rules ride inline only while they fit, and

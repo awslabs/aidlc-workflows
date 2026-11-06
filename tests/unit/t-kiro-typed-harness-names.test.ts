@@ -14,7 +14,8 @@
 // file it stops, and its dry run then its plan token switch, keeping that
 // file. On a copy install it stops and names the download, which the
 // onboarding runs at once. A copied tool's hand-off carries ids, read as ids
-// by every release.
+// by every release; from a tool before these names, `--harness kiro` on a Kiro
+// project is the switch to Kiro CLI (V2), asked and stopped the same way.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -121,6 +122,14 @@ function olderToolCopy(tools: string, into: string): string {
   expect(older).not.toContain('kiro: "kiro-v2"');
   writeFileSync(paths, older);
   return join(into, "aidlc.ts");
+}
+
+// A copy of the project's tool from before the typed names, outside the
+// project, to hand a run over as that release's tool does.
+function olderHandingTool(dir: string): string {
+  const scratch = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-kiro-typed-handing-"));
+  temporary.push(scratch);
+  return olderToolCopy(join(dir, ".kiro", "tools"), join(scratch, ".kiro", "tools"));
 }
 
 // The words of a printed command whose quoted words are single-quoted, with
@@ -593,6 +602,116 @@ describe("Kiro harness names a person types", () => {
     expect(stamp(dir)).toBe("kiro");
     expect(handed.stdout).toContain("To go back: get ");
     expect(handed.stdout).toContain("then run `bun .claude/tools/aidlc.ts config --from <that file> --yes --harness kiro`.");
+  });
+
+  // A copied tool from before these names hands `--harness kiro` over as
+  // Kiro CLI (V2). On a Kiro project the person may be following this
+  // release's guides, so the switch is asked and stops as the other way does,
+  // and the ways on are printed for the tool they ran, in its names.
+  test("an older copied tool's hand-off of --harness kiro on a Kiro project changes nothing without --yes and names both ways in that tool's names", () => {
+    const dir = project();
+    expect(config(dir, ["--harness", "kiro", "--yes"]).status).toBe(0);
+    const tool = olderHandingTool(dir);
+    const handed = { AIDLC_CONFIG_HANDOFF: tool, NO_COLOR: "1" };
+    const plain = config(dir, ["--harness", "kiro"], { env: handed });
+    expect(plain.status, plain.out).toBe(2);
+    expect(plain.out).toContain(
+      `nothing changed; .kiro stays on Kiro. \`--harness kiro\` now means Kiro, but the tool you ran is from an older release and reads it ` +
+        "as Kiro CLI (V2); to switch .kiro to Kiro CLI (V2) in place, run `",
+    );
+    const again = printedWords(/to switch \.kiro to Kiro CLI \(V2\) in place, run `([^`]*)`\. To keep Kiro:/.exec(plain.out)?.[1] ?? "");
+    expect(again.slice(0, 3), plain.out).toEqual(["bun", tool, "config"]);
+    expect(again[again.indexOf("--harness") + 1]).toBe("kiro");
+    expect(again).toContain("--yes");
+    // The way to keep Kiro is the same run with Kiro named as that tool reads it, from the same files.
+    const keep = printedWords(/^usage: (.*)$/m.exec(plain.out)?.[1] ?? "");
+    expect(keep.slice(0, 3), plain.out).toEqual(["bun", tool, "config"]);
+    expect(keep[keep.indexOf("--harness") + 1]).toBe("kiro-ide");
+    expect(keep[keep.indexOf("--from") + 1]).toBe(RELEASE);
+    // A release mirror's path can be its credential: both ways ask for the same one back instead of printing it.
+    // The stop comes before any download, so nothing is fetched from the mirror.
+    const mirrored = spawnSync(process.execPath, [
+      INIT, "config", "--project-dir", dir, "--download", "--release-base-url", "https://mirror.example/releases", "--harness", "kiro",
+    ], {
+      cwd: dir,
+      encoding: "utf-8",
+      timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: { ...process.env, AIDLC_TEST_NAME: "t-kiro-typed-harness-names", KIRO_HOME: `${dir}-kiro-home`, ...handed },
+    });
+    const mirroredOut = `${mirrored.stdout}${mirrored.stderr}`;
+    expect(mirrored.status, mirroredOut).toBe(2);
+    expect(mirroredOut).toContain("--yes` with the same --release-base-url. To keep Kiro with the same --release-base-url:");
+    expect(mirroredOut).toMatch(/^usage: [^\n]* --download --harness kiro-ide$/m);
+    expect(mirroredOut).not.toContain("mirror.example");
+    const quiet = config(dir, ["--harness", "kiro", "--quiet"], { env: handed });
+    expect(quiet.status, quiet.out).toBe(2);
+    expect(quiet.out).toMatch(/^Warning: nothing changed; \.kiro stays on Kiro\.[^\n]*--harness kiro [^`\n]*--yes`/);
+    const json = config(dir, ["--harness", "kiro", "--json"], { env: handed });
+    expect(json.status, json.out).toBe(2);
+    const result = JSON.parse(json.stdout) as { message?: string; data?: { notes?: string[] } };
+    expect(result.data?.notes?.join("\n")).toContain("to keep Kiro, run `");
+    expect(stamp(dir)).toBe("kiro-ide");
+    const kept = spawnSync(process.execPath, [tool, ...keep.slice(2)], {
+      cwd: dir,
+      encoding: "utf-8",
+      timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: { ...process.env, AIDLC_TEST_NAME: "t-kiro-typed-harness-names", KIRO_HOME: `${dir}-kiro-home` },
+    });
+    expect(kept.status, `${kept.stdout}${kept.stderr}`).toBe(0);
+    expect(stamp(dir)).toBe("kiro-ide");
+  });
+
+  test("an older copied tool's hand-off of --harness kiro on a Kiro project asks first at a terminal, and with --yes says once what it does", () => {
+    const dir = project();
+    expect(config(dir, ["--harness", "kiro", "--yes"]).status).toBe(0);
+    const handed = { AIDLC_CONFIG_HANDOFF: olderHandingTool(dir), NO_COLOR: "1" };
+    const declined = config(dir, ["--harness", "kiro"], { env: { ...handed, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "n\n" } });
+    expect(declined.out).toContain(
+      `This project is set up for Kiro. \`--harness kiro\` now means Kiro, but the tool you ran is from an older release and reads it as ` +
+        "Kiro CLI (V2). Switch .kiro to Kiro CLI (V2) in place? [y/N]:",
+    );
+    expect(declined.out).toContain("nothing changed; .kiro stays on Kiro. To keep Kiro:");
+    expect(declined.status, declined.out).toBe(2);
+    expect(declined.out).toMatch(/^usage: [^\n]* --from [^\n]* --harness kiro-ide$/m);
+    expect(stamp(dir)).toBe("kiro-ide");
+    // A mirror the run named is asked for again on the way to stay, not printed.
+    const mirrored = spawnSync(process.execPath, [
+      INIT, "config", "--project-dir", dir, "--download", "--release-base-url", "https://mirror.example/releases", "--harness", "kiro",
+    ], {
+      cwd: dir,
+      encoding: "utf-8",
+      timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: {
+        ...process.env,
+        AIDLC_TEST_NAME: "t-kiro-typed-harness-names",
+        KIRO_HOME: `${dir}-kiro-home`,
+        ...handed,
+        AIDLC_TEST_CONFIG_TTY: "1",
+        AIDLC_TEST_CONFIG_INPUT: "n\n",
+      },
+    });
+    const mirroredOut = `${mirrored.stdout}${mirrored.stderr}`;
+    expect(mirrored.status, mirroredOut).toBe(2);
+    expect(mirroredOut).toContain("nothing changed; .kiro stays on Kiro. To keep Kiro with the same --release-base-url:");
+    expect(mirroredOut).toMatch(/^usage: [^\n]* --download --harness kiro-ide$/m);
+    expect(mirroredOut).not.toContain("mirror.example");
+
+    const switched = config(dir, ["--harness", "kiro", "--yes"], { env: handed });
+    expect(switched.status, switched.out).toBe(0);
+    const note = `\`--harness kiro\` now means Kiro, but the tool you ran is from an older release and reads it as Kiro CLI (V2), so on a ` +
+      "Kiro project like this one it means switching .kiro to Kiro CLI (V2) in place; to keep Kiro, run `";
+    expect(switched.out.split(note).length - 1, switched.out).toBe(1);
+    expect(stamp(dir)).toBe("kiro");
+  });
+
+  test("a hand-off from a tool that reads these names switches a Kiro project to Kiro CLI (V2) as asked, with no question", () => {
+    const dir = project();
+    expect(config(dir, ["--harness", "kiro", "--yes"]).status).toBe(0);
+    // The project's own tool reads the typed names, so its hand-off of the id `kiro` was a typed `kiro-v2`.
+    const handed = config(dir, ["--harness", "kiro"], { env: { AIDLC_CONFIG_HANDOFF: join(dir, ".kiro", "tools", "aidlc.ts") } });
+    expect(handed.status, handed.out).toBe(0);
+    expect(handed.out).not.toContain("the tool you ran is from an older release");
+    expect(stamp(dir)).toBe("kiro");
   });
 
   test("a copied tool's hand-off is read in ids: --harness kiro there is Kiro CLI (V2)", () => {

@@ -18,6 +18,7 @@ import {
   PLUGIN_COMMAND_NAME_RE,
   type RouteNamespaceName,
   TRUSTED_ROUTE_NAMESPACE,
+  UNIT_GRAMMAR,
   UNIT_VERBS,
 } from "./aidlc-command.ts";
 import {
@@ -36,13 +37,16 @@ import {
   isCompiledExecutable,
   kiroTreeLayout,
   packagedDistributionRoot,
-  discoverableRuntimeHarnessDir,
+  discoverableRuntimeHarness,
+  keepRuntimeHarnessPin,
+  pinRuntimeHarness,
   resolveHarnessPath,
   runtimeHarnessDir,
   hookSessionProjectDir,
   runtimeProjectDir,
   runtimeProjectDirFrom,
   runtimeHarnessName,
+  typedHarnessHosts,
 } from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
@@ -260,19 +264,7 @@ export const ROUTES: readonly Route[] = [
     ...PUBLIC_ENGINE,
     namespace: "public",
     mutationScope: "project",
-    all: [
-      "unit adopt <unit>",
-      "unit claim <unit>",
-      "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
-      "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--accept-released-attempt --user-input <text>]",
-      "unit merge-status <unit>",
-      "unit participate",
-      "unit pin <unit>",
-      "unit publish <unit> [--commit]",
-      "unit release <unit>",
-      "unit share",
-      "unit status",
-    ],
+    all: Object.values(UNIT_GRAMMAR).map((grammar) => grammar.usage),
   },
   {
     id: "top-compose",
@@ -461,7 +453,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes]"],
+    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes] [--json|--quiet]"],
   },
   {
     id: "top-use",
@@ -551,7 +543,7 @@ export const ROUTES: readonly Route[] = [
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "versions install", summary: "install a retained release" }],
     all: [
-      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>]",
+      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--dry-run] [--yes] [--json|--quiet]",
     ],
   },
   {
@@ -569,7 +561,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["prune [--yes]"],
+    all: ["prune [--yes] [--json|--quiet]"],
   },
   {
     id: "state-passthrough",
@@ -594,6 +586,8 @@ export const ROUTES: readonly Route[] = [
       "gate-start",
       // The review request runs it (aidlc-log.ts, completionChecksHold).
       "completion-checks",
+      // A Unit's checkpoint verify and ask run it (aidlc-construction-checkpoints.ts, unitGateChecks).
+      "checkpoint-checks",
       "approve",
       "reject",
       "revise",
@@ -773,7 +767,7 @@ export const ROUTES: readonly Route[] = [
     group: "swarm",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["prepare", "check", "finalize", "allow-change"],
+    verbs: ["prepare", "check", "finalize", "allow-change", "take-over"],
     tool: TOOLS.swarm,
     ...HIDDEN_ENGINE,
   },
@@ -1703,6 +1697,14 @@ export function renderCommandHelp(command: PublicCommand): string {
   if (command === "config") {
     const sectionRow = (name: string, summary: string): string =>
       `  ${cmd(name, out)}${" ".repeat(12 - name.length)}${summary}`;
+    // Both Kiro trees' host is Kiro; these are the words the setup picker
+    // shows for them (t230 pins every row to the picker's words).
+    const harnessWords: Readonly<Record<string, string>> = {
+      kiro: "Kiro CLI (V2)",
+      "kiro-ide": "Kiro (Kiro IDE and Kiro CLI on its v3 engine)",
+    };
+    const harnesses = typedHarnessHosts();
+    const nameWidth = Math.max(...harnesses.map(({ name }) => name.length)) + 2;
     return [
       "Set up, refresh, or change AI-DLC project configuration",
       "",
@@ -1724,12 +1726,16 @@ export function renderCommandHelp(command: PublicCommand): string {
       `  ${cmd(`${invoke} config list`, out)}                List them all`,
       "",
       heading("COMMON FLAGS", out),
+      "  --harness <name>  The tool to set up, refresh or add in this project (names under HARNESSES); kiro and kiro-v2 switch a Kiro project in place",
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
       `  --channel [name]  Show or set the release channel this machine follows (stable, preview); ${invoke} update --channel switches for one run only`,
       "  --show            Show one section, or every section with no section named, without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
+      "",
+      heading("HARNESSES", out),
+      ...harnesses.map(({ id, name, host }) => `  ${name.padEnd(nameWidth)}${harnessWords[id] ?? host}`),
       "",
       heading("EXAMPLES", out),
       `  ${cmd(`${invoke} config`, out)}`,
@@ -2979,10 +2985,10 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   // resolve the matching packaged runtime even when the hook cwd carries no
   // harness metadata (.aidlc is shared by copilot and opencode; the
   // metadata-free fallback names opencode).
-  const previousHarness = process.env.AIDLC_HARNESS_DIR;
+  const restorePin = keepRuntimeHarnessPin();
   const previousHarnessName = process.env.AIDLC_HARNESS_NAME;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
+  pinRuntimeHarness(ADAPTER_HARNESS_LEAF[action.harness]);
   process.env.AIDLC_HARNESS_NAME = action.harness;
   if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
@@ -3056,8 +3062,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     hookTrace("adapter-run-end", { code });
     return code;
   } finally {
-    if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
-    else process.env.AIDLC_HARNESS_DIR = previousHarness;
+    restorePin();
     if (previousHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
     else process.env.AIDLC_HARNESS_NAME = previousHarnessName;
     if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -3893,10 +3898,41 @@ function validateSimplePublicGrammar(
   return null;
 }
 
+// A verb the lifecycle tool runs: the words that tool gets (the route's prefix,
+// the verb and what follows it up to a `--`, then this launcher's own flags,
+// which resolveActionFrom hands on at the end; --project-dir, which every
+// lifecycle grammar takes, is left out) and the verb's usage, its form from the
+// route, the line `aidlc system --help` prints for it.
+function lifecycleVerb(argv: readonly string[]): { args: string[]; usage: string } | null {
+  const route = routePolicyFor(argv);
+  if (route?.tool !== TOOLS.lifecycle) return null;
+  const clean = withoutProjectDirFlag(argv);
+  const delimiter = clean.indexOf("--");
+  const words = delimiter < 0 ? clean : clean.slice(0, delimiter);
+  const end = argv.indexOf("--");
+  const launcherFlags = (end < 0 ? argv : argv.slice(0, end)).filter((token) => LAUNCHER_GLOBAL_FLAGS.has(token));
+  const path = route.namespace === "public"
+    ? []
+    : route.group === "top" ? ["system"] : ["system", route.group];
+  const verb = words[path.length];
+  const form = route.all?.find((item) => item === verb || item.startsWith(`${verb} `));
+  if (!form) return null;
+  return {
+    args: [...(route.prefix ?? []), ...words.slice(path.length), ...launcherFlags],
+    usage: [aidlcInvocation(), ...path, form].join(" "),
+  };
+}
+
 async function publicCommandGrammarError(
   route: Route | null,
   argv: readonly string[],
 ): Promise<string | null> {
+  if (route?.namespace === "system") {
+    const lifecycle = lifecycleVerb(argv);
+    if (!lifecycle) return null;
+    const { validatePublicLifecycleArgs } = await import("./aidlc-lifecycle.ts");
+    return validatePublicLifecycleArgs(lifecycle.args);
+  }
   if (
     route?.namespace !== "public" ||
     route.group !== "top"
@@ -3964,7 +4000,12 @@ function renderPublicGrammarFailure(
     text(2, `For the full list, run '${invoke} config --help'.\n`);
     return 2;
   }
-  return renderDispatcherFailure(argv, 2, message);
+  const code = renderDispatcherFailure(argv, 2, message);
+  const usage = lifecycleVerb(argv)?.usage;
+  if (usage && requestedOutputMode(argv) === "human") {
+    text(2, `${heading("usage:", process.stderr)} ${usage}\n`);
+  }
+  return code;
 }
 
 function projectPolicyError(route: Route, argv: readonly string[]): string | null {
@@ -4252,6 +4293,14 @@ export async function main(rawArgv: string[]): Promise<void> {
     text(1, renderCommandHelp(commandHelp));
     return;
   }
+  // `aidlc system rollback --help` and the other lifecycle verbs under
+  // `system`: the lifecycle tool takes --help as one more word, so the verb's
+  // usage is printed here and nothing runs.
+  const lifecycleHelp = lifecycleVerb(argv);
+  if (lifecycleHelp?.args.some((token) => token === "--help" || token === "-h")) {
+    text(1, `usage: ${lifecycleHelp.usage}\n`);
+    return;
+  }
   const route = routePolicyFor(argv);
   if (route) {
     const error = basicPolicyError(route, argv);
@@ -4287,13 +4336,15 @@ export async function main(rawArgv: string[]): Promise<void> {
     // from $bunfs, and embedded data may be Claude-flavoured. Every delegate
     // and sibling tool reads these envs, so pin both identifiers once here,
     // before lazy delegate imports, so same-directory harnesses retain
-    // identity. Falls back to .claude when no install is present. A working
-    // directory that cannot be read pins neither: commands that need no
-    // harness (such as version and the installer's own check) still run, and
-    // a command that needs one reports the error when it resolves its harness.
+    // identity. With several installed, the one whose tool runs this command,
+    // else the first one as a guess. Falls back to .claude when no install is
+    // present. A working directory that cannot be read pins neither: commands
+    // that need no harness (such as version and the installer's own check)
+    // still run, and a command that needs one reports the error when it
+    // resolves its harness.
     if (!process.env.AIDLC_HARNESS_DIR) {
-      const harnessDir = discoverableRuntimeHarnessDir();
-      if (harnessDir) process.env.AIDLC_HARNESS_DIR = harnessDir;
+      const discovered = discoverableRuntimeHarness();
+      if (discovered) pinRuntimeHarness(discovered.harnessDir, discovered.guessed);
     }
     if (process.env.AIDLC_HARNESS_DIR && !process.env.AIDLC_HARNESS_NAME) {
       process.env.AIDLC_HARNESS_NAME = runtimeHarnessName();

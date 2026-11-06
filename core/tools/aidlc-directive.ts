@@ -45,7 +45,8 @@ import { readsAlikeInDoubleQuotes } from "./aidlc-runtime-paths.ts";
 // STANCE, which an LLM resolves by reading a team's free-form `## Walking
 // Skeleton` practices prose (no parser turns free English into a stance). The
 // engine cannot decide it without smuggling an LLM into routing, so it DEFERS:
-// it emits `gate: "unresolved"` for that one stage, the conductor classifies
+// it emits `gate: "unresolved"` for that one stage (and for team work whose own
+// answer is still to be read, on the stage the work is on), the conductor classifies
 // the prose and feeds the stance back via `aidlc-orchestrate report
 // --skeleton-stance`, and the NEXT `next` emits the now-determined boolean gate.
 // The engine still owns the transition — only a typed stance ever crosses back
@@ -317,8 +318,9 @@ export interface RunStageDirective {
   // step that resumes there, until a row of the stage says the agent acted.
   parked_reply?: { words: string; note: string };
   // gate is a boolean for every deterministic case; the string sentinel
-  // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
-  // walking-skeleton gate, which the conductor resolves via report (the
+  // GATE_UNRESOLVED ("unresolved") appears ONLY for the walking-skeleton stance
+  // (the first Construction Bolt's gate, or team work's unread answer), which the
+  // conductor resolves via report (the
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
   // Beside an unresolved gate, a verification command awaiting approval, or a
@@ -902,6 +904,8 @@ export interface PrintDirective {
   message: string;
   /** As on an ask: the request named a document in the project. */
   document_note?: string;
+  /** The step waits on the person: the agent ends its turn after it (a blocking check's Fix or Override). */
+  ends_turn?: true;
   // next_stage: on the reply that opens (or re-opens) a stage's approval gate,
   // the stage the Approve option continues to, computed when the gate opens so
   // a plan change made during the stage is in it. null = the final in-scope
@@ -1199,7 +1203,7 @@ const ASK_FIELDS = [
   "handovers",
 ] as const;
 const PRINT_FIELDS = [
-  "kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id",
+  "kind", "message", "ends_turn", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id",
 ] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
@@ -2351,6 +2355,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     }
     case "print":
       checkString(o, "message", kind, errors);
+      checkOptionalTrue(o, "ends_turn", kind, errors);
       checkOptionalNullableString(o, "next_stage", kind, errors);
       checkOptionalRevisionCycle(o, kind, errors);
       checkOptionalQuestionId(o, kind, errors);

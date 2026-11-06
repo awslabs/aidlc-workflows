@@ -21,6 +21,11 @@
 > switches; without a terminal, or under `--quiet` or `--json`, it changes
 > nothing and prints the command with `--yes`); a plain `aidlc config` refresh, or
 > `--harness kiro-v2`, keeps Kiro CLI (V2).
+> AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and
+> 2026-11-05, read the two Kiro names the other way: Kiro CLI (V2) is
+> `--harness kiro` there and Kiro is `--harness kiro-ide`, and they do not
+> know `kiro-v2`; `--harness kiro-ide` names Kiro on those releases and on this
+> one.
 
 One of the framework's harnesses: the Kiro runtime runs the same AI-DLC
 methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
@@ -319,8 +324,11 @@ Kiro shows you how full the chat is, but gives AI-DLC no figure while it works.
 So AI-DLC reads the figure Kiro saves for the chat at the end of each turn
 (`~/.kiro/sessions/cli/<chat id>.json`, read only). Once it is 80% or more, the
 next approval question or Unit checkpoint carries one line saying how full the
-chat is, with an offer to pause and carry on in a new chat. Your answer
-decides: nothing pauses on its own, and the line is said once in a chat.
+chat is, with an offer to pause and carry on in a new chat. When the chat
+already reached half full or more in its first turn on the work, and still runs
+on the model that filled it, a new chat on that model would start about as
+full, so the line says that instead of offering one. Your answer decides:
+nothing pauses on its own, and the line is said once in a chat.
 
 The line cannot appear in the middle of a stage (it comes only with a question
 you are asked anyway), before Kiro has saved the chat's first turn, for a chat

@@ -76,6 +76,7 @@ import {
   getField,
   hookStandsOutside,
   isolatedRunWithoutWork,
+  selectedRecordIsFinished,
   hostEnvelopeTurnText,
   planApprovalChallengeRelativePath,
   COMMAND_TURN_REPLY,
@@ -380,6 +381,66 @@ function stoppedReviewNote(projectDir: string): string | null {
   return null;
 }
 
+// The questions a question box asked, as the tool's input lists them.
+function boxQuestions(toolInput: unknown): unknown[] {
+  return toolInput !== null && typeof toolInput === "object" &&
+      Array.isArray((toolInput as Record<string, unknown>).questions)
+    ? (toolInput as { questions: unknown[] }).questions
+    : [];
+}
+
+// The answers a question box carried back (the adapter's raw box, or the
+// tool's own result), keyed as the host keys them; null when it holds none the
+// hook can read.
+function boxAnswers(response: unknown): Record<string, unknown> | null {
+  let value = response;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { return null; }
+  }
+  const answers = value !== null && typeof value === "object" ? (value as Record<string, unknown>).answers : null;
+  return answers !== null && typeof answers === "object" && !Array.isArray(answers)
+    ? answers as Record<string, unknown>
+    : null;
+}
+
+// Where a question's answer is: Claude Code keys answers by the question text,
+// Codex by the question id. Null when the box carried none for it.
+function answerKey(question: Record<string, unknown>, answers: Record<string, unknown>): string | null {
+  if (typeof question.id === "string" && question.id in answers) return question.id;
+  return typeof question.question === "string" && question.question in answers ? question.question : null;
+}
+
+// A box that asked several questions, each read as a box asking it alone would
+// be: its words, its choices, whether it takes several picks, and the reply the
+// person gave it (null when they left it blank). The engine's plan question
+// keeps its own reply from here, never another question's
+// (notePlanApprovalAskReply). Undefined for a box of one question.
+function questionsAlone(
+  toolInput: unknown,
+  toolResponse: unknown,
+  pickerReply: unknown,
+): PlanApprovalPickerQuestion["questions"] {
+  const asked = boxQuestions(toolInput);
+  if (asked.length < 2) return undefined;
+  // The reply from where pickerReplies reads it (the adapter's raw box first),
+  // taken as a box of one takes it (its first pick, a Codex note left out); the
+  // picks from where carriesSeveralPicks reads them (the tool's own result).
+  const replies = boxAnswers(pickerReply ?? toolResponse) ?? {};
+  const picks = boxAnswers(toolResponse) ?? {};
+  return asked.map((entry) => {
+    const question = entry !== null && typeof entry === "object" ? entry as Record<string, unknown> : {};
+    const alone = { questions: [entry] };
+    const replyKey = answerKey(question, replies);
+    const pickKey = answerKey(question, picks);
+    return {
+      question: extractQuestionText(alone),
+      options: extractOptionLabels(alone),
+      severalPicks: carriesSeveralPicks(alone, { answers: pickKey === null ? {} : { [pickKey]: picks[pickKey] } }),
+      reply: (replyKey === null ? "" : extractResponseText(replies[replyKey])) || null,
+    };
+  });
+}
+
 // What a question box carried back, one entry per question it asked: the
 // question as shown and the reply as given, verbatim. Claude Code keys each
 // reply by its question; Codex keys it by the question's id, with a list of
@@ -404,11 +465,8 @@ function pickerReplies(
     const payload = JSON.parse(input) as {
       tool_input?: unknown; toolInput?: unknown; tool_response?: unknown; toolResponse?: unknown; picker_reply?: unknown;
     };
-    let response = payload.picker_reply ?? payload.tool_response ?? payload.toolResponse;
-    if (typeof response === "string") response = JSON.parse(response);
-    const answers = response !== null && typeof response === "object" ? (response as Record<string, unknown>).answers : null;
-    if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return { entries: [], cut };
-    const picks = answers as Record<string, unknown>;
+    const picks = boxAnswers(payload.picker_reply ?? payload.tool_response ?? payload.toolResponse);
+    if (picks === null) return { entries: [], cut };
     const replyOf = (value: unknown): string | null => {
       const chosen = value !== null && typeof value === "object" && !Array.isArray(value)
         ? (value as Record<string, unknown>).answers
@@ -418,20 +476,12 @@ function pickerReplies(
         .join(", ");
       return reply === "" ? null : kept(reply);
     };
-    const toolInput = payload.tool_input ?? payload.toolInput;
-    const asked = toolInput !== null && typeof toolInput === "object" &&
-        Array.isArray((toolInput as Record<string, unknown>).questions)
-      ? (toolInput as { questions: unknown[] }).questions
-      : [];
     const entries: Array<{ question: string; reply: string | null }> = [];
     const used = new Set<string>();
-    for (const entry of asked) {
+    for (const entry of boxQuestions(payload.tool_input ?? payload.toolInput)) {
       const question = entry !== null && typeof entry === "object" ? entry as Record<string, unknown> : {};
       if (typeof question.question !== "string") continue;
-      // Claude Code keys answers by the question text, Codex by the question id.
-      const key = typeof question.id === "string" && question.id in picks
-        ? question.id
-        : question.question in picks ? question.question : null;
+      const key = answerKey(question, picks);
       if (key !== null) used.add(key);
       entries.push({ question: kept(question.question), reply: key === null ? null : replyOf(picks[key]) });
     }
@@ -666,6 +716,9 @@ try {
       const pickerResult = parsed.picker_reply ?? parsed.tool_response ?? parsed.toolResponse;
       pickerUnanswered = emptyPickerResult(pickerResult);
       picked = pickerUnanswered ? [] : pickedLabels(parsed.tool_response ?? parsed.toolResponse);
+      const several = questionsAlone(
+        parsed.tool_input ?? parsed.toolInput, parsed.tool_response ?? parsed.toolResponse, parsed.picker_reply,
+      );
       pickerQuestion = {
         question: questionText,
         options: extractOptionLabels(parsed.tool_input ?? parsed.toolInput),
@@ -673,6 +726,7 @@ try {
           parsed.tool_input ?? parsed.toolInput,
           parsed.tool_response ?? parsed.toolResponse,
         ),
+        ...(several !== undefined ? { questions: several } : {}),
       };
     }
     const supplied = suppliedTurnOrigin(parsed.origin);
@@ -805,11 +859,12 @@ try {
   // asks in chat to change with nothing waiting on them (without the id, every
   // such request met the setter's refusal first, and a setting asked in a box
   // answer was recorded on the message typed before it). On the work, every
-  // such message gets it; outside the work or before any exists, only a reply
-  // to this chat's plan question for new work, so a setting asked beside the
-  // plan pick is recorded as theirs and no other prompt in a project with no
-  // AI-DLC work open carries the line. Once a turn. The setter's proof of the
-  // message still decides.
+  // such message gets it, and so does one in a chat that took part in work now
+  // finished, where the message is their turn (standingPersonTurn); outside the
+  // work or before any exists, only a reply to this chat's plan question for
+  // new work, so a setting asked beside the plan pick is recorded as theirs and
+  // no other prompt in a project with no AI-DLC work open carries the line.
+  // Once a turn. The setter's proof of the message still decides.
   let idSaid = false;
   const sayMessageId = (messageId: string | null, notAReply: boolean, onTheWork: boolean): void => {
     if (idSaid || !(promptSubmitted || pickerQuestion !== undefined) || !messageId || notAReply || contextMayReachPerson) {
@@ -831,7 +886,8 @@ try {
     if (turnOrigin.kind !== "host") {
       const kept = keepMessage();
       keepClaudeKey(kept, false);
-      sayMessageId(kept, typedParse?.command === true, false);
+      const tookPart = workflow.participation === "participant" && selectedRecordIsFinished(projectDir, workflow.selection);
+      sayMessageId(kept, typedParse?.command === true, tookPart);
     }
     sayIfKeyShaped();
     return 0;

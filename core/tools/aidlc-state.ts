@@ -1,6 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
-import { BACKGROUND_SYNC_CAUSE, CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
+import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { git, isGitRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -64,10 +64,15 @@ import {
   appendUnderHeading,
   artifactFilename,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
+  blockingSensorPicks,
+  optionsList,
+  shellArg,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
   blockingSensorOverrideReport,
   hasBlockingSensorOverrideAuthorization,
+  committedTextSha256,
+  writeRecordFileNoFollow,
   BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
@@ -209,6 +214,7 @@ import {
   removeSlug,
   replaceSection,
   resolveBoltDag,
+  constructionCheckpointsApply,
   resolveBoltIdentity,
   requireLiveClaimForTeamUnit,
   reviewArtifactFingerprint,
@@ -294,9 +300,9 @@ import {
 } from "./aidlc-message-store.ts";
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
-import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
+import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
 import {
   stageLabel,
@@ -308,7 +314,7 @@ import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
-import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel, SWITCH_CHECKS_OFF_CHOICE } from "./aidlc-orchestrate.ts";
 import {
   askedQuestionFields,
   commandChat,
@@ -321,6 +327,9 @@ import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-t
 import {
   approvedOverUnfinishedReview,
   approvedUnitChanges,
+  constructionCheckpointKind,
+  loadConstructionEvidence,
+  resolveConstructionCheckpoint,
   unfinishedReviewsNotice,
 } from "./aidlc-construction-checkpoints.ts";
 
@@ -927,6 +936,12 @@ function refuseForAgent(msg: string, options: { personDecided?: boolean } = {}):
   throw new DecisionNotMadeError(msg, options.personDecided === true);
 }
 
+// A team's blocking check refusing the stage gate the engine settles itself:
+// the step is the agent's (ask the person Fix or Override, as at a Unit's
+// checkpoint, whose refusal reaches the agent through the checkpoint's verify),
+// so the router hands it to the agent instead of showing it as an error.
+class BlockingCheckStepError extends StateCommandError {}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -1108,6 +1123,9 @@ export function main(argv: string[]): void {
       case "completion-checks":
         handleCompletionChecks(args.slice(1));
         break;
+      case "checkpoint-checks":
+        handleCheckpointChecks(args.slice(1));
+        break;
       case "approve":
         handleApprove(args.slice(1));
         break;
@@ -1155,7 +1173,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, checkpoint-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -1180,6 +1198,9 @@ export function main(argv: string[]): void {
         auditMessage: e.message,
         agentGuidance: e.personDecided ? "person-decided" : "question-open",
       });
+    }
+    if (e instanceof BlockingCheckStepError) {
+      exitWithError({ message: e.message, auditMessage: e.message, agentGuidance: "blocking-check" });
     }
     exitWithError(errorMessage(e));
   }
@@ -2702,13 +2723,14 @@ function handleUnpark(_args: string[]): void {
 // latest receipt for cheap status reads. The autonomous swarm keeps its own
 // SWARM_UNIT_* ledger (aidlc-swarm.ts) — this verb is the interactive twin.
 //
-// Single-active-unit invariant: `start` refuses while another unit of the
-// same stage is non-terminal (started/resumed/paused without a later
-// UNIT_COMPLETED), so resume/restart races cannot create two active units.
-// `resume` refuses unless the named unit is paused and no other unit of the
-// stage is in progress. A pause with `--set-aside-for <unit>` sets the unit
-// aside for that other unit (#1411: the person asked for its work meanwhile),
-// so it does not stop that unit from starting this stage.
+// Single-active-unit invariant: `start` refuses while another unit this
+// checkout holds (unitsHeldHere) is non-terminal on the same stage
+// (started/resumed/paused without a later UNIT_COMPLETED), so resume/restart
+// races cannot create two active units. `resume` refuses unless the named unit
+// is paused and no other unit of the stage is in progress. A pause with
+// `--set-aside-for <unit>` sets the unit aside for that other unit (#1411: the
+// person asked for its work meanwhile), so it does not stop that unit from
+// starting this stage.
 function handleUnit(args: string[]): void {
   const action = args[0];
   const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
@@ -3951,8 +3973,7 @@ function gateSensorMatchesOutput(
   >[number],
   outputPath: string,
 ): boolean {
-  return sensor.matches === undefined ||
-    new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
+  return sensor.matches === undefined || sensorMatchesPath(sensor.matches, outputPath);
 }
 
 // One fire of a gate sensor: the output it is fired on, and every output its
@@ -4226,11 +4247,99 @@ function verifyGateSensorArtifactsUnchanged(
   }
 }
 
+// Where a blocking check's refusal stands: a gate (the report retries it), or
+// one Unit's checkpoint (the pick names the Unit and the checkpoint's verify
+// retries it).
+type BlockingCheckAt =
+  | { kind: "gate"; reportResult: "awaiting-approval" | "revised" }
+  | { kind: "checkpoint"; unit: string; checkpointKind: string; overrodeAt?: string };
+
+// What the person already decided about these checks at other Units, for this
+// Unit's refusal: the line said before the question when they overrode the
+// same check at an earlier Unit (each Unit's latest verification decides), so
+// their second answer is quick; and, when they asked at an earlier Unit to
+// switch that check off, were asked once what they meant (the question offered
+// the work's switch beside the check's two choices) and picked the Override for
+// that Unit, the same pick for the same words here. Read from the record alone:
+// the question's offered choices, the pick, and the verification that carried
+// it (that one, not the Unit's latest, so an Override later undone keeps their
+// answer). Only when that verification overrode every check failing here: the
+// retry is this Unit's Override, which covers all of its findings, so a check
+// they never overrode, failing beside one they did, gets its own question. The
+// check's name in these lines is the agent's (<check>): its id is the team's
+// internal name. Null when there is nothing to say.
+function overrodeAtEarlierUnits(pd: string, slug: string, unit: string, kind: string, sensorIds: string[]): string | null {
+  const rows = sortAttemptEvents(readAuditShardEvents(pd));
+  const latest = new Map<string, string>();
+  for (const row of rows) {
+    if (row.event !== "CHECKPOINT_VERIFICATION_RECORDED" || auditBlockField(row.block, "Verified") !== "true") continue;
+    const at = auditBlockField(row.block, "Unit");
+    if (at === null || at === unit) continue;
+    latest.set(at, auditBlockField(row.block, "Blocking Checks") ?? "");
+  }
+  const overrode = (checks: string, id: string): boolean => checks.split(",").map((entry) => entry.trim())
+    .some((entry) => entry.startsWith(`${slug}:${id}@`) && entry.endsWith("=overridden"));
+  // The one ask answered with the Override at another Unit: the verification that carried it, per Unit.
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  const questions = new Map<AuditShardEvent, AuditShardEvent>();
+  const carried = new Map<string, string>();
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(pd);
+  } catch {
+    stateContent = null;
+  }
+  // Read as the verification that carried the pick reads it (blockingSensorPicks, with the state).
+  for (const [pick, choice] of blockingSensorPicks(rows, slug, pickUnits, questions, stateContent)) {
+    const at = pickUnits.get(pick) ?? null;
+    if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE || at === null || at === unit || carried.has(at)) continue;
+    if (!optionsList(auditBlockField(questions.get(pick)?.block ?? "", "Options")).includes(SWITCH_CHECKS_OFF_CHOICE)) continue;
+    const verification = rows.slice(rows.indexOf(pick) + 1).find((row) =>
+      row.event === "CHECKPOINT_VERIFICATION_RECORDED" && auditBlockField(row.block, "Unit") === at &&
+      auditBlockField(row.block, "Verified") === "true" && auditBlockField(row.block, "Blocking Sensor Override") === "true"
+    );
+    if (verification !== undefined) carried.set(at, auditBlockField(verification.block, "Blocking Checks") ?? "");
+  }
+  const plain = (names: string[]): string => {
+    const shown = names.map(unitPlainName);
+    const list = shown.length < 2 ? shown.join("") : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+    return `the ${list} Unit${shown.length > 1 ? "s" : ""}`;
+  };
+  const slot = (id: string): string => `(<check>: the ${checkName(id)}, named by what it checks, as you name it in the question.)`;
+  const said = sensorIds.flatMap((id) => {
+    const before = [...latest].filter(([, checks]) => overrode(checks, id)).map(([at]) => at);
+    return before.length === 0
+      ? []
+      : [`Say to the person, just before the question: "You overrode the <check> for ${plain(before)}." ${slot(id)}`];
+  });
+  const same = [...carried].find(([, checks]) => sensorIds.every((id) => overrode(checks, id)))?.[0];
+  if (same !== undefined) {
+    const these = sensorIds.length === 1 ? "this check" : "these checks";
+    said.push(
+      `At ${plain([same])} they were asked what switching ${these} off meant and picked the Override for that Unit, ` +
+        `so a request to switch ${these} off again is that same pick: run \`${aidlcToolInvocation("log")} answer ` +
+        // No --message: the answer takes their reply since the question itself, as at the first Unit (an id
+        // the agent had to look up put a search of the record in front of the person).
+        `--stage ${slug} --unit ${shellArg(unit)} --details "${BLOCKING_SENSOR_OVERRIDE_CHOICE}"\`, ` +
+        `then \`${blockingSensorOverrideVerify(unit, kind)}\`, and once that verify ` +
+        `succeeds say, one line for each check: "Same as for ${plain([same])}: I've overridden the <check> for this one too." ` +
+        sensorIds.map(slot).join(" "),
+    );
+  }
+  return said.length === 0 ? null : said.join(" ");
+}
+
+// The checkpoint verify that carries the person's override at a Unit's checkpoint.
+function blockingSensorOverrideVerify(unit: string, kind: string): string {
+  return `${aidlcToolInvocation("bolt")} checkpoint --action verify --unit ${shellArg(unit)} --kind ${kind} ` +
+    `--override-blocking-sensors --user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}"`;
+}
+
 function enforceBlockingGateSensors(
   pd: string,
   stateContent: string,
   slug: string,
-  reportResult: "awaiting-approval" | "revised",
+  at: BlockingCheckAt,
   issues: BlockingSensorIssue[],
   overrideRequested: boolean,
   overrideInput?: string,
@@ -4243,41 +4352,65 @@ function enforceBlockingGateSensors(
   const reasons = issues.map(
     (issue) => `${issue.sensorId}@${issue.outputPath}: ${issue.reason}`,
   );
+  const unitFlag = at.kind === "checkpoint" ? ` --unit ${shellArg(at.unit)}` : "";
+  const retry = at.kind === "checkpoint"
+    ? blockingSensorOverrideVerify(at.unit, at.checkpointKind)
+    : blockingSensorOverrideReport(slug, at.reportResult);
+  const where = at.kind === "checkpoint" ? `"${slug}" for unit "${at.unit}"` : `"${slug}"`;
+  // At the stage gate the engine settles itself after every Unit's checkpoint,
+  // the refusal is the agent's step, as the checkpoint's is.
+  const stage = at.kind === "gate" ? findStageBySlug(slug) : undefined;
+  const late = stage !== undefined && engineSettlesLateGate(pd, stateContent, stage);
+  const refuse = late
+    ? (message: string): never => {
+      throw new BlockingCheckStepError(message);
+    }
+    : error;
+  // The person chose the Override and the agent's own next step is named
+  // (leave Continue automatically first, or the exact choice): it goes on in
+  // the same turn.
+  const refuseOwnStep = late ? (message: string): never => refuseForAgent(message, { personDecided: true }) : error;
   if (overrideRequested) {
     if (isAutonomousMode(stateContent)) {
-      error(
-        `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
+      refuseOwnStep(
+        `Refusing blocking sensor override for ${where}: Construction Autonomy Mode ` +
           "is autonomous. Unattended runs must halt on blocking sensor findings or " +
           "unavailable evaluations. When the person chooses the override, run " +
           `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
-          "approval at each Bolt), then report with the override again.",
+          `approval at each Bolt), then ${at.kind === "checkpoint" ? `run \`${retry}\` again` : "report with the override again"}.`,
       );
     }
     if (overrideInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
-      error(
-        `Refusing blocking sensor override for "${slug}": --user-input must be the ` +
+      refuseOwnStep(
+        `Refusing blocking sensor override for ${where}: --user-input must be the ` +
           `exact offered choice "${BLOCKING_SENSOR_OVERRIDE_CHOICE}".`,
       );
     }
-    if (!hasBlockingSensorOverrideAuthorization(pd, slug)) {
-      error(
-        `Refusing blocking sensor override for "${slug}": no fresh authorization receipt ` +
+    if (!hasBlockingSensorOverrideAuthorization(pd, slug, at.kind === "checkpoint" ? at.unit : null)) {
+      refuse(
+        `Refusing blocking sensor override for ${where}: no fresh authorization receipt ` +
           `proves that "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" was offered and selected after ` +
           "a HUMAN_TURN. Record the decision and exact answer through aidlc-log.ts, then retry.",
       );
     }
     return;
   }
-  error(
-    `Blocking gate sensor evaluation did not pass for "${slug}". Sensors: ` +
+  refuse(
+    `Blocking gate sensor evaluation did not pass for ${where}. Sensors: ` +
       `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
       `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
-      `${aidlcToolInvocation("log")} decision --stage ${slug} ` +
+      `${aidlcToolInvocation("log")} decision --stage ${slug}${unitFlag} ` +
       `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
       `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
       `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
-      `${aidlcToolInvocation("log")} answer. Then retry: ` +
-      `${blockingSensorOverrideReport(slug, reportResult)}. Autonomous mode cannot override.`,
+      `${aidlcToolInvocation("log")} answer${at.kind === "checkpoint" ? ` --stage ${slug}${unitFlag}` : ""}. Then retry: ` +
+      `${retry}. Autonomous mode cannot override.` +
+      // Asked per Unit, the person's "switch the check off for this work" is the work's switch, not one Unit's Override.
+      (at.kind === "checkpoint"
+        ? ` If the person asked to switch the checks off for this piece of work, that is no pick: run ` +
+          `\`${aidlcToolInvocation("orchestrate")} next --sensors off\` instead and follow its step.` +
+          (at.overrodeAt === undefined ? "" : ` ${at.overrodeAt}`)
+        : ""),
   );
 }
 
@@ -5811,7 +5944,7 @@ function staleSourcePreconditionError(
     const message =
       `Refusing to complete "${slug}": the workspace source changed again after ` +
         `the one recovery review by ${reviewer} (source-fingerprint mismatch).${whatChanged} ` +
-        `${BACKGROUND_SYNC_CAUSE} ` +
+        syncFolderClause(pd) +
         `${recoveryGuidance(pd, content, slug)} ` +
         (requestChangesResetIsExecutable(content, slug)
           ? "Only a human Request Changes decision resets the review attempt; do not " +
@@ -5827,7 +5960,7 @@ function staleSourcePreconditionError(
   }
   const message =
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
-      `reviewed it.${whatChanged} ${BACKGROUND_SYNC_CAUSE} Ask ${reviewer} to review the current ` +
+      `reviewed it.${whatChanged} ${syncFolderClause(pd)}Ask ${reviewer} to review the current ` +
       `source once more and record the verdict, or revert the source change, then try again.`;
   // On a per-unit stage the review that covered the source is the newest
   // Unit's, so the one recovery review is that Unit's.
@@ -5915,7 +6048,7 @@ function staleReviewPreconditionError(
   if (recoverySpent) {
     const message =
       `${reviewerPreconditionPrefix(slug, action)}: this stage's output document ` +
-        `changed again after the one recovery review by ${reviewer}.${written} ${BACKGROUND_SYNC_CAUSE} ` +
+        `changed again after the one recovery review by ${reviewer}.${written} ${syncFolderClause(pd)}` +
         recoveryGuidance(pd, content, slug) +
         (requestChangesResetIsExecutable(content, slug)
           ? " Only a human Request Changes decision resets the review attempt; do not " +
@@ -5931,7 +6064,7 @@ function staleReviewPreconditionError(
   }
   const message =
     `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
-      `${reviewer} reviewed it.${written} ${BACKGROUND_SYNC_CAUSE} Run ` +
+      `${reviewer} reviewed it.${written} ${syncFolderClause(pd)}Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
@@ -7421,6 +7554,270 @@ function teamGateFields(
   };
 }
 
+// checkpoint-checks --unit <unit> --kind <unit|skeleton> --stages <csv>
+// [--notices | [--person-answers] [--override-blocking-sensors --user-input <choice>] [--override-keys <csv>]]:
+// a Unit's checkpoint fires its stages' blocking gate checks on that Unit's own
+// outputs before the person is asked to approve it (the checkpoint module runs
+// it, since it cannot load this file), as a stage gate fires them before it
+// opens: the same fireGateSensors and the same enforceBlockingGateSensors
+// refusal, retried at the checkpoint's verify. A checkpoint no person answers
+// (Construction autonomy) fires nothing: the late stage gate checks that Unit,
+// where an unattended run halts, as it always has. An advisory check fires
+// again only where its latest result on the Unit's files did not pass, so what
+// the question says beside it is true now. With the checks off for the work
+// fireGateSensors fires nothing and nothing is recorded. A pick of the
+// person's that still stands is their answer: it is used, not asked again,
+// for the findings they were shown when they made it; on a second pass (the
+// verification command changed the files) it covers only the findings the
+// first pass overrode. Prints the verification row's fields:
+// the blocking checks that ran, how each ended and the files they read, by
+// hash (the late stage gate leaves those out while they are unchanged), and an
+// override's own fields as the gate records them; and the findings overridden.
+function handleCheckpointChecks(args: string[]): void {
+  const unit = getFlagValue(args, "--unit");
+  const kind = getFlagValue(args, "--kind") ?? "unit";
+  const stages = getFlagValue(args, "--stages");
+  if (!unit || !stages) {
+    error("Usage: aidlc-state.ts checkpoint-checks --unit <unit> --kind <unit|skeleton> --stages <csv> " +
+      "[--notices | [--person-answers] [--override-blocking-sensors --user-input <choice>] [--override-keys <csv>]]");
+  }
+  const pd = resolveProjectDir(projectDir);
+  const slugs = stages.split(",").map((part) => part.trim()).filter((part) => part !== "");
+  const rel = (path: string): string => relative(pd, resolvePath(pd, path)).split(sep).join("/");
+  // --notices: what the advisory checks still find on the Unit's outputs, read
+  // from their latest results with nothing fired, in the words a gate says
+  // them (failedCheckNotices); a blocking check is the refusal's, not a line.
+  // Where the checkpoint runs no checks, it says nothing of them either.
+  if (args.includes("--notices")) {
+    const notices = !unitCheckpointChecksApply(readStateFile(pd)) ? [] : slugs.flatMap((slug) => {
+      const stage = findStageBySlug(slug);
+      if (stage?.for_each !== "unit-of-work") return [];
+      const advisory = {
+        ...stage,
+        sensors_applicable: (stage.sensors_applicable ?? []).filter((sensor) => sensor.default_severity !== "blocking"),
+      };
+      // A checkpoint over several stages says which stage a line is about: their files share names.
+      return failedCheckNotices(pd, advisory, unit).map((line) => slugs.length > 1 ? `${stage.name ?? slug}: ${line}` : line);
+    });
+    console.log(JSON.stringify({ notices }));
+    return;
+  }
+  const fields: Record<string, string> = {};
+  if (!args.includes("--person-answers")) {
+    console.log(JSON.stringify({ fields, overridden: [] }));
+    return;
+  }
+  const stateContent = readStateFile(pd);
+  // Stage-major work (a skeleton checkpoint included) keeps its checks at the stage gate, which asks once.
+  if (!unitCheckpointChecksApply(stateContent)) {
+    console.log(JSON.stringify({ fields, overridden: [] }));
+    return;
+  }
+  const keysFlag = getFlagValue(args, "--override-keys");
+  const allowedKeys = keysFlag === undefined ? null : new Set(keysFlag.split(",").filter((key) => key !== ""));
+  // What the person was last shown for each stage of this Unit (the refusal
+  // before their pick): a pick of theirs covers those findings and no other.
+  const shownFile = ".aidlc-engine/checkpoint-blocking-refusals.json";
+  const root = recordDir(pd);
+  let shown: Record<string, string[]> = {};
+  try {
+    shown = root === null ? {} : JSON.parse(readFileSync(join(root, shownFile), "utf-8")) as Record<string, string[]>;
+  } catch {
+    shown = {};
+  }
+  const recordShown = (slug: string, keys: string[]): void => {
+    if (root === null) return;
+    try {
+      writeRecordFileNoFollow(root, shownFile, `${JSON.stringify({ ...shown, [`${unit}|${slug}`]: keys }, null, 2)}\n`);
+    } catch {
+      // Unrecorded, the next pick covers nothing it was not shown: the person is asked again.
+    }
+  };
+  const overrideInput = args.includes("--override-blocking-sensors")
+    ? getFlagValue(args, "--user-input")
+    : BLOCKING_SENSOR_OVERRIDE_CHOICE;
+  const ran: string[] = [];
+  const checked: Record<string, string> = {};
+  const overridden: BlockingSensorIssue[] = [];
+  const overriddenKeys: string[] = [];
+  for (const slug of slugs) {
+    const stage = findStageBySlug(slug);
+    if (stage?.for_each !== "unit-of-work") continue;
+    const paths = declaredOutputsForGate(pd, stage, unit);
+    if (paths.length === 0) continue;
+    // A result row spells its output from the project folder as given; compared canonically.
+    const latest = new Map<string, { kind: string }>();
+    for (const result of latestSensorResults(readAuditShardEvents(pd), slug).values()) {
+      try {
+        latest.set(`${result.id}@${rel(realpathSync(resolveAuditProjectPath(pd, result.output)))}`, result);
+      } catch {
+        // A file no longer there has nothing to say.
+      }
+    }
+    const gateChecks = (stage.sensors_applicable ?? []).filter((sensor) => sensor.fire_on === "gate");
+    const blocking = gateChecks.filter((sensor) =>
+      sensor.default_severity === "blocking" && paths.some((path) => gateSensorMatchesOutput(sensor, path))
+    );
+    const recheck = gateChecks.filter((sensor) =>
+      sensor.default_severity !== "blocking" &&
+      paths.some((path) => {
+        const result = latest.get(`${sensor.id}@${rel(path)}`);
+        return result !== undefined && result.kind !== "passed";
+      })
+    );
+    if (blocking.length === 0 && recheck.length === 0) continue;
+    const { issues, fingerprints } = fireGateSensors(pd, stage, stateContent, undefined, true, {
+      sensorIds: new Set([...blocking, ...recheck].map((sensor) => sensor.id)),
+      paths,
+      unit,
+    });
+    if (blocking.length === 0) continue;
+    const keyOf = (issue: BlockingSensorIssue): string => `${issue.sensorId}@${rel(issue.outputPath)}`;
+    const seen = new Set(shown[`${unit}|${slug}`] ?? []);
+    const standing = issues.length > 0 &&
+      issues.every((issue) => seen.has(keyOf(issue))) &&
+      (allowedKeys === null || issues.every((issue) => allowedKeys.has(keyOf(issue)))) &&
+      hasBlockingSensorOverrideAuthorization(pd, slug, unit);
+    if (issues.length > 0 && !standing) recordShown(slug, issues.map(keyOf));
+    // A stage the person has not answered for is asked about, never refused for a pick they made elsewhere.
+    const overrodeAt = issues.length > 0 && !standing
+      ? overrodeAtEarlierUnits(pd, slug, unit, kind, [...new Set(issues.map((issue) => issue.sensorId))])
+      : null;
+    enforceBlockingGateSensors(
+      pd, stateContent, slug,
+      { kind: "checkpoint", unit, checkpointKind: kind, ...(overrodeAt === null ? {} : { overrodeAt }) },
+      issues, standing, overrideInput,
+    );
+    const failed = new Set(issues.map((issue) => issue.sensorId));
+    for (const sensor of blocking) {
+      // A check fired when its files were held to their bytes (the checks off for the work fire nothing).
+      if (!paths.some((path) => gateSensorMatchesOutput(sensor, path) && fingerprints.has(path))) continue;
+      ran.push(`${slug}:${sensor.id}@${sensorEntryDigest(sensor)}=${failed.has(sensor.id) ? "overridden" : "passed"}`);
+    }
+    // Read as a commit reads it, so a file whose line endings a checkout changed is the same file.
+    for (const path of fingerprints.keys()) checked[rel(path)] = committedTextSha256(readFileSync(path));
+    overridden.push(...issues);
+    overriddenKeys.push(...issues.map(keyOf));
+  }
+  if (ran.length > 0) {
+    fields["Blocking Checks"] = ran.join(", ");
+    fields["Checked Outputs"] = JSON.stringify(checked);
+  }
+  addBlockingSensorOverrideFields(fields, overridden, overridden.length > 0);
+  console.log(JSON.stringify({ fields, overridden: overriddenKeys }));
+}
+
+// The stage gate the engine settles itself once every Unit of this walk is
+// approved at its checkpoint (the late gate): no person approves it, so a
+// team's blocking check refusing it is the agent's step to put to the person.
+export function engineSettlesLateGate(
+  pd: string,
+  stateContent: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): boolean {
+  return stage.for_each === "unit-of-work" && unitCheckpointChecksApply(stateContent) &&
+    !personAnswersGate(pd, stateContent, stage, null);
+}
+
+// Where a Unit's checkpoint runs its stages' blocking checks, and the late
+// stage gate leaves out what those checkpoints checked: solo work built Unit by
+// Unit with checkpoints. Anywhere else (stage-major work, its skeleton
+// checkpoint included; team-owned Units) the stage gate checks every file.
+function unitCheckpointChecksApply(stateContent: string): boolean {
+  return !isTeamUnitOwnership(stateContent) && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major";
+}
+
+// What a blocking check's verdict at a checkpoint stood on besides the files:
+// the check as the stage graph binds it (its severity, matches and when it
+// fires); its script is not in it.
+function sensorEntryDigest(sensor: { id: string; fire_on?: string; default_severity?: string; matches?: string }): string {
+  return createHash("sha256")
+    .update(JSON.stringify([sensor.id, sensor.fire_on ?? null, sensor.default_severity ?? null, sensor.matches ?? null]))
+    .digest("hex")
+    .slice(0, 12);
+}
+
+// The files each blocking check of a stage reads at the late stage gate in
+// work built Unit by Unit with checkpoints: all of them, less each file a
+// Unit's current approval was verified on with that check, while the file is
+// as it was then (its hash on the verification row's Checked Outputs; under
+// Guard Policy off or relaxed an approval stands over a later edit, so the
+// file's own hash decides, not the approval). A Unit approved before its
+// checkpoint ran checks, a Unit that skipped its code, a check added since
+// or whose severity, match or timing changed, and a file edited since are
+// checked here, once (a change to a check's script alone is not seen: the
+// files it passed are not checked again); a check a Unit's checkpoint already
+// ran on a file is not run on it again. Null: not such a gate, every check
+// reads every file as it always has.
+function lateGateChecks(pd: string, stage: GateStage, stateContent: string, artifacts?: string): Map<string, string[]> | null {
+  if (stage.for_each !== "unit-of-work" || !unitCheckpointChecksApply(stateContent)) return null;
+  const blocking = (stage.sensors_applicable ?? []).filter((sensor) =>
+    sensor.fire_on === "gate" && sensor.default_severity === "blocking"
+  );
+  if (blocking.length === 0) return null;
+  let evidence: ReturnType<typeof loadConstructionEvidence>;
+  try {
+    evidence = loadConstructionEvidence(pd, stateContent);
+  } catch {
+    return null;
+  }
+  const dag = evidence.dag;
+  if (dag.state !== "ok" || dag.units.length === 0) return null;
+  const all = dag.batches.flat();
+  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
+  const rows = readAuditShardEvents(pd).filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
+  const covered = new Set<string>();
+  for (const unit of dag.units) {
+    let checkpoint: ReturnType<typeof resolveConstructionCheckpoint>;
+    try {
+      checkpoint = resolveConstructionCheckpoint(pd, unit, constructionCheckpointKind(stateContent, unit, all), stateContent, evidence);
+    } catch {
+      continue;
+    }
+    const id = checkpoint.verification?.id;
+    if (!checkpoint.approved || !checkpoint.stages.includes(stage.slug) || id === undefined) continue;
+    const row = rows.find((candidate) =>
+      auditBlockField(candidate.block, "Unit") === unit && auditBlockField(candidate.block, "Verification Id") === id
+    );
+    if (row === undefined) continue;
+    const recorded = new Set((auditBlockField(row.block, "Blocking Checks") ?? "")
+      .split(",").map((entry) => entry.trim().replace(/=.*$/, "")).filter((entry) => entry !== ""));
+    let hashes: Record<string, string>;
+    try {
+      hashes = JSON.parse(auditBlockField(row.block, "Checked Outputs") ?? "{}") as Record<string, string>;
+    } catch {
+      continue;
+    }
+    for (const path of declaredOutputsForGate(pd, stage, unit)) {
+      const rel = relative(pd, path).split(sep).join("/");
+      let now: string;
+      try {
+        now = committedTextSha256(readFileSync(path));
+      } catch {
+        continue;
+      }
+      if (hashes[rel] === undefined || hashes[rel] !== now) continue;
+      for (const sensor of blocking) {
+        if (recorded.has(`${stage.slug}:${sensor.id}@${sensorEntryDigest(sensor)}`)) covered.add(`${sensor.id}\u0000${path}`);
+      }
+    }
+  }
+  return new Map(blocking.map((sensor) => [
+    sensor.id,
+    paths.filter((path) => !covered.has(`${sensor.id}\u0000${path}`)),
+  ]));
+}
+
+// One gate evaluation from the late gate's fires, one per check.
+function mergedGateEvaluation(parts: GateSensorEvaluation[]): GateSensorEvaluation {
+  return {
+    issues: parts.flatMap((part) => part.issues),
+    fingerprints: new Map(parts.flatMap((part) => [...part.fingerprints])),
+    failedFires: parts.flatMap((part) => part.failedFires),
+  };
+}
+
 // completion-checks <slug> [--unit <unit>] --hand-off review|approval --again
 // <command>: completionChecksStep for a tool that cannot load this one (the
 // review request). Prints {"held":false} or {"held":true,"message":...}; a
@@ -7500,18 +7897,20 @@ function handleGateStart(args: string[]): void {
     ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
     personCall: personCall(),
   });
-  const gateSensorEvaluation = fireGateSensors(
-    pd,
-    preflightStage,
-    preflightContent,
-    artifacts,
-    personAnswersGate(pd, preflightContent, preflightStage, preflightTeamGate),
-  );
+  const personAnswers = personAnswersGate(pd, preflightContent, preflightStage, preflightTeamGate);
+  // The gate the engine approves itself after every Unit's checkpoint: what a
+  // checkpoint already checked is not checked, or asked about, again.
+  const lateGate = personAnswers ? null : lateGateChecks(pd, preflightStage, preflightContent, artifacts);
+  const gateSensorEvaluation = lateGate === null
+    ? fireGateSensors(pd, preflightStage, preflightContent, artifacts, personAnswers)
+    : mergedGateEvaluation([...lateGate].map(([id, paths]) =>
+      fireGateSensors(pd, preflightStage, preflightContent, artifacts, false, { sensorIds: new Set([id]), paths, unit: null })
+    ));
   enforceBlockingGateSensors(
     pd,
     preflightContent,
     slug,
-    "awaiting-approval",
+    { kind: "gate", reportResult: "awaiting-approval" },
     gateSensorEvaluation.issues,
     overrideBlockingSensors,
     overrideInput,
@@ -8082,7 +8481,7 @@ function handleApprove(args: string[]): void {
       pd,
       content,
       slug,
-      "revised",
+      { kind: "gate", reportResult: "revised" },
       backstopSensorEvaluation.issues,
       false,
     );
@@ -8644,7 +9043,7 @@ function handleRevise(args: string[]): void {
     pd,
     preflightContent,
     slug,
-    "revised",
+    { kind: "gate", reportResult: "revised" },
     gateSensorEvaluation.issues,
     overrideBlockingSensors,
     overrideInput,

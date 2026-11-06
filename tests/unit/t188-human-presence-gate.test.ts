@@ -349,7 +349,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(r.rc).not.toBe(0);
       const refusal = JSON.parse(r.out).error as string;
       expect(refusal).toContain(
-        "If the person already replied, that reply was not recorded. Do not ask them to answer again.",
+        "If the person already replied, that reply was not recorded. Do not ask them to answer again now.",
       );
       expect(refusal).not.toContain("hooks");
       expect(refusal).not.toContain("agent picker");
@@ -357,7 +357,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       return refusal;
     };
     const ideStep =
-      'Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don\'t need to answer again. In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on."';
+      'Tell them exactly this, with nothing about why: "Your answer was not recorded, so you may be asked for it again. In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on."';
     // The agent's own commands in Kiro IDE carry TERM_PROGRAM=kiro and neither VSCODE_ variable: only Kiro IDE's
     // hooks get those (measured live on Kiro IDE 1.2.37, #2167), and this refusal comes from the agent's command.
     const agentShell = { TERM_PROGRAM: "kiro", KIRO_SESSION_ID: "sess_test", VSCODE_GIT_ASKPASS_NODE: "C:\\Kiro\\Kiro.exe" };
@@ -375,7 +375,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(elsewhere);
     expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" })).toBe(elsewhere);
     expect(elsewhere).toContain(
-      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose \'Trust, continue\'). If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
+      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you may be asked for it again." In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose \'Trust, continue\'). If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
     );
     expect(elsewhere).not.toContain("Reload Window");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
@@ -426,7 +426,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     writeHeartbeat(proj, Date.now());
     for (const [state, steps] of [
       [KIRO_CLI_STATE, "If the person already replied, that reply was not recorded for this question."],
-      [KIRO_IDE_STATE, "If the person already replied, that reply was not recorded. Do not ask them to answer again."],
+      [KIRO_IDE_STATE, "If the person already replied, that reply was not recorded. Do not ask them to answer again now."],
     ] as const) {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
       expect(r.rc).not.toBe(0);
@@ -460,7 +460,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     for (const [state, line] of [
       [STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
       [KIRO_CLI_STATE, `"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more."`],
-      [KIRO_IDE_STATE, `"Your answer was not recorded, so you don't need to answer again.`],
+      [KIRO_IDE_STATE, `"Your answer was not recorded, so you may be asked for it again.`],
     ] as const) {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
       expect(r.rc).not.toBe(0);

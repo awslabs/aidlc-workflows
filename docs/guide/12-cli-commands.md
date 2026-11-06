@@ -36,7 +36,7 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
-| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out (never the last) |
+| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out |
 | `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers; `--all` keeps every recorded repo |
 | `/aidlc intent add-checkout <path>` | Have the review cover code kept in a worktree in the harness folder or outside the project; `remove-checkout <path>` takes it out |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
@@ -50,7 +50,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
-| `/aidlc unit publish <unit> [--commit]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the work first |
+| `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
 | `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
@@ -299,7 +299,10 @@ shows where the work stands.
 **Multi-repo workspaces.** When your workspace root holds more than one sibling
 code repo (each an immediate child directory with a `.git`), the creation step
 records the set of repos the intent touches in its `intents.json` row. By default
-it **auto-discovers** every sibling repo; to scope an intent to a specific subset,
+it **auto-discovers** every sibling repo, except a git submodule of a project that
+has code of its own beside it: that project is a one-repo project and is the
+work's repo (a project made only of submodules records them). To scope an intent
+to a specific subset, or to name a submodule as the work's repo,
 the creation tool accepts `--repos a,b` (a comma-separated list of repo directory
 names). These are flags of the deterministic `aidlc-utility intent-create` step the
 engine runs for you — not `/aidlc` flags you type. During Construction, each git
@@ -427,7 +430,10 @@ checkout (a real `.git` entry): a folder merely shaped like a repository is
 refused, as is a name with separators. The command serves work that already
 records repos; work that records none treats the workspace folder itself as its
 repo (`workspace reclassify` records its first repos). Removing the last
-recorded repo is refused for the same reason.
+recorded repo is refused for the same reason, unless it is a git submodule of
+the project (listed in its `.gitmodules`, the project folder a Git checkout
+itself): the work then records none and works on the workspace folder again.
+Removing a repo from work that records none changes nothing.
 
 There is no cut-off: after Units Generation is approved the repo is still added
 (or removed), and what that means for the approved Units follows the work's
@@ -647,6 +653,11 @@ work, recording a pinned merge gate, or resuming `aidlc unit land`.
 
 ---
 
+Each Unit command below prints its usage for `--help` and changes nothing
+(`-h` too, typed at a terminal: `aidlc unit share -h`). A word it does not
+take (a misspelt option, a second Unit name) is named with that usage before
+anything is committed, pushed or written.
+
 ### `/aidlc --claim <unit>` and `/aidlc unit claim <unit>` — Claim a team Unit
 
 Atomically claim one open Unit in a team-owned, unit-major Construction workflow.
@@ -745,13 +756,20 @@ does not have yet.
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 
 Run from the scoped team checkout after committing its artifacts, source, state
-mirror, and audit shard, or with `--commit` to commit them first (what git shows
-changed, as `share` commits it); `/aidlc` offers that step itself when the
-Unit is complete and approved:
+mirror, and audit shard, or with `--commit` to commit them first; `/aidlc`
+offers that step itself when the Unit is complete and approved. `--commit`
+commits the Unit's own work: every change to a tracked file, the record under
+`aidlc/`, and the new files the Unit's source manifest lists (what its Code
+Generation says it wrote). Other new files, such as AI-DLC's own install or a
+`node_modules` your `.gitignore` does not list, stay on disk uncommitted, and
+the publish says once how many it left out. `--include <path>` puts a new file
+or folder in as well (give it once for each, or `.` for all of them); run it
+after a publish to publish again with them:
 
 ```bash
 /aidlc unit publish user-profile-api
 /aidlc unit publish user-profile-api --commit
+/aidlc unit publish user-profile-api --commit --include docs/diagrams --include README.md
 ```
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref
@@ -935,13 +953,14 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Hook presence | Every framework hook wired by `settings.json` exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. AI-DLC's status line is checked from your own `.claude/settings.local.json` when you turned it on; it only shows progress, so an `aidlc-statusline.ts` nobody wired is never reported as enforcement that is off. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
-| Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro writes when you switch a hook off under Agent Hooks. The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Kiro's Agent Hooks |
+| Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro IDE writes when you switch a hook off under Agent Hooks (a committed file can carry it too). The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Agent Hooks in Kiro IDE, or in Kiro CLI to change `"enabled": false` to `true` in the hook's file, then quit Kiro and start `kiro-cli --v3` again in the folder |
 | Kiro ignore sources | On the Kiro harness with the Markdown conductor (`.kiro/agents/aidlc-aidlc.md`, used by Kiro IDE and Kiro CLI v3): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the conductor agent (`agents/aidlc-aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by Kiro itself or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because Kiro's `fs_read` guard (Kiro IDE and Kiro CLI v3) then denies every stage, agent, and protocol read. Workspace-source matches warn, because doctor cannot tell which Kiro runs: in Kiro IDE they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting; Kiro CLI v3 applies `.kiroignore` (so a match there denies those reads) and not `.gitignore`, and the warning says which. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | Active space method copy | `aidlc/active-memory/` (the git-ignored copy every harness include reads) holds the active space's `memory/` files; the check writes it first, as every session start does, so a difference left is a file that cannot be written there (warn) |
 | VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
+| Synced folder | Only when the project sits in a synced folder: a Google Drive, OneDrive, Dropbox or Box folder under macOS `~/Library/CloudStorage`, iCloud Drive (`~/Library/Mobile Documents`), a Windows OneDrive folder, or a Dropbox folder that Dropbox's own `info.json` names. Says that sync can change files AI-DLC checks, and to move the project out of the synced folder or pause sync for it; the strict refusals for a document, plan or source that changed after its review or approval say the same. Silent otherwise (advisory - never fails) |
 | Hook heartbeats | `.aidlc-engine/hooks-health/` contains timestamps from hook executions (for a record with none of its own, the beat of the turn that created it, written just before the record existed, counts for its first five minutes). No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with the harness's own step to get its hooks running (on Claude Code, `"disableAllHooks": false` in `.claude/settings.local.json`, or the organization policy; when `.claude/settings.json` is missing, not valid JSON or registers none of AI-DLC's hooks, that file's repair instead). Heartbeats stay in the clone whose hooks wrote them, while audit records travel in git, so when only other clones' audit records show the progress (a teammate's work you pulled) it is a warning instead, `This workflow was run in another clone (<machine>); this clone has no hook record for it yet`, with nothing to fix in this clone |
 | Claude managed hook policy | On the Claude harness only, uses the existing managed-settings resolver (`AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows paths, macOS, Linux/WSL) plus alphabetical `managed-settings.d/` fragments and fails when effective `allowManagedHooksOnly` is `true` |
 | Your replies are not being recorded | When stage/gate events exist but the audit has no `HUMAN_TURN`, warns that the person's replies are not being recorded (so the next approval will be refused), with the harness's own hook step as the fix |
@@ -2407,6 +2426,7 @@ before does not count) is required under every Guard Policy: `rereview` carries
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --over-unfinished-review --message <id>
+aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --override-blocking-sensors --user-input "Override blocking sensors"
 ```
 
 Verification runs the recorded, human-authorized `Construction Verification
@@ -2415,7 +2435,11 @@ does not accept a command argument. If `construction_checkpoint.command_authoriz
 is false, do not run `verify`: complete the
 [recorded-command flow](#construction-verification-command-record-human-authorization),
 then re-run `next`. A skeleton's command must prove the integrated slice end to
-end and check ordinary Units' working results. Approval requires a current
+end and check ordinary Units' working results. In solo work built Unit by Unit, `verify` first runs
+the blocking gate checks of the checkpoint's stages on the Unit's own outputs; a
+failing one refuses with the Unit named for the check's Fix or Override question,
+and the person's Override is retried with `--override-blocking-sensors --user-input
+"Override blocking sensors"` ([blocking checks at a Unit's checkpoint](../reference/07-sensor-system.md#default_severity)). Approval requires a current
 verified proof. Show "Verified with `<full command>` (exit 0)" in the human
 approval question, copying the complete `verification_command` from the current
 tool output into a code span without abbreviation. This display label is the full
@@ -2564,6 +2588,25 @@ batch's prepare and stage completion keep the change, each recorded as
 Unit being built names in its plan (that change goes through the Unit's own
 checkpoint). Under a strict Guard Policy the team holds in memory it changes
 nothing and says in one line where that is set.
+
+### `aidlc engine swarm take-over` - build in this chat the Units another chat started
+
+```bash
+aidlc engine swarm take-over --batch <n> --message <id>
+```
+
+While Units are built side by side from one chat, `next` in another chat on the
+same machine says "Your other chat started building these Units." and hands out
+nothing to run for them. When the person asks that second chat to build them
+instead, `next` names their message for this command, which proves it, records
+it with this chat as `SWARM_TAKEN_OVER`, and `next` then hands this chat the
+batch; the first chat is then told "Your other chat took over building these
+Units." A batch the person sent back at its checkpoint is held for no chat until
+it is prepared again. Only a message sent since the other chat started or last
+took over the build can take it over, so words from before it changed hands do
+not move it back. It refuses
+where the tool cannot tell its chats apart (there nothing holds the batch for
+another chat) and when the batch is not being built from another chat.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 
@@ -3096,8 +3139,9 @@ bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro
 
 In a project with more than one harness installed, `--harness-dir <dir>` names the
 install to change (`aidlc engine plugin select aidlc --harness-dir .kiro`), as it
-does for `plugin sync` below; without it the native `aidlc` changes the first one
-(`.claude` when it is there).
+does for `plugin sync` below; without it the native `aidlc` changes the install of
+the tool whose chat runs it, and from your own terminal the first one (`.claude`
+when it is there).
 
 The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start, or on Kiro CLI and opencode when you run `aidlc engine plugin sync --plugin-root <folder>` with the plugin's folder), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated scope and stage tables (`tables.md`, beside the orchestrator skill) in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or archive the workflow first (a parked workflow still needs its plugin when it resumes), or keep the plugin enabled. Leaving a base plugin out while keeping a plugin built on it pauses that plugin: the list is written as typed, one line says so once with the command that turns the plugin off as well, nothing the plugin adds runs while its base is off, `plugin list` shows it as `paused`, and turning the base back on brings it back at the next session start (on Kiro CLI and opencode, when you run `aidlc engine plugin sync --plugin-root <folder>` with the plugin's folder); the select that turns the base on says which, once.
 

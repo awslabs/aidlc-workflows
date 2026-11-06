@@ -2681,8 +2681,9 @@ export function hostListsPlugins(harnessName: string): boolean {
 // person to sync. A host that lists its plugins (Claude Code, Codex) finds
 // them itself; elsewhere sync needs the plugin's folder (`root`, when the
 // tool knows it). A tool acts on its own harness folder and the native aidlc
-// on the first one installed here, so where the target `harnessDir` is another
-// it is told which, as the plugin hooks do.
+// on the one whose tool runs it, else the first one installed here, so where
+// the target `harnessDir` is not the first it is told which, as the plugin
+// hooks do.
 export function syncCommand(
   harnessName: string,
   key: string,

@@ -87,6 +87,11 @@ const manifest: HarnessManifest = {
       "End your turn right after " +
       "the line: your own next command in this turn would still run without the change.",
   },
+  // Copilot CLI marks every process it starts with COPILOT_CLI=1 (#2921). VS
+  // Code agent mode marks none, so beside another tool it is not told apart.
+  hostShell: { env: ["COPILOT_CLI"] },
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "open a new chat, then type <entry>" },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".github/skills/aidlc/SKILL.md",
   tierFlavor: "copilot",
