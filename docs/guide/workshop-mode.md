@@ -600,7 +600,7 @@ When the home records `Home Location`, each team builds its Unit as a piece of
 work of its own, in its own workspace and under its own rules. A team member
 runs `/aidlc` in their workspace with no work of their own selected there, and
 AI-DLC offers the Units their team can take, from what the workspace already
-has (the home's plan and the claims git last brought in). Where the lead's
+has (the lead's plan and the claims git last brought in). Where the lead's
 project has rules of its own (its `project.md` holds more than the template's
 notes), each Unit is offered two ways in that same question: **Start <unit> and
 follow the lead's project rules too** (those rules named by their headings),
@@ -613,7 +613,7 @@ project, the learnings question's first choice
 reads **Yes, for this project, and offered to any team that takes a Unit**.
 
 - **A clone of the home's own workspace**: the home's work is here too, and its
-  Units are offered to take. **Carry on <work> here, as its home** is offered
+  Units are offered to take. **Carry on <work> here, as the lead** is offered
   only in the checkout that made the plan (or a copy of that folder), once in a
   chat when nothing is ready to take; a teammate's clone never offers it,
   whatever its git name, and hears where things stand. The lead in a fresh
@@ -689,7 +689,7 @@ are in the way, it stops with git's words, nothing moves, and the push is
 offered again once they are committed or put aside. A push the host refuses is
 said once, in its own words, and nothing retries.
 **Not now** pushes nothing; the end of the build says once that the Unit is not
-pushed yet. A repo the Unit changed that the home's plan did not list is added
+pushed yet. A repo the Unit changed that the lead's plan did not list is added
 to the build's repos and goes with the push, said once. When the code went but
 the home did not take the result, the next step offers to send it again.
 

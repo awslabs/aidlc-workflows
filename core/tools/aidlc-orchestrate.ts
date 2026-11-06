@@ -6078,7 +6078,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
     const retry = engineAskMark(projectDir, UNIT_ASSIGNMENT_RETRY_ASK);
     if (retry === null || !personRepliedAfter(projectDir, retry)) {
       if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, UNIT_ASSIGNMENT_RETRY_ASK);
-      const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. " +
+      const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the lead's project could not be reached. " +
         "Do you want me to try again?";
       return lineEndingTurn(null, [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open, kept.leftOpen) }, { label: "Not now" }] }]);
     }
@@ -6087,7 +6087,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
       const units = waiting.map(([unit]) => unit);
       const teams = [...new Set(waiting.map(([, team]) => team))];
       sayWithStepOnce(projectDir, `${namesInProse(units)} ${units.length === 1 ? "is" : "are"} kept for ${namesInProse(teams)}: ` +
-        `${units.length === 1 ? "it waits for its team" : "they wait for their teams"} until the home can be reached and you ask me to try again.`);
+        `${units.length === 1 ? "it waits for its team" : "they wait for their teams"} until the lead's project can be reached and you ask me to try again.`);
     }
     return null;
   }
@@ -8908,7 +8908,7 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   if (ownWork.length > 0) return null;
   // The work this checkout made the plan of (its plan's rows are in this
   // checkout's own audit shard, planMadeElsewhere): only there is carrying it
-  // on here, as its home, offered. A teammate's clone, whatever its git name,
+  // on here, as the lead, offered. A teammate's clone, whatever its git name,
   // never is.
   const ledHere = homeHere.filter((home) => !planMadeElsewhere(projectDir, readAuditShardEvents(projectDir, home.dirName!, active)));
   if (choices.length === 0) {
@@ -8917,9 +8917,9 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
       .map((home) => {
         const label = intentDisplayLabel(home);
         return {
-          question: `Do you want me to carry on ${label} here, as its home? I'd carry it on here, since you led it so far.`,
+          question: `Do you want me to carry on ${label} here, as the lead? I'd carry it on here, since you led it so far.`,
           choices: [
-            { label: `Carry on ${label} here, as its home`, command: selectCommands([home.dirName!])[0].command, recommended: true as const },
+            { label: `Carry on ${label} here, as the lead`, command: selectCommands([home.dirName!])[0].command, recommended: true as const },
             { label: "Not now" },
           ],
         };
@@ -8927,7 +8927,7 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   }
   for (const home of ledHere) {
     choices.push({
-      label: `Carry on ${intentDisplayLabel(home)} here, as its home`,
+      label: `Carry on ${intentDisplayLabel(home)} here, as the lead`,
       detail: "Where its Units are given out and come back.",
       command: selectCommands([home.dirName!])[0].command,
     });
@@ -8936,7 +8936,7 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
     kind: "ask",
     ask_type: "unit-take",
     response_route: "command",
-    question: `${sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the home approved.`.trim(),
+    question: `${sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the lead approved.`.trim(),
     choices,
   };
 }
@@ -8969,7 +8969,7 @@ function unitTakeLook(
         const refreshed = refreshListedHome(projectDir, intent.dirName, space, { sessionId: engineSessionId, now });
         if (!refreshed.fetched && refreshed.unreached === null) stale = true;
         if (refreshed.unreached !== null) {
-          sayWithStepOnce(projectDir, `${intentDisplayLabel(intent)}'s home could not be reached just now, so what is ready to take may be behind.`);
+          sayWithStepOnce(projectDir, `The lead's project for ${intentDisplayLabel(intent)} could not be reached just now, so what is ready to take may be behind.`);
         }
       }
       let opening: ReturnType<typeof openingStatusFrom>;
@@ -9035,7 +9035,7 @@ function unitTakeLook(
           continue;
         }
         if (holder === null && startedAtHome.has(unit)) {
-          building.push(`${unit} (at the home)`);
+          building.push(`${unit} (at the lead's project)`);
           continue;
         }
         if (team !== null && holder !== null && teamSpaceOf(holder) !== team) {
@@ -9068,12 +9068,12 @@ function unitTakeLook(
           holder !== null ? `For ${theTeam(holder)}.` : `Open: for ${team !== null ? theTeam(team) : "a team"}.`,
         )));
       }
-      const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (its home is ${homeLocation(state)})` : "";
+      const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (the lead's project is at ${homeLocation(state)})` : "";
       const label = intentDisplayLabel(intent);
       if (ready.length > 0 || waiting.length > 0 || building.length > 0 || others.length > 0) {
         sentences.push(
           `${label}${elsewhere} is built by teams, one Unit each.` +
-            (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the home first.` : "") +
+            (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the lead's project first.` : "") +
             (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
             (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : "") +
             (building.length > 0 ? ` Being built: ${building.join(", ")}.` : "") +
@@ -9151,10 +9151,10 @@ function handFileStep(projectDir: string, path: string): AskDirective | PrintDir
     kind: "ask",
     ask_type: "unit-handoff",
     response_route: "command",
-    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, handed off from ${file.fields["Home Label"] ?? "its home"} by its ` +
+    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, handed off from ${file.fields["Home Label"] ?? "the lead's project"} by its ` +
       `lead on ${(file.fields["Handed Off"] ?? "").slice(0, 10)}.${repos}`,
     choices: [
-      { label: `Start ${unit}`, detail: "As a piece of work of its own here, from what the home approved.", command: `${aidlcToolInvocation("unit")} take --file ${shellArg(path)}` },
+      { label: `Start ${unit}`, detail: "As a piece of work of its own here, from what the lead approved.", command: `${aidlcToolInvocation("unit")} take --file ${shellArg(path)}` },
       { label: "Not now", detail: "Nothing is started." },
     ],
   };
@@ -9176,12 +9176,12 @@ function turnedDownStep(projectDir: string, unit: string, down: { repo: string; 
   const sentBack = down.from === "build-and-test";
   const back = {
     label: `Take ${unit} back to Code Generation`,
-    detail: "Its code stays as it is; you change what the home asked for, then push it again.",
+    detail: "Its code stays as it is; you change what the lead asked for, then push it again.",
     command: `${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation`,
   };
   const askName = `unit-turned-down-${unit}`;
   if (engineAskMark(projectDir, askName) !== null) {
-    const question = `${unit} is not finished: it was ${sentBack ? "sent back from the lead's Build and Test" : "turned down at the home"} ` +
+    const question = `${unit} is not finished: it was ${sentBack ? "sent back from the lead's Build and Test" : "turned down by the lead"} ` +
       "and waits for your change and a new push. Do you want me to take it back to Code Generation?";
     return lineEndingTurn(null, [{ question, choices: [back, { label: "Not now" }] }]);
   }
@@ -9217,15 +9217,15 @@ function unitProposeAsk(projectDir: string, stateContent: string): AskDirective 
       kind: "ask",
       ask_type: "unit-propose",
       response_route: "command",
-      question: `You changed the ${changed.name} here. Do you want me to send your change to the home for its owner to approve? ` +
+      question: `You changed the ${changed.name} here. Do you want me to send your change to the lead to approve? ` +
         "I'd send it, so every team builds from the same version.",
       choices: [
         {
-          label: "Send it to the home",
+          label: "Send it to the lead",
           detail: `${build.unit} carries on with your version meanwhile.`,
           command: `${aidlcToolInvocation("unit")} propose --input ${shellArg(changed.path)} ${unitWordsArg("propose")}`,
         },
-        { label: "Keep it here only", detail: `${build.unit} is built with your version; the home's stays as it is.` },
+        { label: "Keep it here only", detail: `${build.unit} is built with your version; the lead's stays as it is.` },
       ],
     };
   }
@@ -9289,11 +9289,11 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       kind: "ask",
       ask_type: "unit-push",
       response_route: "command",
-      question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is pushed, but the home did not take its result just now. ` +
+      question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is pushed, but the lead's project did not take its result just now. ` +
         "Do you want me to send it again?",
       choices: [
-        { label: "Send it again", detail: "Nothing new is committed; the result goes to the home.", command: `${unitTool} push` },
-        { label: "Not now", detail: "The home sees it once you send it.", command: `${unitTool} push --later` },
+        { label: "Send it again", detail: "Nothing new is committed; the result goes to the lead's project.", command: `${unitTool} push` },
+        { label: "Not now", detail: "The lead sees it once you send it.", command: `${unitTool} push --later` },
       ],
     };
   }
@@ -14201,7 +14201,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // A teammate's first words in a clone of work teams build ("what's ours?",
     // "take u1 for payments"): the Units to take are what is theirs, put as a
     // bare `next` puts them, once in a chat; picking the work itself is the
-    // lead's, and in the lead's own checkout "Carry on ... here, as its home"
+    // lead's, and in the lead's own checkout "Carry on ... here, as the lead"
     // stays among the choices.
     const take = here !== null && here.selectable.length > 0 && !takeOfferedOnWords(pd) ? unitTakeAsk(pd) ?? soloElsewhereAsk(pd) : null;
     if (take !== null) {
@@ -17922,7 +17922,7 @@ function emitTeamUnitMajorRunStage(
           `${proposal.entry.words ? ` ("${proposal.entry.words}")` : ""}.${at !== null ? ` Their version is at ${at}.` : ""} ` +
           "Approve it for every Unit that uses it, or turn it down?",
         choices: [
-          { label: "Approve it", detail: "The home's copy changes; each team building with it hears it once and carries on." },
+          { label: "Approve it", detail: "Your copy changes; each team building with it hears it once and carries on." },
           { label: "Not now", detail: "It waits for your answer." },
           { label: "Turn it down", detail: `${proposal.claim.owner} carries on with the approved one, and hears your words.` },
         ],

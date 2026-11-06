@@ -104,13 +104,13 @@ describe("a team member's clone of the home's workspace", () => {
     expect(ask.question).toBe(
       "fixture is built by teams, one Unit each. Ready to take: refunds (for payments; likely checkout-api, billing), " +
         "checkout-ui (for web; likely checkout-web). Waiting: reporting (on refunds). Taking a Unit starts it as your " +
-        "team's own piece of work here, from what the home approved.",
+        "team's own piece of work here, from what the lead approved.",
     );
     const choices = ask.choices as Array<{ label: string; command: string }>;
     expect(choices.map((choice) => choice.label)).toEqual([
       "Start refunds for payments",
       "Start checkout-ui for web",
-      "Carry on fixture here, as its home",
+      "Carry on fixture here, as the lead",
     ]);
     expect(choices[0].command).toEndWith(`aidlc-unit.ts take refunds --home ${HOME} --team payments`);
     expect(choices[2].command).toEndWith(`next --pick ${HOME}`);
@@ -130,7 +130,7 @@ describe("a team member's clone of the home's workspace", () => {
     // A copy of the lead's checkout keeps its clone id, so the plan's rows are its own.
     const copy = cloneOf(home.remote, "lead-copy");
     cpSync(join(home.dir, "aidlc", ".aidlc-clone-id"), join(copy, "aidlc", ".aidlc-clone-id"));
-    expect(labels(copy)).toContain("Carry on fixture here, as its home");
+    expect(labels(copy)).toContain("Carry on fixture here, as the lead");
   });
 
   // A live run on opencode: its skill enters a bare /aidlc with `next --resume`,
@@ -145,7 +145,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).toEqual([
       "Start refunds for payments",
       "Start checkout-ui for web",
-      "Carry on fixture here, as its home",
+      "Carry on fixture here, as the lead",
     ]);
   });
 
@@ -161,7 +161,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).toEqual([
       "Start refunds for payments",
       "Start checkout-ui for web",
-      "Carry on fixture here, as its home",
+      "Carry on fixture here, as the lead",
     ]);
     // Asked once in the chat: words after it are read as words, never the same offer again.
     const again = next(alice, chat, ["something else entirely"]);
@@ -237,7 +237,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect(step.offers, JSON.stringify(step)).toBeUndefined();
     expect(step.message).toBe("Say the line above, then end the turn.");
     expect(step.narration).toBe(
-      "fixture is built by teams, one Unit each. The walking skeleton, orders, is built at the home first. " +
+      "fixture is built by teams, one Unit each. The walking skeleton, orders, is built at the lead's project first. " +
         "Waiting: refunds (for payments; on orders), checkout-ui (for web; on orders), reporting (on orders, refunds). " +
         "Nothing is ready to take yet.",
     );
@@ -279,7 +279,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(took.json).toMatchObject({ taken: true, unit: "refunds", team: "payments", space: "payments" });
     expect(String(took.json?.notice)).toStartWith(
       "Refunds is yours, for the payments team. Its build is its own piece of work here, under your team's rules, " +
-        "from what the home approved.",
+        "from what the lead approved.",
     );
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({
       status: "claimed",
@@ -338,12 +338,12 @@ describe("taking a Unit starts its build in the team's space", () => {
     const took = take(alice, "refunds", ["--team", "payments"]);
     expect(took.status, took.out).toBe(0);
     const state = readFileSync(join(buildDir(alice, "payments", "refunds"), "aidlc-state.md"), "utf-8");
-    expect(field(state, "Plan Approval")).toBe("on (from the home's plan)");
-    expect(field(state, "Sensors")).toBe("on (from the home's plan)");
-    expect(field(state, "Learnings")).toBe("on (from the home's plan)");
+    expect(field(state, "Plan Approval")).toBe("on (from the lead's plan)");
+    expect(field(state, "Sensors")).toBe("on (from the lead's plan)");
+    expect(field(state, "Learnings")).toBe("on (from the lead's plan)");
     expect(field(state, "Depth")).toBe("Comprehensive");
     expect(field(state, "Review Override")).toBe("adversarial");
-    expect(field(state, "Guard Policy")).toBe("strict (from the home's plan)");
+    expect(field(state, "Guard Policy")).toBe("strict (from the lead's plan)");
     expect(field(state, "Construction Autonomy Mode")).toBe("gated");
   });
 
@@ -463,7 +463,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     appendAuditEntry("HUMAN_TURN", { Session: "alice-reporting-chat", "Person Reply": "anything new for payments?" }, alice);
     const step = next(alice, chat, ["--", "anything new for payments?"]);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 500)).toContain(
-      'refunds was turned down in billing at the home: "billing needs the ledger entry". Its build is waiting for you; say so to go back to it.',
+      'refunds was turned down in billing by the lead: "billing needs the ledger entry". Its build is waiting for you; say so to go back to it.',
     );
   });
 
@@ -512,7 +512,7 @@ describe("a Unit someone holds is not taken again", () => {
     const took = take(cloneOf(home.remote, "alice"), "refunds", ["--team", "payments"]);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toEndWith(
-      "The home is changing the Unit plan (Units Generation is open again there), so refunds is taken on the plan as it stands there.",
+      "The lead is changing the Unit plan (Units Generation is open again there), so refunds is taken on the plan as it stands there.",
     );
   });
 
@@ -520,7 +520,7 @@ describe("a Unit someone holds is not taken again", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const waiting = take(cloneOf(home.remote, "carol"), "reporting");
     expect(waiting.status).not.toBe(0);
-    expect(waiting.out).toContain("reporting waits on refunds, which is not done at the home yet. It opens once it is done.");
+    expect(waiting.out).toContain("reporting waits on refunds, which is not done at the lead's project yet. It opens once it is done.");
   });
 });
 
@@ -548,7 +548,7 @@ describe("who takes what", () => {
       "Start refunds for payments",
       "Start checkout-ui for payments",
       "Start checkout-ui for another team",
-      "Carry on fixture here, as its home",
+      "Carry on fixture here, as the lead",
     ]);
     expect(choices[1].command).toEndWith(`aidlc-unit.ts take checkout-ui --home ${HOME} --team payments`);
     expect(choices[2].command).toEndWith(`aidlc-unit.ts take checkout-ui --home ${HOME} --team '<their team>'`);
@@ -586,11 +586,11 @@ describe("who takes what", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     const carol = cloneOf(home.remote, "carol");
     const ask = next(carol);
-    expect(String(ask.question)).toContain("Being built: checkout-ui (at the home).");
+    expect(String(ask.question)).toContain("Being built: checkout-ui (at the lead's project).");
     expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label).filter((label) => label.includes("checkout-ui"))).toEqual([]);
     const refused = take(carol, "checkout-ui", ["--team", "web"]);
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("checkout-ui is being built at the home, so it is not open to take. Run `");
+    expect(refused.out).toContain("checkout-ui is being built at the lead's project, so it is not open to take. Run `");
   });
 
   test("a teammate who takes before cloning the code repos: the build records the home's repos", () => {
@@ -698,7 +698,7 @@ describe("a team's own workspace, made from the home's", () => {
     const web = teamWorkspace(home.remote, "web");
     const ask = next(web);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
-    expect(String(ask.question)).toStartWith(`fixture (its home is ${home.remote}) is built by teams, one Unit each.`);
+    expect(String(ask.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams, one Unit each.`);
     expect(String(ask.question)).toContain("checkout-ui (for web; likely checkout-web)");
     const labels = (ask.choices as Array<{ label: string }>).map((choice) => choice.label);
     expect(labels).toEqual(["Start refunds for payments", "Start checkout-ui for web"]);
@@ -732,7 +732,7 @@ describe("a team's own workspace, made from the home's", () => {
     codeGenerated(pay, record);
     const pushed = run(UNIT, ["push"], pay);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toContain("The home takes pushes from here now, so refunds's result goes home by git.");
+    expect(String(pushed.json?.notice)).toContain("The lead's project takes pushes from here now, so refunds's result goes back by git.");
     expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Home Result")).toBeUndefined();
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "pay" });
     expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown }).result).toBeDefined();
@@ -748,13 +748,13 @@ describe("a team's own workspace, made from the home's", () => {
     const held = take(pay, "refunds", ["--team", "payments"]);
     expect(held.status, held.out).toBe(0);
     expect(String(held.json?.notice)).toContain(
-      "You can read the home but not write to it, so the result of refunds goes back as a file when it is built.",
+      "You can read the lead's project but not write to it, so the result of refunds goes back as a file when it is built.",
     );
     expect(field(readFileSync(join(buildDir(pay, "payments", "refunds"), "aidlc-state.md"), "utf-8"), "Home Result")).toBe("by file");
     const openUnit = take(pay, "reporting", ["--team", "payments"]);
     expect(openUnit.status).not.toBe(0);
     expect(String(openUnit.json?.error)).toEndWith(
-      "Ask the lead to hold it for your team at the home.",
+      "Ask the lead to hold it for your team.",
     );
   });
 });
@@ -1030,7 +1030,7 @@ describe("a Unit held for another team, and the way back from a take", () => {
     expect(choices.map((choice) => choice.label)).toEqual([
       "Start refunds for payments",
       "Start checkout-ui for web",
-      "Carry on fixture here, as its home",
+      "Carry on fixture here, as the lead",
     ]);
     expect(choices[0].command).toEndWith(`aidlc-unit.ts take refunds --home ${HOME} --team payments`);
     expect(choices[1].command).toEndWith(`aidlc-unit.ts take checkout-ui --home ${HOME} --team web`);

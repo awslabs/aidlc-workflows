@@ -782,7 +782,7 @@ Unit Progress, the claims git last brought in (or the home's latest
 `UNITS_ASSIGNED` row for a Unit whose claim is not here yet), and the builds
 in this workspace. Its choices are **Start <unit>** for each Unit the person's
 team can take now, **Carry on <unit>** for a build already here (any space),
-and **Carry on <work> here, as its home** when the home's record is in the
+and **Carry on <work> here, as the lead** when the home's record is in the
 selected space, this workspace is the home's own, and this checkout made the
 plan (`planMadeElsewhere` over that record's audit is false: its plan rows are
 in this checkout's own shard); each runs one command (`unit take`, or `next

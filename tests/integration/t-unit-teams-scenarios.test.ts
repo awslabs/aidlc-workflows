@@ -254,7 +254,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     cloneCode(hosts["checkout-web"], web.dir, "checkout-web", "wendy");
     const remotes = git(web.dir, ["remote"]);
     const offer = kiroIde.next(web.dir);
-    expect(String(offer.question)).toStartWith(`fixture (its home is ${home.remote}) is built by teams, one Unit each.`);
+    expect(String(offer.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams, one Unit each.`);
     expect((offer.choices as Array<{ label: string }>).map((c) => c.label)).not.toContain("Carry on fixture");
     const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], web.dir);
     expect(took.status, took.out).toBe(0);
@@ -293,7 +293,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], web.dir);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain(
-      "You can read the home but not write to it, so the result of checkout-ui goes back as a file when it is built.",
+      "You can read the lead's project but not write to it, so the result of checkout-ui goes back as a file when it is built.",
     );
   });
 });
@@ -423,7 +423,7 @@ describe("scenario 6: when things go wrong", () => {
     expect(boardAt(home)).toContain("- refunds, payments: turned down in billing, back with payments");
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(kiro.next(alice))).toContain(
-      'refunds was turned down in billing at the home: "they want the retry logic in the client".',
+      'refunds was turned down in billing by the lead: "they want the retry logic in the client".',
     );
     // The team changes billing and pushes again; checkout-api stays merged.
     code("-with-retry");

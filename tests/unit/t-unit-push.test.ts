@@ -472,11 +472,11 @@ describe("the push", () => {
     chmodSync(hook, 0o755);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toContain("The home did not take refunds's result:");
+    expect(String(pushed.json?.notice)).toContain("The lead's project did not take refunds's result:");
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
     const again = next(alice);
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
-    expect(again.question).toBe("Refunds is pushed, but the home did not take its result just now. Do you want me to send it again?");
+    expect(again.question).toBe("Refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
@@ -499,7 +499,7 @@ describe("the push", () => {
     expect(claim.turned_down).toBeUndefined();
   });
 
-  test("a Unit that changed a repo the home's plan did not list: it is added once, said once, and goes home with the push", () => {
+  test("a Unit that changed a repo the lead's plan did not list: it is added once, said once, and goes home with the push", () => {
     const { alice, record } = refundsTaken();
     codeGenerated(alice, record);
     const ledger = codeHost("ledger");
@@ -512,7 +512,7 @@ describe("the push", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(String(pushed.json?.notice)).toContain(
-      "ledger was not in the home's plan; refunds changed it, so it is now among refunds's repos and went with the push.",
+      "ledger was not in the lead's plan; refunds changed it, so it is now among refunds's repos and went with the push.",
     );
     expect(git(ledger, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toContain("entries.ts");
     // Added by hand at review time, it is the same one line.
@@ -634,7 +634,7 @@ describe("the push", () => {
     expect(choices[1].command).toEndWith("aidlc-unit.ts push --later");
     const later = run(UNIT, ["push", "--later"], alice);
     expect(later.status, later.out).toBe(0);
-    expect(later.json?.notice).toBe("Nothing is pushed. I'll push refunds when you want it to go home.");
+    expect(later.json?.notice).toBe("Nothing is pushed. I'll push refunds when you want it to go to the lead.");
     expect(tellsWhatToType(ask.question, ask.choices, later.json?.notice)).toBe(false);
     const end = next(alice);
     expect(end.kind, JSON.stringify(end)).toBe("done");
@@ -820,7 +820,7 @@ describe("at the home", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
     expect((next(alice).change_notices ?? []) as string[]).toContain(
-      'refunds was turned down in billing at the home: "billing needs the ledger entry too".',
+      'refunds was turned down in billing by the lead: "billing needs the ledger entry too".',
     );
   });
 
@@ -862,7 +862,7 @@ describe("at the home", () => {
     }
     expect(after.map((step) => step.out).join("\n")).toContain("News from the lead's project could not be taken in here");
     expect((next(alice, chat).change_notices ?? []) as string[]).toContain(
-      'refunds was turned down in billing at the home: "billing needs the ledger entry too".',
+      'refunds was turned down in billing by the lead: "billing needs the ledger entry too".',
     );
   });
 
@@ -1138,7 +1138,7 @@ describe("at the home", () => {
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
     const step = personsNext(alice, chat, "t-unit-push-waits");
     expect((step.change_notices ?? []) as string[]).toContain(
-      'refunds was turned down in billing at the home: "billing needs the ledger entry too".',
+      'refunds was turned down in billing by the lead: "billing needs the ledger entry too".',
     );
     expect(step.ask_type, JSON.stringify(step)).toBe("unit-turned-down");
     // Not now: it reads as not finished, and the question is not put again; the agent keeps the offer.
@@ -1146,7 +1146,7 @@ describe("at the home", () => {
     expect(later.kind, JSON.stringify(later)).toBe("print");
     const offers = later.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>;
     expect(offers[0].question).toBe(
-      "refunds is not finished: it was turned down at the home and waits for your change and a new push. " +
+      "refunds is not finished: it was turned down by the lead and waits for your change and a new push. " +
         "Do you want me to take it back to Code Generation?",
     );
     expect(offers[0].choices[0].command).toEndWith("report --result resumed --choice redo --target code-generation");
@@ -1206,7 +1206,7 @@ describe("at the home", () => {
     expect(step.stage).toBe("code-generation");
     // The redo's plan is written for the home's words, never the plan from before the turn-down put up again.
     expect(String(step.plan_note), JSON.stringify(step.plan_approval)).toContain(
-      'refunds was turned down in billing at the home: "billing needs the ledger entry too". Revise this plan and its test instructions for it',
+      'refunds was turned down in billing by the lead: "billing needs the ledger entry too". Revise this plan and its test instructions for it',
     );
   });
 
@@ -1248,7 +1248,7 @@ describe("at the home", () => {
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir);
     expect(down.status, down.out).toBe(0);
     git(alice, ["fetch", "-q", "origin"]);
-    const line = 'refunds was turned down in billing at the home: "billing needs the ledger entry too".';
+    const line = 'refunds was turned down in billing by the lead: "billing needs the ledger entry too".';
     expect((next(alice).change_notices ?? []) as string[]).toContain(line);
   });
 });
@@ -1366,7 +1366,7 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
     git(alice, ["fetch", "-q", "origin"]);
     const chat = personsChat("alice-chat");
     const step = personsNext(alice, chat, "alice-chat");
-    const line = 'refunds was turned down in billing at the home: "needs the ledger entry". Its build is waiting for you; say so to go back to it.';
+    const line = 'refunds was turned down in billing by the lead: "needs the ledger entry". Its build is waiting for you; say so to go back to it.';
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 600)).toContain(line);
     expect(String(step.change_notices_note)).toContain(`take refunds --home ${HOME_RECORD}`);
     expect((personsNext(alice, chat, "alice-chat").change_notices ?? []) as string[]).not.toContain(line);

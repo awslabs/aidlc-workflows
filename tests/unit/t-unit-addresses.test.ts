@@ -96,7 +96,7 @@ describe("addresses", () => {
     const take = next(alice);
     expect(take.ask_type, JSON.stringify(take)).toBe("unit-take");
     expect(String(take.question)).not.toContain("its home is");
-    expect((take.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Carry on fixture here, as its home");
+    expect((take.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Carry on fixture here, as the lead");
   });
 });
 

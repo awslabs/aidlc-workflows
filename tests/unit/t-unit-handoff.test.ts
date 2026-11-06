@@ -242,7 +242,7 @@ describe("progress and the result come back as files", () => {
     expect(progress.status, progress.out).toBe(0);
     expect(progress.json?.notice).toBe("The progress file is aidlc/handoff/fixture-reporting-progress.md; send it to the lead if you like.");
     const progressFile = deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md");
-    expect(readFileSync(progressFile, "utf-8")).toContain("Point AI-DLC at this file at the home and it takes it in.");
+    expect(readFileSync(progressFile, "utf-8")).toContain("Point AI-DLC at this file at the lead's project and it takes it in.");
     // Its path given to the home's /aidlc is the step that takes it in.
     const step = next(home.dir, undefined, ["--hand-file", progressFile]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
@@ -386,7 +386,7 @@ describe("progress and the result come back as files", () => {
       `${text}\n## File: aidlc-state.md\n\n~~~~\n# not the home's state\n~~~~\n`);
     const taken = run(UNIT, ["take-in", result], home.dir);
     expect(taken.status, taken.out).toBe(0);
-    expect(String(taken.json?.notice)).toContain("aidlc-state.md is not an output the home reads of reporting, so it was left out.");
+    expect(String(taken.json?.notice)).toContain("aidlc-state.md is not an output the lead's project reads of reporting, so it was left out.");
     const tip = git(home.remote, ["rev-parse", `refs/heads/claim/${fixtureIntentId8(home.dir)}/reporting`]);
     expect(git(home.remote, ["ls-tree", "-r", "--name-only", tip]).split("\n")).not.toContain(".aidlc-unit-result/aidlc-state.md");
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", "fixture-8000000000000001", "aidlc-state.md"), "utf-8")).toBe(homeState);

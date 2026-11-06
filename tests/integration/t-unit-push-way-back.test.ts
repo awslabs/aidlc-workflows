@@ -266,5 +266,5 @@ test("after a turn-down, the redo's code plan step carries the lead's words and 
   const step = agent.next();
   expect(step.ask_type ?? null, JSON.stringify(step).slice(0, 500)).not.toBe("plan-approval");
   expect(step, JSON.stringify(step).slice(0, 500)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
-  expect(String(step.plan_note)).toContain('refunds was turned down in billing at the home: "rebuild it on the new main".');
+  expect(String(step.plan_note)).toContain('refunds was turned down in billing by the lead: "rebuild it on the new main".');
 });

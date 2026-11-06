@@ -815,7 +815,7 @@ hook's own words, and nothing retries. The result (each repo's branch, base,
 every head pushed, each changed file's blob and patch-id, and the Unit outputs
 the home's later stages read) goes onto the Unit's claim at the home, and
 `UNIT_PUSHED` is recorded; until the home takes it (`Unit Push: unsent`), the
-next step offers to send it again. A repo the Unit changed that the home's plan
+next step offers to send it again. A repo the Unit changed that the lead's plan
 did not list is added to the build's repos first (`intent add-repo`), said once.
 `--later` pushes nothing and only records that you said not now.
 

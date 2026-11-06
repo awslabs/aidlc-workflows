@@ -391,7 +391,7 @@ The exception is a build of Units in parallel under `strict`. A change in the pr
 
 **When the owner of a shared plan amends an input.** A change a team proposed
 to a shared input (a contract summary, the requirements) and the owner of the
-shared plan approved at the home is not a stale approval on any value. The
+shared plan approved by the lead is not a stale approval on any value. The
 home's stages that used it are recorded as current with a
 `SHARED_INPUT_AMENDED` row, and each team building with it hears one line from
 the amendment itself, with the offer to redo a stage that used it, on

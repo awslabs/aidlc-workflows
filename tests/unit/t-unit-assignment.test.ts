@@ -208,13 +208,13 @@ describe("the lead's answer is never asked for twice", () => {
     const kept = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "payments takes refunds, web the UI"], home.dir);
     expect(kept.status, kept.out).toBe(0);
     expect(String(kept.json?.notice)).toBe(
-      "Nothing is held for the teams yet: the home could not be reached. I've kept who builds which Unit. Do you want me to try again?",
+      "Nothing is held for the teams yet: the lead's project could not be reached. I've kept who builds which Unit. Do you want me to try again?",
     );
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     const offer = (step.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)[0];
     expect(offer.question).toBe(
-      "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. Do you want me to try again?",
+      "Who builds which Unit is kept, but nothing is held for the teams yet: the lead's project could not be reached. Do you want me to try again?",
     );
     const retry = String(offer.choices[0].command);
     expect(retry).toEndWith("aidlc-unit.ts assign refunds=payments checkout-ui=web --request-file aidlc/.aidlc-request-text/unit-assign.txt");
@@ -243,7 +243,7 @@ describe("the lead's answer is never asked for twice", () => {
     expect(JSON.stringify(step)).not.toContain("Do you want me to try again?");
     expect(step, JSON.stringify(step)).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
     expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
-      "refunds is kept for payments: it waits for its team until the home can be reached and you ask me to try again.",
+      "refunds is kept for payments: it waits for its team until the lead's project can be reached and you ask me to try again.",
     );
     expect(JSON.stringify(next(home.dir))).not.toContain("Do you want me to try again?");
   });
@@ -281,7 +281,7 @@ describe("the lead's answer is never asked for twice", () => {
 });
 
 // A live run: the lead named the teams, the claims went to the home's remote,
-// and the home's plan (its record) stayed unpushed; a teammate's clone had no
+// and the lead's plan (its record) stayed unpushed; a teammate's clone had no
 // plan and its /aidlc said "Tell me what to build".
 // Live runs: the lead had answered that no slice is built together first
 // (their team's practices), and the who-builds-which question still named one,
@@ -324,7 +324,7 @@ describe("the slice built together first, at the question of who builds which pa
   });
 });
 
-describe("the home's plan goes to the teams the way main's share question asks it", () => {
+describe("the lead's plan goes to the teams the way main's share question asks it", () => {
   const isShare = (step: Record<string, unknown>) =>
     step.kind === "ask" && step.ask_type === "team-handover" && ((step.handovers ?? []) as string[]).includes("share");
 

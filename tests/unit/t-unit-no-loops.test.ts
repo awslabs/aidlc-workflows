@@ -355,7 +355,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, faster.\n");
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-propose");
-    movesOn(alice, ENV, ask, choice(ask, "Send it to the home"));
+    movesOn(alice, ENV, ask, choice(ask, "Send it to the lead"));
   });
 
   test("the push: a repo the plan did not list goes with it; a result the home did not take is offered again as that; a read-only take sends by git once it can", () => {
@@ -547,7 +547,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     const alice = withTools(cloneOf(home.remote, "alice"));
     const waiting = next(alice);
     expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
-    expect(String(waiting.narration)).toContain("The walking skeleton, orders, is built at the home first.");
+    expect(String(waiting.narration)).toContain("The walking skeleton, orders, is built at the lead's project first.");
     // Carrying the home's work on is offered only in the checkout that made the plan, never to a teammate.
     expect(waiting.offers, JSON.stringify(waiting)).toBeUndefined();
     expect(waiting.message).toBe("Say the line above, then end the turn.");
@@ -576,7 +576,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     // The team, mid-build, hears it at its next step.
     const heard = next(alice, ENV);
     expect((heard.change_notices ?? []) as string[], JSON.stringify(heard)).toContain(
-      'refunds was turned down in billing at the home: "yes, go ahead".',
+      'refunds was turned down in billing by the lead: "yes, go ahead".',
     );
   });
 
@@ -628,11 +628,11 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(String(step.narration)).toEndWith("Nothing is ready to take yet.");
     const offer = (step.offers as Offer[] | undefined)?.[0];
-    expect(offer?.question, JSON.stringify(step)).toBe("Do you want me to carry on fixture here, as its home? I'd carry it on here, since you led it so far.");
-    expect(offer!.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Carry on fixture here, as its home");
+    expect(offer?.question, JSON.stringify(step)).toBe("Do you want me to carry on fixture here, as the lead? I'd carry it on here, since you led it so far.");
+    expect(offer!.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Carry on fixture here, as the lead");
     readsAsOffers(step);
     // The pick's own print names the switch to run, then the next step: the home's.
-    const pick = runPrinted(laptop, ENV, offered(step, "Carry on fixture here, as its home"));
+    const pick = runPrinted(laptop, ENV, offered(step, "Carry on fixture here, as the lead"));
     expect(pick.status, pick.out).toBe(0);
     expect(runPrinted(laptop, ENV, printed(JSON.parse(pick.out) as Step)).status).toBe(0);
     const after = next(laptop, ENV);
@@ -866,7 +866,7 @@ describe("the take's own line reaches the person with the build's next step, onc
     const took = runPrinted(bob, chat, choice(offer, "Start refunds for payments"));
     expect(took.status, took.out).toBe(0);
     const line = "Refunds is yours, for the payments team. Its build is its own piece of work here, under your team's rules, " +
-      "from what the home approved. If it is not your team's to build, say so and I give it back.";
+      "from what the lead approved. If it is not your team's to build, say so and I give it back.";
     expect(JSON.parse(took.out.trim().split("\n").at(-1)!).notice, took.out).toBeUndefined();
     const step = next(bob, chat);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(line);

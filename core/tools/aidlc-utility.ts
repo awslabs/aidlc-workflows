@@ -9904,7 +9904,7 @@ function handleIntentRepos(
           lines.push(`Cloned ${name} from ${maskUserinfo(clone.address)} and added it to this piece of work's repos.`);
           if (clone.note !== null) lines.push(clone.note);
         } else if (outcome.unit !== undefined) {
-          lines.push(`Added ${name} to ${outcome.unit}'s repos: the home's plan did not list it, and ${outcome.unit}'s change there goes home with its push.`);
+          lines.push(`Added ${name} to ${outcome.unit}'s repos: the lead's plan did not list it, and ${outcome.unit}'s change there goes to the lead's project with its push.`);
         } else if (outcome.first) {
           const at = repoIsWorkspaceChild(projectDir, name) ? "" : ` (at ${displayRepoPath(readWorkspaceRepos(projectDir).entries.get(name)?.path ?? name)})`;
           lines.push(`Added ${name}${at} to this piece of work's repos; until now it worked on the workspace folder itself, which it still reads.`);
