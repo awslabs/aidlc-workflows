@@ -224,7 +224,9 @@ describe("Kiro harness names a person types", () => {
     expect(onboarding).toContain("this install is for Kiro CLI's V2 engine, and nothing in it tells you which engine this chat runs on.");
     expect(onboarding).toContain("Kiro IDE and Kiro CLI on its v3 engine are the Kiro harness (`--harness kiro`, Kiro CLI 2.24.1 or later), not this one.");
     expect(onboarding).toContain(
-      "In a chat on the v3 engine this install as shipped cannot record the person's answers, so AI-DLC refuses every approval",
+      "On the v3 engine this install's hooks run only when Kiro has rewritten this install's agent files for that engine; otherwise the chat " +
+        "runs on Kiro's Default agent, which cannot record the person's answers, so AI-DLC refuses every approval and confirmation there until " +
+        "the project is switched to Kiro or the chat runs on the V2 engine.",
     );
     expect(onboarding).toContain(
       "With `--yes` it also takes AI-DLC's recommended answer to each Kiro setting AI-DLC has neither asked about nor been given an answer for on this machine, settings that apply to all the person's projects:",
