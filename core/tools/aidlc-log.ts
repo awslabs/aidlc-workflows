@@ -3141,6 +3141,26 @@ function codekbReceiptNotes(pd: string, node: StageEntry): Record<string, unknow
 // and attempt freshness are checked under the audit lock so two concurrent
 // conductors cannot advance the same chain; a link the attempt already holds
 // is answered without a second receipt.
+// The person asked for a system package install (in the message that approved
+// a stage, say), which that approval's decision spends: the agent names the
+// message and the packages, the tool proves the message as any request's and
+// records them, and the install check reads the record (system-install.ts). It
+// reads no words.
+function handleInstall(args: string[]): void {
+  const { positional, flags } = parseFlags(args);
+  if (positional.length === 0 || flags.message === undefined) error(`Usage: ${logUsage("install").split("\n")[0]}`);
+  const pd = resolveProjectDir(projectDir);
+  const proof = proveMessage(pd, flags.message, "request", { request: true });
+  if ("refusal" in proof) error(proof.refusal);
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  emitAudit(pd, "SYSTEM_INSTALL_REQUESTED", {
+    Packages: JSON.stringify(positional),
+    "Message Id": proof.message.id,
+    ...(words ? { "Person Reply": words } : {}),
+  });
+  console.log(JSON.stringify({ requested: positional }));
+}
+
 function handleLink(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -5563,6 +5583,11 @@ function logUsage(subcommand: string | undefined): string {
       `  Options: ${flags(ANSWER_OPTIONS)}`,
     ],
     answers: [`${invoke("answers")} --stage <slug> [--unit <unit>]`, "  Lists the answers recorded for a stage."],
+    install: [
+      `${invoke("install")} <package>... --message <id>`,
+      "  Records that the person's message asked to install these system packages, so the install check runs that " +
+        "install. Required: a package and --message.",
+    ],
     link: [
       `${invoke("link")} --stage <slug> --link <agent> [--repo <repo>] [--artifact <path>] [--single]`,
       "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
@@ -5603,7 +5628,7 @@ export function main(argv: string[]): void {
   if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(logUsage(undefined));
   if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(logUsage(subcommand));
   readOnlyCommand = subcommand === "answers";
-  // What the chat records here (a decision, an answer, a link, a review) is its
+  // What the chat records here (a decision, an answer, a link, a review, an install asked for) is its
   // step on the work (chatTookStepHere); reading the answers is not.
   if (!readOnlyCommand) chatTookStepHere(resolveProjectDir(projectDir));
   if (subcommand === "decision" || subcommand === "answer") {
@@ -5624,6 +5649,9 @@ export function main(argv: string[]): void {
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
+      case "install":
+        handleInstall(filteredArgs.slice(1));
+        break;
       case "review":
         // One review command runs the review accounting per unit, each pass
         // recomputing the whole-tree source identity. Share one computation
@@ -5633,7 +5661,7 @@ export function main(argv: string[]): void {
         );
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review, install`);
     }
     spendRequestFile();
     // The stage's work went on through the record, not through `next`: on the

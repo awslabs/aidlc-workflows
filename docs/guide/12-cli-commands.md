@@ -2158,6 +2158,23 @@ none of its words. The id is
 engine-to-agent text and is never shown to the person.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
+### `aidlc engine log install` - a system install the person asked for
+
+```bash
+aidlc engine log install <package>... --message <id>
+```
+
+A system package install (`sudo apt-get install`, `brew install`, `winget
+install` and the like) waits for the person unless they asked for it. When they
+asked in a message an approval or another decision has already used ("Approve.
+Then install shellcheck and run it."), the install check's refusal names this
+command with their messages. The agent names the one that asked; the engine
+proves it as it proves any request (it exists, came through the person's own
+prompt on this work, carries their words, and no later decision has spent it),
+reads none of its words, and records the packages as `SYSTEM_INSTALL_REQUESTED`.
+The install of those packages then runs, its `SYSTEM_INSTALL_ALLOWED` row naming
+that message and their words, until the next decision of theirs.
+
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
 During Construction, explicitly ask to continue automatically or review each
