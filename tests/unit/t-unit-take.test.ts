@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:take, audit:UNIT_TAKEN_IN, function:unitBuildOf, function:onlyTheBuildsUnit, function:isHomesCopiedWork, function:recordKeptEntries, function:findUnitBuild, function:leadsPlanNotHere, function:planNotHereStep
+// covers: subcommand:aidlc-unit:take, audit:UNIT_TAKEN_IN, function:unitBuildOf, function:onlyTheBuildsUnit, function:isHomesCopiedWork, function:recordKeptEntries, function:findUnitBuild, function:leadsPlanNotHere, function:planNotHereStep, function:ignoreOwnWorkingFiles, function:dropOwnWorkingFilesIgnore
 //
 // Taking a Unit (#2410, item 4). A team member opening a workspace with no work
 // of their own is offered the home's Units their team can take, from what the
@@ -11,7 +11,8 @@
 // taken again; a build here is carried on; the home's work that git copied
 // into a team's workspace is never offered to carry on. Before the lead's plan
 // reaches a clone, a bare /aidlc there says so, the teammate's words go on with
-// the one risk said, and no chat writes AI-DLC's root files there.
+// the one risk said, and no chat writes AI-DLC's root files there: its working
+// files there ignore themselves from inside aidlc/ until its root part is in.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -815,12 +816,60 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     // The lead's own checkout, with its record, is never read as such a clone.
     expect(leadsPlanNotHere(bob)).toBe(true);
     expect(leadsPlanNotHere(home.dir)).toBe(false);
-    // What git shows them before the pull: AI-DLC's own working files, none of which the share brings.
-    console.log(`BEFORE-PULL: ${git(bob, ["status", "--porcelain", "--untracked-files=all"]).split("\n").join(" | ")}`);
+    // AI-DLC's own working files ignore themselves from inside aidlc/: git shows them nothing, and a commit of
+    // everything sweeps none of them in.
+    expect(existsSync(join(bob, "aidlc", ".gitignore"))).toBe(true);
+    expect(git(bob, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
+    expect(git(bob, ["add", "-A", "--dry-run"])).toBe("");
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
     const pulled = spawnSync("git", ["pull", "-q"], { cwd: bob, encoding: "utf-8", env: GIT_ENV });
     expect(pulled.status, pulled.stderr).toBe(0);
+    // With the plan in, the teammate's own build record shows and commits as anywhere.
+    const took = take(bob, "refunds");
+    expect(took.status, took.out).toBe(0);
+    const state = join(buildDir(bob, "payments", "refunds"), "aidlc-state.md");
+    expect(spawnSync("git", ["check-ignore", "-q", state], { cwd: bob }).status).toBe(1);
+    expect(git(bob, ["status", "--porcelain"])).toContain("aidlc/spaces/payments/");
+  });
+
+  function planPulled(home: { dir: string }, bob: string): void {
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const pulled = spawnSync("git", ["pull", "-q"], { cwd: bob, encoding: "utf-8", env: GIT_ENV });
+    expect(pulled.status, pulled.stderr).toBe(0);
+  }
+
+  test("AI-DLC's own aidlc/.gitignore goes once the next chat writes AI-DLC's root part; one someone changed stays", () => {
+    const { home, bob, host } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api") });
+    const own = join(bob, "aidlc", ".gitignore");
+    planPulled(home, bob);
+    expect(existsSync(own)).toBe(true);
+    host.newSession();
+    host.sessionStart("startup");
+    expect(existsSync(own)).toBe(false);
+    expect(git(bob, ["status", "--porcelain", "--untracked-files=all"])).not.toContain("aidlc/");
+    const theirs = leadNotSharedYet({ "checkout-api": codeHost("checkout-api") });
+    const changed = join(theirs.bob, "aidlc", ".gitignore");
+    writeFileSync(changed, `${readFileSync(changed, "utf-8")}/my-notes/\n`);
+    planPulled(theirs.home, theirs.bob);
+    theirs.host.newSession();
+    theirs.host.sessionStart("startup");
+    expect(readFileSync(changed, "utf-8")).toEndWith("/my-notes/\n");
+  });
+
+  test("in the same chat, a pull that brings AI-DLC's root part ends AI-DLC's own aidlc/.gitignore at the next step", () => {
+    const { home, bob, orch } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api") });
+    planPulled(home, bob);
+    // The lead keeps its root .gitignore, AI-DLC's part in it, in git; the teammate pulls it without a new chat.
+    git(home.dir, ["add", ".gitignore"]);
+    git(home.dir, ["commit", "-q", "-m", "keep the root .gitignore"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const pulled = spawnSync("git", ["pull", "-q"], { cwd: bob, encoding: "utf-8", env: GIT_ENV });
+    expect(pulled.status, pulled.stderr).toBe(0);
+    next(bob, ENV, [], orch);
+    expect(existsSync(join(bob, "aidlc", ".gitignore"))).toBe(false);
+    expect(git(bob, ["status", "--porcelain", "--untracked-files=all"])).not.toContain("aidlc/");
   });
 
   test("a teammate's words there go on as their request with the risk said once, and a bare --resume hears the line", () => {

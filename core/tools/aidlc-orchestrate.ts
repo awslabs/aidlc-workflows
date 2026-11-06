@@ -853,7 +853,7 @@ import {
   type RuleContent,
 } from "./aidlc-steering.ts";
 import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
-import { refreshActiveMemory } from "./aidlc-includes.ts";
+import { dropOwnWorkingFilesIgnore, refreshActiveMemory } from "./aidlc-includes.ts";
 import { gateApproveAcceptsLine } from "./aidlc-review-brief.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
@@ -13116,6 +13116,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const switchedToTeams = switchSoloToTeams(pd, engineSessionId);
   const stateContent = loadStateFileIfPresent(pd);
   if (switchedToTeams !== null) sayWithStepOnce(pd, switchedToTeams);
+  // A pull in this chat may have brought AI-DLC's root .gitignore part.
+  if (!isReadOnlyEngineProbe()) dropOwnWorkingFilesIgnore(pd);
   // A turn-down of another of this clone's Unit builds reaches a chat on any of its work.
   if (!isReadOnlyEngineProbe()) {
     for (const { line } of otherBuildsTurnedDown(pd, engineSelection(pd).intent ?? null, engineSessionId)) sayWithStepOnce(pd, line);
