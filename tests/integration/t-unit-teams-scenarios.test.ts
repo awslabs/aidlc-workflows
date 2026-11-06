@@ -274,6 +274,8 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     const carry = kiroIde.next(will);
     expect((carry.choices as Array<{ label: string }>).map((c) => c.label), JSON.stringify(carry)).toContain("Carry on checkout-ui");
     expect(run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], will).json).toMatchObject({ resumed: true });
+    // Its repo is not checked out in this clone: the build's step offers to clone it, once.
+    expect(kiroIde.next(will).ask_type).toBe("unit-clone");
     expect(kiroIde.next(will).unit).toBe("checkout-ui");
     expect(boardAt(home)).toContain("- checkout-ui, web: checkout-web not merged yet");
     mergeOnHost(hosts["checkout-web"], "checkout-ui", "rebase");
