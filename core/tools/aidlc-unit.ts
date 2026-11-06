@@ -6809,10 +6809,15 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
       // The home's record is not here: what this workspace has stands.
     }
     // A pushed build waits on the home's answer: each step of it fetches.
+    // Building, it looks again once each time its chat reaches a new stage,
+    // so a change the lead approves meanwhile is heard there.
     const waits = getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed";
-    if (home !== null && refreshHomeClaims(projectDir, { home, sessionId, now: waits }).unreached !== null) {
+    const atStage = `${recordDir(projectDir) ?? ""}:${getField(stateContent, "Current Stage")?.trim() ?? ""}`;
+    const newStage = buildStageLooked(projectDir, sessionId) !== atStage;
+    if (home !== null && refreshHomeClaims(projectDir, { home, sessionId, now: waits || newStage }).unreached !== null) {
       lines.push("The home could not be reached just now, so news from it may be behind.");
     }
+    if (home !== null && newStage) noteBuildStageLooked(projectDir, sessionId, atStage);
   }
   let claims: Map<string, UnitClaimView>;
   try {
@@ -6854,10 +6859,13 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     if ((mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input && entry.answer === undefined)) continue;
     const shown = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/amendments/${amendment.input}`, "--"]);
     if (!shown.ok) continue;
+    // Pushed after the change came: it was built on the older one, and its stages hear it as stale.
+    const pushedAt = readAuditShardEvents(projectDir).filter((row) => row.event === "UNIT_PUSHED")
+      .map((row) => row.timestamp).sort().at(-1);
     const line = takeNewerInput(projectDir, record, unit, amendment.input, shown.stdout, {
       at: amendment.at,
       done: mine.payload.done === true,
-      pushed: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed",
+      pushed: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed" && (pushedAt === undefined || amendment.at > pushedAt),
       proposedHere: (mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input),
     });
     if (line !== null) lines.push(line);
@@ -7778,6 +7786,35 @@ function takeIn(args: string[], projectDir?: string): void {
 // and the approvals it had (once per Unit at its checkpoint, or after every
 // stage). The Units it already built here stay done here. Nothing is asked
 // again. The line for the person, or null when nothing switched.
+// The stage of a Unit's build a chat last looked at its claim from (the
+// workspace's sessions folder), so each new stage looks once.
+const BUILD_STAGE_LOOK_FILE = "build-stage-look.json";
+
+function buildStageLooked(projectDir: string, sessionId?: string): string | null {
+  try {
+    return (JSON.parse(readFileSync(join(sessionsDir(projectDir), BUILD_STAGE_LOOK_FILE), "utf-8")) as Record<string, string>)[sessionId ?? ""] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function noteBuildStageLooked(projectDir: string, sessionId: string | undefined, atStage: string): void {
+  if (isReadOnlyEngineProbe()) return;
+  const path = join(sessionsDir(projectDir), BUILD_STAGE_LOOK_FILE);
+  let marks: Record<string, string> = {};
+  try {
+    marks = JSON.parse(readFileSync(path, "utf-8")) as Record<string, string>;
+  } catch {
+    // None kept yet.
+  }
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileAtomic(path, `${JSON.stringify({ ...marks, [sessionId ?? ""]: atStage })}\n`);
+  } catch {
+    // Unkept: the next step looks again.
+  }
+}
+
 // The Unit boundary a chat last looked for a teammate's take at, kept in the
 // workspace's sessions folder (the look runs before any work is selected).
 const SOLO_LOOK_FILE = "solo-take-look.json";

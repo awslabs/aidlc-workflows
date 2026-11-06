@@ -29,6 +29,7 @@ import {
   mergeOnHost,
   next,
   personsChat,
+  personsNext,
   refundsTaken,
   run,
   UNIT,
@@ -244,6 +245,27 @@ describe("a change to a shared input", () => {
     const lead = personsChat("lead-chat");
     expect(notices(next(home.dir, lead))).toContain(heard);
     expect(notices(next(home.dir, lead))).not.toContain(heard);
+  });
+
+  // A live run: the lead approved a change while web's chat was in Code
+  // Generation; web heard nothing until its push 22 minutes later, then that
+  // the change came "after checkout-ui was pushed", and no redo was offered.
+  test("a change approved while a team's chat is open is heard at its next stage, and one before its push is never called after it", () => {
+    const { home } = proposed();
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    const chat = personsChat("bob-chat");
+    // bob's chat has looked at its claim once already.
+    personsNext(bob, chat, "bob-chat");
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    // Its build moves on to its next stage in the same chat: the change is heard there, with no fetch by hand.
+    const intents = join(bob, "aidlc", "spaces", "web", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+    const step = personsNext(bob, chat, "bob-chat");
+    expect(notices(step).join(" "), JSON.stringify(step).slice(0, 500)).toContain("The requirements changed at the home");
+    expect(notices(step).join(" ")).not.toContain("after checkout-ui was pushed");
   });
 
   test("a team that left its copy as it was takes the lead's new version, as before", () => {
