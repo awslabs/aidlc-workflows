@@ -3733,10 +3733,10 @@ function openFrontQuestion(
  * A new request, saved as question `saved` for `words`, on a workspace where no
  * work has started: the newest request is the one the work plans from (#3609).
  * Every request whose plan question still waits is marked replaced by it, and
- * when one of them had other words the person hears once, with the next step
- * the agent speaks from, that the newer one is used. The agent already read
- * the words as a request (the waiting step's own command, or words it passed as
- * theirs); nothing here reads them.
+ * the person hears once, with the next step the agent speaks from, that the
+ * newer one is used. The agent already read the words as a request (the
+ * waiting step's own command, or words it passed as theirs); nothing here
+ * reads them.
  */
 function newestRequestReplaces(pd: string, saved: string, words: string): void {
   if (isReadOnlyEngineProbe() || loadStateFileIfPresent(pd) !== null) return;
@@ -3748,7 +3748,7 @@ function newestRequestReplaces(pd: string, saved: string, words: string): void {
   const waiting = waitingFrontRequests(pd).filter((question) => question.id !== saved);
   if (waiting.length === 0) return;
   markReplaced(pd, waiting.map((question) => question.id), saved);
-  if (engineSessionId !== undefined && waiting.some((question) => question.text !== words)) {
+  if (engineSessionId !== undefined) {
     addPendingPersonLines(pd, engineSessionId, [`I've used your newer request: "${requestPreview(words)}".`]);
   }
 }

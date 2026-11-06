@@ -196,13 +196,15 @@ describe("t-newest-request-wins: the newest request is the one the work plans fr
     expect(recorded(proj).description).toBe(other);
   });
 
-  test("the same words typed again are no newer request", async () => {
+  // The engine records the words and never compares them: the same request
+  // typed again is the newest one too.
+  test("the same words typed again in a new chat take the waiting request's place too", async () => {
     const proj = fresh();
     await asks(proj, SESSION, SHORT);
     await later();
     const question = await newestReading(proj, SECOND_SESSION, await asks(proj, SECOND_SESSION, SHORT));
     expect(question.kind).toBe("ask");
-    expect(newerLines(question)).toEqual([]);
+    expect(newerLines(question)).toEqual([lineFor(SHORT)]);
   });
 
   test("the newer request with a plan named starts at once, says the line, and the replaced question stays gone", async () => {
