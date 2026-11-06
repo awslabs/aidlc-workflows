@@ -294,7 +294,7 @@ import {
 } from "./aidlc-message-store.ts";
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
-import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
+import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
@@ -3951,8 +3951,7 @@ function gateSensorMatchesOutput(
   >[number],
   outputPath: string,
 ): boolean {
-  return sensor.matches === undefined ||
-    new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
+  return sensor.matches === undefined || sensorMatchesPath(sensor.matches, outputPath);
 }
 
 // One fire of a gate sensor: the output it is fired on, and every output its
