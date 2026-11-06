@@ -464,6 +464,15 @@ describe("the one offer to write repos.json", () => {
     expect(next(today).ask_type).toBe("repos-manifest");
   });
 
+  test("one person's work on one repo inside the workspace is never offered it; two repos, or teams, are", () => {
+    // One person, one repo (a scaffolder's folder with its own git): no teammate needs the list.
+    const alone = boundaryProject(["lunch-poll"], false);
+    const step = next(alone);
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
+    expect(next(boundaryProject(["lunch-poll"], true)).ask_type).toBe("repos-manifest");
+    expect(next(boundaryProject(["lunch-poll", "lunch-api"], false)).ask_type).toBe("repos-manifest");
+  });
+
   test("a workspace that already has repos.json is never offered it", () => {
     const proj = boundaryProject(["checkout-api", "checkout-web"]);
     writeFileSync(join(proj, "repos.json"), JSON.stringify({ repos: [{ name: "checkout-api" }, { name: "checkout-web" }] }));
