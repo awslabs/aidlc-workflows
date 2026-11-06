@@ -664,6 +664,8 @@ export interface StandInOptions {
    * Unset writes the code in the workspace.
    */
   codeRepo?: (unit: string) => Array<{ repo: string; folder?: string }> | undefined;
+  /** The manifest gives each repo's files by their path from the workspace (a live agent's slip), not from the repo. */
+  manifestFromWorkspace?: boolean;
   /** After the person approves a Unit's checkpoint. */
   afterCheckpoint?: (unit: string, kind: string, agent: AgentStandIn) => void;
   /** After a stage's review verdict is recorded, before its completion. */
@@ -719,7 +721,7 @@ export class AgentStandIn {
   readonly units: string[];
   answers: PersonAnswers;
   readonly afterApproval?: StandInOptions["afterApproval"];
-  readonly hooks: Pick<StandInOptions, "onCode" | "codeRepo" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "atGate" | "artifactText">;
+  readonly hooks: Pick<StandInOptions, "onCode" | "codeRepo" | "manifestFromWorkspace" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "atGate" | "artifactText">;
   /** Each time an engine step sent the agent to repair the units block: where, and how many questions came before. */
   readonly unitsBlockRepairs: { where: string; asked: number }[] = [];
   // Each time the stage's checks handed the agent their findings first.
@@ -745,7 +747,8 @@ export class AgentStandIn {
     this.units = options.units ?? ["core"];
     this.afterApproval = options.afterApproval;
     this.hooks = {
-      onCode: options.onCode, codeRepo: options.codeRepo, afterCheckpoint: options.afterCheckpoint,
+      onCode: options.onCode, codeRepo: options.codeRepo, manifestFromWorkspace: options.manifestFromWorkspace,
+      afterCheckpoint: options.afterCheckpoint,
       afterReview: options.afterReview, beforePlanAnswer: options.beforePlanAnswer, atGate: options.atGate,
       artifactText: options.artifactText,
     };
@@ -1675,7 +1678,10 @@ export class AgentStandIn {
       const extra = this.hooks.onCode?.(unit, this) ?? [];
       const { intent, space } = activeRecord(this.host.proj);
       const paths = [source, test, ...extra];
-      const writes = repos.length > 0 ? repos.flatMap(({ repo }) => paths.map((path) => ({ repo, path }))) : paths.map((path) => ({ path }));
+      const writes = repos.length > 0
+        ? repos.flatMap(({ repo, folder }) =>
+          paths.map((path) => ({ repo, path: this.hooks.manifestFromWorkspace ? `${folder ?? repo}/${path}` : path })))
+        : paths.map((path) => ({ path }));
       this.host.write(
         `aidlc/spaces/${space}/intents/${intent}/construction/${unit}/code-generation/source-manifest.json`,
         `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes }, null, 2)}\n`,

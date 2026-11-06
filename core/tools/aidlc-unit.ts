@@ -6036,6 +6036,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   const unit = build.unit;
   if (bareFlags.has("later") || flags.later !== undefined) {
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
+    finishBuildRecord(pd);
     console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you want it to go home.` }));
     return;
   }
@@ -6266,7 +6267,26 @@ function pushUnit(args: string[], projectDir?: string): void {
       Repos: results.map((repo) => `${repo.repo}@${repo.heads.at(-1)}`).join(", "),
     }, pd);
   });
+  if (homeHasIt) finishBuildRecord(pd);
   console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), notice: lines.join(" ") }));
+}
+
+// The build's record finishes once its push reached home or the person put it
+// off (buildWaitsForPush keeps it open until then), when its last stage is
+// approved; the state tool's own completion writes it. The push stands either
+// way: a completion the state tool refuses leaves the build's end to `next`.
+function finishBuildRecord(pd: string): void {
+  const state = readStateFile(pd);
+  const last = getField(state, "Current Stage")?.trim();
+  if (getField(state, "Status")?.trim() === "Completed" || !last) return;
+  if (!state.split(/\r?\n/).some((line) => line.startsWith(`- [x] ${last} `))) return;
+  const [command, ...args] = aidlcEngineCommand(
+    "state",
+    ["complete-workflow", last, "--project-dir", pd],
+    join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts"),
+    isCompiledExecutable() ? process.execPath : null,
+  );
+  spawnSync(command, args, { cwd: pd, encoding: "utf-8", env: process.env });
 }
 
 function activeRecordDir(projectDir: string): string {

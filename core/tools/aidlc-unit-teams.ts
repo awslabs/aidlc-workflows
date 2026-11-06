@@ -221,6 +221,13 @@ export function unitBuildOf(stateContent: string | null): UnitBuild | null {
   };
 }
 
+// A Unit's build ends with its push home, and its record finishes only after
+// the push or the person's Not now: whatever the push then asks of them (a
+// way back to Code Generation, say) is still their move inside the work.
+export function buildWaitsForPush(stateContent: string): boolean {
+  return unitBuildOf(stateContent) !== null && getField(stateContent, UNIT_PUSH_FIELD)?.trim() !== "later";
+}
+
 // The build of a home's Unit in this workspace, in any space: what taking that
 // Unit again here carries on.
 export function findUnitBuild(projectDir: string, homeWork: string, unit: string): { space: string; dirName: string } | null {
