@@ -6,10 +6,22 @@ harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) materializes each ignored local Bun copy tree
 under `dist/<harness>/` and its native counterpart under
 `dist-release/<harness>/`. Adding another harness is **one directory and one
-manifest row** — the engine, methodology, projection ownership, and
-harness-dir/rules resolution take no `core/` edits at all; the two optional
-exceptions are a per-harness `--doctor` arm (see Step 2) and your tool's
-binding subsections in the protocol modules (see the end of Step 4). This page walks the
+manifest row** for the packager to build it, and the methodology, projection
+ownership, and harness-dir/rules resolution take no `core/` edits. The engine
+still knows each harness by name, so a port also adds its name in `core/`.
+Start with `ModelHarness` (`core/tools/aidlc-model-policy.ts`) and fill in each
+place `bun run typecheck` then names, such as the CLI probe row `HARNESS_CLI` in
+`core/tools/aidlc-config-diagnostics.ts`. Some lists name the shipped harnesses
+where typecheck cannot see them, so search `core/` and `scripts/` for an
+existing harness's id and directory, as a string or a key (for example `cursor`
+and `.cursor`), and add yours beside them where they apply: `aidlc config`
+refuses to set up a name missing from `modelHarness`
+(`core/tools/aidlc-init.ts`), the reader of `harness.json` refuses one missing
+from its `distribution` check (`aidlc-config-diagnostics.ts`), and doctor picks
+its checks by harness directory or name (see Step 2). The steps below name the
+entries that go with a feature your host has, such as your tool's binding
+subsections in the protocol modules (see the end of Step 4) and, in Step 1,
+status-line support, `startedInsideProject` and `cliFirst`. This page walks the
 contract.
 
 > Three senses of "harness" in this repo: **`harness/`** (top-level — the
@@ -20,7 +32,7 @@ contract.
 ## The shape
 
 ```
-core/                      # harness-neutral source — not edited to add a harness (save the optional --doctor arm)
+core/                      # harness-neutral source — a port adds its harness name where core lists each harness (see the top of this page)
 harness/
   claude/  manifest.ts · skills/aidlc/ · onboarding.fills.ts · settings.json
   kiro/    manifest.ts · skills/aidlc/ · agents/*.json · hooks/aidlc-kiro-adapter.ts · settings/cli.json · onboarding.fills.ts
@@ -61,7 +73,8 @@ not read local `dist/` or `dist-release/`.
 The packager **discovers** harnesses by scanning `harness/` for a `manifest.ts`,
 so a new dir is built by the default `bun scripts/package.ts` and `--check` with
 no edit to the packager itself — the literal meaning of "one directory and one
-manifest row, zero shared-code edits."
+manifest row"; how to find the places in `core/` and `scripts/` a harness's
+name goes is at the top of this page.
 
 ## Step 1 — the manifest (the declarative 80%)
 
@@ -349,16 +362,20 @@ reviewer agents themselves where the harness supports per-agent hooks (the
 Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
 matching `agent_type`).
 
-> **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
-> (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new
-> harness adds a per-harness arm there for its own install surfaces (adapter +
-> wiring files present, any binary-version floor). This is deliberate
-> per-harness *logic*, not data — a version check spawns the CLI and compares
-> semver, which no manifest row can express (the three-concerns rule: knowledge
-> lives in code) — so it is the blessed exception to "zero `core/` edits", not a
-> violation (a deliberate design tradeoff). It degrades gracefully: a harness with no arm simply
-> gets the generic checks rather than failing. Everything else — dir resolution,
-> the rules-dir rename, packaging — stays pure manifest data.
+> **The doctor arm.** `/aidlc --doctor` (`core/tools/aidlc-utility.ts`)
+> health-checks an installed tree, and a new harness adds per-harness arms in
+> `collectDoctorReport` for the install surfaces the existing arms do not check
+> (adapter + wiring files present, native command trust). This is deliberate
+> per-harness *logic*, not data (the three-concerns rule: knowledge lives in
+> code), so it is one of the places in `core/` a port adds its name (see the top
+> of this page). The arms are picked by harness directory and, in places, by
+> harness name. A tree with no arm of its own gets another tree's file checks
+> (such as the opencode arm in `.aidlc`, or else the last one, which checks
+> `<harness-dir>/settings.json` the way Claude Code's tree has it) and, on a
+> native install, a native command trust row that fails, so doctor reports
+> problems the host never had. The CLI's version floor is the `HARNESS_CLI` row,
+> not an arm. Everything else — dir resolution, the rules-dir rename,
+> packaging — stays pure manifest data.
 
 ## Step 3 — `emit.ts` (the imperative 20%, only if needed)
 
