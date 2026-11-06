@@ -17231,12 +17231,13 @@ function unitMajorForwardJump(
   scope: string,
   stateContent: string,
   targetSlug: string,
+  everyUnit = false,
 ): "route" | { before?: string; flags: string; said: string } | null {
   const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
-  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  const walk = unitMajorJumpWalk(projectDir, scope, stateContent, currentSlug, everyUnit);
   if (!walk) return null;
   const step = walk.step;
-  const liveStage = step.kind === "work" || step.kind === "summary"
+  const liveStage = step.kind === "work" || step.kind === "summary" || step.kind === "gate"
     ? step.stage.slug
     : step.kind === "paused" ? step.stage : null;
   if (liveStage === targetSlug) return "route";
@@ -17279,6 +17280,19 @@ function unitMajorForwardJump(
     }
   }
   return null;
+}
+
+function unitMajorJumpWalk(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+  everyUnit: boolean,
+): { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext } | null {
+  const solo = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (solo !== null) return solo;
+  if (everyUnit || !teamMainWorksItsUnits(projectDir, stateContent)) return null;
+  return teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
 }
 
 // What a forward jump over a solo unit-major walk's per-unit steps does to each
@@ -18534,7 +18548,7 @@ function emitJumpDirective(
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
     const unitMajor = direction === "forward"
-      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug)
+      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true)
       : null;
     if (unitMajor === "route") return "route";
     // The jump the person asked for, with nothing to run or say around it, is
