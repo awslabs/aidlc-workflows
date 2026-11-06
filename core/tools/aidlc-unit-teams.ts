@@ -13,6 +13,9 @@ import {
   auditBlockField,
   type BoltDagResolution,
   committedTextBytes,
+  docsRoot,
+  ENGINE_DIR,
+  engineDir,
   filterProducesByKind,
   getField,
   intentRepos,
@@ -24,16 +27,20 @@ import {
   loadStageGraphAll,
   markdownBlocks,
   parseBoltDag,
+  readAtomicReplacedFileNoFollowOrThrow,
   readAuditShardEvents,
   readRecordedSourceCheckouts,
   readStateFile,
   recordedCheckoutOfListingPath,
+  removeRecordFileNoFollow,
   repoDir,
   REQUEST_TEXT_DIR,
   slugify,
   sourceCheckoutListingRel,
+  stateDigest,
   UNIT_GATE_RHYTHM_FIELD,
   unitDependencyPath,
+  writeEngineFileNoFollow,
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
 import { applicableTeamUnitScopeStamp } from "./aidlc-record-core.ts";
@@ -768,6 +775,74 @@ export interface UnitBoardRow {
 
 export function renderUnitBoard(label: string, rows: readonly UnitBoardRow[]): string {
   return [`Units of ${label}:`, ...rows.map((row) => `- ${row.unit}, ${row.team ?? "open"}: ${row.status}`)].join("\n");
+}
+
+// --- The lead's project waits on the teams ------------------------------------
+//
+// When `next` at the lead's project has nothing to build there and the board is
+// its step, it records the Units that wait on teams, bound to the state it
+// leaves (as a step on record is bound), so the plan-approval guard reads the
+// wait rather than asking for a `next` that only prints the board again. A
+// command that can give the lead's project a Unit to build, or count one
+// merged, clears it (aidlc-unit.ts main); the next `next` decides again.
+
+/** A Unit the lead's project waits on, with the team that holds it (null: open for any team). */
+export interface WaitingUnit {
+  unit: string;
+  team: string | null;
+}
+
+const TEAMS_WAIT_FILE = "teams-wait.json";
+
+export function noteLeadWaitsOnTeams(projectDir: string, stateContent: string, waiting: readonly WaitingUnit[]): void {
+  try {
+    writeEngineFileNoFollow(projectDir, TEAMS_WAIT_FILE,
+      `${JSON.stringify({ state_sha256: stateDigest(stateContent), waiting })}\n`);
+  } catch {
+    // Without it a write at the wait is refused as before, with `next`, which records it again.
+  }
+}
+
+export function clearLeadWaitsOnTeams(projectDir: string): void {
+  try {
+    if (existsSync(join(engineDir(projectDir), TEAMS_WAIT_FILE))) {
+      removeRecordFileNoFollow(docsRoot(projectDir), `${ENGINE_DIR}/${TEAMS_WAIT_FILE}`);
+    }
+  } catch {
+    // A record that cannot be removed is bound to the state, and goes stale with it.
+  }
+}
+
+/** The Units the lead's project waits on now, as its last board on this state recorded them; null when it does not wait. */
+export function leadWaitsOnTeams(projectDir: string, stateContent: string): WaitingUnit[] | null {
+  try {
+    const path = join(engineDir(projectDir), TEAMS_WAIT_FILE);
+    if (!existsSync(path)) return null;
+    const record = JSON.parse(readAtomicReplacedFileNoFollowOrThrow(path, "teams wait").toString("utf-8")) as {
+      state_sha256?: unknown;
+      waiting?: unknown;
+    };
+    if (record.state_sha256 !== stateDigest(stateContent) || !Array.isArray(record.waiting)) return null;
+    const waiting = record.waiting.filter((entry): entry is WaitingUnit =>
+      typeof entry?.unit === "string" && (entry.team === null || typeof entry.team === "string"));
+    return waiting.length > 0 && waiting.length === record.waiting.length ? waiting : null;
+  } catch {
+    return null;
+  }
+}
+
+// The wait in the person's words: some hosts show a hook's refusal to them as
+// written, so it is their sentence and names no step (the step is theirs).
+export function leadWaitSentence(waiting: readonly WaitingUnit[]): string {
+  const parts = waiting.map(({ unit, team }, at) =>
+    `${unit}${at === 0 ? " waits" : ""} ${team === null ? "for a team to take it" : `on ${theTeam(team)}`}`);
+  const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+  return `${list}, so nothing is built here meanwhile: the files here change only when you ask for a change.`;
+}
+
+/** The waiting Units as a row names them: `unit=team`, an open one as `unit=open`. */
+export function waitingField(waiting: readonly WaitingUnit[]): string {
+  return waiting.map(({ unit, team }) => `${unit}=${team ?? "open"}`).join(", ");
 }
 
 // How far a pushed Unit's repos are merged, in words: "checkout-api merged,

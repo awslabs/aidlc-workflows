@@ -216,6 +216,10 @@ const VALID_EVENT_TYPES = new Set([
   // (ALLOWED, naming their message).
   "SYSTEM_INSTALL_BLOCKED",
   "SYSTEM_INSTALL_ALLOWED",
+  // Where nothing is built at Code Generation (a Unit's approved build, the
+  // lead's project waiting on the teams), a change let through on the person's
+  // turn, naming their message (hook-emitted).
+  "ASKED_CHANGE_ALLOWED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -423,6 +427,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_RULES_BLOCKED: "Stage Rules Blocked",
   SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
   SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
+  ASKED_CHANGE_ALLOWED: "Asked Change Allowed",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
@@ -687,6 +692,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // The person's go-ahead for a system install; a forged one would make an
   // install nobody asked for look like theirs.
   "SYSTEM_INSTALL_ALLOWED",
+  // Likewise for a change the guard let through on their turn.
+  "ASKED_CHANGE_ALLOWED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);

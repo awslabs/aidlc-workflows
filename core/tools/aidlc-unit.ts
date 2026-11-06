@@ -226,6 +226,7 @@ import {
   TEAM_RHYTHM_OFFER,
   teamOrPerson,
   theTeam,
+  clearLeadWaitsOnTeams,
 } from "./aidlc-unit-teams.js";
 import { displayRepoPath, isProjectSubmodule, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -9263,6 +9264,9 @@ function checkUnitWords(verb: string, args: readonly string[]): void {
 
 let projectDir: string | undefined;
 
+// The verbs that end the wait on the teams (main).
+const UNIT_LEAD_WAIT_ENDS = new Set(["assign", "take-in", "merged", "sign-off", "release", "lead-here"]);
+
 export function main(argv: string[]): void {
   const args = [...argv];
   const projectIdx = args.indexOf("--project-dir");
@@ -9274,6 +9278,11 @@ export function main(argv: string[]): void {
   if (command !== undefined) checkUnitWords(command, args);
   // A turn Claude Code started itself is settled before this command reads a turn.
   settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
+  // What can give the lead's project a Unit to build, or count one merged, ends
+  // the wait the last board recorded: the next `next` decides it again.
+  if (command !== undefined && UNIT_LEAD_WAIT_ENDS.has(command)) {
+    clearLeadWaitsOnTeams(resolveProjectDir(projectDirFlag(argv)));
+  }
   try {
     if (command === "assign") assignUnits(args, projectDir);
     else if (command === "take") takeUnit(args, projectDir);

@@ -747,6 +747,7 @@ import {
   unitGateRhythmChosen,
   unitsInPlanOrder,
   unknownLikelyReposLine,
+  noteLeadWaitsOnTeams,
   SIGN_OFF_CLAUSE,
   UNIT_WORDS_NOTE,
   unitWordsArg,
@@ -18196,6 +18197,12 @@ function emitTeamUnitMajorRunStage(
     for (const offer of allOffers) {
       const mark = marks.get(offer.question);
       if (mark !== undefined && !isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, mark);
+    }
+    // Nothing is built here while they wait: the guard reads the wait, on the state as this step leaves it.
+    if (teamHome && !isReadOnlyEngineProbe()) {
+      noteLeadWaitsOnTeams(projectDir, readStateFile(projectDir), rows
+        .filter((row) => heldElsewhere.has(row.unit) && !mergedHere.has(row.unit))
+        .map(({ unit, team }) => ({ unit, team })));
     }
     emit(lineEndingTurn(
       renderUnitBoard(workLabel(projectDir), rows),

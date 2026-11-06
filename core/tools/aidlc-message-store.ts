@@ -1,11 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import type { appendAuditEntryUnlocked as AppendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  acquireAuditLock,
   allowMainCheckoutChangeCommand,
   APPROVED_TOGETHER_WITH_FIELD,
   auditBlockField,
   type AuditShardEvent,
+  errorMessage,
   type GuardRefusalEvent,
   HOOK_HEARTBEAT_STALE_SLACK_MS,
   hookLiveness,
@@ -18,11 +21,14 @@ import {
   mainCheckoutHeldByTeam,
   MESSAGE_SPENDING_EVENTS,
   type PersonsWords,
+  personsWordsText,
   promptHookRanRecently,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
+  recordHookDrop,
   rejectionIsFreshAttempt,
+  releaseAuditLock,
   removeRecordFileNoFollow,
   resolveInvokingSessionId,
   resolveWorkflowSelection,
@@ -522,6 +528,47 @@ export function mainCheckoutChangeStep(pd: string, paths: readonly string[], oth
   return held !== null
     ? `${held} ${otherwise}`
     : requestMessageStep(pd, otherwise, "any", `\`${allowMainCheckoutChangeCommand(paths)}\``, then);
+}
+
+/**
+ * The row a guard leaves when it lets a call through because the person's turn
+ * stood behind it (standingPersonTurn): `fields`, then the turn's message and
+ * the person's words. It says that turn stood, never that they approved. The
+ * row is the record, never the decision: a ledger that cannot take it lets the
+ * call through all the same, and the miss goes to the hook health log.
+ */
+export function recordStandingTurnRow(
+  pd: string,
+  hook: string,
+  event: string,
+  turn: { block: string },
+  fields: Record<string, string>,
+): void {
+  const id = auditBlockField(turn.block, "Message Id");
+  let reply: string | null = null;
+  try {
+    const message = id === null ? null : readMessage(pd, id);
+    reply = message === null ? null : personsWordsText(message.words ?? message.text);
+  } catch {
+    reply = null;
+  }
+  if (!acquireAuditLock(pd, 5, 50)) {
+    recordHookDrop(pd, hook, `audit lock contended; ${event} row dropped (the call was let through)`);
+    return;
+  }
+  try {
+    // Loaded here: aidlc-audit.ts reaches this module through aidlc-lib.ts.
+    const audit = require("./aidlc-audit.ts") as { appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked };
+    audit.appendAuditEntryUnlocked(event, {
+      ...fields,
+      ...(id !== null ? { "Message Id": id } : {}),
+      ...(reply ? { "Person Reply": reply } : {}),
+    }, pd);
+  } catch (error) {
+    recordHookDrop(pd, hook, `${event} row not recorded: ${errorMessage(error)}`);
+  } finally {
+    releaseAuditLock(pd);
+  }
 }
 
 // The chat a command serves, when the engine can tell (the hook's override,

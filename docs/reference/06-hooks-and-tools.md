@@ -1812,6 +1812,25 @@ plan is still judged, and a system package install nobody asked for still waits
 for the person, as at every stage. When the notice goes out of date (a
 compaction), the refusal names `next`, which records it again.
 
+**Where nothing is built at Code Generation.** Two places build nothing while
+Current Stage reads Code Generation: a Unit's build whose Code Generation is
+approved (open only for its push), and the lead's project while its Units wait
+on the teams, where `next` has nothing to build and the board is its step. With
+the board, `next` records the Units that wait and their teams, bound to the state
+it leaves (`leadWaitsOnTeams`); a Unit command that can give the lead's project a
+Unit to build or count one merged (`assign` in every form, `take-in`, `merged`,
+`sign-off`, `release`, `lead-here`) ends that record, and the next `next`
+decides again. In both places what the person asks for runs when their turn
+stands with no decision after it (their own request, or their go-ahead after the
+refusal), never on an unattended run, and leaves `ASKED_CHANGE_ALLOWED` with the
+call, that message and their words. The agent's own change waits for their word,
+under every Guard Policy, refused with one sentence of theirs that names no
+step: at the lead's project, which Units wait on which teams, that nothing is
+built there meanwhile, and that the files there change only when they ask. At
+the lead's project a developer handoff keeps that refusal, and AI-DLC's own
+command in a spelling the reading refused or could not see keeps the refusal
+that names `next` on its own.
+
 **Work that finished at Code Generation.** When Code Generation was the last stage that ran (the stages after it
 skipped), the finished work keeps Current Stage on it, but its walk is over: an edit, a shell command or the
 developer passes this hook under every Guard Policy, whoever asked for it, as once a workflow's walk is past Code
@@ -2168,7 +2187,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact`, `aidlc-jump.ts reopen --via redo` |
 | **Subagent** | 4 | `SUBAGENT_DISPATCHED`, `SUBAGENT_COMPLETED`, `SUBAGENT_PROMPT_UNMATCHED`, `REVIEW_VERDICT_DICTATED` | deliver-stage-rules hook, or log-subagent for a forwarded SubagentStart; log-subagent hook; Copilot adapter (advisory); no longer written (earlier releases' plan-approval-guard hook; the reviewer's own `**Verdict Dictated:**` line now rides `REVIEW_COMPLETED`) |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
-| **Fence enforcement** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` | plan-approval-guard hook (the first on every refusal path, the second when its environment off-switch was set); state-transition-guard and deliver-stage-rules hooks on each refusal; `aidlc-utility.ts` also writes `GUARD_DISABLED` when a fence is switched off for one piece of work |
+| **Fence enforcement** | 3 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED`, `ASKED_CHANGE_ALLOWED` | plan-approval-guard hook (the first on every refusal path, the second when its environment off-switch was set, the third when the person's turn let a change through where nothing is built); state-transition-guard and deliver-stage-rules hooks on each refusal; `aidlc-utility.ts` also writes `GUARD_DISABLED` when a fence is switched off for one piece of work |
 | **Guard refusals** | 2 | `STATE_TRANSITION_BLOCKED`, `STAGE_RULES_BLOCKED` | state-transition-guard hook (delegated lifecycle/routing), deliver-stage-rules hook (brief over the output limit, or a rule file that could not be read) |
 | **System install** | 2 | `SYSTEM_INSTALL_BLOCKED`, `SYSTEM_INSTALL_ALLOWED` | plan-approval-guard hook through `hooks/system-install.ts`, at every stage |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
@@ -2289,6 +2308,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
 | `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A reviewed-output write refused for voiding a fresh terminal review receipt before the gate (PreToolUse); summary-owned questions are excluded unless explicitly named by `review_artifact`. The refusal, which the tool shows the person, says what was refused and ends with `Next:` and the `next` command, with no JSON; the guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)) waits in the refusal record and that `next` hands it over once, and the write is never retried: when no turn of the person's since the last decision stands behind the write (one only answers used counts as theirs), the first refusal is the conductor's own step, to leave the document and quote the change at the next gate or Unit checkpoint; a repeat, or a write the person may have asked for, puts the typed remedies to the person |
 | `plan-approval-guard.ts` | `PLAN_APPROVAL_BLOCKED` | A code-generation developer dispatch refused before the plan is approved (PreToolUse) |
+| `plan-approval-guard.ts` | `ASKED_CHANGE_ALLOWED` | Where nothing is built at Code Generation (a Unit's approved build, the lead's project waiting on the teams), a change let through on the person's turn, naming their message (PreToolUse) |
 | `plan-approval-guard.ts` | `SYSTEM_INSTALL_BLOCKED` / `SYSTEM_INSTALL_ALLOWED` | A system package install nobody asked for held, at any stage; one let through on the person's turn (PreToolUse, `hooks/system-install.ts`) |
 | `plan-approval-guard.ts` | `REVIEW_VERDICT_DICTATED` | No longer written. Earlier releases recorded a reviewer dispatch whose brief already carried a rendered `**Verdict:**` line; the reviewer now writes `**Verdict Dictated:** yes\|no` in its review file and `log review --verdict` records it as written on `REVIEW_COMPLETED`, saying once on `yes` that the reviewer was told what to conclude before it looked. Kept registered so earlier audits and worktree deltas still read and merge |
 | `session-start.ts` | `SESSION_STARTED` / `SESSION_RESUMED` | Per the SessionStart hook input `source` field (on Kiro IDE the adapter supplies it on a chat's first prompt; see [kiro-ide-hook-payload.md](kiro-ide-hook-payload.md)) |
