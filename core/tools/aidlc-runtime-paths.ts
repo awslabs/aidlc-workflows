@@ -1058,9 +1058,9 @@ const CLOUD_STORAGE_SERVICES = new Map([
   ["Box", "Box"],
 ]);
 
-// A blank or relative value is unset: resolve("") is the working folder, which
-// is the project itself. A root that does not resolve is dropped, never
-// compared as written.
+// A blank or relative value is unset: a relative one would resolve against the
+// working folder, which is the project at every refusal. A root that does not
+// resolve is dropped, never compared as written.
 function realDirectory(path: string | undefined): string | null {
   if (!path || !isAbsolute(path)) return null;
   try {
