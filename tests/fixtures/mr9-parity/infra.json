@@ -117,12 +117,12 @@
   {
     "slug": "code-generation",
     "phase": "construction",
-    "action": "SKIP"
+    "action": "EXECUTE"
   },
   {
     "slug": "build-and-test",
     "phase": "construction",
-    "action": "SKIP"
+    "action": "EXECUTE"
   },
   {
     "slug": "ci-pipeline",

@@ -54,7 +54,7 @@ Follow stage-protocol.md question flow.
 
 ### Step 3: Provision and Validate
 
-Provision target AWS environments using IaC from Construction. Validate infrastructure configuration. The orchestrator will invoke aidlc-devsecops-agent for security posture validation.
+Provision target AWS environments using the IaC that Code Generation wrote under Plan Approval and Build and Test checked. This stage applies that IaC; it does not author it. When a change the provisioning needs is missing from that IaC, stop and name the gap rather than writing it here. Validate infrastructure configuration. The orchestrator will invoke aidlc-devsecops-agent for security posture validation.
 
 ### Step 4: Generate Artifacts
 

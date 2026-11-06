@@ -1,5 +1,5 @@
 // covers: hook:aidlc-continue-workflow
-// covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
+// covers: tool:aidlc, function:renderCommandHelp, function:typedHarnessHosts, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
 // covers: function:kiroLayoutOf, function:kiroTreeLayout, function:installedKiroLayout
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -61,6 +61,7 @@ import {
   kiroLayoutOf,
   kiroTreeLayout,
   runtimeHarnessDir,
+  typedHarnessName,
 } from "../../core/tools/aidlc-runtime-paths.ts";
 import { installedKiroLayout } from "../../core/tools/aidlc-lib.ts";
 import { parseSensorManifest } from "../../core/tools/aidlc-sensor-schema.ts";
@@ -3271,15 +3272,37 @@ describe("t230 dispatcher help and errors", () => {
       ...PUBLIC_LIFECYCLE_GRAMMARS,
       ...SIMPLE_PUBLIC_GRAMMARS,
     };
+    // The `aidlc system` lifecycle verbs print their route's form for --help,
+    // so the form names every flag their grammar takes (--no-color as well
+    // as --project-dir is plumbing there).
+    const systemForms: Record<string, string> = {
+      rollback: "top-rollback",
+      "versions install": "versions-install",
+      "versions prune": "versions-prune",
+    };
     // Both parsers, so neither can gain a flag help does not name.
     expect(Object.keys(grammars).sort()).toEqual([
       "doctor",
+      "rollback",
       "uninstall",
       "update",
       "use",
       "version",
+      "versions install",
+      "versions prune",
     ]);
     for (const [command, grammar] of Object.entries(grammars)) {
+      if (systemForms[command]) {
+        const form = ROUTES.find((route) => route.id === systemForms[command])?.all?.[0] ?? "";
+        for (const flag of [...grammar.values, ...grammar.bare]) {
+          if (plumbing.has(flag) || flag === "--no-color") continue;
+          expect(
+            new RegExp(`[\\s\\[|]${flag}[\\s\\]|]`).test(` ${form} `),
+            `system ${command} usage omits the accepted flag ${flag}`,
+          ).toBe(true);
+        }
+        continue;
+      }
       const rendered = renderCommandHelp(
         command as (typeof PUBLIC_COMMANDS)[number],
       );
@@ -3487,7 +3510,7 @@ describe("t230 dispatcher help and errors", () => {
       .toBe("--download and --from are mutually exclusive");
   });
 
-  test("config help names top-level flags and section help still passes through", () => {
+  test("config help names top-level flags and section help still passes through", async () => {
     const projectDir = makeProject();
     const config = viaDispatcher(["config", "--help"], projectDir);
     expect(config.exitCode).toBe(0);
@@ -3528,6 +3551,28 @@ describe("t230 dispatcher help and errors", () => {
     ]) {
       expect(text).toContain(flag);
     }
+    // --harness and every name it takes: one harness/<name>/manifest.ts is one
+    // distribution of the release (what `aidlc versions list` shows), named as
+    // --harness takes it, in the words the setup picker shows for that tool.
+    expect(text).toMatch(/^ {2}--harness <name> {2}\S/m);
+    const lines = text.split("\n");
+    const start = lines.indexOf("HARNESSES");
+    expect(start, "config help has a HARNESSES list").toBeGreaterThan(0);
+    const rows = lines.slice(start + 1, lines.indexOf("", start)).map((line) => line.trim().split(/\s{2,}/));
+    const ids = readdirSync(join(REPO_ROOT, "harness"))
+      .filter((name) => existsSync(join(REPO_ROOT, "harness", name, "manifest.ts")))
+      .sort();
+    const expected: string[][] = [];
+    for (const id of ids) {
+      const manifest = (await import(join(REPO_ROOT, "harness", id, "manifest.ts"))).default as {
+        productName: string;
+        choiceName?: string;
+        choiceNote?: string;
+      };
+      const words = manifest.choiceName ?? manifest.productName;
+      expected.push([typedHarnessName(id), manifest.choiceNote ? `${words} (${manifest.choiceNote})` : words]);
+    }
+    expect(rows).toEqual(expected);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("human help stays short and hides plumbing nouns", () => {

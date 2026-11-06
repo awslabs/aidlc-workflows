@@ -1,5 +1,6 @@
-// aidlc-sensor-record.ts — the rows of one sensor fire, shared by the sensor
-// dispatcher (aidlc-sensor.ts) and the gate (aidlc-state.ts fireGateSensors).
+// aidlc-sensor-record.ts: the rows of one sensor fire and the reader of a
+// sensor's `matches` glob, shared by the sensor dispatcher (aidlc-sensor.ts),
+// the gate (aidlc-state.ts fireGateSensors) and the write hook.
 // It reads no sensor manifest, so the state tool can load it in an install
 // that carries only its tools.
 
@@ -59,6 +60,15 @@ export function relativizePath(absPath: string, projectDir: string): string {
 
 export function normalizePathForComparison(path: string): string {
 	return path.replace(/\\/g, "/");
+}
+
+// --- A sensor's `matches` ---
+
+// The one reader of a manifest's `matches` glob, for the gate's pre-filter,
+// the dispatcher's re-check and the write hook, so a check the gate fires is
+// one the dispatcher runs. Bun's glob: `**/` also takes no folder.
+export function sensorMatchesPath(pattern: string, path: string): boolean {
+	return new Bun.Glob(pattern).match(normalizePathForComparison(path));
 }
 
 function trimTrailingSlashes(path: string): string {

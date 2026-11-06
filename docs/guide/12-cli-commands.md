@@ -699,7 +699,10 @@ concurrent claimant succeeds.
 /aidlc unit claim user-profile-api --team "Alice"
 ```
 
-`--team` supplies the human-readable holder label. `--rhythm` optionally pins
+`--team` supplies the human-readable holder label. With `/aidlc --claim`, the
+command AI-DLC runs for the claim carries the label in a file it writes
+(`--request-file`), so no shell on the way changes it: `O'Brien` or `Ops & QA`
+is recorded as given in PowerShell, Git Bash and cmd.exe. `--rhythm` optionally pins
 this claim to `per-stage` or `unit-end`; when omitted, the workflow's affirmed
 Unit gate rhythm is used. Claims are refused until dependencies and any required
 walking skeleton are complete, and a checkout with a live claim routes only its
@@ -1166,6 +1169,7 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
+| Synced folder | Only when the project sits in a synced folder: a Google Drive, OneDrive, Dropbox or Box folder under macOS `~/Library/CloudStorage`, iCloud Drive (`~/Library/Mobile Documents`), a Windows OneDrive folder, or a Dropbox folder that Dropbox's own `info.json` names. Says that sync can change files AI-DLC checks, and to move the project out of the synced folder or pause sync for it; the strict refusals for a document, plan or source that changed after its review or approval say the same. Silent otherwise (advisory - never fails) |
 | Hook heartbeats | `.aidlc-engine/hooks-health/` contains timestamps from hook executions (for a record with none of its own, the beat of the turn that created it, written just before the record existed, counts for its first five minutes). No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with the harness's own step to get its hooks running (on Claude Code, `"disableAllHooks": false` in `.claude/settings.local.json`, or the organization policy; when `.claude/settings.json` is missing, not valid JSON or registers none of AI-DLC's hooks, that file's repair instead). Heartbeats stay in the clone whose hooks wrote them, while audit records travel in git, so when only other clones' audit records show the progress (a teammate's work you pulled) it is a warning instead, `This workflow was run in another clone (<machine>); this clone has no hook record for it yet`, with nothing to fix in this clone |
 | Claude managed hook policy | On the Claude harness only, uses the existing managed-settings resolver (`AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows paths, macOS, Linux/WSL) plus alphabetical `managed-settings.d/` fragments and fails when effective `allowManagedHooksOnly` is `true` |
 | Your replies are not being recorded | When stage/gate events exist but the audit has no `HUMAN_TURN`, warns that the person's replies are not being recorded (so the next approval will be refused), with the harness's own hook step as the fix |

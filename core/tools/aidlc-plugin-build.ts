@@ -23,6 +23,7 @@ import {
   pluginValidationJson,
   validatePluginRoot,
 } from "./aidlc-plugin-validate.ts";
+import { harnessIdFromTyped, typedHarnessName } from "./aidlc-runtime-paths.ts";
 
 const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir] [--json]";
@@ -76,7 +77,7 @@ function formatBuildResult(
   const lines = [
     "Plugin build: COMPLETE",
     `Plugin root: ${resolve(pluginRoot)}`,
-    `Harness: ${harness}`,
+    `Harness: ${typedHarnessName(harness)}`,
     `Output: ${resolve(outDir)}`,
   ];
   for (const finding of result.warnings) {
@@ -126,7 +127,10 @@ export function main(argv: string[]): number {
     return 2;
   }
 
-  const [pluginRootArg, harness, outArg] = positional;
+  const [pluginRootArg, typedHarness, outArg] = positional;
+  // The harness is typed as config takes it; the target table, the output
+  // folder and the result keep its id.
+  const harness = harnessIdFromTyped(typedHarness);
   const pluginRoot = resolve(pluginRootArg);
   const outDir = outArg
     ? resolve(outArg)
@@ -169,10 +173,10 @@ export function main(argv: string[]): number {
     return 1;
   }
   const targets = readPluginTargets(targetsPath);
-  const target = targets[harness];
+  const target = Object.hasOwn(targets, harness) ? targets[harness] : undefined;
   if (!target) {
     process.stderr.write(
-      `${USAGE}\nUnknown harness "${harness}" (available: ${Object.keys(targets).sort().join(", ")})\n`,
+      `${USAGE}\nUnknown harness "${typedHarness}" (available: ${Object.keys(targets).map(typedHarnessName).sort().join(", ")})\n`,
     );
     return 2;
   }

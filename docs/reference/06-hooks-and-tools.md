@@ -1014,7 +1014,7 @@ These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validatio
 4. **State file guard:** Exits silently if `aidlc-state.md` does not exist (pre-init).
 5. **Isolated run filter:** Exits silently while the step in hand belongs to an isolated `--single` run (its step marker says `single`), so that run's task never moves the workflow's place.
 6. **Health heartbeat:** Writes to `.aidlc-engine/hooks-health/sync-workflow-state.last`.
-7. **State sync:** Calls `bun aidlc-utility.ts set-status --stage <slug>` (normally updates Phase, Stage, Agent, and checkbox). For a valid interleaved unit-major directive, it updates the transient status fields and marker digest while preserving the durable first-stage cursor, `In Progress`, and checkbox.
+7. **State sync:** Calls `bun aidlc-utility.ts set-status --stage <slug>` (normally updates Phase, Stage, Agent, and checkbox). For a valid interleaved unit-major directive, it updates the transient status fields and marker digest while preserving the durable first-stage cursor, `In Progress`, and checkbox. The same rule (`statusSyncLeavesUnitCursor`) holds the cursor in a checkout that claimed the Unit (`Unit Ownership: team`), where the engine rests `Current Stage` on the Unit's own stage and a sync names any other Construction stage (on Kiro IDE the audit tail's last start, the block's first stage while the Units walk).
 
 **Design notes:**
 - Stage Jump tasks (no `[slug]`) and dependency-wiring TaskUpdates (no activeForm) are naturally filtered out.

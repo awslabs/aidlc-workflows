@@ -8,16 +8,19 @@
 > [Running AI-DLC on Kiro IDE](kiro-ide.md).
 
 > [!IMPORTANT]
-> This page covers the `kiro` harness, which pins no Kiro engine; start it
-> with `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see
+> This page covers the Kiro CLI (V2) harness (`aidlc config --harness
+> kiro-v2`), which pins no Kiro engine; start it with `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see
 > [Prerequisites](#prerequisites)). The
 > interactive `aidlc config` lists it as Kiro CLI (V2); when it detects Kiro
 > CLI 2.24.1 or later, it makes it the default over Kiro, except in Kiro IDE's
 > own terminal, where Kiro leads. For Kiro's v3 engine on Kiro CLI 2.24.1 or
-> later, use the `kiro-ide` harness, listed as Kiro: it runs in Kiro CLI
-> (started with `kiro-cli --v3`) as well as Kiro IDE. In an existing `kiro` project,
-> `aidlc config --harness kiro-ide` switches `.kiro/` to it in place and keeps
-> `aidlc/`.
+> later, use the Kiro harness (`--harness kiro`), listed as Kiro: it runs in
+> Kiro CLI (started with `kiro-cli --v3`) as well as Kiro IDE. In an existing
+> Kiro CLI (V2) project, `aidlc config --harness kiro` switches `.kiro/` to it
+> in place and keeps `aidlc/` (at a terminal it asks first; with `--yes` it
+> switches; without a terminal, or under `--quiet` or `--json`, it changes
+> nothing and prints the command with `--yes`); a plain `aidlc config` refresh, or
+> `--harness kiro-v2`, keeps Kiro CLI (V2).
 
 One of the framework's harnesses: the Kiro runtime runs the same AI-DLC
 methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
@@ -28,7 +31,7 @@ configs, hook wiring, activation) differs.
 Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
 loaded through the conductor agent's `resources`. The root `AGENTS.md` block
 is harness-neutral and shared with other installed harnesses; engine directories
-must still differ (the `kiro` and `kiro-ide` rows cannot share one `.kiro/`
+must still differ (the Kiro CLI (V2) and Kiro rows cannot share one `.kiro/`
 install).
 
 ## Prerequisites
@@ -96,7 +99,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 mkdir -p your-project/.kiro your-project/aidlc
 cp -R "$RUNTIME_ROOT/kiro/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro/aidlc/." your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro
+cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-v2
 ```
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built
@@ -304,9 +307,10 @@ and start `kiro-cli --v2 --agent aidlc` in this folder
 instead (an ACP client starts `kiro-cli acp --agent-engine v2`). To run Kiro
 CLI on its v3 engine, use the
 [Kiro IDE](kiro-ide.md) distribution instead; in an existing project,
-`aidlc config --harness kiro-ide` switches `.kiro/` to it in place and keeps
-`aidlc/`; then start `kiro-cli --v3` (when it asks to trust the folder and you
-know what is in it, choose **Trust, continue**). See
+`aidlc config --harness kiro` switches `.kiro/` to it in place and keeps
+`aidlc/` (at a terminal it asks first; with `--yes` it switches; without a terminal, or under
+`--quiet` or `--json`, it changes nothing and prints the command with `--yes`); then start `kiro-cli --v3` (when it asks to trust the folder and you know
+what is in it, choose **Trust, continue**). See
 [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
 
 ### When the chat fills up

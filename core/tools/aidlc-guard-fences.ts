@@ -53,9 +53,6 @@ export const GUARD_POLICY_GLOSS: Record<"strict" | "relaxed" | "off", string> = 
 };
 export const SCOPE_GLOSS = "the set of stages this work runs";
 export const CHECKPOINT_GLOSS = "a stop after each Unit for you to check and approve it";
-export const BACKGROUND_SYNC_CAUSE =
-  "A background sync client (Google Drive, iCloud Drive, OneDrive, Dropbox) rewriting files " +
-  "on its own can do this too, with nobody editing them.";
 
 /** The hook payload fields that say who made a tool call. */
 interface HookCaller {

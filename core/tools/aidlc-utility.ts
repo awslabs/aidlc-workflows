@@ -375,6 +375,7 @@ import {
   unitLifecycleSnapshot,
   unitPlainName,
   recoveryRepoCandidates,
+  type ActiveDirectiveMarker,
   readActiveDirectiveMarker,
   openPlanApprovalAsk,
   activeDirectiveOutOfDateReason,
@@ -525,6 +526,7 @@ import {
   personsWordsText,
   declaredProjectType,
   installWithoutReplacing,
+  pathContainedBy,
 } from "./aidlc-lib.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -585,6 +587,10 @@ import {
   runtimeHarnessDir,
   runtimeHarnessName,
   runtimeProjectDir,
+  typedHarnessName,
+  SYNC_FOLDER_STEP,
+  syncFolderLabel,
+  syncServiceHolding,
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
@@ -3918,14 +3924,14 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   // first records them at its own.
   const steps = behind.flatMap((tree) =>
     native
-      ? [`${tool} config --harness ${tree.distribution}${target}`]
+      ? [`${tool} config --harness ${typedHarnessName(tree.distribution)}${target}`]
       : pinned
-      ? [`${tool} config --harness ${tree.distribution} --download${target}`]
+      ? [`${tool} config --harness ${typedHarnessName(tree.distribution)} --download${target}`]
       : [
         ...(existsSync(join(tree.root, "tools", "data", "aidlc-manifest.json"))
           ? []
-          : [`${tool} config --harness ${tree.distribution} --download${target}`]),
-        `${tool} config --harness ${tree.distribution} --from <that file>${target}`,
+          : [`${tool} config --harness ${typedHarnessName(tree.distribution)} --download${target}`]),
+        `${tool} config --harness ${typedHarnessName(tree.distribution)} --from <that file>${target}`,
       ]
   );
   const run = `run ${steps.map((step) => `\`${step}\``).join(", then ")}`;
@@ -4037,6 +4043,10 @@ export async function collectDoctorReport(
   const hooksLastFired = firingHooksLastFired(projectDir);
   results.push(...runtimeDoctorChecks(projectDir, harnessDir(), hooksLastFired ? { hooksLastFired } : {}));
   results.push(instructionFileDoctorCheck(projectDir, harnessDir()));
+  const syncService = syncServiceHolding(projectDir);
+  if (syncService !== null) {
+    results.push({ pass: false, severity: "warn", label: syncFolderLabel(syncService), fix: SYNC_FOLDER_STEP });
+  }
   // The documents the agents cannot read yet, as the engine's step names them
   // (advisory: the exit code is unchanged).
   try {
@@ -4385,11 +4395,11 @@ export async function collectDoctorReport(
         label: stampVersion !== engineVersion
           ? `Project runtime stamp: ${stampVersion}; ${engine}`
           : pinnedEngine && pinnedEngine !== AIDLC_VERSION
-          ? `Project runtime stamp: ${stampVersion} (${distribution}); ${engine}`
-          : `Project runtime stamp: ${stampVersion} (${distribution})`,
+          ? `Project runtime stamp: ${stampVersion} (${typedHarnessName(distribution)}); ${engine}`
+          : `Project runtime stamp: ${stampVersion} (${typedHarnessName(distribution)})`,
         fix: pinnedEngine
           ? `refresh the project to the pinned release with \`${aidlcInvocation()} config${
-              stamp.distribution ? ` --harness ${stamp.distribution}` : ""
+              stamp.distribution ? ` --harness ${typedHarnessName(stamp.distribution)}` : ""
             }\` or pin the project's release with \`${aidlcInvocation()} config --pin ${stampVersion}\``
           : `run \`${aidlcInvocation()} config\` or select the machine release with \`${aidlcInvocation()} use ${stampVersion}\``,
       });
@@ -4800,7 +4810,7 @@ export async function collectDoctorReport(
     results.push({
       pass: hasJsonAgent || existsSync(markdownAgentPath) || existsSync(join(projectDir, harness, "agents", "aidlc.md")),
       label: "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
-      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE and Kiro CLI v3)`,
+      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI (V2)) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE and Kiro CLI v3)`,
     });
     results.push(...kiroDisabledHookChecks(projectDir, harness));
     if (hasJsonAgent) {
@@ -11359,6 +11369,31 @@ function withCodekbLock<T>(
   );
 }
 
+// Where a --paths entry the snapshot could not read points, when that is
+// outside the folder being scanned: in another of the work's recorded repos
+// (the --repo that reads it, as resolveCodekbRepo resolves it, and the path
+// from that repo's folder), or outside. Null for a path inside the folder. Lexical, on the platform's own path
+// rules, so nothing outside the project is read.
+function codekbPathPlace(
+  projectDir: string,
+  space: string,
+  repoDir: string,
+  recorded: readonly string[],
+  path: string,
+): { repo: string; path: string } | "outside" | null {
+  const at = resolve(repoDir, path);
+  if (pathContainedBy(resolve(repoDir), at)) return null;
+  for (const repo of recorded) {
+    const root = resolve(codekbSourceRoot(projectDir, repo, space));
+    // A recorded repo not cloned here resolves to the project folder, which
+    // holds every path inside the project.
+    if (root === resolve(projectDir) || !pathContainedBy(root, at)) continue;
+    const from = relative(root, at);
+    return { repo, path: from === "" ? "./" : from.split(sep).join("/") };
+  }
+  return "outside";
+}
+
 // Snapshot the two generations a scan is built from. The stage takes this
 // immediately before scanning and passes both tokens to codekb-publish.
 function handleCodekbSnapshot(
@@ -11372,20 +11407,60 @@ function handleCodekbSnapshot(
     recoverCodekbTransactions(projectDir, space, repo);
     const sourceFingerprint = codekbSourceFingerprint(repoDir, paths, excludes);
     if (sourceFingerprint === null) {
-      // Name what to change: a path that is not there, else an entry under
-      // the paths that cannot be read as a file or folder.
-      const absent = paths.filter((path) => {
+      // Name what to change: a path outside the folder being scanned (in
+      // another repo of this work, or outside it), a path that is not there,
+      // else an entry under the paths that cannot be read as a file or folder.
+      let recorded: string[];
+      try {
+        recorded = intentRepos(projectDir, undefined, space);
+      } catch {
+        recorded = [];
+      }
+      const inRepo = new Map<string, { named: string[]; from: string[] }>();
+      const outside: string[] = [];
+      const inside: string[] = [];
+      for (const path of paths) {
+        const place = codekbPathPlace(projectDir, space, repoDir, recorded, path);
+        if (place === null) {
+          inside.push(path);
+        } else if (place === "outside") {
+          outside.push(path);
+        } else {
+          const entry = inRepo.get(place.repo) ?? { named: [], from: [] };
+          entry.named.push(path);
+          entry.from.push(place.path);
+          inRepo.set(place.repo, entry);
+        }
+      }
+      const absent = inside.filter((path) => {
         try {
           return lstatSync(join(repoDir, path), { throwIfNoEntry: false }) === undefined;
         } catch {
           return false;
         }
       });
+      const be = (named: readonly string[]): string => (named.length === 1 ? "is" : "are");
+      const causes: string[] = [];
+      for (const [other, entry] of inRepo) {
+        causes.push(
+          `${entry.named.join(", ")} ${be(entry.named)} in the ${other} repository: run it again with ` +
+            `--repo ${quoteCommandArgument(other)} --paths ${quoteCommandArgument(entry.from.join(","))}.`,
+        );
+      }
+      if (outside.length > 0) {
+        const folder = resolve(repoDir) === resolve(projectDir) ? "the project folder" : `the ${repo} repository's folder`;
+        // No way to bring outside code in is named: add-repo clones nothing
+        // for a name the work already records, and a checkout nested in a
+        // Git project is fingerprinted at its commit only.
+        causes.push(`${outside.join(", ")} ${be(outside)} outside ${folder}: run it again with --paths naming folders inside it.`);
+      }
+      if (absent.length > 0) {
+        causes.push(`${absent.join(", ")} ${be(absent)} not in the repository: run it again with --paths naming paths that exist.`);
+      }
       die(
         `codekb-snapshot: cannot fingerprint source paths: ${paths.join(", ")}. ` +
-          (absent.length > 0
-            ? `${absent.join(", ")} ${absent.length === 1 ? "is" : "are"} not in the repository: ` +
-              `run it again with --paths naming paths that exist.`
+          (causes.length > 0
+            ? causes.join(" ")
             : `Something under ${paths.length === 1 ? "it" : "them"} is not a regular file or folder (a socket or named pipe) or ` +
               `cannot be read: run it again with --paths naming only the folders that hold ` +
               `source, leaving that one out.`),
@@ -13683,6 +13758,37 @@ function applyKeptToPickedWork(projectDir: string, sessionId: string, space: str
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
+// Whether a status sync to `stage` leaves the main cursor (Current Stage, In
+// Progress, the cursor checkbox) where it is. Under unit-major, while the step
+// the engine issued is a Unit's Construction step on `stage` or on Current
+// Stage, a sync to any Construction stage other than Current Stage leaves it:
+// the cursor is the engine's. In an unscoped checkout it rests on the block's
+// first stage while the Units walk, and the task slug names the Unit's stage.
+// In a checkout that claimed the Unit (Unit Ownership: team),
+// `aidlc-state.ts sync-unit-scope-stage` rests it on the Unit's own stage, and
+// the sync names another stage: on Kiro IDE the audit tail's last
+// STAGE_STARTED, the block's first stage while the Units walk, because a Unit
+// step writes UNIT_STARTED rows and no STAGE_STARTED. There, moving the cursor
+// retires the step the engine just issued, and the marker is not refreshed
+// (its stage is not the sync's): on Kiro IDE, where the sync runs after every
+// shell command, `continue` then restarts at part one and Plan Approval finds
+// no current directive, forever. The hook's audit-tail path asks this before
+// it writes; set-status applies it to the slug it is given.
+export function statusSyncLeavesUnitCursor(
+  stateContent: string,
+  activeDirective: ActiveDirectiveMarker | null,
+  stage: string,
+  phase: string,
+): boolean {
+  const currentStage = (getField(stateContent, "Current Stage") ?? "").trim();
+  return getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
+    phase === "CONSTRUCTION" &&
+    activeDirective?.unit !== undefined &&
+    currentStage.length > 0 &&
+    currentStage !== stage &&
+    (activeDirective.stage === stage || activeDirective.stage === currentStage);
+}
+
 export function setStatus(
   projectDir: string,
   flags: Record<string, string>,
@@ -13700,15 +13806,8 @@ export function setStatus(
   const agent = flags.agent || entry.lead_agent;
 
   const previousContent = readStateFile(projectDir, flags.intent, flags.space);
-  const currentStage = (getField(previousContent, "Current Stage") ?? "").trim();
   const activeDirective = readActiveDirectiveMarker(projectDir, previousContent);
-  const preserveUnitMajorCursor =
-    getField(previousContent, "Construction Iteration")?.trim() === "unit-major" &&
-    phase === "CONSTRUCTION" &&
-    activeDirective?.stage === stage &&
-    activeDirective.unit !== undefined &&
-    currentStage.length > 0 &&
-    currentStage !== stage;
+  const preserveUnitMajorCursor = statusSyncLeavesUnitCursor(previousContent, activeDirective, stage, phase);
   let content = previousContent;
   content = setField(content, "Lifecycle Phase", phase);
   content = setField(content, "Active Agent", agent);

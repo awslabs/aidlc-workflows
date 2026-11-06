@@ -52,6 +52,7 @@ scopes:
   - bugfix
   - refactor
   - security-patch
+  - infra
   - classic
   - workshop
   - express
@@ -89,10 +90,10 @@ Read all design artifacts for the current unit:
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
 
-Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
-`express` scope skip Units Generation by design. When those inputs are absent,
-scope the work from Requirements Analysis and the workspace; on brownfield, also
-use the reverse-engineered code knowledge base at
+Incremental scopes (bugfix, poc, refactor, security-patch, infra) and the
+zero-Unit `express` scope skip Units Generation by design. When those inputs
+are absent, scope the work from Requirements Analysis and the workspace; on
+brownfield, also use the reverse-engineered code knowledge base at
 `aidlc/spaces/<active-space>/codekb/<repo>/`. Never invent the content of a
 missing artifact.
 
@@ -129,6 +130,22 @@ Plan should cover (as applicable to the unit):
 - [ ] Configuration files
 - [ ] Documentation (inline and API docs)
 - [ ] Deployment artifacts (Dockerfiles, IaC)
+
+When the deliverable is infrastructure-as-code (always in the `infra` scope),
+this stage writes the IaC, under the same Plan Approval as application code:
+Infrastructure Design only describes it, and Environment Provisioning
+provisions from what this stage wrote. The plan's implementation steps are the
+IaC changes themselves (CDK constructs, Terraform modules or roots,
+CloudFormation templates, IAM policies, dashboards, and alarms), derived from
+Infrastructure Design's `infrastructure-specification.md` and
+`monitoring-design.md`; with no user stories, map each step to the requirement
+or NFR it implements. Its tests are the IaC's own executable checks, such as CDK
+assertion tests, `terraform test`, or policy-as-code rules, run by the
+unit-scoped command in `unit-test-instructions.md`. Static checks
+(`terraform fmt -check` and `terraform validate`, `cdk synth`, `cfn-lint`) are
+build steps that Build and Test runs. When the IaC language has no line-coverage
+tool, say so in the plan rather than reporting a figure. Never apply or deploy
+from this stage.
 
 **Test files are MANDATORY in the plan.** Consult the active test strategy (stage-protocol.md §8 "Test Strategy") to determine test scope and volume:
 - **Minimal strategy**: Requirement-driven tests (1 per requirement, happy-path unit floor per component); unit tests are the default, but a `bugfix` / `security-patch` targeted regression uses the narrowest level that reproduces the defect

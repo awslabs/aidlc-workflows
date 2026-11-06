@@ -5853,6 +5853,50 @@ describe("t218 forward-only sync-statusline (finding 1: no state resurrection)",
   });
 });
 
+// A Kiro IDE run in a checkout that had claimed a Unit (Unit Ownership: team,
+// so unit-major) could not take a step: every shell command ran this sync, the
+// merged audit tail's last STAGE_STARTED was the block's first stage from the
+// facilitator's shard (a Unit step writes UNIT_STARTED, no STAGE_STARTED), and
+// the sync moved Current Stage off the Unit's stage the engine had rested it
+// on. The issued step was retired, so `continue` returned part one again and
+// Plan Approval found no current directive, after every command.
+describe("t218 sync-workflow-state leaves a claimed Unit's cursor on its own stage", () => {
+  test("the audit tail's first-stage start does not move it, and the call is a no-op for the front gate", () => {
+    const dir = scratchProject(true);
+    try {
+      const path = seededStateFile(dir);
+      writeFileSync(path, readFileSync(path, "utf-8")
+        .replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n")
+        .replace("- [-] requirements-analysis — EXECUTE", "- [x] requirements-analysis — EXECUTE")
+        .replace("- [ ] functional-design — EXECUTE", "- [-] functional-design — EXECUTE")
+        .replace("- [ ] code-generation — EXECUTE", "- [-] code-generation — EXECUTE"), "utf-8");
+      setStateField(dir, "Lifecycle Phase", "CONSTRUCTION");
+      setStateField(dir, "Current Stage", "code-generation");
+      setStateField(dir, "In Progress", "code-generation");
+      appendStageStarted(dir, "functional-design", "2026-10-31T16:14:00Z");
+      const before = readFileSync(path, "utf-8");
+      expect(before).toContain("- **Construction Iteration**: unit-major");
+      writeActiveDirectiveMarker(dir, {
+        kind: "run-stage",
+        stage: "code-generation",
+        unit: "u1-contracts",
+        state_sha256: stateDigest(before),
+      });
+
+      const r = runIde(dir, "sync-workflow-state", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+      expect(r.code, r.stderr).toBe(0);
+
+      expect(readFileSync(path, "utf-8")).toBe(before);
+      expect(readActiveDirectiveMarker(dir, before)?.stage).toBe("code-generation");
+      const health = join(seededRecordDir(dir), ".aidlc-engine", "hooks-health");
+      expect(existsSync(join(health, "sync-workflow-state.noop"))).toBe(true);
+      expect(existsSync(join(health, "sync-workflow-state.last"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // A Kiro IDE run reopened Code Generation for two Units from a failed Build
 // and Test, and every reopen was undone by this sync: the last STAGE_STARTED
 // was Build and Test's own, which the reopen had reset to not started, so the

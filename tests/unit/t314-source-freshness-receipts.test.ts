@@ -106,6 +106,8 @@ import {
   seededStateFile,
   seedStateFile,
   setupWorktreeFixture,
+  SYNC_FOLDER_WORDS,
+  syncedFolderEnv,
 } from "../harness/fixtures.ts";
 import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
 
@@ -2183,10 +2185,16 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const stale = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(stale.rc).toBe(1);
     expect(stale.out).toContain("What changed: app.ts; a path that is not source");
-    expect(stale.out).toContain(
-      "A background sync client (Google Drive, iCloud Drive, OneDrive, Dropbox) rewriting files on its own",
-    );
+    expect(stale.out).not.toContain("sync can change files");
     expect(stale.out).not.toContain(".jest-cache/");
+    const home = createTestProject();
+    try {
+      const synced = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"], syncedFolderEnv(proj, home));
+      expect(synced.rc).toBe(1);
+      expect(synced.out).toContain(`${SYNC_FOLDER_WORDS} Ask ${REVIEWER} to review the current source`);
+    } finally {
+      cleanupTestProject(home);
+    }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("under relaxed, with stage-level artifacts, a cache excluded after the review is not said as a change", () => {
@@ -3608,6 +3616,15 @@ describe("t314 multi-unit source attribution", () => {
     expect(dirty.out).toContain(
       "workspace source changed again after the one recovery review",
     );
+    expect(dirty.out).not.toContain("sync can change files");
+    const home = createTestProject();
+    try {
+      const synced = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"], syncedFolderEnv(proj, home));
+      expect(synced.rc).not.toBe(0);
+      expect(synced.out).toContain(SYNC_FOLDER_WORDS);
+    } finally {
+      cleanupTestProject(home);
+    }
     expect(dirty.out).toContain('already said what should change for stage \\"code-generation\\"');
     expect(dirty.out).toContain("their exact text unchanged");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);

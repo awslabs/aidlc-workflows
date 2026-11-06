@@ -67,6 +67,7 @@ import { cmdScriptLaunch } from "../../core/tools/aidlc-executable-path.ts";
 import { addRootBlocks } from "../../core/tools/aidlc-includes.ts";
 import { collectDoctorReport, firingHooksLastFired, kiroDisabledHookChecks } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -140,7 +141,7 @@ function install(harness: string, source = join(DIST_RELEASE, harness)): string 
     "--from",
     source,
     "--harness",
-    harness,
+    typedHarnessName(harness),
     "--mcp",
     "defaults",
     "--yes",
@@ -801,7 +802,8 @@ describe("t294 runtime diagnostics", () => {
       command: "kiro-cli",
       status: "found",
     }));
-    // The kiro row's own floor is the 2.6 its guide asks for.
+    // The kiro row's own floor is the 2.6 its guide asks for; `--v2` (2.21.4)
+    // is a start flag, not a floor.
     expect(probeHarnessCli("kiro", {
       which: () => "/opt/kiro/bin/kiro-cli",
       run: () => ({ status: 0, stdout: "kiro-cli 2.5.9\n" }),
@@ -810,6 +812,10 @@ describe("t294 runtime diagnostics", () => {
       status: "too-old",
       minimumVersion: "2.6.0",
     }));
+    expect(probeHarnessCli("kiro", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.6.0\n" }),
+    })).toEqual(expect.objectContaining({ command: "kiro-cli", status: "found" }));
   });
 
   // The adapter's object entry points ({ id, setup, server }) need opencode
@@ -1933,7 +1939,7 @@ describe("t294 trust diagnostics", () => {
         const dropped = await kiroNativeTrust(project, harness);
         expect(dropped.pass, dropped.label).toBe(true);
         const refreshed = run([
-          "config", "--project-dir", project, "--from", join(DIST_RELEASE, harness), "--harness", harness,
+          "config", "--project-dir", project, "--from", join(DIST_RELEASE, harness), "--harness", typedHarnessName(harness),
           "--mcp", "defaults", "--yes",
         ], project);
         expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
@@ -5794,7 +5800,7 @@ process.exit(0);
           "--from",
           join(DIST_RELEASE, harness),
           "--harness",
-          harness,
+          typedHarnessName(harness),
           "--yes",
         ], project, env);
         // A Claude hook edit is a conflict; the team's opencode.json entries are theirs to keep.
@@ -5842,7 +5848,7 @@ process.exit(0);
           "--from",
           join(DIST_RELEASE, harness),
           "--harness",
-          harness,
+          typedHarnessName(harness),
           "--yes",
         ], project, env);
         expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
@@ -6616,7 +6622,7 @@ process.exit(0);
         "--from",
         join(DIST_RELEASE, harness),
         "--harness",
-        harness,
+        typedHarnessName(harness),
         "--yes",
       ];
       const preview = run([...args, "--dry-run", "--json"], project, env);
@@ -6933,7 +6939,7 @@ process.exit(0);
       [
         "kiro",
         ["--provider", "amazon-bedrock", "--region", "us-west-2"],
-        "kiro provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.",
+        "kiro-v2 provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.",
       ],
     ] as const) {
       const project = install(harness);
@@ -6999,7 +7005,7 @@ process.exit(0);
     const check = run([...args, "--check"], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain(
-      "providers needs no answer for kiro-ide; its model access is harness-managed",
+      "providers needs no answer for kiro; its model access is harness-managed",
     );
     expect(postApplyOutstandingActions(project, ".kiro", "kiro-ide", {
       skipSections: ["runtime", "trust"],
@@ -7067,7 +7073,7 @@ process.exit(0);
       "--from",
       join(DIST_RELEASE, "kiro"),
       "--harness",
-      "kiro",
+      "kiro-v2",
       "--yes",
     ], kiro, noCredentials);
     expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
@@ -7098,7 +7104,7 @@ process.exit(0);
       "--from",
       join(DIST_RELEASE, "kiro"),
       "--harness",
-      "kiro",
+      "kiro-v2",
       "--yes",
     ], kiro, noCredentials);
     expect(kept.status, kept.stdout + kept.stderr).toBe(0);
@@ -7137,7 +7143,7 @@ process.exit(0);
     next.mcpServers["aws-pricing"].args = ["awslabs.aws-pricing-mcp-server@9.9.9"];
     delete next.mcpServers["aws-iac"];
     writeFileSync(releaseMcpPath, `${JSON.stringify(next, null, 2)}\n`);
-    const args = ["config", "--project-dir", kiro, "--from", release, "--harness", "kiro", "--yes"];
+    const args = ["config", "--project-dir", kiro, "--from", release, "--harness", "kiro-v2", "--yes"];
 
     const refresh = run(args, kiro);
     expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
@@ -7178,7 +7184,7 @@ process.exit(0);
     const mcpPath = join(project, ".kiro", "settings", "mcp.json");
     writeFileSync(mcpPath, `${JSON.stringify({ mcpServers: { "team-docs": { command: "team-docs-server" } } }, null, 2)}\n`);
     const result = run(
-      ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro", "--yes"],
+      ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro-v2", "--yes"],
       project,
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -7203,7 +7209,7 @@ process.exit(0);
     const env = { KIRO_HOME: kiroHome };
     const project = temp("aidlc-t294-kiro-grants-");
     mkdirSync(join(project, ".git"));
-    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro", "--yes"];
+    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro-v2", "--yes"];
     const shippedAgent = JSON.parse(readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as Agent;
     const shippedServers = Object.keys((JSON.parse(
       readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
@@ -7342,7 +7348,7 @@ process.exit(0);
       "--check",
     ], kiro, env);
     expect(kiroCheck.status, kiroCheck.stdout + kiroCheck.stderr).toBe(0);
-    expect(kiroCheck.stdout).toContain("needs no answer for kiro");
+    expect(kiroCheck.stdout).toContain("needs no answer for kiro-v2;");
     expect(kiroCheck.stdout).toContain("harness-managed");
     expect(providerDoctorCheck(kiro, ".kiro")).toEqual(expect.objectContaining({
       pass: true,
@@ -7369,10 +7375,10 @@ process.exit(0);
       ], project, env);
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).toContain(
-        `providers needs no answer for ${harness}; model access comes with your ${product} session; ` +
+        `providers needs no answer for ${typedHarnessName(harness)}; model access comes with your ${product} session; ` +
           `to use your own Amazon Bedrock access${where} instead, run '`,
       );
-      expect(check.stdout).toContain(` config providers --harness ${harness}'`);
+      expect(check.stdout).toContain(` config providers --harness ${typedHarnessName(harness)}'`);
       expect(check.stdout).not.toContain("shipped fallback");
       // Run from elsewhere, the command still names the project.
       const elsewhere = temp(`aidlc-t294-elsewhere-${harness}-`);
@@ -7384,7 +7390,7 @@ process.exit(0);
         "--check",
       ], elsewhere, env);
       expect(away.status, away.stdout + away.stderr).toBe(0);
-      expect(away.stdout).toContain(`config providers --harness ${harness} --project-dir `);
+      expect(away.stdout).toContain(`config providers --harness ${typedHarnessName(harness)} --project-dir `);
       expect(providerDoctorCheck(project, harnessDir)).toEqual(expect.objectContaining({
         pass: true,
         label: `Providers: model access comes with your ${product} session; no answer needed`,

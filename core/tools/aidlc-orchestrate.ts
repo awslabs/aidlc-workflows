@@ -687,6 +687,7 @@ import {
   resolveHarnessRoot,
   runtimeHarnessName,
   workspaceSyncInvocation,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
@@ -12474,14 +12475,21 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
     const verb = flags.claim ? "claim" : "release";
     const unit = flags.claim ?? flags.release!;
-    const teamArg = flags.claimTeam
-      ? ` --team ${shellArg(flags.claimTeam)}`
-      : "";
+    // The team name is the person's, so it goes in a file the claim reads
+    // (wordsForNextStep's transport): no one quoting serves every shell the
+    // agent may run it in (PowerShell splits a POSIX-quoted O'Brien, Git Bash
+    // drops the apostrophe from a PowerShell-quoted O'Brien & QA).
+    const teamFile = flags.claimTeam ? requestFileFor(resolveProjectDir(projectDir), `claim-${unit}`, flags.claimTeam) : null;
+    const teamArg = !flags.claimTeam
+      ? ""
+      : teamFile !== null
+      ? ` --request-file ${teamFile}`
+      : ` --team ${quoteCommandArgument(flags.claimTeam)}`;
     const rhythmArg = flags.claimRhythm
-      ? ` --rhythm ${shellArg(flags.claimRhythm)}`
+      ? ` --rhythm ${quoteCommandArgument(flags.claimRhythm)}`
       : "";
     emit(turnEndingPrint(
-      `Run \`${aidlcInvocation()} --${verb} ${shellArg(unit)}${teamArg}${rhythmArg}\`, ` +
+      `Run \`${aidlcInvocation()} --${verb} ${quoteCommandArgument(unit)}${teamArg}${rhythmArg}\`, ` +
         `print its output verbatim, then stop. Re-run ${entrySkillInvocation()} after the claim registry changes.`,
     ));
     return;
@@ -12567,7 +12575,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // AI-DLC's status line, switched by the person: one config command applies it
   // and says the line; nothing of the work moves.
   if (flags.statusline === "on" || flags.statusline === "off") {
-    const command = `${aidlcInvocation()} config --statusline ${flags.statusline} --harness ${runtimeHarnessName()}`;
+    const command = `${aidlcInvocation()} config --statusline ${flags.statusline} --harness ${typedHarnessName(runtimeHarnessName())}`;
     emit(turnEndingPrint(
       `Run \`${command}\`, print its output verbatim, then stop. This is a setting, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));

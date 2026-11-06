@@ -231,7 +231,7 @@ const UNIT_USAGE: ReadonlyMap<string, string> = new Map([
   ["adopt", "adopt <unit>"],
   ["amend", "amend <unit> --input <file> --answer <approve|reject> [--file <text the lead approves>] (--request-file <file> | --person-words <text>)"],
   ["assign", "assign <unit>=<team> [<unit>=<team> ...] | --open"],
-  ["claim", "claim <unit> [--team <label>] [--rhythm per-stage|unit-end]"],
+  ["claim", "claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]"],
   ["gate", "gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)"],
   ["hand-off", "hand-off <unit> --team <team> [--request-file <file> | --person-words <text>]"],
   ["land", "land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] [--accept-released-attempt --user-input <human acknowledgment>]"],
@@ -4441,6 +4441,17 @@ function claimUnit(args: string[], projectDir?: string): void {
     fail(`Invalid --rhythm "${flags.rhythm}"; expected per-stage or unit-end.`);
   }
   const pd = resolveProjectDir(projectDir);
+  // The team name in the file `next --claim` wrote for this command, so no
+  // shell read it on the way; spent once the claim holds.
+  let team = flags.team;
+  let spend = (): void => {};
+  if (flags["request-file"] !== undefined) {
+    if (team !== undefined) fail("Pass either --team or --request-file, not both.");
+    const read = readRequestFile(pd, flags["request-file"]);
+    if (typeof read === "string") fail(read);
+    team = read.text;
+    spend = read.spend;
+  }
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   // Where the work records its home, each team takes its Unit in its own clone
@@ -4474,6 +4485,7 @@ function claimUnit(args: string[], projectDir?: string): void {
       recovered.nonce === existingStamp.nonce
     ) {
       finalizeClaimCheckout(pd, existingStamp, recovered);
+      spend();
       console.log(JSON.stringify({ claimed: true, recovered: true, ...existingStamp }));
       return;
     }
@@ -4514,7 +4526,7 @@ function claimUnit(args: string[], projectDir?: string): void {
       ? current.generation
       : (current?.generation ?? 0) + 1;
   const nonce = randomUUID();
-  const owner = claimOwnerLabel(pd, flags.team);
+  const owner = claimOwnerLabel(pd, team);
   // Pin takes exactly one newly added team shard (candidateBoundary). A
   // checkout whose own shard main already has (the lead's own checkout, or a
   // copy of it) keeps the claim's evidence in a shard of the claim's own: the
@@ -4586,6 +4598,7 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
+  spend();
   console.log(JSON.stringify({ claimed: true, ...stamp, ...(planWarning ? { warning: planWarning } : {}) }));
 }
 

@@ -2474,18 +2474,23 @@ try {
       return null;
     }
   };
-  // The review_artifact rule's error in aidlc-stage-schema.ts, found by its
-  // text, which every engine that has the rule words the same way; null when
-  // the stage passes the rule.
-  const reviewTargetGap = (content: string): string | null => {
+  // The installed engine's schema errors for a stage; null when it has no
+  // schema or the stage does not parse, and the graph compile then judges it.
+  const stageErrors = (content: string): string[] | null => {
     const stage = parsedStage(content);
     if (stage === null || typeof installedSchema?.validateStageFrontmatter !== "function") return null;
     try {
-      const errors = installedSchema.validateStageFrontmatter(stage).errors ?? [];
-      return errors.find((error) => error.includes("is pruned for applicable unit kinds")) ?? null;
+      return installedSchema.validateStageFrontmatter(stage).errors ?? [];
     } catch {
       return null;
     }
+  };
+  // What an addition breaks, in the installed schema's own words: the errors
+  // `after` has that the stage had before it. Compose never reads which rule
+  // an error is, since another engine can word or add rules differently.
+  const addedErrors = (before: readonly string[], after: string): string | null => {
+    const fresh = (stageErrors(after) ?? []).filter((error) => !before.includes(error));
+    return fresh.length > 0 ? fresh.join("; ") : null;
   };
   const giveProducesKinds = (content: string, added: string[]): string => {
     if (!addPluginProducesKinds || added.length === 0) return content;
@@ -2497,8 +2502,10 @@ try {
   };
   const withProducesKinds = (target: string, before: string, merged: string, added: string[]): string => {
     const given = giveProducesKinds(merged, added);
-    const gap = reviewTargetGap(given);
-    if (gap === null || reviewTargetGap(before) !== null) return given;
+    const beforeErrors = stageErrors(before);
+    if (beforeErrors === null) return given;
+    const gap = addedErrors(beforeErrors, given);
+    if (gap === null) return given;
     // An output with no entry is what widens the stage. Merge only the outputs
     // that have one, one at a time, and keep each that leaves the stage within
     // its review target, so the drop names only the outputs that widen it.
@@ -2509,7 +2516,7 @@ try {
     for (const name of mapped) {
       const one: string[] = [];
       const next = giveProducesKinds(mergeListField(kept, "produces", [name], target, one), one);
-      if (one.length > 0 && reviewTargetGap(next) === null) {
+      if (one.length > 0 && addedErrors(beforeErrors, next) === null) {
         kept = next;
         landed.push(...one);
       }

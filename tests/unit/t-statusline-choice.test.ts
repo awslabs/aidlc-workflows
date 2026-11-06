@@ -30,6 +30,7 @@ import {
   STATUSLINE_UNASKED_DEFAULT,
   switchClaudeStatusLine,
 } from "../../core/tools/aidlc-statusline-choice.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(180_000);
 
@@ -124,7 +125,7 @@ function project(prefix = "aidlc-statusline-project-"): string {
 }
 
 function setUp(m: Machine, harness: "claude" | "codex", dir = project()): string {
-  const result = run(m, ["config", "--project-dir", dir, "--from", join(RUNTIME, harness), "--harness", harness, "--yes"]);
+  const result = run(m, ["config", "--project-dir", dir, "--from", join(RUNTIME, harness), "--harness", typedHarnessName(harness), "--yes"]);
   expect(result.status, result.out).toBe(0);
   return dir;
 }

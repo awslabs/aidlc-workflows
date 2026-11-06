@@ -184,10 +184,10 @@ import {
   recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
 import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } from "./aidlc-swarm-source.ts";
-import { BACKGROUND_SYNC_CAUSE, CHECK_GLOSS } from "./aidlc-guard-fences.ts";
+import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
-import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
 } from "./aidlc-reply-reader.ts";
@@ -4863,7 +4863,7 @@ function planApprovalQuestionEvidence(
             "Re-run the fingerprint command, re-present the plan, and approve again."
         : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract. " +
             (changed.length > 0 ? `Files that differ from the approved copy: ${renderChangedPaths(changed)}. ` : "") +
-            `${BACKGROUND_SYNC_CAUSE} ` +
+            syncFolderClause(projectDir) +
             "Re-run the fingerprint command, re-present the plan, and approve again.",
     );
   }
