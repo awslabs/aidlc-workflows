@@ -13313,9 +13313,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           // walk: no fan-out directive.
           throw new Error("claimless-team-mode");
         }
-        // The Unit this checkout walks without a claim is still its own once a
-        // team claims another (#3610): the walk goes on with it, never the board.
-        if (unitsHeldHere(pd) !== null) throw new Error("claimless-team-mode");
         const overview = cachedUnitClaimOverview(pd, {
           writeCache: !readOnlyBoard,
         });
@@ -13346,6 +13343,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           emit(offer);
           return;
         }
+        // The Unit this checkout walks without a claim is still its own once a
+        // team claims another (#3610): after the offers above, the walk goes on
+        // with it instead of the board.
+        if (unitsHeldHere(pd) !== null) throw new Error("claimless-team-mode");
         // While the guard's fan-out check holds (a landed Unit's claim
         // included) it refuses Unit work in this checkout, so the board stays
         // up until the walk has no Unit left to take: every Unit merged. A
