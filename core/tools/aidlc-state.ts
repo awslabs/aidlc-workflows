@@ -64,6 +64,8 @@ import {
   appendUnderHeading,
   artifactFilename,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
+  blockingSensorPicks,
+  optionsList,
   shellArg,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
@@ -312,7 +314,7 @@ import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
-import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel, SWITCH_CHECKS_OFF_CHOICE } from "./aidlc-orchestrate.ts";
 import {
   askedQuestionFields,
   commandChat,
@@ -4243,27 +4245,65 @@ type BlockingCheckAt =
   | { kind: "gate"; reportResult: "awaiting-approval" | "revised" }
   | { kind: "checkpoint"; unit: string; checkpointKind: string; overrodeAt?: string };
 
-// The line said before a Unit's check question when the person overrode the
+// What the person already decided about these checks at other Units, for this
+// Unit's refusal: the line said before the question when they overrode the
 // same check at an earlier Unit (each Unit's latest verification decides), so
-// their second answer is quick; null when they did not.
-function overrodeAtEarlierUnits(pd: string, slug: string, unit: string, sensorIds: string[]): string | null {
+// their second answer is quick; and, when they asked at an earlier Unit to
+// switch that check off, were asked once what they meant (the question offered
+// the work's switch beside the check's two choices) and picked the Override for
+// that Unit, the same pick for the same words here. Read from the record alone:
+// the question's offered choices, the pick, and the verification that carried
+// it (that one, not the Unit's latest, so an Override later undone keeps their
+// answer). The check's name in these lines is the agent's (<check>): its id is
+// the team's internal name. Null when there is nothing to say.
+function overrodeAtEarlierUnits(pd: string, slug: string, unit: string, kind: string, sensorIds: string[]): string | null {
+  const rows = sortAttemptEvents(readAuditShardEvents(pd));
   const latest = new Map<string, string>();
-  for (const row of sortAttemptEvents(readAuditShardEvents(pd))) {
+  for (const row of rows) {
     if (row.event !== "CHECKPOINT_VERIFICATION_RECORDED" || auditBlockField(row.block, "Verified") !== "true") continue;
     const at = auditBlockField(row.block, "Unit");
     if (at === null || at === unit) continue;
     latest.set(at, auditBlockField(row.block, "Blocking Checks") ?? "");
   }
-  const entries = (checks: string): string[] => checks.split(",").map((entry) => entry.trim());
-  const units = (id: string): string[] => [...latest].filter(([, checks]) =>
-    entries(checks).some((entry) => entry.startsWith(`${slug}:${id}@`) && entry.endsWith("=overridden"))
-  ).map(([at]) => at);
-  const list = (names: string[]): string =>
-    names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const overrode = (checks: string, id: string): boolean => checks.split(",").map((entry) => entry.trim())
+    .some((entry) => entry.startsWith(`${slug}:${id}@`) && entry.endsWith("=overridden"));
+  // The one ask answered with the Override at another Unit: the verification that carried it, per Unit.
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  const questions = new Map<AuditShardEvent, AuditShardEvent>();
+  const carried = new Map<string, string>();
+  for (const [pick, choice] of blockingSensorPicks(rows, slug, pickUnits, questions)) {
+    const at = pickUnits.get(pick) ?? null;
+    if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE || at === null || at === unit || carried.has(at)) continue;
+    if (!optionsList(auditBlockField(questions.get(pick)?.block ?? "", "Options")).includes(SWITCH_CHECKS_OFF_CHOICE)) continue;
+    const verification = rows.slice(rows.indexOf(pick) + 1).find((row) =>
+      row.event === "CHECKPOINT_VERIFICATION_RECORDED" && auditBlockField(row.block, "Unit") === at &&
+      auditBlockField(row.block, "Verified") === "true" && auditBlockField(row.block, "Blocking Sensor Override") === "true"
+    );
+    if (verification !== undefined) carried.set(at, auditBlockField(verification.block, "Blocking Checks") ?? "");
+  }
+  const plain = (names: string[]): string => {
+    const shown = names.map(unitPlainName);
+    const list = shown.length < 2 ? shown.join("") : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+    return `the ${list} Unit${shown.length > 1 ? "s" : ""}`;
+  };
+  const slot = (id: string): string => `(<check>: the ${checkName(id)}, named by what it checks, as you name it in the question.)`;
   const said = sensorIds.flatMap((id) => {
-    const at = units(id);
-    if (at.length === 0) return [];
-    return [`You overrode ${sensorIds.length === 1 ? "this check" : `the ${id} check`} at ${list(at)}.`];
+    const lines: string[] = [];
+    const before = [...latest].filter(([, checks]) => overrode(checks, id)).map(([at]) => at);
+    if (before.length > 0) {
+      lines.push(`Say to the person, just before the question: "You overrode the <check> for ${plain(before)}." ${slot(id)}`);
+    }
+    const same = [...carried].find(([, checks]) => overrode(checks, id))?.[0];
+    if (same !== undefined) {
+      lines.push(
+        `At ${plain([same])} they were asked what switching this check off meant and picked the Override for that Unit, ` +
+          `so a request to switch this check off again is that same pick: run \`${aidlcToolInvocation("log")} answer ` +
+          `--stage ${slug} --unit ${shellArg(unit)} --details "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" --message '<id>'\` ` +
+          `(<id>: the message they said it in), then \`${blockingSensorOverrideVerify(unit, kind)}\`, and once that verify ` +
+          `succeeds say in one line: "Same as for ${plain([same])}: I've overridden the <check> for this one too." ${slot(id)}`,
+      );
+    }
+    return lines;
   });
   return said.length === 0 ? null : said.join(" ");
 }
@@ -4335,7 +4375,7 @@ function enforceBlockingGateSensors(
       (at.kind === "checkpoint"
         ? ` If the person asked to switch the checks off for this piece of work, that is no pick: run ` +
           `\`${aidlcToolInvocation("orchestrate")} next --sensors off\` instead and follow its step.` +
-          (at.overrodeAt === undefined ? "" : ` Say to the person, just before the question: "${at.overrodeAt}"`)
+          (at.overrodeAt === undefined ? "" : ` ${at.overrodeAt}`)
         : ""),
   );
 }
@@ -7570,7 +7610,7 @@ function handleCheckpointChecks(args: string[]): void {
     if (issues.length > 0 && !standing) recordShown(slug, issues.map(keyOf));
     // A stage the person has not answered for is asked about, never refused for a pick they made elsewhere.
     const overrodeAt = issues.length > 0 && !standing
-      ? overrodeAtEarlierUnits(pd, slug, unit, [...new Set(issues.map((issue) => issue.sensorId))])
+      ? overrodeAtEarlierUnits(pd, slug, unit, kind, [...new Set(issues.map((issue) => issue.sensorId))])
       : null;
     enforceBlockingGateSensors(
       pd, stateContent, slug,

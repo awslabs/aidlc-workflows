@@ -11850,6 +11850,8 @@ export function blockingSensorPicks(
   slug: string,
   // Filled with each pick's Unit, when given: its answer's, or the question's it answers.
   units?: Map<AuditShardEvent, string | null>,
+  // Filled with the question each pick answers, when given.
+  questions?: Map<AuditShardEvent, AuditShardEvent>,
 ): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
   const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
   // Each clone's shard keeps its own append order, so a teammate's question in
@@ -11906,6 +11908,7 @@ export function blockingSensorPicks(
     if (choice !== undefined) {
       picks.set(row, choice);
       units?.set(row, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"));
+      questions?.set(row, decision);
     }
   }
   return picks;
