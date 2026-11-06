@@ -219,9 +219,11 @@ describe("an engine question of teams building their Units", () => {
     say(home.dir, A, "leave them open for now");
     expect(openIn(home.dir)).toEqual([ask.question_id as string]);
     expect(teamRun(UNIT, ["assign", "--open"], home.dir).status).toBe(0);
-    expect(teamNext(home.dir, chat).ask_type).not.toBe("unit-assignment");
+    // The plan's share question follows it: the open step is that one now.
+    const share = teamNext(home.dir, chat);
+    expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
     say(home.dir, A, "ok");
-    expect(openIn(home.dir)).toEqual([]);
+    expect(openIn(home.dir)).toEqual([share.question_id as string]);
   });
 
   test("every ask the engine hands out is on its list of engine asks, the code plan question aside", () => {
