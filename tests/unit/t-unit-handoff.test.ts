@@ -138,6 +138,23 @@ describe("the lead hands a Unit off by file", () => {
 });
 
 describe("the team takes the file in", () => {
+  // A live run (Copilot CLI on Windows): the member typed the documented
+  // "/aidlc <hand-off file path>", the agent ran next with that path as the
+  // request, and the engine offered to run a new feature plan for the path.
+  test("a request that is only the hand-off file's path is that hand-off, never new work", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    const path = deliver(home.dir, FILE);
+    for (const said of [path, `"${path}"`, `'${path}' `]) {
+      const ask = next(partner.dir, undefined, [said]);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-handoff");
+      expect(JSON.stringify(ask)).not.toContain("feature plan");
+    }
+    // Words that only mention the file are the person's request, as before.
+    const words = next(partner.dir, undefined, [`please read ${path} later`]);
+    expect(words.ask_type).not.toBe("unit-handoff");
+  });
+
   test("pointing at the file is the offer to start it; taking it starts the Unit's build, by file", () => {
     const { home } = handedOff();
     const partner = partnerWorkspace();

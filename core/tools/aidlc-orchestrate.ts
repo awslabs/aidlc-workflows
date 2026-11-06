@@ -8943,6 +8943,18 @@ function unitTakeLook(
   return { sentences, choices, homeHere, stale };
 }
 
+// A request that is only the path of a file AI-DLC wrote for a hand-off, its
+// progress or its result (`/aidlc <file>`) is that file, as `--hand-file` is:
+// read by the file's own structure, never by the words. Anything else is the
+// person's request as before.
+function bareHandFileRequest(flags: ParsedFlags, projectDir: string): void {
+  if (flags.handFile !== undefined || flags.intent === undefined) return;
+  const bare = flags.intent.trim().replace(/^(["'])(.+)\1$/, "$2");
+  if (bare === "" || handFileStep(projectDir, bare) === null) return;
+  flags.handFile = bare;
+  delete flags.intent;
+}
+
 // The person's words are just the path of a hand-off file: the offer to start
 // the Unit in it. The path of a team's result or progress file is taken in, at
 // the home it was sent to. A file already acted on here is "done": the words
@@ -12150,6 +12162,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // Only the park branches still see a resume that carried words.
   const resuming = flags.resume === true || withoutResume !== null;
   handOutSettingsLine(flags, resolveProjectDir(projectDir));
+  bareHandFileRequest(flags, resolveProjectDir(projectDir));
   pickingUp = flags.resume === true;
 
   // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
