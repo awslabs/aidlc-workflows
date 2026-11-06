@@ -66,6 +66,8 @@ import {
   engineAskMark,
   noteEngineAskMark,
   parseArgs,
+  asksForHelp,
+  printUsageAndExit,
   recordDir,
   parseBoltDag,
   readAppendOnlyFileNoFollowOrThrow,
@@ -175,6 +177,8 @@ import {
   textFingerprint,
   UNIT_BUILD_FIELD,
   UNIT_PUSH_FIELD,
+  UNIT_BRANCH_FIELD,
+  unitBranchOf,
   type UnitBuild,
   unitBuildOf,
   unitLikelyRepos,
@@ -213,6 +217,39 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
 import { UNIT_VERBS } from "./aidlc-command.ts";
+
+// Each verb's usage, for its own refusal and for `--help`, which prints it and
+// changes nothing.
+const UNIT_USAGE: ReadonlyMap<string, string> = new Map([
+  ["adopt", "adopt <unit>"],
+  ["amend", "amend <unit> --input <file> --answer <approve|reject> (--request-file <file> | --person-words <text>)"],
+  ["assign", "assign <unit>=<team> [<unit>=<team> ...] | --open"],
+  ["claim", "claim <unit> [--team <label>] [--rhythm per-stage|unit-end]"],
+  ["gate", "gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)"],
+  ["hand-off", "hand-off <unit> --team <team> [--request-file <file> | --person-words <text>]"],
+  ["land", "land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] [--accept-released-attempt --user-input <human acknowledgment>]"],
+  ["lead-sign-off", "lead-sign-off on|off"],
+  ["merge-status", "merge-status <unit>"],
+  ["merged", "merged <unit> --repo <repo> (--request-file <file> | --person-words <text>)"],
+  ["participate", "participate"],
+  ["pin", "pin <unit>"],
+  ["progress", "progress"],
+  ["propose", "propose --input <file it was approved with> [--file <changed text>] [--request-file <file> | --person-words <text>]"],
+  ["publish", "publish <unit> [--commit]"],
+  ["push", "push [--branch <name>] [--remote <repo>=<remote>[,<repo>=<remote>...]] [--later]"],
+  ["rebase", "rebase"],
+  ["release", "release <unit> [--expect-nonce <claim-nonce>]"],
+  ["share", "share"],
+  ["sign-off", "sign-off <unit> (--request-file <file> | --person-words <text>)"],
+  ["status", "status"],
+  ["take", "take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] | take --file <hand-off file>"],
+  ["take-in", "take-in <file>"],
+  ["turned-down", "turned-down <unit> --repo <repo> (--request-file <file> | --person-words <text>)"],
+]);
+
+function unitUsage(verb: string): string {
+  return `Usage: aidlc-unit ${UNIT_USAGE.get(verb) ?? `<${[...UNIT_VERBS.keys()].join("|")}> ...`}`;
+}
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -2202,7 +2239,7 @@ function publishUnit(args: string[], projectDir?: string): void {
   // `--commit` takes no value; `publish --commit alpha` reads alpha as its own.
   const commitFirst = bareFlags.has("commit") || flags.commit !== undefined;
   const unit = positional[0] ?? (bareFlags.has("commit") ? undefined : flags.commit);
-  if (!unit) fail("Usage: aidlc-unit publish <unit> [--commit]");
+  if (!unit) fail(unitUsage("publish"));
   const pd = resolveProjectDir(projectDir);
   const stamp = requireLiveClaimForTeamUnit(pd, unit);
   if (!stamp) fail("Unit publication requires a scoped team checkout.");
@@ -2672,7 +2709,7 @@ function mergeGateRecord(
 function pinUnit(args: string[], projectDir?: string): void {
   const { positional } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit pin <unit>");
+  if (!unit) fail(unitUsage("pin"));
   const pd = resolveProjectDir(projectDir);
   if (readApplicableTeamUnitScopeStamp(pd)) {
     fail("Unit pinning must run from an unscoped main checkout.");
@@ -2801,9 +2838,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     spend = read.spend;
   }
   if (!unit || (decision !== "approve" && decision !== "reject") || !userInput) {
-    fail(
-      "Usage: aidlc-unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
-    );
+    fail(unitUsage("gate"));
   }
   if (
     !humanPresenceGuardDisabled() &&
@@ -3846,10 +3881,7 @@ function landUnit(args: string[], projectDir?: string): void {
     !["git", "state", "audit", "all"].includes(step) ||
     (flags.strategy !== undefined && flags.strategy !== "merge")
   ) {
-    fail(
-      "Usage: aidlc-unit land <unit> [--step git|state|audit|all] [--target <branch>] " +
-        "[--strategy merge] [--accept-released-attempt --user-input <human acknowledgment>]",
-    );
+    fail(unitUsage("land"));
   }
   const pd = resolveProjectDir(projectDir);
   assertMainCheckout(pd);
@@ -4266,7 +4298,7 @@ function writePendingRelease(
 function adoptUnit(args: string[], projectDir?: string): void {
   const { positional } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit adopt <unit>");
+  if (!unit) fail(unitUsage("adopt"));
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
@@ -4369,7 +4401,7 @@ function homePlanChangingLine(state: string, units: readonly string[]): string |
 function claimUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit claim <unit> [--team <label>] [--rhythm per-stage|unit-end]");
+  if (!unit) fail(unitUsage("claim"));
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   if (
@@ -4551,7 +4583,7 @@ function moveClaimTurnRows(projectDir: string, shardPath: string, localPath: str
 function releaseUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit release <unit> [--expect-nonce <claim-nonce>]");
+  if (!unit) fail(unitUsage("release"));
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
@@ -5006,7 +5038,7 @@ function assignUnits(args: string[], projectDir?: string): void {
     if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
     pairs.push({ unit, team });
   }
-  if (pairs.length === 0 && !open) fail("Usage: aidlc-unit assign <unit>=<team> [<unit>=<team> ...] | --open");
+  if (pairs.length === 0 && !open) fail(unitUsage("assign"));
   const local = localOpeningStatus(pd);
   let skeleton = teamSkeletonOn(state) ? local.skeleton : null;
   const lines: string[] = [];
@@ -5583,11 +5615,11 @@ function switchOntoUnitBranch(dir: string, unit: string, paths: string[], dryRun
 
 // The repos where the person's own changes would stop the push's switch onto
 // the Unit's branch just now: the same switch, as a dry run.
-export function unitBranchInTheWay(projectDir: string, unit: string, byRepo: Map<string, string[]>): string[] {
+export function unitBranchInTheWay(projectDir: string, branch: string, byRepo: Map<string, string[]>): string[] {
   return [...byRepo].filter(([repo, paths]) => {
     const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
-    return isGitRepoDir(dir) && git(dir, ["branch", "--show-current"]).stdout.trim() !== unit &&
-      git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${unit}`]).ok && !switchOntoUnitBranch(dir, unit, paths, true).ok;
+    return isGitRepoDir(dir) && git(dir, ["branch", "--show-current"]).stdout.trim() !== branch &&
+      git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok && !switchOntoUnitBranch(dir, branch, paths, true).ok;
   }).map(([repo]) => repo);
 }
 
@@ -5670,7 +5702,7 @@ function takeUnit(args: string[], projectDir?: string): void {
     return;
   }
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit take <unit> --home <record> [--home-space <space>] [--team <label>]");
+  if (!unit) fail(unitUsage("take"));
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   if (!flags.home) fail("take needs --home <record>: the home's work this Unit belongs to.");
@@ -6115,6 +6147,16 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (build === null) fail("push sends a Unit's build home; this work is not one.");
   const unit = build.unit;
   if (bareFlags.has("later") || flags.later !== undefined) {
+  // The branch the person named (their team's own rule), kept for every
+  // later push; else the one named before, else the Unit's name.
+  if (bareFlags.has("branch")) fail(`push --branch needs the branch name the person gave. ${unitUsage("push")}.`);
+  const before = unitBranchOf(state, unit);
+  const branch = flags.branch?.trim() || before;
+  if (flags.branch !== undefined) {
+    const checked = git(pd, ["check-ref-format", "--branch", branch]);
+    if (!checked.ok) fail(`"${branch}" is not a branch name git takes, so nothing was pushed.${checked.stderr.trim() ? ` Git says: "${gitSaid(checked.stderr)}".` : ""}`);
+    withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_BRANCH_FIELD, branch)));
+  }
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
     finishBuildRecord(pd);
     console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you want it to go home.` }));
@@ -6208,14 +6250,22 @@ function pushUnit(args: string[], projectDir?: string): void {
   const madeAt = new Map<string, string>();
   const along: string[] = [];
   const whereNow = (done = false): string =>
-    whereNowLine(unit, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "");
+    whereNowLine(branch, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "");
   for (const { repo, dir, name, remote, paths } of planned) {
     const from = git(dir, ["branch", "--show-current"]).stdout.trim();
-    if (from !== unit) {
-      const exists = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${unit}`]).ok;
+    // The Unit's branch under the name it had, now to go under the person's:
+    // renamed as their own hands would while the remote has no copy of it.
+    if (branch !== before && git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${before}`]).ok &&
+      !git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok) {
+      const sent = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${before}`]).ok;
+      const named = git(dir, sent ? ["branch", branch, before] : ["branch", "-m", before, branch]);
+      if (!named.ok) fail(`Branch ${before} in ${name} could not be named ${branch}, so nothing was pushed. Git says: "${gitSaid(named.stderr)}".${whereNow()}`);
+    }
+    if (from !== branch) {
+      const exists = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
       let switched = false;
       let said = "";
-      if (exists) ({ ok: switched, said } = switchOntoUnitBranch(dir, unit, paths));
+      if (exists) ({ ok: switched, said } = switchOntoUnitBranch(dir, branch, paths));
       else {
         // From the shared integration branch, fetched, when their working tree
         // allows; the workspace itself, which holds AI-DLC's record of this
@@ -6223,17 +6273,17 @@ function pushUnit(args: string[], projectDir?: string): void {
         const integration = repoIntegration(dir, remote);
         if (repo !== ".") {
           git(dir, ["fetch", "-q", remote, integration.slice(remote.length + 1)]);
-          switched = git(dir, ["switch", "-q", "-c", unit, integration]).ok;
+          switched = git(dir, ["switch", "-q", "-c", branch, integration]).ok;
         }
         if (!switched) {
-          const tried = git(dir, ["switch", "-q", "-c", unit]);
+          const tried = git(dir, ["switch", "-q", "-c", branch]);
           switched = tried.ok;
           said = tried.stderr;
           if (switched) madeAt.set(repo, git(dir, ["rev-parse", "HEAD"]).stdout.trim());
         }
       }
       if (!switched) {
-        fail(`Branch ${unit} could not be checked out in ${name}, so nothing was pushed.${said.trim() ? ` Git says: "${gitSaid(said)}".` : ""}` +
+        fail(`Branch ${branch} could not be checked out in ${name}, so nothing was pushed.${said.trim() ? ` Git says: "${gitSaid(said)}".` : ""}` +
           `${exists ? ` Your own changes there stay as they are; once they are committed or put aside, I can push ${unit}.` : ""}${whereNow()}`);
       }
       moved.push({ name, from: from || "the commit you were on" });
@@ -6246,8 +6296,8 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
   }
   for (const { repo, dir, name, remote, paths } of planned) {
-    const comesAlong = comesAlongLine(dir, name, unit, remote, madeAt.get(repo));
-    const pushed = git(dir, ["push", "-u", remote, unit]);
+    const comesAlong = comesAlongLine(dir, name, branch, remote, madeAt.get(repo));
+    const pushed = git(dir, ["push", "-u", remote, branch]);
     if (!pushed.ok) {
       fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}` +
         along.map((line) => ` ${line}`).join(""));
@@ -6260,7 +6310,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     const blobs = blobsAt(dir, head, changed);
     const entry: RepoResult = {
       repo,
-      branch: unit,
+      branch,
       base,
       heads: [...new Set([...(earlier.get(repo)?.heads ?? []), head])],
       paths: Object.fromEntries(changed.map((path) => [path, blobs.get(path) ?? null])),
@@ -6279,7 +6329,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     results.push(entry);
   }
   const names = results.map((repo) => (repo.repo === "." ? "the repo" : repo.repo));
-  const lines = [`Pushed branch ${unit} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.${whereNow(true)}`];
+  const lines = [`Pushed branch ${branch} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.${whereNow(true)}`];
   if (addedRepos.length > 0) {
     lines.push(`${joinNames(addedRepos)} ${addedRepos.length === 1 ? "was" : "were"} not in the home's plan; ${unit} changed ` +
       `${addedRepos.length === 1 ? "it" : "them"}, so ${addedRepos.length === 1 ? "it is" : "they are"} now among ${unit}'s repos and went with the push.`);
@@ -6345,7 +6395,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, homeHasIt ? "pushed" : "unsent"));
     appendAuditEntryUnlocked("UNIT_PUSHED", {
       Unit: unit,
-      Branch: unit,
+      Branch: branch,
       Repos: results.map((repo) => `${repo.repo}@${repo.heads.at(-1)}`).join(", "),
     }, pd);
   });
@@ -6660,19 +6710,20 @@ export function earlyBaseMerged(
     return [];
   }
   return (claims.get(build.unit)?.payload.early_on ?? []).flatMap((dep) => {
+  const branch = unitBranchOf(stateContent, build.unit);
     const theirs = claims.get(dep.unit)?.payload;
     if (!theirs?.done || skip(dep.unit)) return [];
     const moves = (from: typeof dep.repos, look: boolean) => from.flatMap(({ repo, head }) => {
       const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
       const remote = isGitRepoDir(dir) ? repositoryRemote(dir) : null;
-      if (remote === null || !git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${build.unit}`]).ok) return [];
+      if (remote === null || !git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok) return [];
       const onto = repoIntegration(dir, remote);
       // The integration branch as its remote has it now, with the merge.
       if (look) quietFetch(dir, ["-q", remote, onto.slice(remote.length + 1)]);
-      if (git(dir, ["merge-base", "--is-ancestor", onto, `refs/heads/${build.unit}`]).ok) return [];
+      if (git(dir, ["merge-base", "--is-ancestor", onto, `refs/heads/${branch}`]).ok) return [];
       const kept = theirs.verdicts?.find((verdict) => verdict.repo === repo)?.how === "ancestry";
-      const own = head === "" || git(dir, ["rev-parse", `refs/heads/${build.unit}`]).stdout.trim() !== head;
-      const on = git(dir, ["branch", "--show-current"]).stdout.trim() === build.unit;
+      const own = head === "" || git(dir, ["rev-parse", `refs/heads/${branch}`]).stdout.trim() !== head;
+      const on = git(dir, ["branch", "--show-current"]).stdout.trim() === branch;
       return [{
         repo,
         name: repo === "." ? "the repo" : repo,
@@ -6680,7 +6731,7 @@ export function earlyBaseMerged(
         remote,
         onto,
         rebase: on && !own ? ["reset", "-q", "--keep", onto]
-          : kept || head === "" ? ["rebase", onto, build.unit] : ["rebase", "--onto", onto, head, build.unit],
+          : kept || head === "" ? ["rebase", onto, branch] : ["rebase", "--onto", onto, head, branch],
       }];
     });
     const waiting = refused(dep.unit) ? moves(dep.repos, false) : null;
@@ -6728,6 +6779,7 @@ function rebaseUnit(args: string[], projectDir?: string): void {
   const build = unitBuildOf(state);
   if (build === null) fail("rebase moves a Unit's build onto the integration branch; this work is not one.");
   const moved: string[] = [];
+  const unitBranch = unitBranchOf(state, build.unit);
   const onto = new Set<string>();
   // A rebase names the Unit's branch, so git switches to it first.
   const switched: Array<{ name: string; from: string }> = [];
@@ -6743,21 +6795,21 @@ function rebaseUnit(args: string[], projectDir?: string): void {
         // Refused for their own changes: offered again once they are out of the way.
         if (!stopped) noteEngineAskMark(pd, moveRefusedMark(dep.unit));
         // A stopped rebase switched to the Unit's branch first, and its abort leaves them there.
-        if (stopped && from !== build.unit) switched.push({ name: repo.name, from: from || "the commit you were on" });
+        if (stopped && from !== unitBranch) switched.push({ name: repo.name, from: from || "the commit you were on" });
         fail(`${build.unit} could not be moved onto ${branch} in ${repo.name}. Git says: "${gitSaid(ran.stderr || ran.stdout)}".` +
           (stopped ? ` To go back to where ${build.unit} was there, run git rebase --abort in ${repo.name}.` : "") +
-          (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.` : "") + whereNowLine(build.unit, switched));
+          (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.` : "") + whereNowLine(unitBranch, switched));
       }
       moved.push(repo.name);
       onto.add(branch);
       if (repo.rebase[0] === "rebase") replayed = true;
-      if (from !== build.unit) switched.push({ name: repo.name, from: from || "the commit you were on" });
+      if (from !== unitBranch) switched.push({ name: repo.name, from: from || "the commit you were on" });
     }
   }
   const notice = moved.length === 0
     ? `${build.unit} is on the integration branch already; nothing moved.`
     : `${build.unit} is on ${joinNames([...onto])} now in ${joinNames(moved)}${replayed ? ", with its own commits on top" : ""}. ` +
-      `Nothing is pushed.${whereNowLine(build.unit, switched)}`;
+      `Nothing is pushed.${whereNowLine(unitBranch, switched)}`;
   console.log(JSON.stringify({ moved: moved.length > 0, unit: build.unit, repos: moved, notice }));
 }
 
@@ -6790,7 +6842,7 @@ function renewForAmendedInput(projectDir: string, rel: string, extra: Record<str
 // person's own file, or their edited copy. The build carries on meanwhile.
 function proposeChange(args: string[], projectDir?: string): void {
   const { flags } = parseArgs(args);
-  if (!flags.input) fail("Usage: aidlc-unit propose --input <file it was approved with> [--file <changed text>] [--request-file <file> | --person-words <text>]");
+  if (!flags.input) fail(unitUsage("propose"));
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
   const build = unitBuildOf(state);
@@ -6935,7 +6987,7 @@ function amendInput(args: string[], projectDir?: string): void {
   const unit = positional[0];
   const answer = flags.answer;
   if (!unit || !flags.input || (answer !== "approve" && answer !== "reject")) {
-    fail("Usage: aidlc-unit amend <unit> --input <file> --answer <approve|reject> (--request-file <file> | --person-words <text>)");
+    fail(unitUsage("amend"));
   }
   const pd = resolveProjectDir(projectDir);
   const words = personWordsOf(pd, flags);
@@ -7028,7 +7080,7 @@ function amendInput(args: string[], projectDir?: string): void {
 function turnedDown(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit || !flags.repo) fail("Usage: aidlc-unit turned-down <unit> --repo <repo> (--request-file <file> | --person-words <text>)");
+  if (!unit || !flags.repo) fail(unitUsage("turned-down"));
   const pd = resolveProjectDir(projectDir);
   const words = personWordsOf(pd, flags);
   requireLeadsWord(pd, "A turn-down");
@@ -7053,7 +7105,7 @@ function turnedDown(args: string[], projectDir?: string): void {
 function saidMerged(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit || !flags.repo) fail("Usage: aidlc-unit merged <unit> --repo <repo> (--request-file <file> | --person-words <text>)");
+  if (!unit || !flags.repo) fail(unitUsage("merged"));
   const pd = resolveProjectDir(projectDir);
   const words = personWordsOf(pd, flags);
   requireLeadsWord(pd, "That it merged");
@@ -7103,7 +7155,7 @@ function handOff(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
   const team = flags.team?.trim();
-  if (!unit || !team) fail("Usage: aidlc-unit hand-off <unit> --team <team> [--request-file <file> | --person-words <text>]");
+  if (!unit || !team) fail(unitUsage("hand-off"));
   if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
@@ -7298,7 +7350,7 @@ export function handFileActedOn(projectDir: string, file: HandFile): boolean {
 function takeIn(args: string[], projectDir?: string): void {
   const { positional } = parseArgs(args);
   const path = positional[0];
-  if (!path) fail("Usage: aidlc-unit take-in <file>");
+  if (!path) fail(unitUsage("take-in"));
   const pd = resolveProjectDir(projectDir);
   const file = readHandFile(pd, path);
   if (file === null || file.kind === "handoff") fail(`${path} is not a result or progress file.`);
@@ -7412,7 +7464,7 @@ export function leadSignOffOn(stateContent: string | null): boolean {
 
 function leadSignOffSetting(args: string[], projectDir?: string): void {
   const value = args[0];
-  if (value !== "on" && value !== "off") fail("Usage: aidlc-unit lead-sign-off on|off");
+  if (value !== "on" && value !== "off") fail(unitUsage("lead-sign-off"));
   const pd = resolveProjectDir(projectDir);
   if (!isTeamUnitOwnership(readStateFile(pd))) fail("The lead's sign-off is for work that teams build.");
   withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", LEAD_SIGNOFF_FIELD, value)));
@@ -7433,7 +7485,7 @@ export function signOffAskName(unit: string): string {
 function signOff(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit sign-off <unit> (--request-file <file> | --person-words <text>)");
+  if (!unit) fail(unitUsage("sign-off"));
   const pd = resolveProjectDir(projectDir);
   const words = personWordsOf(pd, flags);
   const identity = activeIdentity(pd);
@@ -7458,8 +7510,6 @@ function participate(projectDir?: string): void {
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
-  // A turn Claude Code started itself is settled before this command reads a turn.
-  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const args = [...argv];
   const projectIdx = args.indexOf("--project-dir");
   if (projectIdx !== -1 && projectIdx + 1 < args.length) {
@@ -7492,7 +7542,12 @@ export function main(argv: string[]): void {
     else if (command === "land") landUnit(args, projectDir);
     else if (command === "merge-status") {
       const unit = args[0];
-      if (!unit) fail("Usage: aidlc-unit merge-status <unit>");
+      if (!unit) fail(unitUsage("merge-status"));
+  // A verb's --help prints its usage and changes nothing (asksForHelp, the
+  // engine's one reading of it), not even a turn settled.
+  if (command !== undefined && asksForHelp(args)) printUsageAndExit(unitUsage(command));
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
       console.log(JSON.stringify(
         readUnitMergeTransaction(resolveProjectDir(projectDir), unit),
         null,
@@ -7502,9 +7557,7 @@ export function main(argv: string[]): void {
     else if (command === "status") {
       console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
     } else {
-      fail(
-        `Usage: aidlc-unit <${[...UNIT_VERBS.keys()].join("|")}> ...`,
-      );
+      fail(unitUsage(""));
     }
     // The command did its work: the request file its words came in is spent.
     spendWordsFile?.();

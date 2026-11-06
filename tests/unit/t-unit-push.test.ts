@@ -205,6 +205,67 @@ describe("the push", () => {
     expect(String(again.json?.notice)).not.toContain("come along");
   });
 
+  test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    // Their own rule, as their pre-push hook keeps it in each repo.
+    for (const repo of ["checkout-api", "billing"]) {
+      const hook = join(alice, repo, ".git", "hooks", "pre-push");
+      writeFileSync(hook, "#!/bin/sh\nwhile read lref lsha rref rsha; do case \"$rref\" in refs/heads/feature/*) ;; " +
+        "*) echo 'branch names must start with feature/' >&2; exit 1;; esac; done\nexit 0\n");
+      chmodSync(hook, 0o755);
+    }
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toContain("branch names must start with feature/");
+    const badName = run(UNIT, ["push", "--branch", "feature/..refunds"], alice);
+    expect(badName.status).not.toBe(0);
+    expect(String(badName.json?.error)).toStartWith('"feature/..refunds" is not a branch name git takes, so nothing was pushed.');
+    const pushed = run(UNIT, ["push", "--branch", "feature/refunds"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toStartWith("Pushed branch feature/refunds in checkout-api and billing.");
+    expect(git(hosts.billing, ["log", "-1", "--format=%s", "feature/refunds"])).toBe("refunds: fixture");
+    // The branch the refused push made under the Unit's name is the one renamed, as their own hands would.
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: join(alice, "billing") }).status).not.toBe(0);
+    expect(git(join(alice, "billing"), ["branch", "--show-current"])).toBe("feature/refunds");
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result: { repos: Array<{ branch: string }> } };
+    expect(claim.result.repos.map((repo) => repo.branch)).toEqual(["feature/refunds", "feature/refunds"]);
+    // A later push, with the Unit's files changed again, keeps their name.
+    writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toStartWith("Pushed branch feature/refunds in");
+    expect(git(hosts.billing, ["show", "feature/refunds:lib/refund.ts"])).toBe("export const refund = 2;");
+  });
+
+  test("the push question names the branch the person gave", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("## Runtime State\n", "## Runtime State\n- **Unit Branch**: feature/refunds\n"));
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
+    expect(String(ask.question)).toContain("Commit its changes on branch feature/refunds in each and push them?");
+  });
+
+  test("push --help and rebase --help print their usage and change nothing", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const help = run(UNIT, ["push", "--help"], alice);
+    expect(help.status, help.out).toBe(0);
+    expect(help.out).toContain("Usage: aidlc-unit push [--branch <name>]");
+    for (const repo of ["checkout-api", "billing"]) {
+      expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: join(alice, repo) }).status).not.toBe(0);
+      expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts[repo as "billing"] }).status).not.toBe(0);
+      expect(git(join(alice, repo), ["branch", "--show-current"])).toBe("main");
+    }
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown }).result).toBeUndefined();
+    const rebase = run(UNIT, ["rebase", "-h"], alice);
+    expect(rebase.status, rebase.out).toBe(0);
+    expect(rebase.out).toContain("Usage: aidlc-unit rebase");
+  });
+
   test("a repo whose git signs its commits gets a signed Unit commit", () => {
     const { hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);

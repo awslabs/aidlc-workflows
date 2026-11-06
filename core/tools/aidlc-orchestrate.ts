@@ -706,6 +706,7 @@ import {
   renderUnitBoard,
   type UnitBoardRow,
   UNIT_PUSH_FIELD,
+  unitBranchOf,
   isHomesCopiedWork,
   unitBuildOf,
   unitDependencies,
@@ -5332,7 +5333,6 @@ function projectTypeAskDirective(
   };
 }
 
-// A clone that took part or holds a claim is a team's, not the lead's.
 // Nothing of the stage is written yet in the active work's record (for a stage
 // run once per Unit, in no Unit's folder): its first step. A folder that
 // cannot be read (a file where it goes) is not one.
@@ -5349,6 +5349,7 @@ function stageNotBegun(projectDir: string, slug: string): boolean {
   }
 }
 
+// A clone that took part or holds a claim is a team's, not the lead's.
 function teamsClone(projectDir: string, stateContent: string): boolean {
   return existsSync(unitParticipantPath(projectDir)) ||
     readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
@@ -9014,7 +9015,8 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const repos = [...byRepo.keys()];
   // Their own changes in the way of the Unit's branch: the push would be
   // refused the same way, so it is offered once they are out of the way.
-  const inTheWay = unitBranchInTheWay(projectDir, unit, byRepo);
+  const branch = unitBranchOf(stateContent, unit);
+  const inTheWay = unitBranchInTheWay(projectDir, branch, byRepo);
   if (inTheWay.length > 0) {
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed: changes of yours in ${joinRepoNames(inTheWay)} are in the way ` +
       "of its branch there. Once they are committed or put aside, do you want me to push it?");
@@ -9038,7 +9040,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     ask_type: "unit-push",
     response_route: "command",
     question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is built and you approved it.${changed}${several} Commit its changes on ` +
-      `branch ${unit} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}?`,
+      `branch ${branch} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}?`,
     choices: [
       ...pushes,
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },

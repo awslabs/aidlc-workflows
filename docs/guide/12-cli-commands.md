@@ -49,7 +49,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign <unit>=<team> ... \| --open` | At the home, hold each named Unit for a team, or leave every Unit open |
 | `/aidlc unit take <unit> --home <record>` | Take a Unit of a home's work as your team's own piece of work, or carry its build on |
-| `/aidlc unit push [--later] [--remote <repo>=<name>]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result home |
+| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result home |
 | `/aidlc unit hand-off <unit> --team <team>` | At the home, hold a Unit for a team that cannot reach it and write its hand-off file |
 | `/aidlc unit progress` | In a Unit's build by file, write a progress file for the lead |
 | `/aidlc unit take-in <file>` | At the home, take a team's result or progress file in |
@@ -766,6 +766,7 @@ the build; you can also run it yourself, for example after a review fix:
 /aidlc unit push
 /aidlc unit push --later
 /aidlc unit push --remote billing=team
+/aidlc unit push --branch feature/refunds
 ```
 
 In each repo the Unit's Code Generation recorded writing to (its
@@ -788,6 +789,14 @@ the home's later stages read) goes onto the Unit's claim at the home, and
 next step offers to send it again. A repo the Unit changed that the home's plan
 did not list is added to the build's repos first (`intent add-repo`), said once.
 `--later` pushes nothing and only records that you said not now.
+
+The branch is named after the Unit unless you name it: when your team's
+branches follow a rule of their own (a pre-push hook, or the host, wants
+`feature/...`), say the name and the agent passes it with `--branch <name>`.
+From then on the Unit's branch goes by that name: in a repo where it was made
+under the Unit's name and not pushed yet, it is renamed, as `git branch -m`
+would; every later push, the push offer and the result the home reads use it.
+`/aidlc unit <verb> --help` prints that verb's usage and changes nothing.
 
 ### `/aidlc unit hand-off <unit> --team <team>` - Hand a Unit off by file
 

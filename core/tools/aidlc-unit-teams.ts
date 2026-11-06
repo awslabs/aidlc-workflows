@@ -268,6 +268,13 @@ export const UNIT_BUILD_FIELD = "Unit Build";
 // "later" while the person has not asked for the push yet, "unsent" when the
 // code went but the home did not take the result, "pushed" once it reached home.
 export const UNIT_PUSH_FIELD = "Unit Push";
+// The branch the build's code goes on in each repo: the name the person gave
+// (`push --branch`, a team's own branch rule), else the Unit's name.
+export const UNIT_BRANCH_FIELD = "Unit Branch";
+
+export function unitBranchOf(stateContent: string, unit: string): string {
+  return getField(stateContent, UNIT_BRANCH_FIELD)?.trim() || unit;
+}
 
 export interface UnitBuild {
   unit: string;
