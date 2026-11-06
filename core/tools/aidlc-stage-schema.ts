@@ -110,6 +110,10 @@ export interface StageFrontmatter {
   // required_sections — named `## ` H2 sections a stage's output must contain
   // (plugin contribution mechanism §6). Optional list of non-empty names.
   required_sections?: string[];
+  // runner — `false` keeps aidlc-runner-gen from generating this stage's
+  // `--single` stage-runner skill, for a stage that only makes sense inside
+  // its scope's workflow. Absent or `true`: the stage gets its runner.
+  runner?: boolean;
   inputs: string;
   outputs: string;
 }
@@ -216,7 +220,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "ars", "required_sections"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "ars", "required_sections", "runner"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -386,6 +390,14 @@ export function validateStageFrontmatter(
       errors.push(
         `workspace_requires must be boolean, got ${describe(o.workspace_requires)}`
       );
+    }
+  }
+
+  // runner - optional. Absent -> valid (the stage gets its runner). Present ->
+  // must be boolean, coerced by the parser like workspace_requires.
+  if ("runner" in o && o.runner !== undefined) {
+    if (typeof o.runner !== "boolean") {
+      errors.push(`runner must be boolean, got ${describe(o.runner)}`);
     }
   }
 

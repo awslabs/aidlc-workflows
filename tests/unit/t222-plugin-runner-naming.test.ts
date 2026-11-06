@@ -1,4 +1,4 @@
-// covers: function:compileStageGraph, cli:aidlc-runner-gen(write,scopes)
+// covers: function:compileStageGraph, cli:aidlc-runner-gen(write,scopes,check,list)
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -275,6 +275,70 @@ describe("t222 plugin ownership and runner naming", () => {
     const body = readFileSync(pluginSkill, "utf-8");
     expect(body).toContain("name: test-pro-integration");
     expect(body).toContain("from the test-pro plugin");
+  });
+
+  test("compile carries runner: false only for stages that opt out, and refuses a non-boolean", () => {
+    const compiled = compileFixture({
+      "code-generation": stageFrontmatter("code-generation"),
+      "test-pro-intent": stageFrontmatter("test-pro-intent", "plugin: test-pro\nrunner: false"),
+    });
+    const core = compiled.stages.find((s) => s.slug === "code-generation");
+    const optedOut = compiled.stages.find((s) => s.slug === "test-pro-intent");
+    expect(optedOut?.runner).toBe(false);
+    expect(Object.hasOwn(core ?? {}, "runner")).toBe(false);
+    expect(compiled.json).toContain('"runner": false');
+
+    expect(() =>
+      compileFixture({
+        "test-pro-intent": stageFrontmatter("test-pro-intent", "plugin: test-pro\nrunner: no"),
+      }),
+    ).toThrow(/runner must be boolean/);
+  });
+
+  test("a stage with runner: false gets no stage runner, the drift guard accepts that, and an earlier one is pruned", () => {
+    const project = setupIntegrationProject({ noAidlcDocs: true });
+    tempDirs.push(project);
+    const graphPath = join(project, ".claude", "tools", "data", "stage-graph.json");
+    const graph = JSON.parse(readFileSync(graphPath, "utf-8"));
+    const node: Record<string, unknown> = {
+      slug: "test-pro-intent",
+      number: "3.86",
+      name: "Intent Tracker",
+      plugin: "test-pro",
+      phase: "construction",
+      execution: "ALWAYS",
+      lead_agent: "aidlc-quality-agent",
+      support_agents: [],
+      mode: "inline",
+      produces: [],
+      consumes: [],
+      requires_stage: [],
+      inputs: "test input",
+      outputs: "test output",
+      rules_in_context: [],
+      sensors_applicable: [],
+    };
+    const writeGraph = () => writeFileSync(graphPath, `${JSON.stringify([...graph, node], null, 2)}\n`, "utf-8");
+    const gen = projectRunnerGen(project);
+    const runner = join(project, ".claude", "skills", "test-pro-intent", "SKILL.md");
+
+    writeGraph();
+    expect(runRunnerGen(gen, ["write"]).status).toBe(0);
+    expect(existsSync(runner)).toBe(true);
+
+    node.runner = false;
+    writeGraph();
+    expect(runRunnerGen(gen, ["write"]).status).toBe(0);
+    expect(existsSync(join(project, ".claude", "skills", "test-pro-intent"))).toBe(false);
+    expect(existsSync(join(project, ".claude", "skills", "aidlc-code-generation", "SKILL.md"))).toBe(true);
+
+    const check = runRunnerGen(gen, ["check"]);
+    expect(check.status, check.stdout).toBe(0);
+    expect(check.stdout).toContain("stage-runner set is in sync");
+    const list = runRunnerGen(gen, ["list"]);
+    expect(list.status).toBe(0);
+    expect(list.stdout.split("\n")).toContain("code-generation");
+    expect(list.stdout.split("\n")).not.toContain("test-pro-intent");
   });
 
   test("scope runner default batch is selected by runner: true; --all includes unflagged scopes", () => {
