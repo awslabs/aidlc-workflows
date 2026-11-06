@@ -263,6 +263,11 @@ at compile time.
 | `aidlc-linter.md` | `**/*.{ts,js}` |
 | `aidlc-type-check.md` | `**/*.{ts,tsx}` |
 
+The write hook, the gate and the dispatcher read the glob the same way
+(`sensorMatchesPath`, on Bun's built-in glob): `**/` also matches no folder, so
+`**/code-generation/**/code-summary.md` takes `code-generation/code-summary.md`;
+brace sets and `?` work as usual, and a Windows path is read with `/`.
+
 For `fire_on: write`, `matches` is the fire filter: the hook compares the path
 being written against the glob and an entry without a glob never fires. For
 `fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
