@@ -6800,8 +6800,9 @@ describe("t218 the Kiro IDE trust step", () => {
   });
 
   // The state tool's refusal for a reply that was not recorded says what
-  // happened, not to ask again, and the step doctor names for the tool the
-  // person is in, word for word, with nothing about how AI-DLC works. Inside
+  // happened, not to ask again now, that the question may come again, and the
+  // step doctor names for the tool the person is in, word for word, with
+  // nothing about how AI-DLC works. Inside
   // Kiro IDE (TERM_PROGRAM=kiro on the agent's own commands, VSCODE_IPC_HOOK or
   // VSCODE_PID on its hooks) that is its step alone; Kiro CLI and an ACP client, which nothing tells apart, get
   // their own two lines and never Kiro IDE's.
@@ -6812,8 +6813,8 @@ describe("t218 the Kiro IDE trust step", () => {
     const split = activation.recovery.indexOf(" In Kiro CLI,");
     const ideStep = activation.recovery.slice(0, split);
     const otherTools = activation.recovery.slice(split + 1);
-    const said = "Your answer was not recorded, so you don't need to answer again.";
-    const lead = "If the person already replied, that reply was not recorded. Do not ask them to answer again. ";
+    const said = "Your answer was not recorded, so you may be asked for it again.";
+    const lead = "If the person already replied, that reply was not recorded. Do not ask them to answer again now. ";
     expect(activation.missedReplyInHost).toEqual({
       env: ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"],
       text: `${lead}Tell them exactly this, with nothing about why: "${said} ${ideStep}"`,

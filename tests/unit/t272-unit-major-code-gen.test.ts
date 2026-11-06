@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:writeActiveDirectiveMarker, function:statusSyncLeavesUnitCursor
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:writeActiveDirectiveMarker, function:statusSyncLeavesCursor
 //
 // CLI-contract test for code-generation in the unit-major walk. mechanism = cli.
 //

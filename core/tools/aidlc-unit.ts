@@ -4,6 +4,7 @@ import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pend
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -18,7 +19,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
-import { scopeStampLanded, unitRowMerged } from "./aidlc-unit-landing.ts";
+import { completedUnits, scopeStampLanded, unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
 import { gitUserName, personGitNameField } from "./aidlc-git-name.ts";
 import {
   managedBlockMarkers,
@@ -38,6 +39,7 @@ import {
   auditBlockField,
   auditShardBlocks,
   auditShardName,
+  knownAuditShardName,
   type AuditShardEvent,
   type CachedUnitClaim,
   candidateReviewCoverageProjection,
@@ -69,6 +71,7 @@ import {
   readAuditShardEvents,
   readUnitClaimRegistryCache,
   readApplicableTeamUnitScopeStamp,
+  unitsWalkedWithoutClaim,
   readUnitMergeTransaction,
   recordFileTargetOrThrow,
   REQUEST_TEXT_DIR,
@@ -108,6 +111,10 @@ import {
   writeStateFile,
   writeUnitScopeStamp,
   writeClaimGeneration,
+  readUnitSourceManifest,
+  sourceClaimCovers,
+  sourcePathKey,
+  type SourceClaimModel,
 } from "./aidlc-lib.js";
 import {
   parseTestingContract,
@@ -227,6 +234,8 @@ export interface UnitClaimOverview {
   claimed: Array<{ unit: string; owner: string; generation: number; blockedBy?: string[] }>;
   waiting: Array<{ unit: string; blockedBy: string[] }>;
   claims: Map<string, UnitClaimView>;
+  /** Units a checkout walks without a claim (the lead's own, begun before the teams took the others). */
+  walked?: string[];
   warning?: string;
 }
 
@@ -671,50 +680,6 @@ function dependencyBodyAtOid(projectDir: string, oid: string): string {
   return shown.stdout;
 }
 
-// The Unit Progress table's header and its Unit rows, each as its cells.
-function unitProgressTable(state: string): { header: string[]; rows: string[][] } | null {
-  const match = /^## Unit Progress\s*$/m.exec(state);
-  if (!match) return null;
-  const after = match.index + match[0].length;
-  const next = /^## /m.exec(state.slice(after));
-  const section = state.slice(after, next ? after + next.index : state.length);
-  const table = section
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("|"))
-    .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
-  const header = table.find((cells) => cells[0]?.toLowerCase() === "unit");
-  if (!header) return null;
-  const rows = table.filter((cells) =>
-    cells.length === header.length && cells.length >= 4 &&
-    !(cells[0].toLowerCase() === "unit" && cells[1].toLowerCase() === "owner") &&
-    !cells.every((cell) => /^-+$/.test(cell))
-  );
-  return { header, rows };
-}
-
-function completedUnits(state: string): Set<string> {
-  const table = unitProgressTable(state);
-  if (!table) return new Set();
-  const { header } = table;
-  const mergedIndex = header.findIndex(
-    (cell) => cell.toLowerCase() === "merged",
-  );
-  const done = new Set<string>();
-  for (const cells of table.rows) {
-    const workCells = cells.slice(
-      2,
-      mergedIndex >= 0 ? mergedIndex : undefined,
-    );
-    if (
-      workCells.every((cell) => cell === "[x]") &&
-      (mergedIndex < 0 || unitRowMerged(state, cells[0]))
-    ) {
-      done.add(cells[0]);
-    }
-  }
-  return done;
-}
-
 type OpeningStatus = {
   units: string[];
   blockers: Map<string, string[]>;
@@ -787,14 +752,18 @@ function allClaims(
   return claims;
 }
 
+// A Unit a checkout walks without a claim (the lead's own, begun before the
+// teams took the others) is that checkout's, so it is never claimable (#3610).
 function buildOverview(
   opening: ReturnType<typeof openingStatus>,
   claims: Map<string, UnitClaimView>,
+  walked: ReadonlySet<string>,
   warning?: string,
 ): UnitClaimOverview {
   const claimable: string[] = [];
   const claimed: UnitClaimOverview["claimed"] = [];
   const waiting: Array<{ unit: string; blockedBy: string[] }> = [];
+  const walkedUnits: string[] = [];
   for (const unit of opening.units) {
     const claim = claims.get(unit);
     if (opening.completed.has(unit)) {
@@ -813,11 +782,22 @@ function buildOverview(
       });
       continue;
     }
+    if (walked.has(unit)) {
+      walkedUnits.push(unit);
+      continue;
+    }
     const blockedBy = opening.blockers.get(unit) ?? [];
     if (blockedBy.length > 0) waiting.push({ unit, blockedBy });
     else claimable.push(unit);
   }
-  return { claimable, claimed, waiting, claims, ...(warning ? { warning } : {}) };
+  return {
+    claimable,
+    claimed,
+    waiting,
+    claims,
+    ...(walkedUnits.length > 0 ? { walked: walkedUnits } : {}),
+    ...(warning ? { warning } : {}),
+  };
 }
 
 function cacheClaims(
@@ -1000,7 +980,7 @@ export function cachedUnitClaimOverview(
   if (options.writeCache !== false && !isReadOnlyEngineProbe()) {
     claims = cacheClaims(pd, claims, cache?.warning);
   }
-  return buildOverview(opening, claims, cache?.warning);
+  return buildOverview(opening, claims, new Set(unitsWalkedWithoutClaim(pd).keys()), cache?.warning);
 }
 
 export function localUnitClaimOverviewForIntent(
@@ -1029,7 +1009,9 @@ export function localUnitClaimOverviewForIntent(
     },
     true,
   );
-  return buildOverview(opening, claims);
+  // The walked Units are read from the active work's own record.
+  const active = selector.space === activeSpace(pd) && selector.intentUuid === activeIntentUuid(pd, selector.space);
+  return buildOverview(opening, claims, active ? new Set(unitsWalkedWithoutClaim(pd).keys()) : new Set());
 }
 
 export function unitClaimOverview(projectDir: string): UnitClaimOverview {
@@ -1043,7 +1025,7 @@ export function unitClaimOverview(projectDir: string): UnitClaimOverview {
   const opening = openingStatus(pd, integration.oid);
   const claims = allClaims(pd, integration.remote, identity.intentId8, opening.units);
   const observedClaims = cacheClaims(pd, claims);
-  return buildOverview(opening, observedClaims);
+  return buildOverview(opening, observedClaims, new Set(unitsWalkedWithoutClaim(pd).keys()));
 }
 
 function updateCachedClaim(
@@ -2065,20 +2047,65 @@ function candidateEvidence(
   return evidence;
 }
 
+// What a Unit's publish left out of its commit, said once with its result: how
+// many, the files themselves when few, else the top-level folders or files
+// holding most of them (git's order breaks a tie), where to see them, and for
+// the agent the command that puts any in; and an --include that named none.
+function leftOutFields(unit: string, leftOut: string[], unmatched: string[]): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  if (unmatched.length > 0) {
+    const named = unmatched.map((path) => `\`${path}\``);
+    fields.include_unmatched_note = `No new file here is at ${named.length < 2 ? named.join("") : `${named.slice(0, -1).join(", ")} or ${named.at(-1)}`}, ` +
+      "so nothing from there went in.";
+  }
+  if (leftOut.length === 0) return fields;
+  const one = leftOut.length === 1;
+  let which: string;
+  if (leftOut.length <= 3) {
+    which = `: ${namesInProse(leftOut)}`;
+  } else {
+    const counts = new Map<string, number>();
+    for (const path of leftOut) {
+      const top = path.includes("/") ? `${path.slice(0, path.indexOf("/"))}/` : path;
+      counts.set(top, (counts.get(top) ?? 0) + 1);
+    }
+    which = `, like ${namesInProse([...counts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([top]) => top))}`;
+  }
+  return {
+    ...fields,
+    left_out: leftOut.length,
+    // The tool knows what the Unit's build listed, not what it wrote, so the
+    // line says that.
+    left_out_note: `I left out ${leftOut.length} new file${one ? "" : "s"} here that this Unit's build did not list as ` +
+      `its own${which} (\`git status\` shows ${one ? "it" : "them"}); tell me if you want ${one ? "it" : "any of them"} in.`,
+    left_out_include: "When they want any of them in, run " +
+      `\`${aidlcInvocation()} unit publish ${quoteCommandArgument(unit)} --commit --include '<path>'\`` +
+      ", with one --include for each file or folder they name, or `--include .` for all of them.",
+  };
+}
+
 function publishUnit(args: string[], projectDir?: string): void {
   const { positional, flags, bareFlags } = parseArgs(args);
   // `--commit` takes no value; `publish --commit alpha` reads alpha as its own.
   const commitFirst = bareFlags.has("commit") || flags.commit !== undefined;
   const unit = positional[0] ?? (bareFlags.has("commit") ? undefined : flags.commit);
-  if (!unit) fail("Usage: aidlc-unit publish <unit> [--commit]");
+  if (!unit) fail("Usage: aidlc-unit publish <unit> [--commit] [--include <path>]...");
+  // parseArgs keeps a flag's last value; every --include counts.
+  const include = args.flatMap((arg, i) =>
+    arg === "--include" && i + 1 < args.length ? [args[i + 1]]
+    : arg.startsWith("--include=") ? [arg.slice("--include=".length)]
+    : []
+  );
   const pd = resolveProjectDir(projectDir);
   const stamp = requireLiveClaimForTeamUnit(pd, unit);
   if (!stamp) fail("Unit publication requires a scoped team checkout.");
+  let leftOut: Record<string, unknown> = {};
   if (commitFirst) {
     // A commit git refused leaves HEAD where it was, so the offer to publish
     // at this HEAD is due again.
     try {
-      commitWorkHere(pd, `Complete the ${unit} Unit`);
+      const done = commitWorkHere(pd, `Complete the ${unit} Unit`, { unit, include });
+      leftOut = leftOutFields(unit, done.leftOut, done.unmatched);
     } catch (error) {
       clearTeamHandoverMarks(pd, ["publish"]);
       fail(`${errorMessage(error)} Then publish again.`);
@@ -2167,6 +2194,7 @@ function publishUnit(args: string[], projectDir?: string): void {
       generation: current.generation,
       ...missingReviews,
       ...outsideTree,
+      ...leftOut,
     }));
     return;
   }
@@ -2220,6 +2248,7 @@ function publishUnit(args: string[], projectDir?: string): void {
     generation: published.generation,
     ...missingReviews,
     ...outsideTree,
+    ...leftOut,
   }));
 }
 
@@ -4301,6 +4330,13 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (current?.status === "claimed") {
     fail(`Unit "${unit}" is already claimed by "${current.owner}".`);
   }
+  // Another checkout was building it without a claim (#3610): the person asked
+  // for it by name, so the claim is taken and they hear it once.
+  const walkedIn = unitsWalkedWithoutClaim(pd).get(unit);
+  const walkedWarning = walkedIn !== undefined && walkedIn !== knownAuditShardName(pd)
+    ? `Unit "${unit}" was being built in the checkout that started it, before any team took a Unit; from now on ` +
+      "it is yours, and that checkout sees it claimed."
+    : null;
   const generation =
     current?.status === "released"
       ? current.generation
@@ -4379,7 +4415,8 @@ function claimUnit(args: string[], projectDir?: string): void {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
   spend();
-  console.log(JSON.stringify({ claimed: true, ...stamp, ...(planWarning ? { warning: planWarning } : {}) }));
+  const warning = [planWarning, walkedWarning].filter((line): line is string => !!line).join(" ");
+  console.log(JSON.stringify({ claimed: true, ...stamp, ...(warning ? { warning } : {}) }));
 }
 
 // A checkout whose own shard main already holds claims into a shard of the
@@ -4616,14 +4653,52 @@ function clearTeamHandoverMarks(projectDir: string, kinds: readonly string[]): v
   }
 }
 
+// A team's publish commits a Unit's own work, and the files the person named
+// to put in as well (`--include`, a file or a folder).
+export interface UnitWork {
+  unit: string;
+  include?: readonly string[];
+}
+
+export interface WorkToCommit {
+  paths: string[];
+  untracked: string[];
+  // New files a Unit's publish leaves out, and the --include paths that named none.
+  leftOut: string[];
+  unmatched: string[];
+}
+
+// What a Unit's source manifests claim, as brought-files reads them: the
+// stages that write source (Code Generation in core) each keep one.
+function unitSourceClaims(projectDir: string, unit: string): SourceClaimModel[] {
+  const record = recordDir(projectDir);
+  if (record === null) return [];
+  let stages: string[];
+  try {
+    stages = readdirSync(join(record, "construction", unit));
+  } catch {
+    return [];
+  }
+  return stages.flatMap((stage) => {
+    if (!existsSync(join(record, "construction", unit, stage, "source-manifest.json"))) return [];
+    const read = readUnitSourceManifest(projectDir, stage, unit);
+    return read.ok ? [{ claims: read.claims, prefixes: read.prefixes }] : [];
+  });
+}
+
 // What a commit of the work here takes: every change git shows, files git does
 // not track included and ignored files left out, except AI-DLC's own part of a
-// shared root file (publish leaves it uncommitted too). The share and publish
-// questions name these, and commitWorkHere commits them.
-export function workToCommit(projectDir: string): { paths: string[]; untracked: string[] } {
+// shared root file (publish leaves it uncommitted too). For a Unit's publish
+// (`unit`), a new file outside aidlc/ is taken only when its source manifest
+// claims it or an `include` path names it; the rest is left out, so AI-DLC's
+// own install and an unignored node_modules stay out of the shared project. A
+// Unit with no manifest that reads wrote no source this can tell, so all of
+// those are left out and said. The share, publish and push questions name
+// these, and commitWorkHere commits them.
+export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit {
   const pd = resolveProjectDir(projectDir);
   const status = git(pd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-  if (!status.ok) return { paths: [], untracked: [] };
+  if (!status.ok) return { paths: [], untracked: [], leftOut: [], unmatched: [] };
   const paths: string[] = [];
   const untracked: string[] = [];
   const records = status.stdout.split("\u0000");
@@ -4636,14 +4711,41 @@ export function workToCommit(projectDir: string): { paths: string[]; untracked: 
     if (/[RC]/.test(code) && records[i + 1]) paths.push(records[++i]);
   }
   const own = aidlcOwnRootParts(pd, paths);
-  return { paths: paths.filter((path) => !own.has(path)), untracked: untracked.filter((path) => !own.has(path)) };
+  const kept = paths.filter((path) => !own.has(path));
+  const keptUntracked = untracked.filter((path) => !own.has(path));
+  if (work === undefined) return { paths: kept, untracked: keptUntracked, leftOut: [], unmatched: [] };
+  const claims = unitSourceClaims(pd, work.unit);
+  // As the person or the agent types it, on Windows too: `\` is `/`, a folder
+  // may end in `/`, and `.` is the whole project (every file left out).
+  const include = [...new Set((work.include ?? [])
+    .filter((path) => path.trim() !== "")
+    .map((path) => path.replaceAll("\\", "/").replace(/\/+$/, "").replace(/^(\.\/)+/, "") || "."))];
+  const under = (path: string, folder: string): boolean =>
+    folder === "." || path === folder || path.startsWith(`${folder}/`);
+  const outsideWork = keptUntracked.filter((path) =>
+    !under(path, "aidlc") && !claims.some((claim) => sourceClaimCovers(sourcePathKey("", path), claim))
+  );
+  const leftOut = outsideWork.filter((path) => !include.some((folder) => under(path, folder)));
+  const unmatched = include.filter((folder) => !outsideWork.some((path) => under(path, folder)));
+  const out = new Set(leftOut);
+  return {
+    paths: kept.filter((path) => !out.has(path)),
+    untracked: keptUntracked.filter((path) => !out.has(path)),
+    leftOut,
+    unmatched,
+  };
 }
 
 // Commits what workToCommit names, as the person, with their own git setup;
-// nothing to commit commits nothing. Returns how many paths it took.
-function commitWorkHere(projectDir: string, message: string): number {
-  const { paths } = workToCommit(projectDir);
-  if (paths.length === 0) return 0;
+// nothing to commit commits nothing. Returns how many paths it took, and what
+// a Unit's publish left out.
+function commitWorkHere(
+  projectDir: string,
+  message: string,
+  work?: UnitWork,
+): { committed: number; leftOut: string[]; unmatched: string[] } {
+  const { paths, leftOut, unmatched } = workToCommit(projectDir, work);
+  if (paths.length === 0) return { committed: 0, leftOut, unmatched };
   const added = git(projectDir, ["add", "-A", "--", ...paths]);
   if (!added.ok) fail(`git add failed: ${added.stderr.trim()}`);
   const committed = git(projectDir, ["commit", "-q", "-m", message]);
@@ -4656,7 +4758,7 @@ function commitWorkHere(projectDir: string, message: string): number {
     }
     fail(`git did not commit: ${(committed.stderr || committed.stdout).trim()}.`);
   }
-  return paths.length;
+  return { committed: paths.length, leftOut, unmatched };
 }
 
 // The remote and integration branch a share pushes to, or null with no remote.
@@ -4703,7 +4805,7 @@ function shareMain(projectDir?: string): void {
     committed = commitWorkHere(
       pd,
       landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams",
-    );
+    ).committed;
   } catch (error) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
     fail(`${errorMessage(error)} Then share again.`);

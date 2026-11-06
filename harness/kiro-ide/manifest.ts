@@ -166,8 +166,10 @@ const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
 // <entry> stays out of the constant it shares.
 const KIRO_CLI_ACP_RESTART_STEP = `${KIRO_CLI_RESTART}, then type <entry> to carry on. ${KIRO_ACP_CLIENT}`;
 
-// The words the agent relays when the person's answer was not recorded.
-const ANSWER_NOT_RECORDED = "Your answer was not recorded, so you don't need to answer again.";
+// The words the agent relays when the person's answer was not recorded. Nothing
+// brings that answer back after the step the line names, so the question can
+// come again; a message sent after the step can still answer it.
+const ANSWER_NOT_RECORDED = "Your answer was not recorded, so you may be asked for it again.";
 
 // Inside Kiro IDE: its agent's own commands carry TERM_PROGRAM=kiro, its hooks
 // VSCODE_IPC_HOOK and VSCODE_PID and no TERM_PROGRAM (measured live on Kiro IDE
@@ -267,21 +269,21 @@ const manifest: HarnessManifest = {
   // " In Kiro CLI," alone, so that sentence keeps its place and spelling.
   hookActivation: {
     recovery: `${KIRO_IDE_TRUST_STEP} ${KIRO_CLI_ACP_STEP}`,
-    // Says what happened, asks for nothing again, and gives the person the step
-    // for the tool they are in, in fixed words the agent relays without
-    // explaining why. Inside Kiro IDE that is the Kiro IDE step alone;
+    // Says what happened, that the question may come again, and gives the
+    // person the step for the tool they are in, in fixed words the agent relays
+    // without explaining why. Inside Kiro IDE that is the Kiro IDE step alone;
     // elsewhere Kiro CLI and an ACP client, which nothing tells apart, each get
     // their line. Kiro IDE's hooks carry VSCODE_IPC_HOOK and VSCODE_PID, but the
     // agent's own commands, where this refusal comes from, carry neither: they
     // carry TERM_PROGRAM=kiro (measured live on Kiro IDE 1.2.37, #2167).
     missedReply:
-      "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
+      "If the person already replied, that reply was not recorded. Do not ask them to answer again now. " +
       "Tell them exactly this, with nothing about why, then only the line below for the tool they are in: " +
       `"${ANSWER_NOT_RECORDED}" ${KIRO_CLI_ACP_STEP}`,
     missedReplyInHost: {
       env: KIRO_IDE_AGENT_SHELL,
       text:
-        "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
+        "If the person already replied, that reply was not recorded. Do not ask them to answer again now. " +
         `Tell them exactly this, with nothing about why: "${ANSWER_NOT_RECORDED} ${KIRO_IDE_TRUST_STEP}"`,
     },
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
