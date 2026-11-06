@@ -16918,6 +16918,13 @@ export function deriveTeamUnitProgressModel(
   for (const unit of mainOwnedUnits) {
     if (owners.get(unit) !== "main") owners.delete(unit);
   }
+  // A Unit built alone here before teams, its checkpoint still open, is asked
+  // once at its end (unitsBuiltHereGateOpen): its row reads that way too, until
+  // a gate row of its own says otherwise.
+  const rhythms = unitGateRhythmsFromAudit(orderedAuditRows);
+  for (const unit of unitsBuiltHereGateOpen(projectDir, stateContent, block[block.length - 1].slug, orderedAuditRows)) {
+    if (!rhythms.has(unit)) rhythms.set(unit, "unit-end");
+  }
   return teamUnitProgressModel(
     projectDir,
     stateContent,
@@ -16932,7 +16939,7 @@ export function deriveTeamUnitProgressModel(
     mergeTracking,
     mainOwnedUnits,
     mergedUnitOverrides,
-    unitGateRhythmsFromAudit(orderedAuditRows),
+    rhythms,
   );
 }
 

@@ -117,8 +117,8 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
     const assigned = run(UNIT, ["assign", `${other}=payments`], home.dir);
     expect(assigned.status, assigned.out).toBe(0);
     const board = teamBoard(home.dir);
-    // Teams approve stage by stage here, and none of its stages is approved yet.
-    expect(board).toContain(`- ${built}, here: waiting for your approval at Functional Design`);
+    // Asked once for the whole Unit, as its checkpoint was, though teams approve stage by stage here.
+    expect(board).toContain(`- ${built}, here: built, waiting for your approval`);
     expect(board).not.toContain(`- ${built}, here: done`);
   });
 

@@ -76,7 +76,7 @@ describe("a Unit built at the lead's project stays the lead's to approve there",
     // Asked once for the whole Unit, as its checkpoint was.
     expect(step, JSON.stringify(step).slice(0, 400)).toMatchObject({ stage: "code-generation", gate: true, unit_gate: "unit-end" });
     const board = agent.drive(step);
-    expect(String(board.narration), JSON.stringify(board).slice(0, 600)).toContain("orders-api, here: built here");
+    expect(String(board.narration), JSON.stringify(board).slice(0, 600)).toContain("orders-api, here: done");
     const approvals = auditOf(home.dir).split("\n## ").filter((block) =>
       block.includes("**Event**: GATE_APPROVED") && block.includes("**Unit**: orders-api") && block.includes("**Gate Scope**: unit-end"));
     expect(approvals.length, auditOf(home.dir).slice(-3000)).toBe(1);
