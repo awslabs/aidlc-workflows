@@ -93,13 +93,17 @@ describe("t-agent-conduct", () => {
 
   // Reported on Kiro CLI 3.1.0: one small feature asked the person twenty times for the
   // conductor's own `ls -la && cat package.json`, `grep` and an AI-DLC command piped into `head`.
-  // The conductor's prompt carries FILE_TOOLS_RULE's reading and command sentences word for word,
+  // The conductor's prompt carries FILE_TOOLS_RULE's exception for the person's and the plan's
+  // commands and its reading and command sentences word for word,
   // so it has them from the chat's start, not only when the engine hands over conductor.md; the
   // skill Kiro IDE and Kiro CLI's 3.0 engine share also names shell reads to leave out.
   test("every Kiro conductor is told from the chat's start to look at files with its file tool and run AI-DLC commands alone", () => {
     const start = FILE_TOOLS_RULE.indexOf("Read, list, and search");
     expect(start).toBeGreaterThan(0);
     const READ_AND_RUN = FILE_TOOLS_RULE.slice(start);
+    // The person's own command, or one the plan names, still runs as they wrote it.
+    const PERSON_AND_PLAN_RUN = /A command the person asks for, [^.]*still runs as written\./.exec(FILE_TOOLS_RULE)?.[0] ?? "";
+    expect(PERSON_AND_PLAN_RUN).toContain("still runs as written");
     expect(READ_AND_RUN).toContain(`Run every AI-DLC command ${AS_ITS_OWN_COMMAND}`);
     for (const tree of ["dist", "dist-release"]) {
       const ide = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"), "utf-8");
@@ -108,6 +112,7 @@ describe("t-agent-conduct", () => {
       }).prompt;
       for (const [row, prompt] of [["kiro-ide", ide], ["kiro", cli]]) {
         expect(prompt, `${tree} ${row}`).toContain(READ_AND_RUN);
+        expect(prompt, `${tree} ${row}`).toContain(PERSON_AND_PLAN_RUN);
       }
       const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
       expect(skill, `${tree} kiro-ide skill`).toContain("Kiro IDE and Kiro CLI run most plain AI-DLC commands quietly");
