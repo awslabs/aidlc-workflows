@@ -175,7 +175,9 @@ describe("the lead's plan approval after their checkout claims the Unit", () => 
       expect(personRepliedAfter(lead, mark)).toBe(false);
       says(lead, "/aidlc -- does the plan cover the greeting only?");
       expect(personRepliedAfter(lead, mark)).toBe(false);
-      expect(approve(lead)).toMatchObject({ status: 1 });
+      const command = approve(lead);
+      expect(command.status, command.message).toBe(1);
+      expect(command.message).toContain("has not replied to the plan question since it was shown");
       expect(approvalsRecorded(lead)).toBe(0);
 
       says(lead, "Fine, our plan looks good, go ahead with it.");
