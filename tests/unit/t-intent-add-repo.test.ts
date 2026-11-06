@@ -663,7 +663,7 @@ describe("work that records no repos", () => {
     const r = utility(["intent", "remove-repo", "checkout-api"]);
     expect(r.rc, r.out).toBe(0);
     expect(repos()).toEqual([]);
-    expect(r.out).toContain("Removed checkout-api from this piece of work's repos; it works on the workspace folder itself again.");
+    expect(r.out).toContain("Removed checkout-api from this piece of work's repos; it now works on the workspace folder itself.");
     const none = utility(["intent", "remove-repo", "checkout-api"]);
     expect(none.rc, none.out).toBe(0);
     expect(none.out).toContain("This piece of work records no repos: it works on the workspace folder itself. Nothing changed.");
