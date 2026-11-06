@@ -161,7 +161,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
     const take = next(alice, ENV);
     expect(take.ask_type, JSON.stringify(take)).toBe("unit-take");
-    movesOn(alice, ENV, take, choice(take, "Start refunds"));
+    movesOn(alice, ENV, take, choice(take, "Start refunds for payments"));
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     // The team's push at the end of its build.
@@ -863,10 +863,10 @@ describe("the take's own line reaches the person with the build's next step, onc
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "bob-chat" };
     const offer = next(bob, chat);
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
-    const took = runPrinted(bob, chat, choice(offer, "Start refunds"));
+    const took = runPrinted(bob, chat, choice(offer, "Start refunds for payments"));
     expect(took.status, took.out).toBe(0);
     const line = "Refunds is yours, for the payments team. Its build is its own piece of work here, under your team's rules, " +
-      "from what the home approved.";
+      "from what the home approved. If it is not your team's to build, say so and I give it back.";
     expect(JSON.parse(took.out.trim().split("\n").at(-1)!).notice, took.out).toBeUndefined();
     const step = next(bob, chat);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(line);

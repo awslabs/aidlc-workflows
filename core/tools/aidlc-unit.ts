@@ -4649,6 +4649,18 @@ function releaseUnit(args: string[], projectDir?: string): void {
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
+  // In the Unit's own build, release is the way back from its take.
+  const build = ((): UnitBuild | null => {
+    try {
+      return unitBuildOf(readStateFile(pd));
+    } catch {
+      return null;
+    }
+  })();
+  if (build !== null && build.unit === unit) {
+    giveBack(pd, build);
+    return;
+  }
   if (readApplicableTeamUnitScopeStamp(pd)) {
     fail("release must run from an unscoped checkout.");
   }
@@ -4794,6 +4806,64 @@ function releaseUnit(args: string[], projectDir?: string): void {
     generation: released.generation,
     claim_ref: ref,
     claim_oid: released.oid,
+  }));
+}
+
+// The way back from a take, run in the Unit's build: the claim at the lead's
+// project goes back to what it was before this build took it (the lead's hold
+// for its team, or open), and the build is set aside by the engine's own
+// archive, so its record and audit stay and nothing is deleted. A claim that
+// moved on since (a pushed result, a release at the lead's project, a build by
+// file) is left as it is. The clone goes back to the default space, where its
+// next step offers the Units again.
+function giveBack(pd: string, build: UnitBuild): void {
+  const unit = build.unit;
+  const Unit = `${unit.charAt(0).toUpperCase()}${unit.slice(1)}`;
+  const home = buildsHome(pd, build);
+  const ref = claimRef(home.id8, unit);
+  let current: UnitClaimView | null;
+  try {
+    if (home.target !== null) ensureFetchedClaim(pd, home, ref);
+    current = currentClaim(pd, home.target, ref);
+  } catch {
+    fail(`The lead's project could not be reached, so ${unit} is not given back yet and its build here stays as it is. Try again when it can be reached.`);
+  }
+  let said: string;
+  if (current?.status === "claimed" && current.payload.taken_by !== undefined && current.generation === build.attempt &&
+    current.payload.result === undefined) {
+    const before = current.payload.predecessor_oid ? readPayload(pd, current.payload.predecessor_oid, { localOnly: true }) : null;
+    const held = before !== null && before.status === "claimed" && before.taken_by === undefined &&
+      teamSpaceOf(before.owner) === teamSpaceOf(current.owner) ? before : null;
+    const { taken_by: _taker, early_on: _early, ...untaken } = current.payload;
+    // The lead's hold comes back as the lead made it, its nonce too; a Unit
+    // that was open is released, as the lead's release does. Either way the
+    // generation moves on, so this build's attempt is over.
+    const payload: UnitClaimPayload = {
+      ...(held ?? { ...untaken, status: "released", owner: "released", nonce: randomUUID() }),
+      generation: current.generation + 1,
+      predecessor_oid: current.oid,
+    } as UnitClaimPayload;
+    const pushed = updateClaimRef(pd, home.target, ref, createClaimCommit(pd, current.oid, payload), current.oid);
+    if (!pushed.ok) {
+      fail(`${unit} could not be given back: ${pushed.refused ?? "its claim at the lead's project moved meanwhile"}. Try again.`);
+    }
+    invalidateLiveClaimPayloadCache(pd, unit);
+    said = held !== null
+      ? `${Unit} is given back: the lead's project holds it for ${theTeam(held.owner)} again, as before.`
+      : `${Unit} is given back: it is open again at the lead's project.`;
+  } else {
+    said = `Nothing changed for ${unit} at the lead's project, which still has it as it was` +
+      (current?.status === "claimed" ? `, for ${theTeam(current.owner)}.` : ".");
+  }
+  const dirName = resolveWorkflowSelection(pd).intent;
+  const archived = dirName ? runEngineUtility(pd, ["intent", "archive", dirName, "--reason", "given back to the lead's project"]) : null;
+  if (archived !== null && !archived.ok) fail(`${said} Its build here could not be set aside: ${(archived.stderr || archived.stdout).trim()}`);
+  setActiveSpaceCursor(pd, DEFAULT_SPACE);
+  console.log(JSON.stringify({
+    released: true,
+    given_back: true,
+    unit,
+    notice: `${said} Its build here is set aside, with everything in it kept.`,
   }));
 }
 
@@ -6103,16 +6173,23 @@ function takeUnit(args: string[], projectDir?: string): void {
   const opening = solo ?? openingStatusFrom(plan.state, plan.dependencies);
   if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
   if (solo?.started.has(unit)) fail(`${unit} is being built on the other machine; take another Unit, or follow along.`);
-  const openUnits = opening.units.filter((name) => name !== unit && !opening.completed.has(name));
   const me = git(pd, ["config", "user.name"]).stdout.trim() || "a teammate";
   const activeTeam = activeSpace(pd) === DEFAULT_SPACE ? null : activeSpace(pd);
   if (current?.status === "claimed") {
     if (current.payload.taken_by !== undefined) {
       fail(`${unit} is held by ${theTeam(current.owner)} (${current.payload.taken_by} took it).`);
     }
-    if (activeTeam !== null && flags.team === undefined && teamSpaceOf(current.owner) !== activeTeam) {
-      fail(`${unit} is held by ${theTeam(current.owner)}.${openUnits.length > 0 ? ` Open: ${openUnits.join(", ")}.` : ""}`);
+    // A Unit the lead holds for a team is that team's to take, in any space:
+    // the person's team is the one they name or the team space they are in,
+    // and with neither, theirs is for the agent to read from their words.
+    const taker = flags.team ?? activeTeam;
+    if (!home.solo && taker === null) {
+      fail(
+        `${unit} is held for ${theTeam(current.owner)}. Run this again with --team and the person's team: ` +
+          `--team ${shellArg(current.owner)} if they are on it. If their words do not say which team they are on, ask them.`,
+      );
     }
+    if (taker !== null && teamSpaceOf(taker) !== teamSpaceOf(current.owner)) fail(`${unit} is held by ${theTeam(current.owner)}.`);
   }
   if (opening.completed.has(unit)) fail(`${unit} is already done at the home.`);
   const homeRows = homeAuditAt(pd, home, integration.oid);
@@ -6243,6 +6320,8 @@ function takeUnit(args: string[], projectDir?: string): void {
     (resultByFile
       ? ` You can read the home but not write to it, so the result of ${unit} goes back as a file when it is built.`
       : "") +
+    // The way back (release, run in this build), said once with the take.
+    " If it is not your team's to build, say so and I give it back." +
     earlyLines.map((line) => ` ${line}`).join("") +
     notThere.lines +
     (planChanging !== null

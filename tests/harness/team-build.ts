@@ -306,7 +306,9 @@ export function refundsTaken(assign: string[] = ["refunds=payments", "checkout-u
   const alice = cloneOf(home.remote, "alice");
   for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
   beforeTake?.(alice);
-  const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+  // Alice is on the team the lead holds refunds for.
+  const team = assign.find((pair) => pair.startsWith("refunds="))?.slice("refunds=".length) ?? "payments";
+  const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", team], alice);
   expect(took.status, took.out).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);

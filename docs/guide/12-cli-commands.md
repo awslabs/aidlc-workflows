@@ -762,9 +762,14 @@ yourself:
 
 The Unit is held at the home's remote first, by its address when the workspace
 is the team's own, with a compare-and-swap like any claim: a Unit held for your
-team becomes yours, an open Unit is held for `--team` (or your active space; from
-the default space the team is asked for), and a Unit another team holds, a
-teammate took, or the home started is refused with who holds it. A Unit that
+team becomes yours (your team is `--team`, or your active space; from the
+default space it is named on the take, and the take offer's choice names it),
+an open Unit is held for `--team` (or your active space; from the default space
+the team is asked for), and a Unit another team holds, a teammate took, or the
+home started is refused with who holds it. The take says its way back once:
+`/aidlc unit release <unit>` in the Unit's build gives it back, the home's hold
+for its team as it was (or open again), and sets the build aside with the
+engine's archive, nothing deleted. A Unit that
 waits on another is refused until that Unit is done at the home. The build
 records the home's repos. The build copies what the home approved at its pushed commit,
 records `UNIT_TAKEN_IN`, and is selected for this chat. Taking a Unit whose
@@ -961,6 +966,11 @@ inspectable.
 After a Unit has been released and re-claimed, a later release must include
 `--expect-nonce` from `aidlc-unit.ts status`; this binds the command to the
 successor attempt and prevents a lost-output retry from tombstoning it.
+
+In a Unit's build (a team's take of the home's Unit), `unit release <unit>` is
+the way back from the take: the home's claim goes back to what it was before
+(the lead's hold for that team, or open), and the build is archived with its
+record and audit kept.
 
 ### `/aidlc unit participate` — Enable the guided picker
 

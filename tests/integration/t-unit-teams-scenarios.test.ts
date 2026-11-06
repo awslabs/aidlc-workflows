@@ -124,7 +124,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     const offer = cursor.next(alice);
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
     expect(String(offer.question)).toContain("refunds (for payments; likely checkout-api, billing)");
-    const took = run(cursor.unit, ["take", "refunds", "--home", HOME_RECORD], alice);
+    const took = run(cursor.unit, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice);
     expect(took.status, took.out).toBe(0);
     const record = buildRecord(alice, "payments", "refunds");
     built(record, "refunds", [
@@ -196,7 +196,7 @@ describe("scenario 2: one big code repo", () => {
     const codex = tree("codex");
     const alice = cloneOf(home.remote, "alice");
     cloneCode(platform, join(alice, ".."), "platform", "alice");
-    const took = run(codex.unit, ["take", "refunds", "--home", HOME_RECORD], alice);
+    const took = run(codex.unit, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice);
     expect(took.status, took.out).toBe(0);
     built(buildRecord(alice, "payments", "refunds"), "refunds", [
       { repo: "platform", folder: join(alice, "..", "platform"), path: "services/checkout-api/src/refunds.ts" },
@@ -256,7 +256,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     const offer = kiroIde.next(web.dir);
     expect(String(offer.question)).toStartWith(`fixture (its home is ${home.remote}) is built by teams, one Unit each.`);
     expect((offer.choices as Array<{ label: string }>).map((c) => c.label)).not.toContain("Carry on fixture");
-    const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD], web.dir);
+    const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], web.dir);
     expect(took.status, took.out).toBe(0);
     const record = buildRecord(web.dir, "web", "checkout-ui");
     built(record, "checkout-ui", [{ repo: "checkout-web", folder: join(web.dir, "checkout-web"), path: "src/cart.tsx" }]);
@@ -273,7 +273,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     const will = cloneOf(web.host, "will");
     const carry = kiroIde.next(will);
     expect((carry.choices as Array<{ label: string }>).map((c) => c.label), JSON.stringify(carry)).toContain("Carry on checkout-ui");
-    expect(run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD], will).json).toMatchObject({ resumed: true });
+    expect(run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], will).json).toMatchObject({ resumed: true });
     expect(kiroIde.next(will).unit).toBe("checkout-ui");
     expect(boardAt(home)).toContain("- checkout-ui, web: checkout-web not merged yet");
     mergeOnHost(hosts["checkout-web"], "checkout-ui", "rebase");
@@ -290,7 +290,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     chmodSync(hook, 0o755);
     const kiroIde = tree("kiro-ide");
     const web = teamWorkspace(home.remote, "wendy");
-    const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD], web.dir);
+    const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], web.dir);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain(
       "You can read the home but not write to it, so the result of checkout-ui goes back as a file when it is built.",
@@ -375,7 +375,7 @@ describe("scenario 5: solo work, then a second person joins", () => {
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
     expect((ask.choices as Array<{ label: string }>).map((c) => c.label)).toEqual(["Carry on fixture here", "Take checkout-ui", "Follow along"]);
     const before = readFileSync(seededStateFile(bob), "utf-8");
-    expect(run(opencode.unit, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(opencode.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bob).status).toBe(0);
     expect(readFileSync(seededStateFile(bob), "utf-8")).toBe(before);
     built(buildRecord(bob, "default", "checkout-ui"), "checkout-ui", [{ repo: "checkout-web", folder: join(bob, "checkout-web"), path: "src/cart.tsx" }]);
     expect(run(opencode.unit, ["push"], bob).status).toBe(0);
@@ -402,7 +402,7 @@ function refundsOnKiro() {
   const kiro = tree("kiro");
   const alice = cloneOf(home.remote, "alice");
   for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-  expect(run(kiro.unit, ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+  expect(run(kiro.unit, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
   const record = buildRecord(alice, "payments", "refunds");
   const code = (body = "") => built(record, "refunds", [
     { repo: "checkout-api", folder: join(alice, "checkout-api"), path: "src/refunds.ts" },

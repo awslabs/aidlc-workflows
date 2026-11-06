@@ -8985,7 +8985,10 @@ function unitTakeLook(
       const named = [...new Set([...overview.claims.values()].filter((claim) => claim.status === "claimed").map((claim) => claim.owner))];
       const forTeams = (unit: string, holder: string | null, label: string, detail: string, extra = ""): AskChoice[] => {
         const command = (forTeam: string) => `${take.replace("%s", shellArg(unit))}${extra} --team ${forTeam}`;
-        if (holder !== null) return [{ label, detail, command: `${take.replace("%s", shellArg(unit))}${extra}` }];
+        // A Unit held for a team: in a team's space it is that team's own; in a
+        // fresh clone the pick says the team, so the take is theirs.
+        if (holder !== null && team !== null) return [{ label, detail, command: `${take.replace("%s", shellArg(unit))}${extra}` }];
+        if (holder !== null) return [{ label: `${label} for ${holder}`, detail, command: command(shellArg(holder)) }];
         if (team !== null) return [{ label, detail, command: command(shellArg(team)) }];
         return [
           ...named.map((owner) => ({ label: `${label} for ${owner}`, detail, command: command(shellArg(owner)) })),

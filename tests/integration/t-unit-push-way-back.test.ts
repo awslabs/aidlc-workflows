@@ -64,7 +64,7 @@ function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, 
   person.say("/aidlc");
   const offer = agent.next();
   expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
-  choose(agent, person, offer, "Start refunds");
+  choose(agent, person, offer, "Start refunds for payments");
   const push = agent.drive(agent.next());
   expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
   const intents = join(dir, "aidlc", "spaces", "payments", "intents");

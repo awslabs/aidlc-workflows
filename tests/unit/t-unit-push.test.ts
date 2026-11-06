@@ -359,7 +359,7 @@ describe("the push", () => {
       { name: "checkout-api", path: "../checkout-api-mine" },
       { name: "billing", path: "../billing-mine" },
     ] })}\n`);
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     mkdirSync(join(alice, "..", "checkout-api-mine", "src"), { recursive: true });
@@ -813,7 +813,7 @@ describe("at the home", () => {
     git(seed, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(own, "alice");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     codeGenerated(alice, join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!));
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -951,7 +951,7 @@ describe("at the home", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(home.remote, "alice");
     git(alice, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
-    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice);
     expect(took.status, took.out).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
@@ -1360,7 +1360,7 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     // Its chat moves to its other Unit.
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"], home.dir).status).toBe(0);
     git(alice, ["fetch", "-q", "origin"]);

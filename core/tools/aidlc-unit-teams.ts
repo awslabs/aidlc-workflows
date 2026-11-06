@@ -398,7 +398,7 @@ export function buildWaitsForPush(stateContent: string): boolean {
 }
 
 // The build of a home's Unit in this workspace, in any space: what taking that
-// Unit again here carries on.
+// Unit again here carries on. A build given back (archived) is not carried on.
 export function findUnitBuild(projectDir: string, homeWork: string, unit: string): { space: string; dirName: string } | null {
   let spaces: string[];
   try {
@@ -415,7 +415,7 @@ export function findUnitBuild(projectDir: string, homeWork: string, unit: string
         continue;
       }
       const build = unitBuildOf(state);
-      if (build?.unit === unit && build.homeWork === homeWork) return { space, dirName };
+      if (build?.unit === unit && build.homeWork === homeWork && getField(state, "Status")?.trim() !== "Archived") return { space, dirName };
     }
   }
   return null;

@@ -196,7 +196,7 @@ describe("a look at the board records nothing, and says so", () => {
     expect(building.unit, JSON.stringify(building).slice(0, 400)).toBe("checkout-ui");
     const alice = cloneOf(home.remote, "alice");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     codeGenerated(alice, record);
@@ -236,7 +236,7 @@ describe("going back to change the Unit plan while teams hold Units", () => {
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
     next(home.dir, chat);
     const alice = cloneOf(home.remote, "alice");
-    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice);
     expect(took.status, took.out).toBe(0);
     const step = next(home.dir, chat, ["--stage", "units-generation"]);
     const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));

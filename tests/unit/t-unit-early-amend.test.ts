@@ -181,7 +181,7 @@ describe("a change to a shared input", () => {
   test("the owner is asked once at the home, and their approval reaches every team building with it", () => {
     const { home, alice } = proposed();
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bob).status).toBe(0);
     const ask = next(home.dir);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-amend");
     const proposedAt = `aidlc/spaces/default/intents/${HOME_RECORD}/.aidlc-engine/proposed/refunds/${REQUIREMENTS}`;
@@ -219,7 +219,7 @@ describe("a change to a shared input", () => {
     const { home, alice, record } = refundsTaken();
     // web proposes a change; payments edited its own copy meanwhile.
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bob).status).toBe(0);
     const intents = join(bob, "aidlc", "spaces", "web", "intents");
     const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
     writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
@@ -256,7 +256,7 @@ describe("a change to a shared input", () => {
   test("a change approved while a team's chat is open is heard at its next stage, and one before its push is never called after it", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bob).status).toBe(0);
     const chat = personsChat("bob-chat");
     // bob's chat has looked at its claim once already.
     personsNext(bob, chat, "bob-chat");
@@ -297,7 +297,7 @@ describe("a change to a shared input", () => {
   test("a team that left its copy as it was takes the lead's new version, as before", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bob).status).toBe(0);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     git(bob, ["fetch", "-q", "origin"]);
     expect(notices(next(bob))).toContain("The requirements changed at the home; checkout-ui uses the new one from here.");
@@ -310,7 +310,7 @@ describe("a change to a shared input", () => {
   test("a team's proposed copy stays its own while the proposal waits; once approved, that is the copy it builds on", () => {
     const { home, alice, record } = refundsTaken();
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bob).status).toBe(0);
     const bobIntents = join(bob, "aidlc", "spaces", "web", "intents");
     const bobRecord = join(bobIntents, readdirSync(bobIntents).find((name) => name.endsWith("-checkout-ui"))!);
     // The lead approves web's change first; it reaches payments too.
@@ -365,7 +365,7 @@ describe("a change to a shared input", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     // web proposes a change to the input refunds was built with too; the home approves it.
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bob).status).toBe(0);
     const intents = join(bob, "aidlc", "spaces", "web", "intents");
     const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
     writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, shown in the UI.\n");
@@ -381,7 +381,7 @@ describe("a change to a shared input", () => {
   test("an approved change that does not reach a team just now names that team", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bob).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     const hook = join(home.remote, "hooks", "pre-receive");
     writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do case "$ref" in */checkout-ui) echo 'busy' >&2; exit 1;; esac; done\n`);
@@ -434,7 +434,7 @@ describe("a change to a shared input", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "payments"], bob).status).toBe(0);
     const copy = join(readdirSync(join(bob, "aidlc", "spaces", "payments", "intents")).map((name) => join(bob, "aidlc", "spaces", "payments", "intents", name)).find((dir) => dir.endsWith("-checkout-ui"))!, ...REQUIREMENTS.split("/"));
     writeFileSync(copy, "# Requirements\n\nFR1 refunds, with receipts.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md"], bob).status).toBe(0);
@@ -491,8 +491,8 @@ describe("who hears a change to the contract summary", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
-    for (const [unit, person] of [["refunds", "alice"], ["checkout-ui", "bob"], ["reporting", "dana"]]) {
-      const took = run(UNIT, ["take", unit, "--home", HOME_RECORD], cloneOf(home.remote, person));
+    for (const [unit, person, team] of [["refunds", "alice", "payments"], ["checkout-ui", "bob", "web"], ["reporting", "dana", "data"]]) {
+      const took = run(UNIT, ["take", unit, "--home", HOME_RECORD, "--team", team], cloneOf(home.remote, person));
       expect(took.status, took.out).toBe(0);
     }
     git(home.dir, ["fetch", "-q", "origin"]);

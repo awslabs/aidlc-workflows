@@ -120,7 +120,7 @@ describe("the packages inside the workspace's own repo, as gitlinks", () => {
     person.say("/aidlc");
     const offer = agent.next();
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
-    const took = pick(agent, person, offer, "Start refunds");
+    const took = pick(agent, person, offer, "Start refunds for payments");
     expect(took).toMatchObject({ taken: true, unit: "refunds", team: "payments", space: "payments" });
     const end = agent.drive(agent.next());
     expect(end.ask_type, JSON.stringify(end)).toBe("unit-push");
