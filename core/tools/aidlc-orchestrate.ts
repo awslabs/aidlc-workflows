@@ -297,7 +297,6 @@ import {
   hasAnyUnitClaimRefs,
   noteEngineAskMark,
   teamSkeletonOn,
-  memorySectionBody,
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
@@ -599,6 +598,9 @@ import {
   publishedAtHead,
   refreshClaimRefs,
   shareBlocker,
+  skeletonHeldBackOnShare,
+  teamsClone,
+  teamStanceToRead,
   shareTarget,
   teamHandoverMarkName,
   teamSharedHere,
@@ -5212,45 +5214,6 @@ function projectTypeAskDirective(
     existing_code_command: reclassifyCommand(projectDir, "brownfield"),
     new_project_command: reclassifyCommand(projectDir, "greenfield"),
   };
-}
-
-// A clone that took part or holds a claim is a team's, not the lead's.
-function teamsClone(projectDir: string, stateContent: string): boolean {
-  return existsSync(unitParticipantPath(projectDir)) ||
-    readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
-}
-
-// The team's own answer on building a walking skeleton first, not read yet:
-// team work whose scope runs one, no stance recorded, and the team's or the
-// project's memory says something under `## Walking Skeleton` (Practices
-// Discovery writes the team's). org.md's section is the framework's default,
-// which reads as the scope's own answer, so it is not one. Which way the answer
-// goes is the agent's to read (the classify round-trip); this reads only
-// whether there is one.
-function teamSkeletonAnswerUnread(projectDir: string, stateContent: string): boolean {
-  if (!isTeamUnitOwnership(stateContent) || getField(stateContent, "Skeleton Stance")) return false;
-  if (loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton !== true) return false;
-  let memory: string;
-  try {
-    memory = memoryDirFor(projectDir);
-  } catch {
-    return false;
-  }
-  return ["team.md", "project.md"].some((file) => {
-    try {
-      return memorySectionBody(readFileSync(join(memory, file), "utf-8"), "## Walking Skeleton").trim() !== "";
-    } catch {
-      return false;
-    }
-  });
-}
-
-// The team's own walking-skeleton answer is read on the lead's checkout before
-// any team step decides from it (the handout line, the share, a teammate's
-// claim): a team's clone reads the lead's record and never writes the stance.
-function teamStanceToRead(projectDir: string, stateContent: string | null): boolean {
-  return stateContent !== null && teamSkeletonAnswerUnread(projectDir, stateContent) &&
-    !teamsClone(projectDir, stateContent) && !planMadeElsewhere(projectDir);
 }
 
 // The step that has the agent read it: the stage's own step with the classify
@@ -13536,6 +13499,29 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           // walk: no fan-out directive.
           throw new Error("claimless-team-mode");
         }
+        // A checkout the teams take Units from reads the team's own
+        // walking-skeleton answer before its board decides what is open or
+        // anything is offered; a claim-less one meets it in the walk below.
+        const reading = teamStanceReadStep(
+          pd, stateContent, getField(stateContent, "Current Stage") ?? "", scope, projectType, recordPrefix, codekbCtx,
+        );
+        if (reading) {
+          emit(reading);
+          return;
+        }
+        // The lead's answer is recorded here and the plan the teams have still
+        // waits on the first Unit as a walking skeleton: said once, while true.
+        const heldBack = participant || teamsClone(pd, stateContent) || planMadeElsewhere(pd)
+          ? null
+          : skeletonHeldBackOnShare(pd);
+        if (heldBack !== null) {
+          sayWithStepOnce(
+            pd,
+            `The teams still see every Unit waiting on ${heldBack}, because your answer about ` +
+              `building a thin slice first hasn't been shared yet. I can share the plan when you say so, or you can run ` +
+              `\`${aidlcInvocation()} unit share\`.`,
+          );
+        }
         const overview = cachedUnitClaimOverview(pd, {
           writeCache: !readOnlyBoard,
         });
@@ -19976,7 +19962,8 @@ function handleSkeletonStanceReport(
     return;
   }
   const node = nodeForSlug(slug);
-  if (!node || !(isSkeletonGateStage(node, scope, stateContent) || teamStanceToRead(pd, stateContent))) {
+  const forTeams = teamStanceToRead(pd, stateContent);
+  if (!node || !(isSkeletonGateStage(node, scope, stateContent) || forTeams)) {
     emit(errorDirective(
       `Current stage "${slug}" is not the skeleton-gate stage for scope "${scope}" - ` +
         "a skeleton stance is only reported for the first Construction Bolt's gate.",
@@ -19996,9 +19983,14 @@ function handleSkeletonStanceReport(
     return;
   }
 
+  // Team work's answer can be asked for by the share as well as by `next`'s
+  // step: the agent goes back to whichever asked, so a share the person asked
+  // for is never put to them again as the share question.
   emit(printDirective(
     `Recorded walking-skeleton stance "${stance}" for "${slug}". ` +
-      "Re-run `next` to continue - the gate is now determined.",
+      (forTeams
+        ? `If \`${aidlcInvocation()} unit share\` asked for it, run that share again now; otherwise re-run \`next\` to continue.`
+        : "Re-run `next` to continue - the gate is now determined."),
   ));
 }
 
