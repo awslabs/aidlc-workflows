@@ -38,6 +38,7 @@ import {
   kiroTreeLayout,
   packagedDistributionRoot,
   discoverableRuntimeHarness,
+  keepRuntimeHarnessPin,
   pinRuntimeHarness,
   resolveHarnessPath,
   runtimeHarnessDir,
@@ -2984,8 +2985,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   // resolve the matching packaged runtime even when the hook cwd carries no
   // harness metadata (.aidlc is shared by copilot and opencode; the
   // metadata-free fallback names opencode).
-  const previousHarness = process.env.AIDLC_HARNESS_DIR;
-  const previousGuess = process.env.AIDLC_HARNESS_DIR_GUESSED;
+  const restorePin = keepRuntimeHarnessPin();
   const previousHarnessName = process.env.AIDLC_HARNESS_NAME;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
   pinRuntimeHarness(ADAPTER_HARNESS_LEAF[action.harness]);
@@ -3062,10 +3062,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     hookTrace("adapter-run-end", { code });
     return code;
   } finally {
-    if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
-    else process.env.AIDLC_HARNESS_DIR = previousHarness;
-    if (previousGuess === undefined) delete process.env.AIDLC_HARNESS_DIR_GUESSED;
-    else process.env.AIDLC_HARNESS_DIR_GUESSED = previousGuess;
+    restorePin();
     if (previousHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
     else process.env.AIDLC_HARNESS_NAME = previousHarnessName;
     if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;

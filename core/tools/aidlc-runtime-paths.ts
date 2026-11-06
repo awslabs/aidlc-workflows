@@ -721,7 +721,7 @@ export function discoverableRuntimeHarness(
 
 // The harness the dispatcher pinned with no tool's mark to go by, among several
 // installed. Read only while it is still the pin, so a later pin of another
-// harness is never a guess; pinRuntimeHarness owns both.
+// harness is never a guess; pinRuntimeHarness and keepRuntimeHarnessPin write it.
 const GUESSED_HARNESS_DIR = "AIDLC_HARNESS_DIR_GUESSED";
 
 /** Pin the harness this process and the tools it loads run on; `guessed` marks the first of several installed that no tool's mark named. */
@@ -729,6 +729,18 @@ export function pinRuntimeHarness(harnessDir: string, guessed = false): void {
   process.env.AIDLC_HARNESS_DIR = harnessDir;
   if (guessed) process.env[GUESSED_HARNESS_DIR] = harnessDir;
   else delete process.env[GUESSED_HARNESS_DIR];
+}
+
+/** The pin as it is now, guess and all, put back by the function returned (after a run pinned to another harness). */
+export function keepRuntimeHarnessPin(): () => void {
+  const dir = process.env.AIDLC_HARNESS_DIR;
+  const guessed = process.env[GUESSED_HARNESS_DIR];
+  return () => {
+    if (dir === undefined) delete process.env.AIDLC_HARNESS_DIR;
+    else process.env.AIDLC_HARNESS_DIR = dir;
+    if (guessed === undefined) delete process.env[GUESSED_HARNESS_DIR];
+    else process.env[GUESSED_HARNESS_DIR] = guessed;
+  };
 }
 
 /** Whether the harness this process runs on is a guess at the person's tool: its lines for one tool may be another's. */
