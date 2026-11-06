@@ -4961,6 +4961,8 @@ function unitsWordsReplyDirective(requestId: string, offer: AskDirective | Print
       `The Units offer says: ${said} Read the person's words. ` +
       (choices === "" ? "" : `If they ask for one of these Units (to take it, start it, or start it early), run that choice's ` +
         `command and follow what it returns: ${choices}. `) +
+      "If they ask for a Unit the offer does not list as one to start (being built, waiting, or done), tell them in one line " +
+      "where it stands, from what the offer says, and run nothing. " +
       `If they only ask what is here, run \`${orchestrate} next\` with nothing after it. If they say they lead this work and ask ` +
       `to carry it on here, run \`${aidlcDispatcherInvocation("intent")} switch <name>\` with its name, then \`${aidlcToolInvocation("unit")} ` +
       `lead-here ${unitWordsArg("lead-here")}\` with their words. Otherwise (new work of ` +
@@ -5452,7 +5454,9 @@ function offersOnce(projectDir: string, offers: StepOffer[]): StepOffer[] {
 // The work selected here is the home of Units teams build (not a team's build).
 function atTeamHome(projectDir: string): boolean {
   const state = loadStateFileIfPresent(projectDir);
-  return state !== null && isTeamUnitOwnership(state) && homeLocation(state) !== null && unitBuildOf(state) === null;
+  // The lead's own checkout only: one that did not make the plan is a team's.
+  return state !== null && isTeamUnitOwnership(state) && homeLocation(state) !== null && unitBuildOf(state) === null &&
+    !planMadeElsewhere(projectDir);
 }
 
 // A step of teams building Units that says where things stand and ends the

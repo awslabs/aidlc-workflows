@@ -173,6 +173,10 @@ describe("a team member's clone of the home's workspace", () => {
     // Their words there are read against the Units offer, never sent on as the lead's work.
     const words = next(alice, ENV, ["we are the payments team and want to take refunds, our Unit"]);
     expect(String(words.message), JSON.stringify(words).slice(0, 500)).toContain(`take refunds --home ${HOME} --team payments`);
+    // A Unit not ready to take is said where it stands, never sent on as new work.
+    expect(String(words.message)).toContain("tell them in one line where it stands");
+    // Nor do the lead's own commands ride a step in this clone.
+    expect(String(words.board_note ?? "")).not.toContain("hand-off <unit>");
   });
 
   test("the lead on a second machine: their own word that they lead this work, recorded, puts the lead's questions there again", () => {
