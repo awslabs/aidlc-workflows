@@ -749,6 +749,7 @@ import {
   type GuardPreflightAction,
   type GuardPreflightResult,
   completionChecksStep,
+  engineSettlesLateGate,
   failedCheckNotices,
   guardPreflight as stateGuardPreflight,
   leftOutNotice,
@@ -1786,7 +1787,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // ask whose ways on are the conductor's own work (agent_work) is no question
   // for the person: the turn goes on, and the conductor carries them out.
   const endsTurn = (directive.kind === "ask" && (directive as { agent_work?: unknown }).agent_work !== true) ||
-    turnEndingPrints.has(directive) || showsGateAgain(directive as unknown as Record<string, unknown>);
+    turnEndingPrints.has(directive) || (directive.kind === "print" && directive.ends_turn === true) ||
+    showsGateAgain(directive as unknown as Record<string, unknown>);
   if (
     directive.kind === "run-stage" && directive.construction_policy &&
     directive.gate === false
@@ -13745,7 +13747,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           if (together) directive.approve_together = together;
           // A joint late approval stays the one question it is: the report
           // would show the gate as this stage's alone.
-          if (!together && gateOwesItsReport(pd, stateContent, currentNode, scope)) {
+          const owesReport = !together && gateOwesItsReport(pd, stateContent, currentNode, scope);
+          // A late gate the engine settles itself, already open (the person's
+          // Override opened it, or an earlier report did): its approval is
+          // recorded here and the walk goes on, so its checks are not run, or
+          // asked about, again.
+          if (!together && !owesReport && settleBookkeepingGate(pd, stateContent, directive)) return;
+          if (owesReport) {
             const step = printDirective(
               `The ${currentNode.name} gate's reviewed work changed after its review: run \`${aidlcToolInvocation("orchestrate")} ` +
                 `report --stage ${shellArg(currentSlug)} --result awaiting-approval\` and show the gate with what it returns.`,
@@ -15735,8 +15743,11 @@ function emitPerUnitRunStage(
 // late stage gates are bookkeeping: the person approved the work Unit by Unit
 // and is not asked again. A bare `next` settles each one itself, with the same
 // two reports the conductor would run (so the same rows), then routes again and
-// hands over the next real step. A report that does not go through is shown as
-// it is. True when this call emitted.
+// hands over the next real step; a gate already open (the person's Override
+// opened it) owes only its approval, so its checks are not run, or asked about,
+// again. A report that does not go through is shown as it is, and so is one
+// that answered with a step instead of opening the gate (a team's blocking
+// check): nothing is approved over it. True when this call emitted.
 const MAX_SETTLED_GATES = 12;
 function settleBookkeepingGate(
   projectDir: string,
@@ -15755,7 +15766,8 @@ function settleBookkeepingGate(
   ) {
     return false;
   }
-  for (const result of ["awaiting-approval", "approved"] as const) {
+  const open = checkboxForSlug(stateContent, directive.stage)?.state === "awaiting-approval";
+  for (const result of open ? ["approved" as const] : ["awaiting-approval", "approved"] as const) {
     const run = Bun.spawnSync({
       cmd: aidlcEngineCommand(
         "orchestrate",
@@ -15774,8 +15786,13 @@ function settleBookkeepingGate(
     } catch {
       reported = null;
     }
-    if (run.exitCode !== 0 || reported?.kind !== (result === "approved" ? "done" : "print")) {
-      emit(reported !== null && reported.kind !== "print" && reported.kind !== "done"
+    const after = result === "awaiting-approval" && reported?.kind === "print" ? loadStateFileIfPresent(projectDir) : null;
+    const stayedShut = (result === "awaiting-approval" && reported?.kind === "print" &&
+      (after === null || checkboxForSlug(after, directive.stage)?.state !== "awaiting-approval")) ||
+      // The approval's own re-check of a file changed at the open gate refused it: the person's question.
+      (reported?.kind === "print" && reported.ends_turn === true);
+    if (run.exitCode !== 0 || reported?.kind !== (result === "approved" ? "done" : "print") || stayedShut) {
+      emit(reported !== null && (stayedShut || (reported.kind !== "print" && reported.kind !== "done"))
         ? reported
         : errorDirective(
           `${nodeForSlug(directive.stage)?.name ?? directive.stage} could not be recorded as approved: ` +
@@ -19724,6 +19741,15 @@ function validGuardRecoveryAsk(
 // may end there; one the person already made (another pick, their own words)
 // is the agent's to record now. Anything else stops the workflow with the
 // tool's plain words.
+// A team's blocking check stopped the late gate: the agent asks the person Fix
+// or Override and ends its turn. The mark rides the step itself, so `next`
+// keeps it when it hands on a report's step (settleBookkeepingGate).
+function blockingCheckStep(text: string): PrintDirective {
+  const step = turnEndingPrint(text);
+  step.ends_turn = true;
+  return step;
+}
+
 function stateRefusalDirective(lead: string, question: string, detail: string): PrintDirective | ErrorDirective {
   let text = detail;
   let agentGuidance: unknown = null;
@@ -19746,6 +19772,7 @@ function stateRefusalDirective(lead: string, question: string, detail: string): 
     );
   }
   if (agentGuidance === "person-decided") return printDirective(text);
+  if (agentGuidance === "blocking-check") return blockingCheckStep(text);
   return errorDirective(
     lead + (text ? `: ${text}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
   );
@@ -21776,8 +21803,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // At the late gate these refusals name the agent's own next step, as the state tool's do.
+    const refusal = engineSettlesLateGate(pd, stateContent, node) ? printDirective : errorDirective;
     if (readAutonomyMode(stateContent) === "autonomous") {
-      emit(errorDirective(
+      emit(refusal(
         `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
           "is autonomous. Unattended runs must halt on blocking sensor failures. When the person " +
           `chooses the override, run \`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction ` +
@@ -21786,7 +21815,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     if (flags.userInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
-      emit(errorDirective(
+      emit(refusal(
         `A blocking sensor override requires --user-input ` +
           `"${BLOCKING_SENSOR_OVERRIDE_CHOICE}", the exact choice offered to the human.`,
       ));
@@ -21995,6 +22024,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       emit(stateRefusalDirective(`Could not update the approval status for "${slug}"`, `"${slug}"`, detail));
+      return;
+    }
+    // The person's Override opened a late gate of a solo unit-major walk, one
+    // the engine settles itself (settleBookkeepingGate): no one is asked to
+    // approve it, so the reply is the walk's next step, not the gate's question.
+    if (
+      flags.result === "awaiting-approval" && flags.overrideBlockingSensors && !revalidatingOpenGate &&
+      engineSettlesLateGate(pd, stateContent, node)
+    ) {
+      emit(withChangeNotices(
+        printDirective(`The person's Override is recorded and the ${node.name} gate is open: run \`${aidlcToolInvocation("orchestrate")} next\`, which settles it and goes on.`),
+        changeNoticesFromToolOutput(res.stdout),
+      ));
       return;
     }
     const gateReply = withChangeNotices(

@@ -11839,6 +11839,15 @@ export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
 // label a reply recorded for several questions names), or its number on the
 // decision's own Options. The override's authorization and the review attempt
 // floor both read this one pairing.
+//
+// In solo work built Unit by Unit with checkpoints (the walk aidlc-state.ts
+// unitCheckpointChecksApply names; the state is given), the refusal itself
+// puts the question to the person, so their reply may come before the agent
+// records it: a reply after the refusal's own fire (the stage's latest
+// blocking result the gate refuses on before the question, with no boundary
+// between) backs the pick too, when nothing spent that reply and nothing else
+// was asked or answered between it and the question. Read from the order of
+// the rows, never the words.
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
   slug: string,
@@ -11846,7 +11855,32 @@ export function blockingSensorPicks(
   units?: Map<AuditShardEvent, string | null>,
   // Filled with the question each pick answers, when given.
   questions?: Map<AuditShardEvent, AuditShardEvent>,
+  stateContent: string | null = null,
 ): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
+  const walk = stateContent !== null && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major";
+  const blocking = new Set(walk
+    ? (findStageBySlug(slug)?.sensors_applicable ?? []).flatMap((sensor) =>
+      sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
+    )
+    : []);
+  // The fire whose refusal put the check's question, for a pick of `unit` (any Unit's when none is named):
+  // every result a blocking check refuses on (the gate's account of a check that gave no verified pass).
+  const refuses = (row: AuditShardEvent): boolean =>
+    row.event === "SENSOR_FAILED" || row.event === "SENSOR_COULD_NOT_RUN" || row.event === "SENSOR_BUDGET_OVERRIDE" ||
+    (row.event === "SENSOR_PASSED" && auditBlockField(row.block, "Note") !== null);
+  const refusalFire = (decision: AuditShardEvent, unit: string | null): AuditShardEvent | undefined => {
+    const before = rows.filter((row) => row.shard === decision.shard && row.pos < decision.pos);
+    const fire = before.filter((row) =>
+      refuses(row) &&
+      auditBlockField(row.block, "Stage slug") === slug && blocking.has(auditBlockField(row.block, "Sensor ID") ?? "") &&
+      (unit === null || auditBlockField(row.block, "Unit") === unit)
+    ).reduce<AuditShardEvent | undefined>((latest, row) => (latest === undefined || row.pos > latest.pos ? row : latest), undefined);
+    if (fire === undefined) return undefined;
+    return before.some((row) =>
+      BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event) && auditBlockField(row.block, "Stage") === slug && row.pos > fire.pos
+    ) ? undefined : fire;
+  };
   const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
   // Each clone's shard keeps its own append order, so a teammate's question in
   // another shard never takes the place of the one this answer closes.
@@ -11893,8 +11927,18 @@ export function blockingSensorPicks(
     ) continue;
     const offered = optionsList(auditBlockField(decision.block, "Options"));
     if (!BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) => offered.includes(option))) continue;
+    const fire = walk
+      ? refusalFire(decision, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"))
+      : undefined;
+    // A row that spent the reply (MESSAGE_SPENDING_EVENTS), or another question or answer, between the
+    // reply and the question took the reply for itself.
+    const answeredElse = (turn: AuditShardEvent): boolean => rows.some((other) =>
+      (other.event === "DECISION_RECORDED" || other.event === "QUESTION_ANSWERED" || MESSAGE_SPENDING_EVENTS.has(other.event)) &&
+      other.shard === turn.shard && other.pos > turn.pos && other.pos < decision.pos
+    );
     if (!rows.some((turn) =>
-      turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
+      turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos < row.pos &&
+      (turn.pos > decision.pos || (fire !== undefined && turn.pos > fire.pos && !answeredElse(turn)))
     )) continue;
     const numbered = /^(\d+)[.)]?$/.exec(details);
     const named = numbered ? offered[Number(numbered[1]) - 1] : checkLabel(details);
@@ -11979,6 +12023,8 @@ type SensorFixStage = Parameters<typeof producesArtifactUnit>[0] & Pick<StageEnt
 export function blockingSensorFixes(
   rows: ReadonlyArray<AuditShardEvent>,
   stage: SensorFixStage,
+  // The workflow's state, which says where a pick reads as blockingSensorPicks says.
+  stateContent: string | null = null,
 ): Map<AuditShardEvent, ReadonlySet<string> | null> {
   const blocking = new Set((stage.sensors_applicable ?? []).flatMap((sensor) =>
     sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
@@ -12000,7 +12046,7 @@ export function blockingSensorFixes(
   };
   const fixes = new Map<AuditShardEvent, ReadonlySet<string> | null>();
   const pickUnits = new Map<AuditShardEvent, string | null>();
-  for (const [row, choice] of blockingSensorPicks(rows, stage.slug, pickUnits)) {
+  for (const [row, choice] of blockingSensorPicks(rows, stage.slug, pickUnits, undefined, stateContent)) {
     if (choice !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0]) continue;
     const unit = pickUnits.get(row) ?? null;
     fixes.set(row, unit ? new Set([unit]) : failedUnits(row));
@@ -12043,17 +12089,15 @@ export function hasBlockingSensorOverrideAuthorization(
   unit: string | null = null,
 ): boolean {
   const rows = readAuditShardEvents(projectDir);
-  // Solo work built Unit by Unit with checkpoints is where a pick can be made at a Unit's checkpoint.
-  let unitPicks = unit !== null;
-  if (!unitPicks) {
-    try {
-      const stateContent = readStateFile(projectDir);
-      unitPicks = constructionCheckpointsApply(stateContent) &&
-        getField(stateContent, "Construction Iteration") === "unit-major";
-    } catch {
-      unitPicks = false;
-    }
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(projectDir);
+  } catch {
+    stateContent = null;
   }
+  // Solo work built Unit by Unit with checkpoints is where a pick can be made at a Unit's checkpoint.
+  const unitPicks = unit !== null || (stateContent !== null && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major");
   const unitOf = (row: AuditShardEvent): string | null => auditBlockField(row.block, "Unit");
   const stageRows = rows.filter((row) => {
     const workflow = auditBlockField(row.block, "Workflow");
@@ -12078,13 +12122,14 @@ export function hasBlockingSensorOverrideAuthorization(
       ))
       : []),
   ];
-  // At a Unit's checkpoint the agent re-logging the check's question, or an
-  // answer to it that is no Fix pick of the person's (the Override recorded
-  // again, with --unit or without, or with no new reply), is no new decision:
-  // it does not spend the pick, so the person's Override is never refused into
-  // asking again. A Fix pick, or any answer to another question, still does.
+  // At a Unit's checkpoint, and at the stage gate the engine settles itself
+  // after them, the agent re-logging the check's question, or an answer to it
+  // that is no Fix pick of the person's (the Override recorded again, with
+  // --unit or without, or with no new reply), is no new decision: it does not
+  // spend the pick, so the person's Override is never refused into asking
+  // again. A Fix pick, or any answer to another question, still does.
   const pickUnits = new Map<AuditShardEvent, string | null>();
-  const picks = blockingSensorPicks(rows, slug, pickUnits);
+  const picks = blockingSensorPicks(rows, slug, pickUnits, undefined, stateContent);
   const asksCheck = (row: AuditShardEvent | undefined): boolean =>
     row !== undefined && row.event === "DECISION_RECORDED" &&
     auditBlockField(row.block, "Decision") === BLOCKING_SENSOR_OVERRIDE_DECISION;
@@ -12092,7 +12137,7 @@ export function hasBlockingSensorOverrideAuthorization(
   const answersCheck = (row: AuditShardEvent): boolean => asksCheck(stageRows.filter((other) =>
     other.event === "DECISION_RECORDED" && other.shard === row.shard && other.pos < row.pos
   ).at(-1));
-  const relogged = (row: AuditShardEvent): boolean => unit !== null && (
+  const relogged = (row: AuditShardEvent): boolean => unitPicks && (
     asksCheck(row) ||
     (row.event === "QUESTION_ANSWERED" && answersCheck(row) && picks.get(row) !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0])
   );
@@ -18896,7 +18941,7 @@ export function reviewAttemptWindow(
   keep?: AuditShardEvent,
 ): AttemptView {
   const allEvents = auditRows ?? readAuditShardEvents(projectDir);
-  const sensorFixes = blockingSensorFixes(allEvents, stage);
+  const sensorFixes = blockingSensorFixes(allEvents, stage, stateContent);
   const events = sortAttemptEvents(
     allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event) || sensorFixes.has(row)),
   );
@@ -39343,12 +39388,13 @@ export function printUsageAndExit(usage: string): never {
 // Refusals may need to name something outside the current project dir, such as
 // another checkout's path, on stderr while keeping the committed audit portable.
 // `agentGuidance`: the message is the agent's next step, so callers hand it to
-// the agent instead of the person: the person's question is still open, or the
-// person already decided and the agent records what they chose.
+// the agent instead of the person: the person's question is still open, the
+// person already decided and the agent records what they chose, or a team's
+// blocking check stopped the gate and the agent asks them Fix or Override.
 export type EmitErrorMessage = string | {
   message: string;
   auditMessage: string;
-  agentGuidance?: "question-open" | "person-decided";
+  agentGuidance?: "question-open" | "person-decided" | "blocking-check";
 };
 
 export function emitError(
