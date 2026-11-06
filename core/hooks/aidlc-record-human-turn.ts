@@ -421,8 +421,9 @@ function questionsAlone(
 ): PlanApprovalPickerQuestion["questions"] {
   const asked = boxQuestions(toolInput);
   if (asked.length < 2) return undefined;
-  // The reply as pickerReplies reads it (the adapter's raw box first), the
-  // picks as carriesSeveralPicks reads them (the tool's own result).
+  // The reply from where pickerReplies reads it (the adapter's raw box first),
+  // taken as a box of one takes it (its first pick, a Codex note left out); the
+  // picks from where carriesSeveralPicks reads them (the tool's own result).
   const replies = boxAnswers(pickerReply ?? toolResponse) ?? {};
   const picks = boxAnswers(toolResponse) ?? {};
   return asked.map((entry) => {

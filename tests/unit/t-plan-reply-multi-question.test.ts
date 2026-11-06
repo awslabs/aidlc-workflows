@@ -2,7 +2,7 @@
 //
 // The code plan question asked in one question box beside other questions
 // (#3621). The agent may put the plan question in a box with another question
-// (seen: the verification command); the person answers both and submits. The
+// (the verification command, say); the person answers both and submits. The
 // plan question's own answer is their reply to it, read as if the box had asked
 // it alone; another question's answer never is. These cases drive the real
 // human-turn hook (and Codex's adapter), `next`, `log answer` and the
@@ -23,7 +23,8 @@
 //     makes it some other question, as in a box of one;
 //   - Codex's box (answers keyed by question id): the plan pick approves, with
 //     the person's note beside it too; a blank plan answer keeps nothing;
-//   - a box answered before the plan question was shown keeps nothing for it.
+//   - a box answered before the plan question was shown keeps nothing for it;
+//   - a box that asks only the plan question is read as before.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -345,6 +346,22 @@ describe("the plan question in a box of several questions", () => {
     box(proj, [verify, { question: name, options: ["slugify", "slug"] }],
       { [VERIFY_QUESTION]: "Approve", [name]: "slugify" });
     stillOpenThenTheirReplyRecords(proj);
+  });
+
+  test("a box that asks only the plan question is read as before: its pick, or their words for the agent", () => {
+    const picked = project();
+    askFor(picked);
+    box(picked, [plan], { [PLAN_QUESTION]: "Approve Plan" });
+    expect(approvals(picked)).toBe(1);
+    expect(auditText(picked)).toContain("**Person Reply**: Approve Plan\n");
+    expect(next(picked).plan_approval).toEqual({ status: "approved" });
+    const worded = project();
+    askFor(worded);
+    box(worded, [plan], { [PLAN_QUESTION]: "go ahead with it" });
+    expect(approvals(worded)).toBe(0);
+    const recorded = answer(worded, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(auditText(worded)).toContain("**Person Reply**: go ahead with it\n");
   });
 
   test("a box answered before the plan question was shown keeps nothing for it", () => {
