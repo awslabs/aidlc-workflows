@@ -293,8 +293,8 @@ import {
   engineAskMark,
   hasAnyUnitClaimRefs,
   noteEngineAskMark,
-  teamSkeletonAnswerUnread,
   teamSkeletonOn,
+  memorySectionBody,
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
@@ -5155,6 +5155,31 @@ function projectTypeAskDirective(
 function teamsClone(projectDir: string, stateContent: string): boolean {
   return existsSync(unitParticipantPath(projectDir)) ||
     readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
+}
+
+// The team's own answer on building a walking skeleton first, not read yet:
+// team work whose scope runs one, no stance recorded, and the team's or the
+// project's memory says something under `## Walking Skeleton` (Practices
+// Discovery writes the team's). org.md's section is the framework's default,
+// which reads as the scope's own answer, so it is not one. Which way the answer
+// goes is the agent's to read (the classify round-trip); this reads only
+// whether there is one.
+function teamSkeletonAnswerUnread(projectDir: string, stateContent: string): boolean {
+  if (!isTeamUnitOwnership(stateContent) || getField(stateContent, "Skeleton Stance")) return false;
+  if (loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton !== true) return false;
+  let memory: string;
+  try {
+    memory = memoryDirFor(projectDir);
+  } catch {
+    return false;
+  }
+  return ["team.md", "project.md"].some((file) => {
+    try {
+      return memorySectionBody(readFileSync(join(memory, file), "utf-8"), "## Walking Skeleton").trim() !== "";
+    } catch {
+      return false;
+    }
+  });
 }
 
 // The team's own walking-skeleton answer is read on the lead's checkout before

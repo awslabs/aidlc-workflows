@@ -12663,30 +12663,10 @@ export function constructionSkeletonOn(stateContent: string): boolean {
 // Team Units wait on the walking skeleton, the first DAG Unit built on main,
 // when the scope runs one and the work has not recorded `Skeleton Stance: off`.
 // Unrecorded keeps the scope's answer only while the team has given none of its
-// own: one it gave is read first (teamSkeletonAnswerUnread).
+// own: one it gave is read first (teamSkeletonAnswerUnread, aidlc-orchestrate.ts).
 export function teamSkeletonOn(stateContent: string): boolean {
   return getField(stateContent, "Skeleton Stance") !== "off" &&
     loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton === true;
-}
-
-// The team's own answer on building a walking skeleton first, not read yet:
-// team work whose scope runs one, no stance recorded, and the team's or the
-// project's memory says something under `## Walking Skeleton` (Practices
-// Discovery writes the team's). org.md's section is the framework's default,
-// which reads as the scope's own answer, so it is not one. Which way the answer
-// goes is the agent's to read (the classify round-trip in `next`); this reads
-// only whether there is one.
-export function teamSkeletonAnswerUnread(projectDir: string, stateContent: string): boolean {
-  if (!isTeamUnitOwnership(stateContent) || getField(stateContent, "Skeleton Stance")) return false;
-  if (loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton !== true) return false;
-  const memory = changeControlMemoryDir(projectDir);
-  return ["team.md", "project.md"].some((file) => {
-    try {
-      return memorySectionBody(readFileSync(join(memory, file), "utf-8"), "## Walking Skeleton").trim() !== "";
-    } catch {
-      return false;
-    }
-  });
 }
 
 export function constructionCheckpointsApply(stateContent: string): boolean {

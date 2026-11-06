@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:teamSkeletonAnswerUnread
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report
 //
 // A lead's "no thin slice first" holds for team work from the moment they said
 // it (#3634). The team's `## Walking Skeleton` answer was read only on the
