@@ -364,6 +364,29 @@ describe("a change to a shared input", () => {
     expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).not.toContain("you changed reach");
   });
 
+  // A live run: the team's Unit was built, pushed and merged; the lead
+  // redid Requirements Analysis with a wording change "so the web team gets
+  // it too", and the team's next chat heard nothing.
+  test("the lead's own approved change reaches a Unit already done and merged, with the offer of follow-up work", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/"));
+    writeFileSync(homeCopy, "# Requirements\n\nFR1 refunds, said the new way.\n");
+    appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
+    const lead = personsChat("lead-chat");
+    expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).toContain("The requirements you changed reach the teams");
+    git(alice, ["fetch", "-q", "origin"]);
+    expect(notices(next(alice))).toContain(
+      "The lead changed the requirements after refunds was done. Do you want me to start follow-up work for it?",
+    );
+  });
+
   test("a team that left its copy as it was takes the lead's new version, as before", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");

@@ -8072,8 +8072,10 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
   const pd = resolveProjectDir(projectDir);
   return quietly(() => {
     const lines: string[] = [];
+    // A Unit already done hears it too, as an approved proposal reaches it:
+    // once, with the offer of follow-up work, never reopened (takeNewerInput).
     const claims = [...cachedClaims(pd).values()].filter((claim) =>
-      claim.status === "claimed" && !claim.payload.done && claim.payload.taken_by !== undefined && !claim.payload.by_file
+      claim.status === "claimed" && claim.payload.taken_by !== undefined && !claim.payload.by_file
     );
     const recordRel = relativeRecordDir(pd)?.split(sep).join("/") ?? null;
     if (claims.length === 0 || recordRel === null) return lines;
