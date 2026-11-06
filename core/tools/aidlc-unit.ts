@@ -7239,9 +7239,9 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   if (isTeamUnitOwnership(state) || homeLocation(state) !== null || isReadOnlyEngineProbe()) return null;
   if (getField(state, "Construction Iteration")?.trim() !== "unit-major") return null;
   // A teammate's take changes what this session does next once its Unit walk
-  // has begun (or its first Unit is next): the claims are looked at once in a
-  // chat, before each next Unit starts, and after each message of the
-  // person's; never at an Inception step.
+  // has begun (or its first Unit is next): the claims are looked at once when
+  // a chat starts and before each next Unit starts, never after each message
+  // inside a Unit and never at an Inception step.
   const remote = repositoryRemote(projectDir);
   const stages = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true);
   const progress = soloUnitsProgress(readAuditShardEvents(projectDir), stages.at(-1) ?? "code-generation");
@@ -7250,7 +7250,6 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
       home: { target: remote, id8: activeIdentity(projectDir).intentId8 },
       sessionId,
       now: progress.started.size > 0 && [...progress.started].every((unit) => progress.done.has(unit)),
-      sincePerson: true,
     });
   }
   if (!hasAnyUnitClaimRefs(projectDir)) return null;
