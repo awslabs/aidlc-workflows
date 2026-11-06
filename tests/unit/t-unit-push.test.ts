@@ -824,6 +824,25 @@ describe("at the home", () => {
     expect(String(waiting.json?.error)).toEndWith("The person has not answered yet: end your turn; their next reply answers it.");
   });
 
+  test("the lead's own pre-push hook turns the board's send away: the line says the hook's words, and the next step sends it", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    next(home.dir);
+    const hook = join(home.dir, ".git", "hooks", "pre-push");
+    writeFileSync(hook, "#!/bin/sh\necho 'run the test gate before you push: npm test' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const step = next(home.dir);
+    const line = ((step.change_notices ?? []) as string[]).find((said) => said.startsWith("What the board shows here")) ?? "";
+    expect(line).toStartWith("What the board shows here could not be sent to origin: run the test gate before you push: npm test");
+    expect(line).toEndWith("The teams may not see it yet, and the next step sends it again.");
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+  });
+
   test("a verdict the home's remote does not take stays here, said once, and goes at the next step", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
@@ -835,9 +854,9 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     const step = next(home.dir);
-    expect((step.change_notices ?? []) as string[]).toContain(
-      "What the board shows here could not be sent to origin just now; the teams may not see it yet, and the next step sends it again.",
-    );
+    const line = ((step.change_notices ?? []) as string[]).find((said) => said.startsWith("What the board shows here")) ?? "";
+    expect(line).toStartWith("What the board shows here could not be sent to origin: claims are read-only today");
+    expect(line).toEndWith("The teams may not see it yet, and the next step sends it again.");
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");

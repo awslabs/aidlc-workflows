@@ -17111,7 +17111,7 @@ function teamHomeClaims(
   // What came back from the teams, checked against each repo once per step
   // (with the home unreached, the board is the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();
-  const unsent: string[] = [];
+  const unsent: Array<{ to: string; refused?: string }> = [];
   const told: ToldMerge[] = [];
   if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
     try {
@@ -17126,8 +17126,12 @@ function teamHomeClaims(
       ? `I've told the teams ${merge.unit} is merged.`
       : `I've told the teams ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
   }
+  // In git's words when git refused it (a hook of theirs, the host), as the push and take lines are.
   if (unsent.length > 0) {
-    sayWithStepOnce(projectDir, `What the board shows here could not be sent to ${unsent[0]} just now; the teams may not see it yet, and the next step sends it again.`);
+    const [first] = unsent;
+    sayWithStepOnce(projectDir, first.refused !== undefined
+      ? `What the board shows here could not be sent to ${first.to}: ${first.refused.replace(/([^.!?])$/, "$1.")} The teams may not see it yet, and the next step sends it again.`
+      : `What the board shows here could not be sent to ${first.to} just now; the teams may not see it yet, and the next step sends it again.`);
   }
   if (unreached.length > 0) {
     sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what your last fetch brought.`);

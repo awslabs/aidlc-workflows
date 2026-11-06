@@ -6608,7 +6608,7 @@ export interface ToldMerge {
 export function checkTeamResults(
   projectDir: string,
   unreached?: string[],
-  unsent?: string[],
+  unsent?: Array<{ to: string; refused?: string }>,
   told?: ToldMerge[],
   readOnly = false,
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
@@ -6619,7 +6619,7 @@ export function checkTeamResults(
 function checkTeamResultsQuietly(
   pd: string,
   unreached?: string[],
-  unsent?: string[],
+  unsent?: Array<{ to: string; refused?: string }>,
   told?: ToldMerge[],
   readOnly = false,
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
@@ -6674,10 +6674,11 @@ function checkTeamResultsQuietly(
       const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, verdicts, ...(done ? { done: true as const } : {}) };
       const commit = createClaimCommit(pd, live.oid, payload);
       // Unwritten, the verdict stays here and the next step writes it again.
-      if (updateClaimRef(pd, remote, live.ref, commit, live.oid).ok) {
+      const sent = updateClaimRef(pd, remote, live.ref, commit, live.oid);
+      if (sent.ok) {
         invalidateLiveClaimPayloadCache(pd, unit);
         told?.push({ unit, repos: newlyMerged, done });
-      } else unsent?.push(remote ?? "the home");
+      } else unsent?.push({ to: remote ?? "the home", ...(sent.refused ? { refused: sent.refused } : {}) });
     }
     found.set(unit, { team: live.owner, verdicts, done });
   }
