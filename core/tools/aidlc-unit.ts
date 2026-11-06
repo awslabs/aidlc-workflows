@@ -6154,15 +6154,12 @@ function repoIntegration(dir: string, remote: string): string {
   return `${remote}/main`;
 }
 
-// The person's own commits the first push of a Unit's branch sends with it:
-// those on no remote, back from where the branch was made (this run, else the
-// branch's oldest reflog entry, git's own record of it). Said on the push that
-// sends them, whichever run made the branch; once the remote has the branch,
-// they went with it. Null with nothing to say, or no record of the start.
-function comesAlongLine(dir: string, name: string, branch: string, remote: string, made?: string): string | null {
-  if (git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]).ok) return null;
-  const start = made ?? git(dir, ["log", "-g", "--format=%H", `refs/heads/${branch}`, "--"]).stdout.split(/\r?\n/).filter(Boolean).at(-1);
-  if (!start) return null;
+// The person's own commits a Unit's branch made from where they were carries:
+// those on no remote. Said in the line of the run that makes the branch,
+// whether its push then goes or is refused, so they hear of them before
+// anything is published; a later push says nothing of them again. Null with
+// nothing to say.
+function comesAlongLine(dir: string, name: string, branch: string, remote: string, start: string): string | null {
   const subjects = git(dir, ["log", "--format=%s", start, "--not", "--remotes"]).stdout.split(/\r?\n/).filter(Boolean);
   if (subjects.length === 0) return null;
   return `Branch ${branch} in ${name} starts from where you were, so your ${subjects.length === 1 ? "commit" : `${subjects.length} commits`} ` +
@@ -6277,11 +6274,12 @@ function pushUnit(args: string[], projectDir?: string): void {
   // commit made with their git (hooks, signing, identity), before anything is
   // pushed: a hook that stops one pushes nothing.
   const moved: Array<{ name: string; from: string }> = [];
-  // Where this run made a Unit branch from where they were, by repo.
-  const madeAt = new Map<string, string>();
+  // Their own commits on a branch this run made from where they were: said in
+  // whatever line the run ends with.
   const along: string[] = [];
   const whereNow = (done = false): string =>
-    whereNowLine(branch, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "");
+    whereNowLine(branch, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "") +
+      along.map((line) => ` ${line}`).join("");
   for (const { repo, dir, name, remote, paths } of planned) {
     // The Unit's branch under the name it had, now to go under the person's:
     // renamed as their own hands would while the remote has no copy of it.
@@ -6310,7 +6308,8 @@ function pushUnit(args: string[], projectDir?: string): void {
           const tried = git(dir, ["switch", "-q", "-c", branch]);
           switched = tried.ok;
           said = tried.stderr;
-          if (switched) madeAt.set(repo, git(dir, ["rev-parse", "HEAD"]).stdout.trim());
+          const comesAlong = switched ? comesAlongLine(dir, name, branch, remote, git(dir, ["rev-parse", "HEAD"]).stdout.trim()) : null;
+          if (comesAlong !== null) along.push(comesAlong);
         }
       }
       if (!switched) {
@@ -6327,13 +6326,8 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
   }
   for (const { repo, dir, name, remote, paths } of planned) {
-    const comesAlong = comesAlongLine(dir, name, branch, remote, madeAt.get(repo));
     const pushed = git(dir, ["push", "-u", remote, branch]);
-    if (!pushed.ok) {
-      fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}` +
-        along.map((line) => ` ${line}`).join(""));
-    }
-    if (comesAlong !== null) along.push(comesAlong);
+    if (!pushed.ok) fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}`);
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
     const base = earlier.get(repo)?.base ??
       (git(dir, ["merge-base", "HEAD", repoIntegration(dir, remote)]).stdout.trim() || head);
@@ -6365,7 +6359,6 @@ function pushUnit(args: string[], projectDir?: string): void {
     lines.push(`${joinNames(addedRepos)} ${addedRepos.length === 1 ? "was" : "were"} not in the home's plan; ${unit} changed ` +
       `${addedRepos.length === 1 ? "it" : "them"}, so ${addedRepos.length === 1 ? "it is" : "they are"} now among ${unit}'s repos and went with the push.`);
   }
-  lines.push(...along);
   if (leftOut.length > 0) {
     lines.push(`${joinNames(leftOut)} ${leftOut.length === 1 ? "is" : "are"} not in the commit: ${leftOut.length === 1 ? "it" : "each"} ` +
       `already had a change of yours when ${unit} was taken, and ${unit}'s own change could not be kept apart from it. ` +

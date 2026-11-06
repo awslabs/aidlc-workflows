@@ -178,11 +178,11 @@ describe("the push", () => {
     expect(readFileSync(join(billing, "README.md"), "utf-8")).toBe("# billing\n\nlocal, still editing\n");
   });
 
-  test("their pre-push hook refuses the first push: the push that sends the branch says the commits that come along, once", () => {
+  test("their pre-push hook refuses the first push: the refusal names their commits that come along, before anything is published, and the retry says nothing again", () => {
     const { hosts, alice, record } = refundsTaken();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
-    git(billing, ["commit", "-q", "-am", "local readme"]);
+    git(billing, ["commit", "-q", "-am", "wip: log billing calls"]);
     writeFileSync(join(billing, "README.md"), "# billing\n\nlocal, still editing\n");
     // Their hook turns the first push away, then lets the next one through.
     writeFileSync(join(billing, ".git", "refuse-once"), "");
@@ -193,16 +193,14 @@ describe("the push", () => {
     const refused = run(UNIT, ["push"], alice);
     expect(refused.status).not.toBe(0);
     expect(String(refused.json?.error)).toContain("The push of refunds in billing was refused");
+    expect(String(refused.json?.error)).toContain(
+      'Branch refunds in billing starts from where you were, so your commit not yet on origin/main comes along: "wip: log billing calls".',
+    );
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts.billing }).status).not.toBe(0);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toContain(
-      'Branch refunds in billing starts from where you were, so your commit not yet on origin/main comes along: "local readme".',
-    );
-    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: fixture", "local readme"]);
-    // Sent once: the next push says nothing of it.
-    const again = run(UNIT, ["push"], alice);
-    expect(again.status, again.out).toBe(0);
-    expect(String(again.json?.notice)).not.toContain("come along");
+    expect(String(pushed.json?.notice)).not.toContain("come along");
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: fixture", "wip: log billing calls"]);
   });
 
   test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {
