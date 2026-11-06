@@ -167,6 +167,10 @@ describe("a switch never takes the next word", () => {
       "extra",
     );
     expectUsage(
+      unchangedBy(w.mate, w.remote, () => unitTool(["publish", "alpha", "--commit", "--include", ".", "-h"], w.mate)),
+      "publish",
+    );
+    expectUsage(
       unchangedBy(w.lead, w.remote, () => unitTool(["land", "alpha", "--accept-released-attempt", "-h"], w.lead)),
       "land",
     );
