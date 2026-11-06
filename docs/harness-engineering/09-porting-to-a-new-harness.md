@@ -78,11 +78,21 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `.,()+-`; a name of 1 to 15 characters and a note of 1 to 60. The packager
   refuses a manifest whose text is not, and `aidlc config` does not offer such a
   projection.
-- `firstRunSteps` / `editorTerminalApp` / `hookActivation` (optional) - only for
+- `firstRunSteps` / `editorTerminalApp` / `cliFirst` / `hookActivation` (optional) - only for
   a host whose first run needs steps the other harnesses do not. `firstRunSteps`
   replaces the two next-step lines that end `aidlc config`. `editorTerminalApp`
   is the `TERM_PROGRAM` value the editor's built-in terminal sets; running
   `aidlc config` there makes this harness the wizard's default choice.
+  `cliFirst` (`{ env, configNextStep, firstRunSteps }`) is for a tree an
+  editor and a CLI both run: the CLI's words for those two lines, used
+  instead when a supported harness CLI (its `--version` at or above the
+  harness's minimum, when one is set) is on an absolute PATH entry and
+  `aidlc config` runs outside the editor (no shell `env` names, read like
+  `missedReplyInHost`, and not the terminal of its `TERM_PROGRAM=<name>`
+  entry); Kiro IDE declares it, with `hookActivation.notRunYetCliFirst`
+  (`{ env, text }`) for doctor's line. Only a harness whose CLI AI-DLC
+  already probes (`probeHarnessCli` in `core/tools/aidlc-config-diagnostics.ts`)
+  can lead with its CLI's words; a new port adds that probe first.
   `hookActivation` is for a host that may run no hooks until the person acts.
   Every text in it names only the person's own step, in the host's own words,
   never hooks, the engine, or why; `<entry>`, `<folder>` and `<next>` are
@@ -135,7 +145,7 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   declare `recovery`, `agentStep` and `notRunYet` (Kiro CLI also `missedReply`,
   which names its agent picker); Copilot also
   `notRunInWorkflow`; Kiro IDE `recovery`, `missedReply`, `missedReplyInHost`,
-  `notRunYet`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
+  `notRunYet`, `notRunYetCliFirst`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
   been allowed to run commands in, no AI-DLC command can run, so Kiro IDE
   also keeps that step in its orchestrator skill.
 - `newChatStep` (optional) - `{ text, inHost? }`: how the person starts a clean
