@@ -416,7 +416,6 @@ import {
   setPhaseProgress,
   setStageSuffix,
   intentRepos,
-  discoverSiblingRepos,
   INTENT_SELECTOR_REGEX,
   SPACE_NAME_REGEX,
   scopeGridPath,
@@ -885,7 +884,7 @@ Utilities:
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
   intent add-repo <name> [--url <address>] [--reason <text>] [--person-words <their words>]  Add a sibling repo to the active piece of work, cloning it first when it is not here yet (from repos.json, or --url)
-  intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one); its folder and its repos.json line stay
+  intent remove-repo <name>  Take a sibling repo out of the active piece of work; its folder and its repos.json line stay
   intent set-repos <name,...> | --all  Set exactly which sibling repos the active piece of work covers, or keep them all
   intent add-checkout <path>  Record a checkout outside the review's reach (a harness-folder worktree, or one outside the project) so the review covers the code there
   intent remove-checkout <path>  Take a recorded checkout out of the active piece of work's review
@@ -7699,14 +7698,16 @@ interface DirSignals {
   buildSystem: string;
 }
 
-function scanSignals(dir: string, fileScanDepth: number): DirSignals {
+// `leftOut`: entries of dir read as if they were not there (a submodule at
+// lib/ is not the project's own source folder).
+function scanSignals(dir: string, fileScanDepth: number, leftOut: ReadonlySet<string> = new Set()): DirSignals {
   let entries: string[] = [];
   try {
     entries = readdirSync(dir);
   } catch {
     // dir doesn't exist yet (caller should scaffold first)
   }
-  const entrySet = new Set(entries.filter((e) => !SCAN_EXCLUDE.has(e)));
+  const entrySet = new Set(entries.filter((e) => !SCAN_EXCLUDE.has(e) && !leftOut.has(e)));
 
   // Source-file count. countFilesByLang(dir, counts, 0) counts files directly
   // under dir (its recursion guard returns immediately at depth -1), matching
@@ -7806,10 +7807,25 @@ function scanSubmodules(projectDir: string): SubmoduleEntry[] {
   }));
 }
 
-export function detectWorkspace(projectDir: string): ScanResult {
+// A path .gitmodules lists, as the '/'-joined path from the project the scan
+// walks (a Windows path's backslashes, a leading ./ and a trailing slash read
+// the same).
+function submodulePath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+}
+
+// `ownCodeBeside` leaves these folders and the ones the project's .gitmodules
+// lists out of the root's signals and the nested walk, and drops the signal
+// those declarations give: Brownfield then means code of the project's own,
+// outside its submodules and the other repos in it.
+export function detectWorkspace(projectDir: string, { ownCodeBeside }: { ownCodeBeside?: readonly string[] } = {}): ScanResult {
+  const submodules = scanSubmodules(projectDir);
+  const leftOut: ReadonlySet<string> = new Set(
+    ownCodeBeside === undefined ? [] : [...ownCodeBeside, ...submodules.map((entry) => submodulePath(entry.path))],
+  );
   // Root scan (depth 0 for the top-level file sweep, byte-identical to the
   // base inline loop plus the SCAN_SOURCE_DIRS recurse, both inside scanSignals).
-  const root = scanSignals(projectDir, 0);
+  const root = scanSignals(projectDir, 0, leftOut);
   const langCounts = { ...root.langCounts };
   const frameworks = [...root.frameworks];
   let buildSystem = root.buildSystem;
@@ -7845,7 +7861,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
 
       let found = false;
       for (const entry of entries) {
-        if (skipNestedScanDir(entry)) continue;
+        if (skipNestedScanDir(entry) || leftOut.has([...parentParts, entry].join("/"))) continue;
         const full = join(parentDir, entry);
         let st: import("node:fs").Stats;
         try {
@@ -7906,8 +7922,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
   // SCANNED (Unknown is truthful until the submodules are fetched). A root
   // signal: folded in after the nested fallback so nested aggregation (and
   // nestedRoot attribution) still runs when submodules are the only signal.
-  const submodules = scanSubmodules(projectDir);
-  if (submodules.length > 0) brownfield = true;
+  if (submodules.length > 0 && ownCodeBeside === undefined) brownfield = true;
 
   const result: ScanResult = {
     projectType: brownfield ? "Brownfield" : "Greenfield",
@@ -7918,6 +7933,25 @@ export function detectWorkspace(projectDir: string): ScanResult {
   };
   if (nestedHits.length > 0) result.nestedRoot = nestedRoots.join(", ");
   return result;
+}
+
+// Whether `name` is a folder the project's .gitmodules lists.
+function isProjectSubmodule(projectDir: string, name: string): boolean {
+  return scanSubmodules(projectDir).some((entry) => submodulePath(entry.path) === name);
+}
+
+// The repos a piece of work records when it starts, one rule for its creation
+// and for existing code declared before Construction: the set the person named
+// (`--repos`) as named; otherwise the repos found in the folder, less the
+// submodules of a project with code of its own beside them (outside them and
+// the other repos found), which is then the work's repo as in any one-repo
+// project. A project made only of submodules records them.
+function startingRepoSet(projectDir: string, explicitReposCsv?: string): string[] {
+  const repos = resolveIntentRepoSet(projectDir, explicitReposCsv);
+  if (explicitReposCsv && explicitReposCsv.trim().length > 0) return repos;
+  if (!repos.some((name) => isProjectSubmodule(projectDir, name))) return repos;
+  if (detectWorkspace(projectDir, { ownCodeBeside: repos }).projectType !== "Brownfield") return repos;
+  return repos.filter((name) => !isProjectSubmodule(projectDir, name));
 }
 
 // ---------------------------------------------------------------------------
@@ -8393,14 +8427,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
   }
 
-  // Resolve the repo set the intent touches (P7 multi-repo): an explicit
-  // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
-  // root's immediate children for a `.git`. An empty result (legacy single-repo /
-  // fresh greenfield) records no repos row — the lone repo is inferred on the
-  // construction path. Validated up front so a bad name fails before any mutation.
+  // Resolve the repo set the intent touches (P7 multi-repo, startingRepoSet):
+  // an explicit `--repos a,b` wins; absent it, the workspace root's immediate
+  // children with a `.git`, a project's own submodules aside. An empty result
+  // (legacy single-repo / fresh greenfield) records no repos row; the lone repo
+  // is inferred on the construction path. Validated up front so a bad name fails
+  // before any mutation.
   let repos: string[];
   try {
-    repos = resolveIntentRepoSet(projectDir, flags.repos);
+    repos = startingRepoSet(projectDir, flags.repos);
   } catch (e) {
     die(errorMessage(e));
   }
@@ -9700,6 +9735,8 @@ function handleIntentRepos(
       }
       const current = row.repos ?? [];
       if (current.length === 0) {
+        // Nothing to take out: the workspace folder is already the work's repo.
+        if (verb === "remove-repo") return { kind: "none" as const };
         die(`intent ${verb} refused: this piece of work treats the workspace folder itself as its code repo, so it records no repos to change.`);
       }
       const state = readStateFile(projectDir, dirName, space);
@@ -9711,7 +9748,9 @@ function handleIntentRepos(
         }
       } else {
         if (!current.includes(name)) return { kind: "absent" as const, current };
-        if (current.length === 1) {
+        // A submodule of a project that is a checkout itself leaves the
+        // project folder as the work's repo, as in any one-repo project.
+        if (current.length === 1 && !(hasRealGitEntry(projectDir) && isProjectSubmodule(projectDir, name))) {
           die(`intent remove-repo refused: "${name}" is the only repo this piece of work records; removing it would leave none.`);
         }
       }
@@ -9741,6 +9780,7 @@ function handleIntentRepos(
         reState: boxes.get("reverse-engineering"),
         reAction,
         units: unitsRepoChangeAtChange(projectDir, state, stage, dirName, space),
+        none: next.length === 0,
       };
     }, dirName, space);
   });
@@ -9752,6 +9792,9 @@ function handleIntentRepos(
       break;
     case "absent":
       lines.push(`${name} is not one of this piece of work's repos (${outcome.current.join(", ")}); nothing changed.`);
+      break;
+    case "none":
+      lines.push("This piece of work records no repos: it works on the workspace folder itself. Nothing changed.");
       break;
     case "changed":
       if (verb === "add-repo") {
@@ -9771,11 +9814,12 @@ function handleIntentRepos(
       } else {
         const listed = workspaceManifestNames(projectDir).includes(name);
         lines.push(
-          `Removed ${name} from this piece of work's repos. Its folder stays` +
+          `Removed ${name} from this piece of work's repos${outcome.none ? "; it now works on the workspace folder itself" : ""}. Its folder stays` +
             (listed ? ", and so does its line in repos.json (delete that line to take it off the workspace's list)." : "."),
         );
         if (outcome.units !== null) lines.push(outcome.units);
-        lines.push("You can add it back any time.");
+        // add-repo serves work that records repos, so with none left it is no way back.
+        if (!outcome.none) lines.push("You can add it back any time.");
       }
       break;
   }
@@ -12050,10 +12094,11 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       ).content;
     }
     // Repos added after creation, recorded as creation would have recorded
-    // them; only names a repo may have, since each becomes a path segment.
+    // them (startingRepoSet); only names a repo may have, since each becomes a
+    // path segment.
     const repos = declared === "Brownfield" && !started && intent !== undefined &&
         intentRepos(projectDir, intent, space).length === 0
-      ? discoverSiblingRepos(projectDir).filter(isValidRepoName)
+      ? startingRepoSet(projectDir).filter(isValidRepoName)
       : [];
     content = setField(content, "Last Updated", isoTimestamp());
 

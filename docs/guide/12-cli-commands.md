@@ -36,7 +36,7 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
-| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out (never the last) |
+| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out |
 | `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers; `--all` keeps every recorded repo |
 | `/aidlc intent add-checkout <path>` | Have the review cover code kept in a worktree in the harness folder or outside the project; `remove-checkout <path>` takes it out |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
@@ -299,7 +299,10 @@ shows where the work stands.
 **Multi-repo workspaces.** When your workspace root holds more than one sibling
 code repo (each an immediate child directory with a `.git`), the creation step
 records the set of repos the intent touches in its `intents.json` row. By default
-it **auto-discovers** every sibling repo; to scope an intent to a specific subset,
+it **auto-discovers** every sibling repo, except a git submodule of a project that
+has code of its own beside it: that project is a one-repo project and is the
+work's repo (a project made only of submodules records them). To scope an intent
+to a specific subset, or to name a submodule as the work's repo,
 the creation tool accepts `--repos a,b` (a comma-separated list of repo directory
 names). These are flags of the deterministic `aidlc-utility intent-create` step the
 engine runs for you — not `/aidlc` flags you type. During Construction, each git
@@ -427,7 +430,10 @@ checkout (a real `.git` entry): a folder merely shaped like a repository is
 refused, as is a name with separators. The command serves work that already
 records repos; work that records none treats the workspace folder itself as its
 repo (`workspace reclassify` records its first repos). Removing the last
-recorded repo is refused for the same reason.
+recorded repo is refused for the same reason, unless it is a git submodule of
+the project (listed in its `.gitmodules`, the project folder a Git checkout
+itself): the work then records none and works on the workspace folder again.
+Removing a repo from work that records none changes nothing.
 
 There is no cut-off: after Units Generation is approved the repo is still added
 (or removed), and what that means for the approved Units follows the work's
