@@ -7395,7 +7395,12 @@ function takeNewerInput(
   how: { at: string; done: boolean; pushed: boolean; proposedHere: boolean },
 ): string | null {
   const path = join(record, ...input.split("/"));
-  if (existsSync(path) && textFingerprint(readFileSync(path, "utf-8")) === textFingerprint(text)) return null;
+  // The copy already holds it (the team's own change, approved as it was):
+  // taken, so the next newer version is read against it, not as their edit.
+  if (existsSync(path) && textFingerprint(readFileSync(path, "utf-8")) === textFingerprint(text)) {
+    if (inputsTaken(record).get(input) !== textFingerprint(text)) noteInputTaken(record, input, textFingerprint(text));
+    return null;
+  }
   const name = inputName(input);
   const taken = inputsTaken(record).get(input);
   if (!how.proposedHere && existsSync(path) && taken !== undefined && textFingerprint(readFileSync(path, "utf-8")) !== taken) {

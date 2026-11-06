@@ -22,6 +22,7 @@ import {
   claimPayload,
   cleanupTeamBuild,
   cloneCode,
+  cloneOf,
   codeHost,
   ENV,
   git,
@@ -346,9 +347,28 @@ describe("progress and the result come back as files", () => {
     const taken = run(UNIT, ["take", "--file", delivered], partner.dir);
     expect(taken.status, taken.out).toBe(0);
     expect(String(taken.json?.notice)).toContain("The lead approved your change to the requirements.");
-    expect(readFileSync(copy, "utf-8").replace(/\r\n/g, "\n")).toBe(
-      readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", "fixture-8000000000000001", "inception", "requirements-analysis", "requirements.md"), "utf-8").replace(/\r\n/g, "\n"),
-    );
+    const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", "fixture-8000000000000001", "inception", "requirements-analysis", "requirements.md");
+    expect(readFileSync(copy, "utf-8").replace(/\r\n/g, "\n")).toBe(readFileSync(homeCopy, "utf-8").replace(/\r\n/g, "\n"));
+    // A live run: payments' change to the same requirements, approved after, came in the next
+    // newer file and was put beside the copy as if the copy were data's own edit, though it was
+    // the version the lead approved; the approved change never reached the build.
+    const pat = cloneOf(home.remote, "pat");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], pat).status).toBe(0);
+    const patIntents = join(pat, "aidlc", "spaces", "payments", "intents");
+    const patRecord = join(patIntents, readdirSync(patIntents).find((name) => name.endsWith("-refunds"))!);
+    writeFileSync(join(patRecord, "inception", "requirements-analysis", "requirements.md"),
+      `${readFileSync(homeCopy, "utf-8").replace(/\r\n/g, "\n").trimEnd()}\nFR2 refunds in the shop's currency.\n`);
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds in the shop's currency"], pat).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const second = run(UNIT, ["amend", "refunds", "--input", "inception/requirements-analysis/requirements.md", "--answer", "approve",
+      "--person-words", "yes, in the shop's currency"], home.dir);
+    expect(second.status, second.out).toBe(0);
+    const newest = /A newer hand-off file for reporting is at (\S+): send it/.exec(String(second.json?.notice))?.[1];
+    expect(newest, String(second.json?.notice)).toBeString();
+    const again = run(UNIT, ["take", "--file", deliver(home.dir, newest!)], partner.dir);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).not.toContain("your own edits");
+    expect(readFileSync(copy, "utf-8").replace(/\r\n/g, "\n")).toContain("FR2 refunds in the shop's currency.");
   });
 
   test("a turned-down by-file change says nothing reaches the team from here", () => {
