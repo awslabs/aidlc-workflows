@@ -295,6 +295,19 @@ export function aidlcEngineCommand(
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
+// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
+// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
+// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
+// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
+export function inHostShell(env: readonly string[] | undefined, actualEnv: NodeJS.ProcessEnv = process.env): boolean {
+  const entries = (env ?? []).map((entry) => {
+    const [name, value] = entry.split("=", 2);
+    return { value: value?.toLowerCase(), actual: actualEnv[name]?.trim().toLowerCase() };
+  });
+  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
+  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
+}
+
 // Control characters (line breaks, terminal escapes) in something we print.
 export function hasControlCharacters(value: string): boolean {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: detecting them is the point

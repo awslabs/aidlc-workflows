@@ -19,7 +19,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
@@ -116,6 +116,21 @@ function asKiroIde(project: string): Record<string, string> {
 
 const KIRO_IDE_ADVICE = ["Trust Folder & Continue", "Kiro IDE", "Reload Window", "agent picker"];
 
+// A PATH with a supported kiro-cli (a shell-script stand-in) or with none, and
+// the shell marks that say where doctor runs: Kiro IDE's (TERM_PROGRAM=kiro) or none.
+function withKiroCli(project: string, ide: boolean, cli = true): Record<string, string> {
+  const bin = join(project, ".managed-policy", "bin");
+  mkdirSync(bin, { recursive: true });
+  if (cli) writeFileSync(join(bin, "kiro-cli"), "#!/bin/sh\nprintf '%s\\n' 'kiro-cli 3.1.0'\n", { mode: 0o755 });
+  return {
+    PATH: cli ? `${bin}${delimiter}${process.env.PATH ?? ""}` : bin,
+    TERM_PROGRAM: ide ? "kiro" : "",
+    VSCODE_GIT_ASKPASS_NODE: "",
+    VSCODE_IPC_HOOK: "",
+    VSCODE_PID: "",
+  };
+}
+
 function writeManagedSettings(
   project: string,
   body: Record<string, unknown>,
@@ -211,7 +226,8 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
   // the first workflow, so none yet gets the trust step, in Kiro's words.
   test("Kiro IDE with no heartbeat warns that the hooks have not run, with the trust step", () => {
     const project = freshProject();
-    const run = runUtility(project, ["doctor", "--verbose"], asKiroIde(project));
+    const kiroIde = { ...asKiroIde(project), ...withKiroCli(project, true) };
+    const run = runUtility(project, ["doctor", "--verbose"], kiroIde);
     const text = output(run);
     expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
     expect(text).toContain(
@@ -224,6 +240,33 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
     expect(text).not.toContain("agent picker");
     expect(text).not.toContain("Hook heartbeats: not yet fired");
+  });
+
+  // Outside Kiro IDE, with a supported kiro-cli on the PATH, the same warning
+  // leads with Kiro CLI's restart (#3596). Doctor runs the stand-in for its version.
+  test.skipIf(process.platform === "win32")(
+    "Kiro with no heartbeat, run outside Kiro IDE where kiro-cli is found, leads with Kiro CLI's step",
+    () => {
+      const project = freshProject();
+      const run = runUtility(project, ["doctor", "--verbose"], { ...asKiroIde(project), ...withKiroCli(project, false) });
+      const text = output(run);
+      expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+      expect(text).toContain(
+        "fix: This is expected before your first chat message here. If you already sent one in Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue'), then send a message and run doctor again. If you sent it in Kiro IDE, trust this folder there: choose Trust Folder & Continue when Kiro asks whether you trust it,",
+      );
+      expect(text).toContain("Reload Window does not change that.");
+    },
+  );
+
+  test("Kiro with no heartbeat, run outside Kiro IDE with no kiro-cli, keeps the Kiro IDE step first", () => {
+    const project = freshProject();
+    const run = runUtility(project, ["doctor", "--verbose"], { ...asKiroIde(project), ...withKiroCli(project, false, false) });
+    const text = output(run);
+    expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(text).toContain(
+      "fix: This is expected before your first chat message here. If you already sent one, trust this folder in Kiro IDE:",
+    );
+    expect(text).not.toContain("If you already sent one in Kiro CLI");
   });
 
   // Claude Code's human-turn hook leaves a heartbeat on every message, so with

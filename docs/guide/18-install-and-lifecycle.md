@@ -1422,6 +1422,11 @@ Successful config prints the host-specific next step:
 | Codex CLI | Run `codex` (when it asks about hooks, choose Trust all and continue), then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 
+On the Kiro row (Kiro IDE and Kiro CLI on v3), when Kiro CLI 2.24.1 or later is
+on your PATH and config runs outside Kiro IDE (not in its terminal), the next
+step names Kiro CLI first: start `kiro-cli --v3` in this project, then run
+`/aidlc --doctor`, with the Kiro IDE steps after it.
+
 ## Update and Version Selection
 
 | Command | Public options and behavior |

@@ -175,6 +175,26 @@ const ANSWER_NOT_RECORDED = "Your answer was not recorded, so you don't need to 
 // VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
 const KIRO_IDE_AGENT_SHELL = ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"];
 
+// The next step `aidlc config` prints, in two parts per host so both orders
+// (Kiro IDE first, or Kiro CLI first in cliFirst) say the same words.
+const KIRO_IDE_OPEN_REST =
+  "; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, " +
+  "select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, " +
+  "or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor`";
+const KIRO_IDE_OPEN = `open this project in Kiro IDE${KIRO_IDE_OPEN_REST}`;
+const KIRO_CLI_START = "start `kiro-cli --v3` in the project";
+const KIRO_CLI_START_REST =
+  "; if Kiro asks whether you trust this workspace and you know what is in this folder, choose " +
+  '"Trust, continue"; then run `/aidlc --doctor`';
+
+// Doctor's Kiro IDE step when no hook has run yet, in both orders of notRunYet.
+const KIRO_IDE_NOT_RUN_YET_TRUST =
+  "choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the " +
+  "Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette " +
+  "(Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run doctor again. If AI-DLC was " +
+  "installed while Kiro IDE was open, quit Kiro IDE fully and reopen it instead: it keeps the PATH " +
+  "it started with, so its hooks cannot find aidlc, and Reload Window does not change that.";
+
 // What the agent does when Kiro is not running AI-DLC's hooks, before the one line it shows.
 const KIRO_HOOKS_OFF_AGENT =
   "Kiro is not running AI-DLC's hooks in this folder. You cannot change that from inside the chat: " +
@@ -185,7 +205,7 @@ const manifest: HarnessManifest = {
   // One tree for Kiro IDE and Kiro CLI, so it is named after neither.
   productName: "Kiro",
   choiceNote: "Kiro IDE and Kiro CLI on its v3 engine",
-  configNextStep: "open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli --v3` in the project instead; if Kiro asks whether you trust this workspace and you know what is in this folder, choose \"Trust, continue\"; then run `/aidlc --doctor`)",
+  configNextStep: `${KIRO_IDE_OPEN} (in Kiro CLI, ${KIRO_CLI_START} instead${KIRO_CLI_START_REST})`,
   // Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
   // folder is trusted and the window reloads; until then the first approval
   // gate cannot see the human's reply, so those steps come before the first
@@ -206,6 +226,27 @@ const manifest: HarnessManifest = {
     "whether you trust this workspace and you know what is in this folder,",
     'choose "Trust, continue". Then step 4.',
   ],
+  // The same lines with Kiro CLI first, where a supported kiro-cli is on an
+  // absolute PATH entry and setup runs outside Kiro IDE
+  // (core/tools/aidlc-config-diagnostics.ts harnessCliLeads): someone who has
+  // only Kiro CLI reads its step first, and Kiro IDE's after it. Doctor's copy
+  // is hookActivation.notRunYetCliFirst.
+  cliFirst: {
+    env: KIRO_IDE_AGENT_SHELL,
+    configNextStep: `${KIRO_CLI_START}${KIRO_CLI_START_REST} (in Kiro IDE, open this project instead${KIRO_IDE_OPEN_REST})`,
+    firstRunSteps: [
+      "1. Start `kiro-cli --v3` in this folder. If Kiro asks whether you trust",
+      "   this workspace and you know what is in this folder, choose",
+      '   "Trust, continue".',
+      '2. /aidlc "what you want built"  describe your first intent',
+      "",
+      "Using Kiro IDE instead? Open this folder in Kiro IDE. If the Restricted",
+      "Mode banner shows at the top of the window and you know what is in this",
+      'folder, select Manage on it, then Trust. Run "Developer: Reload Window"',
+      "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose",
+      "the aidlc agent in the chat panel's agent picker, then step 2.",
+    ],
+  },
   // Kiro IDE has no CLI of its own to probe. Its integrated terminal sets
   // TERM_PROGRAM=kiro (captured from Kiro IDE 1.1.14 on Windows), and its git
   // askpass helper (VSCODE_GIT_ASKPASS_NODE) is the Kiro executable. A miss
@@ -247,12 +288,15 @@ const manifest: HarnessManifest = {
     // before the first workflow, so doctor warns only while none exists.
     notRunYet:
       "This is expected before your first chat message here. If you already sent one, trust this " +
-      "folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
-      "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window " +
-      "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
-      "doctor again. If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen " +
-      "it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload " +
-      `Window does not change that. ${KIRO_CLI_RESTART}.`,
+      `folder in Kiro IDE: ${KIRO_IDE_NOT_RUN_YET_TRUST} ${KIRO_CLI_RESTART}.`,
+    notRunYetCliFirst: {
+      env: KIRO_IDE_AGENT_SHELL,
+      text:
+        "This is expected before your first chat message here. If you already sent one in Kiro CLI, quit " +
+        "Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this " +
+        "workspace and you know what is in this folder, choose 'Trust, continue'), then send a message " +
+        `and run doctor again. If you sent it in Kiro IDE, trust this folder there: ${KIRO_IDE_NOT_RUN_YET_TRUST}`,
+    },
     // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
     // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
     // started with hooks off for the untrusted folder ("hooks.v2.execution

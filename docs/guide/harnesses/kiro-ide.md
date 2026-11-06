@@ -269,6 +269,11 @@ On Kiro CLI, start `kiro-cli --v3` in `your-project/`; if Kiro asks whether you
 trust this workspace and you know what is in this folder, choose **Trust,
 continue**. Then go to step 4.
 
+When Kiro CLI 2.24.1 or later is on your PATH and setup runs outside Kiro IDE
+(not in its terminal), setup lists this Kiro CLI step first and the Kiro IDE
+steps after it; doctor's fix for "AIDLC hooks have not run in this project yet" does the
+same.
+
 When `kiro-cli` is on your PATH, setup also offers Kiro CLI's session model,
 saved in your personal Kiro settings (`~/.kiro/settings/cli.json`). It is a
 Kiro CLI setting: Kiro IDE uses the model you choose in its own model picker.

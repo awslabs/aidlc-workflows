@@ -20,6 +20,7 @@ import {
   type DirectiveLimit,
   directiveLimitFor,
   discoverProjectHarnesses,
+  inHostShell,
   isCompiledExecutable,
   type KiroLayout,
   kiroTreeLayout,
@@ -762,7 +763,7 @@ export interface DocumentExtractorSpec {
 }
 
 // A host-specific line from harness.json, kept only when well formed.
-function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
+function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "notRunYetCliFirst">(
   key: K,
   value: unknown,
 ): Partial<Record<K, { env: string[]; text: string }>> {
@@ -781,19 +782,6 @@ function registrationLines(value: unknown): Pick<HookActivation, "registration">
     : {};
 }
 
-// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
-// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
-// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
-// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
-function inHostShell(env: readonly string[] | undefined): boolean {
-  const entries = (env ?? []).map((entry) => {
-    const [name, value] = entry.split("=", 2);
-    return { value: value?.toLowerCase(), actual: process.env[name]?.trim().toLowerCase() };
-  });
-  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
-  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
-}
-
 /** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
 export interface HookActivation {
   recovery: string;
@@ -801,6 +789,7 @@ export interface HookActivation {
   missedReplyInHost?: { env: string[]; text: string };
   missesReplies?: true;
   notRunYet?: string;
+  notRunYetCliFirst?: { env: string[]; text: string };
   notRunInWorkflow?: string;
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
@@ -993,6 +982,7 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(hostLine("missedReplyInHost", activation.missedReplyInHost)),
           ...(activation.missesReplies === true ? { missesReplies: true as const } : {}),
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+          ...(typeof activation.notRunYet === "string" ? hostLine("notRunYetCliFirst", activation.notRunYetCliFirst) : {}),
           ...(typeof activation.notRunInWorkflow === "string"
             ? { notRunInWorkflow: activation.notRunInWorkflow }
             : {}),
