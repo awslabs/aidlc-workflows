@@ -6368,7 +6368,11 @@ function pushUnit(args: string[], projectDir?: string): void {
   // stages read; a home that takes no push from here gets it as a file.
   const outputs = unitOutputsHomeReads(unit, getField(state, "Scope") ?? "")
     .filter((rel) => existsSync(join(activeRecordDir(pd), ...rel.split("/"))));
-  const result: UnitResult = { by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate", repos: results, outputs };
+  const kept = inputsKeptOverNewer(recordDir(pd) ?? "");
+  const result: UnitResult = {
+    by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate", repos: results, outputs,
+    ...(kept.length > 0 ? { kept_edits: kept } : {}),
+  };
   lines.push(...reached);
   let homeHasIt = true;
   if (claim === null || ref === null || home === null) {
@@ -6627,6 +6631,48 @@ export function reopenTurnedDownBuild(projectDir: string, stateContent: string):
   }
 }
 
+// Each shared input's version as this build last took it from the home (at
+// the take, then each amendment it took), and the inputs whose own edit it kept
+// over a newer version: what the team's copy is told apart by, and what its
+// result says to the lead. Kept in the build's engine folder, never committed.
+const INPUTS_TAKEN_FILE = "inputs-taken.json";
+
+function inputsTakenFile(record: string): { taken: Record<string, string>; kept: string[] } {
+  try {
+    const read = JSON.parse(readFileSync(join(record, ".aidlc-engine", INPUTS_TAKEN_FILE), "utf-8")) as { taken?: Record<string, string>; kept?: string[] };
+    return { taken: read.taken ?? {}, kept: read.kept ?? [] };
+  } catch {
+    return { taken: {}, kept: [] };
+  }
+}
+
+function inputsTaken(record: string): Map<string, string> {
+  const taken = new Map(approvedInputsOf(record).map((input) => [input.path, input.fingerprint] as [string, string]));
+  for (const [input, fingerprint] of Object.entries(inputsTakenFile(record).taken)) taken.set(input, fingerprint);
+  return taken;
+}
+
+// `fingerprint` null: the team's own edit of `input` is kept over the new version.
+function noteInputTaken(record: string, input: string, fingerprint: string | null): void {
+  const file = inputsTakenFile(record);
+  if (fingerprint === null) file.kept = [...new Set([...file.kept, input])];
+  else {
+    file.taken[input] = fingerprint;
+    file.kept = file.kept.filter((entry) => entry !== input);
+  }
+  try {
+    mkdirSync(join(record, ".aidlc-engine"), { recursive: true });
+    writeFileAtomic(join(record, ".aidlc-engine", INPUTS_TAKEN_FILE), `${JSON.stringify(file)}\n`);
+  } catch {
+    // Unnoted: the next step reads the copy against the version taken first.
+  }
+}
+
+// The inputs whose own edit this build kept over the home's newer version.
+export function inputsKeptOverNewer(record: string): string[] {
+  return inputsTakenFile(record).kept;
+}
+
 // What the home said about this build's Unit, read from the claims git last
 // brought in, each said once: a turn-down in the home's words, the home's
 // answer to a proposal, a Unit it started early on that is now done or turned
@@ -6689,10 +6735,25 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     const shown = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/amendments/${amendment.input}`, "--"]);
     const path = join(record, ...amendment.input.split("/"));
     if (!shown.ok || (existsSync(path) && textFingerprint(readFileSync(path, "utf-8")) === textFingerprint(shown.stdout))) continue;
+    const name = inputName(amendment.input);
+    // A copy the team edited since it took it, and never sent home as a
+    // proposal, stays as they left it: the new version goes beside it, said
+    // once, and their result says so to the lead.
+    const taken = inputsTaken(record).get(amendment.input);
+    const proposedHere = (mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input);
+    if (!proposedHere && existsSync(path) && taken !== undefined && textFingerprint(readFileSync(path, "utf-8")) !== taken) {
+      const beside = path.replace(/\.md$/, "") + ".from-lead.md";
+      if (existsSync(beside) && textFingerprint(readFileSync(beside, "utf-8")) === textFingerprint(shown.stdout)) continue;
+      writeFileSync(beside, shown.stdout, "utf-8");
+      noteInputTaken(record, amendment.input, null);
+      lines.push(`The ${name} changed at the home, and your copy has your own edits, so I kept yours as you left it and put ` +
+        `the new version beside it, at ${relative(projectDir, beside).split(sep).join("/")}: compare the two and keep what you want.`);
+      continue;
+    }
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, shown.stdout, "utf-8");
+    noteInputTaken(record, amendment.input, textFingerprint(shown.stdout));
     const renewed = renewForAmendedInput(projectDir, amendment.input, { Unit: unit, "Amended At Home": amendment.at });
-    const name = inputName(amendment.input);
     if (mine.payload.done) {
       lines.push(`The ${name} changed at the home after ${unit} was done. Do you want me to start follow-up work for it?`);
     } else if (getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed") {

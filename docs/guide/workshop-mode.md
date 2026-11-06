@@ -741,6 +741,10 @@ hears it once, on every Guard Policy; a team that pushed already hears it as a
 fact, and the others hear the offer to redo a stage that used it:
 "Something Functional Design used changed after it finished. I'm carrying on
 with it as it is. Do you want me to redo Functional Design with the change?"
+A team that edited its own copy and never sent that edit home keeps its copy as
+it left it: the new version is put beside it (`<file>.from-lead.md`), said once,
+and when its result comes home the lead hears once that the team's copy has its
+own edit, made on the version before the change.
 A team by file gets a newer hand-off file to take in. A team whose Unit was
 already done and merged hears once that the input changed after it was done,
 with an offer to start follow-up work; the done Unit is never reopened. A

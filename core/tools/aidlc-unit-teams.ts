@@ -404,6 +404,9 @@ export interface UnitResult {
   outputs: string[];
   // Taken in from a file changed after the team wrote it.
   edited?: true;
+  // Shared inputs the team's own edit was kept for, made on the version before
+  // the home's change (record-relative).
+  kept_edits?: string[];
 }
 
 export const RESULT_FILES_ROOT = ".aidlc-unit-result";

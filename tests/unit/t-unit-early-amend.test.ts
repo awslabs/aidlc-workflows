@@ -28,6 +28,7 @@ import {
   HOME_RECORD,
   mergeOnHost,
   next,
+  personsChat,
   refundsTaken,
   run,
   UNIT,
@@ -182,6 +183,53 @@ describe("a change to a shared input", () => {
     // The team that proposed it hears the answer.
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice))).toContain("The home approved your change to the requirements.");
+  });
+
+  // Arden's call on a live run: a team's own edit of its copy was written over
+  // by the lead's change. Their edit stays as they left it, the new version
+  // goes beside it, said once, and the lead hears it was made on the older one.
+  test("a team that edited its copy keeps its edit, gets the lead's new version beside it once, and the lead hears it", () => {
+    const { home, alice, record } = refundsTaken();
+    // web proposes a change; payments edited its own copy meanwhile.
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    const intents = join(bob, "aidlc", "spaces", "web", "intents");
+    const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+    writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    const sent = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], bob);
+    expect(sent.status, sent.out).toBe(0);
+    const copy = join(record, ...REQUIREMENTS.split("/"));
+    writeFileSync(copy, "# Requirements\n\nFR1 refunds. FR9 the payments team's own note.\n");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const amended = run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
+    expect(amended.status, amended.out).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    const beside = `${REQUIREMENTS.replace(/\.md$/, "")}.from-lead.md`;
+    const line = "The requirements changed at the home, and your copy has your own edits, so I kept yours as you left it " +
+      `and put the new version beside it, at aidlc/spaces/payments/intents/${record.split("/").at(-1)}/${beside}: compare the two and keep what you want.`;
+    expect(notices(next(alice))).toContain(line);
+    expect(readFileSync(copy, "utf-8")).toBe("# Requirements\n\nFR1 refunds. FR9 the payments team's own note.\n");
+    expect(readFileSync(join(record, ...beside.split("/")), "utf-8")).toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    expect(notices(next(alice))).not.toContain(line);
+    // Their result tells the lead, once, that their copy was edited on the version before.
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const heard = "The payments team's copy of the requirements has their own edit, made on the version before your change, and they kept it: " +
+      "what they built uses theirs.";
+    const lead = personsChat("lead-chat");
+    expect(notices(next(home.dir, lead))).toContain(heard);
+    expect(notices(next(home.dir, lead))).not.toContain(heard);
+  });
+
+  test("a team that left its copy as it was takes the lead's new version, as before", () => {
+    const { home } = proposed();
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    git(bob, ["fetch", "-q", "origin"]);
+    expect(notices(next(bob))).toContain("The requirements changed at the home; checkout-ui uses the new one from here.");
   });
 
   // A live run: a team's own proposed copy was written back to an older

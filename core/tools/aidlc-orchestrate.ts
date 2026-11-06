@@ -17197,6 +17197,15 @@ function emitTeamUnitMajorRunStage(
   // left for the home to build now), a result to check, a change to answer.
   const teamHome = !scopeStamp && homeLocation(stateContent) !== null;
   const { overview, results, heldElsewhere } = teamHomeClaims(projectDir, teamHome);
+  // A team's result built on its own edit of a shared input, made on the
+  // version before the lead's change: said once.
+  for (const claim of teamHome && !isReadOnlyEngineProbe() ? overview?.claims.values() ?? [] : []) {
+    for (const input of claim.status === "claimed" ? claim.payload.result?.kept_edits ?? [] : []) {
+      const team = theTeam(claim.owner);
+      sayWithStepOnce(projectDir, `${team.charAt(0).toUpperCase()}${team.slice(1)}'s copy of the ${inputName(input)} has their own edit, ` +
+        "made on the version before your change, and they kept it: what they built uses theirs.");
+    }
+  }
   const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat().filter((unit) => !heldElsewhere.has(unit));
   const kinds = resolution.unitKinds;
   const rhythm = effectiveUnitGateRhythm(projectDir, stateContent);
