@@ -84,9 +84,12 @@ describe("solo work a teammate joined", () => {
     const took = run(UNIT, ["take", "web-ui", "--home", HOME_RECORD], bob);
     expect(took.status, took.out).toBe(0);
 
-    // The lead's session switches to teams at its next step, and approves
-    // once per Unit from then on, as work begun with checkpoints on does.
+    // The lead's next chat (a take is looked for once per chat start and Unit
+    // boundary) switches to teams, and approves once per Unit from then on,
+    // as work begun with checkpoints on does.
     stopAt = (d) => isBoard(d) || d.stage === "build-and-test";
+    host.newSession();
+    person.say("/aidlc");
     const switched = agent.next();
     const rhythm = run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir);
     expect(rhythm.status, rhythm.out).toBe(0);
