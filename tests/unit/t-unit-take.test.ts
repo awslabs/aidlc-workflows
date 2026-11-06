@@ -218,6 +218,34 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect((step.produces as string[])[0]).toContain("/construction/refunds/functional-design/");
   });
 
+  // A live run: the lead approved a plan with Plan Approval on over a scope
+  // whose default is off; the team's build read "Plan Approval: off (from
+  // scope express)", and Code Generation built with no plan question.
+  test("the build keeps the plan settings the home approved, not its scope's defaults", () => {
+    const home = makeHome();
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md");
+    const set = (content: string, name: string, value: string) => new RegExp(`^- \\*\\*${name}\\*\\*:.*$`, "m").test(content)
+      ? content.replace(new RegExp(`^- \\*\\*${name}\\*\\*:.*$`, "m"), `- **${name}**: ${value}`)
+      : content.replace(/^- \*\*Test Strategy\*\*:.*$/m, (line) => `${line}\n- **${name}**: ${value}`);
+    let homeState = readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: express");
+    for (const [name, value] of [["Plan Approval", "on (set by you)"], ["Sensors", "on (set by you)"], ["Learnings", "on (set by you)"],
+      ["Depth", "Comprehensive"], ["Review Override", "adversarial"]] as const) homeState = set(homeState, name, value);
+    writeFileSync(statePath, homeState);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const took = take(alice, "refunds");
+    expect(took.status, took.out).toBe(0);
+    const state = readFileSync(join(buildDir(alice, "payments", "refunds"), "aidlc-state.md"), "utf-8");
+    expect(field(state, "Plan Approval")).toBe("on (from the home's plan)");
+    expect(field(state, "Sensors")).toBe("on (from the home's plan)");
+    expect(field(state, "Learnings")).toBe("on (from the home's plan)");
+    expect(field(state, "Depth")).toBe("Comprehensive");
+    expect(field(state, "Review Override")).toBe("adversarial");
+  });
+
   test("the team approves each of its stages: the build holds on a stage until it is approved", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const alice = cloneOf(home.remote, "alice");

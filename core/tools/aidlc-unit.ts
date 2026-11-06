@@ -86,6 +86,9 @@ import {
   resolveBoltDag,
   setCheckbox,
   setOrInsertField,
+  CEREMONY_FIELDS,
+  formatCeremony,
+  parseCeremonyStateLine,
   removeField,
   shellArg,
   unattendedHumanPresenceHint,
@@ -5353,6 +5356,17 @@ function createUnitBuild(
       ["Home Attempt", String(attempt)],
     ] as const) {
       content = setOrInsertField(content, "## Runtime State", field, value);
+    }
+    // The plan as the home approved it, never its scope's defaults: each
+    // ceremony (Plan Approval, sensors, learnings ...), the depth, the test
+    // strategy and the review class the home's plan set.
+    for (const name of Object.values(CEREMONY_FIELDS)) {
+      const setting = parseCeremonyStateLine(getField(plan.state, name));
+      if (setting !== null) content = setOrInsertField(content, "## Runtime State", name, formatCeremony(setting.value, "the home's plan"));
+    }
+    for (const name of ["Depth", "Test Strategy", "Review Override"]) {
+      const value = getField(plan.state, name)?.trim();
+      if (value) content = setOrInsertField(content, "## Runtime State", name, value);
     }
     // The type the home settled; a later scan here does not ask about it again.
     const homeType = getField(plan.state, "Project Type")?.trim();
