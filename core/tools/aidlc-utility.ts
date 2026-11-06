@@ -517,6 +517,7 @@ import {
   personsWordsText,
   declaredProjectType,
   installWithoutReplacing,
+  pathContainedBy,
 } from "./aidlc-lib.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -11158,6 +11159,32 @@ function withCodekbLock<T>(
   );
 }
 
+// Where a --paths entry the snapshot could not read points, when that is
+// outside the folder being scanned: in another of the work's recorded repos
+// (the --repo that reads it, as resolveCodekbRepo resolves it, and the path
+// from that repo's folder), or outside, and whether outside the project too.
+// Null for a path inside the folder. Lexical, on the platform's own path
+// rules, so nothing outside the project is read.
+function codekbPathPlace(
+  projectDir: string,
+  space: string,
+  repoDir: string,
+  recorded: readonly string[],
+  path: string,
+): { repo: string; path: string } | { outsideProject: boolean } | null {
+  const at = resolve(repoDir, path);
+  if (pathContainedBy(resolve(repoDir), at)) return null;
+  for (const repo of recorded) {
+    const root = resolve(codekbSourceRoot(projectDir, repo, space));
+    // A recorded repo not cloned here resolves to the project folder, which
+    // holds every path.
+    if (root === resolve(projectDir) || !pathContainedBy(root, at)) continue;
+    const from = relative(root, at);
+    return { repo, path: from === "" ? "./" : from.split(sep).join("/") };
+  }
+  return { outsideProject: !pathContainedBy(resolve(projectDir), at) };
+}
+
 // Snapshot the two generations a scan is built from. The stage takes this
 // immediately before scanning and passes both tokens to codekb-publish.
 function handleCodekbSnapshot(
@@ -11171,20 +11198,71 @@ function handleCodekbSnapshot(
     recoverCodekbTransactions(projectDir, space, repo);
     const sourceFingerprint = codekbSourceFingerprint(repoDir, paths, excludes);
     if (sourceFingerprint === null) {
-      // Name what to change: a path that is not there, else an entry under
-      // the paths that cannot be read as a file or folder.
-      const absent = paths.filter((path) => {
+      // Name what to change: a path outside the folder being scanned (in
+      // another repo of this work, or outside it), a path that is not there,
+      // else an entry under the paths that cannot be read as a file or folder.
+      let recorded: string[];
+      try {
+        recorded = intentRepos(projectDir, undefined, space);
+      } catch {
+        recorded = [];
+      }
+      const inRepo = new Map<string, { named: string[]; from: string[] }>();
+      const outside: string[] = [];
+      let outsideProject = false;
+      const inside: string[] = [];
+      for (const path of paths) {
+        const place = codekbPathPlace(projectDir, space, repoDir, recorded, path);
+        if (place === null) {
+          inside.push(path);
+        } else if ("repo" in place) {
+          const entry = inRepo.get(place.repo) ?? { named: [], from: [] };
+          entry.named.push(path);
+          entry.from.push(place.path);
+          inRepo.set(place.repo, entry);
+        } else {
+          outside.push(path);
+          outsideProject ||= place.outsideProject;
+        }
+      }
+      const absent = inside.filter((path) => {
         try {
           return lstatSync(join(repoDir, path), { throwIfNoEntry: false }) === undefined;
         } catch {
           return false;
         }
       });
+      const be = (named: readonly string[]): string => (named.length === 1 ? "is" : "are");
+      const causes: string[] = [];
+      for (const [other, entry] of inRepo) {
+        causes.push(
+          `${entry.named.join(", ")} ${be(entry.named)} in the ${other} repository: run it again with ` +
+            `--repo ${quoteCommandArgument(other)} --paths ${quoteCommandArgument(entry.from.join(","))}.`,
+        );
+      }
+      if (outside.length > 0) {
+        const folder = resolve(repoDir) === resolve(projectDir) ? "the project folder" : `the ${repo} repository's folder`;
+        causes.push(`${outside.join(", ")} ${be(outside)} outside ${folder}: run it again with --paths naming folders inside it.`);
+        // Code outside the project is read once a checkout of it is in the
+        // project: add-repo clones one for work that records its repos, and
+        // refuses for work whose repo is the workspace folder itself.
+        if (outsideProject) {
+          causes.push(
+            recorded.length > 0
+              ? `To scan code kept outside the project, add it to this work with ` +
+                  `\`${aidlcDispatcherInvocation("intent add-repo <name> --url <address>")}\`, which clones it into ` +
+                  `the project folder, then run it again with --repo <name>.`
+              : "To scan code kept outside the project, put a checkout of it in a folder inside the project, then name that folder.",
+          );
+        }
+      }
+      if (absent.length > 0) {
+        causes.push(`${absent.join(", ")} ${be(absent)} not in the repository: run it again with --paths naming paths that exist.`);
+      }
       die(
         `codekb-snapshot: cannot fingerprint source paths: ${paths.join(", ")}. ` +
-          (absent.length > 0
-            ? `${absent.join(", ")} ${absent.length === 1 ? "is" : "are"} not in the repository: ` +
-              `run it again with --paths naming paths that exist.`
+          (causes.length > 0
+            ? causes.join(" ")
             : `Something under ${paths.length === 1 ? "it" : "them"} is not a regular file or folder (a socket or named pipe) or ` +
               `cannot be read: run it again with --paths naming only the folders that hold ` +
               `source, leaving that one out.`),
