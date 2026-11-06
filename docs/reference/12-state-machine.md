@@ -145,7 +145,8 @@ name; a joint late approval keeps the gate-only step below. Otherwise it re-pres
 the stage body or reviewer. A gate another chat of this clone opened, shown in a
 chat that never saw it, starts its `narration` with "This was finished in your
 other chat; here it is to approve." (once per chat, only where the host names
-its chats, never on `--resume`), and a stage question that chat answers or asks
+its chats; a showing after rule parts is recorded as one in one message is), and
+a stage question that chat answers or asks
 late (`log answer`, `log decision`; the summary in any chat) records nothing and
 names this step, or the gate's Request Changes when the reply asked for a
 change. The directive retains `reviewer`, `review_artifact`,

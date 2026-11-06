@@ -13801,10 +13801,9 @@ function applyGateOnlyShape(
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
     // A gate another chat of this clone opened, shown in this one for the first
     // time, says so first; QUESTION_SHOWN then names this chat, so it is said
-    // once. Only where the host names its chats (on the others two chats of one
-    // window share an id, and a restart takes a new one), and not on a resume,
-    // whose pick-up line says where the work is.
-    const elsewhere = gateQuestion !== null && !pickingUp && CHAT_NAMING_HOSTS.has(runtimeHarnessName(projectDir)) &&
+    // once. Only where the host names its chats: on the others two chats of one
+    // window share an id, and a restart takes a new one.
+    const elsewhere = gateQuestion !== null && CHAT_NAMING_HOSTS.has(runtimeHarnessName(projectDir)) &&
       shownOnlyInOtherChats(projectDir, gateQuestion.id, engineSessionId ?? null);
     // The rules Approve adds to the project's rules, what the person left out
     // of the build, the files of theirs it changed, and a check that still
@@ -22415,6 +22414,9 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
       // The last part has handed over the build, so it keeps the record `next`
       // keeps when it hands over a build that fits one message.
       if (!recordHandedOverBuild(pd, prepared.transported)) return;
+      // A gate shown again after its rules parts is shown in this chat, as one
+      // `next` hands out in one message is.
+      recordQuestionStep(prepared);
       writePrepared(prepared);
       return;
     }

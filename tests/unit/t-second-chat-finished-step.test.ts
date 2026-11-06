@@ -365,12 +365,41 @@ describe("t-second-chat-finished-step: a stage finished in another chat is shown
     expect(folder.text()).toBe(SECOND_DOCUMENT);
   });
 
-  test("a resume in the first chat says where the work picks up, not the line", () => {
-    const { first } = secondChatFinishedTheStage();
-    first.said("/aidlc --resume");
-    const gate = first.next(["--resume"]);
-    expect(gate, JSON.stringify(gate)).toMatchObject({ stage: STAGE });
-    expect(JSON.stringify(gate)).not.toContain(FINISHED_ELSEWHERE);
+  // Live on Claude Code the second chat met the gate after its rules came in
+  // parts, and that showing was not on record: every later `next` there said the
+  // line again, and a question it asked at the gate it had shown would have
+  // been read as one from a chat that never saw it.
+  test("a new chat that reaches a gate the first chat opened shows it once, after its rules parts", () => {
+    const folder = new Folder();
+    const first = new Chat(folder, FIRST);
+    first.start();
+    folder.ok(first.tool("jump", ["execute", "--target", STAGE, "--direction", "redo"]), "start the stage");
+    first.next();
+    first.said("Q1: A");
+    first.write(folder.questions, questionsBody(""));
+    folder.json(first.askSummary(), "ask the summary");
+    first.said("Looks correct");
+    first.write(folder.questions, questionsBody("Looks correct"));
+    folder.json(first.answerSummary(), "record the summary answer");
+    expect(first.finishStage(FIRST_DOCUMENT).kind).toBe("print");
+    const written = folder.text();
+    const second = new Chat(folder, SECOND);
+    second.start();
+    second.said("/aidlc");
+    const parts = folder.json(second.tool("orchestrate", ["next"]), "the second chat's first next");
+    expect(parts.kind, JSON.stringify(parts)).toBe("load-steering");
+    const gate = second.next();
+    expect(gate, JSON.stringify(gate)).toMatchObject({ kind: "run-stage", stage: STAGE, gate_only: true });
+    expect(String(gate.narration).split("\n")[0]).toBe(FINISHED_ELSEWHERE);
+    const shown = folder.rows("QUESTION_SHOWN").filter((row) => auditBlockField(row.block, "Question Chat") === SECOND);
+    expect(shown.length).toBe(1);
+    expect(String(second.next().narration ?? "")).not.toContain(FINISHED_ELSEWHERE);
+    // A question it asks at the gate it has shown is its own, recorded as today.
+    second.said("does the owner see a count?");
+    const asked = folder.json(second.tool("log", ["decision", "--stage", STAGE, "--decision", "Should the owner see a count?",
+      "--options", "Yes,No"]), "a question at the gate this chat showed");
+    expect(asked.emitted).toBe("DECISION_RECORDED");
+    expect(folder.text()).toBe(written);
   });
 
   test("a gate a teammate's clone opened is not called your other chat", () => {
