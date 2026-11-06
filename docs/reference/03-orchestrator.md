@@ -814,10 +814,9 @@ build now, a result to check, a proposal to answer); the take offer in a clone
 runs it for each home it lists, and again at each look while nothing is ready;
 solo work built one Unit at a time (`switchSoloToTeams`) runs it once its Unit
 walk has begun (a Unit started, or the step is a per-Unit Construction stage),
-never at an Inception step: once in a chat, before each next Unit starts, and,
-with `sincePerson`, after each message of the person's once the last fetch
-reached the remote, so a teammate's take is heard and its Unit is never started
-there too. Each of these fetches on a step nobody typed (`quietFetch`) looks
+never at an Inception step: once when a chat starts and before each next Unit
+starts (never after each message inside a Unit), so a teammate's take is heard
+and its Unit is never started there too. Each of these fetches on a step nobody typed (`quietFetch`) looks
 first with an `ls-remote` of the refs it names and fetches only what the remote
 has that is not here yet.
 That fetch and the merge check's git go through `quietly`, whose env is built
