@@ -5754,11 +5754,25 @@ function homePlanAt(projectDir: string, home: HomeWork, oid: string, branch: str
   return { state: read("aidlc-state.md"), dependencies: read("inception/units-generation/unit-of-work-dependency.md") };
 }
 
-// The Inception outputs a Unit's planned stages read: the copy its build starts
-// from, at the paths those stages read them, plus the Unit plan itself.
-function homeInputPaths(stages: string[]): string[] {
+// The lead's approved Ideation and Inception outputs a Unit's build reads: the
+// copy it starts from, at the paths the lead's own checkout holds them, plus
+// the Unit plan itself. Each the Unit's planned stages read, and each output of
+// a stage the lead's plan ran (`state`), so what a stage reads there without
+// naming it (the mockups the lead approved) is here too. The lead's notes of
+// the code (Reverse Engineering) and of their own team's practices stay theirs.
+const LEADS_OWN_STAGES = new Set(["reverse-engineering", "practices-discovery"]);
+function homeInputPaths(stages: string[], state: string): string[] {
   const graph = loadStageGraphAll();
   const paths = new Set<string>(["inception/units-generation/unit-of-work-dependency.md"]);
+  // A take marks the lead's completed stages completed in its own state too, so
+  // the build reads the same list; a stage done with nothing written adds nothing.
+  const ran = new Set(parseCheckboxes(state).filter((box) => box.state === "completed").map((box) => box.slug));
+  for (const stage of graph) {
+    if ((stage.phase !== "ideation" && stage.phase !== "inception") || LEADS_OWN_STAGES.has(stage.slug) || !ran.has(stage.slug)) continue;
+    for (const name of [...(stage.produces ?? []), ...(stage.optional_produces ?? [])]) {
+      paths.add(`${stage.phase}/${stage.slug}/${artifactFilename(name)}`);
+    }
+  }
   for (const slug of stages) {
     const stage = graph.find((entry) => entry.slug === slug);
     for (const consume of stage?.consumes ?? []) {
@@ -5872,7 +5886,7 @@ function createUnitBuild(
   const record = join(intentsDir(projectDir, space), dirName);
   // The copy, at the paths the Unit's stages read it.
   const inputs: Array<{ path: string; fingerprint: string }> = [];
-  for (const rel of homeInputPaths(stages)) {
+  for (const rel of homeInputPaths(stages, plan.state)) {
     const text = source.read(rel);
     if (text === null) continue;
     mkdirSync(dirname(join(record, ...rel.split("/"))), { recursive: true });
@@ -7907,7 +7921,7 @@ function unitsReading(projectDir: string, input: string): Set<string> {
   return new Set(dag.units.filter((unit) => homeInputPaths(stages.filter((slug) => {
     const stage = graph.find((entry) => entry.slug === slug);
     return stage !== undefined && teamUnitStageApplies(stage, dag.unitKinds?.get(unit) ?? null);
-  })).includes(input)));
+  }), state).includes(input)));
 }
 
 // The inputs this build was approved with whose copy here now differs, for a
@@ -8097,7 +8111,7 @@ function unitsHearing(pd: string, input: string, before: string | null, after: s
 // own way to the teams).
 function approvedInputPathsHere(pd: string): string[] {
   const state = readStateFile(pd);
-  return homeInputPaths(unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true))
+  return homeInputPaths(unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true), state)
     .filter((rel) => !rel.endsWith("unit-of-work-dependency.md"));
 }
 
@@ -8437,7 +8451,7 @@ function writeHandOffFile(
   const integration = fetchIntegration(pd);
   const record = activeRecordDir(pd);
   const files = new Map<string, string>([["aidlc-state.md", state]]);
-  for (const rel of homeInputPaths(unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true))) {
+  for (const rel of homeInputPaths(unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true), state)) {
     if (existsSync(join(record, ...rel.split("/")))) files.set(rel, readFileSync(join(record, ...rel.split("/")), "utf-8"));
   }
   const produced = new Set([...files.keys()].map((rel) => rel.split("/")[1]));

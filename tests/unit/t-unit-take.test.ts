@@ -520,6 +520,35 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(JSON.stringify(redo), JSON.stringify(redo).slice(0, 600)).toContain("Reopened Functional Design for refunds.");
   });
 
+  // A live run on Kiro IDE: the lead picked "a confirm step" in Refined
+  // Mockups; the team's Functional Design found no mockups in its record and
+  // built the panel without it. The take carries the lead's approved design,
+  // as the Unit's build would read it in the lead's own checkout.
+  test("the take carries every Ideation and Inception output the lead approved, the mockups too", () => {
+    const D = String.fromCharCode(0x2014);
+    const home = makeHome({
+      state: homeState().replace(`- [x] units-generation ${D} EXECUTE`, `- [x] refined-mockups ${D} EXECUTE\n- [x] units-generation ${D} EXECUTE`),
+    });
+    const design = join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "inception", "refined-mockups");
+    mkdirSync(design, { recursive: true });
+    writeFileSync(join(design, "interaction-spec.md"), "# Interaction spec\n\nThe refund panel asks to confirm before it sends.\n");
+    writeFileSync(join(design, "mockups.md"), "# Mockups\n\nRefund panel with a confirm step.\n");
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "checkout-ui=web"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const wen = cloneOf(home.remote, "wen");
+    const took = take(wen, "checkout-ui", ["--team", "web"]);
+    expect(took.status, took.out).toBe(0);
+    const record = buildDir(wen, "web", "checkout-ui");
+    expect(readFileSync(join(record, "inception", "refined-mockups", "interaction-spec.md"), "utf-8")).toContain("confirm before it sends");
+    expect(existsSync(join(record, "inception", "refined-mockups", "mockups.md"))).toBe(true);
+    const approved = readFileSync(join(record, "approved-inputs.md"), "utf-8");
+    expect(approved).toContain("inception/refined-mockups/interaction-spec.md");
+    // The lead's own record of the code is the team's code itself: never copied.
+    expect(approved).not.toContain("reverse-engineering");
+  });
+
   // A live run on Codex: the lead's work ran Construction autonomously, the
   // team's build of one Unit took that, and its Code Generation went out as a
   // parallel batch in worktrees: a commit landed on the person's own main and

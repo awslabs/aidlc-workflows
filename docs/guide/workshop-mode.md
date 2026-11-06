@@ -644,9 +644,11 @@ Picking one runs `aidlc unit take <unit> --home <record>`. It holds the Unit at
 the lead's project for your team: one held for your team becomes yours, and an open one
 is held for the team you named. Then it starts the Unit's build: a new piece of work in your team's
 space, named after the Unit, running the Unit's planned Construction stages
-from a copy of what the lead approved. The copy is the lead's Inception outputs
-at the paths those stages read them, listed with their fingerprints in
-`approved-inputs.md`. The build records the lead's repos, cloned here or not
+from a copy of what the lead approved. The copy is what the lead's Ideation
+and Inception stages wrote (the mockups and the Unit plan among them), at the
+paths the lead's project holds them, listed with their fingerprints in
+`approved-inputs.md`; the lead's Reverse Engineering and Practices Discovery
+notes stay theirs. The build records the lead's repos, cloned here or not
 yet. The lead's Inception shows as done there and does not run again, and its
 approvals stay the lead's. Your team approves its Unit the way the lead's
 work does: after every stage, or once at its end.
