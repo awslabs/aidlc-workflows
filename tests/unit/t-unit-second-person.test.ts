@@ -176,6 +176,8 @@ describe("a teammate opens solo work built from another machine", () => {
     const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob);
     expect(took.status, took.out).toBe(0);
     expect(took.json).toMatchObject({ space: "default" });
+    // Their team is their own name: the Unit is theirs, never "for the bob team".
+    expect(String(took.json?.notice)).toStartWith("Checkout-ui is yours. Its build is its own piece of work here");
     expect(readFileSync(seededStateFile(bob), "utf-8")).toBe(homeStateBefore);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "bob", taken_by: "bob" });
     const other = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
@@ -432,7 +434,10 @@ describe("the lead's sign-off", () => {
       expect(String(board.board_note)).toContain(command);
     }
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
-    expect(run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], home.dir).status).toBe(0);
+    const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], home.dir);
+    expect(signed.status, signed.out).toBe(0);
+    // Every repo it changed has merged: it is done now, not once they merge.
+    expect(String(signed.json?.notice)).toBe("Signed off refunds; every repo it changed has merged, so it is done.");
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
   });

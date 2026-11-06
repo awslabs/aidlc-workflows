@@ -288,7 +288,7 @@ describe("progress and the result come back as files", () => {
     expect(resultIn.json?.notice).toBe("Took in reporting's result from data.");
     // A team by file reads nothing from here, so the step never says it was told.
     const recorded = next(home.dir);
-    expect(JSON.stringify(recorded.change_notices ?? [])).not.toContain("I've told the teams");
+    expect(JSON.stringify(recorded.change_notices ?? [])).not.toContain("I've told");
     const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(merged.map((row) => row.block).join("\n")).toContain("reported by data");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ done: true });

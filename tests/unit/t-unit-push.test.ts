@@ -797,11 +797,11 @@ describe("at the home", () => {
       { repo: "billing", merged: false },
     ]);
     // The one write the home makes for the teams, said once in plain words.
-    expect((seen.change_notices ?? []) as string[]).toContain("I've told the teams checkout-api merged refunds.");
+    expect((seen.change_notices ?? []) as string[]).toContain("I've told the payments team checkout-api merged refunds.");
     const written = git(home.remote, ["rev-parse", ref]);
     const after = next(home.dir);
     expect(git(home.remote, ["rev-parse", ref])).toBe(written);
-    expect(JSON.stringify(after.change_notices ?? [])).not.toContain("I've told the teams");
+    expect(JSON.stringify(after.change_notices ?? [])).not.toContain("I've told");
   });
 
   test("a team's result brings home what Build and Test reads of the Unit, so its coverage check passes for team-built Units", () => {

@@ -374,6 +374,12 @@ export function theTeam(label: string): string {
   return /\bteam$/i.test(label.trim()) ? `the ${label.trim()}` : `the ${label.trim()} team`;
 }
 
+// Who holds a Unit, in words: the team, or the person when their team label is
+// their own name (a teammate who took solo work), never "the <name> team".
+export function teamOrPerson(owner: string, by?: string): string {
+  return by !== undefined && by.trim() === owner.trim() ? owner.trim() : theTeam(owner);
+}
+
 // --- A Unit's build -----------------------------------------------------------
 //
 // The piece of work a team builds one Unit of the home's work as, in its own

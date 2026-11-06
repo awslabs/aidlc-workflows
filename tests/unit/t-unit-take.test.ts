@@ -534,8 +534,11 @@ describe("taking a Unit starts its build in the team's space", () => {
     const alice = cloneOf(home.remote, "alice");
     expect(take(alice, "refunds", ["--team", "payments"]).status).toBe(0);
     const statePath = join(buildDir(alice, "payments", "refunds"), "aidlc-state.md");
-    expect(field(readFileSync(statePath, "utf-8"), "Construction Autonomy Mode")).toBe("autonomous");
+    // The lead's "continue automatically" was theirs: the team approves its own Unit.
+    expect(field(readFileSync(statePath, "utf-8"), "Construction Autonomy Mode")).toBe("gated");
+    // The team's own choice to run on by itself, later, as its state then reads.
     writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \*\*Construction Autonomy Mode\*\*: .*$/m, "- **Construction Autonomy Mode**: autonomous")
       .replace(/^- \[[ -]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design) /gm, "- [x] $1 ")
       .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
     const step = next(alice);

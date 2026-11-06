@@ -733,8 +733,8 @@ AI-DLC runs `aidlc unit merged <unit> --repo <repo>` with your words): the
 lead's project records `UNIT_MERGED`, writes the Unit's outputs into its record where
 Build and Test reads them, and marks the claim done, so the Units waiting on it
 open for the lead's project and for every team. A merge the lead's project sees is the one thing it
-writes for the teams, and the board says it once: "I've told the teams refunds
-is merged." Another clone or machine of the lead's project reads a Unit done on its claim
+writes for the teams, and the board says it once: "I've told the payments team
+refunds is merged." Another clone or machine of the lead's project reads a Unit done on its claim
 as done too. A repo the lead's project has no checkout of stays
 "not merged yet" there. To send a repo back, the lead says so at the lead's project and
 AI-DLC runs `aidlc unit turned-down <unit> --repo <repo>` with their words; the

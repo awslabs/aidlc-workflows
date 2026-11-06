@@ -17646,8 +17646,8 @@ function teamHomeClaims(
   // A merge the home saw is the one thing it writes for the teams: said once, in plain words.
   for (const merge of told) {
     sayWithStepOnce(projectDir, merge.done
-      ? `I've told the teams ${merge.unit} is merged.`
-      : `I've told the teams ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
+      ? `I've told ${merge.to} ${merge.unit} is merged.`
+      : `I've told ${merge.to} ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
   }
   // In git's words when git refused it (a hook of theirs, the host), as the push and take lines are.
   if (unsent.length > 0) {
@@ -18098,7 +18098,12 @@ function emitTeamUnitMajorRunStage(
         response_route: "command",
         question: `${toSignOff.unit} came back from ${toSignOff.owner}: ${mergedStatus(verdicts)}. Sign it off?`,
         choices: [
-          { label: "Sign it off", detail: "It counts as done once every repo it changed has merged." },
+          {
+            label: "Sign it off",
+            detail: verdicts.length > 0 && verdicts.every((verdict) => verdict.merged)
+              ? "Every repo it changed has merged, so it is done."
+              : "It counts as done once every repo it changed has merged.",
+          },
           { label: "Not now", detail: "It waits for your sign-off." },
         ],
         signoff_command: `${aidlcToolInvocation("unit")} sign-off ${shellArg(toSignOff.unit)} ${unitWordsArg("sign-off", toSignOff.unit)}`,

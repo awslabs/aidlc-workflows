@@ -220,6 +220,7 @@ import {
   outputForLead,
   unitWordsArg,
   TEAM_RHYTHM_OFFER,
+  teamOrPerson,
   theTeam,
 } from "./aidlc-unit-teams.js";
 import { displayRepoPath, isProjectSubmodule, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
@@ -5916,7 +5917,9 @@ function createUnitBuild(
     }
     for (const name of ["Depth", "Test Strategy", "Review Override", AUTONOMY_MODE_FIELD]) {
       const value = getField(plan.state, name)?.trim();
-      if (value) content = setOrInsertField(content, "## Runtime State", name, value);
+      // The lead's "continue automatically" was their answer for their own
+      // work: the team approves its Unit itself, and its record says so.
+      if (value) content = setOrInsertField(content, "## Runtime State", name, name === AUTONOMY_MODE_FIELD && value === "autonomous" ? "gated" : value);
     }
     // The Guard Policy the lead set; a lock in the team's own memory still wins where it is read.
     const policyField = guardPolicyStateField(plan.state);
@@ -6364,7 +6367,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       writeStateFile(pd, setOrInsertField(content, "## Runtime State", "Home Result", "by file"), build.dirName, build.space);
     });
   }
-  const taken = `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, for ${theTeam(team)}. Its build is its own ` +
+  const taken = `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours${team === me ? "" : `, for ${theTeam(team)}`}. Its build is its own ` +
     `piece of work here, under your team's rules, from what the lead approved.` +
     (resultByFile
       ? ` You can read the lead's project but not write to it, so the result of ${unit} goes back as a file when it is built.`
@@ -7130,6 +7133,8 @@ export interface ToldMerge {
   unit: string;
   repos: string[];
   done: boolean;
+  // Who was told, in words: the team holding the Unit, or the person.
+  to: string;
 }
 
 // `readOnly` (a query such as `team-board`): the same verdicts, nothing written.
@@ -7207,7 +7212,9 @@ function checkTeamResultsQuietly(
       // it, and a claim not written leaves it nothing it missed.
       if (sent.ok) {
         invalidateLiveClaimPayloadCache(pd, unit);
-        if (!live.payload.by_file) told?.push({ unit, repos: newlyMerged, done });
+        if (!live.payload.by_file) {
+          told?.push({ unit, repos: newlyMerged, done, to: teamOrPerson(live.owner, live.payload.result?.by ?? live.payload.taken_by) });
+        }
       } else if (!live.payload.by_file) unsent?.push({ to: remote ?? "the lead's project", ...(sent.refused ? { refused: sent.refused } : {}) });
     }
     found.set(unit, { team: live.owner, verdicts, done });
@@ -8947,7 +8954,13 @@ function signOff(args: string[], projectDir?: string): void {
   appendAuditEntry("QUESTION_ANSWERED", {
     Question: `Sign off ${unit} from ${live.owner}`, Answer: "Sign it off", [QUESTION_TYPE_FIELD]: "unit-signoff", ...lead.fields,
   }, pd);
-  console.log(JSON.stringify({ unit, notice: `Signed off ${unit}; it counts as done once every repo it changed has merged.` }));
+  const merged = (live.payload.verdicts ?? []).length > 0 && live.payload.verdicts!.every((verdict) => verdict.merged);
+  console.log(JSON.stringify({
+    unit,
+    notice: merged
+      ? `Signed off ${unit}; every repo it changed has merged, so it is done.`
+      : `Signed off ${unit}; it counts as done once every repo it changed has merged.`,
+  }));
 }
 
 function participate(projectDir?: string): void {
