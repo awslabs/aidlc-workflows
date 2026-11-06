@@ -42,7 +42,7 @@ afterEach(cleanupTempDirs);
 
 const NO = "We do not build a thin end-to-end slice first: every Unit starts as soon as what it depends on is done.";
 const ALWAYS = "We always build a thin end-to-end slice first, before any other Unit.";
-const HELD_BACK = "The teams still see every Unit waiting on the alpha Unit, because your answer about building a " +
+const HELD_BACK = "The teams still see every Unit waiting on alpha, because your answer about building a " +
   "thin slice first hasn't been shared yet. Say \"share the plan\", or run `";
 const CHAT = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000003652", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
 
@@ -133,10 +133,12 @@ function share(dir: string): Record<string, unknown> {
   return JSON.parse(ran.stdout) as Record<string, unknown>;
 }
 
-function report(dir: string, stance: string): void {
+function report(dir: string, stance: string): string {
   const ran = runMergeTool(ORCH, ["report", "--skeleton-stance", stance], dir, false, CHAT);
   expect(ran.status, ran.out).toBe(0);
-  expect(JSON.parse(ran.stdout).kind, ran.out).not.toBe("error");
+  const printed = JSON.parse(ran.stdout) as { kind?: string; message?: string };
+  expect(printed.kind, ran.out).not.toBe("error");
+  return String(printed.message);
 }
 
 // The plan the teams have: the state on the remote's main.
@@ -169,7 +171,10 @@ describe("the share and the team board read the lead's walking-skeleton answer b
     expect(step).toMatch(/orchestrate(\.ts)? report --skeleton-stance <on\|off\|scope-dependent>`/);
     expect(step).toMatch(/unit share` again/);
     expect(git(remote, ["rev-parse", "main"])).toBe(before);
-    report(lead, "off");
+    // The report that the share asked for sends the agent back to the share,
+    // never on to `next`, whose step would be the share question again.
+    const recorded = report(lead, "off");
+    expect(recorded).toMatch(/unit share` asked for it, run that share again now/);
     const second = share(lead);
     expect(second.shared, JSON.stringify(second)).toBe(true);
     expect(sharedState(remote, lead)).toContain("- **Skeleton Stance**: off");

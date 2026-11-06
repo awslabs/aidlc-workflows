@@ -13443,7 +13443,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         if (heldBack !== null) {
           sayWithStepOnce(
             pd,
-            `The teams still see every Unit waiting on the ${unitPlainName(heldBack)} Unit, because your answer about ` +
+            `The teams still see every Unit waiting on ${heldBack}, because your answer about ` +
               `building a thin slice first hasn't been shared yet. Say "share the plan", or run \`${aidlcInvocation()} unit share\`.`,
           );
         }
@@ -19759,7 +19759,8 @@ function handleSkeletonStanceReport(
     return;
   }
   const node = nodeForSlug(slug);
-  if (!node || !(isSkeletonGateStage(node, scope, stateContent) || teamStanceToRead(pd, stateContent))) {
+  const forTeams = teamStanceToRead(pd, stateContent);
+  if (!node || !(isSkeletonGateStage(node, scope, stateContent) || forTeams)) {
     emit(errorDirective(
       `Current stage "${slug}" is not the skeleton-gate stage for scope "${scope}" - ` +
         "a skeleton stance is only reported for the first Construction Bolt's gate.",
@@ -19779,9 +19780,14 @@ function handleSkeletonStanceReport(
     return;
   }
 
+  // Team work's answer can be asked for by the share as well as by `next`'s
+  // step: the agent goes back to whichever asked, so a share the person asked
+  // for is never put to them again as the share question.
   emit(printDirective(
     `Recorded walking-skeleton stance "${stance}" for "${slug}". ` +
-      "Re-run `next` to continue - the gate is now determined.",
+      (forTeams
+        ? `If \`${aidlcInvocation()} unit share\` asked for it, run that share again now; otherwise re-run \`next\` to continue.`
+        : "Re-run `next` to continue - the gate is now determined."),
   ));
 }
 
