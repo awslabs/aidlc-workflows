@@ -163,6 +163,7 @@ import {
   HOME_LOCATION_FIELD,
   homeLocation,
   inputName,
+  LEAD_RULES_FIELD,
   lastCommittedByThisPerson,
   parseHandFile,
   patchIdOf,
@@ -244,7 +245,7 @@ const UNIT_USAGE: ReadonlyMap<string, string> = new Map([
   ["share", "share"],
   ["sign-off", "sign-off <unit> (--request-file <file> | --person-words <text>)"],
   ["status", "status"],
-  ["take", "take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] | take --file <hand-off file>"],
+  ["take", "take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] [--lead-rules] | take --file <hand-off file>"],
   ["take-in", "take-in <file>"],
   ["turned-down", "turned-down <unit> --repo <repo> (--request-file <file> | --person-words <text>)"],
 ]);
@@ -5384,6 +5385,8 @@ function createUnitBuild(
   source: BuildSource,
   // A build taken from solo work lives in the home's own space.
   inSpace?: string,
+  // The person took it following the lead's project rules too.
+  leadRules = false,
 ): { space: string; dirName: string } {
   const space = inSpace ?? teamSpaceOf(team);
   if (!listSpacesHere(projectDir).includes(space)) {
@@ -5452,6 +5455,7 @@ function createUnitBuild(
     ] as const) {
       content = setOrInsertField(content, "## Runtime State", field, value);
     }
+    if (leadRules) content = setOrInsertField(content, "## Runtime State", LEAD_RULES_FIELD, `aidlc/spaces/${home.space}/memory/project.md`);
     // The plan as the home approved it, never its scope's defaults: each
     // ceremony (Plan Approval, sensors, learnings ...), the depth, the test
     // strategy and the review class the home's plan set.
@@ -5856,7 +5860,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       return shown.ok ? shown.stdout : null;
     },
     approvals: (produced) => homeApprovals(homeRows, produced),
-  }, home.solo ? home.space : undefined);
+  }, home.solo ? home.space : undefined, bareFlags.has("lead-rules") || flags["lead-rules"] !== undefined);
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
   // out where nothing of the person's is uncommitted.

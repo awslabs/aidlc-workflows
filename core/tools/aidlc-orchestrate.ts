@@ -700,6 +700,8 @@ import {
   unitsBuiltBeforeTeams,
   unitsBuiltHereGateOpen,
   unitsTakenFromHome,
+  leadProjectRuleNames,
+  offersLearningsCorrectionChoices,
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
@@ -8774,6 +8776,18 @@ function unitTakeLook(
           { label: named.length > 0 ? `${label} for another team` : label, detail: `${detail} I'll ask which team builds it.`, command: command("'<their team>'") },
         ];
       };
+      // The lead's project has rules of its own: each start is offered with
+      // them too (read-only, the team's own on top) or under the team's own
+      // rules only, in the one question (Arden's call).
+      const leadRules = leadProjectRuleNames(projectDir, space);
+      const withRules = (offered: AskChoice[]): AskChoice[] => leadRules.length === 0 ? offered : offered.flatMap((choice) => [
+        {
+          label: `${choice.label} and follow the lead's project rules too (${leadRules.join(", ")})`,
+          detail: `${choice.detail} The lead's project rules apply to its build too, as they are, with your team's own on top.`,
+          command: `${choice.command} --lead-rules`,
+        },
+        { label: `${choice.label} under your team's own rules only`, detail: choice.detail, command: choice.command },
+      ]);
       // The walking skeleton, while the home builds it, is the home's: every
       // other Unit waits on it.
       const skeleton = teamSkeletonOn(state) && !opening.completed.has(opening.skeleton) ? opening.skeleton : null;
@@ -8811,24 +8825,24 @@ function unitTakeLook(
           waiting.push(`${unit} (${holder !== null ? `for ${holder}; ` : ""}on ${blockers.join(", ")})`);
           // Every Unit it waits on is pushed: it can start early on their branches.
           if (blockers.every((dep) => overview.claims.get(dep)?.payload.result !== undefined)) {
-            choices.push(...forTeams(
+            choices.push(...withRules(forTeams(
               unit,
               holder,
               `Start ${unit} early`,
               `On the pushed branches of ${blockers.join(" and ")}; ${blockers.length === 1 ? "it" : "they"} may still change before merging.`,
               " --early",
-            ));
+            )));
           }
           continue;
         }
         const notes = [holder !== null ? `for ${holder}` : "open", ...(likely.has(unit) ? [`likely ${likely.get(unit)!.join(", ")}`] : [])];
         ready.push(`${unit} (${notes.join("; ")})`);
-        choices.push(...forTeams(
+        choices.push(...withRules(forTeams(
           unit,
           holder,
           `Start ${unit}`,
           holder !== null ? `For ${theTeam(holder)}.` : `Open: for ${team !== null ? theTeam(team) : "a team"}.`,
-        ));
+        )));
       }
       const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (its home is ${homeLocation(state)})` : "";
       const label = intentDisplayLabel(intent);
@@ -15701,7 +15715,7 @@ function learningsSinceStageStart(
     if (question === LEARNINGS_NOTE_QUESTION || question === LEARNINGS_KEEP_QUESTION) return true;
     if (question.endsWith(` ${LEARNINGS_CORRECTION_ASK}`)) return true;
     const options = auditBlockField(block, "Options") ?? "";
-    return LEARNINGS_CORRECTION_CHOICES.every((choice) => options.includes(JSON.stringify(choice)));
+    return offersLearningsCorrectionChoices((choice) => options.includes(JSON.stringify(choice)));
   };
   let asked = false;
   let picked = false;

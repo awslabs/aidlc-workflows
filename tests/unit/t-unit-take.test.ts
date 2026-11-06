@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
@@ -266,6 +267,60 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(field(state, "Review Override")).toBe("adversarial");
     expect(field(state, "Guard Policy")).toBe("strict (from the home's plan)");
     expect(field(state, "Construction Autonomy Mode")).toBe("gated");
+  });
+
+  // Arden's call on a live run: a team builds under its own rules; where the
+  // lead's project has rules of its own, the take question that is already
+  // asked offers to follow them too, named in short, and taking it that way
+  // loads them, read where they are, with the team's own on top.
+  test("the lead's project rules are offered at the take, named, and taken they reach the build before the team's own", () => {
+    const home = makeHome();
+    const projectRules = join(home.dir, "aidlc", "spaces", "default", "memory", "project.md");
+    writeFileSync(projectRules, `${readFileSync(projectRules, "utf-8")}\n## Release Checks\n\nEvery handler ships with a contract test.\n`);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    const choices = ask.choices as Array<{ label: string; command: string }>;
+    expect(choices.map((choice) => choice.label).slice(0, 2)).toEqual([
+      "Start refunds and follow the lead's project rules too (Release Checks)",
+      "Start refunds under your team's own rules only",
+    ]);
+    expect(choices[0].command).toEndWith(" --lead-rules");
+    const took = take(alice, "refunds", ["--lead-rules"]);
+    expect(took.status, took.out).toBe(0);
+    const record = buildDir(alice, "payments", "refunds");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/project.md");
+    const step = next(alice);
+    expect(step.kind, JSON.stringify(step).slice(0, 400)).toBe("run-stage");
+    expect(step.rules_in_context as string[]).toContain("aidlc/spaces/default/memory/project.md");
+    // The lead's file is read, never written, from the build.
+    expect(readFileSync(join(alice, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8")).toContain("Every handler ships with a contract test.");
+  });
+
+  test("at the lead's project the learnings choice says a project learning is offered to any team that takes a Unit", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const lead = readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md"), "utf-8");
+    expect(learningsCorrectionChoices(lead)).toEqual(["Yes, for this project, and offered to any team that takes a Unit", "Yes, for the team", "No"]);
+    expect(learningsCorrectionChoices(homeState())).toEqual(["Yes, for this project", "Yes, for the team", "No"]);
+    const alice = cloneOf(home.remote, "alice");
+    expect(take(alice, "refunds").status).toBe(0);
+    expect(learningsCorrectionChoices(readFileSync(join(buildDir(alice, "payments", "refunds"), "aidlc-state.md"), "utf-8"))[0])
+      .toBe("Yes, for this project");
+    // Either wording is the same question when its answer is read back.
+    for (const choices of [learningsCorrectionChoices(lead), learningsCorrectionChoices(homeState())]) {
+      expect(offersLearningsCorrectionChoices((choice) => choices.includes(choice))).toBe(true);
+    }
+  });
+
+  test("a lead's project with no rules of its own offers each Unit once, as before", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const labels = ((next(cloneOf(home.remote, "alice")).choices ?? []) as Array<{ label: string }>).map((choice) => choice.label);
+    expect(labels).toContain("Start refunds");
+    expect(labels.some((label) => label.includes("project rules"))).toBe(false);
   });
 
   test("the team approves each of its stages: the build holds on a stage until it is approved", () => {

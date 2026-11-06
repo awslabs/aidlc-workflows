@@ -40378,7 +40378,7 @@ export function isLearningsNoteDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === LEARNINGS_NOTE_QUESTION_KIND;
   const offered = optionsList(auditBlockField(block, "Options"));
-  return LEARNINGS_CORRECTION_CHOICES.every((choice) => offered.includes(choice)) ||
+  return unitTeams().offersLearningsCorrectionChoices((choice) => offered.includes(choice)) ||
     LEARNINGS_NOTE_CHOICES.every((choice) => offered.includes(choice));
 }
 /** Its value for Intent Capture's Assumption Confirmation, written by the command that stage names. */

@@ -586,7 +586,14 @@ When the home records `Home Location`, each team builds its Unit as a piece of
 work of its own, in its own workspace and under its own rules. A team member
 runs `/aidlc` in their workspace with no work of their own selected there, and
 AI-DLC offers the Units their team can take, from what the workspace already
-has (the home's plan and the claims git last brought in):
+has (the home's plan and the claims git last brought in). Where the lead's
+project has rules of its own (its `project.md` holds more than the template's
+notes), each Unit is offered two ways in that same question: **Start <unit> and
+follow the lead's project rules too** (those rules named by their headings),
+which loads the lead's `project.md` where it is, read only, before the team's
+own rules, so the team's are on top; or **Start <unit> under your team's own
+rules only**. At the lead's project, the learnings question's first choice
+reads **Yes, for this project, and offered to any team that takes a Unit**.
 
 - **A clone of the home's own workspace**: the home's work is here too, and its
   Units are offered beside **Carry on <work> here, as its home**, for the lead

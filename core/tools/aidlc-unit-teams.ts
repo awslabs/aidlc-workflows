@@ -18,6 +18,7 @@ import {
   intentRepos,
   isPerUnitStage,
   isTeamUnitOwnership,
+  LEARNINGS_CORRECTION_CHOICES,
   listIntentDirs,
   loadScopeMapping,
   loadStageGraphAll,
@@ -29,6 +30,8 @@ import {
   slugify,
   unitDependencyPath,
 } from "./aidlc-lib.ts";
+import { memoryDirFor } from "./aidlc-graph.ts";
+import { visibleMarkdownLines } from "./aidlc-markdown.ts";
 import { applicableTeamUnitScopeStamp } from "./aidlc-record-core.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
@@ -141,6 +144,49 @@ export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: st
   if (last === undefined || auditBlockField(last.block, "Held") !== "not yet") return null;
   const pairs = (auditBlockField(last.block, "Assigned") ?? "").split(",").map((pair) => pair.trim()).filter((pair) => pair.includes("="));
   return { pairs, open: auditBlockField(last.block, "Open") === "all" };
+}
+
+// A team's build that follows the lead's project rules too (Arden's call):
+// the lead's project.md, read where it is and never written from the build,
+// loaded before the team's own rules, so the team's own are on top.
+export const LEAD_RULES_FIELD = "Lead Project Rules";
+
+// The headings of the lead's project.md that hold a rule of its own, not only
+// the template's notes: how the take question names those rules. Empty when it
+// has none, or none can be read here.
+export function leadProjectRuleNames(projectDir: string, homeSpace: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(join(memoryDirFor(projectDir, homeSpace), "project.md"), "utf-8");
+  } catch {
+    return [];
+  }
+  const names: string[] = [];
+  let heading: string | null = null;
+  for (const line of visibleMarkdownLines(text)) {
+    const named = /^##\s+(.+?)\s*$/.exec(line);
+    if (named) {
+      heading = named[1];
+      continue;
+    }
+    if (heading !== null && line.trim() !== "" && !line.trim().startsWith(">") && !names.includes(heading)) names.push(heading);
+  }
+  return names;
+}
+
+// At the lead's project teams build for, a project learning is offered to any
+// team that takes a Unit (its project rules, at the take), and the learnings
+// choice says so (Arden's call).
+export const LEARNINGS_PROJECT_CHOICE_AT_HOME = "Yes, for this project, and offered to any team that takes a Unit";
+export function learningsCorrectionChoices(stateContent: string): string[] {
+  const home = homeLocation(stateContent) !== null && unitBuildOf(stateContent) === null;
+  return home ? [LEARNINGS_PROJECT_CHOICE_AT_HOME, ...LEARNINGS_CORRECTION_CHOICES.slice(1)] : [...LEARNINGS_CORRECTION_CHOICES];
+}
+
+// Whether the options offered are the learnings correction question's, in either wording.
+export function offersLearningsCorrectionChoices(has: (choice: string) => boolean): boolean {
+  return LEARNINGS_CORRECTION_CHOICES.slice(1).every(has) &&
+    (has(LEARNINGS_CORRECTION_CHOICES[0]) || has(LEARNINGS_PROJECT_CHOICE_AT_HOME));
 }
 
 // What the plan's share reaches, from the lead's answers since teams: Units held
