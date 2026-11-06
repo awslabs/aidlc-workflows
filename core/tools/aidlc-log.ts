@@ -247,7 +247,6 @@ import {
   picksAddANote,
   summaryConfirmationCommands,
   summaryConfirmationOwed,
-  summaryAnswerPutBack,
   summaryQuestionFileRelative,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
@@ -998,6 +997,27 @@ function revisedSummaryNote(
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
 // choices) on a stage that owes one, refuse it and name the command that counts.
+// The questions file with its summary answer line put back to `[Answer]:
+// Looks correct`, every other byte as it was (line endings included): a chat
+// still showing the summary wrote over (or blanked) a confirmation another chat
+// already recorded, before the engine could say the stage was done. The one
+// summary reader (summaryConfirmationAnswer) says which `[Answer]:` line is the
+// summary's. Null when the section holds no single answer, or it reads Looks
+// correct.
+function summaryAnswerPutBack(content: string): string | null {
+  const answer = summaryConfirmationAnswer(content);
+  if (answer === null || answer === "Looks correct") return null;
+  const parts = content.split(/(\r\n|\r|\n)/);
+  for (let at = parts.length - 1; at >= 0; at -= 1) {
+    if (!/^(?:\uFEFF)?\[Answer\]:/.test(parts[at])) continue;
+    const candidate = [...parts];
+    candidate[at] = `${parts[at].startsWith("\uFEFF") ? "\uFEFF" : ""}[Answer]: Looks correct`;
+    const putBack = candidate.join("");
+    if (summaryConfirmationAnswer(putBack) === "Looks correct") return putBack;
+  }
+  return null;
+}
+
 // A stage's own question asked or answered while its gate waits (a chat that
 // was still showing it when another chat finished the stage): the stage is
 // done, so the step is that gate, shown with `next`, the documents as they are,
