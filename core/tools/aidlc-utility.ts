@@ -517,6 +517,7 @@ import {
   personsWordsText,
   declaredProjectType,
   installWithoutReplacing,
+  pathContainedBy,
 } from "./aidlc-lib.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -11166,6 +11167,31 @@ function withCodekbLock<T>(
   );
 }
 
+// Where a --paths entry the snapshot could not read points, when that is
+// outside the folder being scanned: in another of the work's recorded repos
+// (the --repo that reads it, as resolveCodekbRepo resolves it, and the path
+// from that repo's folder), or outside. Null for a path inside the folder. Lexical, on the platform's own path
+// rules, so nothing outside the project is read.
+function codekbPathPlace(
+  projectDir: string,
+  space: string,
+  repoDir: string,
+  recorded: readonly string[],
+  path: string,
+): { repo: string; path: string } | "outside" | null {
+  const at = resolve(repoDir, path);
+  if (pathContainedBy(resolve(repoDir), at)) return null;
+  for (const repo of recorded) {
+    const root = resolve(codekbSourceRoot(projectDir, repo, space));
+    // A recorded repo not cloned here resolves to the project folder, which
+    // holds every path inside the project.
+    if (root === resolve(projectDir) || !pathContainedBy(root, at)) continue;
+    const from = relative(root, at);
+    return { repo, path: from === "" ? "./" : from.split(sep).join("/") };
+  }
+  return "outside";
+}
+
 // Snapshot the two generations a scan is built from. The stage takes this
 // immediately before scanning and passes both tokens to codekb-publish.
 function handleCodekbSnapshot(
@@ -11179,20 +11205,60 @@ function handleCodekbSnapshot(
     recoverCodekbTransactions(projectDir, space, repo);
     const sourceFingerprint = codekbSourceFingerprint(repoDir, paths, excludes);
     if (sourceFingerprint === null) {
-      // Name what to change: a path that is not there, else an entry under
-      // the paths that cannot be read as a file or folder.
-      const absent = paths.filter((path) => {
+      // Name what to change: a path outside the folder being scanned (in
+      // another repo of this work, or outside it), a path that is not there,
+      // else an entry under the paths that cannot be read as a file or folder.
+      let recorded: string[];
+      try {
+        recorded = intentRepos(projectDir, undefined, space);
+      } catch {
+        recorded = [];
+      }
+      const inRepo = new Map<string, { named: string[]; from: string[] }>();
+      const outside: string[] = [];
+      const inside: string[] = [];
+      for (const path of paths) {
+        const place = codekbPathPlace(projectDir, space, repoDir, recorded, path);
+        if (place === null) {
+          inside.push(path);
+        } else if (place === "outside") {
+          outside.push(path);
+        } else {
+          const entry = inRepo.get(place.repo) ?? { named: [], from: [] };
+          entry.named.push(path);
+          entry.from.push(place.path);
+          inRepo.set(place.repo, entry);
+        }
+      }
+      const absent = inside.filter((path) => {
         try {
           return lstatSync(join(repoDir, path), { throwIfNoEntry: false }) === undefined;
         } catch {
           return false;
         }
       });
+      const be = (named: readonly string[]): string => (named.length === 1 ? "is" : "are");
+      const causes: string[] = [];
+      for (const [other, entry] of inRepo) {
+        causes.push(
+          `${entry.named.join(", ")} ${be(entry.named)} in the ${other} repository: run it again with ` +
+            `--repo ${quoteCommandArgument(other)} --paths ${quoteCommandArgument(entry.from.join(","))}.`,
+        );
+      }
+      if (outside.length > 0) {
+        const folder = resolve(repoDir) === resolve(projectDir) ? "the project folder" : `the ${repo} repository's folder`;
+        // No way to bring outside code in is named: add-repo clones nothing
+        // for a name the work already records, and a checkout nested in a
+        // Git project is fingerprinted at its commit only.
+        causes.push(`${outside.join(", ")} ${be(outside)} outside ${folder}: run it again with --paths naming folders inside it.`);
+      }
+      if (absent.length > 0) {
+        causes.push(`${absent.join(", ")} ${be(absent)} not in the repository: run it again with --paths naming paths that exist.`);
+      }
       die(
         `codekb-snapshot: cannot fingerprint source paths: ${paths.join(", ")}. ` +
-          (absent.length > 0
-            ? `${absent.join(", ")} ${absent.length === 1 ? "is" : "are"} not in the repository: ` +
-              `run it again with --paths naming paths that exist.`
+          (causes.length > 0
+            ? causes.join(" ")
             : `Something under ${paths.length === 1 ? "it" : "them"} is not a regular file or folder (a socket or named pipe) or ` +
               `cannot be read: run it again with --paths naming only the folders that hold ` +
               `source, leaving that one out.`),
@@ -13487,35 +13553,29 @@ function applyKeptToPickedWork(projectDir: string, sessionId: string, space: str
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
-// Whether a status sync to `stage` leaves the main cursor (Current Stage, In
-// Progress, the cursor checkbox) where it is. Under unit-major, while the step
-// the engine issued is a Unit's Construction step on `stage` or on Current
-// Stage, a sync to any Construction stage other than Current Stage leaves it:
-// the cursor is the engine's. In an unscoped checkout it rests on the block's
-// first stage while the Units walk, and the task slug names the Unit's stage.
-// In a checkout that claimed the Unit (Unit Ownership: team),
-// `aidlc-state.ts sync-unit-scope-stage` rests it on the Unit's own stage, and
-// the sync names another stage: on Kiro IDE the audit tail's last
-// STAGE_STARTED, the block's first stage while the Units walk, because a Unit
-// step writes UNIT_STARTED rows and no STAGE_STARTED. There, moving the cursor
-// retires the step the engine just issued, and the marker is not refreshed
-// (its stage is not the sync's): on Kiro IDE, where the sync runs after every
-// shell command, `continue` then restarts at part one and Plan Approval finds
-// no current directive, forever. The hook's audit-tail path asks this before
-// it writes; set-status applies it to the slug it is given.
-export function statusSyncLeavesUnitCursor(
+// Whether a status sync to `stage` leaves the state as it is: the one rule for
+// where the sync may move Current Stage. While the step the engine issued is
+// still current (`issuedStep` is readActiveDirectiveMarker's, so only while it
+// matches the state), Current Stage is where the engine put it for that step,
+// and a sync naming another stage changes nothing. The sync takes its stage
+// from outside the engine (the task the agent marked in progress, or on Kiro
+// IDE the audit tail's last STAGE_STARTED, which a Unit's step never writes),
+// and the engine writes Current Stage itself on every move of its own, so no
+// step needs the sync to move it. Moving it retires the issued step (on Kiro
+// IDE `continue` then restarts at part one after every shell command) or the
+// place of a Unit walk, whose cursor rests on the block's first stage under
+// unit-major and under the walking skeleton. The step stays current across a
+// `unit start` because the digest leaves out the Unit lifecycle fields, and a
+// step left at the state's digest when it went out of date holds the sync too.
+// The hook's audit-tail path asks this before it writes; set-status applies it
+// to the slug it is given.
+export function statusSyncLeavesCursor(
   stateContent: string,
-  activeDirective: ActiveDirectiveMarker | null,
+  issuedStep: ActiveDirectiveMarker | null,
   stage: string,
-  phase: string,
 ): boolean {
   const currentStage = (getField(stateContent, "Current Stage") ?? "").trim();
-  return getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
-    phase === "CONSTRUCTION" &&
-    activeDirective?.unit !== undefined &&
-    currentStage.length > 0 &&
-    currentStage !== stage &&
-    (activeDirective.stage === stage || activeDirective.stage === currentStage);
+  return issuedStep !== null && currentStage.length > 0 && currentStage !== stage;
 }
 
 export function setStatus(
@@ -13535,18 +13595,19 @@ export function setStatus(
   const agent = flags.agent || entry.lead_agent;
 
   const previousContent = readStateFile(projectDir, flags.intent, flags.space);
-  const activeDirective = readActiveDirectiveMarker(projectDir, previousContent);
-  const preserveUnitMajorCursor = statusSyncLeavesUnitCursor(previousContent, activeDirective, stage, phase);
+  // Held, nothing is written: Active Agent follows Current Stage, and another
+  // stage's Lifecycle Phase would change the digest and retire the step.
+  if (statusSyncLeavesCursor(previousContent, readActiveDirectiveMarker(projectDir, previousContent), stage)) {
+    return { phase, stage, agent };
+  }
   let content = previousContent;
   content = setField(content, "Lifecycle Phase", phase);
   content = setField(content, "Active Agent", agent);
   content = setField(content, "Status", "Running");
   content = setField(content, "Last Updated", isoTimestamp());
-  if (!preserveUnitMajorCursor) {
-    content = setField(content, "Current Stage", stage);
-    content = setField(content, "In Progress", stage);
-    content = setCheckbox(withStageProgressRow(content, stage), stage, "in-progress");
-  }
+  content = setField(content, "Current Stage", stage);
+  content = setField(content, "In Progress", stage);
+  content = setCheckbox(withStageProgressRow(content, stage), stage, "in-progress");
   writeStateFile(projectDir, content, flags.intent, flags.space);
   try {
     refreshActiveDirectiveMarker(projectDir, stage, previousContent, content);

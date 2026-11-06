@@ -1190,7 +1190,11 @@ This stage has a **two-part structure**: planning followed by generation.
    files. Paths are POSIX-relative and use no globs or `..`; a trailing `/`
    claims a generated directory tree. In a main-workspace multi-repo run every
    entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
-   to that selected repo and omit `repo`.
+   to that selected repo and omit `repo`. An entry read in a recorded repo gives its path
+   from that repo's root: one the repo does not have counts as deleted only when the repo
+   had it (at HEAD, in a commit before it, or, for a file, in a folder still on disk), and
+   any other (`{"repo": "billing", "path": "billing/package.json"}`) is refused before the
+   review, every such entry named in one reason.
 
    The stage file gives this shape:
 

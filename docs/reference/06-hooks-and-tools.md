@@ -1014,12 +1014,12 @@ These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validatio
 4. **State file guard:** Exits silently if `aidlc-state.md` does not exist (pre-init).
 5. **Isolated run filter:** Exits silently while the step in hand belongs to an isolated `--single` run (its step marker says `single`), so that run's task never moves the workflow's place.
 6. **Health heartbeat:** Writes to `.aidlc-engine/hooks-health/sync-workflow-state.last`.
-7. **State sync:** Calls `bun aidlc-utility.ts set-status --stage <slug>` (normally updates Phase, Stage, Agent, and checkbox). For a valid interleaved unit-major directive, it updates the transient status fields and marker digest while preserving the durable first-stage cursor, `In Progress`, and checkbox. The same rule (`statusSyncLeavesUnitCursor`) holds the cursor in a checkout that claimed the Unit (`Unit Ownership: team`), where the engine rests `Current Stage` on the Unit's own stage and a sync names any other Construction stage (on Kiro IDE the audit tail's last start, the block's first stage while the Units walk).
+7. **State sync:** Calls `bun aidlc-utility.ts set-status --stage <slug>` (normally updates Phase, Stage, Agent, and checkbox). While the step the engine issued is still current and the slug names a stage other than `Current Stage`, it writes nothing (`statusSyncLeavesCursor`): `Current Stage` is where the engine put it for that step. So a Unit walk's cursor stays on the block's first stage (unit-major, or the walking skeleton under Construction Checkpoints), and a checkout that claimed the Unit (`Unit Ownership: team`) keeps `Current Stage` on the Unit's own stage. The Kiro IDE audit-tail path asks the same rule.
 
 **Design notes:**
 - Stage Jump tasks (no `[slug]`) and dependency-wiring TaskUpdates (no activeForm) are naturally filtered out.
 - The hook calls the existing `set-status` subcommand — no new code path needed.
-- When the activated slug matches the state-bound active-directive marker, `set-status` refreshes that marker's state digest while preserving its unit. The digest is taken over a projection of `aidlc-state.md` that omits the cache layer, so a status sync that touched only cache fields leaves the marker completely alone rather than superseding the live directive. Either way a recorded Plan Approval is unaffected: it binds to plan content and stage attempt, not to the marker. For an interleaved unit-major directive it also leaves `Current Stage`, `In Progress`, and the durable cursor checkbox unchanged, so the completed-grid gate cascade still begins at the block's first stage.
+- When the activated slug is `Current Stage` and matches the state-bound active-directive marker, `set-status` refreshes that marker's state digest while preserving its unit. The digest is taken over a projection of `aidlc-state.md` that omits the cache layer, so a status sync that touched only cache fields leaves the marker completely alone rather than superseding the live directive. Either way a recorded Plan Approval is unaffected: it binds to plan content and stage attempt, not to the marker. A sync the rule holds writes nothing, so the completed-grid gate cascade still begins at the block's first stage, and the Units after a walking skeleton start at its first stage too.
 
 ### PostToolUse: run-sensors.ts
 
@@ -1885,7 +1885,11 @@ plan, the refusal and the edit-mode question name the answer to record (Request
 Changes when they handed the plan back, with their words as the change, or
 Approve Plan when they finished it), so the agent never goes round; a question
 about several Units keeps today's words, since a reply there can be about some
-of them.
+of them. In a checkout that claimed its team Unit after the plan question was
+shown, the person's turns go to the Unit's own record: a reply there sent after
+the question was shown answers it (`replyTurnsAfter`), and a switch-off they
+send there is taken as theirs, as when no plan question waits
+(`planApprovalOffStands`).
 
 **AI-DLC's records.** A file-tool or shell write whose every target is a stage's
 record output under `aidlc/spaces` passes in every Plan Approval state: a stage's

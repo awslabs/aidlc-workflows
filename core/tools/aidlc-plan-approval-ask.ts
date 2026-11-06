@@ -1465,6 +1465,23 @@ function shownFromNow(projectDir: string): { repliesFrom: AuditMark; shownFrom: 
   return { repliesFrom: mark, shownFrom: mark };
 }
 
+// Whether the person replied after the mark their answer is read from. A
+// question shown before marks kept a time, whose answer is still read from its
+// showing, lends it the time it was last shown, never earlier than the first,
+// for a shard a claim put back short of the mark (replyTurnsAfter). Still the
+// showing's: repliesFrom is shownFrom, or, on a record from before shownFrom,
+// it is asking with nothing answered, since only the person's edit of the
+// files moved it and that ends with an answer. Moved, it lends none. A record
+// reopened for a fresh look on the old release and not shown since keeps its
+// old time; its replies were cleared, so it is asked again before this counts.
+function repliedSinceShown(projectDir: string, record: PlanApprovalAskRecord, mark: AuditMark): boolean {
+  const shown = record.shownFrom;
+  const unmoved = mark.at === undefined && (shown !== undefined
+    ? shown.shard === mark.shard && shown.offset === mark.offset
+    : record.mode === "ask" && !record.results?.length);
+  return personRepliedAfter(projectDir, mark, unmoved ? record.issuedAt : undefined);
+}
+
 /**
  * Where the record stood when the Plan Approval question was shown, while it is
  * the open step with a plan still unanswered; "due" while the step on record
@@ -1987,7 +2004,7 @@ export function planApprovalReplyEditableFiles(projectDir: string): string[] {
     if (open === null || open.record.mode !== "ask" || replies.length === 0) return [];
     // Kept words can be a question about the switch ("skip plan approval?"),
     // which is no reply: the files open only after a reply to the question.
-    if (open.record.repliesFrom && !personRepliedAfter(projectDir, open.record.repliesFrom)) return [];
+    if (open.record.repliesFrom && !repliedSinceShown(projectDir, open.record, open.record.repliesFrom)) return [];
     const answered = new Set((open.record.results ?? []).map((result) => result.unit));
     return open.record.targets.filter((target) => !answered.has(target.unit)).flatMap((target) => {
       const dir = codeGenerationRecordDir(projectDir, target.unit);
@@ -2092,7 +2109,7 @@ export function planApprovalKeptReplyWaits(projectDir: string): boolean {
   try {
     const open = currentPlanApprovalAsk(projectDir);
     return open !== null && open.record.mode === "ask" && (open.record.replies?.length ?? 0) > 0 &&
-      (open.record.repliesFrom === undefined || personRepliedAfter(projectDir, open.record.repliesFrom));
+      (open.record.repliesFrom === undefined || repliedSinceShown(projectDir, open.record, open.record.repliesFrom));
   } catch {
     return false;
   }
@@ -2132,7 +2149,7 @@ export function recordPlanApprovalAnswer(
     // alone. An approval needs a reply after the question.
     const asked = answer.choice === "request-changes" ? answer.opening : undefined;
     const opening = asked && record.mode === "ask" && !record.replies?.length && !record.results?.length &&
-        record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom) &&
+        record.repliesFrom && !repliedSinceShown(projectDir, record, record.repliesFrom) &&
         !readAuditShardEvents(projectDir).some((row) => row.event === "QUESTION_ANSWERED" &&
           auditBlockField(row.block, "Checkpoint") === "plan-approval" && row.timestamp >= asked.at)
       ? { session: session || "unidentified-session", text: asked.words.slice(0, ASK_REPLY_MAX_CHARS) }
@@ -2201,7 +2218,7 @@ export function recordPlanApprovalAnswer(
     }
     // Words kept since the question can be a question or a command to AIDLC
     // ("skip plan approval?"), which answers nothing: a choice needs a reply.
-    if (opening === null && record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom)) {
+    if (opening === null && record.repliesFrom && !repliedSinceShown(projectDir, record, record.repliesFrom)) {
       throw new Error(
         "The person has not answered the plan question since it was shown: their message since then was a " +
           "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +

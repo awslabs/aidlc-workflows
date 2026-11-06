@@ -182,6 +182,7 @@ import {
   readStateWrites,
   recordDirMatches,
   registryList,
+  replyTurnsAfter,
   relativeRecordDir,
   relativeRecordDirForSelection,
   resolveAuditProjectPath,
@@ -12147,19 +12148,19 @@ export function auditMark(projectDir: string): AuditMark {
   return {
     shard: projectRelativePath(projectDir, shardPath),
     offset: existsSync(shardPath) ? statSync(shardPath).size : 0,
+    at: isoTimestamp(),
   };
 }
 
 // The person replied after the mark: a human turn that is more than a command
-// to AIDLC (isReplyTurn) is on record after it. A decision on an open question
-// needs this; presence for what a command asks for does not. A trail that
-// cannot be read, or a mark from another shard, proves no reply.
-export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean {
+// to AIDLC (isReplyTurn) is on record after it, in this checkout's record of
+// the work (replyTurnsAfter). A decision on an open question needs this;
+// presence for what a command asks for does not. A trail that cannot be read
+// proves no reply. `shownAt`: as replyTurnsAfter takes it.
+export function personRepliedAfter(projectDir: string, mark: AuditMark, shownAt?: string): boolean {
   try {
-    const shardPath = auditFilePath(projectDir);
-    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return false;
-    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardTurnBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    const reply = (block: string) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block });
+    return replyTurnsAfter(projectDir, mark, reply, shownAt).length > 0;
   } catch {
     return false;
   }
@@ -12185,14 +12186,11 @@ export function rowsAfterMark(projectDir: string, mark: AuditMark): ((row: Audit
 
 // Their replies after the mark, as personRepliedAfter counts them, oldest
 // first: the message each turn names (null when it names none) and its time.
-// Empty when there is none, or the mark is another shard's.
+// Empty when there is none.
 export function repliesAfter(projectDir: string, mark: AuditMark): Array<{ messageId: string | null; at: string }> {
   try {
-    const shardPath = auditFilePath(projectDir);
-    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return [];
-    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardTurnBlocks(after)
-      .filter((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }))
+    const reply = (block: string) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block });
+    return replyTurnsAfter(projectDir, mark, reply)
       .map((block) => ({ messageId: auditBlockField(block, "Message Id"), at: auditBlockField(block, "Timestamp") ?? "" }));
   } catch {
     return [];
@@ -26519,6 +26517,7 @@ function validateUnitSourceManifestBytes(
   const prefixes: string[] = [];
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
+  const notInRepo: string[] = [];
   const pathModeIndexes: GitPathModeIndexCache = new Map();
   // Cache only this manifest read: later review, verdict, and finalize checks
   // must observe fresh HEAD and ignore rules, even for the same manifest.
@@ -26641,12 +26640,59 @@ function validateUnitSourceManifestBytes(
     if (symlinkReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
     }
+    // A recorded repo's write names its path from that repo's root. A path the
+    // repo does not have is a deletion only when the repo had it: at HEAD, in a
+    // commit before it, or, for a file, in a folder still on disk (an untracked
+    // file, which the source walk saw and git never did). Any other binds no
+    // file to the review, most often a path given from the workspace
+    // ("billing/package.json" in billing); every such write is named at once.
+    if (canonicalRepo !== undefined && isGitRepoDir(claim.dir)) {
+      const onDisk = (path: string, folder = false): boolean => {
+        try {
+          const entry = lstatSync(join(claim.dir, path));
+          return !folder || entry.isDirectory();
+        } catch {
+          return false;
+        }
+      };
+      const literal = claim.path.replace(/\/+$/, "");
+      if (!onDisk(literal)) {
+        const head = gitSourceClaimHeadAndTree(claim.dir, sourceClaimValidation);
+        const atHead = (path: string): boolean => head.treeModes?.has(path.replace(/\/+$/, "")) === true;
+        const from = relative(projectDir, claim.dir).split(sep).join("/");
+        const rootPath = from !== "" && claim.path.startsWith(`${from}/`) ? claim.path.slice(from.length + 1) : "";
+        // In a billing/billing/ layout the folder is there, so a path whose
+        // root form the repo has is still one given from the workspace.
+        const rootPathInRepo = rootPath !== "" && (onDisk(rootPath.replace(/\/+$/, "")) || atHead(rootPath));
+        let had = atHead(literal) ||
+          (!normalized.prefix && !rootPathInRepo && onDisk(literal.includes("/") ? dirname(literal) : ".", true));
+        if (!had && head.head !== null) {
+          const touched = spawnSync("git", ["-C", claim.dir, "--literal-pathspecs", "rev-list", "-1", head.head, "--", literal], {
+            encoding: "utf-8",
+          });
+          // Git that cannot answer refuses nothing.
+          had = touched.status !== 0 || touched.stdout.trim() !== "";
+        }
+        if (!had) {
+          notInRepo.push(
+            `writes[${index}].path ${JSON.stringify(write.path)} is not in repo ${JSON.stringify(canonicalRepo)} or its git history` +
+              (rootPath === "" ? "" : ` (from that repo's root: ${JSON.stringify(rootPath)})`),
+          );
+        }
+      }
+    }
     const key = sourcePathKey(canonicalRepo ?? "", claim.listingPath);
     if (seen.has(key)) return { ok: false, reason: `writes[${index}] duplicates a normalized source claim` };
     seen.add(key);
     if (normalized.prefix) prefixes.push(key);
     else claims.add(key);
     writes.push({ ...(declaredRepo === undefined ? {} : { repo: declaredRepo }), path: normalized.path });
+  }
+  if (notInRepo.length > 0) {
+    return {
+      ok: false,
+      reason: `${notInRepo.join("; ")}. Give each write's path from its repo's root, or leave out a path this Unit did not change`,
+    };
   }
 
   prefixes.sort();
