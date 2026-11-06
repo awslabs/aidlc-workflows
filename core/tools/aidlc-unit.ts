@@ -8057,7 +8057,10 @@ export function changedInputs(projectDir: string, stateContent: string): Array<{
       return [];
     }
     const fingerprint = textFingerprint(text);
-    if (fingerprint === entry.fingerprint || sentOrAnswered(entry.path, fingerprint)) return [];
+    // The version a newer hand-off file or claim brought, as taken, is the
+    // lead's, never a change of the team's to send back.
+    if (fingerprint === entry.fingerprint || inputsTaken(record).get(entry.path) === fingerprint ||
+      sentOrAnswered(entry.path, fingerprint)) return [];
     return [{ path: entry.path, name: inputName(entry.path), fingerprint }];
   });
 }
