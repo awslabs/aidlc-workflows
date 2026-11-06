@@ -364,6 +364,9 @@ describe("taking a Unit starts its build in the team's space", () => {
     const redo = next(alice, undefined, ["--stage", "functional-design", "--unit", "refunds"]);
     expect(JSON.stringify(redo)).not.toContain("can be reopened for one unit only");
     expect(JSON.stringify(redo)).not.toContain("Do you want me to reopen it for every unit?");
+    // The line names the build's one Unit, never every unit.
+    expect(JSON.stringify(redo)).not.toContain("for every unit");
+    expect(JSON.stringify(redo), JSON.stringify(redo).slice(0, 600)).toContain("Reopened Functional Design for refunds.");
   });
 
   test("the team approves each of its stages: the build holds on a stage until it is approved", () => {

@@ -20278,7 +20278,10 @@ function emitJumpDirective(
     // redoes the step for every unit. `--every-unit` asks for exactly what the
     // jump below does here, so it goes through and says so in one line. A
     // Unit's build holds that one Unit: the jump for it is the jump for every unit.
-    if (flags.jumpUnit !== undefined && unitBuildOf(unitMajorState)?.unit === flags.jumpUnit) {
+    const buildUnit = flags.jumpUnit !== undefined && unitBuildOf(unitMajorState)?.unit === flags.jumpUnit
+      ? flags.jumpUnit
+      : null;
+    if (buildUnit !== null) {
       flags.everyUnit = true;
       flags.jumpUnit = undefined;
     }
@@ -20288,7 +20291,7 @@ function emitJumpDirective(
     }
     const everyUnitSaid = flags.everyUnit && direction !== "forward"
       ? `Reopened ${nodeForSlug(targetSlug)?.name || targetSlug}` +
-        `${direction === "backward" ? " and the steps after it" : ""} for every unit.`
+        `${direction === "backward" ? " and the steps after it" : ""} for ${buildUnit ?? "every unit"}.`
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
     const unitMajor = direction === "forward"
