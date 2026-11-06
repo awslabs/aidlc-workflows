@@ -16,13 +16,14 @@ export function walkFiles(dir: string): string[] {
 }
 
 // GNU tar (Linux, and Git for Windows' tar ahead of Windows' own bsdtar) reads `C:\…` as a remote host
-// unless told the archive is local; bsdtar and BusyBox tar have no such flag.
+// unless told the archive is local, and unquotes a `-C` folder (`\a` in `C:\…\aidlc-…` becomes a control
+// character) unless told not to; bsdtar and BusyBox tar have neither flag.
 let gnu: boolean | null = null;
-function localFlag(): string[] {
+function gnuFlags(): string[] {
   gnu ??= /GNU tar/i.test(spawnSync("tar", ["--version"], { encoding: "utf8" }).stdout ?? "");
-  return gnu ? ["--force-local"] : [];
+  return gnu ? ["--force-local", "--no-unquote"] : [];
 }
 
 export function extractArchive(archive: string, dir: string): void {
-  execFileSync("tar", ["-xzf", archive, ...localFlag(), "-C", dir]);
+  execFileSync("tar", ["-xzf", archive, ...gnuFlags(), "-C", dir]);
 }

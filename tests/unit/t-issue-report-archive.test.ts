@@ -18,17 +18,29 @@ function useWords(out: string, words: string[]) {
 const RULES = `${import.meta.dir}/../../core/tools/aidlc-doctor-bundle.ts`; // rules-path
 const SCRIPTS = resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts");
 
-test("an archive unpacks into the folder it is given", () => {
+function packed(): string {
   const src = mkdtempSync(join(tmpdir(), "archive-src-"));
   mkdirSync(join(src, "r"));
   writeFileSync(join(src, "r", "report.json"), "{}");
   const out = mkdtempSync(join(tmpdir(), "archive-out-"));
-  const archive = join(out, "a.tar.gz");
   // Packed by a relative name: Git for Windows' GNU tar reads `-f C:\…` as a remote host. extractArchive
   // itself is handed the absolute path, as collect.ts hands it.
   execFileSync("tar", ["-czf", "a.tar.gz", "-C", src, "r"], { cwd: out });
+  return join(out, "a.tar.gz");
+}
+
+test("an archive unpacks into the folder it is given", () => {
   const into = mkdtempSync(join(tmpdir(), "archive-into-"));
-  extractArchive(archive, into);
+  extractArchive(packed(), into);
+  expect(walkFiles(into).map((f) => f.slice(into.length + 1))).toEqual([join("r", "report.json")]);
+});
+
+// A Windows path is `C:\…\aidlc-…`, and GNU tar unquotes a `-C` folder unless extractArchive says not to, so
+// `\a` there would name another folder. Only GNU tar (the Linux run) fails this case without that flag.
+test.skipIf(process.platform === "win32")("an archive unpacks into a folder whose name holds a backslash, as a Windows path does", () => {
+  const into = join(mkdtempSync(join(tmpdir(), "archive-into-")), "x\\aidlc");
+  mkdirSync(into);
+  extractArchive(packed(), into);
   expect(walkFiles(into).map((f) => f.slice(into.length + 1))).toEqual([join("r", "report.json")]);
 });
 
