@@ -14269,7 +14269,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const words = saveReadingQuestion(pd, flags.intent, "", "routing", {
         space: here.space,
         targets: pickable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
-        pick: pickable.length > 0,
+        ...(pickable.length > 0 ? { pick: true as const } : {}),
       });
       emit(offer !== null
         ? unitsWordsReplyDirective(words.id, offer, here.selectable.map(({ selector }) => selector))
