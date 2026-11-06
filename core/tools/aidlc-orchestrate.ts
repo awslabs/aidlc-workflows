@@ -14291,9 +14291,7 @@ function batchBuiltElsewhereStep(projectDir: string, stage: string, batch: numbe
   if (chat === null || !hostNamesThisChat(projectDir)) return null;
   const building = swarmBuildingChat(projectDir, batch, stage);
   if (building === null || building.chat === chat) return null;
-  const rows = ownShardRows(projectDir).mine;
-  const at = rows.findIndex((row) => row.shard === building.row.shard && row.pos === building.row.pos);
-  if (rows.slice(at + 1).some((row) => row.event === "SESSION_ENDED" &&
+  if (ownShardRows(projectDir).mine.some((row) => building.since(row) && row.event === "SESSION_ENDED" &&
     auditBlockField(row.block, "Session") === building.chat &&
     !(auditBlockField(row.block, "Reason") ?? "").startsWith("inferred"))) return null;
   const tookOver = building.row.event === "SWARM_TAKEN_OVER";
@@ -14303,7 +14301,7 @@ function batchBuiltElsewhereStep(projectDir: string, stage: string, batch: numbe
       `The side-by-side build of ${units.join(", ")} was ${tookOver ? "taken over by" : "started from"} another chat ` +
         "on this machine and has not landed. " +
         requestMessageStep(projectDir, "Run nothing for it here and end your turn.", "any", take,
-          `run bare \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns`),
+          `run bare \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns`, building.since),
     ),
     narration: tookOver ? TAKEN_OVER_IN_OTHER_CHAT : BUILDING_IN_OTHER_CHAT,
   };

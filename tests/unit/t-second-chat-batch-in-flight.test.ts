@@ -146,6 +146,41 @@ describe("t-second-chat-batch-in-flight: a batch another chat is building is tha
     isTheLine(next(pd, FIRST), TAKEN_OVER_ELSEWHERE);
   });
 
+  // A message that asked to build here before the other chat took the build
+  // last does not ask for it now: the step names none from before, and a
+  // take-over on one is refused, so the build moves only on what they said since.
+  test("a take-over stands only on what the person said since the other chat last took the build", () => {
+    const pd = firstChatBuilds();
+    const first = says(pd, SECOND, "build them here instead, my other window is closed");
+    const takeOver = (chat: string, message: string) =>
+      tool(pd, chat, "tools/aidlc-swarm.ts", ["take-over", "--batch", "1", "--message", message, "--project-dir", pd]);
+    expect(takeOver(SECOND, first).code).toBe(0);
+    // The first chat is told who has it, and no message of its from before is named.
+    expect(String(next(pd, FIRST).message)).not.toContain("take-over");
+    const back = says(pd, FIRST, "no, build them here in this window");
+    const named = next(pd, FIRST);
+    expect(String(named.message)).toContain(`If their message ${back}`);
+    expect(takeOver(FIRST, back).code).toBe(0);
+    const rows = readAuditShardEvents(pd).filter((row) => row.event === "SWARM_TAKEN_OVER").length;
+    // Back in the second chat, its message from before the first chat took it back is not named, and does not prove.
+    says(pd, SECOND, "/aidlc");
+    const step = next(pd, SECOND);
+    isTheLine(step, TAKEN_OVER_ELSEWHERE);
+    expect(String(step.message)).not.toContain(first);
+    expect(String(step.message)).not.toContain("take-over");
+    const stale = takeOver(SECOND, first);
+    expect(stale.code).not.toBe(0);
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "SWARM_TAKEN_OVER").length).toBe(rows);
+    expect(next(pd, FIRST)).toMatchObject({ kind: "invoke-swarm", units: UNITS });
+    // What they say there now still takes it over.
+    const again = says(pd, SECOND, "build them here after all");
+    const offered = next(pd, SECOND);
+    expect(String(offered.message)).toContain(`If their message ${again}`);
+    expect(String(offered.message)).not.toContain(first);
+    expect(takeOver(SECOND, again).code).toBe(0);
+    expect(next(pd, SECOND)).toMatchObject({ kind: "invoke-swarm", units: UNITS });
+  });
+
   test("one chat alone builds as today", () => {
     const pd = firstChatBuilds();
     expect(next(pd, FIRST)).toMatchObject({ kind: "invoke-swarm", units: UNITS });

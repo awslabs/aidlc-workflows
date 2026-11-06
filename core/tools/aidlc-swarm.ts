@@ -188,7 +188,7 @@ import {
   committedTextSha256,
   currentFingerprintForm,
 } from "./aidlc-lib.ts";
-import { proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
+import { messagesSince, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { codeGenerationPlanNamedPaths } from "./aidlc-plan-approval-ask.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
 import { aidlcDispatcherInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -3894,11 +3894,6 @@ function handleTakeOver(rest: string[]): void {
   const projectDir = resolveProjectDir(flags["project-dir"]);
   resolveSwarmSelection(projectDir, flags);
   if (!flags.batch || !/^[1-9][0-9]*$/.test(flags.batch)) fail("take-over requires --batch <n>: the batch the person asked to build here");
-  if (!flags.message || flags.message === "true") {
-    // The agent has no other place to learn the id: the step names their messages.
-    fail(requestMessageStep(projectDir, "take-over requires --message <id>: the person's message that asked to build here.",
-      "any", `\`${aidlcDispatcherInvocation("swarm take-over")} --batch ${flags.batch}\``));
-  }
   const next = aidlcDispatcherInvocation("orchestrate next");
   const chat = hostNamesThisChat(projectDir) ? commandChat(projectDir) : null;
   if (chat === null) {
@@ -3909,8 +3904,19 @@ function handleTakeOver(rest: string[]): void {
   if (building === null || building.chat === chat) {
     fail(`Batch ${flags.batch} is not being built from another chat here: run \`${next}\` and follow what it returns.`);
   }
+  // The agent has no other place to learn the id: the step names their messages
+  // since the other chat last took the build, the only ones that can ask for it.
+  if (!flags.message || flags.message === "true") {
+    fail(requestMessageStep(projectDir, "take-over requires --message <id>: the person's message that asked to build here.",
+      "any", `\`${aidlcDispatcherInvocation("swarm take-over")} --batch ${flags.batch}\``, "", building.since));
+  }
   const proof = proveMessage(projectDir, flags.message, "request", { request: true });
   if ("refusal" in proof) fail(proof.refusal);
+  if (!messagesSince(readAuditShardEvents(projectDir), building.since).has(flags.message)) {
+    fail(requestMessageStep(projectDir, `Message ${flags.message} came before the other chat ` +
+      `${building.row.event === "SWARM_TAKEN_OVER" ? "took this build over" : "started this build"}, so it does not ` +
+      "ask to build it here now. Run nothing for it here and end your turn.", "any", "the same command", "", building.since));
+  }
   const words = personsWordsText(proof.message.words ?? proof.message.text);
   appendAuditEntry("SWARM_TAKEN_OVER", {
     "Batch number": flags.batch,
