@@ -16251,11 +16251,12 @@ function emitTeamUnitMajorRunStage(
   // The Unit this checkout walked without a claim is done; while the teams'
   // Units are not all merged, the board is the step here, as for a checkout
   // that walks none (#3610).
-  if (held !== null && model !== null) {
-    const merged = model.mergedUnits;
-    if (resolution.batches.flat().some((unit) => !held.has(unit) && !merged.has(unit))) {
+  if (held !== null) {
+    const readOnly = model === null;
+    const seen = model ?? deriveTeamUnitProgressModel(projectDir, refreshedState, auditRows, undefined, { readOnly: true });
+    if (resolution.batches.flat().some((unit) => !held.has(unit) && !seen.mergedUnits.has(unit))) {
       emit(noticeDirective(renderTeamConstructionBoard(
-        buildTeamConstructionBoard(projectDir, refreshedState, { model }),
+        buildTeamConstructionBoard(projectDir, refreshedState, { model: seen, readOnly }),
         "dispatcher",
       )));
       return;

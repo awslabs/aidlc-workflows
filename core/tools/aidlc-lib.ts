@@ -118,6 +118,7 @@ export {
 import {
   ACTIVE_DIRECTIVE_MARKER,
   ACTIVE_INTENT_POINTER,
+  activeIntent,
   activeIntentUuid,
   applicableTeamUnitScopeStamp,
   attemptEventDefinitelyBefore,
@@ -30526,8 +30527,12 @@ export function requireLiveClaimForTeamUnit(
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
     // A Unit this checkout walks without a claim is its own, as the walking
-    // skeleton on main is (#3610).
-    if (!selector.intent && !selector.space && unitsHeldHere(pd)?.has(unit)) return null;
+    // skeleton on main is (#3610): for the active work, however the caller
+    // names it (a fork and a merge name its space).
+    const space = activeSpace(pd);
+    const activeWork = (!selector.space || selector.space === space) &&
+      (!selector.intent || selector.intent === activeIntent(pd, space) || selector.intent === activeIntentUuid(pd, space));
+    if (activeWork && unitsHeldHere(pd)?.has(unit)) return null;
     throw new Error(
       `Unit Ownership: team requires a live claim for Unit "${unit}" before fork or lifecycle work.`,
     );

@@ -301,6 +301,12 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     // walking skeleton on main does not; the teammate's Unit still does.
     expect(requireLiveClaimForTeamUnit(lead, "alpha")).toBeNull();
     expect(() => requireLiveClaimForTeamUnit(lead, "beta")).toThrow("requires a live claim");
+    // The Bolt fork names the work's space and record, as Code Generation's does.
+    const forkAlpha = runMergeTool(STATE, ["fork", "--slug", "alpha"], lead);
+    expect(said(forkAlpha)).not.toContain("requires a live claim");
+    const forkBeta = runMergeTool(STATE, ["fork", "--slug", "beta"], lead);
+    expect(forkBeta.status).not.toBe(0);
+    expect(said(forkBeta)).toContain("requires a live claim");
   });
 
   test("once the lead's Unit is done, the board is the step while the teams' Units are not merged", () => {
