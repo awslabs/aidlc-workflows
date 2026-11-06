@@ -500,6 +500,7 @@ import {
   unitMergeTransactions,
   unitMergeTransactionsForIdentity,
   unitMajorConstructionStageSlugs,
+  unitsHeldHere,
   validateLiveUnitScope,
   validScopes,
   shellArg,
@@ -5728,6 +5729,8 @@ export interface TeamConstructionBoard {
     releasedAfterGitAccepted: boolean;
   }>;
   claimable: string[];
+  /** Units a checkout walks without a claim (the lead's own, begun before the teams took the others). */
+  walked: string[];
   blocked: Array<{ unit: string; blockedBy: string[] }>;
   /** Claimed Units a team published that wait for review here (not pinned at that commit, nothing left to land first). */
   ready: Array<{ unit: string; owner: string; key: string }>;
@@ -5982,6 +5985,7 @@ function assembleTeamConstructionBoard(
     claims,
     awaitingMerge,
     claimable,
+    walked: [...(overview.walked ?? [])].sort(compareBoardKeys),
     blocked,
     ready,
     unpushed: target === null ? null : { units: landedHere.map((row) => row.unit), ...target },
@@ -6072,15 +6076,18 @@ export function renderTeamConstructionBoard(
   const claimedUnits = board.claims.filter((claim) => claim.status === "claimed");
   if (nextActions.length === 0) {
     nextActions.push(
-      claimedUnits.length === 0
+      claimedUnits.length === 0 && board.walked.length === 0
         ? "- No dispatcher action is pending; main may resume the normal Construction walk."
         : mode === "dispatcher"
-        ? "- Nothing runs from this checkout: every Unit not yet merged is claimed or waits on one. " +
-          "Each claimed Unit is worked in its own checkout:"
+        ? "- Nothing runs from this checkout: every Unit not yet merged is claimed, waits on one, or is built " +
+          "where it was started. Each claimed Unit is worked in its own checkout:"
         : "- No dispatcher action is pending. Each claimed Unit is worked in its own checkout:",
     );
-  } else if (claimedUnits.length > 0) {
+  } else if (claimedUnits.length > 0 || board.walked.length > 0) {
     nextActions.push("- Each claimed Unit is worked in its own checkout:");
+  }
+  for (const unit of board.walked) {
+    nextActions.push(`  - \`${unit}\` is being built in the checkout that started it, before any team took a Unit.`);
   }
   for (const claim of claimedUnits) {
     nextActions.push(
@@ -13358,6 +13365,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           emit(offer);
           return;
         }
+        // The Unit this checkout walks without a claim is still its own once a
+        // team claims another (#3610): after the offers above, the walk goes on
+        // with it instead of the board.
+        if (unitsHeldHere(pd) !== null) throw new Error("claimless-team-mode");
         // While the guard's fan-out check holds (a landed Unit's claim
         // included) it refuses Unit work in this checkout, so the board stays
         // up until the walk has no Unit left to take: every Unit merged. A
@@ -16043,6 +16054,20 @@ function refreshTeamUnitProgress(
   return readStateFile(projectDir);
 }
 
+// The Units an unclaimed team checkout walks itself once the teams take Units
+// (#3610): the ones it walks without a claim (unitsHeldHere), or null for every
+// Unit. Before the plan is shared the checkout walks every Unit, as before.
+function teamWalkHeldUnits(projectDir: string): ReadonlySet<string> | null {
+  const held = unitsHeldHere(projectDir);
+  if (held === null) return null;
+  try {
+    return claimlessTeamCheckout(projectDir) ? null : held;
+  } catch {
+    // A record that cannot be read keeps the walk on the held Units.
+    return held;
+  }
+}
+
 function emitTeamUnitMajorRunStage(
   projectType: "brownfield" | "greenfield" | null,
   scope: string,
@@ -16062,7 +16087,10 @@ function emitTeamUnitMajorRunStage(
       return;
     }
   }
-  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat();
+  const held = scopeStamp ? null : teamWalkHeldUnits(projectDir);
+  const units = scopeStamp
+    ? [scopeStamp.unit]
+    : resolution.batches.flat().filter((unit) => held === null || held.has(unit));
   const kinds = resolution.unitKinds;
   const rhythm = effectiveUnitGateRhythm(projectDir, stateContent);
   const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
@@ -16250,6 +16278,20 @@ function emitTeamUnitMajorRunStage(
     });
     return;
   }
+  // The Unit this checkout walked without a claim is done; once the teams take
+  // Units, while theirs are not all merged, the board is the step here, as for
+  // a checkout that walks none (#3610).
+  if (held !== null) {
+    const readOnly = model === null;
+    const seen = model ?? deriveTeamUnitProgressModel(projectDir, refreshedState, auditRows, undefined, { readOnly: true });
+    if (resolution.batches.flat().some((unit) => !held.has(unit) && !seen.mergedUnits.has(unit))) {
+      emit(noticeDirective(renderTeamConstructionBoard(
+        buildTeamConstructionBoard(projectDir, refreshedState, { model: seen, readOnly }),
+        "dispatcher",
+      )));
+      return;
+    }
+  }
   const next = nextInScopeStage(finalStage.slug, scope, refreshedState);
   if (!next) {
     emit({
@@ -16395,7 +16437,10 @@ function teamUnitMajorWalkBeat(
   const block = constructionUnitMajorBlock(scope, stateContent, true);
   if (!block.some((stage) => stage.slug === currentSlug)) return null;
   const scopeStamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
-  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat();
+  const held = scopeStamp ? null : teamWalkHeldUnits(projectDir);
+  const units = scopeStamp
+    ? [scopeStamp.unit]
+    : resolution.batches.flat().filter((unit) => held === null || held.has(unit));
   const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
     if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
     if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;

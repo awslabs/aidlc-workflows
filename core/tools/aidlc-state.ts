@@ -2702,13 +2702,14 @@ function handleUnpark(_args: string[]): void {
 // latest receipt for cheap status reads. The autonomous swarm keeps its own
 // SWARM_UNIT_* ledger (aidlc-swarm.ts) — this verb is the interactive twin.
 //
-// Single-active-unit invariant: `start` refuses while another unit of the
-// same stage is non-terminal (started/resumed/paused without a later
-// UNIT_COMPLETED), so resume/restart races cannot create two active units.
-// `resume` refuses unless the named unit is paused and no other unit of the
-// stage is in progress. A pause with `--set-aside-for <unit>` sets the unit
-// aside for that other unit (#1411: the person asked for its work meanwhile),
-// so it does not stop that unit from starting this stage.
+// Single-active-unit invariant: `start` refuses while another unit this
+// checkout holds (unitsHeldHere) is non-terminal on the same stage
+// (started/resumed/paused without a later UNIT_COMPLETED), so resume/restart
+// races cannot create two active units. `resume` refuses unless the named unit
+// is paused and no other unit of the stage is in progress. A pause with
+// `--set-aside-for <unit>` sets the unit aside for that other unit (#1411: the
+// person asked for its work meanwhile), so it does not stop that unit from
+// starting this stage.
 function handleUnit(args: string[]): void {
   const action = args[0];
   const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
