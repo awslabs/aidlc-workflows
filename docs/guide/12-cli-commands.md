@@ -647,9 +647,10 @@ work, recording a pinned merge gate, or resuming `aidlc unit land`.
 
 ---
 
-Each Unit command below prints its usage for `--help` or `-h` and changes
-nothing. A word it does not take (a misspelt option, a second Unit name) is
-named with that usage before anything is committed, pushed or written.
+Each Unit command below prints its usage for `--help` and changes nothing
+(`-h` too, typed at a terminal: `aidlc unit share -h`). A word it does not
+take (a misspelt option, a second Unit name) is named with that usage before
+anything is committed, pushed or written.
 
 ### `/aidlc --claim <unit>` and `/aidlc unit claim <unit>` — Claim a team Unit
 
