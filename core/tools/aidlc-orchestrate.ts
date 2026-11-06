@@ -134,6 +134,7 @@ import {
 } from "./aidlc-question-store.ts";
 import {
   latestMessage, listMessages, messageBeforeJoining, noReplySince, personTurnStands, readMessage, standingPersonTurn,
+  requestMessageStep,
 } from "./aidlc-message-store.ts";
 import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices, SUMMARY_CONFIRMATION_CHOICES } from "./aidlc-reply-reader.ts";
 import {
@@ -14274,13 +14275,17 @@ function swarmRevisionNeedsPreparation(
   });
 }
 
-// Said in a chat that did not start the side-by-side batch it reached.
+// Said in a chat that did not start, or take over, the side-by-side batch it reached.
 const BUILDING_IN_OTHER_CHAT = "Your other chat started building these Units.";
+const TAKEN_OVER_IN_OTHER_CHAT = "Your other chat took over building these Units.";
 
 // A batch another chat of this clone started (or took over) and has not
 // landed is that chat's (#3633): this chat says so and hands out nothing to run
 // for it. Only where the host named this chat; a chat that ended since its row
-// leaves the batch to whichever chat asks. The person's own words take it over.
+// leaves the batch to whichever chat asks (an end a host only inferred when the
+// next chat started says nothing about the other chat). The person's own words
+// take it over: once they have said something here, the step names their
+// messages for it, so nothing is offered before they ask.
 function batchBuiltElsewhereStep(projectDir: string, stage: string, batch: number, units: string[]): Directive | null {
   const chat = engineSessionId ?? null;
   if (chat === null || !hostNamesThisChat(projectDir)) return null;
@@ -14289,16 +14294,18 @@ function batchBuiltElsewhereStep(projectDir: string, stage: string, batch: numbe
   const rows = ownShardRows(projectDir).mine;
   const at = rows.findIndex((row) => row.shard === building.row.shard && row.pos === building.row.pos);
   if (rows.slice(at + 1).some((row) => row.event === "SESSION_ENDED" &&
-    auditBlockField(row.block, "Session") === building.chat)) return null;
-  const take = `${aidlcToolInvocation("swarm")} take-over --batch ${batch} --message <id>`;
+    auditBlockField(row.block, "Session") === building.chat &&
+    !(auditBlockField(row.block, "Reason") ?? "").startsWith("inferred"))) return null;
+  const tookOver = building.row.event === "SWARM_TAKEN_OVER";
+  const take = `\`${aidlcToolInvocation("swarm")} take-over --batch ${batch}\``;
   const step: Directive = {
     ...printDirective(
-      `The side-by-side build of ${units.join(", ")} was started from another chat on this machine and has not ` +
-        "landed, so run nothing for it here and end your turn. When the person asks to build these Units in this " +
-        `chat instead, run \`${take}\`, with <id> the message they asked in, then run bare ` +
-        `\`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
+      `The side-by-side build of ${units.join(", ")} was ${tookOver ? "taken over by" : "started from"} another chat ` +
+        "on this machine and has not landed. " +
+        requestMessageStep(projectDir, "Run nothing for it here and end your turn.", "any", take,
+          `run bare \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns`),
     ),
-    narration: BUILDING_IN_OTHER_CHAT,
+    narration: tookOver ? TAKEN_OVER_IN_OTHER_CHAT : BUILDING_IN_OTHER_CHAT,
   };
   turnEndingPrints.add(step);
   planWaitPrints.add(step);

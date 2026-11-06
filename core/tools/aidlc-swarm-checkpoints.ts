@@ -518,7 +518,16 @@ export function swarmBuildingChat(
       auditBlockField(row.block, "Run floor") === floor);
     const latest = rows.at(-1);
     const chat = latest === undefined ? null : auditBlockField(latest.block, "Session");
-    return latest === undefined || !chat ? null : { chat, row: latest };
+    if (latest === undefined || !chat) return null;
+    // The person sent the landed batch back at its checkpoint: the build it
+    // reopens is whichever chat runs it, until a new prepare names one.
+    const mine = ownShardRows(projectDir).mine;
+    const after = mine.slice(mine.findIndex((row) => row.shard === latest.shard && row.pos === latest.pos) + 1);
+    const reopened = after.some((row) => row.event === "GATE_REJECTED" &&
+      auditBlockField(row.block, "Checkpoint") === "swarm-batch" &&
+      auditBlockField(row.block, "Batch number") === String(batch) &&
+      auditBlockField(row.block, "Stage") === stage && auditBlockField(row.block, "Run floor") === floor);
+    return reopened ? null : { chat, row: latest };
   } catch {
     return null;
   }

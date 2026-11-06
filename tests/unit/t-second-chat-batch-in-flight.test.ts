@@ -22,7 +22,8 @@ import {
   auditBlockField, readActiveDirectiveMarker, readAuditShardEvents, stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, runOrchestrateNext } from "../harness/fixtures.ts";
-import { cleanupCheckpointFixtures, fixture, ISOLATED_GIT_ENV } from "../harness/swarm-checkpoint.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { cleanupCheckpointFixtures, fixture, ISOLATED_GIT_ENV, reject } from "../harness/swarm-checkpoint.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS * 2);
@@ -32,6 +33,7 @@ const UNITS = ["alpha", "beta"];
 const FIRST = "01995000-0995-7000-8000-000000003633";
 const SECOND = "01995000-0995-7000-8000-000000003634";
 const BUILDING_ELSEWHERE = "Your other chat started building these Units.";
+const TAKEN_OVER_ELSEWHERE = "Your other chat took over building these Units.";
 
 type Json = Record<string, unknown>;
 
@@ -91,9 +93,9 @@ function firstChatBuilds(): string {
   return pd;
 }
 
-function isTheLine(step: Json): void {
+function isTheLine(step: Json, line = BUILDING_ELSEWHERE): void {
   expect(step, JSON.stringify(step)).toMatchObject({ kind: "print" });
-  expect(String(step.narration)).toBe(BUILDING_ELSEWHERE);
+  expect(String(step.narration)).toBe(line);
   expect(JSON.stringify(step)).not.toContain("swarm prepare --batch 1 --units alpha,beta --base");
 }
 
@@ -106,7 +108,10 @@ describe("t-second-chat-batch-in-flight: a batch another chat is building is tha
     const before = marker(pd);
     const rows = readAuditShardEvents(pd).length;
     says(pd, SECOND, "/aidlc");
-    isTheLine(next(pd, SECOND));
+    const step = next(pd, SECOND);
+    isTheLine(step);
+    // Nothing is offered before the person asks: a bare /aidlc names no take-over.
+    expect(String(step.message)).not.toContain("take-over");
     expect(marker(pd)).toEqual(before);
     // Nothing of the build is recorded from the second chat (its own turn is).
     expect(readAuditShardEvents(pd).slice(rows).map((row) => row.event).filter((event) => event !== "HUMAN_TURN"))
@@ -119,6 +124,11 @@ describe("t-second-chat-batch-in-flight: a batch another chat is building is tha
     const pd = firstChatBuilds();
     isTheLine(next(pd, SECOND));
     const message = says(pd, SECOND, "build them here instead, my other window is closed");
+    // Once they have said something here, the step names their message for the take-over.
+    const named = next(pd, SECOND);
+    isTheLine(named);
+    expect(String(named.message)).toContain(`If their message ${message}`);
+    expect(String(named.message)).toContain("take-over --batch 1`");
     // Live on Kiro CLI the agent had no id to name: the step names their message.
     const unnamed = tool(pd, SECOND, "tools/aidlc-swarm.ts", ["take-over", "--batch", "1", "--project-dir", pd]);
     expect(unnamed.code).not.toBe(0);
@@ -132,8 +142,8 @@ describe("t-second-chat-batch-in-flight: a batch another chat is building is tha
     expect(auditBlockField(row!.block, "Message Id")).toBe(message);
     expect(auditBlockField(row!.block, "Person Reply")).toContain("build them here instead");
     expect(next(pd, SECOND)).toMatchObject({ kind: "invoke-swarm", units: UNITS });
-    // Now the first chat is the other one.
-    isTheLine(next(pd, FIRST));
+    // Now the first chat is the other one, and is told who has the build now.
+    isTheLine(next(pd, FIRST), TAKEN_OVER_ELSEWHERE);
   });
 
   test("one chat alone builds as today", () => {
@@ -148,6 +158,19 @@ describe("t-second-chat-batch-in-flight: a batch another chat is building is tha
     expect(ended.code, `${ended.out}\n${ended.err}`).toBe(0);
     expect(readAuditShardEvents(pd).some((row) => row.event === "SESSION_ENDED")).toBe(true);
     expect(next(pd, SECOND)).toMatchObject({ kind: "invoke-swarm", units: UNITS });
+  });
+
+  // Codex infers the first chat ended the moment the second one starts.
+  test("an end a host only inferred when the next chat started does not release the batch", () => {
+    const pd = firstChatBuilds();
+    appendAuditEntry("SESSION_ENDED", { Reason: "inferred - no SessionEnd event; reconciled at next start", Session: FIRST }, pd);
+    isTheLine(next(pd, SECOND));
+  });
+
+  test("a batch the person sent back at its checkpoint is held for no chat until it is prepared again", () => {
+    const pd = firstChatBuilds();
+    reject(pd, "alpha");
+    expect(next(pd, SECOND).kind).not.toBe("print");
   });
 
   test("a batch a teammate's clone started is not called your other chat", () => {
