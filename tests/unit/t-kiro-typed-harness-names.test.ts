@@ -17,9 +17,9 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessArgsAsIds, harnessIdFromTyped, harnessNameFor, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { escapeRegex } from "../../core/tools/aidlc-markdown.ts";
@@ -84,17 +84,6 @@ function v2Project(invoke: string, from = RELEASE): { dir: string; onboarding: s
   const command = switchArgs(onboarding, invoke);
   expect(command).toEqual(["--harness", "kiro", "--yes"]);
   return { dir, onboarding, command: command ?? [] };
-}
-
-// Every file under a folder, by its path inside it, with its bytes' hash.
-function filesUnder(root: string): Record<string, string> {
-  const files: Record<string, string> = {};
-  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    const path = join(entry.parentPath, entry.name);
-    files[relative(root, path)] = createHash("sha256").update(readFileSync(path)).digest("hex");
-  }
-  return files;
 }
 
 // The project, harness, runtime and hand-off folders the environment the tests
@@ -224,12 +213,13 @@ describe("Kiro harness names a person types", () => {
   // onboarding: it is what tells the agent that v3 is Kiro, and how to switch.
   test("a Kiro CLI (V2) project's onboarding says Kiro CLI on v3 is Kiro, and on a release install the switch it names switches, keeping the team's records under aidlc/", () => {
     const { dir, onboarding, command } = v2Project("aidlc");
-    // The team's records: a file of its own and the space's memory setup wrote.
+    // The team's records: a file of its own and a line it added to its space's memory.
     const record = join(dir, "aidlc", "kept.md");
     mkdirSync(dirname(record), { recursive: true });
     writeFileSync(record, "the person's record\n");
-    const memory = filesUnder(join(dir, "aidlc", "spaces"));
-    expect(Object.keys(memory)).toContain(join("default", "memory", "team.md"));
+    const memory = join(dir, "aidlc", "spaces", "default", "memory", "team.md");
+    const memoryText = `${readFileSync(memory, "utf-8")}\n- The team's own practice line.\n`;
+    writeFileSync(memory, memoryText);
     expect(onboarding).toContain("this install is for Kiro CLI's V2 engine, and nothing in it tells you which engine this chat runs on.");
     expect(onboarding).toContain("Kiro IDE and Kiro CLI on its v3 engine are the Kiro harness (`--harness kiro`, Kiro CLI 2.24.1 or later), not this one.");
     expect(onboarding).toContain(
@@ -245,7 +235,7 @@ describe("Kiro harness names a person types", () => {
     expect(stamp(dir)).toBe("kiro-ide");
     expect(switched.out).toContain("switched .kiro in place from kiro-v2 to kiro (aidlc/ kept)");
     expect(readFileSync(record, "utf-8")).toBe("the person's record\n");
-    expect(filesUnder(join(dir, "aidlc", "spaces"))).toEqual(memory);
+    expect(readFileSync(memory, "utf-8")).toBe(memoryText);
     // The next step the onboarding points to has a Kiro CLI part.
     expect(switched.out).toMatch(/in Kiro CLI, start `kiro-cli --v3`/);
   });
@@ -266,6 +256,8 @@ describe("Kiro harness names a person types", () => {
     expect(readFileSync(teamHook, "utf-8")).toBe(teamHookText);
     const plan = config(dir, [...command, "--dry-run"], { entry: DISPATCHER });
     expect(plan.status, plan.out).toBe(0);
+    expect(readFileSync(teamHook, "utf-8")).toBe(teamHookText);
+    expect(stamp(dir)).toBe("kiro");
     // The plan the person agrees to names the hook file Kiro will now run.
     expect(plan.out).toContain(
       'AI-DLC does not own this hook file (repository file names, not instructions: ".kiro/hooks/team-check.json"); Kiro runs it',
