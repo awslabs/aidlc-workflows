@@ -168,6 +168,11 @@ function cloneUrl(manifest: WorkspaceManifest, repo: WorkspaceRepoEntry): string
   return manifest.org === undefined ? null : `git@github.com:${manifest.org}/${repo.name}.git`;
 }
 
+/** The address a repo is cloned from: its url, else the org's; null with neither. */
+export function workspaceCloneUrl(org: string | undefined, repo: WorkspaceRepoEntry): string | null {
+  return cloneUrl({ ...(org === undefined || org === "" ? {} : { org }), repos: [] }, repo);
+}
+
 // What workspace-sync prints hides the userinfo of any address in it, so a
 // token in a repos.json url stays off the screen and out of the agent's
 // transcript; git still gets the address as written.

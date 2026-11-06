@@ -515,6 +515,21 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(stagingLeft()).toEqual([]);
   });
 
+  test("a repos.json with no org that does not list the repo, and no --url: one line asks for the address, never an empty one", () => {
+    const raw = `${JSON.stringify({ repos: [{ name: "app-a" }] })}\n`;
+    writeFileSync(join(proj, "repos.json"), raw);
+    const r = utility(["intent", "add-repo", "payments"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain(
+      "payments is not in this workspace yet, and repos.json gives no address to clone it from (it does not list payments, and has no org). " +
+        "Ask the person for its clone address once, then run this again with --url and that address; if it is already cloned elsewhere, give its folder with --path. Nothing was changed.",
+    );
+    expect(r.out).not.toContain("undefined");
+    expect(readFileSync(join(proj, "repos.json"), "utf-8")).toBe(raw);
+    expect(repos()).toEqual(["app-a"]);
+    expect(stagingLeft()).toEqual([]);
+  });
+
   // Kiro CLI's prompt hook runs a typed `/aidlc intent ...` itself, with no
   // agent between: the person's address and their quoted reason arrive whole.
   test("on Kiro CLI the typed command clones the repo through the prompt hook and keeps the quoted reason whole", () => {

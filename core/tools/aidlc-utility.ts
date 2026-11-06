@@ -156,6 +156,7 @@ import {
   discardStagedWorkspaceRepo,
   installWorkspaceManifest,
   installWorkspaceRepo,
+  workspaceCloneUrl,
   maskUserinfo,
   type StagedWorkspaceRepo,
   stageWorkspaceRepo,
@@ -9706,7 +9707,7 @@ function handleIntentRepos(
     try {
       staged = stageWorkspaceRepo(projectDir, clone.org, clone.repo);
     } catch (err) {
-      const url = clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`;
+      const url = clone.address;
       const address = maskUserinfo(url);
       const why = err instanceof CloneFailure ? err.reason : maskUserinfo(errorMessage(err));
       // The clone stageWorkspaceRepo makes, with the credential left for the person to put back.
@@ -9769,7 +9770,7 @@ function handleIntentRepos(
               Stage: (getField(state, "Current Stage") ?? "").trim() || "none",
               Cloned: name,
               Repos: current.join(", "),
-              "Cloned From": maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`),
+              "Cloned From": maskUserinfo(clone.address),
               ...(reason ? { Reason: reason } : {}),
               ...(personWords ? { "Person Words": personWords } : {}),
               ...repoBaselineAdditionField(projectDir, [name], dirName, space),
@@ -9799,7 +9800,7 @@ function handleIntentRepos(
           Stage: stage,
           [verb === "add-repo" ? "Added" : "Removed"]: name,
           Repos: next.join(", "),
-          ...(staged !== null && clone !== null ? { "Cloned From": maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`) } : {}),
+          ...(staged !== null && clone !== null ? { "Cloned From": maskUserinfo(clone.address) } : {}),
           ...(mapping !== null && mapping.next !== null ? { "Listed At": mapping.shown } : {}),
           ...(reason ? { Reason: reason } : {}),
           ...(personWords ? { "Person Words": personWords } : {}),
@@ -9841,7 +9842,7 @@ function handleIntentRepos(
       break;
     case "cloned":
       lines.push(
-        `Cloned ${name} from ${maskUserinfo(clone!.repo.url ?? `git@github.com:${clone!.org}/${name}.git`)} to ` +
+        `Cloned ${name} from ${maskUserinfo(clone!.address)} to ` +
           `${displayRepoPath(readWorkspaceRepos(projectDir).entries.get(name)?.path ?? name)}; it was already one of this piece of work's repos.`,
       );
       if (clone!.note !== null) lines.push(clone!.note);
@@ -9849,7 +9850,7 @@ function handleIntentRepos(
     case "changed":
       if (verb === "add-repo") {
         if (staged !== null && clone !== null) {
-          lines.push(`Cloned ${name} from ${maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`)} and added it to this piece of work's repos.`);
+          lines.push(`Cloned ${name} from ${maskUserinfo(clone.address)} and added it to this piece of work's repos.`);
           if (clone.note !== null) lines.push(clone.note);
         } else if (outcome.unit !== undefined) {
           lines.push(`Added ${name} to ${outcome.unit}'s repos: the home's plan did not list it, and ${outcome.unit}'s change there goes home with its push.`);
@@ -9984,7 +9985,7 @@ function plannedRepoClone(
   projectDir: string,
   name: string,
   url: string | undefined,
-): { repo: WorkspaceRepoEntry; org: string | undefined; manifest: { raw: string | null; next: string | null }; note: string | null } {
+): { repo: WorkspaceRepoEntry; org: string | undefined; address: string; manifest: { raw: string | null; next: string | null }; note: string | null } {
   const path = join(projectDir, "repos.json");
   const raw = existsSync(path) ? readFileSync(path, "utf-8") : null;
   let manifest: WorkspaceManifest | null = null;
@@ -10003,17 +10004,19 @@ function plannedRepoClone(
           "add its \"url\" in repos.json, or in repos.local.json for your own copy, or give it with --url. Nothing was changed.",
       );
     }
-    return {
-      repo: url === undefined ? entry : { ...entry, url },
-      org: manifest.org,
-      manifest: { raw, next: null },
-      note: null,
-    };
+    const repo = url === undefined ? entry : { ...entry, url };
+    return { repo, org: manifest.org, address: workspaceCloneUrl(manifest.org, repo)!, manifest: { raw, next: null }, note: null };
   }
   if (url === undefined && manifest === null) {
     die(
       `${name} is not in this workspace yet, and there is no repos.json to say where it is. ` +
         "If it is already cloned elsewhere, run this again with --path and the folder the person named; to clone it, give its address with --url. Nothing was changed.",
+    );
+  }
+  if (url === undefined && manifest !== null && manifest.org === undefined) {
+    die(
+      `${name} is not in this workspace yet, and repos.json gives no address to clone it from (it does not list ${name}, and has no org). ` +
+        "Ask the person for its clone address once, then run this again with --url and that address; if it is already cloned elsewhere, give its folder with --path. Nothing was changed.",
     );
   }
   const kept = url === undefined ? undefined : withoutCredentials(url);
@@ -10023,13 +10026,14 @@ function plannedRepoClone(
   if (manifest !== null) {
     const next = workspaceManifestWith(raw, manifest.org, written);
     if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
-    return { repo, org: manifest.org, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
+    return { repo, org: manifest.org, address: workspaceCloneUrl(manifest.org, repo)!, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
   }
   const owner = hostedAddressOwner(url!);
   if (owner === null) {
     return {
       repo,
       org: "",
+      address: url!,
       manifest: { raw: null, next: null },
       note: "This workspace has no repos.json, so a teammate's workspace does not get it by itself.",
     };
@@ -10037,6 +10041,7 @@ function plannedRepoClone(
   return {
     repo,
     org: owner,
+    address: url!,
     manifest: { raw: null, next: workspaceManifestWith(null, owner, written) },
     note: `repos.json is new: it lists ${name} under the org ${owner}; commit it to share the list with your team.${stripped}`,
   };
