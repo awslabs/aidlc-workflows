@@ -1197,15 +1197,17 @@ describe("a message typed while Kiro CLI v3 works is the person's turn", () => {
     try {
       expect(state(project, "kiro-ide", ["gate-start", "feasibility"]).code).toBe(0);
       const id = "steer-5c9eddba-d1ec-493e-8bc2-4a26cda1b150";
+      // A trailing newline as typed: the row keeps it, the match reads past it.
+      const words = "Approve\n";
       const opening = kiroV3Prompt("Carry on with the feasibility check.");
-      kiroV3Record(project.home, chat, [...opening, kiroV3Typed("Approve", id)]);
+      kiroV3Record(project.home, chat, [...opening, kiroV3Typed(words, id)]);
       const typed = run(project, [join(project.dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "record-human-turn"],
-        JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: chat, cwd: project.dir, prompt: "Approve" }),
+        JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: chat, cwd: project.dir, prompt: words }),
         { KIRO_SESSION_ID: chat });
       expect(typed.code, typed.out).toBe(0);
       expect(humanTurns(project.dir)).toBe(1);
       // Kiro hands it on after the prompt hook ran.
-      kiroV3Record(project.home, chat, [...opening, kiroV3Typed("Approve", id), kiroV3HandedOn("Approve", id)]);
+      kiroV3Record(project.home, chat, [...opening, kiroV3Typed(words, id), kiroV3HandedOn(words, id)]);
       expect(shellCard(project, NEXT_CALL).code).toBe(0);
       expect(humanTurns(project.dir)).toBe(1);
       agentApproves(project, "kiro-ide", true);
