@@ -904,9 +904,9 @@ describe("at the home", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status).not.toBe(0);
     const said = String(pushed.json?.error);
-    // The source list's own check refuses it (its reason, whole), with the way back.
-    expect(said, pushed.out).toStartWith("refunds's Code Generation record names what it wrote in a way its repos do not have (");
-    expect(said).toContain("src/refunds.ts");
+    // The source list's own check refuses it, said in plain words with the way back, never in the check's own terms.
+    expect(said, pushed.out).toStartWith("refunds's Code Generation record names what it wrote in a way its repos do not have, so nothing was pushed.");
+    expect(said).not.toMatch(/writes\[\d+\]|multi-repo intent/);
     expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
   });
@@ -930,8 +930,7 @@ describe("at the home", () => {
     expect(pushed.status).not.toBe(0);
     const said = String(pushed.json?.error);
     expect(said, pushed.out).not.toContain("outside checkout-api");
-    expect(said, pushed.out).toStartWith("refunds's Code Generation record names what it wrote in a way its repos do not have (");
-    expect(said).toContain("checkout-api/src/refunds.ts");
+    expect(said, pushed.out).toStartWith("refunds's Code Generation record names what it wrote in a way its repos do not have, so nothing was pushed.");
     expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
   });

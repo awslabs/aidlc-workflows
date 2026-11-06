@@ -6486,7 +6486,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       );
     }
     fail(recorded
-      ? `${unit}'s Code Generation record names what it wrote in a way its repos do not have (${manifest.reason}), so nothing ` +
+      ? `${unit}'s Code Generation record names what it wrote in a way its repos do not have, so nothing ` +
         `was pushed. Ask the person whether to take ${unit} back to Code Generation to write and record it again; on their yes, run ` +
         `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` and follow what it returns.`
       : `${unit} has no record of what its Code Generation wrote yet (${manifest.reason}).`);
