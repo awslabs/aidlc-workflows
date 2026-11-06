@@ -1520,6 +1520,20 @@ function lastJson(text: string | null | undefined): Record<string, unknown> | nu
   }
 }
 
+// What the Unit's checks still find, beside its checkpoint question: read
+// from their latest results (the checkpoint's verify fired them), nothing
+// fired here. None, or an unreadable record, says nothing.
+function unitCheckNotices(projectDir: string, unit: string, kind: ConstructionCheckpointKind, stages: readonly string[]): string[] {
+  const [command, ...args] = aidlcEngineCommand("state", [
+    "checkpoint-checks", "--unit", unit, "--kind", kind, "--stages", stages.join(","), "--notices", "--project-dir", projectDir,
+  ], fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)));
+  const result = spawnSync(command, args, {
+    encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: projectDir }, timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
+  });
+  const notices = result.status === 0 ? lastJson(result.stdout)?.notices : null;
+  return Array.isArray(notices) ? notices.filter((line): line is string => typeof line === "string") : [];
+}
+
 // The Unit's gate checks, fired on its own outputs before its verification:
 // the state tool's `checkpoint-checks` (fireGateSensors and
 // enforceBlockingGateSensors, which this module cannot load). A blocking check
@@ -1821,9 +1835,11 @@ export function askConstructionCheckpoint(
     const carried = changedFiles !== null && earlier !== null &&
       addPendingPersonLines(projectDir, session, [changedFiles.line]);
     if (changedFiles !== null && (earlier === null || carried)) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
+    const findings = unitCheckNotices(projectDir, unit, kind, current.result.stages);
     const result = {
       ...current.result,
       question_id: asked[QUESTION_ID_FIELD],
+      ...(findings.length === 0 ? {} : { check_findings: findings.join(" ") }),
       ...(leftOut === null ? {} : { left_out: leftOut }),
       ...(changedFiles === null || carried ? {} : { changed_files: changedFiles.line }),
       ...(offer === null ? {} : { check_offer: offer.offer }),

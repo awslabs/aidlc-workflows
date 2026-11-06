@@ -7481,14 +7481,16 @@ function teamGateFields(
 }
 
 // checkpoint-checks --unit <unit> --kind <unit|skeleton> --stages <csv>
-// [--person-answers] [--override-blocking-sensors --user-input <choice>] [--override-keys <csv>]:
+// [--notices | [--person-answers] [--override-blocking-sensors --user-input <choice>] [--override-keys <csv>]]:
 // a Unit's checkpoint fires its stages' blocking gate checks on that Unit's own
 // outputs before the person is asked to approve it (the checkpoint module runs
 // it, since it cannot load this file), as a stage gate fires them before it
 // opens: the same fireGateSensors and the same enforceBlockingGateSensors
 // refusal, retried at the checkpoint's verify. A checkpoint no person answers
 // (Construction autonomy) fires nothing: the late stage gate checks that Unit,
-// where an unattended run halts, as it always has. With the checks off for the work
+// where an unattended run halts, as it always has. An advisory check fires
+// again only where its latest result on the Unit's files did not pass, so what
+// the question says beside it is true now. With the checks off for the work
 // fireGateSensors fires nothing and nothing is recorded. A pick of the
 // person's that still stands is their answer: it is used, not asked again,
 // for the findings they were shown when they made it; on a second pass (the
@@ -7503,11 +7505,29 @@ function handleCheckpointChecks(args: string[]): void {
   const stages = getFlagValue(args, "--stages");
   if (!unit || !stages) {
     error("Usage: aidlc-state.ts checkpoint-checks --unit <unit> --kind <unit|skeleton> --stages <csv> " +
-      "[--person-answers] [--override-blocking-sensors --user-input <choice>] [--override-keys <csv>]");
+      "[--notices | [--person-answers] [--override-blocking-sensors --user-input <choice>] [--override-keys <csv>]]");
   }
   const pd = resolveProjectDir(projectDir);
   const slugs = stages.split(",").map((part) => part.trim()).filter((part) => part !== "");
   const rel = (path: string): string => relative(pd, resolvePath(pd, path)).split(sep).join("/");
+  // --notices: what the advisory checks still find on the Unit's outputs, read
+  // from their latest results with nothing fired, in the words a gate says
+  // them (failedCheckNotices); a blocking check is the refusal's, not a line.
+  // Where the checkpoint runs no checks, it says nothing of them either.
+  if (args.includes("--notices")) {
+    const notices = !unitCheckpointChecksApply(readStateFile(pd)) ? [] : slugs.flatMap((slug) => {
+      const stage = findStageBySlug(slug);
+      if (stage?.for_each !== "unit-of-work") return [];
+      const advisory = {
+        ...stage,
+        sensors_applicable: (stage.sensors_applicable ?? []).filter((sensor) => sensor.default_severity !== "blocking"),
+      };
+      // A checkpoint over several stages says which stage a line is about: their files share names.
+      return failedCheckNotices(pd, advisory, unit).map((line) => slugs.length > 1 ? `${stage.name ?? slug}: ${line}` : line);
+    });
+    console.log(JSON.stringify({ notices }));
+    return;
+  }
   const fields: Record<string, string> = {};
   if (!args.includes("--person-answers")) {
     console.log(JSON.stringify({ fields, overridden: [] }));
@@ -7551,16 +7571,33 @@ function handleCheckpointChecks(args: string[]): void {
     if (stage?.for_each !== "unit-of-work") continue;
     const paths = declaredOutputsForGate(pd, stage, unit);
     if (paths.length === 0) continue;
+    // A result row spells its output from the project folder as given; compared canonically.
+    const latest = new Map<string, { kind: string }>();
+    for (const result of latestSensorResults(readAuditShardEvents(pd), slug).values()) {
+      try {
+        latest.set(`${result.id}@${rel(realpathSync(resolveAuditProjectPath(pd, result.output)))}`, result);
+      } catch {
+        // A file no longer there has nothing to say.
+      }
+    }
     const gateChecks = (stage.sensors_applicable ?? []).filter((sensor) => sensor.fire_on === "gate");
     const blocking = gateChecks.filter((sensor) =>
       sensor.default_severity === "blocking" && paths.some((path) => gateSensorMatchesOutput(sensor, path))
     );
-    if (blocking.length === 0) continue;
+    const recheck = gateChecks.filter((sensor) =>
+      sensor.default_severity !== "blocking" &&
+      paths.some((path) => {
+        const result = latest.get(`${sensor.id}@${rel(path)}`);
+        return result !== undefined && result.kind !== "passed";
+      })
+    );
+    if (blocking.length === 0 && recheck.length === 0) continue;
     const { issues, fingerprints } = fireGateSensors(pd, stage, stateContent, undefined, true, {
-      sensorIds: new Set(blocking.map((sensor) => sensor.id)),
+      sensorIds: new Set([...blocking, ...recheck].map((sensor) => sensor.id)),
       paths,
       unit,
     });
+    if (blocking.length === 0) continue;
     const keyOf = (issue: BlockingSensorIssue): string => `${issue.sensorId}@${rel(issue.outputPath)}`;
     const seen = new Set(shown[`${unit}|${slug}`] ?? []);
     const standing = issues.length > 0 &&

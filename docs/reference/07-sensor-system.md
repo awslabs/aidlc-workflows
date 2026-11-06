@@ -379,7 +379,10 @@ after the last Unit, each blocking check skips a file its Unit's current
 checkpoint checked while the file's hash is unchanged and the check's binding is
 the same; it reads every other file once. A checkpoint no person answers
 (Construction autonomy) fires nothing, and the late gate halts on the findings as
-before. Guard Policy, at any value, never softens a blocking check: only the
+before. An advisory gate check whose latest result on the Unit's files did not
+pass fires again at that `verify`, and what it still finds is said once beside
+the checkpoint question (`check_findings` on `ask`, `checkpoint-checks --notices`),
+with no new stop or question. Guard Policy, at any value, never softens a blocking check: only the
 person's Override or the work's checks switched off lets work past one.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.
