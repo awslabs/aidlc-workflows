@@ -2558,7 +2558,7 @@ export function suppliedTurnOrigin(value: unknown): TurnOrigin | null {
 
 // The last `maxBytes` of a file as text, from its first whole line. Chat
 // records grow for a whole session; the entry for this turn is at the end.
-function tailText(path: string, maxBytes: number): string | null {
+export function tailText(path: string, maxBytes: number): string | null {
   let fd: number | null = null;
   try {
     fd = openSync(path, "r");
@@ -2828,7 +2828,7 @@ function kiroCliSteersRecordedPath(projectDir: string, sessionId: string): strin
   return segment ? join(sessionsDir(projectDir), `.kiro-cli-steers-${segment}.json`) : "";
 }
 
-function kiroCliSteersRecorded(projectDir: string, sessionId: string): string[] {
+export function kiroCliSteersRecorded(projectDir: string, sessionId: string): string[] {
   try {
     const ids: unknown = JSON.parse(readFileSync(kiroCliSteersRecordedPath(projectDir, sessionId), "utf-8"));
     return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
