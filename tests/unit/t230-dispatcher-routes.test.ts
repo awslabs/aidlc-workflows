@@ -776,6 +776,20 @@ describe("t230 dispatcher route parity", () => {
     });
   }
 
+  test("an engine subcommand honours --help instead of running it (#3493)", () => {
+    const projectDir = makeProject();
+    const plugin = viaDispatcher(["engine", "plugin", "sync", "--help"], projectDir);
+    expect(plugin.exitCode, plugin.stdout.toString()).toBe(0);
+    expect(plugin.stdout.toString()).toContain("usage: aidlc engine plugin");
+    expect(plugin.stdout.toString()).toContain("--rules-level");
+    expect(plugin.stderr.toString()).toBe("");
+
+    const runtime = viaDispatcher(["engine", "runtime", "compile", "--help"], projectDir);
+    expect(runtime.exitCode, runtime.stdout.toString()).toBe(0);
+    expect(runtime.stdout.toString()).toContain("Usage: aidlc-runtime");
+    expect(runtime.stderr.toString()).toBe("");
+  });
+
   // The commands Reverse Engineering's repo question hands the agent, through
   // the entry it names: the list is recorded exactly, and --all keeps every repo.
   test("intent set-repos through the dispatcher sets the list, and --all keeps every repo", () => {

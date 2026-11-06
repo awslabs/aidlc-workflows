@@ -668,12 +668,16 @@ Kiro reads the result one second after sending the command and shows exit code
 -1 for every run). Most AI-DLC steps take longer. So in Command Prompt every
 AI-DLC command prints one line first, `AI-DLC reply: aidlc/.aidlc-sessions/replies/<id>.txt`,
 and writes its reply to that file as well as to the terminal; when Kiro cuts
-the result off at that line, the agent reads the reply from the file instead
-of running the command again (the newest twenty replies are kept, in a folder
-git ignores). A value the agent wrote in single quotes, the PowerShell way,
-arrives from Command Prompt as several words with the quotes still on them;
-AI-DLC joins them back into the one value. Steps still take extra turns, so
-Kiro itself recommends PowerShell.
+the result off at that line or later in the reply, the agent goes on from the
+file instead of running the command again (the newest twenty replies are kept,
+in a folder git ignores). When a long command has not finished, the agent says
+so, and that it may be waiting for your answer in Kiro's terminal panel; when
+its reply still has not come on the next turn, the agent says so and checks
+what the command was meant to change. A
+value the agent wrote in single quotes, the PowerShell way, arrives from
+Command Prompt as several words with the quotes still on them; AI-DLC joins
+them back into the one value. Steps still take extra turns, so Kiro itself
+recommends PowerShell.
 
 When Kiro's terminal is Command Prompt and you have not answered before on this
 computer, AI-DLC asks you once whether to set it to PowerShell: during
@@ -697,6 +701,49 @@ terminal behaves and how to set PowerShell when you ask for it, so any chat can
 carry out "set Kiro's terminal to PowerShell". If you kept Command Prompt, the
 first time a step's reply is lost the agent tells you once what happened and
 that PowerShell avoids it; it does not ask again.
+
+### PowerShell without Kiro's shell integration on Windows
+
+Kiro's PowerShell terminal tells Kiro when a command finishes through Kiro's
+shell integration, a script Kiro loads as the terminal starts. When that script
+does not load, the terminal behaves like Command Prompt: every command shows
+exit code -1, even when it worked, and Kiro hands over only what a command
+printed within about a second. PowerShell's execution policy is one cause:
+`Restricted` or `AllSigned` stops Kiro's unsigned script without a message.
+Kiro's setting `terminal.integrated.shellIntegration.enabled` turned off has
+the same effect.
+
+AI-DLC notices this from its own commands. In such a terminal, in a project
+that has its `aidlc/` folder, every AI-DLC command the agent runs prints the
+`AI-DLC reply:` line first and keeps its reply in that file, as in Command
+Prompt (output sent to a pipe gets no such line), and when the result stops at
+that line or the reply after it is cut off, the agent goes on from that file
+instead of running the command again. The first time in a chat the agent tells
+you in one line that the terminal runs without its shell integration, then goes
+on with your request. `aidlc doctor` run in Kiro's terminal shows a
+`Kiro terminal` warning with what to change; `/aidlc --doctor` typed in the
+chat runs outside the terminal, so it cannot see this.
+
+To check, run this in Kiro's PowerShell terminal (Windows PowerShell and
+PowerShell 7 keep separate policies):
+
+```powershell
+Get-ExecutionPolicy -List
+$ExecutionContext.SessionState.LanguageMode
+```
+
+When `MachinePolicy` or `UserPolicy` is set, or the language mode is not
+`FullLanguage` (an organization's application control), your organization
+manages it; ask your IT team. When `Process` is set, Kiro took it from where it
+was started: start Kiro from the Start menu instead. When the policy in effect comes from `CurrentUser` or
+`LocalMachine` and is `Restricted` or `AllSigned`, you can let Kiro's script
+load for your own account, then restart Kiro:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+AI-DLC never changes the policy itself: it is your computer's security setting.
 
 ### Command cards end with "dministrator: ...powershell.exe" on Windows
 

@@ -246,9 +246,12 @@ clone last saw).
 #### 1. Claim
 
 In a team's own clone of the shared remote, `/aidlc` offers the Units open to
-take ("2 Units are open for a team to take: payments and refunds. Take one for
-your team?"), once for each set of open Units. Picking one claims it for your
-team, labelled with your git user name; **Not now** shows the board. A clone
+take, once for each set of open Units: "2 Units are open for a team to take:
+payments and refunds; billing is with Billing team. Take one for your team? I'd
+label your team "Alice"; say another name to use it instead." Each
+choice says what waits on that Unit ("invoicing waits on it"). Picking one
+claims it for your team under that label, your git user name, or under the name
+you give with your pick; **Not now** shows the board. A clone
 that ran the work itself (the lead's own checkout) is not asked. The
 participant marker still marks a clone for the picker by hand
 (`aidlc unit participate`), and a claim can be typed directly:
@@ -318,7 +321,8 @@ checkout's own history, and publish says how many rows. A change to any other
 record outside the Unit's `construction/<unit>/` folder (an Inception artifact
 such as `contract-summary.md`) is published too, but pin will refuse it, so
 publish names the file: take it out of the branch, make the change on main,
-and publish again.
+and publish again. Pin and land refuse it too, and say to do that in the
+checkout where the Unit is claimed.
 
 ### Pin, gate, and land
 

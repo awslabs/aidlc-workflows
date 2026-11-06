@@ -350,6 +350,14 @@ restores the full matrix for that artifact.
 The stock NFR stages map both `observability-requirements` and
 `observability-design` to service units.
 
+When a plugin adds an output with `adds.produces` to a per-Unit stage that
+maps every required output, the output gets an entry for the kinds those
+outputs cover, so the stage applies to the same Units as before and its review
+target still covers them (see `review_artifact` below). On a stage with an
+unmapped required output, such as the NFR stages, the stage already applies to
+every kind, so the added output gets no entry
+([Plugin Mechanism §6](18-plugin-mechanism.md)).
+
 One trust note: the `kind:` value is enum-checked at the units-generation gate
 (the `required-sections` sensor fails loud on a typo), but the compiled
 runtime graph is trusted afterwards - the engine only shape-checks the kind

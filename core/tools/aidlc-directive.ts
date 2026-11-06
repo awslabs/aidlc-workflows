@@ -1395,6 +1395,11 @@ export function questionNote(invocation: string, oneChoice = false, next = `${in
     "Anything else is their own words: read what they meant.";
 }
 
+// The Take question names the label a claim carries and offers another: the
+// person's name for their team is theirs to read, the flag is the tool's.
+const TEAM_NAME_NOTE = "When they take a Unit and give their team another name than the one the question offers, " +
+  "add `--team '<that name>'` to that Take choice's command.";
+
 // Which repos Reverse Engineering reads: the names are the person's, the
 // command takes them exactly; the engine checks each one. "Only some" has no
 // command of its own, so `next` waits until the names are set. A request that
@@ -1958,6 +1963,8 @@ export function withAgentNotes<T extends object>(
       ? routingRecordsQuestionNote(invocation)
       : d.ask_type === "repo-scope"
       ? repoScopeQuestionNote(invocation)
+      : d.ask_type === "team-handover" && Array.isArray(d.handovers) && d.handovers.includes("join")
+      ? `${questionNote(invocation, choices?.length === 1)} ${TEAM_NAME_NOTE}`
       : d.ask_type === "unit-assignment"
       ? unitAssignmentQuestionNote(invocation)
       : d.ask_type === "unit-amend"

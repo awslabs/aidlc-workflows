@@ -1951,6 +1951,36 @@ export function auditShardBlocks(content: string): string[] {
   return content.replace(/\r\n/g, "\n").split(/\n---\n/);
 }
 
+// The HUMAN_TURN blocks a later HOST_TURN takes back, by position. The hook
+// records a Claude Code turn as the person's before Claude Code has written its
+// own row for it; once that row says the host started the turn (a scheduled
+// wake-up), settleClaudeTurns (aidlc-claude-turn-origin.ts) appends a HOST_TURN
+// naming the turn's Message Id after it, in the same clone's shard. Every
+// reader that counts a person's turns skips these, whether it walks parsed rows
+// (parseAuditShardEvents) or a shard's blocks itself.
+export function withdrawnTurnPositions(blocks: readonly string[]): Set<number> {
+  const withdrawn = new Set<number>();
+  // Most shards hold no such HOST_TURN: one substring test per block then.
+  if (!blocks.some((block) => block.includes("HOST_TURN") && block.includes("**Message Id**"))) return withdrawn;
+  const takenBack = new Set<string>();
+  for (let pos = blocks.length - 1; pos >= 0; pos--) {
+    const event = auditBlockField(blocks[pos], "Event");
+    const id = event === "HOST_TURN" || event === "HUMAN_TURN" ? auditBlockField(blocks[pos], "Message Id") : null;
+    if (id === null) continue;
+    if (event === "HOST_TURN") takenBack.add(id);
+    else if (takenBack.has(id)) withdrawn.add(pos);
+  }
+  return withdrawn;
+}
+
+// A shard's blocks without the turns a HOST_TURN took back (withdrawnTurnPositions),
+// for a reader that counts a person's turns in the text and needs no positions.
+export function auditShardTurnBlocks(content: string): string[] {
+  const blocks = auditShardBlocks(content);
+  const withdrawn = withdrawnTurnPositions(blocks);
+  return withdrawn.size === 0 ? blocks : blocks.filter((_, pos) => !withdrawn.has(pos));
+}
+
 // A shard file that a sync tool or a person copied (a "<shard> 2.md" conflict
 // copy, a hand copy) repeats rows another shard already holds. Each copied row
 // would tie with itself across two files, read as causally unordered, and stop
@@ -2078,8 +2108,9 @@ export function parseAuditShardEvents(
 ): AuditShardEvent[] {
   const rows: AuditShardEvent[] = [];
   const blocks = auditShardBlocks(content);
+  const withdrawn = withdrawnTurnPositions(blocks);
   for (let pos = 0; pos < blocks.length; pos++) {
-    if (copied.has(pos)) continue;
+    if (copied.has(pos) || withdrawn.has(pos)) continue;
     const event = auditBlockField(blocks[pos], "Event");
     const timestamp = auditBlockField(blocks[pos], "Timestamp");
     if (!event || !timestamp) continue;

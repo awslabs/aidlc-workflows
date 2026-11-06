@@ -78,6 +78,7 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import {
   createHash,
   randomBytes,
@@ -598,8 +599,10 @@ import {
   cachedUnitClaimOverview,
   checkTeamResults,
   claimsOpenHere,
+  defaultTeamLabel,
   homeResultsPastUnitStages,
   landedNotOnRemote,
+  namesInProse,
   localUnitClaimOverviewForIntent,
   openingStatusFrom,
   publishedAtHead,
@@ -809,7 +812,12 @@ import {
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
-import { documentsCard } from "./aidlc-knowledge.ts";
+import {
+  documentsCard,
+  markUnreadDocumentsSaid,
+  type UnreadDocumentsNotice,
+  unreadDocumentsNotice,
+} from "./aidlc-knowledge.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   readRuleBundle,
@@ -1066,6 +1074,24 @@ let activeKiroHooksOffNotices: string[] | null = null;
 function kiroHooksOffNoticesOnce(projectDir: string): string[] {
   activeKiroHooksOffNotices ??= kiroHooksOffNotices(projectDir, harnessDir());
   return activeKiroHooksOffNotices;
+}
+
+// Documents the agents cannot read yet, named once per work. A chat that has
+// not joined the work keeps no mark in it, so it says nothing either.
+let activeUnreadDocuments: UnreadDocumentsNotice | null | undefined;
+function unreadDocumentsOnce(projectDir: string): UnreadDocumentsNotice | null {
+  if (activeUnreadDocuments === undefined) {
+    activeUnreadDocuments = engineUnjoined || isReadOnlyEngineProbe()
+      ? null
+      : (() => {
+        try {
+          return unreadDocumentsNotice(projectDir, engineSelections.get(projectDir));
+        } catch {
+          return null;
+        }
+      })();
+  }
+  return activeUnreadDocuments;
 }
 
 function redefinedStagesNotice(
@@ -1821,6 +1847,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   if (hooksOff.length > 0) {
     directive = withChangeNotices(directive, [...hooksOff, ...(directive.change_notices ?? [])]);
   }
+  const unread = engineProjectDir ? unreadDocumentsOnce(engineProjectDir) : null;
+  if (unread !== null) directive = withChangeNotices(directive, [...(directive.change_notices ?? []), unread.line]);
   if (restartUnmarkedNotice) {
     directive = withChangeNotices(directive, [RESTART_UNMARKED_LINE, ...(directive.change_notices ?? [])]);
     restartUnmarkedNotice = false;
@@ -2417,6 +2445,10 @@ function writePrepared(prepared: PreparedEmission): void {
     !isReadOnlyEngineProbe() && !isHookPreDispatch()
   ) {
     markPersonLinesHeard(engineProjectDir, engineSessionId, [validity.warning]);
+  }
+  if (engineProjectDir && activeUnreadDocuments && kind !== "load-steering" && !isReadOnlyEngineProbe()) {
+    markUnreadDocumentsSaid(engineProjectDir, activeUnreadDocuments);
+    activeUnreadDocuments = null;
   }
 }
 
@@ -4181,6 +4213,7 @@ function openGateReplyDirective(
   requestId: string,
   folder: string,
   replies: Array<{ id: string; at: string }>,
+  wordsAlone: boolean,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   const named = replyIdsNote(replies, "report");
@@ -4192,7 +4225,7 @@ function openGateReplyDirective(
       `--user-input "Request Changes"\`. Then follow what it returns. If it asks about what the stage found or ` +
       `produced, answer it from the files in ${folder ? `${folder}/` : "the stage's folder"}, then ask the approval ` +
       `question again. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(stage)}\` and ` +
-      "follow what it returns. If it is about something else, such as new " +
+      `follow what it returns. ${openDecisionQuestionReading(wordsAlone)}If it is about something else, such as new ` +
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       `person in one short question and follow their answer.${named}`,
@@ -4310,6 +4343,7 @@ function openQuestionReplyDirective(
   requestId: string,
   { replies, wordsKept }: ReturnType<typeof chatReplies>,
   stateContent: string,
+  wordsAlone: boolean,
   before: string | null = null,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
@@ -4324,7 +4358,8 @@ function openQuestionReplyDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet${asked}. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
       `\`${orchestrate} next\` the next time you need the engine. If it asks to skip this stage, run ` +
-      `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. If it is about something else, such as new work ` +
+      `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. ${openDecisionQuestionReading(wordsAlone)}` +
+      "If it is about something else, such as new work " +
       `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       `person in one short question and follow their answer.${replyIdsNote(replies, "`log answer`")}`,
@@ -4344,13 +4379,14 @@ function recoveryQuestionChoices(marker: ActiveDirectiveMarker): string {
 // Words while the recovery question holds the person's reply may pick one of
 // its choices: the conductor reads which, the same split as
 // openQuestionReplyDirective.
-function openRecoveryReplyDirective(marker: ActiveDirectiveMarker, requestId: string): PrintDirective {
+function openRecoveryReplyDirective(marker: ActiveDirectiveMarker, requestId: string, wordsAlone: boolean): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   return printDirective(
     `The recovery question for "${marker.stage}" is open, and ${recoveryQuestionChoices(marker)}. The person's ` +
       "reply may answer it. Read it. If it picks one of those choices, run that choice's command and follow what it " +
       `returns. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(marker.stage)}\` and follow ` +
-      "what it returns. If it is about something else, such as new work or a change to the plan, run " +
+      `what it returns. ${openDecisionQuestionReading(wordsAlone)}If it is about something else, such as new work or a ` +
+      "change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person once in plain words, with the " +
       "question's choices, and follow their answer.",
@@ -4543,6 +4579,7 @@ function openPlanQuestionReplyDirective(
   // Every plan has its answer and nothing is built yet: their words may change it.
   answered = false,
   replies: Array<{ id: string; at: string }> = [],
+  wordsAlone = false,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // Settings typed on the same line ("/aidlc --guard-policy off approve the
@@ -4569,7 +4606,8 @@ function openPlanQuestionReplyDirective(
       `${record}, then run bare \`${orchestrate} next\`.${typed}`;
   return printDirective(
     `${undo}${answer} If it asks to skip Code Generation, run \`${orchestrate} next --skip code-generation\` and ` +
-      "follow what it returns. If it is about something else, such as new work or a change to the plan, run " +
+      `follow what it returns. ${openDecisionQuestionReading(wordsAlone)}If it is about something else, such as new work ` +
+      "or a change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
       `their answer.${replyIdsNote(replies, "`log answer`")}`,
@@ -4670,6 +4708,13 @@ function workQuestionReading(about: string, status = readOnlyCommand("status")):
 const WORK_ITSELF = "the work itself (where it stands, which stage comes next, how much remains)";
 const FINISHED_ABOUT = "(what it built, whether anything remains)";
 const FINISHED_WORK = `the finished work ${FINISHED_ABOUT}`;
+
+// At an open decision the status reading is for words that came alone: a
+// setting typed beside them rides the request reading, which a status-only
+// answer would leave unset.
+function openDecisionQuestionReading(wordsAlone: boolean): string {
+  return wordsAlone ? `${workQuestionReading(WORK_ITSELF)} ` : "";
+}
 
 // Words while a workflow is active may ask to redo, jump to a stage, or start
 // fresh ("/aidlc take me back to requirements analysis"), or be new work or a
@@ -5450,7 +5495,7 @@ function teamShareOffer(
     choices: [
       {
         label: "Share them with the teams",
-        detail: `Pushes ${target.branch} to ${target.remote}; nothing is forced.`,
+        detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
         command: `${aidlcInvocation()} unit share`,
       },
     ],
@@ -5493,8 +5538,12 @@ function teamPublishOffer(projectDir: string, unit: string): AskDirective | null
 // On a checkout that holds no Unit claim: the Units a team published and that
 // wait for review here, and, in a fresh clone of the work that did not share
 // it, the Units it can take. One question for both, so neither the lead nor a
-// teammate meets a question that is only the other's. Each Unit is asked
-// about once per published commit, each set of Units to take once.
+// teammate meets a question that is only the other's; taking comes first, as
+// only a teammate's clone meets both. Each Unit is asked about once per
+// published commit, each set of Units to take once. The person picks from the
+// board's own facts (what waits on each Unit, who holds the others) and hears
+// the label their claim would carry; a name of theirs reaches the claim through
+// the agent's --team (withAgentNotes).
 function teamReviewOrJoinOffer(
   projectDir: string,
   overview: UnitClaimOverview,
@@ -5507,27 +5556,43 @@ function teamReviewOrJoinOffer(
   const join = joining && !handoverOffered(projectDir, joinMark) ? [...overview.claimable].sort(compareBoardKeys) : [];
   if (ready.length === 0 && join.length === 0) return null;
   const readyWords = ready.map((row) => `${row.unit} is ready from ${row.owner}`).join(", and ");
+  const holders = new Map<string, string[]>();
+  for (const row of overview.claimed) {
+    if (!ready.some((entry) => entry.unit === row.unit)) holders.set(row.owner, [...(holders.get(row.owner) ?? []), row.unit]);
+  }
+  const held = [...holders].map(([owner, units]) =>
+    `; ${namesInProse(units.sort(compareBoardKeys))} ${units.length === 1 ? "is" : "are"} with ${owner}`
+  );
   const joinWords = `${join.length === 1 ? "1 Unit is" : `${join.length} Units are`} open for a team to take: ` +
-    `${join.join(", ").replace(/, ([^,]*)$/, " and $1")}.`;
+    `${namesInProse(join)}${held.join("")}.`;
+  const label = `I'd label your team "${defaultTeamLabel(projectDir)}"; say another name to use it instead.`;
   const question = ready.length > 0 && join.length > 0
-    ? `${readyWords}, and ${joinWords} Review and merge, or take one for your team?`
+    ? `${joinWords} ${readyWords}. Take one for your team, or review and merge? ${label}`
     : ready.length > 0
     ? `${readyWords}: review and merge ${ready.length === 1 ? "it" : "them"}?`
-    : `${joinWords} Take one for your team?`;
+    : `${joinWords} Take one for your team? ${label}`;
+  const waitingOn = (unit: string): string[] =>
+    [...overview.waiting, ...overview.claimed].filter((row) => row.blockedBy?.includes(unit)).map((row) => row.unit)
+      .sort(compareBoardKeys);
   return teamHandoverAsk(projectDir, {
     handovers: [...(ready.length > 0 ? ["review" as const] : []), ...(join.length > 0 ? ["join" as const] : [])],
     marks: [...ready.map((row) => teamHandoverMarkName("review", row.key)), ...(join.length > 0 ? [joinMark] : [])],
     question,
     choices: [
+      ...join.map((unit) => {
+        const waiting = waitingOn(unit);
+        return {
+          label: `Take ${unit}`,
+          detail: waiting.length === 0
+            ? "No other Unit waits on it."
+            : `${namesInProse(waiting)} ${waiting.length === 1 ? "waits" : "wait"} on it.`,
+          command: `${aidlcToolInvocation("orchestrate")} next --claim ${shellArg(unit)}`,
+        };
+      }),
       ...ready.map((row) => ({
         label: `Review and merge ${row.unit}`,
-        detail: "Pins what the team published and shows it, then asks whether to merge it.",
+        detail: "Shows what the team built and its checks, then asks whether to merge it.",
         command: `${aidlcInvocation()} unit pin ${quoteCommandArgument(row.unit)}`,
-      })),
-      ...join.map((unit) => ({
-        label: `Take ${unit}`,
-        detail: "Claims it for your team; this clone then builds it.",
-        command: `${aidlcToolInvocation("orchestrate")} next --claim ${shellArg(unit)}`,
       })),
     ],
   });
@@ -5550,7 +5615,8 @@ function teamPushOffer(projectDir: string): AskDirective | null {
       (work === null ? "" : ` I'd commit ${work} first.`),
     choices: [{
       label: `Push ${target.branch}`,
-      detail: `${work === null ? "Pushes" : "Commits, then pushes"} ${target.branch} to ${target.remote}; nothing is forced.`,
+      detail: `${work === null ? "Pushes" : "Commits, then pushes"} ${target.branch} to ${target.remote} as a plain push; ` +
+        "it never overwrites what a team pushed.",
       command: `${aidlcInvocation()} unit share`,
     }],
   });
@@ -13809,7 +13875,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const settings = typedSettingModifiers(flags);
       emit(openPlanQuestionReplyDirective(
         planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings), planQuestion.answered,
-        replyIds(pd, "code-generation"),
+        replyIds(pd, "code-generation"), nextArgsAreOnlyWords(args),
       ));
       return;
     }
@@ -13824,7 +13890,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // this chat joined the work (a teammate's clone): the answer names them.
       const replies = chatReplies(pd, open.stage);
       const before = replies.replies.length === 0 ? messageBeforeJoining(pd, words.messageId) : null;
-      emit(openQuestionReplyDirective(open, words.id, replies, stateContent, before));
+      emit(openQuestionReplyDirective(open, words.id, replies, stateContent, nextArgsAreOnlyWords(args), before));
       return;
     }
     // Words at the engine's recovery question, once it holds the person's
@@ -13836,7 +13902,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openRecoveryReplyDirective(recovery, words.id));
+      emit(openRecoveryReplyDirective(recovery, words.id, nextArgsAreOnlyWords(args)));
       return;
     }
     // Words at an approval gate the person is looking at ("approve") may be
@@ -13854,7 +13920,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const gateFolder = gateNode && !(isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(gateScope, stateContent))
         ? commonFolder(resolveProduces(gateNode, null, engineRelativeRecordDir(pd), codekbCtxFor(pd)))
         : "";
-      emit(openGateReplyDirective(gateStage, words.id, gateFolder, replyIds(pd, gateStage)));
+      emit(openGateReplyDirective(gateStage, words.id, gateFolder, replyIds(pd, gateStage), nextArgsAreOnlyWords(args)));
       return;
     }
     // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
@@ -23598,6 +23664,8 @@ function nextArgsWithRequestFile(
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
   // Every route answers for the workflow unless it is an isolated Code
   // Generation run (emitSingleRunStage, handleContinue say so).
@@ -23820,9 +23888,10 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

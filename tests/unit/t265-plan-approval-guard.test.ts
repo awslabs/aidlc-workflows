@@ -511,6 +511,8 @@ function scratchProject(): string {
     "aidlc-git-name.ts",
     "aidlc-unit-landing.ts",
     "aidlc-kiro-chat-record.ts",
+    "aidlc-claude-turn-origin.ts",
+    "aidlc-claude-turn-pending.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
     "aidlc-channel.ts",

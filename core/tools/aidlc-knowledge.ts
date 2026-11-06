@@ -51,6 +51,8 @@
 // contents of a container you have not verified is guarding the wrong thing.
 
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { readPdfMain } from "./aidlc-pdf.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import {
@@ -62,6 +64,7 @@ import {
   statSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   agentFileText,
   assertNoSymlinkInChainOrThrow,
@@ -70,6 +73,7 @@ import {
   auditShardName,
   documentExtractors,
   emitError,
+  engineDir,
   ensureDirSync,
   entrySkillInvocation,
   errorMessage,
@@ -93,6 +97,7 @@ import {
   validSpaceFlag,
   withAuditLock,
   writeBufferAtomic,
+  writeEngineFileNoFollow,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { appendAuditEntryAtPathUnlocked } from "./aidlc-audit.ts";
@@ -402,10 +407,12 @@ const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
 
 // --- Extraction --------------------------------------------------------------
 //
-// AI-DLC ships NO PDF parser and downloads none at runtime. It probes an
-// EXTERNAL EXECUTABLE -- `pdftotext` on PATH by default -- exactly as the
-// sensors probe their tools: `--version` with an operational backstop, then degrade.
-// probe-then-degrade is the reusable part of that precedent, not the transport.
+// A PDF is read by an EXTERNAL EXECUTABLE -- `pdftotext` on PATH by default --
+// probed exactly as the sensors probe their tools: `--version` with an
+// operational backstop. Where the default is missing, AI-DLC's own reader
+// (aidlc-pdf.ts, Bun built-ins only) reads it instead, as a child process under
+// the same timeout and output bounds; a harness-configured extractor that is
+// missing stays missing, since the team chose it. Nothing is downloaded at runtime.
 //
 // `bunx unpdf` was proposed and withdrawn: `unpdf` is a LIBRARY with no
 // executable `bin`, while `bunx` runs package executables. The precedent that
@@ -484,6 +491,27 @@ function pdfGoesPastPageCap(absPath: string, out: string): boolean {
   );
   if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") return true;
   return r.error === undefined && r.status === 0 && (r.stdout ?? "").length > 0;
+}
+
+const BUILTIN_PDF = Object.freeze({ name: "builtin-pdf", version: "1" });
+
+/** AI-DLC's own PDF reader as a child of this engine: its `engine knowledge read-pdf` in a compiled binary, the
+ *  reader's own file under Bun. The PDF goes on stdin, so the child opens no path. */
+function builtinPdfCommand(): readonly string[] {
+  const exe = compiledExecutable();
+  return exe !== null
+    ? [exe, "engine", "knowledge", "read-pdf", "--page-cap", String(EXTRACT_PAGE_CAP)]
+    : [process.execPath, fileURLToPath(new URL("./aidlc-pdf.ts", import.meta.url)), "--page-cap", String(EXTRACT_PAGE_CAP)];
+}
+
+/** The page count the built-in reader reports as the last line of its stderr (0 when it says none). */
+function builtinPageCount(stderr: string): number {
+  try {
+    const pages = (JSON.parse(stderr.trim().split("\n").at(-1) ?? "") as { pages?: unknown }).pages;
+    return typeof pages === "number" ? pages : 0;
+  } catch {
+    return 0;
+  }
 }
 
 export interface ExtractorProbe {
@@ -687,7 +715,9 @@ export function extractDocument(
   }
 
   const probe = probeExtractor(argv[0]);
-  if (!probe.available) {
+  // pdftotext first where it is installed; where the default is missing, AI-DLC's own reader.
+  const builtin = !probe.available && argv === DEFAULT_PDF_ARGV;
+  if (!probe.available && !builtin) {
     // Name only: nothing ran, so there is no version to report, and inventing
     // one would be a fabricated fact about a program that never executed.
     // `detectedType` IS recorded (the caller's `mime`, the same value
@@ -697,15 +727,16 @@ export function extractDocument(
       record: { state: "extractor_unavailable", extractor: { name: argv[0] }, detectedType: mime },
     };
   }
-  const version = probe.version ?? "unknown";
+  const extractor = builtin ? { ...BUILTIN_PDF } : { name: argv[0], version: probe.version ?? "unknown" };
 
   // `$IN` is the ONLY substitution. No general templating, so a document path
   // cannot become a flag or a second command.
-  const args = argv.slice(1).map((a) => (a === "$IN" ? absPath : a));
-  const r = spawnSync(argv[0], args, {
+  const command = builtin ? builtinPdfCommand() : argv.map((a) => (a === "$IN" ? absPath : a));
+  const r = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     timeout: configuredTimeoutFor(mime),
     maxBuffer: EXTRACT_OUTPUT_CHAR_CAP * 4,
+    ...(builtin ? { input: readRegularFileNoFollowOrThrow(absPath, "document") } : {}),
   });
 
   if (r.error !== undefined) {
@@ -714,7 +745,7 @@ export function extractDocument(
     return {
       record: {
         state: "extraction_failed",
-        extractor: { name: argv[0], version },
+        extractor,
         detectedType: mime,
         reason: timedOut
           ? `extraction exceeded the ${configuredTimeoutFor(mime)}ms timeout`
@@ -730,9 +761,11 @@ export function extractDocument(
     return {
       record: {
         state: "extraction_failed",
-        extractor: { name: argv[0], version },
+        extractor,
         detectedType: mime,
-        reason: `extractor exited ${r.status}${detail ? `: ${detail}` : ""}`,
+        reason: builtin
+          ? `AI-DLC could not read it as a PDF: ${detail || "it is damaged"}`
+          : `extractor exited ${r.status}${detail ? `: ${detail}` : ""}`,
       },
     };
   }
@@ -745,18 +778,19 @@ export function extractDocument(
     return {
       record: {
         state: "no_extractable_text",
-        extractor: { name: argv[0], version },
+        extractor,
         source_revision: sourceRevision,
       },
     };
   }
   const charCut = out.length > EXTRACT_OUTPUT_CHAR_CAP;
   // The page cap is the default argv's own; a configured extractor sets its own bounds.
-  const pageCut = !charCut && argv === DEFAULT_PDF_ARGV && pdfGoesPastPageCap(absPath, out);
+  const pageCut = !charCut && argv === DEFAULT_PDF_ARGV &&
+    (builtin ? builtinPageCount(r.stderr ?? "") > EXTRACT_PAGE_CAP : pdfGoesPastPageCap(absPath, out));
   return {
     record: {
       state: "extracted",
-      extractor: { name: argv[0], version },
+      extractor,
       chars: Math.min(out.length, EXTRACT_OUTPUT_CHAR_CAP),
       truncated: charCut || pageCut,
       // Only when the page cap is what ended the text: a character cut inside
@@ -2628,6 +2662,199 @@ export function documentsCard(projectDir: string, space: string, intentUuid: str
   ].join("\n");
 }
 
+// --- Documents the knowledge base cannot read yet ----------------------------
+//
+// A file in documents/ that was never added, or was added with no text, is not
+// on the stages' documents card: only `list` and `show` named it, and work went
+// on to approvals without what it holds. The engine's
+// next step names these files once per work and doctor names them whenever it
+// is asked, both from `unreadDocuments`. A line, never a stop: the person
+// decides whether to carry on.
+
+export type UnreadReason =
+  | "new"
+  | "changed"
+  | "no-reader"
+  | "office"
+  | "pdf"
+  | "no-extractor"
+  | "failed"
+  | "no-text";
+
+export interface UnreadDocument {
+  /** The row's own key: the path under the space's knowledge/ folder. */
+  path: string;
+  reason: UnreadReason;
+}
+
+function unreadReason(row: DocumentRow): UnreadReason | null {
+  switch (effectiveExtractionState(row)) {
+    case "extracted":
+      return null;
+    case "invalidated":
+      return "changed";
+    case "unsupported_type":
+      // A Word or Excel file added before AI-DLC read them is read on the next sync.
+      return builtinReadsRow(row) ? "office" : "no-reader";
+    case "extractor_unavailable":
+      // A PDF added when the computer had no PDF reader: AI-DLC reads it itself on the next sync (the rule
+      // shouldRetryExtraction uses). A team's own extractor that is missing stays a program to install.
+      return extractorArgvFor(detectMimeFromRow(row)) === DEFAULT_PDF_ARGV ? "pdf" : "no-extractor";
+    case "extraction_failed":
+      return "failed";
+    case "no_extractable_text":
+      return "no-text";
+  }
+}
+
+// The line asks for a text copy beside the original, so a readable file in
+// the same folder named after it ("mapping.md", "mapping.csv",
+// "mapping-Codes.csv" beside "mapping.xlsx") stands for it.
+function readThroughCopy(original: string, readable: readonly string[]): boolean {
+  const cut = original.lastIndexOf("/") + 1;
+  const name = original.slice(cut);
+  const dot = name.lastIndexOf(".");
+  const stem = original.slice(0, cut) + (dot > 0 ? name.slice(0, dot) : name);
+  return readable.some((path) =>
+    path !== original && path.startsWith(stem) && /^[.\-_ ][^/]*$/.test(path.slice(stem.length))
+  );
+}
+
+/**
+ * The files under documents/ the stages cannot read yet (not in the index, or
+ * in it with no text), each with why. A redirected knowledge root is refused as
+ * every reader refuses it; the engine and doctor then say nothing.
+ */
+export function unreadDocuments(projectDir: string, space: string): UnreadDocument[] {
+  assertKnowledgeRootTrusted(projectDir, space);
+  const folder = documentsDir(projectDir, space);
+  if (!existsSync(folder)) return [];
+  const rows = new Map<string, DocumentRow>();
+  for (const row of readIndex(projectDir, space).documents) {
+    if (row.source.kind === "managed" && !isTombstoned(row)) rows.set(row.source.path, row);
+  }
+  const found = walkDocuments(folder).map((abs) => {
+    const path = portableSourcePath(projectDir, space, abs);
+    const row = rows.get(path);
+    return { path, reason: row === undefined ? "new" as const : unreadReason(row) };
+  });
+  const readable = found.filter((file) => file.reason === null).map((file) => file.path);
+  return found.filter((file): file is UnreadDocument =>
+    file.reason !== null &&
+    (file.reason === "new" || file.reason === "changed" || !readThroughCopy(file.path, readable))
+  );
+}
+
+const UNREAD_ORDER: readonly UnreadReason[] = [
+  "new", "changed", "no-reader", "office", "pdf", "no-extractor", "failed", "no-text",
+];
+// One sentence per kind, the files its subject, so the line reads the same
+// when it is passed on. `them` is "it" for one file, "each" for several.
+const UNREAD_SENTENCES: Readonly<Record<UnreadReason, (names: string, one: boolean) => string>> = {
+  new: (names, one) => `${names} ${one ? "is" : "are"} not in the knowledge base yet.`,
+  changed: (names, one) => `${names} changed since ${one ? "it was" : "they were"} added.`,
+  "no-reader": (names, one) =>
+    `The knowledge base has no reader for ${names}: save ${one ? "it" : "each"} as .md, .txt or .csv beside ${one ? "it" : "the original"}.`,
+  office: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read Word and Excel files.`,
+  pdf: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read a PDF without pdftotext.`,
+  "no-extractor": (names, one) =>
+    `The program set up to read ${names} is not installed on this computer: install it, or save ${one ? "the file" : "each"} as .md beside ${one ? "it" : "the original"}.`,
+  failed: (names, one) => `${names} could not be read: save ${one ? "it" : "each"} again, or as .md beside ${one ? "it" : "the original"}.`,
+  "no-text": (names, one) =>
+    `${names} ${one ? "has" : "have"} no text to read, as with a scanned page: save a text version as .md beside ${one ? "it" : "each"}.`,
+};
+const UNREAD_NAMED_MAX = 10;
+
+/** What to do for each kind, then the files (quoted: the names are the person's), in a fixed order. */
+function unreadGroups(files: readonly UnreadDocument[]): string {
+  return UNREAD_ORDER.flatMap((reason) => {
+    const paths = files.filter((file) => file.reason === reason).map((file) => file.path.replace(/^documents\//, ""));
+    if (paths.length === 0) return [];
+    const named = paths.slice(0, UNREAD_NAMED_MAX).map((path) => JSON.stringify(path));
+    const more = paths.length - named.length;
+    const list = more > 0
+      ? `${named.join(", ")} and ${more} more`
+      : named.length > 1 ? `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}` : named[0];
+    return [UNREAD_SENTENCES[reason](list, paths.length === 1)];
+  }).join(" ");
+}
+
+function documentsFolder(projectDir: string, space: string): string {
+  return `${toPosix(relative(projectDir, documentsDir(projectDir, space)))}/`;
+}
+
+/** Doctor's row: every file the knowledge base cannot read yet, in the step's words. */
+export function unreadDocumentsLabel(projectDir: string, space: string, files: readonly UnreadDocument[]): string {
+  return `Documents AI-DLC's knowledge base cannot read yet in ${documentsFolder(projectDir, space)}: ${unreadGroups(files)}`;
+}
+
+function unreadDocumentsLine(projectDir: string, space: string, files: readonly UnreadDocument[]): string {
+  const count = files.length === 1 ? "1 file" : `${files.length} files`;
+  return `AI-DLC's knowledge base cannot read ${count} in ${documentsFolder(projectDir, space)} yet, so this work ` +
+    `goes on without ${files.length === 1 ? "it" : "them"}. ${unreadGroups(files)} ` +
+    `Run \`${entrySkillInvocation()} knowledge sync\` ${files.every((file) => file.reason === "new" || file.reason === "changed" || file.reason === "office" || file.reason === "pdf")
+      ? `to add ${files.length === 1 ? "it" : "them"}`
+      : "after that"}.`;
+}
+
+// Each file is named once per work: the said mark keeps every entry the work's
+// steps named, in the work's own engine folder (git-ignored, so each clone
+// hears it once). A torn or missing mark only has the line said once more.
+const UNREAD_SAID_FILE = "unread-documents-said.json";
+const UNREAD_SAID_MAX_BYTES = 1024 * 1024;
+
+export interface UnreadDocumentsNotice {
+  line: string;
+  said: string[];
+  intent: string;
+  space: string;
+}
+
+function readUnreadSaid(projectDir: string, intent: string, space: string): Set<string> {
+  try {
+    const raw = readRegularFileNoFollowOrThrow(
+      join(engineDir(projectDir, intent, space), UNREAD_SAID_FILE), "said documents", UNREAD_SAID_MAX_BYTES,
+    ).toString("utf-8");
+    const parsed: unknown = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * The line the engine's next step carries: the files the active work has not
+ * named yet. Null before the work exists (the work's first step says it), and
+ * when every file is readable or already named.
+ */
+export function unreadDocumentsNotice(
+  projectDir: string,
+  selected?: { intent: string | null; space: string },
+): UnreadDocumentsNotice | null {
+  const work = selected ?? resolveWorkflowSelection(projectDir);
+  if (work.intent === null) return null;
+  const files = unreadDocuments(projectDir, work.space);
+  const said = readUnreadSaid(projectDir, work.intent, work.space);
+  const entry = (file: UnreadDocument): string => `${file.reason}\t${file.path}`;
+  const fresh = files.filter((file) => !said.has(entry(file)));
+  if (fresh.length === 0) return null;
+  return {
+    line: unreadDocumentsLine(projectDir, work.space, fresh),
+    said: [...new Set([...said, ...files.map(entry)])],
+    intent: work.intent,
+    space: work.space,
+  };
+}
+
+/** Keep that the work's step named them. */
+export function markUnreadDocumentsSaid(projectDir: string, notice: UnreadDocumentsNotice): void {
+  try {
+    writeEngineFileNoFollow(projectDir, UNREAD_SAID_FILE, `${JSON.stringify(notice.said)}\n`, notice.intent, notice.space);
+  } catch {
+    // Advisory: without the mark the line is said once more.
+  }
+}
+
 // --- sync --------------------------------------------------------------------
 //
 // Reconcile the catalog with what is actually on disk. Five changes matter, and
@@ -3304,7 +3531,12 @@ export function shouldRetryExtraction(row: DocumentRow): boolean {
   if (rec.state === "extractor_unavailable" || rec.state === "unsupported_type") {
     const argv = extractorArgvFor(detectMimeFromRow(row));
     if (argv === null) return false; // still nothing configured for this type
-    return probeExtractor(argv[0]).available;
+    // The default PDF argv always has a reader now: pdftotext, or AI-DLC's own.
+    return argv === DEFAULT_PDF_ARGV || probeExtractor(argv[0]).available;
+  }
+  // A PDF AI-DLC read itself is read again by pdftotext once the person installs it.
+  if (rec.state !== "extraction_failed" && rec.extractor?.name === BUILTIN_PDF.name) {
+    return extractorArgvFor(detectMimeFromRow(row)) === DEFAULT_PDF_ARGV && probeExtractor(DEFAULT_PDF_ARGV[0]).available;
   }
   if (rec.state === "extraction_failed" && rec.extractor !== undefined) {
     const argv = extractorArgvFor(detectMimeFromRow(row));
@@ -4497,6 +4729,10 @@ export function main(argv: string[]): void {
         }
         break;
       }
+      case "read-pdf":
+        // The built-in PDF reader as the child extractDocument runs in a compiled binary; not a command for people.
+        process.exitCode = readPdfMain(args.slice(1));
+        break;
       case "help":
       case undefined:
         process.stdout.write(

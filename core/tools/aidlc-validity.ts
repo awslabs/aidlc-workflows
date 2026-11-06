@@ -13,6 +13,7 @@ import {
   staleStageLine,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
+import { withdrawnTurnPositions } from "./aidlc-record-core.ts";
 import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
@@ -623,10 +624,11 @@ export function parseStageValidationBasis(
 
 function orderedMainWorkflowEvents(audit: string): OrderedAuditEvent[] {
   if (audit.length === 0) return [];
-  const events = audit
-    .replaceAll("\r\n", "\n")
-    .split(/\n---\n/)
+  const blocks = audit.replaceAll("\r\n", "\n").split(/\n---\n/);
+  const withdrawn = withdrawnTurnPositions(blocks);
+  const events = blocks
     .map((block, position): OrderedAuditEvent | null => {
+      if (withdrawn.has(position)) return null;
       const event = auditBlockField(block, "Event");
       if (!event) return null;
       if (auditBlockField(block, "Workflow")?.startsWith("single-stage:")) {
