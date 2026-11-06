@@ -213,6 +213,7 @@ import {
   hasBlockingSensorOverrideAuthorization,
   type CheckboxState,
   CHANGE_CONTROL_FIELD,
+  BLOCKING_SENSOR_OVERRIDE_DECISION,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
   guardFenceConfigKey,
@@ -297,7 +298,6 @@ import {
   hasAnyUnitClaimRefs,
   noteEngineAskMark,
   teamSkeletonOn,
-  memorySectionBody,
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
@@ -630,6 +630,9 @@ import {
   earlyBaseMerged,
   moveRefusedMark,
   shareBlocker,
+  skeletonHeldBackOnShare,
+  teamsClone,
+  teamStanceToRead,
   shareTarget,
   teamHandoverMarkName,
   teamSharedHere,
@@ -5475,12 +5478,6 @@ function stageNotBegun(projectDir: string, slug: string): boolean {
   }
 }
 
-// A clone that took part or holds a claim is a team's, not the lead's.
-function teamsClone(projectDir: string, stateContent: string): boolean {
-  return existsSync(unitParticipantPath(projectDir)) ||
-    readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
-}
-
 // The one offer to write repos.json from the repos found here (decision 21):
 // at a stage boundary, the first time the work records repos or teams are
 // chosen (open question 7), in a workspace that has none, once per clone, and
@@ -5510,39 +5507,6 @@ function reposManifestAsk(projectDir: string, stateContent: string): AskDirectiv
       { label: "Not now", detail: "I won't ask again.", command: `${aidlcToolInvocation("orchestrate")} next` },
     ],
   };
-}
-
-// The team's own answer on building a walking skeleton first, not read yet:
-// team work whose scope runs one, no stance recorded, and the team's or the
-// project's memory says something under `## Walking Skeleton` (Practices
-// Discovery writes the team's). org.md's section is the framework's default,
-// which reads as the scope's own answer, so it is not one. Which way the answer
-// goes is the agent's to read (the classify round-trip); this reads only
-// whether there is one.
-function teamSkeletonAnswerUnread(projectDir: string, stateContent: string): boolean {
-  if (!isTeamUnitOwnership(stateContent) || getField(stateContent, "Skeleton Stance")) return false;
-  if (loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton !== true) return false;
-  let memory: string;
-  try {
-    memory = memoryDirFor(projectDir);
-  } catch {
-    return false;
-  }
-  return ["team.md", "project.md"].some((file) => {
-    try {
-      return memorySectionBody(readFileSync(join(memory, file), "utf-8"), "## Walking Skeleton").trim() !== "";
-    } catch {
-      return false;
-    }
-  });
-}
-
-// The team's own walking-skeleton answer is read on the lead's checkout before
-// any team step decides from it (the handout line, the share, a teammate's
-// claim): a team's clone reads the lead's record and never writes the stance.
-function teamStanceToRead(projectDir: string, stateContent: string | null): boolean {
-  return stateContent !== null && teamSkeletonAnswerUnread(projectDir, stateContent) &&
-    !teamsClone(projectDir, stateContent) && !planMadeElsewhere(projectDir);
 }
 
 // The step that has the agent read it: the stage's own step with the classify
@@ -6886,6 +6850,54 @@ function settingEndsTurn(pd: string, scope: string, stateContent: string): boole
   } catch {
     return true;
   }
+}
+
+// The one-ask choice for a person who names one check to switch off (the
+// sensors module's question), and the answer the switch records when it is
+// their answer to the check's question.
+export const SWITCH_CHECKS_OFF_CHOICE = "Switch all checks off for this work";
+
+// The check's own open question that switching the checks off answers: the
+// typed settings turn the checks off, and the question waiting on the person
+// is the blocking check's (its Decision), at a Unit's checkpoint under
+// whichever of its block's stages logged it for that Unit (the stage whose
+// file failed, which need not be Current Stage), elsewhere under Current
+// Stage. Each stage is read as openStageQuestion reads it: from its start (from
+// its latest Request Changes while it is revised), so a question of an earlier
+// attempt is not taken, and a block stage with no start of its own (the Unit
+// block's later stages are started per Unit) from the workflow attempt, as the
+// stage ahead is read there. From the record, never from the person's words;
+// null when another question waits or none does.
+function switchAnswersOpenCheck(
+  pd: string,
+  scope: string,
+  stateContent: string,
+  modifiers: readonly string[],
+): { stage: string; unit: string | null } | null {
+  if (!modifiers.includes(`${CEREMONY_FLAGS.sensors.slice(2)} off`)) return null;
+  try {
+    if (planApprovalAskIsOpen(pd) || composeGateOpen(pd)) return null;
+    const current = (getField(stateContent, "Current Stage") ?? "").trim();
+    if (current.length === 0) return null;
+    const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
+    const atCheckpoint = walk !== null && walk.step.kind === "checkpoint" ? walk.step.unit : null;
+    const slugs = walk !== null && atCheckpoint !== null ? walk.block.map((stage) => stage.slug) : [current];
+    const started = new Set(readAuditShardEvents(pd).filter((row) => row.event === "STAGE_STARTED")
+      .map((row) => auditBlockField(row.block, "Stage")));
+    const boxes = parseCheckboxes(stateContent);
+    for (const slug of slugs) {
+      const block = started.has(slug)
+        ? openDecisionMenu(pd, slug, stageQuestionBoundary(boxes.find((row) => row.slug === slug)?.state)).at(-1) ?? null
+        : hasPendingDecision(pd, slug, undefined, undefined, true) ? openDecisionMenu(pd, slug).at(-1) ?? null : null;
+      if (block === null || auditBlockField(block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION) continue;
+      const unit = auditBlockField(block, "Unit");
+      if (atCheckpoint !== null && unit !== atCheckpoint) continue;
+      return { stage: slug, unit };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 // For the agent, after the still-paused line: what a yes to it runs.
@@ -8246,7 +8258,7 @@ function createPrintDirective(
   // Beside other work the chat still holds that work's conversation: the
   // person can start this one in a clean chat instead, said once, never as a
   // stop, and only while they can take it (sayPendingPersonLines).
-  const cleanChat = flags.newIntent ? cleanChatLine(projectDir) : null;
+  const cleanChat = flags.newIntent ? cleanChatLine() : null;
   if (cleanChat) saidAsStageComes.set(directive, cleanChat);
   // The agent runs the creation and goes on, so the line rides the first step
   // it speaks from.
@@ -8379,8 +8391,8 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
 // tool the person is in from the tree's own harness.json (its manifest's
 // newChatStep). A tree that names none, or a native engine that cannot tell the
 // person's tool among several installed, offers nothing.
-function cleanChatLine(projectDir: string): string | null {
-  const step = newChatStep(projectDir);
+function cleanChatLine(): string | null {
+  const step = newChatStep();
   return step ? `${CLEAN_CHAT_LEAD}${step}.` : null;
 }
 
@@ -14022,6 +14034,29 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         ));
         return;
       }
+      // Switching the checks off as the answer to the check's own open question
+      // is that answer: the setter turns them off, the answer records it on the
+      // question with their words, and the work goes on, with nothing left for
+      // the person to say first (a live run stopped there for "carry on", and
+      // the question stayed open). The setter runs first, so a refusal leaves
+      // the question as it was.
+      const answered = planChanges || stillParked !== null
+        ? null
+        : switchAnswersOpenCheck(pd, currentStateScope, stateContent, modifiers);
+      if (answered !== null) {
+        const answer = [
+          `${aidlcToolInvocation("log")} answer --stage ${shellArg(answered.stage)}`,
+          ...(answered.unit === null ? [] : [`--unit ${shellArg(answered.unit)}`]),
+          `--details "${SWITCH_CHECKS_OFF_CHOICE}"`,
+          ...(unnamed ? [`--message '${MESSAGE_SLOT}'`] : []),
+        ].join(" ");
+        emit(printDirective(
+          `Run \`${command}\` to switch the checks off${fill}, then \`${answer}\`${unnamed ? " with the same message" : ""}, ` +
+            "which records the switch as their answer to the check's question; print the first command's output verbatim " +
+            `and run \`${aidlcToolInvocation("orchestrate")} next\` to carry on with the work.`,
+        ));
+        return;
+      }
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(
@@ -14588,6 +14623,29 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           // Exact claim-less team mode remains the increment-1 single-checkout
           // walk: no fan-out directive.
           throw new Error("claimless-team-mode");
+        }
+        // A checkout the teams take Units from reads the team's own
+        // walking-skeleton answer before its board decides what is open or
+        // anything is offered; a claim-less one meets it in the walk below.
+        const reading = teamStanceReadStep(
+          pd, stateContent, getField(stateContent, "Current Stage") ?? "", scope, projectType, recordPrefix, codekbCtx,
+        );
+        if (reading) {
+          emit(reading);
+          return;
+        }
+        // The lead's answer is recorded here and the plan the teams have still
+        // waits on the first Unit as a walking skeleton: said once, while true.
+        const heldBack = participant || teamsClone(pd, stateContent) || planMadeElsewhere(pd)
+          ? null
+          : skeletonHeldBackOnShare(pd);
+        if (heldBack !== null) {
+          sayWithStepOnce(
+            pd,
+            `The teams still see every Unit waiting on ${heldBack}, because your answer about ` +
+              `building a thin slice first hasn't been shared yet. I can share the plan when you say so, or you can run ` +
+              `\`${aidlcInvocation()} unit share\`.`,
+          );
         }
         const overview = cachedUnitClaimOverview(pd, {
           writeCache: !readOnlyBoard,
@@ -21515,7 +21573,8 @@ function handleSkeletonStanceReport(
     return;
   }
   const node = nodeForSlug(slug);
-  if (!node || !(isSkeletonGateStage(node, scope, stateContent) || teamStanceToRead(pd, stateContent))) {
+  const forTeams = teamStanceToRead(pd, stateContent);
+  if (!node || !(isSkeletonGateStage(node, scope, stateContent) || forTeams)) {
     emit(errorDirective(
       `Current stage "${slug}" is not the skeleton-gate stage for scope "${scope}" - ` +
         "a skeleton stance is only reported for the first Construction Bolt's gate.",
@@ -21535,9 +21594,14 @@ function handleSkeletonStanceReport(
     return;
   }
 
+  // Team work's answer can be asked for by the share as well as by `next`'s
+  // step: the agent goes back to whichever asked, so a share the person asked
+  // for is never put to them again as the share question.
   emit(printDirective(
     `Recorded walking-skeleton stance "${stance}" for "${slug}". ` +
-      "Re-run `next` to continue - the gate is now determined.",
+      (forTeams
+        ? `If \`${aidlcInvocation()} unit share\` asked for it, run that share again now; otherwise re-run \`next\` to continue.`
+        : "Re-run `next` to continue - the gate is now determined."),
   ));
 }
 

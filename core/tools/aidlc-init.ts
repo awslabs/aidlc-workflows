@@ -5420,6 +5420,7 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "rulesSubdir",
   "statusLine",
   "agentFinishRecorded",
+  "hostShell",
 ]);
 
 const CLAUDE_SHIPPED_KEYS = [
@@ -13369,44 +13370,61 @@ export async function main(
       : undefined;
     const dryRun = argv.includes("--dry-run");
     // `--harness kiro` named Kiro CLI (V2) before it named Kiro, so on a Kiro
-    // CLI (V2) project it may be an older script's refresh. At a terminal the
-    // person is asked first, unless a --plan-token already carries their
-    // approval of this switch's plan. With no question to ask (no terminal,
-    // or --quiet or --json), the switch needs --yes (or a dry run's token);
-    // otherwise it stops, saying what the name means and both commands. With
-    // --yes or on a dry run, the note says what
-    // the name means and how to stay, before any check can refuse the run, in
-    // words true whatever happens next; under --json in the result (its notes
-    // on success, emitResult on any refusal).
-    if (switchOccupant?.distribution === "kiro" && !section && typedHarnesses.includes(typedHarnessName("kiro-ide"))) {
-      const stay = configCommand(`--harness ${invokedHarnessName("kiro")}${projectTarget(projectDir)}`);
+    // CLI (V2) project it may be an older script's refresh. A copied tool from
+    // before these names hands its refresh over in ids, where `kiro` is still
+    // Kiro CLI (V2), so on a Kiro project it may be a person following this
+    // release's guides. Either way, at a terminal the person is asked first,
+    // unless a --plan-token already carries their approval of this switch's
+    // plan. With no question to ask (no terminal, or --quiet or --json), the
+    // switch needs --yes (or a dry run's token); otherwise it stops, saying
+    // what the name means and both commands. With --yes or on a dry run, the
+    // note says what the name means and how to stay, before any check can
+    // refuse the run, in words true whatever happens next; under --json in
+    // the result (its notes on success, emitResult on any refusal).
+    const handedBy = handingTool();
+    const olderHandOff = switchOccupant?.distribution === "kiro-ide" && requestedHarness === "kiro" &&
+      handedBy !== undefined && !toolReadsTypedNames(handedBy);
+    const typedSwitch = switchOccupant?.distribution === "kiro" && typedHarnesses.includes(typedHarnessName("kiro-ide"));
+    if (switchOccupant && !section && (typedSwitch || olderHandOff)) {
+      const dir = switchOccupant.harnessDir;
+      const [staying, switching] = olderHandOff ? ["Kiro", "Kiro CLI (V2)"] : ["Kiro CLI (V2)", "Kiro"];
+      const meaning = olderHandOff
+        ? "`--harness kiro` now means Kiro, but the tool you ran is from an older release and reads it as Kiro CLI (V2)"
+        : `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3)`;
+      // The older tool stays on Kiro by its own run with Kiro named its way,
+      // from the same files; a plan token there is for the switch's plan.
+      const keepKiro = olderHandOff
+        ? configRerunWith(harnessArgsWith(input, (id) => (id === "kiro" ? "kiro-ide" : id)), projectDir, [], ["--plan-token"])
+        : undefined;
+      const stay = keepKiro ??
+        configCommand(`--harness ${invokedHarnessName(olderHandOff ? "kiro-ide" : "kiro")}${projectTarget(projectDir)}`);
+      // The older tool's way to stay leaves out a mirror the run named, and asks for it.
+      const stayMirror = keepKiro ? sameMirror(input) : "";
       const unapproved = !options.yes && !dryRun && !argv.includes("--plan-token");
       const asking = configInputIsTty() && options.mode === "human" && unapproved;
       if (asking) {
         const answer = configPrompt(
-          `This project is set up for Kiro CLI (V2). \`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3). ` +
-            `Switch ${switchOccupant.harnessDir} to Kiro in place? [y/N]:`,
+          `This project is set up for ${staying}. ${meaning}. Switch ${dir} to ${switching} in place? [y/N]:`,
         );
         if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
-          emitResult(usage(`nothing changed; ${switchOccupant.harnessDir} stays on Kiro CLI (V2)`, stay), options);
+          emitResult(usage(`nothing changed; ${dir} stays on ${staying}${keepKiro ? `. To keep ${staying}${stayMirror}:` : ""}`, stay), options);
           return;
         }
       } else {
-        const note = `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3), so on a Kiro CLI (V2) ` +
-          `project like this one it means switching ${switchOccupant.harnessDir} to Kiro in place; to keep Kiro CLI (V2), run \`${stay}\` instead.`;
+        const note = `${meaning}, so on a ${staying} project like this one it means switching ${dir} to ${switching} in place; ` +
+          `to keep ${staying}, run \`${stay}\`${stayMirror} instead.`;
         if (options.mode === "json") {
           refusalNote = note;
           sourceNotes.push(note);
         }
         // With no one at a terminal to answer, the run may be an agent
-        // following a line an older Kiro CLI (V2) tree printed, so the switch
-        // waits for --yes (a dry run and a --plan-token go on).
+        // following a line printed in the other meaning, so the switch waits
+        // for --yes (a dry run and a --plan-token go on).
         if (unapproved) {
           const again = configRerunWith(input, projectDir, ["--yes"]);
-          const stopped = `nothing changed; ${switchOccupant.harnessDir} stays on Kiro CLI (V2). ` +
-            `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3); ` +
-            `to switch ${switchOccupant.harnessDir} to Kiro in place, run ${again ? `\`${again}\`${sameMirror(input)}` : "it again with --yes"}. ` +
-            "To keep Kiro CLI (V2):";
+          const stopped = `nothing changed; ${dir} stays on ${staying}. ${meaning}; ` +
+            `to switch ${dir} to ${switching} in place, run ${again ? `\`${again}\`${sameMirror(input)}` : "it again with --yes"}. ` +
+            `To keep ${staying}${stayMirror}:`;
           // --quiet prints only a refusal's command, so the rest comes first.
           if (options.mode === "quiet") writeSwitchNote(stopped, options);
           emitResult(usage(stopped, stay), options);

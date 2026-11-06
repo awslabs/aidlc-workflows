@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import { beforePerUnitBlock, withStageProgressRow } from "./aidlc-graph.ts";
+import { keptSinceFinished } from "./aidlc-message-store.ts";
+import { isNonAnswer } from "./aidlc-reply-reader.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -38,6 +40,8 @@ import {
   resolveStage,
   resolveWorkflowSelection,
   type StageEntry,
+  updateIntentStatus,
+  withAuditLock,
   setCheckbox,
   removeField,
   setField,
@@ -50,7 +54,9 @@ import {
   writeStateFile,
   REDO_REUSE_SOURCE,
   answerModeStageStartedFields,
+  type GateReply,
   personsGateReply,
+  personsWordsText,
   resolveInvokingSessionId,
   windowMessageIds,
   claimAttemptFields,
@@ -297,10 +303,47 @@ function parseFlags(
 // The active Unit's lifecycle mirror is dropped; the next `unit start` writes
 // it again.
 
+// Work moved back to Running from Completed is in flight again on the work
+// list (intents.json, which `intent list` and the running-work readers show),
+// as a scope change's reopen puts it; finishing again marks it complete. One
+// place for every move of the jump tool, under the workspace lock the registry
+// write asks for.
+function backInFlight(pd: string, before: string, after: string): void {
+  if (getField(before, "Status")?.trim() !== "Completed" || getField(after, "Status")?.trim() !== "Running") return;
+  const { intent, space } = resolveWorkflowSelection(pd);
+  if (intent !== null) withAuditLock(pd, () => updateIntentStatus(pd, intent, "in-flight", space));
+}
+
+// The change the person asked for, in their words. On finished work the
+// human-turn hook keeps their messages beside the record and writes no turn on
+// them, so the change is every message of theirs kept there since the finish
+// (keptSinceFinished, the window the guard let this reopen through on), read
+// as personsGateReply reads a gate's window: their words joined in order, only
+// when the engine names this chat and none was cut, beside every message's id.
+function changeAsked(pd: string, content: string, stage: string): GateReply {
+  const session = resolveInvokingSessionId(pd);
+  const reply = personsGateReply(pd, session, stage);
+  if (reply.words !== null || getField(content, "Status")?.trim() !== "Completed") return reply;
+  const kept = keptSinceFinished(pd);
+  // With no chat named, several chats' messages are nobody's to name, as at a gate.
+  if (kept.length === 0 || (session === null && new Set(kept.map((message) => message.session)).size > 1)) return reply;
+  const said = kept
+    .map((message) => (message.words ? personsWordsText(message.words) : ""))
+    .filter((text) => !isNonAnswer(text));
+  const whole = session !== null && kept.every((message) => message.cut !== true);
+  return {
+    words: whole && said.length > 0 ? said.join("\n") : null,
+    messageId: kept.at(-1)?.id ?? null,
+    replies: kept.map((message) => ({ id: message.id, at: message.at })),
+    elsewhere: [],
+  };
+}
+
 function handleReopen(args: string[]): void {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
+  const stateBefore = content;
   const targetSlug = flags.target;
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
   if (!targetSlug || units.length === 0) {
@@ -328,9 +371,7 @@ function handleReopen(args: string[]): void {
   // A change is kept in the person's own words, from the gate they answered,
   // with the messages they came in, as a gate's Request Changes row names them.
   const gateStage = getField(content, "Current Stage")?.trim() ?? targetSlug;
-  const change = flags.via === "change"
-    ? personsGateReply(pd, resolveInvokingSessionId(pd), gateStage)
-    : null;
+  const change = flags.via === "change" ? changeAsked(pd, content, gateStage) : null;
   // From a later stage of the same phase (Build and Test, say) the work moves
   // back to the target as a backward jump moves it, but with no STAGE_JUMPED or
   // STAGE_STARTED: only these Units start the step again. Each Unit's row names
@@ -344,17 +385,26 @@ function handleReopen(args: string[]): void {
   const theirs = flags.via === "change" || !isAutonomousConstructionDecision(content, targetStage.phase);
   let stagesReset: string[] = [];
   let movedFrom: string | undefined;
-  if (from && !isPerUnitStage(from) && from.phase === targetStage.phase && stageIndex(current) > stageIndex(targetSlug)) {
+  // Work whose walk ended on the target or a later stage of its phase (Units
+  // built one at a time, the stages after Code Generation skipped) is put back
+  // to Running on the target, as a redo or backward jump puts it, so `next`
+  // takes these Units' step again; still only they start it over.
+  const finishedHere = getField(content, "Status")?.trim() === "Completed" && !!from &&
+    from.phase === targetStage.phase && stageIndex(current) >= stageIndex(targetSlug);
+  const fromLater = from && !isPerUnitStage(from) && from.phase === targetStage.phase &&
+    stageIndex(current) > stageIndex(targetSlug);
+  if (fromLater || finishedHere) {
     const scope = flags.scope || getField(content, "Scope") || "feature";
     const scopeMapping = loadScopeMapping()[scope];
     if (!scopeMapping) error(`Unknown scope: ${scope}`);
     const suffixes = scope === (getField(content, "Scope") || "")
       ? parseStateStageSuffixes(content)
       : new Map<string, "EXECUTE" | "SKIP">();
-    const moved = movedState(content, targetSlug, targetStage, "backward", scope, suffixes, scopeMapping);
+    const direction = stageIndex(current) === stageIndex(targetSlug) ? "redo" : "backward";
+    const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
     content = moved.content;
     stagesReset = moved.stagesReset;
-    movedFrom = current;
+    if (current !== targetSlug) movedFrom = current;
   }
   for (const unit of units) {
     emitAudit(pd, "GATE_REJECTED", {
@@ -394,6 +444,7 @@ function handleReopen(args: string[]): void {
   }
   content = setField(content, "Last Updated", isoTimestamp());
   writeStateFile(pd, content);
+  backInFlight(pd, stateBefore, content);
   console.log(JSON.stringify({
     reopened: targetSlug, stages, units, ...(stagesReset.length > 0 ? { stages_reset: stagesReset } : {}),
     state_updated: true, audit_appended: true,
@@ -719,6 +770,7 @@ async function handleExecute(args: string[]): Promise<void> {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
+  const stateBefore = content;
 
   const targetSlug = flags.target;
   if (!targetSlug) error("Usage: execute --target <slug> --direction <forward|backward|redo> [--units <unit[,unit...]> [--stages <slug[,slug...]>]] [--scope <scope>]");
@@ -906,6 +958,7 @@ async function handleExecute(args: string[]): Promise<void> {
   }
 
   writeStateFile(pd, content);
+  backInFlight(pd, stateBefore, content);
 
   // The jump is done, so its line (what it skipped and the way back, or what
   // comes after an owed Reverse Engineering) can never fail it. The line is

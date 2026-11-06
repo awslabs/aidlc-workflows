@@ -1808,9 +1808,6 @@ function jumpIsPersonsMove(
   finished: boolean,
 ): boolean | EngineInvocation {
   if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
-  // A Unit's reopen leaves finished work finished (aidlc-jump reopen moves no
-  // Status), so it would record a reopen that runs nothing: it waits as before.
-  if (finished && jump.verb !== "execute") return false;
   if (!personTurnStands(projectDir, "plain", { requests: true })) return false;
   const last = lastStepAdmitsPersonsMoves(projectDir, jump, finished);
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
@@ -2731,9 +2728,8 @@ async function evaluate(
     // `next`. Archived work is judged as before.
     // Nobody asked means no turn of theirs with no decision after it, the
     // strictest reading a held command waits on, so the approval that
-    // finished the work is no ask. Held with their ask standing (a Unit's
-    // reopen), or for its form (a pipe, a second command, a line it cannot
-    // read), it keeps the refusal below.
+    // finished the work is no ask. Held for its form (a pipe, a second
+    // command, a line it cannot read), it keeps the refusal below.
     if (walkEnded && mutation.engineAlone && !personTurnStands(projectDir, "plain", { requests: true })) {
       verdict = { block: true, mentioned: [] };
       blockedMutation = {

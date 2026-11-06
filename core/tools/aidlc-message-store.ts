@@ -965,6 +965,32 @@ function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOpt
 }
 
 /**
+ * This chat's messages (with no chat named, any chat's in this project) kept
+ * beside finished work since its latest WORKFLOW_COMPLETED row, oldest first:
+ * the window turnKeptSinceFinished stands on, and a change asked there is read
+ * from. Empty when the record is not
+ * finished, has no completion row, or cannot be read.
+ */
+export function keptSinceFinished(pd: string, options: { intent?: string; space?: string } = {}): StoredMessage[] {
+  try {
+    if (!selectedRecordIsFinished(pd, resolveWorkflowSelection(pd, { intent: options.intent, space: options.space }))) {
+      return [];
+    }
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
+    if (unreadable.length > 0) return [];
+    const finishedAt = rows.filter((row) => row.event === "WORKFLOW_COMPLETED").map((row) => row.timestamp).sort().at(-1);
+    if (finishedAt === undefined) return [];
+    const onThisWork = sentOnThisWork(rows);
+    const chat = invokingChat(pd);
+    return listMessages(pd).filter((message) =>
+      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Presence on finished work: once the work is finished (selectedRecordIsFinished,
  * the reading the human-turn hook stands outside by) the hook keeps the
  * person's messages beside its record and writes no turn on it. So the turn is
@@ -986,18 +1012,7 @@ function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOpt
 function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEvent | null {
   if (options.replies === true) return null;
   try {
-    if (!selectedRecordIsFinished(pd, resolveWorkflowSelection(pd, { intent: options.intent, space: options.space }))) {
-      return null;
-    }
-    const unreadable: string[] = [];
-    const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
-    if (unreadable.length > 0) return null;
-    const finishedAt = rows.filter((row) => row.event === "WORKFLOW_COMPLETED").map((row) => row.timestamp).sort().at(-1);
-    if (finishedAt === undefined) return null;
-    const onThisWork = sentOnThisWork(rows);
-    const chat = invokingChat(pd);
-    const kept = listMessages(pd).filter((message) =>
-      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat)).at(-1);
+    const kept = keptSinceFinished(pd, options).at(-1);
     if (kept === undefined) return null;
     const turn: AuditShardEvent = {
       event: "HUMAN_TURN",

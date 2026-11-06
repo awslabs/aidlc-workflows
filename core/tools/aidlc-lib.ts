@@ -38,6 +38,8 @@ import {
   type DirectiveLimit,
   directiveLimitFor,
   discoverProjectHarnesses,
+  harnessIsAGuess,
+  inHostShell,
   isCompiledExecutable,
   type KiroLayout,
   kiroTreeLayout,
@@ -811,19 +813,6 @@ function registrationLines(value: unknown): Pick<HookActivation, "registration">
       typeof lines.invalid === "string" && typeof lines.unwired === "string"
     ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid, unwired: lines.unwired } }
     : {};
-}
-
-// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
-// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
-// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
-// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
-export function inHostShell(env: readonly string[] | undefined): boolean {
-  const entries = (env ?? []).map((entry) => {
-    const [name, value] = entry.split("=", 2);
-    return { value: value?.toLowerCase(), actual: process.env[name]?.trim().toLowerCase() };
-  });
-  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
-  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
 }
 
 /** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
@@ -10190,15 +10179,18 @@ export function codeGenerationIsTheStep(issuedStage: string, currentStage: strin
     normalizeStageName(currentStage) === "code-generation";
 }
 
-// The Code Generation step the engine issued last for this work, even when a
-// state write since then made it out of date: the write retired the step, not
-// the work it named. Only a Code Generation step of the current intent; null
-// for any other.
-export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMarker | null {
+// The step the engine issued last for this work, even when a state write since
+// then made it out of date: the write retired the step, not the work it named.
+// Only a step of the current intent, at `stage` (Code Generation unless named;
+// null takes a step at any stage); null for any other.
+export function readIssuedDirectiveMarker(
+  projectDir: string,
+  stage: string | null = "code-generation",
+): ActiveDirectiveMarker | null {
   try {
     const target = resolveActiveDirectiveTarget(projectDir);
     const marker = readActiveDirectiveMarkerRaw(target.markerPath);
-    return marker?.stage === "code-generation" && (marker.intent_uuid ?? null) === target.intentUuid
+    return marker && (stage === null || marker.stage === stage) && (marker.intent_uuid ?? null) === target.intentUuid
       ? marker : null;
   } catch {
     return null;
@@ -10209,13 +10201,7 @@ export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMa
 // (`--single`) run of `stage`, even when a state write since then made it out
 // of date.
 export function issuedStepIsIsolatedRun(projectDir: string, stage: string): boolean {
-  try {
-    const target = resolveActiveDirectiveTarget(projectDir);
-    const marker = readActiveDirectiveMarkerRaw(target.markerPath);
-    return marker?.stage === stage && marker.single === true && (marker.intent_uuid ?? null) === target.intentUuid;
-  } catch {
-    return false;
-  }
+  return readIssuedDirectiveMarker(projectDir, stage)?.single === true;
 }
 
 // Read the shared/sessionless resume wait under the active-directive lock. The
@@ -11856,6 +11842,8 @@ export function blockingSensorPicks(
   slug: string,
   // Filled with each pick's Unit, when given: its answer's, or the question's it answers.
   units?: Map<AuditShardEvent, string | null>,
+  // Filled with the question each pick answers, when given.
+  questions?: Map<AuditShardEvent, AuditShardEvent>,
 ): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
   const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
   // Each clone's shard keeps its own append order, so a teammate's question in
@@ -11912,6 +11900,7 @@ export function blockingSensorPicks(
     if (choice !== undefined) {
       picks.set(row, choice);
       units?.set(row, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"));
+      questions?.set(row, decision);
     }
   }
   return picks;
@@ -28185,7 +28174,8 @@ const HOOKS_OFF_AGENT_RULES =
  */
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
-  if (!activation?.agentStep) return null;
+  // A tree the engine only guessed is the person's tool would name another tool's step.
+  if (!activation?.agentStep || harnessIsAGuess()) return null;
   const project = resolveProjectDir(projectDir);
   // Started in a folder inside the project, no file or setting brings the
   // hooks back: the one step is to start the tool in the project folder.
@@ -31584,7 +31574,7 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   // when a session starts), the file and a new session, never to the trust
   // step. A caller refusing for a reply not given yet (the summary choice the
   // person has not made) is not a lost reply: it hears nothing here either.
-  if (options.missedReply !== false && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
+  if (options.missedReply !== false && !harnessIsAGuess() && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
     return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
       "replies is switched off. Do not ask them to answer again. Tell them exactly this, with " +
       "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
@@ -31615,7 +31605,7 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   // could have missed (no heartbeat, or one the workflow left far behind) gets
   // the missed-reply line.
   if (promptHookRanRecently(projectDir)) return ` ${NOT_ANSWERED_YET_STEP}`;
-  const activation = hookActivation();
+  const activation = harnessIsAGuess() ? null : hookActivation();
   const host = activation?.missedReplyInHost;
   const missedReply = (inHostShell(host?.env) ? host?.text : activation?.missedReply) ??
     "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +

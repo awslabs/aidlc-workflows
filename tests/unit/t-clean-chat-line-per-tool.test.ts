@@ -1,4 +1,4 @@
-// covers: function:cleanChatLine, function:newChatStep, function:shippedNewChatStep, function:treeIsTheHost, function:createPrintDirective, function:sayPendingPersonLines, subcommand:aidlc-orchestrate:next
+// covers: function:cleanChatLine, function:newChatStep, function:shippedNewChatStep, function:harnessIsAGuess, function:createPrintDirective, function:sayPendingPersonLines, subcommand:aidlc-orchestrate:next
 //
 // New work started beside other work in a chat carries on in that chat, and
 // the person is offered once to start it in a clean chat instead. The offer
@@ -18,7 +18,7 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
@@ -221,35 +221,30 @@ describe("t-clean-chat-line-per-tool: the clean-chat offer names the person's ow
     expect(print.message).toContain("then re-run `next` to continue.");
   });
 
-  // A native engine in a project with several harnesses runs on the first one
-  // installed for every host but Codex, so its tree's step can be another
-  // tool's: Kiro CLI's "/chat new" said in Cursor (AIDA review 5797055097 F1).
-  test("a native engine that cannot tell the person's tool among several installed names no step", () => {
-    const installed = (dirs: string[]): string => {
-      const proj = project("kiro");
-      for (const [tree, dir] of [["cursor", ".cursor"], ["copilot", ".aidlc"]] as const) {
-        if (!dirs.includes(dir)) continue;
-        mkdirSync(join(proj, dir, "tools"), { recursive: true });
-        cpSync(join(REPO_ROOT, "dist", tree, dir, "tools", "data"), join(proj, dir, "tools", "data"), { recursive: true });
-      }
-      return proj;
-    };
-    const native = (proj: string): string | null => {
-      const was = process.env.AIDLC_COMPILED_EXECUTABLE;
-      process.env.AIDLC_COMPILED_EXECUTABLE = "/usr/local/bin/aidlc";
+  // A native engine in a project with several harnesses that cannot tell which
+  // tool runs a command runs on the first one installed, as a guess, so its
+  // tree's step can be another tool's: Kiro CLI's "/chat new" said in Cursor
+  // (AIDA review 5797055097 F1). The tool whose mark the command carries is
+  // told apart (t-native-engine-caller-lines).
+  test("a native engine that could only guess the person's tool names no step", () => {
+    const pinned = (env: Record<string, string>): string | null => {
+      const keys = ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_DIR_GUESSED"] as const;
+      const was = keys.map((key) => process.env[key]);
+      for (const key of keys) delete process.env[key];
+      Object.assign(process.env, env);
       try {
-        return newChatStep(proj);
+        return newChatStep();
       } finally {
-        if (was === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
-        else process.env.AIDLC_COMPILED_EXECUTABLE = was;
+        keys.forEach((key, i) => {
+          if (was[i] === undefined) delete process.env[key];
+          else process.env[key] = was[i];
+        });
       }
     };
-    delete process.env.AIDLC_COMPILED_EXECUTABLE;
-    expect(native(installed([".kiro", ".cursor"]))).toBeNull();
-    expect(native(installed([".kiro", ".aidlc"]))).toBeNull();
-    // One harness installed: the engine's tree is the person's tool.
-    expect(native(installed([".kiro"]))).toBe(KIRO_CLI_STEP);
-    // The copy channel runs from the tree of the tool that called it.
-    expect(newChatStep(installed([".kiro", ".cursor"]))).toBe(KIRO_CLI_STEP);
+    expect(pinned({ AIDLC_HARNESS_DIR: ".kiro", AIDLC_HARNESS_DIR_GUESSED: ".kiro" })).toBeNull();
+    // The tool told apart, one harness installed, or the copy channel: the tree's own step.
+    expect(pinned({ AIDLC_HARNESS_DIR: ".kiro" })).toBe(KIRO_CLI_STEP);
+    // A guess the engine then pinned past is no longer one.
+    expect(pinned({ AIDLC_HARNESS_DIR: ".kiro", AIDLC_HARNESS_DIR_GUESSED: ".claude" })).toBe(KIRO_CLI_STEP);
   });
 });
