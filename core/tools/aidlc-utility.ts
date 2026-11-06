@@ -7821,61 +7821,63 @@ export function detectWorkspace(projectDir: string): ScanResult {
   // only index.html beside an api repo) is named as a nested root too, so the
   // scan never reports one repo of a multi-repo folder as the whole project. It
   // adds no signal, so it never changes the Brownfield/Greenfield verdict.
-  // Returns whether a hit was found at or below parentDir.
-  if (!brownfield) {
-    const walkContainers = (
-      parentDir: string,
-      parentParts: string[],
-      parentDepth: number
-    ): boolean => {
-      let entries: string[];
+  // Returns whether a hit was found at or below parentDir. `named` is off for a
+  // repo outside the workspace: its folders are not the workspace's own.
+  const walkContainers = (
+    parentDir: string,
+    parentParts: string[],
+    parentDepth: number,
+    named = true,
+  ): boolean => {
+    let entries: string[];
+    try {
+      entries = readdirSync(parentDir).sort();
+    } catch {
+      return false;
+    }
+
+    let found = false;
+    for (const entry of entries) {
+      if (skipNestedScanDir(entry)) continue;
+      const full = join(parentDir, entry);
+      let st: import("node:fs").Stats;
       try {
-        entries = readdirSync(parentDir).sort();
+        st = lstatSync(full);
       } catch {
-        return false;
+        continue;
       }
+      if (st.isSymbolicLink() || !st.isDirectory()) continue;
 
-      let found = false;
-      for (const entry of entries) {
-        if (skipNestedScanDir(entry)) continue;
-        const full = join(parentDir, entry);
-        let st: import("node:fs").Stats;
-        try {
-          st = lstatSync(full);
-        } catch {
-          continue;
-        }
-        if (st.isSymbolicLink() || !st.isDirectory()) continue;
-
-        const parts = [...parentParts, entry];
-        const depth = parentDepth + 1;
-        const sub = scanSignals(full, 0);
-        if (sub.brownfield) {
-          brownfield = true;
-          found = true;
+      const parts = [...parentParts, entry];
+      const depth = parentDepth + 1;
+      const sub = scanSignals(full, 0);
+      if (sub.brownfield) {
+        brownfield = true;
+        found = true;
+        if (named) {
           nestedHits.push(parts.join("/"));
           nestedRoots.push(parts.join("/"));
-          for (const [lang, n] of Object.entries(sub.langCounts)) {
-            langCounts[lang] = (langCounts[lang] || 0) + n;
-          }
-          for (const fw of sub.frameworks) {
-            if (!frameworks.includes(fw)) frameworks.push(fw);
-          }
-          if (buildSystem === "Unknown") buildSystem = sub.buildSystem;
-          continue;
         }
-
-        if (depth < NESTED_SCAN_MAX_DEPTH && walkContainers(full, parts, depth)) {
-          found = true;
-        } else if (isGitRepoDir(full)) {
-          nestedRoots.push(parts.join("/"));
+        for (const [lang, n] of Object.entries(sub.langCounts)) {
+          langCounts[lang] = (langCounts[lang] || 0) + n;
         }
+        for (const fw of sub.frameworks) {
+          if (!frameworks.includes(fw)) frameworks.push(fw);
+        }
+        if (buildSystem === "Unknown") buildSystem = sub.buildSystem;
+        continue;
       }
-      return found;
-    };
 
-    walkContainers(projectDir, [], 0);
-  }
+      if (depth < NESTED_SCAN_MAX_DEPTH && walkContainers(full, parts, depth, named)) {
+        found = true;
+      } else if (named && isGitRepoDir(full)) {
+        nestedRoots.push(parts.join("/"));
+      }
+    }
+    return found;
+  };
+
+  if (!brownfield) walkContainers(projectDir, [], 0);
 
   // A repo repos.json puts outside the workspace (beside it, say) is code of
   // this work too, which neither sweep above reaches: read as a nested hit is,
@@ -7886,7 +7888,12 @@ export function detectWorkspace(projectDir: string): ScanResult {
       const inside = relative(resolve(projectDir), resolve(dir));
       if (inside === "" || (!inside.startsWith("..") && !isAbsolute(inside))) continue;
       const sub = scanSignals(dir, 0);
-      if (!sub.brownfield) continue;
+      if (!sub.brownfield) {
+        // Its code in folders below its root (one big repo's services and
+        // apps), read as deep as the workspace's own folders are.
+        walkContainers(dir, [], 0, false);
+        continue;
+      }
       brownfield = true;
       for (const [lang, n] of Object.entries(sub.langCounts)) {
         langCounts[lang] = (langCounts[lang] || 0) + n;

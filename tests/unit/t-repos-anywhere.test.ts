@@ -209,6 +209,18 @@ describe("the workspace scan reads the repos repos.json names", () => {
     expect(scan.languages).toContain("TypeScript");
   });
 
+  // RFC scenario 2: one big repo beside the workspace, its code in folders
+  // below its root, read as deep as the same repo inside the workspace is.
+  test("one big repo beside the workspace, code only in its services and apps: Brownfield", () => {
+    const { root, ws } = layout();
+    const platform = join(root, "work", "platform");
+    for (const sub of [["services", "orders"], ["services", "billing"], ["apps", "web"]]) codeAt(join(platform, ...sub));
+    writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "platform", path: "../platform" }] }));
+    const scan = detectWorkspace(ws);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBeUndefined();
+  });
+
   test("a repos.json path with no code there, or no repos.json: the folder alone decides, as before", () => {
     const { root, ws } = layout();
     mkdirSync(join(root, "work", "api"), { recursive: true });
