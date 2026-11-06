@@ -1116,6 +1116,22 @@ describe("a message typed while Kiro CLI v3 works is the person's turn", () => {
     }
   });
 
+  test("Kiro CLI v3: the message is kept as the person typed it, whitespace and all", () => {
+    const project = scratchProject("kiro-ide");
+    try {
+      expect(state(project, "kiro-ide", ["gate-start", "feasibility"]).code).toBe(0);
+      const words = "  keep this indent\n    and this one\n";
+      kiroV3Record(project.home, chat, [
+        ...kiroV3Prompt("Carry on with the feasibility check."),
+        ...kiroV3Steer(words, "steer-3ec38b9e-8ac7-407c-9c05-6200e348a7a5"),
+      ]);
+      expect(shellCard(project, NEXT_CALL).code).toBe(0);
+      expect(keptWords(project.dir)).toEqual([words]);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
   test("Kiro CLI v3: the turn's start is found however much tool output came after it", () => {
     const project = scratchProject("kiro-ide");
     try {

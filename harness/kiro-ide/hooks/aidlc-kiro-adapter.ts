@@ -1549,7 +1549,7 @@ function steersTypedThisTurn(sessionId: string, handedOnOnly = true): KiroCliSte
       ) {
         continue;
       }
-      if (!steers.some((steer) => steer.id === id)) steers.push({ id, words: words.trim() });
+      if (!steers.some((steer) => steer.id === id)) steers.push({ id, words });
     }
     // The record may have grown since the last pass; its size now says whether it was read whole.
     let size: number;
@@ -4101,7 +4101,7 @@ if (target === "record-human-turn" && result.code === 0 && (fwd.input.origin as 
   try {
     const recorded = session ? kiroCliSteersRecorded(projectDir, session) : [];
     const steer = session && words
-      ? steersTypedThisTurn(session, false).findLast((typed) => typed.words === words && !recorded.includes(typed.id))
+      ? steersTypedThisTurn(session, false).findLast((typed) => typed.words.trim() === words && !recorded.includes(typed.id))
       : undefined;
     if (steer !== undefined) noteKiroCliSteerRecorded(projectDir, session, steer.id);
   } catch (error) {
