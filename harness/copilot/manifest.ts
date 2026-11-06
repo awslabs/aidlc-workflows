@@ -87,6 +87,8 @@ const manifest: HarnessManifest = {
       "End your turn right after " +
       "the line: your own next command in this turn would still run without the change.",
   },
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "open a new chat, then type <entry>" },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".github/skills/aidlc/SKILL.md",
   tierFlavor: "copilot",

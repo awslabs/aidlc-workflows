@@ -206,11 +206,14 @@ const BASE_KEYS = [
 // settings file the host reads only when someone chooses it (#1407).
 // `agentFinishRecorded` is Claude Code's (its SubagentStop row lands before a
 // helper's result, so a verdict with none since its request had no reviewer).
+// `newChatStep` is the host's own step to a clean chat, which every shipped
+// tree declares and a new harness may leave out (then no offer is made).
 const OPTIONAL_KEYS = [
   "agentFinishRecorded",
   "directiveMaxBytes",
   "hookActivation",
   "kiroLayout",
+  "newChatStep",
   "runnerFrontmatterAdditions",
   "statusLine",
 ] as const;

@@ -585,6 +585,7 @@ import {
   type ConstructionEvidence,
 } from "./aidlc-construction-checkpoints.ts";
 import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
+import { newChatStep } from "./aidlc-new-chat.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
@@ -1546,6 +1547,12 @@ function keptRequest(projectDir: string, space: string): { args: string[]; resta
 // Steps whose narration the agent passes through without speaking, so it rides
 // the next step it speaks from (the print that creates the work).
 const carriesNarration = new WeakSet<Directive>();
+// The line of such a step that is true only before the work starts (the offer
+// of a clean chat for new work): the next stage step says it as its own line,
+// as that step comes, rather than in change_notices, said before they reply.
+// Kept apart from the rest by its words, which the engine writes alone.
+const saidAsStageComes = new WeakMap<Directive, string>();
+const CLEAN_CHAT_LEAD = "To start this in a clean chat instead, ";
 // Steps the agent speaks right after, with no line of their own (the print
 // that opens a stage's gate, before the gate is shown).
 const leadsToSpeech = new WeakSet<Directive>();
@@ -1670,12 +1677,22 @@ function sayPendingPersonLines(
 ): { directive: Directive; said?: () => void } {
   const projectDir = engineProjectDir;
   const sessionId = engineSessionId;
-  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return { directive: transported };
+  // A line true only before the work comes apart from the step's narration, so
+  // the stage step can say it as it comes; with no chat to keep it for, the
+  // step says it with its own line.
+  const lead = saidAsStageComes.get(requested);
+  const withLead = (): Directive => {
+    if (lead) transported.narration = transported.narration ? `${transported.narration} ${lead}` : lead;
+    return transported;
+  };
+  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return { directive: withLead() };
   if (carriesNarration.has(requested)) {
-    if (transported.narration && addPendingPersonLines(projectDir, sessionId, [transported.narration])) {
+    const lines = [transported.narration ?? "", lead ?? ""];
+    if (transported.narration && addPendingPersonLines(projectDir, sessionId, lines)) {
       delete transported.narration;
+      return { directive: transported };
     }
-    return { directive: transported };
+    return { directive: withLead() };
   }
   const pending = pendingPersonLines(projectDir, sessionId);
   if (pending.lines.length === 0) return { directive: transported };
@@ -1683,12 +1700,24 @@ function sayPendingPersonLines(
   // even one with no line of its own (a waiting Unit checkpoint).
   const pickUp = (transported.kind === "run-stage" || transported.kind === "ask") &&
     pending.lines.some((line) => line.startsWith(PICK_UP_LEAD));
-  if (!pickUp && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) return { directive: transported };
-  const carried = withPersonLines(transported, pending.lines);
+  // The offer of a clean chat is true only before the work starts, so a stage
+  // step says it with its own line, as the step comes. In change_notices it
+  // was said with the first gate, after the stage had run in this chat.
+  const asItComes = transported.kind === "run-stage"
+    ? pending.lines.filter((line) => line.startsWith(CLEAN_CHAT_LEAD))
+    : [];
+  if (!pickUp && asItComes.length === 0 && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) {
+    return { directive: transported };
+  }
+  const beforeReply = pending.lines.filter((line) => !asItComes.includes(line));
+  const carried = beforeReply.length > 0 ? withPersonLines(transported, beforeReply) : transported;
   if (carried === null) return { directive: transported };
+  const spoken = asItComes.length > 0
+    ? { ...carried, narration: [carried.narration, ...asItComes].filter(Boolean).join(" ") } as Directive
+    : carried;
   const noted = withAgentNotes(
-    carried, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
-    switchBackOnFollowUps(carried),
+    spoken, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
+    switchBackOnFollowUps(spoken),
   );
   if (Buffer.byteLength(JSON.stringify(noted), "utf-8") > directiveMaxBytes()) return { directive: transported };
   return { directive: noted, said: pending.said };
@@ -7730,8 +7759,10 @@ function createPrintDirective(
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the
-  // person can start this one in a clean chat instead, said once, never as a stop.
-  if (flags.newIntent) directive.narration += ` ${cleanChatLine(projectDir)}`;
+  // person can start this one in a clean chat instead, said once, never as a
+  // stop, and only while they can take it (sayPendingPersonLines).
+  const cleanChat = flags.newIntent ? cleanChatLine(projectDir) : null;
+  if (cleanChat) saidAsStageComes.set(directive, cleanChat);
   // The agent runs the creation and goes on, so the line rides the first step
   // it speaks from.
   carriesNarration.add(directive);
@@ -7859,20 +7890,13 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
   );
 }
 
-// The optional line offering a clean chat for new work, in the host's own words.
-function cleanChatLine(projectDir: string): string {
-  const skill = entrySkillInvocation();
-  let harness: string | null = null;
-  try {
-    harness = installedHarnessName(projectDir);
-  } catch {
-    harness = null;
-  }
-  const how = harness === "claude" ? `type /clear, then ${skill}`
-    : harness === "kiro-ide" ? `open a new chat, pick the aidlc agent, then type ${skill}`
-    : harness === "opencode" ? `start a new session, then type ${skill}`
-    : `open a new chat, then type ${skill}`;
-  return `To start this in a clean chat instead, ${how}.`;
+// The optional line offering a clean chat for new work, with the step of the
+// tool the person is in from the tree's own harness.json (its manifest's
+// newChatStep). A tree that names none, or a native engine that cannot tell the
+// person's tool among several installed, offers nothing.
+function cleanChatLine(projectDir: string): string | null {
+  const step = newChatStep(projectDir);
+  return step ? `${CLEAN_CHAT_LEAD}${step}.` : null;
 }
 
 // A new project leaves out Reverse Engineering when its plan runs it, and when

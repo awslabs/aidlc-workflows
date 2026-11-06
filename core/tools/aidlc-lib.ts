@@ -782,7 +782,7 @@ export interface DocumentExtractorSpec {
 }
 
 // A host-specific line from harness.json, kept only when well formed.
-function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
+export function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "inHost">(
   key: K,
   value: unknown,
 ): Partial<Record<K, { env: string[]; text: string }>> {
@@ -805,7 +805,7 @@ function registrationLines(value: unknown): Pick<HookActivation, "registration">
 // matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
 // A `NAME=value` variable holding another value rules the host out: Kiro CLI in
 // VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
-function inHostShell(env: readonly string[] | undefined): boolean {
+export function inHostShell(env: readonly string[] | undefined): boolean {
   const entries = (env ?? []).map((entry) => {
     const [name, value] = entry.split("=", 2);
     return { value: value?.toLowerCase(), actual: process.env[name]?.trim().toLowerCase() };
