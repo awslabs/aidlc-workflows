@@ -73,7 +73,7 @@ it would be without it. The rows that carry it:
   with `Source: you`.
 - `CHANGE_ACCEPTED` that carries the person's `Message Id`.
 
-## Event Registry (138 events, 27 categories)
+## Event Registry (139 events, 27 categories)
 
 ### Workflow Lifecycle (9 events)
 
@@ -272,7 +272,7 @@ record. A question in a questions file is digested entry by entry with its
 and Windows line endings change nothing. The ids are recorded only: nothing
 reads them to decide anything yet.
 
-### Unit Configuration and Lifecycle Events (14 events, unit-major Construction)
+### Unit Configuration and Lifecycle Events (15 events, unit-major Construction)
 
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
@@ -301,6 +301,7 @@ once no unit owes it.
 | `UNIT_OWNERSHIP_SET` | Unit-major ownership mode is set before unit activity starts, or solo work switches to teams because a teammate took a Unit from another machine | Timestamp, Mode; optional Home Location, Reason | `tools/aidlc-state.ts set-unit-ownership`, `tools/aidlc-unit.ts` (the switch) |
 | `UNIT_GATE_RHYTHM_SET` | Team-owned gate rhythm is set before the first team Unit gate | Timestamp, Rhythm | `tools/aidlc-state.ts set-unit-gate-rhythm` |
 | `LEAD_SIGN_OFF_SET` | The lead switched their own sign-off of each team's result on or off at the lead's project | Timestamp, Mode; optional Person Words (the lead's own words, whole) | `tools/aidlc-unit.ts lead-sign-off` |
+| `LEAD_HERE_SET` | The lead said, in a checkout that did not make the plan (another machine), that they lead the work there, so the lead's own questions are put there | Timestamp; optional Person Words (the lead's own words, whole), Message Id | `tools/aidlc-unit.ts lead-here` |
 | `UNITS_ASSIGNED` | The lead named, at the lead's project, which team builds which Unit and which stay open for any team | Timestamp, Assigned, Open; optional Left Open (the Units the lead left open for any team), Person Words; By File for a hand-off (no Open); Here for a Unit left open the lead builds at the lead's project (`assign --here`) | `tools/aidlc-unit.ts assign`, `hand-off` |
 | `UNIT_TAKEN_IN` | A team took one Unit of the lead's work in, as a build of its own in its space | Timestamp, Unit, Team, Home Location, Home Work, Home Record, Home Attempt, Home Commit, Copy Fingerprint, Home Approvals | `tools/aidlc-unit.ts take` |
 | `UNIT_PUSHED` | A team pushed its Unit's branch in each repo it changed and sent the result back to the lead's project | Timestamp, Unit, Branch, Repos | `tools/aidlc-unit.ts push` |

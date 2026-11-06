@@ -1853,6 +1853,9 @@ export function auditShardName(projectDir: string): string {
 // clone the board or the Units it can take, never the walk the lead keeps.
 export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
   const ownShard = knownAuditShardName(projectDir);
+  // The person's own word in this checkout that they lead this work (`unit
+  // lead-here`, the lead on another machine): its plan is theirs here.
+  if (ownShard !== null && rows.some((row) => row.event === "LEAD_HERE_SET" && basename(row.shard) === ownShard)) return false;
   const plan = rows.filter((row) =>
     (row.event.startsWith("STAGE_") || row.event.startsWith("GATE_")) && /^\*\*Unit\*\*:/m.test(row.block) === false
   );

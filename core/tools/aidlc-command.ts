@@ -257,6 +257,11 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
     usage: "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] " +
       "[--accept-released-attempt --user-input <acknowledgment>]",
   },
+  "lead-here": {
+    name: false,
+    options: ["message", "request-file", "person-words"],
+    usage: "unit lead-here [--message <id>] (--request-file <file> | --person-words <text>)",
+  },
   "lead-sign-off": {
     name: false,
     word: "on|off",

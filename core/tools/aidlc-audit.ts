@@ -285,6 +285,7 @@ const VALID_EVENT_TYPES = new Set([
   "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
   "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
   "UNIT_SENT_BACK",
@@ -455,6 +456,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   UNIT_PUSHED: "Unit Pushed",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
   LEAD_SIGN_OFF_SET: "Lead Sign-off Set",
+  LEAD_HERE_SET: "Lead Here Set",
   CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
   UNIT_SENT_BACK: "Unit Sent Back",
@@ -626,6 +628,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
   "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   // The applied Construction policy decides which stage starts are attempt
   // boundaries for Unit receipts, so only its typed setters may record it.
   "CONSTRUCTION_POLICY_SET",
@@ -730,6 +733,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_TAKEN_IN",
   "UNIT_GATE_RHYTHM_SET",
   "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",

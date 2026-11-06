@@ -1013,7 +1013,8 @@ export const ALLOWED: Record<string, Allowed> = {
   "core/tools/aidlc-jump.ts#changeAsked": { use: "keeps", why: "a reopen's change on finished work: every message kept in this chat since the finish (keptSinceFinished), read as personsGateReply reads a gate's window, kept as Feedback" },
   "core/tools/aidlc-unit.ts#mergeGateReplyFields": { use: "keeps", why: "the audit writer: the pinned merge gate row's Person Reply and Message Id from S1's window, kept only when every reply in it came after the pin" },
   // The lead's word that settles a team's Unit (S10 B): its records keep what the lead typed, never the words a team hears.
-  "core/tools/aidlc-unit.ts#leadsWord": { use: "keeps", why: "the reader for the lead's five Unit verbs: the message named, the reply held for the verb's own question, or personsGateReply's window, handed to the verb's records as Person Reply and Message Id" },
+  "core/tools/aidlc-unit.ts#leadsWord": { use: "keeps", why: "the reader for the lead's Unit verbs: the message named, the reply held for the verb's own question, or personsGateReply's window, handed to the verb's records as Person Reply and Message Id" },
+  "core/tools/aidlc-unit.ts#leadHere": { use: "keeps", why: "the audit writer: LEAD_HERE_SET keeps the lead's own words that they lead this work in this checkout, read by no line" },
   "core/tools/aidlc-unit.ts#signOff": { use: "keeps", why: "the audit and claim writer: the sign-off's QUESTION_ANSWERED and the claim's sign-off keep the lead's typed words" },
   "core/tools/aidlc-unit.ts#amendInput": { use: "keeps", why: "the audit writer: SHARED_INPUT_AMENDED's Person Words; what the teams hear stays the agent's relay" },
   "core/tools/aidlc-unit.ts#turnedDown": { use: "keeps", why: "the claim writer: the turn-down keeps the lead's typed words as person_reply, read by no line" },

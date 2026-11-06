@@ -58,6 +58,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
 | `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the lead's project, answer a team's proposed change, in your own words |
 | `/aidlc unit lead-sign-off on\|off` | At the lead's project, make each team's result wait for your sign-off, or not (off by default) |
+| `/aidlc unit lead-here` | In a checkout that did not make the plan (the lead on another machine), record the lead's own word that they lead the work there, so the lead's questions are put there |
 | `/aidlc unit sign-off <unit>` | At the lead's project, sign a team's result off, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the lead's project, send one repo of a team's Unit back to the team, with your words |
 | `/aidlc unit merged <unit> --repo <repo>` | At the lead's project, count one repo of a team's Unit as merged where the board does not see it, in your words |
@@ -909,6 +910,13 @@ own force push. The line says where you are now and the way back to your
 branch. A conflict stops with git's words, and `git rebase --abort` in that repo
 goes back; a move your own changes kept git from making is offered again once
 they are out of the way.
+
+### `/aidlc unit lead-here` - Lead the work from another checkout
+
+In a checkout that did not make the work's plan (a fresh clone on another machine), the lead's own questions (who builds which
+Unit, a hand-off, a sign-off, an answer to a team's change) are not put: the step shows the board and the Units to take, as a
+teammate's clone does. When you say you lead this work and want to carry it on there, the agent runs `unit lead-here` with
+your words; it records `LEAD_HERE_SET` in that checkout's own audit, and from then on the lead's questions are put there.
 
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 

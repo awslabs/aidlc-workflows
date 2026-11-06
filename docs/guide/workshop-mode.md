@@ -616,8 +616,11 @@ reads **Yes, for this project, and offered to any team that takes a Unit**.
   Units are offered to take. **Carry on <work> here, as the lead** is offered
   only in the checkout that made the plan (or a copy of that folder), once in a
   chat when nothing is ready to take; a teammate's clone never offers it,
-  whatever its git name, and hears where things stand. The lead in a fresh
-  clone on another machine says so in their own words and picks the work.
+  whatever its git name, and hears where things stand. Even with the lead's
+  work picked there, the lead's own questions (who builds which Unit, a
+  hand-off, a sign-off) are not put in such a clone. The lead in a fresh clone
+  on another machine says so in their own words, and AI-DLC records it there
+  (`unit lead-here`); from then on that checkout gets the lead's questions.
 - **A team's own workspace made from the lead's** (its `origin` is the team's
   repository): the lead's work that git copied in stays the lead's, read only,
   and is never offered to carry on. Its Units are, and taking one reaches the

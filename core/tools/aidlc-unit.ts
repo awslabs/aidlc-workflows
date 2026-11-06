@@ -8842,6 +8842,22 @@ export function leadSignOffOn(stateContent: string | null): boolean {
   return getField(stateContent ?? "", LEAD_SIGNOFF_FIELD)?.trim() === "on";
 }
 
+// `aidlc unit lead-here`: the person's own word that they lead this work, in
+// a checkout that did not make its plan (the lead on another machine). It is
+// recorded with their words in this checkout's own audit, and from then on the
+// lead's own questions are put here (planMadeElsewhere reads it); a teammate
+// never says it, so the lead's questions never reach their clone.
+function leadHere(args: string[], projectDir?: string): void {
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (!isTeamUnitOwnership(state) || homeLocation(state) === null || unitBuildOf(state) !== null) {
+    fail("lead-here is for the lead's work built by teams, selected in this checkout.");
+  }
+  const lead = leadsWord(pd, parseArgs(args).flags, "Carrying this work on here as its lead");
+  appendAuditEntry("LEAD_HERE_SET", { ...(lead.said !== null ? { "Person Words": lead.said } : {}), ...lead.fields }, pd);
+  console.log(JSON.stringify({ lead_here: true, notice: "This checkout carries the work on as yours, the lead's, from here." }));
+}
+
 function leadSignOffSetting(args: string[], projectDir?: string): void {
   const value = args[0];
   if (value !== "on" && value !== "off") fail(`usage: ${unitUsage("lead-sign-off")}`);
@@ -8954,6 +8970,7 @@ export function main(argv: string[]): void {
     else if (command === "rebase") rebaseUnit(args, projectDir);
     else if (command === "amend") amendInput(args, projectDir);
     else if (command === "lead-sign-off") leadSignOffSetting(args, projectDir);
+    else if (command === "lead-here") leadHere(args, projectDir);
     else if (command === "sign-off") signOff(args, projectDir);
     else if (command === "turned-down") turnedDown(args, projectDir);
     else if (command === "send-back") sendBack(args, projectDir);

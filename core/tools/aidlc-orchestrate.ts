@@ -4952,7 +4952,8 @@ function unitsWordsReplyDirective(requestId: string, offer: AskDirective | Print
       (choices === "" ? "" : `If they ask for one of these Units (to take it, start it, or start it early), run that choice's ` +
         `command and follow what it returns: ${choices}. `) +
       `If they only ask what is here, run \`${orchestrate} next\` with nothing after it. If they say they lead this work and ask ` +
-      `to carry it on here, run \`${aidlcDispatcherInvocation("intent")} switch <name>\` with its name. Otherwise (new work of ` +
+      `to carry it on here, run \`${aidlcDispatcherInvocation("intent")} switch <name>\` with its name, then \`${aidlcToolInvocation("unit")} ` +
+      `lead-here ${unitWordsArg("lead-here")}\` with their words. Otherwise (new work of ` +
       `their own, or you cannot tell), run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words.",
   );
@@ -17800,6 +17801,18 @@ function emitTeamUnitMajorRunStage(
   // per chat, and at each step that shows or acts on them: the board (nothing
   // left for the home to build now), a result to check, a change to answer.
   const teamHome = !scopeStamp && homeLocation(stateContent) !== null;
+  // The lead's work in a checkout that did not make its plan (a teammate's
+  // clone): the lead's own questions are never put there, by whatever route the
+  // work was selected. The board prints and the Units offer follows; the
+  // person's own word that they lead it lifts this (`unit lead-here`).
+  if (teamHome && !isReadOnlyEngineProbe() && planMadeElsewhere(projectDir)) {
+    const take = unitTakeAsk(projectDir);
+    emit(lineEndingTurn(teamHomeBoardText(projectDir, stateContent), take?.kind === "ask" ? [{ question: take.question, choices: take.choices ?? [] }] : [],
+      `This checkout did not make this work's plan, so the lead's own questions are not put here. If the person says they lead ` +
+        `this work and ask to carry it on here, run \`${aidlcToolInvocation("unit")} lead-here ${unitWordsArg("lead-here")}\` ` +
+        `with their words, then \`${aidlcToolInvocation("orchestrate")} next\`.`));
+    return;
+  }
   const { overview, results, heldElsewhere } = teamHomeClaims(projectDir, teamHome);
   // A team's result built on its own edit of a shared input, made on the
   // version before the lead's change: said once.

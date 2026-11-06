@@ -152,6 +152,45 @@ describe("a team member's clone of the home's workspace", () => {
   // Live runs on Codex, Kiro CLI and Copilot CLI: a teammate's first line with
   // words ("what is ours to build?") got the pick of the work itself, which
   // selected it in their clone and showed them the lead's board.
+  // Live runs on Codex: payments' clone selected the lead's work (a pick, an
+  // intent switch) and was asked the lead's own hand-off question.
+  test("in a clone that did not make the plan, the lead's work selected gets the board and the Units offer, never the lead's questions", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    expect(run(UTILITY, ["intent", "switch", HOME], alice).status).toBe(0);
+    const step = next(alice, ENV);
+    const said = JSON.stringify(step);
+    expect(said, said.slice(0, 600)).not.toContain("as a file");
+    expect(said).toContain("Taking a Unit starts it as your team's own piece of work here");
+    expect(said).not.toContain("Who builds which Unit");
+    // Again in the same chat: still the Units offer, never the lead's walk.
+    expect(JSON.stringify(next(alice, ENV))).not.toContain("as a file");
+  });
+
+  test("the lead on a second machine: their own word that they lead this work, recorded, puts the lead's questions there again", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const laptop = cloneOf(home.remote, "lead");
+    expect(run(UTILITY, ["intent", "switch", HOME], laptop).status).toBe(0);
+    const step = next(laptop, ENV);
+    expect(String(step.board_note), JSON.stringify(step).slice(0, 600)).toContain("lead-here");
+    const lifted = run(UNIT, ["lead-here", "--person-words", "I lead this work, carry it on here on my laptop"], laptop);
+    expect(lifted.status, lifted.out).toBe(0);
+    const row = readAuditShardEvents(laptop).findLast((entry) => entry.event === "LEAD_HERE_SET");
+    expect(row, "the lift is on the record").toBeDefined();
+    const after = next(laptop, ENV);
+    expect(JSON.stringify(after), JSON.stringify(after).slice(0, 600)).not.toContain("Taking a Unit starts it as your team's own piece of work here");
+  });
+
   // A live run on Codex: after the Units offer, a teammate's words about their
   // own Unit got the pick of the lead's whole work, which selected it in their
   // clone and put the lead's own questions to them.
