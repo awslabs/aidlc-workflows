@@ -758,6 +758,7 @@ import {
 } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
+import { kiroFirstTurnFill } from "./aidlc-kiro-chat-record.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
 import {
   documentsCard,
@@ -19399,6 +19400,11 @@ function addApproveAcceptsLine(
 // asked anyway: a stage's approval, or a Unit's checkpoint. The person's answer
 // decides; nothing parks here. The figure changes, so one key marks it heard.
 const KIRO_CONTEXT_OFFER_HEARD = "kiro-context-offer";
+// A new chat that picks the work up on the same model starts about as full as
+// this chat got in its first turn on the work (#3642). From half the window,
+// where the statusline turns yellow (contextColor), it would fill again soon,
+// so the line says that instead of recommending one.
+const NEW_CHAT_NO_ROOM_PERCENT = 50;
 function addContextParkOffer(
   reply: { kind: string; narration?: string; change_notices?: string[] },
   projectDir: string,
@@ -19418,20 +19424,32 @@ function addContextParkOffer(
     // No first turn known: no summary counts.
   }
   const pressure = kiroContextPressure(chat, since);
-  const line = pressure?.kind === "summarized"
-    ? "Kiro has summarized this chat to make room, so the agent now works from a summary of what came before. " +
-      "Do you want to pause here and carry on in a new chat? I recommend it: your work is saved, and a new chat " +
-      "picks it up from the saved files."
+  const summarized = pressure?.kind === "summarized";
+  const full = summarized
+    ? "Kiro has summarized this chat to make room, so the agent now works from a summary of what came before."
     : pressure?.kind === "usage" && pressure.percent >= 80
     ? `This chat is about ${Math.round(pressure.percent)}% full by Kiro's count, and once it fills the agent ` +
-      "carries on from a summary. Do you want to pause here and carry on in a new chat? I recommend it: the work " +
-      "is saved, and a new chat picks it up from the saved files."
+      "carries on from a summary."
     : null;
-  if (line === null) return;
+  if (full === null) return;
+  const first = kiroFirstTurnFill(chat, since);
+  const noRoom = first !== null && first.percent >= NEW_CHAT_NO_ROOM_PERCENT;
+  const line = noRoom
+    ? `${full} A new chat on the same model${first.model ? ` (${first.model})` : ""} will not help much: this chat ` +
+      `reached about ${Math.round(first.percent)}% in its first turn on this work, so a new chat would fill up ` +
+      `${summarized ? "and be summarized again" : "again"} soon.`
+    : summarized
+    ? `${full} Do you want to pause here and carry on in a new chat? I recommend it: your work is saved, and a new ` +
+      "chat picks it up from the saved files."
+    : `${full} Do you want to pause here and carry on in a new chat? I recommend it: the work is saved, and a new ` +
+      "chat picks it up from the saved files.";
   // A step `next` builds may be sent in parts and rebuilt by `continue`, and a
   // Unit's step has its narration rewritten on the way out: the settled lines
   // ride both, as sayWithStepOnce's do.
   if (reply.kind === "run-stage") settledNotices.push(line);
+  // A line that asks nothing rides as a change notice, which the agent says as
+  // written: at the end of a gate's narration it was left out (Kiro CLI 3.1.0).
+  else if (noRoom) reply.change_notices = [...(reply.change_notices ?? []), line];
   else reply.narration = reply.narration ? `${reply.narration}\n${line}` : line;
   markPersonLinesHeard(projectDir, chat, [KIRO_CONTEXT_OFFER_HEARD]);
 }
