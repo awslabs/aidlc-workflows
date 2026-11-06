@@ -1674,19 +1674,22 @@ function sayPendingPersonLines(
 ): { directive: Directive; said?: () => void } {
   const projectDir = engineProjectDir;
   const sessionId = engineSessionId;
-  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return { directive: transported };
+  // A line true only before the work comes apart from the step's narration, so
+  // the stage step can say it as it comes; with no chat to keep it for, the
+  // step says it with its own line.
+  const lead = saidAsStageComes.get(requested);
+  const withLead = (): Directive => {
+    if (lead) transported.narration = transported.narration ? `${transported.narration} ${lead}` : lead;
+    return transported;
+  };
+  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return { directive: withLead() };
   if (carriesNarration.has(requested)) {
-    // A line true only before the work is kept as its own line, so the stage
-    // step can say it apart from the rest.
-    const lead = saidAsStageComes.get(requested);
-    const own = lead && transported.narration?.endsWith(` ${lead}`)
-      ? transported.narration.slice(0, -(lead.length + 1))
-      : transported.narration;
-    const lines = own && lead && own !== transported.narration ? [own, lead] : [own ?? ""];
-    if (own && addPendingPersonLines(projectDir, sessionId, lines)) {
+    const lines = [transported.narration ?? "", lead ?? ""];
+    if (transported.narration && addPendingPersonLines(projectDir, sessionId, lines)) {
       delete transported.narration;
+      return { directive: transported };
     }
-    return { directive: transported };
+    return { directive: withLead() };
   }
   const pending = pendingPersonLines(projectDir, sessionId);
   if (pending.lines.length === 0) return { directive: transported };
@@ -7715,10 +7718,7 @@ function createPrintDirective(
   // person can start this one in a clean chat instead, said once, never as a
   // stop, and only while they can take it (sayPendingPersonLines).
   const cleanChat = flags.newIntent ? cleanChatLine() : null;
-  if (cleanChat) {
-    directive.narration += ` ${cleanChat}`;
-    saidAsStageComes.set(directive, cleanChat);
-  }
+  if (cleanChat) saidAsStageComes.set(directive, cleanChat);
   // The agent runs the creation and goes on, so the line rides the first step
   // it speaks from.
   carriesNarration.add(directive);
