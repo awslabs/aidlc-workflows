@@ -1756,8 +1756,8 @@ once to your tool:
 codex plugin marketplace add <path>     # Codex CLI
 ```
 
-Install, `aidlc update`, `aidlc use <version>` and `aidlc rollback` refresh the
-catalogue from the release they make active, writing it whole and then swapping
+Install, `aidlc update`, `aidlc use <version>` and `aidlc system rollback`
+refresh the catalogue from the release they make active, writing it whole and then swapping
 it in, so the tool never reads half of one. After an update, the tool's own
 marketplace update (`/plugin marketplace update aidlc-plugins` in Claude Code)
 reads the new plugin versions from the same path. If the folder cannot be

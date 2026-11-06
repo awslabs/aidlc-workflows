@@ -3271,15 +3271,37 @@ describe("t230 dispatcher help and errors", () => {
       ...PUBLIC_LIFECYCLE_GRAMMARS,
       ...SIMPLE_PUBLIC_GRAMMARS,
     };
+    // The `aidlc system` lifecycle verbs print their route's form for --help,
+    // so the form names every flag their grammar takes (--no-color as well
+    // as --project-dir is plumbing there).
+    const systemForms: Record<string, string> = {
+      rollback: "top-rollback",
+      "versions install": "versions-install",
+      "versions prune": "versions-prune",
+    };
     // Both parsers, so neither can gain a flag help does not name.
     expect(Object.keys(grammars).sort()).toEqual([
       "doctor",
+      "rollback",
       "uninstall",
       "update",
       "use",
       "version",
+      "versions install",
+      "versions prune",
     ]);
     for (const [command, grammar] of Object.entries(grammars)) {
+      if (systemForms[command]) {
+        const form = ROUTES.find((route) => route.id === systemForms[command])?.all?.[0] ?? "";
+        for (const flag of [...grammar.values, ...grammar.bare]) {
+          if (plumbing.has(flag) || flag === "--no-color") continue;
+          expect(
+            new RegExp(`[\\s\\[|]${flag}[\\s\\]|]`).test(` ${form} `),
+            `system ${command} usage omits the accepted flag ${flag}`,
+          ).toBe(true);
+        }
+        continue;
+      }
       const rendered = renderCommandHelp(
         command as (typeof PUBLIC_COMMANDS)[number],
       );

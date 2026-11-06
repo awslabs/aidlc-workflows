@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -2301,6 +2302,122 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     expect(both.stdout + both.stderr).toContain(
       `rollback takes one version; you typed ${NEXT_VERSION} and ${LIVE_PIN_VERSION}`,
     );
+    expect(active()).toBe(AIDLC_VERSION);
+  });
+
+  // `aidlc system --help` lists rollback and versions, and every lifecycle
+  // verb's usage error says "rerun with --help". Asked for its usage, or given a
+  // word it does not read, a verb used to run: rollback --help and --dry-run
+  // rolled back, prune --help deleted a retained release. Each case here leaves
+  // the whole machine (the active pointer, every retained release and harness
+  // tree, the launcher) and the person's profile as they were.
+  test("a lifecycle verb's --help prints its usage, and a word it does not know is refused with its usage, changing nothing", () => {
+    const machine = temp("aidlc-t244-verb-help-");
+    const project = temp("aidlc-t244-verb-help-project-");
+    const home = temp("aidlc-t244-verb-help-home-");
+    mkdirSync(join(project, ".git"));
+    const env = { ...envFor(machine), NO_COLOR: "1" };
+    const releases = Object.fromEntries(
+      [AIDLC_VERSION, NEXT_VERSION, LIVE_PIN_VERSION, STALE_PIN_VERSION]
+        .map((version) => [version, fixture(version, { binary: "executable" })]),
+    );
+    for (const version of [AIDLC_VERSION, NEXT_VERSION]) {
+      const installed = run(LIFECYCLE, ["update", "--version", version, "--from", releases[version]], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    }
+    // A retained release that is neither active, the rollback target nor pinned: prune removes it.
+    const retained = run(LIFECYCLE, [
+      "versions", "install", LIVE_PIN_VERSION, "--from", releases[LIVE_PIN_VERSION],
+    ], project, env);
+    expect(retained.status, retained.stdout + retained.stderr).toBe(0);
+    const active = () => readFileSync(join(machine, "active-version"), "utf-8").trim();
+    const entries = (root: string): string[] => {
+      const found: string[] = [];
+      const visit = (dir: string): void => {
+        for (const name of readdirSync(dir).sort()) {
+          const path = join(dir, name);
+          const stat = lstatSync(path);
+          const at = path.slice(root.length + 1);
+          if (stat.isDirectory()) {
+            found.push(`${at}/`);
+            visit(path);
+          } else if (stat.isSymbolicLink()) {
+            found.push(`${at} -> ${readlinkSync(path)}`);
+          } else {
+            found.push(`${at} ${createHash("sha256").update(readFileSync(path)).digest("hex")}`);
+          }
+        }
+      };
+      visit(root);
+      return found;
+    };
+    // The home folder is Bun's too (its own cache lands there), so only the profile is watched in it.
+    const profile = join(home, ".profile");
+    const snapshot = () => [...entries(machine), existsSync(profile) ? readFileSync(profile, "utf-8") : "no profile"];
+    const help = (form: string) => ({ code: 0, says: [`usage: `, form] });
+    const unknown = (line: string, form: string) => ({ code: 2, says: [line, "usage: ", form] });
+    const rollbackForm = " system rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes]";
+    const pruneForm = " system versions prune [--yes]";
+    const installForm = " system versions install <version> [--from <dir>]";
+    const cases: Array<{ args: string[]; code: number; says: string[]; home?: true }> = [
+      { args: ["system", "rollback", "--help"], ...help(rollbackForm) },
+      { args: ["system", "rollback", "-h"], ...help(rollbackForm) },
+      { args: ["system", "versions", "prune", "--help", "--yes"], ...help(pruneForm) },
+      { args: ["system", "versions", "install", STALE_PIN_VERSION, "--from", releases[STALE_PIN_VERSION], "--help"], ...help(installForm) },
+      {
+        args: ["system", "lifecycle", "install-apply", "--from", releases[LIVE_PIN_VERSION], "--version", LIVE_PIN_VERSION, "-h"],
+        ...help(" system lifecycle install-apply --from <dir> --version <version>"),
+      },
+      {
+        args: ["system", "lifecycle", "install-profile", "--profile", profile, "--bin-dir", join(machine, "bin"), "--help"],
+        ...help(" system lifecycle install-profile --profile <path> --bin-dir <path>"),
+        home: true,
+      },
+      { args: ["update", "--help"], code: 0, says: ["USAGE"] },
+      { args: ["update", "-h"], code: 0, says: ["USAGE"] },
+      { args: ["use", AIDLC_VERSION, "--help"], code: 0, says: ["USAGE"] },
+      { args: ["uninstall", "--help", "--yes"], code: 0, says: ["USAGE"] },
+      { args: ["system", "rollback", "--dry-run"], ...unknown("unknown rollback option --dry-run", rollbackForm) },
+      { args: ["system", "rollback", "--bogus"], ...unknown("unknown rollback option --bogus", rollbackForm) },
+      { args: ["system", "versions", "prune", "--bogus", "--yes"], ...unknown("unknown versions prune option --bogus", pruneForm) },
+      {
+        args: ["system", "versions", "install", STALE_PIN_VERSION, "--from", releases[STALE_PIN_VERSION], "--bogus"],
+        ...unknown("unknown versions install option --bogus", installForm),
+      },
+      { args: ["update", "--bogus"], ...unknown("unknown update option --bogus", " update [--version <version>]") },
+      { args: ["use", AIDLC_VERSION, "--bogus"], ...unknown("unknown use option --bogus", " use <version> [--from <dir>]") },
+      { args: ["uninstall", "--bogus", "--yes"], ...unknown("unknown uninstall option --bogus", " uninstall [--purge]") },
+    ];
+    // Every case is run, so a red names each verb that acted.
+    const failures: string[] = [];
+    for (const item of cases) {
+      const before = snapshot();
+      const was = active();
+      const result = run(DISPATCHER, item.args, project, item.home ? { ...env, HOME: home } : env);
+      const output = result.stdout + result.stderr;
+      const label = `aidlc ${item.args.join(" ")}`;
+      if (result.status !== item.code) failures.push(`${label}: exit ${result.status}, wanted ${item.code}: ${output}`);
+      for (const part of item.says) {
+        if (!output.includes(part)) failures.push(`${label}: does not say ${JSON.stringify(part)}: ${output}`);
+      }
+      if (active() !== was) failures.push(`${label}: switched the active release from ${was} to ${active()}`);
+      if (JSON.stringify(snapshot()) !== JSON.stringify(before)) failures.push(`${label}: changed the machine or the profile`);
+    }
+    expect(failures).toEqual([]);
+
+    // A script reading JSON gets the same message it always did, and nothing changes.
+    const json = run(DISPATCHER, ["system", "rollback", "--dry-run", "--json"], project, env);
+    expect(json.status, json.stdout + json.stderr).toBe(2);
+    expect(JSON.parse(json.stdout).message).toBe("unknown rollback option --dry-run");
+    expect(active()).toBe(NEXT_VERSION);
+
+    // The words rollback does know still work.
+    const listed = run(DISPATCHER, ["system", "rollback", "--list"], project, env);
+    expect(listed.status, listed.stdout + listed.stderr).toBe(0);
+    expect(listed.stdout).toContain(AIDLC_VERSION);
+    const rolled = run(DISPATCHER, ["system", "rollback", AIDLC_VERSION, "--yes"], project, env);
+    expect(rolled.status, rolled.stdout + rolled.stderr).toBe(0);
+    expect(rolled.stdout).toContain(`rolled back to ${AIDLC_VERSION}`);
     expect(active()).toBe(AIDLC_VERSION);
   });
 
