@@ -831,7 +831,9 @@ In a Unit's build, `propose --input <file> [--file <changed text>]` sends the
 home your change to one of the files the Unit was approved with (your edited
 copy, or the text in `--file`), with your words in the request file its command
 names (`--request-file`); the build carries on, and
-offers it once when your copy changed. At the home, the owner of the shared
+offers it once when your copy changed. A build by file writes the change into
+its progress file instead, for you to send to the lead; taking that file in
+(`take-in`) puts it on the claim as if it had been sent. At the home, the owner of the shared
 plan is asked once, with the path of the team's version (the board keeps the
 choice after a "Not now"), and the agent runs
 `amend <unit> --input <file> --answer <approve|reject> --request-file <file>`

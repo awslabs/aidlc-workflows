@@ -261,6 +261,37 @@ describe("progress and the result come back as files", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ done: true });
   });
 
+  // A live run: a team building by file was told to send its change "with your
+  // result file", which carries none, so its change had no way home. Its
+  // proposal goes in a progress file, and the lead is asked when they take it in.
+  test("a team by file proposes a change in a progress file, and the lead is asked about it once it is taken in", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+    const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, by month.\n");
+    const sent = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "report refunds by month"], partner.dir);
+    expect(sent.status, sent.out).toBe(0);
+    expect(sent.json?.notice).toBe(
+      "Your change to the requirements is in aidlc/handoff/fixture-reporting-progress.md: send it to the lead, who is asked " +
+        "about it when they take it in. I'm carrying on with your version here until the lead decides.",
+    );
+    const progressFile = deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md");
+    const progressIn = run(UNIT, ["take-in", progressFile], home.dir);
+    expect(progressIn.status, progressIn.out).toBe(0);
+    expect(String(progressIn.json?.notice)).toContain("It brings a change data proposes to the requirements.");
+    const ask = next(home.dir);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-amend");
+    expect(String(ask.question)).toStartWith('data proposes a change to the requirements for reporting ("report refunds by month").');
+    // Turned down, nothing reaches a team that builds from a file: the line says to tell them.
+    const down = run(UNIT, ["amend", "reporting", "--input", "inception/requirements-analysis/requirements.md", "--answer", "reject",
+      "--person-words", "not this month"], home.dir);
+    expect(down.status, down.out).toBe(0);
+    expect(down.json?.notice).toBe("Turned down data's change to the requirements. They build from a file, so nothing reaches them " +
+      "from here: tell them, and they carry on with the approved requirements.");
+  });
+
   test("a result brings home only the Unit outputs the home reads: a file naming the home's state is left out, with a line", () => {
     const { home } = handedOff();
     const partner = partnerWorkspace();

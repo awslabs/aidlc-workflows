@@ -6947,7 +6947,16 @@ function proposeChange(args: string[], projectDir?: string): void {
     return;
   }
   if (getField(state, "Home Result")?.trim() === "by file") {
-    fail(`The home takes no push from here: send your change to the ${name} to the lead with your result file.`);
+    const rel = writeProgressFile(pd, state, build, {
+      input: match.path, by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate", words: personWordsOf(pd, flags), text,
+    });
+    console.log(JSON.stringify({
+      proposed: true,
+      file: rel,
+      notice: `Your change to the ${name} is in ${rel}: send it to the lead, who is asked about it when they take it in. ` +
+        `I'm carrying on with ${flags.file !== undefined ? `the approved ${name}` : "your version here"} until the lead decides.`,
+    }));
+    return;
   }
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, build.unit);
@@ -7150,7 +7159,10 @@ function amendInput(args: string[], projectDir?: string): void {
     const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
     if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
     invalidateLiveClaimPayloadCache(pd, unit);
-    lines.push(`Turned down ${live.owner}'s change to the ${name}; they hear it once, with your words.`);
+    lines.push(live.payload.by_file && !live.payload.taken_by
+      ? `Turned down ${live.owner}'s change to the ${name}. They build from a file, so nothing reaches them from here: ` +
+        `tell them, and they carry on with the approved ${name}.`
+      : `Turned down ${live.owner}'s change to the ${name}; they hear it once, with your words.`);
   }
   appendAuditEntry("QUESTION_ANSWERED", {
     Question: `${live.owner} proposes a change to the ${name} for ${unit}`,
@@ -7423,17 +7435,37 @@ function progressFile(projectDir?: string): void {
     console.log(JSON.stringify({ notice: `${build.unit}'s progress reaches the home with your pushes; no file is needed.` }));
     return;
   }
+  const rel = writeProgressFile(pd, state, build);
+  console.log(JSON.stringify({ file: rel, notice: `The progress file is ${rel}; send it to the lead if you like.` }));
+}
+
+// A by-file build's progress file: where its Unit stands, and a change it
+// proposes to an input it was approved with (RFC 5.4), which the lead is asked
+// about once they take the file in.
+function writeProgressFile(
+  pd: string,
+  state: string,
+  build: UnitBuild,
+  proposal?: { input: string; by: string; words: string; text: string },
+): string {
   const label = getField(state, "Home Label")?.trim() || build.unit;
   const rel = handFilePath(label, build.unit, "-progress");
   const stage = getField(state, "Current Stage")?.trim() ?? "";
+  const written = isoTimestamp();
   writeHandFile(pd, rel, renderHandFile(
     "progress",
     `Progress: ${build.unit}`,
     "Point AI-DLC at this file at the home and it takes it in.",
-    { "Home Work": build.homeWork, "Home Label": label, Unit: build.unit, Attempt: String(build.attempt), Stage: stage, Written: isoTimestamp() },
-    new Map(),
+    {
+      "Home Work": build.homeWork, "Home Label": label, Unit: build.unit, Attempt: String(build.attempt), Stage: stage, Written: written,
+      ...(proposal ? {
+        Proposed: proposal.input, "Proposed By": proposal.by,
+        ...(proposal.words ? { "Person Words": proposal.words.replace(/\s+/g, " ").trim() } : {}),
+      } : {}),
+    },
+    proposal ? new Map([[`proposals/${proposal.input}`, proposal.text]]) : new Map(),
   ));
-  console.log(JSON.stringify({ file: rel, notice: `The progress file is ${rel}; send it to the lead if you like.` }));
+  return rel;
 }
 
 // A hand file already acted on here, so pointing at it again starts nothing: a
@@ -7485,6 +7517,17 @@ function takeIn(args: string[], projectDir?: string): void {
     payload.progress = { stage: file.fields.Stage ?? "", at: file.fields.Written ?? "" };
     const stage = file.fields.Stage ? stageLabel(loadGraph().find((entry) => entry.slug === file.fields.Stage), file.fields.Stage) : null;
     lines.unshift(`Took in ${unit}'s progress from ${live.owner}: ${stage ?? "under way"}.`);
+    // A change the team proposes, put to the lead at the next step as a claim's is.
+    const input = file.fields.Proposed?.trim();
+    const text = input ? file.files.get(`proposals/${input}`) : undefined;
+    if (input && text !== undefined) {
+      const proposal: Proposal = {
+        input, by: file.fields["Proposed By"]?.trim() || live.owner, words: file.fields["Person Words"]?.trim() ?? "", at: file.fields.Written ?? isoTimestamp(),
+      };
+      payload.proposals = [...(live.payload.proposals ?? []).filter((entry) => entry.input !== input || entry.answer !== undefined), proposal];
+      files[`${RESULT_FILES_ROOT}/proposals/${input}`] = text;
+      lines.push(`It brings a change ${live.owner} proposes to the ${inputName(input)}.`);
+    }
   } else {
     if (!file.result) fail(`${path} holds no result.`);
     // A result brings home only the Unit outputs the home's later stages read.
