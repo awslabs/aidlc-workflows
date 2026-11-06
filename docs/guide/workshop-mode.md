@@ -630,7 +630,10 @@ work does: after every stage, or once at its end.
   held from your side: the lead holds it for your team at the home.
 - A repo the home's work records that your workspace has no checkout of is
   said once, with where to clone it or how to give its path in
-  `repos.local.json`.
+  `repos.local.json`. When `repos.json` has its address, the take asks instead:
+  "billing is not at ../billing yet, where repos.json puts it. Do you want me to
+  clone it there?" On your yes it is cloned there with your own git, and its
+  files are nobody's change at the Unit's gates.
 
 Each build keeps its entry in its own record folder (`aidlc-intent.json`), not in
 the space's `intents.json`, so two people who take two Units in one space share

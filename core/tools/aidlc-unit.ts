@@ -192,7 +192,7 @@ import {
   TEAM_RHYTHM_OFFER,
   theTeam,
 } from "./aidlc-unit-teams.js";
-import { repoNotThereLine } from "./aidlc-workspace-manifest.js";
+import { repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
   captureStageValidationBasis,
@@ -5862,8 +5862,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   }
   // The likely repos this workspace has no checkout of, said with the way to one.
   const likely = unitLikelyRepos(pd, home.dirName, home.space).get(unit) ?? [];
-  const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
-    .filter((repo) => home.repos.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
+  const notThere = likelyReposNotHere(pd, likely, home.repos);
   if (resultByFile) {
     withAuditLock(pd, () => {
       const content = readStateFile(pd, build.dirName, build.space);
@@ -5882,10 +5881,12 @@ function takeUnit(args: string[], projectDir?: string): void {
         ? ` You can read the home but not write to it, so the result of ${unit} goes back as a file when it is built.`
         : "") +
       earlyLines.map((line) => ` ${line}`).join("") +
-      missing.map((repo) => ` ${repoNotThereLine(pd, repo)}`).join("") +
+      notThere.lines +
       (planChanging !== null
         ? ` The home is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
-        : ""),
+        : "") +
+      notThere.question,
+    ...notThere.offer,
   }));
 }
 
@@ -6146,7 +6147,6 @@ function pushUnit(args: string[], projectDir?: string): void {
   const build = unitBuildOf(state);
   if (build === null) fail("push sends a Unit's build home; this work is not one.");
   const unit = build.unit;
-  if (bareFlags.has("later") || flags.later !== undefined) {
   // The branch the person named (their team's own rule), kept for every
   // later push; else the one named before, else the Unit's name.
   if (bareFlags.has("branch")) fail(`push --branch needs the branch name the person gave. ${unitUsage("push")}.`);
@@ -6157,6 +6157,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (!checked.ok) fail(`"${branch}" is not a branch name git takes, so nothing was pushed.${checked.stderr.trim() ? ` Git says: "${gitSaid(checked.stderr)}".` : ""}`);
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_BRANCH_FIELD, branch)));
   }
+  if (bareFlags.has("later") || flags.later !== undefined) {
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
     finishBuildRecord(pd);
     console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you want it to go home.` }));
@@ -6252,7 +6253,6 @@ function pushUnit(args: string[], projectDir?: string): void {
   const whereNow = (done = false): string =>
     whereNowLine(branch, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "");
   for (const { repo, dir, name, remote, paths } of planned) {
-    const from = git(dir, ["branch", "--show-current"]).stdout.trim();
     // The Unit's branch under the name it had, now to go under the person's:
     // renamed as their own hands would while the remote has no copy of it.
     if (branch !== before && git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${before}`]).ok &&
@@ -6261,6 +6261,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       const named = git(dir, sent ? ["branch", branch, before] : ["branch", "-m", before, branch]);
       if (!named.ok) fail(`Branch ${before} in ${name} could not be named ${branch}, so nothing was pushed. Git says: "${gitSaid(named.stderr)}".${whereNow()}`);
     }
+    const from = git(dir, ["branch", "--show-current"]).stdout.trim();
     if (from !== branch) {
       const exists = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
       let switched = false;
@@ -6709,8 +6710,8 @@ export function earlyBaseMerged(
   } catch {
     return [];
   }
-  return (claims.get(build.unit)?.payload.early_on ?? []).flatMap((dep) => {
   const branch = unitBranchOf(stateContent, build.unit);
+  return (claims.get(build.unit)?.payload.early_on ?? []).flatMap((dep) => {
     const theirs = claims.get(dep.unit)?.payload;
     if (!theirs?.done || skip(dep.unit)) return [];
     const moves = (from: typeof dep.repos, look: boolean) => from.flatMap(({ repo, head }) => {
@@ -6778,8 +6779,8 @@ function rebaseUnit(args: string[], projectDir?: string): void {
   const state = readStateFile(pd);
   const build = unitBuildOf(state);
   if (build === null) fail("rebase moves a Unit's build onto the integration branch; this work is not one.");
-  const moved: string[] = [];
   const unitBranch = unitBranchOf(state, build.unit);
+  const moved: string[] = [];
   const onto = new Set<string>();
   // A rebase names the Unit's branch, so git switches to it first.
   const switched: Array<{ name: string; from: string }> = [];
@@ -7287,8 +7288,7 @@ function takeFromFile(pd: string, path: string): void {
   });
   setActiveSpaceCursor(pd, build.space);
   const likely = unitLikelyRepos(pd, build.dirName, build.space).get(unit) ?? [];
-  const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
-    .filter((repo) => home.repos.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
+  const notThere = likelyReposNotHere(pd, likely, home.repos);
   console.log(JSON.stringify({
     taken: true,
     unit,
@@ -7299,8 +7299,34 @@ function takeFromFile(pd: string, path: string): void {
       `${(fields["Handed Off"] ?? "").slice(0, 10)}. Its build is its own piece of work here, under your team's rules, ` +
       "from what the home approved; its result goes back as a file when it is built." +
       (file.edited ? " This file was changed after the lead wrote it: it is taken in as it is." : "") +
-      missing.map((repo) => ` ${repoNotThereLine(pd, repo)}`).join(""),
+      notThere.lines + notThere.question,
+    ...notThere.offer,
   }));
+}
+
+// The likely repos of a taken Unit that this workspace has no checkout of: a
+// line each with the way to one, and, for those repos.json gives an address,
+// the offer to clone them where it puts them (add-repo's clone, on their yes).
+function likelyReposNotHere(
+  pd: string,
+  likely: string[],
+  recorded: string[],
+): { lines: string; question: string; offer: { offer?: { choices: Array<{ label: string; command?: string }> } } } {
+  const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
+    .filter((repo) => recorded.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
+  const cloneable = missing.filter((repo) => repoCloneable(pd, repo));
+  return {
+    lines: missing.filter((repo) => !cloneable.includes(repo)).map((repo) => ` ${repoNotThereLine(pd, repo)}`).join(""),
+    question: cloneable.length > 0 ? ` ${repoCloneOfferLine(pd, cloneable)}` : "",
+    offer: cloneable.length === 0 ? {} : {
+      offer: {
+        choices: [
+          ...cloneable.map((repo) => ({ label: `Clone ${repo}`, command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)}` })),
+          { label: "Not now" },
+        ],
+      },
+    },
+  };
 }
 
 // A build by file sends its progress whenever the person likes; nobody has to.
@@ -7517,6 +7543,11 @@ export function main(argv: string[]): void {
     args.splice(projectIdx, 2);
   }
   const command = args.shift();
+  // A verb's --help prints its usage and changes nothing (asksForHelp, the
+  // engine's one reading of it), not even a turn settled.
+  if (command !== undefined && asksForHelp(args)) printUsageAndExit(unitUsage(command));
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   try {
     if (command === "assign") assignUnits(args, projectDir);
     else if (command === "take") takeUnit(args, projectDir);
@@ -7543,11 +7574,6 @@ export function main(argv: string[]): void {
     else if (command === "merge-status") {
       const unit = args[0];
       if (!unit) fail(unitUsage("merge-status"));
-  // A verb's --help prints its usage and changes nothing (asksForHelp, the
-  // engine's one reading of it), not even a turn settled.
-  if (command !== undefined && asksForHelp(args)) printUsageAndExit(unitUsage(command));
-  // A turn Claude Code started itself is settled before this command reads a turn.
-  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
       console.log(JSON.stringify(
         readUnitMergeTransaction(resolveProjectDir(projectDir), unit),
         null,

@@ -556,3 +556,33 @@ describe("a team's own workspace, made from the home's", () => {
     );
   });
 });
+
+// A take whose likely repo is not checked out yet, where repos.json has its
+// address (x2783-s9): the take offers to clone it where repos.json puts it, and
+// the offer's own command clones it, the Unit's repos as they were.
+describe("a likely repo this workspace has no copy of", () => {
+  test("the take offers to clone it from repos.json, and the offer's command clones it there", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    cloneCode(hosts["checkout-api"], alice, "checkout-api", "alice");
+    const took = run(UNIT, ["take", "refunds", "--home", HOME], alice);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toEndWith("billing is not at billing in this workspace yet. Do you want me to clone it there?");
+    expect(String(took.json?.notice)).not.toContain("give its path in repos.local.json");
+    const offer = took.json?.offer as { choices: Array<{ label: string; command?: string }> };
+    expect(offer.choices.map((choice) => choice.label)).toEqual(["Clone billing", "Not now"]);
+    expect(offer.choices[0].command).toEndWith("aidlc-utility.ts intent add-repo billing");
+    const cloned = run(UTILITY, ["intent", "add-repo", "billing"], alice);
+    expect(cloned.status, cloned.out).toBe(0);
+    expect(cloned.out).toContain(`Cloned billing from ${hosts.billing} to billing; it was already one of this piece of work's repos.`);
+    expect(existsSync(join(alice, "billing", "README.md"))).toBe(true);
+    const row = readIntentRegistry(alice, "payments").find((entry) => entry.dirName === took.json?.record);
+    expect(row?.repos).toEqual(["billing", "checkout-api"]);
+  });
+});

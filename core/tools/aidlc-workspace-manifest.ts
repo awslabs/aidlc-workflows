@@ -326,6 +326,26 @@ export function repoNotThereLine(projectDir: string, repoName: string): string {
     : `${repoName} is not at ${where} in this workspace. Clone it there, or list it in repos.json with its path.`;
 }
 
+// Whether repos.json gives a repo an address to clone it from: its own url,
+// or the org's.
+export function repoCloneable(projectDir: string, repoName: string): boolean {
+  const repos = readWorkspaceRepos(projectDir);
+  return repos.entries.get(repoName)?.url !== undefined || (repos.entries.has(repoName) && repos.manifest?.org !== undefined);
+}
+
+// The offer, when repos.json can clone a repo that is not where it puts it.
+export function repoCloneOfferLine(projectDir: string, repoNames: string[]): string {
+  const repos = readWorkspaceRepos(projectDir);
+  const where = (name: string): string => {
+    const source = repos.pathSource.get(name);
+    const at = displayRepoPath(source === undefined ? name : repos.entries.get(name)?.path ?? name);
+    return source === undefined ? `${name} is not at ${at} in this workspace yet` : `${name} is not at ${at} yet, where ${source} puts it`;
+  };
+  return repoNames.length === 1
+    ? `${where(repoNames[0])}. Do you want me to clone it there?`
+    : `${repoNames.map(where).join("; ")}. Do you want me to clone them there?`;
+}
+
 // The lines repos.json's managed .gitignore block holds: the recovery folder
 // and each declared repo whose checkout sits inside the workspace (by its own
 // path in repos.json, never one person's override), never the workspace itself.

@@ -6780,6 +6780,28 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     rmSync(outside, { recursive: true, force: true });
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // A take's likely repo the work records but this workspace has no copy of:
+  // cloned on the person's yes, after the stage began.
+  test("a repo the work records, cloned after the stage began: its files are no Unit's change", () => {
+    const bare = join(proj, "..", `${basename(proj)}-payments.git`);
+    git(join(proj, "payments"), ["clone", "-q", "--bare", ".", bare]);
+    rmSync(join(proj, "payments"), { recursive: true, force: true });
+    writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }, { name: "payments", url: bare }] })}\n`, "utf-8");
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a", "payments"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    restartBaseline(proj);
+    expect(intent("add-repo", "payments")).toContain("it was already one of this piece of work's repos.");
+    expect(existsSync(join(proj, "payments", "src", "api.ts"))).toBe(true);
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/");
+    expect(r.out).not.toContain("aidlc.code-workspace");
+    expect(r.rc, r.out).toBe(0);
+    rmSync(bare, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("after a remove and a second add, the latest add's listing is the one that counts", () => {
     intent("add-repo", "payments");
     commitIn("payments", "README.md", "# payments, edited between the adds\n");

@@ -9697,7 +9697,8 @@ function handleIntentRepos(
     ? plannedRepoPath(projectDir, name, flags.path)
     : null;
   const target = verb === "add-repo" && flags.path !== undefined ? mappedRepoDir(projectDir, flags.path) : repoDir(projectDir, name);
-  const clone = verb === "add-repo" && flags.path === undefined && !recorded.includes(name) && !pathEntryExists(target)
+  // A repo the work records that is not on disk (a take's likely repo) is cloned the same way.
+  const clone = verb === "add-repo" && flags.path === undefined && !pathEntryExists(target)
     ? plannedRepoClone(projectDir, name, flags.url)
     : null;
   let staged: StagedWorkspaceRepo | null = null;
@@ -9757,7 +9758,28 @@ function handleIntentRepos(
       // added without asking about them again (decision 5).
       const build = unitBuildOf(state);
       if (verb === "add-repo") {
-        if (current.includes(name)) return { kind: "already" as const };
+        if (current.includes(name)) {
+          if (staged === null || clone === null) return { kind: "already" as const };
+          // Cloned where repos.json puts it, the work's repos unchanged: the
+          // row names no Added, and its files join any stage's baseline as an
+          // added repo's do, so they are nobody's change.
+          appendAuditEntryUnlocked(
+            "INTENT_REPOS_CHANGED",
+            {
+              Stage: (getField(state, "Current Stage") ?? "").trim() || "none",
+              Cloned: name,
+              Repos: current.join(", "),
+              "Cloned From": maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`),
+              ...(reason ? { Reason: reason } : {}),
+              ...(personWords ? { "Person Words": personWords } : {}),
+              ...repoBaselineAdditionField(projectDir, [name], dirName, space),
+            },
+            projectDir,
+            dirName,
+            space,
+          );
+          return { kind: "cloned" as const };
+        }
         if (!isGitRepoDir(target)) {
           die(`intent add-repo refused: "${name}" is not a Git checkout (no .git entry at ${target}). Clone or create the repo there first.`);
         }
@@ -9778,6 +9800,7 @@ function handleIntentRepos(
           [verb === "add-repo" ? "Added" : "Removed"]: name,
           Repos: next.join(", "),
           ...(staged !== null && clone !== null ? { "Cloned From": maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`) } : {}),
+          ...(mapping !== null && mapping.next !== null ? { "Listed At": mapping.shown } : {}),
           ...(reason ? { Reason: reason } : {}),
           ...(personWords ? { "Person Words": personWords } : {}),
           ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space) : {}),
@@ -9800,7 +9823,6 @@ function handleIntentRepos(
         none: next.length === 0,
       };
     }, dirName, space);
-          ...(mapping !== null && mapping.next !== null ? { "Listed At": mapping.shown } : {}),
   });
   // What the person hears: what happened and the way back, in their words.
   const lines: string[] = [];
@@ -9816,6 +9838,13 @@ function handleIntentRepos(
       break;
     case "itself":
       lines.push(`${name} is the workspace folder itself, which this piece of work already works on; nothing changed.`);
+      break;
+    case "cloned":
+      lines.push(
+        `Cloned ${name} from ${maskUserinfo(clone!.repo.url ?? `git@github.com:${clone!.org}/${name}.git`)} to ` +
+          `${displayRepoPath(readWorkspaceRepos(projectDir).entries.get(name)?.path ?? name)}; it was already one of this piece of work's repos.`,
+      );
+      if (clone!.note !== null) lines.push(clone!.note);
       break;
     case "changed":
       if (verb === "add-repo") {
