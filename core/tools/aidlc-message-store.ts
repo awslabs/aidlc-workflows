@@ -965,28 +965,10 @@ function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOpt
 }
 
 /**
- * Presence on finished work: once the work is finished (selectedRecordIsFinished,
- * the reading the human-turn hook stands outside by) the hook keeps the
- * person's messages beside its record and writes no turn on it. So the turn is
- * their latest message no turn on the work names (sentOnThisWork: a terminal
- * message, which has no chat, counts as on the work and stands for nothing
- * here), kept at or after the work's latest WORKFLOW_COMPLETED row, from this
- * chat (with no chat named, any chat's message in this project). With
- * `requests` every kept message counts, as every turn the hook writes today
- * does (only an older record's question row is left out on the record); with
- * `replies` none does, as before: whether a message is a reply is the hook's
- * reading, which the record keeps and the message does not. Nothing on the work decides after
- * the finish, so no decision spends it. It is handed back in a turn's shape
- * (its Message Id, Session and time), which is all a caller reads. Both times
- * are whole seconds; a tie with the finish is harmless, as the message that
- * gave the finishing approval is named on the record. No completion row, or a
- * shard that cannot be read: null. Ids, times and the engine's own rows, never
- * words.
- */
-/**
- * This chat's messages kept beside finished work since its latest
- * WORKFLOW_COMPLETED row, oldest first: the window turnKeptSinceFinished stands
- * on, and a change asked there is read from. Empty when the record is not
+ * This chat's messages (with no chat named, any chat's in this project) kept
+ * beside finished work since its latest WORKFLOW_COMPLETED row, oldest first:
+ * the window turnKeptSinceFinished stands on, and a change asked there is read
+ * from. Empty when the record is not
  * finished, has no completion row, or cannot be read.
  */
 export function keptSinceFinished(pd: string, options: { intent?: string; space?: string } = {}): StoredMessage[] {
@@ -1008,6 +990,25 @@ export function keptSinceFinished(pd: string, options: { intent?: string; space?
   }
 }
 
+/**
+ * Presence on finished work: once the work is finished (selectedRecordIsFinished,
+ * the reading the human-turn hook stands outside by) the hook keeps the
+ * person's messages beside its record and writes no turn on it. So the turn is
+ * their latest message no turn on the work names (sentOnThisWork: a terminal
+ * message, which has no chat, counts as on the work and stands for nothing
+ * here), kept at or after the work's latest WORKFLOW_COMPLETED row, from this
+ * chat (with no chat named, any chat's message in this project). With
+ * `requests` every kept message counts, as every turn the hook writes today
+ * does (only an older record's question row is left out on the record); with
+ * `replies` none does, as before: whether a message is a reply is the hook's
+ * reading, which the record keeps and the message does not. Nothing on the work decides after
+ * the finish, so no decision spends it. It is handed back in a turn's shape
+ * (its Message Id, Session and time), which is all a caller reads. Both times
+ * are whole seconds; a tie with the finish is harmless, as the message that
+ * gave the finishing approval is named on the record. No completion row, or a
+ * shard that cannot be read: null. Ids, times and the engine's own rows, never
+ * words.
+ */
 function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEvent | null {
   if (options.replies === true) return null;
   try {

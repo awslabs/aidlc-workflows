@@ -312,7 +312,8 @@ function changeAsked(pd: string, content: string, stage: string): GateReply {
   const reply = personsGateReply(pd, session, stage);
   if (reply.words !== null || getField(content, "Status")?.trim() !== "Completed") return reply;
   const kept = keptSinceFinished(pd);
-  if (kept.length === 0) return reply;
+  // With no chat named, several chats' messages are nobody's to name, as at a gate.
+  if (kept.length === 0 || (session === null && new Set(kept.map((message) => message.session)).size > 1)) return reply;
   const said = kept
     .map((message) => (message.words ? personsWordsText(message.words) : ""))
     .filter((text) => !isNonAnswer(text));
