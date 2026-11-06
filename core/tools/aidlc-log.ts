@@ -1060,13 +1060,14 @@ function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "
   const next = aidlcDispatcherInvocation("orchestrate next");
   const waits = `Stage "${stage}" is finished and waiting for the person's approval` +
     `${elsewhere ? ", opened in another chat," : ""} with its documents as they are, so nothing was recorded`;
+  const change = `When it asked for a change, run \`${requestChangesReportCommand(pd, stage, undefined)}\` and ` +
+    "follow what it returns: their messages go on the record as what should change.";
   const message = verb === "decision"
-    ? `${waits}: there is no question of it to ask now. Run \`${next}\` and show the gate it returns.`
+    ? `${waits}: there is no question of it to ask now. When the person's last reply asked for nothing to change, ` +
+      `run \`${next}\` and show the gate it returns. ${change}`
     : `${waits}: ${flags.checkpoint === undefined ? "its questions were answered" : "its summary was confirmed"} ` +
       "before its documents were written. When the person's reply confirmed or answered it, it decides nothing at " +
-      `the gate: run \`${next}\` and show the gate it returns. When it asked for a change, run ` +
-      `\`${requestChangesReportCommand(pd, stage, undefined)}\` and follow what it returns: their messages go on ` +
-      "the record as what should change.";
+      `the gate: run \`${next}\` and show the gate it returns. ${change}`;
   console.log(JSON.stringify({ recorded: null, message }));
   return true;
 }

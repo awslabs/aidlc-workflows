@@ -273,8 +273,11 @@ describe("t-second-chat-finished-step: a stage finished in another chat is shown
     expect(step).toContain("opened in another chat");
     expect(step).toContain("orchestrate next`");
     expect(step).not.toContain("Record the question before presenting it");
-    // The summary question asked again names the same step and is not recorded.
-    expect(redirected(first.askSummary())).toContain("orchestrate next`");
+    // The summary question asked again names the same step, and the gate's
+    // Request Changes for a reply that asked for a change, and is not recorded.
+    const again = redirected(first.askSummary());
+    expect(again).toContain("orchestrate next`");
+    expect(again).toContain(`report --stage ${STAGE} --result rejected`);
     expect(folder.rows("DECISION_RECORDED").length).toBe(decisions);
     expect(folder.rows("SUMMARY_CONFIRMATION_RECORDED").length).toBe(confirmations);
     expect(folder.rows("ERROR_LOGGED").length).toBe(errors);
