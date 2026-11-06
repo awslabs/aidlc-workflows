@@ -99,6 +99,9 @@ const manifest: HarnessManifest = {
       "Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, " +
       "start it again in <folder>, then type <entry>.",
   },
+  // A clean chat for new work started beside other work: /clear starts a new
+  // conversation and keeps the old one for /resume.
+  newChatStep: { text: "type /clear, then <entry>" },
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",
   tierFlavor: "claude",

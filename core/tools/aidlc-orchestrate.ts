@@ -579,7 +579,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { chatTookStep, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -591,6 +591,7 @@ import {
   type ConstructionEvidence,
 } from "./aidlc-construction-checkpoints.ts";
 import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
+import { newChatStep } from "./aidlc-new-chat.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   BUILD_WAITING_CLAUSE,
@@ -766,6 +767,7 @@ import {
   questionTextSha,
   recordedQuestion,
   shownAgainFields,
+  shownOnlyInOtherChats,
 } from "./aidlc-questions.ts";
 import {
   isPlanApprovalBeat,
@@ -1635,6 +1637,12 @@ function keptRequest(projectDir: string, space: string): { args: string[]; resta
 // Steps whose narration the agent passes through without speaking, so it rides
 // the next step it speaks from (the print that creates the work).
 const carriesNarration = new WeakSet<Directive>();
+// The line of such a step that is true only before the work starts (the offer
+// of a clean chat for new work): the next stage step says it as its own line,
+// as that step comes, rather than in change_notices, said before they reply.
+// Kept apart from the rest by its words, which the engine writes alone.
+const saidAsStageComes = new WeakMap<Directive, string>();
+const CLEAN_CHAT_LEAD = "To start this in a clean chat instead, ";
 // Steps the agent speaks right after, with no line of their own (the print
 // that opens a stage's gate, before the gate is shown).
 const leadsToSpeech = new WeakSet<Directive>();
@@ -1759,12 +1767,22 @@ function sayPendingPersonLines(
 ): { directive: Directive; said?: () => void } {
   const projectDir = engineProjectDir;
   const sessionId = engineSessionId;
-  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return { directive: transported };
+  // A line true only before the work comes apart from the step's narration, so
+  // the stage step can say it as it comes; with no chat to keep it for, the
+  // step says it with its own line.
+  const lead = saidAsStageComes.get(requested);
+  const withLead = (): Directive => {
+    if (lead) transported.narration = transported.narration ? `${transported.narration} ${lead}` : lead;
+    return transported;
+  };
+  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return { directive: withLead() };
   if (carriesNarration.has(requested)) {
-    if (transported.narration && addPendingPersonLines(projectDir, sessionId, [transported.narration])) {
+    const lines = [transported.narration ?? "", lead ?? ""];
+    if (transported.narration && addPendingPersonLines(projectDir, sessionId, lines)) {
       delete transported.narration;
+      return { directive: transported };
     }
-    return { directive: transported };
+    return { directive: withLead() };
   }
   const pending = pendingPersonLines(projectDir, sessionId);
   if (pending.lines.length === 0) return { directive: transported };
@@ -1772,12 +1790,24 @@ function sayPendingPersonLines(
   // even one with no line of its own (a waiting Unit checkpoint).
   const pickUp = (transported.kind === "run-stage" || transported.kind === "ask") &&
     pending.lines.some((line) => line.startsWith(PICK_UP_LEAD));
-  if (!pickUp && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) return { directive: transported };
-  const carried = withPersonLines(transported, pending.lines);
+  // The offer of a clean chat is true only before the work starts, so a stage
+  // step says it with its own line, as the step comes. In change_notices it
+  // was said with the first gate, after the stage had run in this chat.
+  const asItComes = transported.kind === "run-stage"
+    ? pending.lines.filter((line) => line.startsWith(CLEAN_CHAT_LEAD))
+    : [];
+  if (!pickUp && asItComes.length === 0 && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) {
+    return { directive: transported };
+  }
+  const beforeReply = pending.lines.filter((line) => !asItComes.includes(line));
+  const carried = beforeReply.length > 0 ? withPersonLines(transported, beforeReply) : transported;
   if (carried === null) return { directive: transported };
+  const spoken = asItComes.length > 0
+    ? { ...carried, narration: [carried.narration, ...asItComes].filter(Boolean).join(" ") } as Directive
+    : carried;
   const noted = withAgentNotes(
-    carried, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
-    switchBackOnFollowUps(carried),
+    spoken, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
+    switchBackOnFollowUps(spoken),
   );
   if (Buffer.byteLength(JSON.stringify(noted), "utf-8") > directiveMaxBytes()) return { directive: transported };
   return { directive: noted, said: pending.said };
@@ -1875,7 +1905,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   if (switchOff.length > 0) {
     directive = withChangeNotices(directive, [...switchOff, ...(directive.change_notices ?? [])]);
   }
-  // A hook the person switched off in Kiro's Agent Hooks is said once per change, like a switch.
+  // An AI-DLC hook switched off in its Kiro hook file is said once per change, like a switch.
   const hooksOff = engineProjectDir ? kiroHooksOffNoticesOnce(engineProjectDir) : [];
   if (hooksOff.length > 0) {
     directive = withChangeNotices(directive, [...hooksOff, ...(directive.change_notices ?? [])]);
@@ -8135,8 +8165,10 @@ function createPrintDirective(
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the
-  // person can start this one in a clean chat instead, said once, never as a stop.
-  if (flags.newIntent) directive.narration += ` ${cleanChatLine(projectDir)}`;
+  // person can start this one in a clean chat instead, said once, never as a
+  // stop, and only while they can take it (sayPendingPersonLines).
+  const cleanChat = flags.newIntent ? cleanChatLine(projectDir) : null;
+  if (cleanChat) saidAsStageComes.set(directive, cleanChat);
   // The agent runs the creation and goes on, so the line rides the first step
   // it speaks from.
   carriesNarration.add(directive);
@@ -8264,20 +8296,13 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
   );
 }
 
-// The optional line offering a clean chat for new work, in the host's own words.
-function cleanChatLine(projectDir: string): string {
-  const skill = entrySkillInvocation();
-  let harness: string | null = null;
-  try {
-    harness = installedHarnessName(projectDir);
-  } catch {
-    harness = null;
-  }
-  const how = harness === "claude" ? `type /clear, then ${skill}`
-    : harness === "kiro-ide" ? `open a new chat, pick the aidlc agent, then type ${skill}`
-    : harness === "opencode" ? `start a new session, then type ${skill}`
-    : `open a new chat, then type ${skill}`;
-  return `To start this in a clean chat instead, ${how}.`;
+// The optional line offering a clean chat for new work, with the step of the
+// tool the person is in from the tree's own harness.json (its manifest's
+// newChatStep). A tree that names none, or a native engine that cannot tell the
+// person's tool among several installed, offers nothing.
+function cleanChatLine(projectDir: string): string | null {
+  const step = newChatStep(projectDir);
+  return step ? `${CLEAN_CHAT_LEAD}${step}.` : null;
 }
 
 // A new project leaves out Reverse Engineering when its plan runs it, and when
@@ -14912,6 +14937,10 @@ function revisedUnitGateStep(stage: GraphStage, unit: string): Directive {
   );
 }
 
+// Said first with a gate shown in a chat that never saw it, when another chat
+// of this clone opened it (the work order's words).
+const FINISHED_IN_OTHER_CHAT = "This was finished in your other chat; here it is to approve.";
+
 // Reuse the settled run-stage surface without re-entering body or review work.
 // Unlike autonomous swarm bookkeeping, an open human gate keeps its approval.
 function applyGateOnlyShape(
@@ -14939,13 +14968,19 @@ function applyGateOnlyShape(
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
     const unit = directive.unit ?? null;
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
+    // A gate another chat of this clone opened, shown in this one for the first
+    // time, says so first; QUESTION_SHOWN then names this chat, so it is said
+    // once. Only where the host named this chat: the process tree gives the
+    // chats of one window one id, and a restart a new one.
+    const elsewhere = gateQuestion !== null && hostNamesThisChat(projectDir) &&
+      shownOnlyInOtherChats(projectDir, gateQuestion.id, engineSessionId ?? null);
     // The rules Approve adds to the project's rules, what the person left out
     // of the build, the files of theirs it changed, and a check that still
     // fails on a declared output, are said with the gate, each on its own line
     // after what the stage produced: the narration is the person's line, and
     // the produced sentence stays whole.
     const narration = [
-      line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
+      elsewhere ? FINISHED_IN_OTHER_CHAT : null, line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
       unitsWithoutInputsNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
@@ -24025,6 +24060,9 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
       // The last part has handed over the build, so it keeps the record `next`
       // keeps when it hands over a build that fits one message.
       if (!recordHandedOverBuild(pd, prepared.transported)) return;
+      // A gate shown again after its rules parts is shown in this chat, as one
+      // `next` hands out in one message is.
+      recordQuestionStep(prepared);
       writePrepared(prepared);
       return;
     }

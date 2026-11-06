@@ -11,17 +11,20 @@
 // write the files it staged there, and the same merge lands it. A landing that git
 // does not start because a file it changes holds changes not committed in the
 // main checkout (an AI-DLC update to .gitignore) names the file and the step.
+// A change of the person's own that the landing keeps (Guard Policy off) is said
+// once the Unit has landed: not by a landing git did not start or that clashed,
+// and once by the same merge when it then lands.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField, boltSlugForUnit, readAuditShardEvents, workspaceSourceListing, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  ISOLATED_GIT_ENV, STAGE, cleanupCheckpointFixtures, fixture, git, nextDirective, prepare, reviewRevisedSource,
+  CHECK, ISOLATED_GIT_ENV, STAGE, cleanupCheckpointFixtures, fixture, git, nextDirective, prepare, reviewRevisedSource,
   runCheckpointTool, swarm, wt, writeUnitSource,
 } from "../harness/swarm-checkpoint.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
@@ -323,5 +326,96 @@ describe("a parallel landing that clashes in a sibling repository", () => {
     expect(auditBlockField(rows[1].block, "Landed changes")).toBe("repo-a/src/shared.ts");
     expect(guard(pd, "Write", write(shared)).code).toBe(2);
     expect((nextDirective(pd) as { kind: string }).kind).toBe("run-stage");
+  });
+});
+
+describe("a landing over the person's own change says so once it has landed", () => {
+  const notes = (run: { err: string }) => run.err.split(/\r?\n/).filter((line) => line.includes("during the build"));
+  const landedNotices = (run: { out: string }) => (JSON.parse(run.out) as { notices?: string[] }).notices;
+  const accepted = (pd: string) => readAuditShardEvents(pd)
+    .filter((row) => row.event === "CHANGE_ACCEPTED").map((row) => auditBlockField(row.block, "Changed"));
+  const commit = (pd: string, paths: string[], message: string) => {
+    git(pd, ["add", "--", ...paths]);
+    git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", message]);
+  };
+
+  // Guard Policy off, as the feature scope sets it. The agent committed one of
+  // AI-DLC's own records in the Unit's worktree by hand, and the main checkout
+  // holds the same record not committed, so git does not start the landing
+  // until it is committed there.
+  function recordInTheWay(personChanges: boolean): { pd: string; record: string } {
+    const pd = fixture(["alpha"], CHECK, false, null, "off");
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    writeUnitSource(pd, "alpha", 2);
+    const checked = swarm(pd, ["check", "alpha"]);
+    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+    reviewRevisedSource(pd, "alpha");
+    const manifest = join(codeGenerationRecordDir(wt(pd), "alpha"), "source-manifest.json");
+    const record = relative(wt(pd), manifest).replace(/\\/g, "/");
+    const bytes = readFileSync(manifest);
+    commit(wt(pd), [record], "the Unit's work");
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    writeFileSync(join(pd, record), bytes);
+    if (personChanges) writeFileSync(join(pd, "CHANGELOG.md"), "## Unreleased\n");
+    return { pd, record };
+  }
+
+  test("a landing git did not start says only that, and the landing that happens says their change once", () => {
+    const { pd, record } = recordInTheWay(true);
+    const refused = land(pd, "alpha");
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("so git did not start it and nothing in the checkout changed");
+    expect(notes(refused)).toEqual([]);
+    commit(pd, [record], "AI-DLC's records");
+    const landed = land(pd, "alpha");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    const said = "You changed CHANGELOG.md during the build; kept them and merged unit alpha.";
+    expect(notes(landed)).toEqual([`note: ${said}`]);
+    expect(landedNotices(landed)).toEqual([said]);
+    expect(accepted(pd)).toEqual(["CHANGELOG.md"]);
+  });
+
+  test("with nothing of theirs changed, neither the stopped landing nor the one that happens says a change", () => {
+    const { pd, record } = recordInTheWay(false);
+    const refused = land(pd, "alpha");
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("so git did not start it and nothing in the checkout changed");
+    expect(notes(refused)).toEqual([]);
+    commit(pd, [record], "AI-DLC's records");
+    const landed = land(pd, "alpha");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    expect(landed.err).not.toContain("note:");
+    expect(landedNotices(landed)).toBeUndefined();
+    expect(accepted(pd)).toEqual([]);
+  });
+
+  test("a landing that clashes says only the clash, and once combined it lands and says their change once", () => {
+    const pd = fixture(["alpha"], CHECK, false, null, "off");
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    writeUnitSource(pd, "alpha", 2);
+    const checked = swarm(pd, ["check", "alpha"]);
+    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+    reviewRevisedSource(pd, "alpha");
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    // Their own edit to the Unit's file, committed while the Unit was built.
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 5;\n");
+    commit(pd, ["src/alpha.ts"], "the person's own change");
+    const clash = land(pd, "alpha");
+    expect(clash.code).toBe(1);
+    expect(JSON.parse(clash.out) as Clash).toMatchObject({ status: "conflict", conflict_files: ["src/alpha.ts"] });
+    expect(notes(clash)).toEqual([]);
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 7;\n");
+    git(pd, ["add", "src/alpha.ts"]);
+    const landed = land(pd, "alpha");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    const said = "You changed src/alpha.ts during the build; kept them and merged unit alpha.";
+    expect(notes(landed)).toEqual([`note: ${said}`]);
+    expect(landedNotices(landed))
+      .toEqual([said, "Landed Unit alpha with src/alpha.ts settled by hand against what was already on main."]);
+    expect(readFileSync(join(pd, "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 7;\n");
   });
 });

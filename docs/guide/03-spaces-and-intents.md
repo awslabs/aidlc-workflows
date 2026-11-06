@@ -547,6 +547,11 @@ of the workspace root that has its own `.git`) and records the set in the intent
 `intents.json` row. During Construction, each git operation is then anchored to
 the right repo automatically.
 
+A git submodule is not one of them when the project holding it has code of its
+own beside it (a shared library added with `git submodule add`, say): that
+project is a one-repo project, the workspace folder is the work's repo, and the
+submodule is left alone. A project made only of submodules records them.
+
 Each repo is recorded by its folder's name as you gave it: a space, an accent,
 an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent). A few
 characters break something AI-DLC relies on, so a folder whose name has one is

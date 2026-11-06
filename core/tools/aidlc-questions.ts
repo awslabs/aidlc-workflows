@@ -12,6 +12,7 @@ import { dirname, join, relative } from "node:path";
 import {
   auditBlockField,
   auditFilePath,
+  ownShardRows,
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
   readAuditShardEvents,
@@ -178,6 +179,29 @@ export function recordedQuestion(projectDir: string, id: string): RecordedQuesti
     found.shows = auditBlockField(row.block, QUESTION_SHOWS_FIELD) ?? found.shows;
   }
   return found;
+}
+
+/**
+ * Whether the question with this id was asked or shown only in other chats of
+ * this clone: this chat is named and never saw it, and a chat on this clone's
+ * own audit shard did. A teammate's chat in a shared record is not one of this
+ * clone's, and a command that names no chat is never told it.
+ */
+export function shownOnlyInOtherChats(projectDir: string, id: string, chat: string | null): boolean {
+  if (!chat) return false;
+  try {
+    const { mine, others } = ownShardRows(projectDir);
+    const chatsOf = (rows: typeof mine): string[] => rows.flatMap((row) => {
+      if (!ASKING_ROWS.has(row.event) && row.event !== QUESTION_SHOWN) return [];
+      if (auditBlockField(row.block, QUESTION_ID_FIELD) !== id) return [];
+      const shownIn = auditBlockField(row.block, QUESTION_CHAT_FIELD);
+      return shownIn ? [shownIn] : [];
+    });
+    const here = chatsOf(mine);
+    return here.length > 0 && ![...here, ...chatsOf(others)].includes(chat);
+  } catch {
+    return false;
+  }
 }
 
 /**

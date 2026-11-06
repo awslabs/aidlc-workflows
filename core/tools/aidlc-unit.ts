@@ -261,8 +261,9 @@ interface GitBytesResult {
 // Unit's audit shard outgrows that in one long attempt, so the cap is lifted
 // the way the other git readers lift it. A run that could not start, was killed
 // or overflowed is a failed run, whatever its exit status. Inside `quietly`,
-// git never prompts and gives up after its quiet time limit.
-function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
+// git never prompts and gives up after its quiet time limit. `input` is what
+// git reads on its standard input.
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
     env: { ...process.env, ...(quiet ? quietEnv(projectDir) : {}), ...env },
@@ -271,6 +272,7 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
     ...(quiet
       ? { timeout: args[0] === "ls-remote" ? QUIET_READ_TIMEOUT_MS : QUIET_WRITE_CEILING_MS, detached: process.platform !== "win32" }
       : {}),
+    ...(input === undefined ? {} : { input }),
   });
   // At its time limit the whole group goes. Windows gives git no group of its own, and a pid there names no one
   // process (a freed pid is handed out again, and a process keeps its dead parent's), so what a stopped look started
@@ -295,8 +297,8 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
   };
 }
 
-function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
-  const result = gitBytes(projectDir, args, env);
+function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): GitResult {
+  const result = gitBytes(projectDir, args, env, input);
   return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
@@ -4942,7 +4944,17 @@ function commitWorkHere(
   const { leftOut, unmatched, ...picked } = workToCommit(projectDir, work);
   const paths = picked.paths.filter((path) => only === undefined || only(path));
   if (paths.length === 0) return { committed: 0, leftOut, unmatched };
-  const added = git(projectDir, ["add", "-A", "--", ...paths]);
+  // One call whatever the count: Windows caps a command line at 32,767
+  // characters, so the paths go to git on its standard input, NUL-separated,
+  // each read as the same name an argument would be (git 2.25; core already
+  // needs 2.29). An empty list never gets here: with -A and no path git would
+  // take the whole tree.
+  const added = git(
+    projectDir,
+    ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+    undefined,
+    paths.map((path) => `${path}\0`).join(""),
+  );
   if (!added.ok) fail(`git add failed: ${added.stderr.trim()}`);
   const committed = git(projectDir, ["commit", "-q", "-m", message]);
   if (!committed.ok) {

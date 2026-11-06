@@ -271,6 +271,13 @@ const manifest: HarnessManifest = {
       text: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_IDE_TRUST_STEP}" Then end your turn.`,
     },
   },
+  // A clean chat for new work started beside other work. Kiro CLI has its own
+  // command and opens on the aidlc agent; Kiro IDE opens a new chat on its
+  // Default agent, so its step picks aidlc, told apart as the hook lines are.
+  newChatStep: {
+    text: "type /chat new, then <entry>",
+    inHost: { env: KIRO_IDE_AGENT_SHELL, text: "open a new chat, pick the aidlc agent, then type <entry>" },
+  },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",

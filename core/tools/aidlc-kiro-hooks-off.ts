@@ -1,9 +1,11 @@
-// What the engine's next step says, once per change, about an AI-DLC hook the
-// person switched off in Kiro's Agent Hooks (#2203). Kiro writes
+// What the engine's next step says, once per change, about an AI-DLC hook
+// switched off in its file (#2203). Kiro IDE's Agent Hooks panel writes
 // `"enabled": false` into the hook's file and the hook runs nothing; a person
-// who did that after a flood of hook cards ran six Units with no guard and no
-// word from anyone. Doctor's rows (aidlc-utility.ts, kiroDisabledHookChecks)
-// name each hook that is off; this file gives the engine the same reading,
+// who switched hooks off there after a flood of hook cards ran six Units with
+// no guard and no word from anyone. A committed file carries the flag to Kiro
+// CLI too, which has no such panel, so the way back names the file first.
+// Doctor's rows (aidlc-utility.ts, kiroDisabledHookChecks) name each hook
+// that is off; this file gives the engine the same reading,
 // with the file's time, so the step the person is on says it once and says it
 // again only after the hook was on and off again, like a switched-off fence.
 // The person drives: their switch stands, and AI-DLC never turns a hook back
@@ -12,7 +14,16 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type KiroDisabledHook, kiroDisabledHooks } from "./aidlc-utility.ts";
 
-export const KIRO_HOOKS_OFF_STEP = "Turn it back on under Kiro's Agent Hooks.";
+/**
+ * The way back on each host; doctor's fix gives the same steps in its own
+ * words. Kiro CLI has no panel and registers hook files when a session starts,
+ * so the edit there takes a new session. "Change false to true" also reaches a
+ * flag on a `hooks` entry, which a root-level `"enabled": true` would leave off.
+ */
+export function kiroHookOnStep(file: string): string {
+  return `In Kiro CLI, change \`"enabled": false\` to \`true\` in \`${file}\`, then quit Kiro and start ` +
+    "`kiro-cli --v3` again in this folder; in Kiro IDE, turn it back on under Agent Hooks.";
+}
 
 export type KiroHookOff = KiroDisabledHook & {
   /** When the file was last written: the switch, as near as the record gets. */
@@ -20,8 +31,8 @@ export type KiroHookOff = KiroDisabledHook & {
 };
 
 /**
- * The flow-altering AI-DLC hooks Kiro has switched off, each with its file's
- * time. The hooks doctor only warns about are left to doctor: the step says
+ * The flow-altering AI-DLC hooks switched off in their files, each with its
+ * file's time. The hooks doctor only warns about are left to doctor: the step says
  * what costs the person a protection, not every record it stops keeping.
  * Nothing on another harness.
  */
@@ -51,8 +62,8 @@ function clock(iso: string, now: Date): string {
 
 /** The one line the person hears: the hook, since when, what is no longer protected, and the way back, in doctor's words. */
 export function kiroHookOffLine(hook: KiroHookOff, now: Date = new Date()): string {
-  return `AI-DLC hook ${hook.name} is switched off in Kiro's Agent Hooks since ${clock(hook.since, now)}: ` +
-    `${hook.protects}. ${KIRO_HOOKS_OFF_STEP}`;
+  return `AI-DLC hook ${hook.name} is switched off since ${clock(hook.since, now)}: ` +
+    `${hook.protects}. ${kiroHookOnStep(hook.file)}`;
 }
 
 // The said mark keeps, per hook, the file time the line was said for, so a hook
