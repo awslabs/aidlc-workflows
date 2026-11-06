@@ -5311,6 +5311,20 @@ interface HomeWork {
   solo: boolean;
 }
 
+// This clone's own remote carries the work's claims (git tracks them under
+// it): it is the lead's repo, however its address is spelled (ssh beside
+// https, a host's own ssh port or path, an ssh alias), so the claims are read
+// and written through it with the person's own login.
+function remoteHoldsClaims(projectDir: string, id8: string): boolean {
+  try {
+    const remote = repositoryRemote(projectDir);
+    if (remote === null) return false;
+    return git(projectDir, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/${remote}/claim/${id8}/`]).stdout.trim() !== "";
+  } catch {
+    return false;
+  }
+}
+
 function findHomeWork(projectDir: string, dirName: string, space: string): HomeWork {
   let state: string;
   try {
@@ -5327,14 +5341,15 @@ function findHomeWork(projectDir: string, dirName: string, space: string): HomeW
   const row = readIntentRegistry(projectDir, space).find((entry) => entry.dirName === dirName);
   if (!row?.uuid) fail(`${dirName} has no entry in its space's list of work.`);
   const own = workspaceHomeLocation(projectDir);
-  const target = location === "local" || (own !== null && sameGitAddress(location, own))
+  const id8 = idSuffix(row.uuid);
+  const target = location === "local" || (own !== null && sameGitAddress(location, own)) || remoteHoldsClaims(projectDir, id8)
     ? repositoryRemote(projectDir)
     : location;
   return {
     space,
     dirName,
     uuid: row.uuid,
-    id8: idSuffix(row.uuid),
+    id8,
     label: row.slug,
     location,
     target,

@@ -747,5 +747,29 @@ describe("a likely repo this workspace has no copy of", () => {
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).not.toContain("--add-dir");
   });
+
+  test("the lead's project recorded under an https address while her clone's origin is the same repo over ssh: the take reaches the claims through her origin", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    // The lead's origin, as their own clone spells it (Bitbucket Server's https
+    // form), where a teammate on ssh has no sign-in.
+    const https = "https://git.example.invalid/scm/checkout/workspace.git";
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Home Location\*\*: .*$/m, `- **Home Location**: ${https}`));
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    const took = run(UNIT, ["take", "refunds", "--home", HOME], alice);
+    expect(took.status, took.out).toBe(0);
+    expect(took.out).not.toContain("could not be reached");
+    expect(String(took.json?.notice)).toStartWith("Refunds is yours, for the payments team.");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "alice" });
+    // Her clone's setup is as she made it: no address rewritten.
+    expect(spawnSync("git", ["config", "--get-regexp", "^url\\."], { cwd: alice, encoding: "utf-8" }).stdout).toBe("");
+  });
 });
 
