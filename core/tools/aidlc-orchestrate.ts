@@ -13152,17 +13152,20 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(offer);
       return;
     }
-    // A Unit's build whose own work is done (finished or pushed): a teammate's
-    // /aidlc or words there get the Units their team can take first, once in a
-    // chat, never "everything is done" or a new piece of work that would run
-    // Inception again.
-    // A build the lead turned down is not done: its step says so.
-    const buildDone = unitBuildOf(stateContent) !== null && (
-      getField(stateContent, "Status")?.trim() === "Completed" ||
+  }
+  // A Unit's build whose own work is done (finished or pushed): a teammate's
+  // /aidlc or words there get the Units their team can take first, never
+  // "everything is done" or a new piece of work that would run Inception
+  // again. Each offer is put once in a chat for what it says, so a Unit a merge
+  // opens later in the same chat is offered then.
+  // A build the lead turned down is not done: its step says so.
+  if (stateContent && plainNext && engineSessionId && !isReadOnlyEngineProbe() && unitBuildOf(stateContent) !== null) {
+    const buildDone = (getField(stateContent, "Status")?.trim() === "Completed" ||
       getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed") && !buildTurnedDownNow(pd, stateContent, engineSessionId);
     const take = buildDone ? unitTakeAsk(pd) : null;
     // Only when there is a Unit to start: a build that is the team's only one says its own end.
-    if (take !== null && take.kind === "ask" && (take.choices ?? []).some((choice) => choice.label.startsWith("Start "))) {
+    if (take !== null && take.kind === "ask" && (take.choices ?? []).some((choice) => choice.label.startsWith("Start ")) &&
+      offersOnce(pd, [{ question: take.question, choices: take.choices ?? [] }]).length > 0) {
       noteTakeOfferedOnWords(pd);
       emit(take);
       return;

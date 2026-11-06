@@ -170,6 +170,38 @@ describe("a team member's clone of the home's workspace", () => {
     expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("unit-take");
   });
 
+  // Live run on Copilot CLI: the chat that took the first Unit was told its
+  // work was finished once the merge opened the team's next one.
+  test("in the chat that took and pushed a Unit, the team's next Unit its merge opened is offered, once", () => {
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat" };
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "reporting=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    // The chat's first look offers refunds; the take, the build and the push all run in that chat.
+    expect(next(alice, chat).ask_type).toBe("unit-take");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME], alice, chat).status).toBe(0);
+    const record = buildDir(alice, "payments", "refunds");
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], alice, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const offered = next(alice, chat);
+    expect(offered.ask_type, JSON.stringify(offered).slice(0, 500)).toBe("unit-take");
+    expect((offered.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
+    const again = next(alice, chat);
+    expect(again.ask_type ?? null, JSON.stringify(again).slice(0, 300)).not.toBe("unit-take");
+  });
+
   test("while the home builds the walking skeleton, hears that every Unit waits on it, and nothing of the home's work runs", () => {
     const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n  - name: orders\n    depends_on: []\n" +
       "  - name: refunds\n    depends_on: [orders]\n  - name: checkout-ui\n    depends_on: [orders]\n" +
