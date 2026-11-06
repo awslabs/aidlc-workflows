@@ -5205,10 +5205,13 @@ function teamStanceReadStep(
 ): RunStageDirective | null {
   const node = nodeForSlug(slug);
   if (!node || !teamStanceToRead(projectDir, stateContent)) return null;
-  return {
-    ...buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, stateContent, recordPrefix, codekbCtx),
-    gate: GATE_UNRESOLVED,
-  };
+  // The builder's own object: its route (runStageRoutes) carries the rules
+  // the agent reads the answer from.
+  const directive = buildRunStageDirective(
+    node, projectType, UNIT_NAME_PLACEHOLDER, scope, stateContent, recordPrefix, codekbCtx,
+  );
+  directive.gate = GATE_UNRESOLVED;
+  return directive;
 }
 
 // Who builds a plan of two or more Units is the person's to say, once, as

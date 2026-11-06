@@ -209,7 +209,16 @@ describe("the team's walking-skeleton answer is read before a team step decides"
     const proj = project("delivery-planning", null, NO);
     teams(proj);
     expect(claimsOpenHere(proj)).toBe(false);
-    expectSettleStep(next(proj), "delivery-planning");
+    const reading = runOrchestrateNext(ORCH, proj, [], { env: ENV });
+    const settle = reading.directive as Directive;
+    expectSettleStep(settle, "delivery-planning");
+    // The memory text the agent reads the answer from comes with the step, in
+    // it or in the parts ahead of it, as with any chat's first stage step.
+    const rules = [settle, ...reading.steering].flatMap((part) =>
+      Array.isArray(part.rules_content) ? (part.rules_content as Array<{ path?: string }>) : []
+    );
+    expect(rules.map((entry) => entry.path), JSON.stringify(Object.keys(settle)))
+      .toContain("aidlc/spaces/default/memory/team.md");
     expectRecorded(proj, "off");
     expect(claimsOpenHere(proj)).toBe(true);
     const after = next(proj);
