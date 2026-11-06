@@ -353,10 +353,11 @@ export interface Timeline {
   workflowStartedRaw: string | typeof UNKNOWN;
   workflowStatus: string; // from state file, or "unknown"
   // True when the LATEST run (the scoped slice, not the whole buffer) recorded a
-  // WORKFLOW_COMPLETED that no later STAGE_STARTED reopened. Rule 3 (state/audit
-  // drift) reads this so it never fires on an old completion left in the buffer
-  // by a completed-then-restarted run, nor on finished work a scope change
-  // reopened at the stage it added (#2261).
+  // WORKFLOW_COMPLETED that nothing reopened since (a later STAGE_STARTED, or a
+  // Unit's reopen). Rule 3 (state/audit drift) reads this so it never fires on
+  // an old completion left in the buffer by a completed-then-restarted run, on
+  // finished work a scope change reopened at the stage it added (#2261), nor on
+  // a Unit's redo after the finish (#3608).
   workflowCompleted: boolean;
   notes: string[];
 }
@@ -492,8 +493,14 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     stages,
     workflowStartedRaw: workflowStarted?.timestampRaw ?? UNKNOWN,
     workflowStatus: status,
+    // Completed unless something reopened the run since: a stage started, or
+    // a Unit's step reopened (aidlc-jump reopen writes its GATE_REJECTED rows
+    // with Reopen and no STAGE_STARTED, so only those Units start it over).
     workflowCompleted: lastEventIndex(events, "WORKFLOW_COMPLETED") !== -1 &&
-      lastEventIndex(events, "WORKFLOW_COMPLETED") > lastEventIndex(events, "STAGE_STARTED"),
+      lastEventIndex(events, "WORKFLOW_COMPLETED") > Math.max(
+        lastEventIndex(events, "STAGE_STARTED"),
+        events.findLastIndex((e) => e.event === "GATE_REJECTED" && auditBlockField(e.block, "Reopen") !== null),
+      ),
     notes,
   };
 }

@@ -1,4 +1,4 @@
-// covers: function:jumpIsPersonsMove, function:turnKeptSinceFinished, function:standingPersonTurn, hook:aidlc-plan-approval-guard, hook:aidlc-record-human-turn, scope:bugfix
+// covers: function:jumpIsPersonsMove, function:turnKeptSinceFinished, function:standingPersonTurn, hook:aidlc-plan-approval-guard, hook:aidlc-record-human-turn, scope:bugfix, function:reconstructTimeline, function:changeAsked, subcommand:aidlc-utility:doctor
 //
 // #3608, driven with no model through the real engine and hooks
 // (tests/harness/scope-run.ts): a bugfix with the stages after Code Generation
@@ -7,12 +7,14 @@
 // through the plan-approval guard, the code plan is asked about once, and the
 // redone build runs to its gate and back to done, with no refusal on the way;
 // a file the person asks for after the finish is written. On work built Unit
-// by Unit a Unit's redo after the finish runs for that Unit only.
+// by Unit a Unit's redo after the finish runs for that Unit only, doctor reads
+// it as a run, and a Unit's change keeps the person's words.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   auditEvents,
   cleanupScopeProjects,
+  field,
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
   ScopeRunRefused,
@@ -78,12 +80,37 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     person.say("Redo code generation for the core unit.");
     const ran = host.bash(reopen as string);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    // While core redoes its step, doctor reads a reopened run, not a lost
+    // state write whose fix would end the redo.
+    const doctor = host.bash("bun .claude/tools/aidlc-utility.ts doctor");
+    expect(doctor.stdout, "doctor read the reopen as drift").not.toContain("State/audit drift");
+    expect(doctor.stdout).not.toContain("set Status=Completed");
     const final = agent.drive(agent.next());
     expect(final.kind).toBe("done");
     expect(host.refusals.slice(refusals)).toEqual([]);
     const plans = agent.asked.slice(asked).filter((q) => q.what === "plan approval");
     expect(plans.map((q) => q.unit)).toEqual(["core"]);
     expect(auditEvents(proj).filter((row) => row.event === "WORKFLOW_COMPLETED").length).toBe(finishedRows + 1);
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  // A change the person asks for one Unit after the finish is kept in their
+  // own words, with the message it came in, as a change at a gate is.
+  test.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, Units built one at a time: a Unit's change after the finish keeps the person's words", (policy) => {
+    const run = runScope("classic", { units: ["core", "extra"], flags: [...CLASSIC_SKIP, "--guard-policy", policy] });
+    const { host, person, agent, proj } = run;
+    expect(run.final.kind).toBe("done");
+    host.fullHost = true;
+    const words = "Change the core unit's code so slugs keep their dashes.";
+    person.say(words);
+    const print = agent.next("--stage", "code-generation", "--unit", "core", "--change");
+    const reopen = /`(bun \.claude\/tools\/aidlc-jump\.ts reopen [^`]+--via change[^`]*)`/.exec(String(print.message ?? ""))?.[1];
+    expect(reopen, JSON.stringify(print)).toBeDefined();
+    const ran = host.bash(reopen as string);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    const change = auditEvents(proj).filter((row) => row.event === "GATE_REJECTED").at(-1);
+    expect(field(change?.block ?? "", "Feedback")).toBe(words);
+    expect(field(change?.block ?? "", "Message Id")).not.toBeNull();
+    expect(host.refusals).toEqual([]);
   }, SCOPE_RUN_TIMEOUT_MS);
 
   test("Units built one at a time: a redo of every Unit after the finish asks each Unit's plan once", () => {

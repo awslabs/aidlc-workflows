@@ -7,8 +7,8 @@
 // (#3608). A redo they ask for in this chat since the finish runs, and its plan
 // is asked about once; a change they ask for in their code goes through, as
 // past Code Generation. A jump nobody asked for, one another chat's message
-// asked for, one inside a line the guard cannot read, and a Unit's reopen that
-// would leave the work finished still wait, under every Guard Policy.
+// asked for, and one inside a line the guard cannot read still wait, under
+// every Guard Policy.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

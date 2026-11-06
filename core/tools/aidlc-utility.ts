@@ -5761,9 +5761,9 @@ export async function collectDoctorReport(
     try {
       const auditContent = auditAllShards;
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // The latest run recorded a completion that no later stage start
-      // reopened (a scope change on finished work starts the stage it adds,
-      // #2261). One owner for the rule, the doctor bundle's timeline, which
+      // The latest run recorded a completion that nothing reopened since (a
+      // scope change on finished work starts the stage it adds, #2261; a
+      // Unit's reopen there writes its reopen rows, #3608). One owner for the rule, the doctor bundle's timeline, which
       // reads every shard in time order: shards joined by file name put a
       // teammate's earlier completion after this clone's reopen.
       if (reconstructTimeline(auditContent, stateContent).workflowCompleted) {
