@@ -360,6 +360,10 @@ describe("scenario 5: solo work, then a second person joins", () => {
     const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
     row("UNIT_STARTED", "functional-design", "refunds");
     row("UNIT_COMPLETED", "code-generation", "refunds");
+    // Approved at its checkpoint, as the walk records it.
+    appendAuditEntry("GATE_APPROVED", {
+      Stage: "code-generation", Unit: "refunds", "Gate Scope": "unit-end", "User Input": "Approve", "Run floor": "0",
+    }, home.dir);
     row("UNIT_STARTED", "functional-design", "reporting");
     commitAll(home.dir, "solo work under way");
     git(home.dir, ["push", "-q", "origin", "main"]);
