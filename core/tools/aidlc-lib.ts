@@ -11848,6 +11848,8 @@ export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
   slug: string,
+  // Filled with each pick's Unit, when given: its answer's, or the question's it answers.
+  units?: Map<AuditShardEvent, string | null>,
 ): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
   const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
   // Each clone's shard keeps its own append order, so a teammate's question in
@@ -11901,7 +11903,10 @@ export function blockingSensorPicks(
     const numbered = /^(\d+)[.)]?$/.exec(details);
     const named = numbered ? offered[Number(numbered[1]) - 1] : checkLabel(details);
     const choice = BLOCKING_SENSOR_OVERRIDE_OPTIONS.find((option) => option === named);
-    if (choice !== undefined) picks.set(row, choice);
+    if (choice !== undefined) {
+      picks.set(row, choice);
+      units?.set(row, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"));
+    }
   }
   return picks;
 }
@@ -11985,7 +11990,8 @@ export function blockingSensorFixes(
     const units = new Set<string>();
     const before = rows.filter((row) => attemptEventDefinitelyBefore(row, pick));
     for (const result of latestSensorResults(before, stage.slug).values()) {
-      if (result.kind !== "failed" || !blocking.has(result.id)) continue;
+      // A Unit's checkpoint fires name the Unit; the stage gate's name none.
+      if (result.kind !== "failed" || !blocking.has(result.id) || result.unit !== null) continue;
       // The gate fires on every declared output, so the matcher over all of
       // them names the owner; only a codekb stage reads the recorded
       // repositories, and none is per Unit.
@@ -11996,9 +12002,10 @@ export function blockingSensorFixes(
     return units.size > 0 ? units : null;
   };
   const fixes = new Map<AuditShardEvent, ReadonlySet<string> | null>();
-  for (const [row, choice] of blockingSensorPicks(rows, stage.slug)) {
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  for (const [row, choice] of blockingSensorPicks(rows, stage.slug, pickUnits)) {
     if (choice !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0]) continue;
-    const unit = auditBlockField(row.block, "Unit");
+    const unit = pickUnits.get(row) ?? null;
     fixes.set(row, unit ? new Set([unit]) : failedUnits(row));
   }
   return fixes;
@@ -12026,20 +12033,82 @@ function auditEventIsAfter(later: AuditShardEvent, earlier: AuditShardEvent): bo
 // back, and nothing was asked or answered on the stage since. The state tool
 // accepts an override report on this test, and `next` names that report while
 // it holds, so the two never disagree about a pick.
-export function hasBlockingSensorOverrideAuthorization(projectDir: string, slug: string): boolean {
+//
+// In solo work built Unit by Unit with checkpoints, a pick made at a Unit's
+// checkpoint names that Unit (its answer, or the check's question it answers):
+// it stands for that Unit's checkpoint only (`unit`), until a verification
+// carries it, or the Unit is approved, sent back or started again, and never
+// for the stage's own gate over every Unit. Everywhere else a pick reads as it
+// always has.
+export function hasBlockingSensorOverrideAuthorization(
+  projectDir: string,
+  slug: string,
+  unit: string | null = null,
+): boolean {
   const rows = readAuditShardEvents(projectDir);
+  // Solo work built Unit by Unit with checkpoints is where a pick can be made at a Unit's checkpoint.
+  let unitPicks = unit !== null;
+  if (!unitPicks) {
+    try {
+      const stateContent = readStateFile(projectDir);
+      unitPicks = constructionCheckpointsApply(stateContent) &&
+        getField(stateContent, "Construction Iteration") === "unit-major";
+    } catch {
+      unitPicks = false;
+    }
+  }
+  const unitOf = (row: AuditShardEvent): string | null => auditBlockField(row.block, "Unit");
   const stageRows = rows.filter((row) => {
     const workflow = auditBlockField(row.block, "Workflow");
     return auditBlockField(row.block, "Stage") === slug &&
       !workflow?.startsWith("single-stage:");
   });
-  const boundaries = stageRows.filter((row) => BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event));
-  const interactions = stageRows.filter((row) =>
-    row.event === "DECISION_RECORDED" ||
-    row.event === "QUESTION_ANSWERED"
+  // A verification that verified with an Override spent the pick it used,
+  // whichever Unit it named; one whose project check failed leaves the pick
+  // standing for the same findings (the state tool holds it to them). A
+  // Unit's approval and its Request Changes (the checkpoint's GATE_ rows carry
+  // the Unit), and its stage started again, end a pick made at its checkpoint.
+  const spent = (row: AuditShardEvent): boolean =>
+    row.event === "CHECKPOINT_VERIFICATION_RECORDED" && auditBlockField(row.block, "Blocking Sensor Override") === "true" &&
+    auditBlockField(row.block, "Verified") === "true";
+  const boundaries = [
+    ...stageRows.filter((row) => BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event)),
+    ...(unitPicks ? rows.filter(spent) : []),
+    ...(unit !== null
+      ? rows.filter((row) => unitOf(row) === unit && (
+        row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED" ||
+        (row.event === "UNIT_STARTED" && auditBlockField(row.block, "Stage") === slug)
+      ))
+      : []),
+  ];
+  // At a Unit's checkpoint the agent re-logging the check's question, or an
+  // answer to it that is no Fix pick of the person's (the Override recorded
+  // again, with --unit or without, or with no new reply), is no new decision:
+  // it does not spend the pick, so the person's Override is never refused into
+  // asking again. A Fix pick, or any answer to another question, still does.
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  const picks = blockingSensorPicks(rows, slug, pickUnits);
+  const asksCheck = (row: AuditShardEvent | undefined): boolean =>
+    row !== undefined && row.event === "DECISION_RECORDED" &&
+    auditBlockField(row.block, "Decision") === BLOCKING_SENSOR_OVERRIDE_DECISION;
+  // An answer to the check's own question (the stage's latest question in its shard).
+  const answersCheck = (row: AuditShardEvent): boolean => asksCheck(stageRows.filter((other) =>
+    other.event === "DECISION_RECORDED" && other.shard === row.shard && other.pos < row.pos
+  ).at(-1));
+  const relogged = (row: AuditShardEvent): boolean => unit !== null && (
+    asksCheck(row) ||
+    (row.event === "QUESTION_ANSWERED" && answersCheck(row) && picks.get(row) !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0])
   );
-  for (const [answer, choice] of blockingSensorPicks(rows, slug)) {
+  const interactions = stageRows.filter((row) =>
+    (row.event === "DECISION_RECORDED" || row.event === "QUESTION_ANSWERED") &&
+    (unit === null || unitOf(row) === null || unitOf(row) === unit) && !relogged(row)
+  );
+  for (const [answer, choice] of picks) {
     if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE) continue;
+    // At a Unit's checkpoint a pick that names no Unit is the Unit's too (the
+    // agent left --unit off); at the stage gate it must name none.
+    const pickUnit = pickUnits.get(answer) ?? null;
+    if (unitPicks && pickUnit !== unit && !(unit !== null && pickUnit === null)) continue;
     if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
       continue;
     }

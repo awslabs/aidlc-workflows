@@ -595,6 +595,8 @@ export const ROUTES: readonly Route[] = [
       "gate-start",
       // The review request runs it (aidlc-log.ts, completionChecksHold).
       "completion-checks",
+      // A Unit's checkpoint verify and ask run it (aidlc-construction-checkpoints.ts, unitGateChecks).
+      "checkpoint-checks",
       "approve",
       "reject",
       "revise",
