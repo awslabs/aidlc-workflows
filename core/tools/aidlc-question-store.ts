@@ -107,6 +107,11 @@ export interface StoredQuestion {
    * picks a plan are kept (aidlc-before-pick.ts) while it is open.
    */
   asker?: string;
+  /**
+   * The plan proposal step's request: handed to the agent to propose a plan for, never itself put to the person. The
+   * plan question they see for it is the copy saved when the agent proposes one.
+   */
+  proposal?: true;
   createdAt: string;
 }
 
@@ -190,7 +195,8 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.replacedBy === undefined ||
       (typeof question.replacedBy === "string" && QUESTION_ID.test(question.replacedBy))) &&
     (question.messageId === undefined || (typeof question.messageId === "string" && QUESTION_ID.test(question.messageId))) &&
-    (question.asker === undefined || (typeof question.asker === "string" && validSessionId(question.asker) === question.asker))
+    (question.asker === undefined || (typeof question.asker === "string" && validSessionId(question.asker) === question.asker)) &&
+    (question.proposal === undefined || question.proposal === true)
   ) {
     return question as StoredQuestion;
   }
@@ -312,8 +318,10 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
 /**
  * The question stored most recently, of any origin (a `compose` entry
  * included), unexpired: the one a reply that only names an option is about.
+ * With `shown`, a proposal step's request is passed over: it was never put to
+ * the person.
  */
-export function latestQuestion(projectDir: string): StoredQuestion | null {
+export function latestQuestion(projectDir: string, options: { shown?: boolean } = {}): StoredQuestion | null {
   let names: string[];
   try {
     names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
@@ -327,7 +335,7 @@ export function latestQuestion(projectDir: string): StoredQuestion | null {
     const question = readStoredQuestion(projectDir, id);
     if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
-    if (question === null || Number.isNaN(at)) continue;
+    if (question === null || Number.isNaN(at) || (options.shown && question.proposal)) continue;
     if (latest === null || at > latest.at) latest = { question, at };
   }
   if (latest === null) return null;
@@ -383,13 +391,14 @@ export function questionsFromMessage(projectDir: string, messageId: string): Sto
  * of it: the request described right after words said before any was open. A
  * `compose` entry counts, so words said just before a composition answer it.
  * With `routing`, a routing question counts too: words typed with a description
- * beside open work answer the routing question that description becomes.
+ * beside open work answer the routing question that description becomes. With
+ * `shown`, a proposal step's request does not: it was never put to the person.
  */
 export function firstFrontQuestionSince(
   projectDir: string,
   since: string,
   withinMs: number,
-  options: { routing?: boolean } = {},
+  options: { routing?: boolean; shown?: boolean } = {},
 ): string | null {
   const from = Date.parse(since);
   if (Number.isNaN(from)) return null;
@@ -406,8 +415,8 @@ export function firstFrontQuestionSince(
     const question = readStoredQuestion(projectDir, id);
     if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
-    if (question === null || (question.origin === "routing" && !options.routing) || Number.isNaN(at) ||
-      at < from || at - from > withinMs) continue;
+    if (question === null || (question.origin === "routing" && !options.routing) || (options.shown && question.proposal) ||
+      Number.isNaN(at) || at < from || at - from > withinMs) continue;
     if (first === null || at < first.at) first = { id, at };
   }
   return first?.id ?? null;
@@ -452,6 +461,7 @@ export function saveQuestion(
   settings?: QuestionSettings,
   approvedRequest?: string,
   messageId?: string,
+  proposal = false,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   // A question derived from another keeps that one's root, never the parent, so
@@ -478,6 +488,7 @@ export function saveQuestion(
     ...(approvedRequest && QUESTION_ID.test(approvedRequest) ? { approvedRequest } : {}),
     ...(carried && QUESTION_ID.test(carried) ? { messageId: carried } : {}),
     ...(asker ? { asker } : {}),
+    ...(proposal ? { proposal: true as const } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);
