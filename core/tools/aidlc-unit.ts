@@ -6245,8 +6245,14 @@ export function refreshHomeClaims(
   const chat = options.sessionId ?? "no chat";
   const noted = chats[id8];
   const last = typeof noted === "string" ? { chat: noted, at: "", reached: false } : noted;
+  // Their message since that fetch: a turn on the record, or on finished work
+  // the message kept beside it (standingPersonTurn), read by time only.
   const spoke = options.sincePerson === true && last?.chat === chat && last.reached &&
-    readAuditShardEvents(pd).some((row) => isRequestTurn(row) && row.timestamp >= last.at);
+    (readAuditShardEvents(pd).some((row) => isRequestTurn(row) && row.timestamp >= last.at) ||
+      ((): boolean => {
+        const { standingPersonTurn } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+        return (standingPersonTurn(pd, "request", { requests: true })?.timestamp ?? "") >= last.at;
+      })());
   if (!options.now && !spoke && last?.chat === chat) return { fetched: false, unreached: null };
   const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
   const at = isoTimestamp();
@@ -7265,7 +7271,9 @@ export function otherBuildsTurnedDown(projectDir: string, selected: string | nul
       const homeDir = build.homeRecord.slice(build.homeRecord.indexOf("/") + 1);
       try {
         const home = buildsHome(projectDir, build);
-        if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { home, sessionId });
+        // Again after each message of the person's in this chat: news that came
+        // after the chat's first look is heard at their next word.
+        if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { home, sessionId, sincePerson: true });
         const mine = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
           .get(build.unit);
         const down = mine?.payload.turned_down;

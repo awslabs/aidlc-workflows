@@ -19,6 +19,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
@@ -391,6 +392,28 @@ describe("taking a Unit starts its build in the team's space", () => {
     const step = next(alice);
     expect(step.kind, JSON.stringify(step).slice(0, 500)).not.toBe("invoke-swarm");
     expect(step).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+  });
+
+  // A live run on Codex: in the chat of the team's other build, "anything new
+  // for payments?" missed the lead's send-back of refunds that came after the
+  // chat's first look, and only a later ask heard it.
+  test("the lead's turn-down of another of the team's builds reaches the chat at the person's next message, after its first look", () => {
+    const { home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=payments"]);
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const other = take(alice, "checkout-ui");
+    expect(other.status, other.out).toBe(0);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-reporting-chat" };
+    // The chat's first look, before the lead's word.
+    next(alice, chat);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry"], home.dir).status).toBe(0);
+    appendAuditEntry("HUMAN_TURN", { Session: "alice-reporting-chat", "Person Reply": "anything new for payments?" }, alice);
+    const step = next(alice, chat, ["--", "anything new for payments?"]);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 500)).toContain(
+      'refunds was turned down in billing at the home: "billing needs the ledger entry". Its build is waiting for you; say so to go back to it.',
+    );
   });
 
   test("the team approves each of its stages: the build holds on a stage until it is approved", () => {
