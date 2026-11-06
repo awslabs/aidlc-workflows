@@ -6402,13 +6402,19 @@ function takeUnit(args: string[], projectDir?: string): void {
     resultByFile = true;
   }
   invalidateLiveClaimPayloadCache(pd, unit);
+  const withLeadRules = bareFlags.has("lead-rules") || flags["lead-rules"] !== undefined;
+  // The lead's rules the build reads too, in the take's own words, as its choice named them.
+  const leads = withLeadRules ? leadRulesOf(pd, home.space) : null;
+  const leadsToo = leads === null || leads.paths.length === 0 ? ""
+    : ` and the lead's ${leads.practices.length > 0 && leads.project.length > 0 ? "agreed practices and project rules"
+      : leads.practices.length > 0 ? "agreed practices" : "project rules"}`;
   const build = createUnitBuild(pd, home, plan, integration.oid, unit, team, generation, {
     read: (rel) => {
       const shown = git(pd, ["show", `${integration.oid}:${home.recordPrefix}/${rel}`, "--"]);
       return shown.ok ? shown.stdout : null;
     },
     approvals: (produced) => homeApprovals(homeRows, produced),
-  }, home.solo ? home.space : undefined, bareFlags.has("lead-rules") || flags["lead-rules"] !== undefined);
+  }, home.solo ? home.space : undefined, withLeadRules);
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
   // out where nothing of the person's is uncommitted.
@@ -6445,7 +6451,7 @@ function takeUnit(args: string[], projectDir?: string): void {
     });
   }
   const taken = `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours${team === me ? "" : `, for ${theTeam(team)}`}. Its build is its own ` +
-    `piece of work here, under your team's rules, from what the lead approved.` +
+    `piece of work here, under your team's rules${leadsToo}, from what the lead approved.` +
     (resultByFile
       ? ` You can read the lead's project but not write to it, so the result of ${unit} goes back as a file when it is built.`
       : "") +

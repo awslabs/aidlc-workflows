@@ -254,7 +254,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     cloneCode(hosts["checkout-web"], web.dir, "checkout-web", "wendy");
     const remotes = git(web.dir, ["remote"]);
     const offer = kiroIde.next(web.dir);
-    expect(String(offer.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams, one Unit each.`);
+    expect(String(offer.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams.`);
     expect((offer.choices as Array<{ label: string }>).map((c) => c.label)).not.toContain("Carry on fixture");
     const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], web.dir);
     expect(took.status, took.out).toBe(0);

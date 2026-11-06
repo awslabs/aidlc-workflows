@@ -102,7 +102,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
     expect(ask.response_route).toBe("command");
     expect(ask.question).toBe(
-      "fixture is built by teams, one Unit each. Ready to take: refunds (for payments; likely checkout-api, billing), " +
+      "fixture is built by teams. Ready to take: refunds (for payments; likely checkout-api, billing), " +
         "checkout-ui (for web; likely checkout-web). Waiting: reporting (on refunds). Taking a Unit starts it as your " +
         "team's own piece of work here, from what the lead approved.",
     );
@@ -304,7 +304,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect(step.offers, JSON.stringify(step)).toBeUndefined();
     expect(step.message).toBe("Say the line above, then end the turn.");
     expect(step.narration).toBe(
-      "fixture is built by teams, one Unit each. The walking skeleton, orders, is built at the lead's project first. " +
+      "fixture is built by teams. The walking skeleton, orders, is built at the lead's project first. " +
         "Waiting: refunds (for payments; on orders), checkout-ui (for web; on orders), reporting (on orders, refunds). " +
         "Nothing is ready to take yet.",
     );
@@ -320,7 +320,7 @@ describe("a team member's clone of the home's workspace", () => {
     const waiting = next(dana);
     expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
     expect(waiting.narration).toBe(
-      "fixture is built by teams, one Unit each. Waiting: reporting (for data; on refunds). Being built: refunds " +
+      "fixture is built by teams. Waiting: reporting (for data; on refunds). Being built: refunds " +
         "(by alice for payments). Held for other teams: checkout-ui (for web). Nothing is ready to take yet.",
     );
     codeGenerated(alice, record);
@@ -468,6 +468,8 @@ describe("taking a Unit starts its build in the team's space", () => {
     ]);
     const took = take(alice, "refunds", ["--team", "payments", "--lead-rules"]);
     expect(took.status, took.out).toBe(0);
+    // The take's own line names what the person chose to follow.
+    expect(String(took.json?.notice)).toContain("under your team's rules and the lead's agreed practices, from what the lead approved.");
     const record = buildDir(alice, "payments", "refunds");
     expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/team.md");
     const step = next(alice);
@@ -724,7 +726,7 @@ describe("who takes what", () => {
     const step = next(dana);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(step.narration).toBe(
-      "fixture is built by teams, one Unit each. Being built: refunds (by alice for payments). " +
+      "fixture is built by teams. Being built: refunds (by alice for payments). " +
         "Held for other teams: checkout-ui (for web). Nothing is ready to take yet.",
     );
   });
@@ -863,7 +865,7 @@ describe("a team's own workspace, made from the home's", () => {
     const web = teamWorkspace(home.remote, "web");
     const ask = next(web);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
-    expect(String(ask.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams, one Unit each.`);
+    expect(String(ask.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams.`);
     expect(String(ask.question)).toContain("checkout-ui (for web; likely checkout-web)");
     const labels = (ask.choices as Array<{ label: string }>).map((choice) => choice.label);
     expect(labels).toEqual(["Start refunds for payments", "Start checkout-ui for web"]);

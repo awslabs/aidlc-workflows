@@ -9164,7 +9164,7 @@ function unitTakeLook(
       const label = intentDisplayLabel(intent);
       if (ready.length > 0 || waiting.length > 0 || building.length > 0 || others.length > 0) {
         sentences.push(
-          `${label}${elsewhere} is built by teams, one Unit each.` +
+          `${label}${elsewhere} is built by teams.` +
             (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the lead's project first.` : "") +
             (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
             (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : "") +
