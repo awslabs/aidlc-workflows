@@ -203,3 +203,37 @@ test("after the push, the person's redo of Code Generation runs", () => {
   const step = agent.next();
   expect(step, JSON.stringify(step).slice(0, 600)).toMatchObject({ stage: "code-generation", unit: "refunds" });
 });
+
+// The same live run, step by step as its agent took it: the person's words
+// were reported as a jump, `next --stage code-generation` printed the redo,
+// and the redo was refused.
+test("after the push, the person's jump back to Code Generation, by next --stage, runs", () => {
+  const { host, person, agent, push } = builtToPush("codex", false);
+  const pushed = choose(agent, person, push, "Push");
+  expect(pushed.status, pushed.out).toBe(0);
+  agent.next();
+  person.say("Fix the known stale-panel refund issue");
+  const jumped = host.bash(`bun ${host.dir}/tools/aidlc-orchestrate.ts report --result resumed --choice jump --target code-generation`);
+  expect(jumped.status, jumped.stdout + jumped.stderr).toBe(0);
+  const printed = host.bash(`bun ${host.dir}/tools/aidlc-orchestrate.ts next --stage code-generation`);
+  expect(printed.status, printed.stdout + printed.stderr).toBe(0);
+  const jump = /`([^`]*aidlc-jump\.ts execute --target code-generation[^`]*)`/.exec(printed.stdout)?.[1];
+  expect(jump, printed.stdout).toBeString();
+  const moved = host.bash(jump!);
+  expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+  const step = agent.next();
+  expect(step, JSON.stringify(step).slice(0, 600)).toMatchObject({ stage: "code-generation", unit: "refunds" });
+});
+
+// A live run at the push question, as the agent takes a turn: the person's
+// words, the agent's next first, then the edit they asked for.
+test("at the push question the person's ask goes through after the agent's own next", () => {
+  const { host, person, agent, dir } = builtToPush("claude", false);
+  person.say("hold on, before pushing: add a line to the end of billing/README.md");
+  expect(agent.next().ask_type).toBe("unit-push");
+  const write = host.hook("plan-approval-guard", {
+    hook_event_name: "PreToolUse", tool_name: "Write",
+    tool_input: { file_path: join(dir, "billing", "README.md"), content: "# billing\n\nRefunds live here.\n" },
+  });
+  expect(write.status, write.stderr).toBe(0);
+});
