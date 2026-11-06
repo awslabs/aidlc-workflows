@@ -75,6 +75,9 @@ function expectRequestSteps(action: string, command: string): void {
   // was read as the conductor writing the review in the reviewer's name).
   expect(action).toContain("dispatch the reviewer named in it as a subagent and have it write the `reviewFile`");
   expect(action).toContain("never write it yourself and never stand in for it");
+  // A reviewer continued with a message keeps its earlier reviews and gets no
+  // stage rules, since rules are attached at dispatch (issue #3549).
+  expect(action).toContain("Dispatch a new reviewer for it, never an earlier one continued with a message");
   expect(action).toContain("stage-protocol-reviewer.md");
   expect(action).toContain("`reviewFile`");
   expect(action).toContain("`recordVerdict`");
