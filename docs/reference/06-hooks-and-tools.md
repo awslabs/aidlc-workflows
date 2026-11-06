@@ -1019,7 +1019,7 @@ These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validatio
 **Design notes:**
 - Stage Jump tasks (no `[slug]`) and dependency-wiring TaskUpdates (no activeForm) are naturally filtered out.
 - The hook calls the existing `set-status` subcommand — no new code path needed.
-- When the activated slug matches the state-bound active-directive marker, `set-status` refreshes that marker's state digest while preserving its unit. The digest is taken over a projection of `aidlc-state.md` that omits the cache layer, so a status sync that touched only cache fields leaves the marker completely alone rather than superseding the live directive. Either way a recorded Plan Approval is unaffected: it binds to plan content and stage attempt, not to the marker. A sync the rule holds writes nothing, so the completed-grid gate cascade still begins at the block's first stage, and the Units after a walking skeleton start at its first stage too.
+- When the activated slug is `Current Stage` and matches the state-bound active-directive marker, `set-status` refreshes that marker's state digest while preserving its unit. The digest is taken over a projection of `aidlc-state.md` that omits the cache layer, so a status sync that touched only cache fields leaves the marker completely alone rather than superseding the live directive. Either way a recorded Plan Approval is unaffected: it binds to plan content and stage attempt, not to the marker. A sync the rule holds writes nothing, so the completed-grid gate cascade still begins at the block's first stage, and the Units after a walking skeleton start at its first stage too.
 
 ### PostToolUse: run-sensors.ts
 
