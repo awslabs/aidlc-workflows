@@ -884,7 +884,7 @@ Utilities:
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
   intent add-repo <name> [--url <address>] [--reason <text>] [--person-words <their words>]  Add a sibling repo to the active piece of work, cloning it first when it is not here yet (from repos.json, or --url)
-  intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one); its folder and its repos.json line stay
+  intent remove-repo <name>  Take a sibling repo out of the active piece of work; its folder and its repos.json line stay
   intent set-repos <name,...> | --all  Set exactly which sibling repos the active piece of work covers, or keep them all
   intent add-checkout <path>  Record a checkout outside the review's reach (a harness-folder worktree, or one outside the project) so the review covers the code there
   intent remove-checkout <path>  Take a recorded checkout out of the active piece of work's review

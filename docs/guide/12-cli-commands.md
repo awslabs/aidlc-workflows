@@ -36,7 +36,7 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
-| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out (never the last) |
+| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out |
 | `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers; `--all` keeps every recorded repo |
 | `/aidlc intent add-checkout <path>` | Have the review cover code kept in a worktree in the harness folder or outside the project; `remove-checkout <path>` takes it out |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |

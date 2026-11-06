@@ -285,4 +285,21 @@ describe("t-submodule-not-a-repo: removing a submodule from the work", () => {
     expect(r.out).toContain("\"api\" is the only repo this piece of work records; removing it would leave none.");
     expect(row(proj).repos).toEqual(["api"]);
   });
+
+  test("the command's help and its one-line summaries do not say the last repo is never removed", () => {
+    const proj = createOrchestrationTestProject();
+    tempDirs.push(proj);
+    const help = run(proj, ["help"]).out.split("\n").filter((line) => line.includes("intent remove-repo"));
+    expect(help).toHaveLength(1);
+    expect(help[0]).not.toContain("never the last");
+    const docs = join(import.meta.dir, "..", "..", "docs");
+    const summary = readFileSync(join(docs, "guide", "12-cli-commands.md"), "utf-8").split("\n")
+      .filter((line) => line.startsWith("| `/aidlc intent add-repo"));
+    expect(summary).toHaveLength(1);
+    expect(summary[0]).not.toContain("never the last");
+    const toolRow = readFileSync(join(docs, "reference", "06-hooks-and-tools.md"), "utf-8").split("\n")
+      .filter((line) => line.startsWith("| `intent remove-repo"));
+    expect(toolRow).toHaveLength(1);
+    expect(toolRow[0]).toContain("unless it is a git submodule of the project");
+  });
 });
