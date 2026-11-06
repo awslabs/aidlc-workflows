@@ -10184,15 +10184,18 @@ export function codeGenerationIsTheStep(issuedStage: string, currentStage: strin
     normalizeStageName(currentStage) === "code-generation";
 }
 
-// The Code Generation step the engine issued last for this work, even when a
-// state write since then made it out of date: the write retired the step, not
-// the work it named. Only a Code Generation step of the current intent; null
-// for any other.
-export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMarker | null {
+// The step the engine issued last for this work, even when a state write since
+// then made it out of date: the write retired the step, not the work it named.
+// Only a step of the current intent, at `stage` (Code Generation unless named;
+// null takes a step at any stage); null for any other.
+export function readIssuedDirectiveMarker(
+  projectDir: string,
+  stage: string | null = "code-generation",
+): ActiveDirectiveMarker | null {
   try {
     const target = resolveActiveDirectiveTarget(projectDir);
     const marker = readActiveDirectiveMarkerRaw(target.markerPath);
-    return marker?.stage === "code-generation" && (marker.intent_uuid ?? null) === target.intentUuid
+    return marker && (stage === null || marker.stage === stage) && (marker.intent_uuid ?? null) === target.intentUuid
       ? marker : null;
   } catch {
     return null;
@@ -10203,13 +10206,7 @@ export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMa
 // (`--single`) run of `stage`, even when a state write since then made it out
 // of date.
 export function issuedStepIsIsolatedRun(projectDir: string, stage: string): boolean {
-  try {
-    const target = resolveActiveDirectiveTarget(projectDir);
-    const marker = readActiveDirectiveMarkerRaw(target.markerPath);
-    return marker?.stage === stage && marker.single === true && (marker.intent_uuid ?? null) === target.intentUuid;
-  } catch {
-    return false;
-  }
+  return readIssuedDirectiveMarker(projectDir, stage)?.single === true;
 }
 
 // Read the shared/sessionless resume wait under the active-directive lock. The

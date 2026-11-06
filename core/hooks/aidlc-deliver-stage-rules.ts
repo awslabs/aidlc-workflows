@@ -29,6 +29,7 @@ import {
   getField,
   isAidlcAgentFile,
   markSubagentInflight,
+  readIssuedDirectiveMarker,
   recordGuardBlockedRow,
   resolveWorkflowSelection,
   stateFilePath,
@@ -90,17 +91,23 @@ function currentStage(projectDir: string): string | null {
   }
 }
 
+// The stage the work is doing. A stage run on its own (`--single`) never moves
+// Current Stage, so its stage comes from the step the engine issued for it.
+function stageOnRecord(projectDir: string): string | null {
+  const issued = readIssuedDirectiveMarker(projectDir, null);
+  return issued?.single === true ? issued.stage : currentStage(projectDir);
+}
+
 // Resolve which stage a brief belongs to, most-authoritative signal first:
 // 1. An explicit stage-file path in the brief (the protocol tells dispatched
 //    briefs to name it) - unambiguous.
-// 2. The state file's Current Stage - dispatches happen DURING a stage, so
-//    when a workflow is live this is the stage whose rules apply. It outranks
-//    prose mentions: a brief that happens to name one OTHER stage's slug in
-//    passing ("after scope-definition completes...") must not bind that
-//    stage's bundle.
-// 3. A unique slug mention in the brief - last resort for stateless contexts
-//    (single-stage runner before state exists). Ambiguous mentions bind
-//    nothing.
+// 2. The stage on record (stageOnRecord): the stage of a stage run on its own,
+//    else the state file's Current Stage - dispatches happen DURING a stage, so
+//    this is the stage whose rules apply. It outranks prose mentions: a brief that
+//    happens to name one OTHER stage's slug in passing ("after
+//    scope-definition completes...") must not bind that stage's bundle.
+// 3. A unique slug mention in the brief - last resort when no stage is on
+//    record. Ambiguous mentions bind nothing.
 function promptStage(prompt: string, fallback: string | null): GraphStage | null {
   const graph = loadGraph();
   const bySlug = new Map(graph.map((node) => [node.slug, node]));
@@ -265,7 +272,7 @@ export function augmentDispatchRules(
   projectDir: string,
 ): DispatchRuleResult {
   if (!DISPATCH_TOOLS.has(toolName.toLowerCase())) return { changed: false };
-  const fallbackStage = currentStage(projectDir);
+  const fallbackStage = stageOnRecord(projectDir);
   if (toolName.toLowerCase() !== "subagent") {
     return augmentSingleDispatch(input, projectDir, fallbackStage);
   }
@@ -421,7 +428,7 @@ const START_LEAD =
 // nothing can be refused here: an unreadable rule already refused the dispatch.
 function deliverAtStart(parsed: HookInput, projectDir: string): number {
   if (!isAidlcAgent(parsed.agent_type)) return 0;
-  const delivered = augmentText("", projectDir, currentStage(projectDir));
+  const delivered = augmentText("", projectDir, stageOnRecord(projectDir));
   if (!delivered.changed) return 0;
   const output = `${JSON.stringify({
     hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: START_LEAD + delivered.prompt },
