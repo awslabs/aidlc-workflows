@@ -857,7 +857,9 @@ plan is asked once, with the path of the team's version (the board keeps the
 choice after a "Not now"), and the agent runs
 `amend <unit> --input <file> --answer <approve|reject> --request-file <file>`
 with their reply written to that file: their own words after the question was
-shown, not empty and not the agent's. A change made on an older copy is put onto
+shown, not empty and not the agent's. The record keeps their reply as they typed
+it, from the message it came in (the agent names another with `--message <id>`).
+A change made on an older copy is put onto
 the text approved since; where the two do not fit together, nothing changes and
 both are shown, and the text the lead puts together from them is approved as
 written with `--file <that text>`. An approved change is written into the home's
@@ -872,7 +874,9 @@ At the lead's project, when Build and Test finds a Unit a team built wanting,
 failure's own words (written to the file first): its result and its done come
 off its claim, the board shows it back with the team, the team hears it once
 with the words, and the lead's project records it again once it merges again
-(`UNIT_SENT_BACK`). Nothing of it is rebuilt at the lead's project.
+(`UNIT_SENT_BACK`, which keeps the lead's own words to send it back and the
+message they came in, beside the failure). Nothing of it is rebuilt at the
+lead's project.
 
 ### `/aidlc unit rebase` - Move an early build onto what merged
 
@@ -897,14 +901,18 @@ signed its team's result off and every repo it changed merged. The home asks
 once as a result arrives, and the board keeps the choice after a "Not now"; the
 agent runs `sign-off <unit> --request-file <file>` with their reply written to
 that file, under the same rules as any answer of theirs (their own words, after
-the question was shown, not the agent's).
+the question was shown, not the agent's). The record keeps their reply as they
+typed it, from the message it came in (the agent names another with
+`--message <id>`).
 
 ### `/aidlc unit turned-down <unit> --repo <repo>` - Send a repo back
 
 At the home, when a team's pull request in one repo is turned down. The agent
 runs it with your words in the request file its command names
 (`--request-file aidlc/.aidlc-request-text/unit-turned-down.txt`). Your words go onto
-the Unit's claim, and the team hears them once at its next step; its build asks
+the Unit's claim, beside your words as you typed them in the message you said
+them in (the agent names another with `--message <id>`), and the team hears them
+once at its next step; its build asks
 once whether to take the Unit back to Code Generation so it can be changed and
 pushed again. A repo that already merged stays merged.
 
@@ -913,8 +921,9 @@ pushed again. A repo that already merged stays merged.
 At the home, when a repo merged a team's Unit in a way the board does not see (the
 change made again by hand, or merged through another branch). The agent runs it
 with your words in the request file its command names
-(`--request-file aidlc/.aidlc-request-text/unit-merged.txt`). Your words go onto the
-Unit's claim, the repo counts as merged at the home's next step, and the Unit's
+(`--request-file aidlc/.aidlc-request-text/unit-merged.txt`). Your words, as you
+typed them in the message you said them in (the agent names another with
+`--message <id>`), go onto the Unit's claim, the repo counts as merged at the home's next step, and the Unit's
 done record keeps them ("by your word").
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim

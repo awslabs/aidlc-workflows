@@ -109,7 +109,9 @@ import {
   parseReviewRecordBytes,
   personAskedSinceGate,
   pairedReviewRecordForCompletion,
+  OPEN_QUESTION_FIELD,
   personsGateReply,
+  personsWordsText,
   relativeRecordDir,
   REVIEW_RECORDS_DIR,
   reviewRecordDigest,
@@ -344,7 +346,8 @@ export interface UnitClaimPayload {
   result?: UnitResult;
   verdicts?: Array<{ repo: string; merged: boolean; commit?: string; how?: string }>;
   done?: true;
-  turned_down?: { repo: string; words: string; at: string; from?: "build-and-test" };
+  // `person_reply`: the lead's own words for a turn-down, as they typed them.
+  turned_down?: { repo: string; words: string; at: string; from?: "build-and-test"; person_reply?: string };
   // Handed off by file; the team's progress file, when it sent one.
   by_file?: true;
   progress?: { stage: string; at: string };
@@ -5134,16 +5137,71 @@ function personWordsOf(pd: string, flags: Record<string, string | undefined>): s
 }
 
 // The lead's words at the home are theirs only with a turn of theirs behind
-// them (personAskedSinceGate). The four that settle a team's Unit (an answer
-// to a proposal, a turn-down, a merge by word, a sign-off) are refused without
-// one, with the step for a reply the hooks may have missed; assign and hand-off
-// go on, and record no words as the lead's.
+// them (personAskedSinceGate). The five that settle a team's Unit (an answer
+// to a proposal, a turn-down, a merge by word, a sign-off, a send-back) are
+// refused without one (leadsWord), with the step for a reply the hooks may
+// have missed; assign and hand-off go on, and record no words as the lead's.
 function leadSpoke(pd: string): boolean {
   return humanPresenceGuardDisabled() || personAskedSinceGate(pd);
 }
 
 function requireLeadsWord(pd: string, what: string): void {
   if (!leadSpoke(pd)) fail(`${what} is the person's own word: ask them first, then run this with their words.${unattendedHumanPresenceHint(pd)}`);
+}
+
+// The lead's word that settles a team's Unit, as the engine's other decisions
+// keep the person's words: the message the agent names (`--message <id>`, proved by proveMessage's
+// request form, which stands in for the turn requireLeadsWord looks for), else
+// their replies in this chat since the last decision (personsGateReply, as the
+// merge gate's row reads them, over a window no stage starts). A reply sent
+// while the engine's own question for this verb (`ask`) was on screen answers
+// that question, and the window holds it aside: the turn the hook wrote names
+// the question, so its message is taken as a named one, falling back to the
+// window when its proof fails, as `log answer` takes an inherited id. `said`
+// is what they typed, from the message store, and only it goes on a row as
+// theirs (`fields`); null when the store kept no words of theirs (hooks off, a
+// host that passed no text), where the request file's text is all there is.
+const LEAD_WORD_WINDOW = "unit-lead-word";
+function leadsWord(
+  pd: string,
+  flags: Record<string, string | undefined>,
+  what: string,
+  ask?: string,
+): { said: string | null; fields: Record<string, string> } {
+  const { proveMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const kept = (message: import("./aidlc-message-store.ts").StoredMessage) => {
+    const text = message.words === null ? "" : personsWordsText(message.words);
+    const theirs = text.trim() !== "" && !isNonAnswer(text);
+    return { said: theirs ? text.trim() : null, fields: { "Message Id": message.id, ...(theirs ? { "Person Reply": text } : {}) } };
+  };
+  if (flags.message !== undefined) {
+    const proof = proveMessage(pd, flags.message, "decision", { request: true });
+    if ("refusal" in proof) fail(proof.refusal);
+    return kept(proof.message);
+  }
+  requireLeadsWord(pd, what);
+  let chat: string | null = null;
+  try {
+    chat = resolveInvokingSessionId(pd);
+  } catch {
+    // No chat to name: the window reads none as the lead's.
+  }
+  const reply = personsGateReply(pd, chat, LEAD_WORD_WINDOW);
+  const held = new Set(reply.elsewhere.map((entry) => entry.id));
+  const answered = ask === undefined || held.size === 0 ? undefined : readAuditShardEvents(pd).findLast((row) =>
+    row.event === "HUMAN_TURN" && held.has(auditBlockField(row.block, "Message Id") ?? "") &&
+    auditBlockField(row.block, OPEN_QUESTION_FIELD) === ask);
+  const id = answered === undefined ? null : auditBlockField(answered.block, "Message Id");
+  const proof = id === null ? null : proveMessage(pd, id, "decision", { request: true });
+  if (proof !== null && "message" in proof) return kept(proof.message);
+  return {
+    said: reply.words?.trim() || null,
+    fields: {
+      ...(reply.words ? { "Person Reply": reply.words } : {}),
+      ...(reply.messageId ? { "Message Id": reply.messageId } : {}),
+      ...windowMessageIds(reply),
+    },
+  };
 }
 
 // Who builds which Unit, in the lead's own words at the home: one claim per
@@ -7768,13 +7826,16 @@ function amendInput(args: string[], projectDir?: string): void {
     fail(`usage: ${unitUsage("amend")}`);
   }
   const pd = resolveProjectDir(projectDir);
+  // What the team hears stays the words the agent relays (`words`): a team's
+  // notice is said once by its text, so the lead's typed words go only on the
+  // lead's own records (`lead`).
   const words = personWordsOf(pd, flags);
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
   const proposal = live?.payload.proposals?.find((entry) => entry.input === flags.input && entry.answer === undefined);
   if (!live || proposal === undefined) fail(`${unit} has no change to ${flags.input} waiting for an answer.`);
-  requireLeadsWord(pd, "The answer to a proposed change");
+  const lead = leadsWord(pd, flags, "The answer to a proposed change", "unit-amend");
   const name = inputName(proposal.input);
   const answered: Proposal = { ...proposal, answer: answer === "approve" ? "approved" : "turned down", ...(words ? { answer_words: words } : {}) };
   const lines: string[] = [];
@@ -7805,7 +7866,9 @@ function amendInput(args: string[], projectDir?: string): void {
     }
     const before = existsSync(path) ? readFileSync(path, "utf-8") : null;
     writeFileSync(path, text, "utf-8");
-    renewForAmendedInput(pd, proposal.input, { "Proposed By": `${proposal.by} (${live.owner})`, "Person Words": words });
+    renewForAmendedInput(pd, proposal.input, {
+      "Proposed By": `${proposal.by} (${live.owner})`, ...(lead.said !== null ? { "Person Words": lead.said } : {}),
+    });
     const amendment: Amendment = { input: proposal.input, at: isoTimestamp(), words };
     const readers = unitsHearing(pd, proposal.input, before, text);
     const missed: string[] = [];
@@ -7840,7 +7903,7 @@ function amendInput(args: string[], projectDir?: string): void {
   appendAuditEntry("QUESTION_ANSWERED", {
     Question: `${live.owner} proposes a change to the ${name} for ${unit}`,
     Answer: answer === "approve" ? "Approve it" : "Turn it down",
-    "Person Reply": words,
+    ...lead.fields,
   }, pd);
   console.log(JSON.stringify({ answered: answered.answer, unit, notice: lines.join(" ") }));
 }
@@ -7856,8 +7919,10 @@ function sendBack(args: string[], projectDir?: string): void {
   const unit = positional[0];
   if (!unit) fail(`usage: ${unitUsage("send-back")}`);
   const pd = resolveProjectDir(projectDir);
-  const words = personWordsOf(pd, flags);
-  requireLeadsWord(pd, "Sending a Unit back");
+  // The failure, in the words the agent showed the person, is what the team
+  // hears; the lead's own word to send it back goes on the row.
+  const failure = personWordsOf(pd, flags);
+  const lead = leadsWord(pd, flags, "Sending a Unit back");
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
@@ -7866,13 +7931,14 @@ function sendBack(args: string[], projectDir?: string): void {
   const payload: UnitClaimPayload = {
     ...rest,
     predecessor_oid: live.oid,
-    turned_down: { repo: "", words: words.trim(), at: isoTimestamp(), from: "build-and-test" },
+    turned_down: { repo: "", words: failure.trim(), at: isoTimestamp(), from: "build-and-test" },
   };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`${unit} could not be sent back: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
   appendAuditEntry("UNIT_SENT_BACK", {
-    Unit: unit, Owner: live.owner, "Attempt Generation": String(live.generation), ...(words ? { "Person Words": words } : {}),
+    Unit: unit, Owner: live.owner, "Attempt Generation": String(live.generation), ...(failure ? { Failure: failure } : {}),
+    ...lead.fields,
   }, pd);
   console.log(JSON.stringify({
     unit,
@@ -7885,8 +7951,10 @@ function turnedDown(args: string[], projectDir?: string): void {
   const unit = positional[0];
   if (!unit || !flags.repo) fail(`usage: ${unitUsage("turned-down")}`);
   const pd = resolveProjectDir(projectDir);
+  // The team hears the words the agent relays; the lead's typed words, from
+  // the message store, stay on the claim beside them, read by no line.
   const words = personWordsOf(pd, flags);
-  requireLeadsWord(pd, "A turn-down");
+  const said = leadsWord(pd, flags, "A turn-down").said;
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
@@ -7894,7 +7962,7 @@ function turnedDown(args: string[], projectDir?: string): void {
   const payload: UnitClaimPayload = {
     ...live.payload,
     predecessor_oid: live.oid,
-    turned_down: { repo: flags.repo, words: words.trim(), at: isoTimestamp() },
+    turned_down: { repo: flags.repo, words: words.trim(), at: isoTimestamp(), ...(said !== null ? { person_reply: said } : {}) },
   };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`);
@@ -7910,8 +7978,8 @@ function saidMerged(args: string[], projectDir?: string): void {
   const unit = positional[0];
   if (!unit || !flags.repo) fail(`usage: ${unitUsage("merged")}`);
   const pd = resolveProjectDir(projectDir);
-  const words = personWordsOf(pd, flags);
-  requireLeadsWord(pd, "That it merged");
+  const given = personWordsOf(pd, flags);
+  const words = leadsWord(pd, flags, "That it merged").said ?? given;
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
@@ -8546,17 +8614,18 @@ function signOff(args: string[], projectDir?: string): void {
   const unit = positional[0];
   if (!unit) fail(`usage: ${unitUsage("sign-off")}`);
   const pd = resolveProjectDir(projectDir);
-  const words = personWordsOf(pd, flags);
+  const given = personWordsOf(pd, flags);
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
   if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
-  requireLeadsWord(pd, "The sign-off");
+  const lead = leadsWord(pd, flags, "The sign-off", "unit-signoff");
+  const words = lead.said ?? given;
   const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, signoff: { words, at: isoTimestamp() } };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
   invalidateLiveClaimPayloadCache(pd, unit);
-  appendAuditEntry("QUESTION_ANSWERED", { Question: `Sign off ${unit} from ${live.owner}`, Answer: "Sign it off", "Person Reply": words }, pd);
+  appendAuditEntry("QUESTION_ANSWERED", { Question: `Sign off ${unit} from ${live.owner}`, Answer: "Sign it off", ...lead.fields }, pd);
   console.log(JSON.stringify({ unit, notice: `Signed off ${unit}; it counts as done once every repo it changed has merged.` }));
 }
 

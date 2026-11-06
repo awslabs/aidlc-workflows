@@ -864,11 +864,21 @@ the home's own board from the step's builders (`teamHomeClaims`,
 `unitBoardRows`): it fetches the claims and each pushed repo's integration
 branch, checks the merges without writing them, and shows the same text the
 step would; a Unit's build left unpushed ends with
-`done_note`, the push command. `unit turned-down`, `unit merged`, `unit amend`
-and `unit sign-off` record the lead's word only with a turn of theirs behind it
-(`requireLeadsWord` over `personAskedSinceGate`, unless the human-presence guard
-is off; a refusal adds `unattendedHumanPresenceHint`); `unit assign` and `unit
-hand-off` record `Person Words` only then. The merge
+`done_note`, the push command. `unit turned-down`, `unit merged`, `unit amend`,
+`unit sign-off` and `unit send-back` record the lead's word only with a turn of
+theirs behind it (`requireLeadsWord` over `personAskedSinceGate`, unless the
+human-presence guard is off; a refusal adds `unattendedHumanPresenceHint`), or
+on the message the agent names (`--message <id>`, proved by `proveMessage`'s
+request form). Their words come from the message store (`leadsWord`): the named
+message, else the reply the hook held for the engine's own `unit-amend` or
+`unit-signoff` question, else this chat's replies since the last decision
+(`personsGateReply`); each row carries its `Message Id`, and the request file's
+text is used only where the store kept none, never labelled as theirs. The words
+a team hears (a turn-down's, an answer to its proposal, an amendment's, a
+send-back's failure) stay the request file's: a team's notice is said once by its
+text (`sayWithStepOnce`), so the lead's typed words go only on the lead's own
+records, and on a turn-down's claim as `person_reply`, which no line reads. `unit
+assign` and `unit hand-off` record `Person Words` only with a turn behind them. The merge
 check's claim reads and its write of the verdicts and `done` (a
 `--force-with-lease` push of the claim ref) run under the same quiet git as the
 claims fetch; an unwritten verdict stays local, the board line says it may be

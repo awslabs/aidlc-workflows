@@ -224,9 +224,9 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   adopt: { name: true, options: [], usage: "unit adopt <unit>" },
   amend: {
     name: true,
-    options: ["input", "answer", "file", "request-file", "person-words"],
+    options: ["input", "answer", "file", "message", "request-file", "person-words"],
     usage: "unit amend <unit> --input <file> --answer <approve|reject> [--file <text the lead approves>] " +
-      "(--request-file <file> | --person-words <text>)",
+      "[--message <id>] (--request-file <file> | --person-words <text>)",
   },
   assign: {
     name: false,
@@ -266,8 +266,8 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   "merge-status": { name: true, options: [], usage: "unit merge-status <unit>" },
   merged: {
     name: true,
-    options: ["repo", "request-file", "person-words"],
-    usage: "unit merged <unit> --repo <repo> (--request-file <file> | --person-words <text>)",
+    options: ["repo", "message", "request-file", "person-words"],
+    usage: "unit merged <unit> --repo <repo> [--message <id>] (--request-file <file> | --person-words <text>)",
   },
   participate: { name: false, options: [], usage: "unit participate" },
   pin: { name: true, options: [], usage: "unit pin <unit>" },
@@ -294,14 +294,14 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   release: { name: true, options: ["expect-nonce"], usage: "unit release <unit> [--expect-nonce <claim-nonce>]" },
   "send-back": {
     name: true,
-    options: ["request-file", "person-words"],
-    usage: "unit send-back <unit> (--request-file <file> | --person-words <text>)",
+    options: ["message", "request-file", "person-words"],
+    usage: "unit send-back <unit> [--message <id>] (--request-file <file> | --person-words <text>)",
   },
   share: { name: false, options: [], switches: ["plan"], usage: "unit share [--plan]" },
   "sign-off": {
     name: true,
-    options: ["request-file", "person-words"],
-    usage: "unit sign-off <unit> (--request-file <file> | --person-words <text>)",
+    options: ["message", "request-file", "person-words"],
+    usage: "unit sign-off <unit> [--message <id>] (--request-file <file> | --person-words <text>)",
   },
   status: { name: false, options: [], usage: "unit status" },
   take: {
@@ -314,8 +314,8 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   "take-in": { name: false, word: "<file>", options: [], usage: "unit take-in <file>" },
   "turned-down": {
     name: true,
-    options: ["repo", "request-file", "person-words"],
-    usage: "unit turned-down <unit> --repo <repo> (--request-file <file> | --person-words <text>)",
+    options: ["repo", "message", "request-file", "person-words"],
+    usage: "unit turned-down <unit> --repo <repo> [--message <id>] (--request-file <file> | --person-words <text>)",
   },
 };
 
