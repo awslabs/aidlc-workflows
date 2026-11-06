@@ -18077,12 +18077,18 @@ function emitTeamUnitMajorRunStage(
     // A team the home holds a Unit for may not reach this workspace: the lead
     // is offered once to hand the Unit to them as a file.
     const unitTool = aidlcToolInvocation("unit");
-    const offers = heldNotTaken.map(({ unit, team }) => ({
+    // The hand-off and build-here offers are put once for each Unit, in any
+    // chat: keeping it held, or leaving it open, needs no command, so the mark
+    // keeps that answer; their commands stay in the board's note.
+    const markOf = (kind: string, unit: string) => `board-${kind}-${unit.replace(/[^A-Za-z0-9.-]+/g, "_")}.json`;
+    const marks = new Map<string, string>();
+    const offers = heldNotTaken.filter(({ unit }) => engineAskMark(projectDir, markOf("hand-off", unit)) === null).map(({ unit, team }) => ({
       question: `If ${team} cannot reach this workspace, I can hand ${unit} to them as a file they build it from. Do you want me to?`,
       choices: [
         { label: `Hand ${unit} to ${team} as a file`, command: `${unitTool} hand-off ${unit} --team ${shellArg(team)} ${unitWordsArg("hand-off", unit)}` },
         { label: `Keep ${unit} for ${team} here`, recommended: true as const },
       ],
+      mark: markOf("hand-off", unit),
     }));
     // A sign-off or a proposal the lead was asked about once stays theirs to answer, from the board.
     const answers = [...(overview?.claims.values() ?? [])].filter((claim) => claim.status === "claimed").flatMap((claim) => [
@@ -18113,15 +18119,21 @@ function emitTeamUnitMajorRunStage(
     const dependencies = unitDependencies(projectDir);
     const startable = [...leftOpen].filter((unit) => overview?.claims.get(unit)?.status !== "claimed" && !mergedHere.has(unit) &&
       homeWalkUnits([unit], new Set([...heldElsewhere].filter((other) => other !== unit)), mergedHere, dependencies).length > 0);
-    const buildHere = unitsInPlanOrder(projectDir, startable).map((unit) => ({
+    const buildHere = unitsInPlanOrder(projectDir, startable).filter((unit) => engineAskMark(projectDir, markOf("build-here", unit)) === null).map((unit) => ({
       question: `${unit} is open for any team to take. Do you want me to build it here instead?`,
       choices: [
         { label: `Leave ${unit} open`, recommended: true as const },
         { label: `Build ${unit} here`, command: `${unitTool} assign --here ${shellArg(unit)} ${unitWordsArg("assign")}` },
       ],
+      mark: markOf("build-here", unit),
     }));
+    for (const { question, mark } of [...offers, ...buildHere]) marks.set(question, mark);
     // Each offer is put once in a chat; its command stays in the board's note.
-    const allOffers = offersOnce(projectDir, [...answers, ...offers, ...buildHere]);
+    const allOffers = offersOnce(projectDir, [...answers, ...offers, ...buildHere].map(({ question, choices }) => ({ question, choices })));
+    for (const offer of allOffers) {
+      const mark = marks.get(offer.question);
+      if (mark !== undefined && !isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, mark);
+    }
     emit(lineEndingTurn(
       renderUnitBoard(workLabel(projectDir), rows),
       allOffers,

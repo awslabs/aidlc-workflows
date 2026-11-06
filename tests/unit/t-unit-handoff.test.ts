@@ -142,6 +142,11 @@ describe("the lead hands a Unit off by file", () => {
     const again = next(home.dir, chat);
     expect(again.offers, JSON.stringify(again)).toBeUndefined();
     expect(String(again.board_note)).toContain("aidlc-unit.ts hand-off <unit>");
+    // A live run: the lead's "keep it" needs no command, and a later chat put
+    // the same offer again. Put once for the Unit, its answer stands.
+    const later = next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-handoff-board-later" });
+    expect(later.offers, JSON.stringify(later).slice(0, 400)).toBeUndefined();
+    expect(String(later.board_note)).toContain("aidlc-unit.ts hand-off <unit>");
   });
 });
 
