@@ -728,6 +728,11 @@ export function harnessIdFromTyped(name: string): string {
   return Object.entries(TYPED_HARNESS_NAMES).find(([, typed]) => typed === name)?.[0] ?? name;
 }
 
+/** Every harness this release ships, in id order: its id, the name --harness takes, and its host's name. */
+export function typedHarnessHosts(): { id: string; name: string; host: string }[] {
+  return Object.keys(HOST_LABELS).sort().map((id) => ({ id, name: typedHarnessName(id), host: HOST_LABELS[id] }));
+}
+
 /** A command line's --harness values, typed names read as harness ids. */
 export function harnessArgsAsIds(args: readonly string[]): string[] {
   return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? harnessIdFromTyped(arg) : arg));

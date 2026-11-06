@@ -43,6 +43,7 @@ import {
   runtimeProjectDir,
   runtimeProjectDirFrom,
   runtimeHarnessName,
+  typedHarnessHosts,
 } from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
@@ -1703,6 +1704,14 @@ export function renderCommandHelp(command: PublicCommand): string {
   if (command === "config") {
     const sectionRow = (name: string, summary: string): string =>
       `  ${cmd(name, out)}${" ".repeat(12 - name.length)}${summary}`;
+    // Both Kiro trees' host is Kiro; these are the words the setup picker
+    // shows for them (t230 pins every row to the picker's words).
+    const harnessWords: Readonly<Record<string, string>> = {
+      kiro: "Kiro CLI (V2)",
+      "kiro-ide": "Kiro (Kiro IDE and Kiro CLI on its v3 engine)",
+    };
+    const harnesses = typedHarnessHosts();
+    const nameWidth = Math.max(...harnesses.map(({ name }) => name.length)) + 2;
     return [
       "Set up, refresh, or change AI-DLC project configuration",
       "",
@@ -1724,12 +1733,16 @@ export function renderCommandHelp(command: PublicCommand): string {
       `  ${cmd(`${invoke} config list`, out)}                List them all`,
       "",
       heading("COMMON FLAGS", out),
+      "  --harness <name>  The tool to set up, refresh or add in this project (names under HARNESSES); kiro and kiro-v2 switch a Kiro project in place",
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
       `  --channel [name]  Show or set the release channel this machine follows (stable, preview); ${invoke} update --channel switches for one run only`,
       "  --show            Show one section, or every section with no section named, without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
+      "",
+      heading("HARNESSES", out),
+      ...harnesses.map(({ id, name, host }) => `  ${name.padEnd(nameWidth)}${harnessWords[id] ?? host}`),
       "",
       heading("EXAMPLES", out),
       `  ${cmd(`${invoke} config`, out)}`,
