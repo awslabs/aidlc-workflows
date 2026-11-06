@@ -762,7 +762,7 @@ export interface DocumentExtractorSpec {
 }
 
 // A host-specific line from harness.json, kept only when well formed.
-function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "inHost">(
+export function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "inHost">(
   key: K,
   value: unknown,
 ): Partial<Record<K, { env: string[]; text: string }>> {
@@ -785,7 +785,7 @@ function registrationLines(value: unknown): Pick<HookActivation, "registration">
 // matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
 // A `NAME=value` variable holding another value rules the host out: Kiro CLI in
 // VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
-function inHostShell(env: readonly string[] | undefined): boolean {
+export function inHostShell(env: readonly string[] | undefined): boolean {
   const entries = (env ?? []).map((entry) => {
     const [name, value] = entry.split("=", 2);
     return { value: value?.toLowerCase(), actual: process.env[name]?.trim().toLowerCase() };
@@ -820,8 +820,6 @@ interface ShippedHarnessData {
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
   hookActivation: HookActivation | null;
-  /** The person's step to a clean chat in this host (newChatStep), or null. */
-  newChatStep: { text: string; inHost?: { env: string[]; text: string } } | null;
   /** The host variables of a host whose own stop event records every
    *  dispatched agent's finish before the agent that dispatched it sees the
    *  result (agentFinishRecorded), or null. */
@@ -1014,11 +1012,6 @@ function readShippedHarnessData(): ShippedHarnessData {
         finish.every((name) => typeof name === "string" && name !== "")
       ? [...finish as string[]]
       : null;
-    // A line for the person, so a malformed step is dropped and none is said.
-    const chat = (parsed as { newChatStep?: { text?: unknown; inHost?: unknown } | null }).newChatStep;
-    const newChatStep = typeof chat?.text === "string" && chat.text.trim() !== ""
-      ? { text: chat.text, ...hostLine("inHost", chat.inHost) }
-      : null;
     const paused = pausedBySelection(plugins, (plugin) => composedPluginBase(dirname(p), plugin));
     _shippedHarnessData = {
       rulesSubdir,
@@ -1030,7 +1023,6 @@ function readShippedHarnessData(): ShippedHarnessData {
       documentExtractors,
       runnerFrontmatterAdditions,
       hookActivation,
-      newChatStep,
       agentFinishRecorded,
     };
     return _shippedHarnessData;
@@ -1046,7 +1038,6 @@ function readShippedHarnessData(): ShippedHarnessData {
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
     hookActivation: null,
-    newChatStep: null,
     agentFinishRecorded: null,
   };
   return _shippedHarnessData;
@@ -27934,17 +27925,6 @@ export const HOOK_EXECUTION_RECOVERY_OTHER =
 export function hookActivation(): HookActivation | null {
   try {
     return readShippedHarnessData().hookActivation;
-  } catch {
-    return null;
-  }
-}
-
-/** The person's step to a clean chat in the host the agent's shell is in, filled in, or null. Never throws. */
-export function newChatStep(): string | null {
-  try {
-    const step = readShippedHarnessData().newChatStep;
-    if (step === null) return null;
-    return fillHookActivationText(step.inHost && inHostShell(step.inHost.env) ? step.inHost.text : step.text);
   } catch {
     return null;
   }

@@ -1,4 +1,4 @@
-// covers: function:cleanChatLine, function:newChatStep, function:createPrintDirective, function:sayPendingPersonLines, subcommand:aidlc-orchestrate:next
+// covers: function:cleanChatLine, function:newChatStep, function:shippedNewChatStep, function:createPrintDirective, function:sayPendingPersonLines, subcommand:aidlc-orchestrate:next
 //
 // New work started beside other work in a chat carries on in that chat, and
 // the person is offered once to start it in a clean chat instead. The offer
@@ -92,6 +92,11 @@ function hostEnv(row: Pick<Row, "env">, chat: boolean): NodeJS.ProcessEnv {
     "AIDLC_UNATTENDED",
     "AIDLC_SESSION_OVERRIDE",
     "AIDLC_SESSION_OVERRIDE_SOURCE",
+    // The chat this test runs in names none of the rows' chats.
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_PID",
+    "CODEX_THREAD_ID",
+    "KIRO_SESSION_ID",
     "TERM_PROGRAM",
     "VSCODE_IPC_HOOK",
     "VSCODE_PID",

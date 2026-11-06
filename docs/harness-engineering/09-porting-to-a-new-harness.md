@@ -142,10 +142,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   chat in this host, in its own words, with `<entry>` filled in. When new work
   starts beside other work in a chat, its first stage step says once, as it
   comes and before the stage's work, "To start this in a clean chat instead,
-  <text>.";
-  without it nothing is said. `inHost` (`{ env, text }`) gives one host this
-  tree runs in its own step, told apart as `missedReplyInHost` is: Kiro IDE uses
-  it beside Kiro CLI's `/chat new`.
+  <text>."; without it nothing is said. `inHost` (`{ env, text }`) gives one
+  host this tree runs in its own step, told apart as `missedReplyInHost` is:
+  Kiro IDE uses it beside Kiro CLI's `/chat new`.
 - `directiveMaxBytes` (optional) - for a host that keeps less of one shell
   result than the engine's 28 KiB directive cap. The engine keeps every
   directive at or under it: stage rules ride inline only while they fit, and

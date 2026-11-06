@@ -509,7 +509,6 @@ import {
   authoritativeProjectDescription,
   harnessDir,
   hookActivation,
-  newChatStep,
   hookChildEnv,
   hookLiveness,
   hooksOffAgentStep,
@@ -583,6 +582,7 @@ import {
   type ConstructionEvidence,
 } from "./aidlc-construction-checkpoints.ts";
 import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
+import { newChatStep } from "./aidlc-new-chat.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
