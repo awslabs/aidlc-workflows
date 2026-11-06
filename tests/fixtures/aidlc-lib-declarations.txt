@@ -72,7 +72,6 @@ CHANGE_CONTROL_VALUES
 CHECKBOX_REVERSE
 CLAIM_BOUNDARY_WARNINGS
 CLAIM_GENERATIONS_FILE
-CLAIM_REGISTRY_CACHE_FILE
 CLAUDE_HOST_TEMPLATES
 CLAUDE_HOST_TURN_ORIGINS
 CLAUDE_QUEUED_HOST_ORIGINS
@@ -95,7 +94,6 @@ CREATION_RECEIPT_FILE
 CURRENT_FINGERPRINTS
 CURRENT_SESSION_FILE
 CURRENT_STATE_VERSION
-CachedUnitClaim
 CeremonyKey
 CeremonyPolicy
 CeremonyResolution
@@ -522,7 +520,6 @@ UNSAVED_REASONS
 UNTRUSTED_AUDIT_NOTICE
 UTILITY_COMMANDS
 UnitCheckpoint
-UnitClaimRegistryCache
 UnitDependencyEdge
 UnitGateRhythm
 UnitGateScope
@@ -652,7 +649,6 @@ boltEventUnits
 boltWorktreeBaseCommit
 boundDirectiveMessage
 boxPicksAddANote
-cachedClaimFanoutActive
 candidateAttemptEventMatches
 candidateReviewCoverageProjection
 canonicalEngineCommand
@@ -677,8 +673,6 @@ claimGenerationKey
 claimGenerationsPath
 claimOverOwnJump
 claimPayloadAtTip
-claimRegistryCachePath
-claimRegistryGit
 claimRegistryRemote
 claimRegistryTips
 classifyRuntimeCompileCommand
@@ -1421,7 +1415,6 @@ readSubagentInflightLedger
 readSummaryAuthorization
 readSyncBufferedBytes
 readSyncBufferedLine
-readUnitClaimRegistryCache
 readUnitGateRhythm
 readUnitMergeTransaction
 readUnitSourceManifest

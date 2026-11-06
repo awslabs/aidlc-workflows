@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:unit, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:unitOpenCheckpoints, function:activeUnitCheckpoint, function:unitLifecycleSnapshot
+// covers: subcommand:aidlc-state:unit, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-unit:claim, subcommand:aidlc-unit:status, function:unitOpenCheckpoints, function:activeUnitCheckpoint, function:unitLifecycleSnapshot, function:unitsHeldHere, function:unitsWalkedWithoutClaim, function:claimRegistryGit, function:requireLiveClaimForTeamUnit, function:validateLiveUnitScope, function:cachedClaimFanoutActive
 //
 // Which checkout holds a Unit's work (#3610). The lead's checkout starts a
 // Unit before any team took one, and main is pushed with it in progress. A
@@ -307,6 +307,18 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     const forkBeta = runMergeTool(STATE, ["fork", "--slug", "beta"], lead);
     expect(forkBeta.status).not.toBe(0);
     expect(said(forkBeta)).toContain("requires a live claim");
+  });
+
+  test("shared before any team claims, the lead's chat still goes on with it", () => {
+    const { lead } = leadsCheckout();
+    nextDirective(lead);
+    expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
+    expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+    // The person asks for the plan to be shared now: the engine's own share.
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    const step = nextDirective(lead);
+    expect(step, JSON.stringify(step).slice(0, 400)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
   });
 
   test("once the lead's Unit is done, the board is the step while the teams' Units are not merged", () => {

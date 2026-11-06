@@ -16038,6 +16038,20 @@ function refreshTeamUnitProgress(
   return readStateFile(projectDir);
 }
 
+// The Units an unclaimed team checkout walks itself once the teams take Units
+// (#3610): the ones it walks without a claim (unitsHeldHere), or null for every
+// Unit. Before the plan is shared the checkout walks every Unit, as before.
+function teamWalkHeldUnits(projectDir: string): ReadonlySet<string> | null {
+  const held = unitsHeldHere(projectDir);
+  if (held === null) return null;
+  try {
+    return claimlessTeamCheckout(projectDir) ? null : held;
+  } catch {
+    // A record that cannot be read keeps the walk on the held Units.
+    return held;
+  }
+}
+
 function emitTeamUnitMajorRunStage(
   projectType: "brownfield" | "greenfield" | null,
   scope: string,
@@ -16057,7 +16071,7 @@ function emitTeamUnitMajorRunStage(
       return;
     }
   }
-  const held = scopeStamp ? null : unitsHeldHere(projectDir);
+  const held = scopeStamp ? null : teamWalkHeldUnits(projectDir);
   const units = scopeStamp
     ? [scopeStamp.unit]
     : resolution.batches.flat().filter((unit) => held === null || held.has(unit));
@@ -16248,9 +16262,9 @@ function emitTeamUnitMajorRunStage(
     });
     return;
   }
-  // The Unit this checkout walked without a claim is done; while the teams'
-  // Units are not all merged, the board is the step here, as for a checkout
-  // that walks none (#3610).
+  // The Unit this checkout walked without a claim is done; once the teams take
+  // Units, while theirs are not all merged, the board is the step here, as for
+  // a checkout that walks none (#3610).
   if (held !== null) {
     const readOnly = model === null;
     const seen = model ?? deriveTeamUnitProgressModel(projectDir, refreshedState, auditRows, undefined, { readOnly: true });
@@ -16407,7 +16421,7 @@ function teamUnitMajorWalkBeat(
   const block = constructionUnitMajorBlock(scope, stateContent, true);
   if (!block.some((stage) => stage.slug === currentSlug)) return null;
   const scopeStamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
-  const held = scopeStamp ? null : unitsHeldHere(projectDir);
+  const held = scopeStamp ? null : teamWalkHeldUnits(projectDir);
   const units = scopeStamp
     ? [scopeStamp.unit]
     : resolution.batches.flat().filter((unit) => held === null || held.has(unit));
