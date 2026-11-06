@@ -13479,35 +13479,29 @@ function applyKeptToPickedWork(projectDir: string, sessionId: string, space: str
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
-// Whether a status sync to `stage` leaves the main cursor (Current Stage, In
-// Progress, the cursor checkbox) where it is. Under unit-major, while the step
-// the engine issued is a Unit's Construction step on `stage` or on Current
-// Stage, a sync to any Construction stage other than Current Stage leaves it:
-// the cursor is the engine's. In an unscoped checkout it rests on the block's
-// first stage while the Units walk, and the task slug names the Unit's stage.
-// In a checkout that claimed the Unit (Unit Ownership: team),
-// `aidlc-state.ts sync-unit-scope-stage` rests it on the Unit's own stage, and
-// the sync names another stage: on Kiro IDE the audit tail's last
-// STAGE_STARTED, the block's first stage while the Units walk, because a Unit
-// step writes UNIT_STARTED rows and no STAGE_STARTED. There, moving the cursor
-// retires the step the engine just issued, and the marker is not refreshed
-// (its stage is not the sync's): on Kiro IDE, where the sync runs after every
-// shell command, `continue` then restarts at part one and Plan Approval finds
-// no current directive, forever. The hook's audit-tail path asks this before
-// it writes; set-status applies it to the slug it is given.
-export function statusSyncLeavesUnitCursor(
+// Whether a status sync to `stage` leaves the state as it is: the one rule for
+// where the sync may move Current Stage. While the step the engine issued is
+// still current (`issuedStep` is readActiveDirectiveMarker's, so only while it
+// matches the state), Current Stage is where the engine put it for that step,
+// and a sync naming another stage changes nothing. The sync takes its stage
+// from outside the engine (the task the agent marked in progress, or on Kiro
+// IDE the audit tail's last STAGE_STARTED, which a Unit's step never writes),
+// and the engine writes Current Stage itself on every move of its own, so no
+// step needs the sync to move it. Moving it retires the issued step (on Kiro
+// IDE `continue` then restarts at part one after every shell command) or the
+// place of a Unit walk, whose cursor rests on the block's first stage under
+// unit-major and under the walking skeleton. The step stays current across a
+// `unit start` because the digest leaves out the Unit lifecycle fields, and a
+// step left at the state's digest when it went out of date holds the sync too.
+// The hook's audit-tail path asks this before it writes; set-status applies it
+// to the slug it is given.
+export function statusSyncLeavesCursor(
   stateContent: string,
-  activeDirective: ActiveDirectiveMarker | null,
+  issuedStep: ActiveDirectiveMarker | null,
   stage: string,
-  phase: string,
 ): boolean {
   const currentStage = (getField(stateContent, "Current Stage") ?? "").trim();
-  return getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
-    phase === "CONSTRUCTION" &&
-    activeDirective?.unit !== undefined &&
-    currentStage.length > 0 &&
-    currentStage !== stage &&
-    (activeDirective.stage === stage || activeDirective.stage === currentStage);
+  return issuedStep !== null && currentStage.length > 0 && currentStage !== stage;
 }
 
 export function setStatus(
@@ -13527,18 +13521,19 @@ export function setStatus(
   const agent = flags.agent || entry.lead_agent;
 
   const previousContent = readStateFile(projectDir, flags.intent, flags.space);
-  const activeDirective = readActiveDirectiveMarker(projectDir, previousContent);
-  const preserveUnitMajorCursor = statusSyncLeavesUnitCursor(previousContent, activeDirective, stage, phase);
+  // Held, nothing is written: Active Agent follows Current Stage, and another
+  // stage's Lifecycle Phase would change the digest and retire the step.
+  if (statusSyncLeavesCursor(previousContent, readActiveDirectiveMarker(projectDir, previousContent), stage)) {
+    return { phase, stage, agent };
+  }
   let content = previousContent;
   content = setField(content, "Lifecycle Phase", phase);
   content = setField(content, "Active Agent", agent);
   content = setField(content, "Status", "Running");
   content = setField(content, "Last Updated", isoTimestamp());
-  if (!preserveUnitMajorCursor) {
-    content = setField(content, "Current Stage", stage);
-    content = setField(content, "In Progress", stage);
-    content = setCheckbox(withStageProgressRow(content, stage), stage, "in-progress");
-  }
+  content = setField(content, "Current Stage", stage);
+  content = setField(content, "In Progress", stage);
+  content = setCheckbox(withStageProgressRow(content, stage), stage, "in-progress");
   writeStateFile(projectDir, content, flags.intent, flags.space);
   try {
     refreshActiveDirectiveMarker(projectDir, stage, previousContent, content);
