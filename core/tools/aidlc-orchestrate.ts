@@ -623,7 +623,8 @@ import {
 // by the agent (planProposalDirective), never inferred here from keywords; the
 // audit-emitting detect-scope verb remains a separate recording move. Importing
 // aidlc-utility.ts is safe (its main() runs only under import.meta.main, and
-// utility never imports this module - no cycle).
+// utility loads this module only from status, with an awaited import once both
+// are loaded - no load-time cycle).
 import {
   capInlineContextPaths,
   type InlineContextEntry,
@@ -16559,6 +16560,34 @@ function unitStageStop(
   return confirmation.ok ? null : { kind: "summary", stage: k, unit: u, confirmation };
 }
 
+// Every stop the solo walk still has for one Unit, in order: each block stage
+// it has not settled (its work), the summary confirmation of one it has, then
+// its checkpoint. The walk's stop for the Unit is the first (unitMajorWalkStep);
+// status reads the rest (unitWalkStanding). Lazy, so the walk reads no further.
+function* unitWalkStops(
+  projectDir: string,
+  stateContent: string | null,
+  block: GraphStage[],
+  ledgers: ReadonlyMap<string, UnitLedger>,
+  u: string,
+  kinds: Map<string, string> | null | undefined,
+  allUnits: string[],
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  checkpoints: boolean,
+): Generator<UnitMajorWalkStep> {
+  for (const k of block) {
+    const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
+    const stop = unitStageStop(projectDir, stateContent, k, u, kinds?.get(u) ?? null, recordPrefix, codekbCtx, ledger);
+    if (stop) yield stop;
+  }
+  if (checkpoints && stateContent && !unitSkippedItsCode(projectDir, stateContent, u)) {
+    const kind = constructionCheckpointKind(stateContent, u, allUnits);
+    const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
+    if (!checkpoint.approved) yield { kind: "checkpoint", unit: u, checkpoint };
+  }
+}
+
 function unitMajorWalkStep(
   projectDir: string,
   stateContent: string | null,
@@ -16588,15 +16617,8 @@ function unitMajorWalkStep(
   }
   // The Unit's first stop in the block, or null when it is done.
   const stopFor = (u: string): UnitMajorWalkStep | null => {
-    for (const k of block) {
-      const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
-      const stop = unitStageStop(projectDir, stateContent, k, u, kinds?.get(u) ?? null, recordPrefix, codekbCtx, ledger);
-      if (stop) return stop;
-    }
-    if (checkpoints && stateContent && !unitSkippedItsCode(projectDir, stateContent, u)) {
-      const kind = constructionCheckpointKind(stateContent, u, allUnits);
-      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
-      if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
+    for (const stop of unitWalkStops(projectDir, stateContent, block, ledgers, u, kinds, allUnits, recordPrefix, codekbCtx, checkpoints)) {
+      return stop;
     }
     return null;
   };
@@ -16672,6 +16694,96 @@ function unitMajorWalkBeat(
     step,
     block,
     context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx },
+  };
+}
+
+// Where each Unit of a solo unit-major walk stands, for `/aidlc --status`,
+// read from the walk itself (unitWalkStops, the stops the walk routes by), and
+// what comes next: the step in hand while its Unit has not started it, else
+// that Unit's next stop, else the next Unit's first, else the plan's stage
+// after the block. `current` is the place of the walk's Unit in the walk's
+// order (null once every Unit is through the block). Null on
+// unitMajorWalkBeat's conditions. Reads only.
+export function unitWalkStanding(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+): { clause: string; current: number | null; total: number; next: string | null } | null {
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, (getField(stateContent, "Current Stage") ?? "").trim());
+  if (walk === null) return null;
+  const { block, step } = walk;
+  const { units, kinds, recordPrefix, codekbCtx } = walk.context;
+  const checkpoints = checkpointPolicyEnabled(stateContent);
+  const ledgers = new Map<string, UnitLedger>(block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]));
+  const stops = (u: string) =>
+    unitWalkStops(projectDir, stateContent, block, ledgers, u, kinds, units, recordPrefix, codekbCtx, checkpoints);
+  const openOf = (u: string) =>
+    block.flatMap((k) => (ledgers.get(k.slug)?.open ?? []).filter((cp) => cp.unit === u).map((cp) => ({ stage: k, cp })));
+  const nameOf = (k: GraphStage): string => stageLabel(k, k.slug) ?? k.slug;
+  const standing = (u: string): string => {
+    const kind = kinds?.get(u) ?? null;
+    const first = stops(u).next();
+    if (first.done) {
+      const owed = block.filter((k) => !kindVacuous(k, kind));
+      return owed.length > 0 && owed.every((k) => ledgers.get(k.slug)?.skipped.has(u)) ? "skipped" : "done";
+    }
+    const stop = first.value;
+    if (stop.kind === "checkpoint") return "at the Unit checkpoint";
+    if (stop.kind !== "work" && stop.kind !== "summary") return "";
+    const open = openOf(u);
+    if (open.some(({ stage, cp }) => stage.slug === stop.stage.slug && cp.state === "paused")) return `paused at ${nameOf(stop.stage)}`;
+    const started = open.length > 0 || block.some((k) =>
+      !kindVacuous(k, kind) && unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kind, ledgers.get(k.slug)!));
+    return started ? `at ${nameOf(stop.stage)}` : "not started";
+  };
+  // Units in a row that stand the same way are said together.
+  const groups: Array<{ names: string[]; where: string }> = [];
+  for (const u of units) {
+    const where = standing(u);
+    const last = groups.at(-1);
+    if (last?.where === where) last.names.push(u);
+    else groups.push({ names: [u], where });
+  }
+  const list = (names: string[]): string =>
+    names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  const clause = groups.map(({ names, where }) => `${list(names)}${where ? ` ${where}` : ""}`).join(", ");
+  const walkUnit = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  // After the walk's Unit, the Unit the walk takes next: one in progress
+  // first, then the walk's order, as unitMajorWalkStep picks.
+  const inProgress = new Set(block.flatMap((k) => (ledgers.get(k.slug)?.open ?? []).filter((cp) => cp.state === "in-progress").map((cp) => cp.unit)));
+  const afterBlock = (): string | null => {
+    const last = block.at(-1);
+    const after = last ? nextInScopeStage(last.slug, scope, stateContent) : null;
+    return after ? stagePlace(after.slug) || null : null;
+  };
+  const nextUnitStop = (): string | null => {
+    for (const u of [...units.filter((x) => inProgress.has(x)), ...units.filter((x) => !inProgress.has(x))]) {
+      if (u === walkUnit) continue;
+      const first = stops(u).next();
+      if (!first.done) return walkStepPlace(first.value);
+    }
+    return afterBlock();
+  };
+  let next: string | null;
+  if (step.kind === "covered") {
+    next = afterBlock();
+  } else if (step.kind === "paused") {
+    next = stagePlace(step.stage, step.checkpoint.unit) || null;
+  } else if (step.kind === "checkpoint") {
+    next = nextUnitStop();
+  } else if (step.kind === "work" && !openOf(step.unit).some(({ stage, cp }) => stage.slug === step.stage.slug && cp.state === "in-progress")) {
+    next = walkStepPlace(step);
+  } else {
+    const after = stops(step.unit);
+    after.next();
+    const second = after.next();
+    next = second.done ? nextUnitStop() : walkStepPlace(second.value);
+  }
+  return {
+    clause,
+    current: walkUnit === null ? null : units.indexOf(walkUnit) + 1,
+    total: units.length,
+    next,
   };
 }
 
