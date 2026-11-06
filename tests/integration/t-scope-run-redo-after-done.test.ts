@@ -6,9 +6,8 @@
 // then asks in their own words to redo it. The jump `next --stage` names goes
 // through the plan-approval guard, the code plan is asked about once, and the
 // redone build runs to its gate and back to done, with no refusal on the way;
-// a file the person asks for after the finish is written. Work built Unit by
-// Unit keeps a Unit's reopen waiting there: that reopen leaves the work
-// finished, so letting it through would record a reopen that runs nothing.
+// a file the person asks for after the finish is written. On work built Unit
+// by Unit a Unit's redo after the finish runs for that Unit only.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
@@ -16,6 +15,7 @@ import {
   cleanupScopeProjects,
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
+  ScopeRunRefused,
 } from "../harness/scope-run.ts";
 
 afterAll(cleanupScopeProjects);
@@ -56,18 +56,52 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     expect(rows.filter((row) => row.event === "WORKFLOW_COMPLETED").length).toBe(finishedRows + 1);
   }, SCOPE_RUN_TIMEOUT_MS);
 
-  test("Units built one at a time: a Unit's reopen after the finish still waits, and no reopen is recorded", () => {
+  test.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, Units built one at a time: a Unit's redo after the finish runs for that Unit only, its plan asked once", (policy) => {
+    const run = runScope("classic", { units: ["core", "extra"], flags: [...CLASSIC_SKIP, "--guard-policy", policy] });
+    const { host, person, agent, proj } = run;
+    expect(run.final.kind).toBe("done");
+    const finishedRows = auditEvents(proj).filter((row) => row.event === "WORKFLOW_COMPLETED").length;
+    host.fullHost = true;
+    const print = agent.next("--stage", "code-generation", "--unit", "core");
+    const reopen = /`(bun \.claude\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(print.message ?? ""))?.[1];
+    expect(reopen, JSON.stringify(print)).toBeDefined();
+    // The agent's own reopen waits for the person, and says so.
+    let refused = "";
+    try {
+      host.bash(reopen as string);
+    } catch (error) {
+      refused = error instanceof ScopeRunRefused ? error.refusal : String(error);
+    }
+    expect(refused).toContain("runs once the person asks for it");
+    const refusals = host.refusals.length;
+    const asked = agent.asked.length;
+    person.say("Redo code generation for the core unit.");
+    const ran = host.bash(reopen as string);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    const final = agent.drive(agent.next());
+    expect(final.kind).toBe("done");
+    expect(host.refusals.slice(refusals)).toEqual([]);
+    const plans = agent.asked.slice(asked).filter((q) => q.what === "plan approval");
+    expect(plans.map((q) => q.unit)).toEqual(["core"]);
+    expect(auditEvents(proj).filter((row) => row.event === "WORKFLOW_COMPLETED").length).toBe(finishedRows + 1);
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  test("Units built one at a time: a redo of every Unit after the finish asks each Unit's plan once", () => {
     const run = runScope("classic", { units: ["core", "extra"], flags: CLASSIC_SKIP });
     const { host, person, agent, proj } = run;
     expect(run.final.kind).toBe("done");
     host.fullHost = true;
-    person.say("Redo code generation for the core unit.");
-    const print = agent.next("--stage", "code-generation", "--unit", "core");
-    const reopen = /`(bun \.claude\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(print.message ?? ""))?.[1];
-    expect(reopen, JSON.stringify(print)).toBeDefined();
-    const rejected = auditEvents(proj).filter((row) => row.event === "GATE_REJECTED").length;
-    expect(() => host.bash(reopen as string)).toThrow(/the guard refused/);
-    expect(auditEvents(proj).filter((row) => row.event === "GATE_REJECTED").length).toBe(rejected);
-    expect(agent.next().kind).toBe("done");
+    const asked = agent.asked.length;
+    person.say("Redo code generation for every unit.");
+    const print = agent.next("--stage", "code-generation", "--every-unit");
+    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts (?:reopen|execute) [^`]+)`/.exec(String(print.message ?? ""))?.[1];
+    expect(jump, JSON.stringify(print)).toBeDefined();
+    const ran = host.bash(jump as string);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(agent.drive(agent.next()).kind).toBe("done");
+    expect(host.refusals).toEqual([]);
+    const plans = agent.asked.slice(asked).filter((q) => q.what === "plan approval").map((q) => q.unit).sort();
+    expect(plans).toEqual(["core", "extra"]);
+    expect(auditEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED")).toHaveLength(0);
   }, SCOPE_RUN_TIMEOUT_MS);
 });

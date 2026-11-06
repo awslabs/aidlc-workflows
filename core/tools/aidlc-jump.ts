@@ -344,17 +344,26 @@ function handleReopen(args: string[]): void {
   const theirs = flags.via === "change" || !isAutonomousConstructionDecision(content, targetStage.phase);
   let stagesReset: string[] = [];
   let movedFrom: string | undefined;
-  if (from && !isPerUnitStage(from) && from.phase === targetStage.phase && stageIndex(current) > stageIndex(targetSlug)) {
+  // Work whose walk ended on the target or a later stage of its phase (Units
+  // built one at a time, the stages after Code Generation skipped) is put back
+  // to Running on the target, as a redo or backward jump puts it, so `next`
+  // takes these Units' step again; still only they start it over.
+  const finishedHere = getField(content, "Status")?.trim() === "Completed" && !!from &&
+    from.phase === targetStage.phase && stageIndex(current) >= stageIndex(targetSlug);
+  const fromLater = from && !isPerUnitStage(from) && from.phase === targetStage.phase &&
+    stageIndex(current) > stageIndex(targetSlug);
+  if (fromLater || finishedHere) {
     const scope = flags.scope || getField(content, "Scope") || "feature";
     const scopeMapping = loadScopeMapping()[scope];
     if (!scopeMapping) error(`Unknown scope: ${scope}`);
     const suffixes = scope === (getField(content, "Scope") || "")
       ? parseStateStageSuffixes(content)
       : new Map<string, "EXECUTE" | "SKIP">();
-    const moved = movedState(content, targetSlug, targetStage, "backward", scope, suffixes, scopeMapping);
+    const direction = stageIndex(current) === stageIndex(targetSlug) ? "redo" : "backward";
+    const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
     content = moved.content;
     stagesReset = moved.stagesReset;
-    movedFrom = current;
+    if (current !== targetSlug) movedFrom = current;
   }
   for (const unit of units) {
     emitAudit(pd, "GATE_REJECTED", {
