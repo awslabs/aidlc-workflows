@@ -126,7 +126,7 @@ describe("a team member's clone of the home's workspace", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     const labels = (dir: string) => ((next(dir).choices ?? []) as Array<{ label: string }>).map((choice) => choice.label);
     // A clone made under the lead's own git name is a clone all the same.
-    expect(labels(cloneOf(home.remote, "lead"))).toEqual(["Start refunds", "Start checkout-ui"]);
+    expect(labels(cloneOf(home.remote, "lead"))).toEqual(["Start refunds for payments", "Start checkout-ui for web"]);
     // A copy of the lead's checkout keeps its clone id, so the plan's rows are its own.
     const copy = cloneOf(home.remote, "lead-copy");
     cpSync(join(home.dir, "aidlc", ".aidlc-clone-id"), join(copy, "aidlc", ".aidlc-clone-id"));
