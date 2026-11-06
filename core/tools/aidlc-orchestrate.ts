@@ -110,6 +110,7 @@ import {
   isQuestionId,
   latestFrontQuestionId,
   latestQuestion,
+  markReplaced,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
   questionsFromMessage,
@@ -129,6 +130,7 @@ import {
   saveQuestion,
   saveRestartRequest,
   takeRestartRequest,
+  waitingFrontRequests,
 } from "./aidlc-question-store.ts";
 import {
   latestMessage, listMessages, messageBeforeJoining, noReplySince, personTurnStands, readMessage, standingPersonTurn,
@@ -3706,14 +3708,15 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
 /**
  * The plan question the person was asked and has not answered: the latest copy
  * this engine kept, when it is one of its own front questions and nothing was
- * started from it. A question whose answer created work is answered, and a
- * routing question has its own step (openRoutingQuestion).
+ * started from it. A question whose answer created work is answered, one a
+ * newer request replaced waits no more (newestRequestReplaces), and a routing
+ * question has its own step (openRoutingQuestion).
  */
 function openFrontQuestion(
   projectDir: string,
 ): { question: StoredQuestion; sole: boolean } | null {
   const latest = latestQuestion(projectDir);
-  if (latest === null || latest.origin !== "front") return null;
+  if (latest === null || latest.origin !== "front" || latest.replacedBy !== undefined) return null;
   if (intentStartedByQuestion(projectDir, latest.id) !== null) return null;
   // A question copy does not say which chat it was shown in, and a reply
   // answers a question of this work from any chat, so with more than one still
@@ -3721,9 +3724,36 @@ function openFrontQuestion(
   // says so instead of naming one: the agent has the question it asked in its
   // own chat, with that question's own commands. A question this one was
   // derived from (the proposal step's request, answered by the agent's plan) is
-  // the same request, not another open question.
+  // the same request, not another open question. A replaced one still counts:
+  // its own chat may still show it, and its commands still answer it there.
   const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY);
   return { question: latest, sole: earliest === null || earliest === latest.id || earliest === latest.composedFrom };
+}
+
+/**
+ * A new request, saved as question `saved` for `words`, on a workspace where no
+ * work has started: the newest request is the one the work plans from (#3609).
+ * Every request whose plan question still waits is marked replaced by it, and
+ * the person hears once, with the next step the agent speaks from, that the
+ * newer one is used. The agent already read the words as a request (the
+ * waiting step's own command, or words it passed as theirs); nothing here
+ * reads them.
+ */
+function newestRequestReplaces(pd: string, saved: string, words: string): void {
+  if (isReadOnlyEngineProbe() || loadStateFileIfPresent(pd) !== null) return;
+  // Work whose record is in this checkout keeps today's path. A row whose
+  // record is missing here, or archived work, is no work in hand, as creation
+  // reads them (unselectedRecords).
+  const workHere = listSpaces(pd).some(({ name }) => readIntentRegistry(pd, name).some((row) =>
+    !isArchivedIntent(row) && row.dirName !== undefined && row.dirName !== "" &&
+    existsSync(join(intentsDir(pd, name), row.dirName, "aidlc-state.md"))));
+  if (workHere) return;
+  const waiting = waitingFrontRequests(pd).filter((question) => question.id !== saved);
+  if (waiting.length === 0) return;
+  markReplaced(pd, waiting.map((question) => question.id), saved);
+  if (engineSessionId !== undefined) {
+    addPendingPersonLines(pd, engineSessionId, [`I've used your newer request: "${requestPreview(words)}".`]);
+  }
 }
 
 function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
@@ -7240,6 +7270,9 @@ function planProposalDirective(
       pd, description, "", "front", undefined, flags.newIntent === true, derivedFrom, undefined,
       routingSettings(carriedRoutingFlags(flags)),
     );
+  if (question !== kept && derivedFrom === undefined && finished === undefined) {
+    newestRequestReplaces(pd, question.id, description);
+  }
   const next = `${aidlcToolInvocation("orchestrate")} next`;
   const words = `"${requestPreview(description)}".${documentSplitSentence(description)}`;
   // Words beside finished work may ask to go back to one of its stages: the
@@ -7566,7 +7599,11 @@ function createPrintDirective(
   const cmd = [`--scope ${scopeArg(scope)}`];
   let labelHint = "";
   if (description && description.length > 0) {
-    const questionId = flags.request ?? saveQuestion(projectDir, description, scope).id;
+    let questionId = flags.request;
+    if (questionId === undefined) {
+      questionId = saveQuestion(projectDir, description, scope).id;
+      newestRequestReplaces(projectDir, questionId, description);
+    }
     cmd.push(`--request ${questionId}`);
     // The conductor (LLM) condenses the description into the short dir-name label
     // — the engine can't summarize. Name the missing --label in the directive so
@@ -11387,11 +11424,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           `or \`${tool} compose --request ${open.id}${stages.tailored}\` for a plan tailored to it`
         : `\`${tool} compose --request ${open.id}${stages.tailored}\`, or one of the plan commands that question listed, ` +
           `each with \`--request ${open.id}\``;
+    // The request it was asked about: a chat that never saw the question cannot
+    // tell an answer from the same work asked again without it (#3609).
+    const about = openFront.sole ? ` about "${requestPreview(open.text)}"` : "";
     emit(printDirective(
-      "The person has not answered the plan question they were asked, so `next` cannot tell their reply from a " +
-      `new request and took nothing from the line. If their words answer that question, run the command it gave ` +
-      `for their choice: ${answer}. If they are asking for something else, run ` +
-      `\`${tool}${wordsForNextStep(questionDir, "other", flags.intent ?? "")}\`, which keeps every word of theirs (${JSON.stringify(flags.intent ?? "")}). ` +
+      `The person has not answered the plan question they were asked${about}, so \`next\` cannot tell their reply ` +
+      `from a new request and took nothing from the line. If their words answer that question, run the command it ` +
+      `gave for their choice: ${answer}. If they are asking for something else, or for the same work again in more ` +
+      `or other words, run \`${tool}${wordsForNextStep(questionDir, "other", flags.intent ?? "")}\`, which keeps ` +
+      `every word of theirs (${JSON.stringify(flags.intent ?? "")}) as their newest request. ` +
       "If you cannot tell, ask them once in plain words.",
     ));
     return;
@@ -12475,6 +12516,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (flags.intent && !flags.request && !inFlight) {
       splitSaid = documentSplitSentence(flags.intent);
       flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
+      newestRequestReplaces(pd, flags.request, flags.intent);
     } else if (!flags.request && !inFlight) {
       // A report-only or task-less composition is described only on approval,
       // and its approval names this entry, so words said at its gate (plan
