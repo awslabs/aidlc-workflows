@@ -202,6 +202,7 @@ import {
   unitsKeptForTeams,
   unitsLeftOpen,
   unitWriteTargets,
+  outputForLead,
   unitWordsArg,
   TEAM_RHYTHM_OFFER,
   theTeam,
@@ -6569,14 +6570,14 @@ function pushUnit(args: string[], projectDir?: string): void {
         "Built By": result.by,
         Written: isoTimestamp(),
       },
-      new Map(outputs.map((rel) => [rel, readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8")])),
+      new Map(outputs.map((rel) => [rel, outputForLead(pd, rel, readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8"))])),
       result,
     ));
     lines.push(`The result file is ${rel}; send it to the lead.`);
   } else {
     const files = Object.fromEntries(outputs.map((rel) => [
       `${RESULT_FILES_ROOT}/${rel}`,
-      readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8"),
+      outputForLead(pd, rel, readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8")),
     ]));
     // A push after a turn-down is the team's answer to it. The lead's word that
     // a repo merged holds only for a repo whose head did not change.

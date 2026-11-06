@@ -258,7 +258,7 @@ describe("the push", () => {
   });
 
   test("the agent built in worktrees of its own and recorded them as checkouts: the push reads each as its repo's and sends both home", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTaken();
     // Worktrees the agent made for the Unit, recorded with intent add-checkout.
     const trees = join(alice, ".aidlc-worktrees", "refunds");
     for (const repo of ["checkout-api", "billing"]) {
@@ -279,6 +279,12 @@ describe("the push", () => {
       writes: [{ path: "checkout-api@checkout/src/refunds.ts" }, { path: "billing@checkout/lib/refund.ts" }],
     }, null, 2)}\n`);
     writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
+    // Its traceability names the files where it built them, in its worktrees.
+    const table = { coverage: [
+      { id: "FR-1", status: "OK", target: ".aidlc-worktrees/refunds/checkout-api/src/refunds.ts" },
+      { id: "FR-2", status: "OK", target: ".aidlc-worktrees/refunds/billing/lib/refund.ts" },
+    ], upstream_ids: ["FR-1", "FR-2"] };
+    writeFileSync(join(stage, "traceability.json"), `${JSON.stringify(table, null, 2)}\n`);
     finishBuild(record);
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
@@ -288,6 +294,11 @@ describe("the push", () => {
     expect(String(pushed.json?.notice)).toStartWith("Pushed branch refunds in checkout-api and billing.");
     expect(git(hosts["checkout-api"], ["show", "refunds:src/refunds.ts"])).toBe("export const refunds = 1;");
     expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
+    // What the lead's checks read names the repos, where the lead's project finds the files; the team's own record is as written.
+    const tip = git(home.remote, ["rev-parse", `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`]).trim();
+    const sent = JSON.parse(git(home.remote, ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
+    expect(sent.coverage.map((entry) => entry.target)).toEqual(["checkout-api/src/refunds.ts", "billing/lib/refund.ts"]);
+    expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain(".aidlc-worktrees/refunds/checkout-api/src/refunds.ts");
   });
 
   test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {

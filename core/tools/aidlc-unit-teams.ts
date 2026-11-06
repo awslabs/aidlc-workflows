@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
   type AuditShardEvent,
@@ -603,15 +603,7 @@ export function unitWriteTargets(
 ): Map<string, { dir: string; paths: string[] }> {
   const recorded = intentRepos(projectDir);
   const checkouts = writes.some((write) => write.repo === undefined) ? readRecordedSourceCheckouts(projectDir) : [];
-  const commonDir = (dir: string): string | null => {
-    const read = spawnSync("git", ["rev-parse", "--git-common-dir"], { cwd: dir, encoding: "utf-8" });
-    return read.status === 0 && read.stdout.trim() ? resolve(dir, read.stdout.trim()) : null;
-  };
-  const originOf = (dir: string): string | null => {
-    const read = spawnSync("git", ["remote", "get-url", "origin"], { cwd: dir, encoding: "utf-8" });
-    return read.status === 0 && read.stdout.trim() ? read.stdout.trim() : null;
-  };
-  const repoOfCheckout = new Map<string, string | null>();
+  const repoOf = checkoutRepoReader(projectDir, recorded);
   const targets = new Map<string, { dir: string; paths: string[] }>();
   const add = (repo: string, dir: string, path: string): void => {
     const at = targets.get(repo) ?? { dir, paths: [] };
@@ -622,17 +614,7 @@ export function unitWriteTargets(
     const inCheckout = write.repo === undefined ? recordedCheckoutOfListingPath(write.path, checkouts) : null;
     if (inCheckout !== null && inCheckout.rest !== "") {
       const { checkout, rest } = inCheckout;
-      if (!repoOfCheckout.has(checkout.real)) {
-        // A worktree shares its repo's own git folder; a clone of it, its origin.
-        const own = commonDir(checkout.real);
-        const origin = originOf(checkout.real);
-        repoOfCheckout.set(checkout.real,
-          recorded.find((repo) => own !== null && commonDir(repoDir(projectDir, repo)) === own) ??
-            recorded.find((repo) => origin !== null && originOf(repoDir(projectDir, repo)) !== null &&
-              sameGitAddress(origin, originOf(repoDir(projectDir, repo))!)) ??
-            null);
-      }
-      const repo = repoOfCheckout.get(checkout.real);
+      const repo = repoOf(checkout.real);
       if (repo) {
         add(repo, checkout.real, rest);
         continue;
@@ -642,6 +624,68 @@ export function unitWriteTargets(
     add(repo, repo === "." ? projectDir : repoDir(projectDir, repo), write.path);
   }
   return targets;
+}
+
+// Which recorded repo a recorded checkout's folder is of: a worktree shares
+// its repo's own git folder, a clone of it its origin; null for neither.
+function checkoutRepoReader(projectDir: string, recorded: readonly string[]): (real: string) => string | null {
+  const commonDir = (dir: string): string | null => {
+    const read = spawnSync("git", ["rev-parse", "--git-common-dir"], { cwd: dir, encoding: "utf-8" });
+    return read.status === 0 && read.stdout.trim() ? resolve(dir, read.stdout.trim()) : null;
+  };
+  const originOf = (dir: string): string | null => {
+    const read = spawnSync("git", ["remote", "get-url", "origin"], { cwd: dir, encoding: "utf-8" });
+    return read.status === 0 && read.stdout.trim() ? read.stdout.trim() : null;
+  };
+  const seen = new Map<string, string | null>();
+  return (real) => {
+    if (!seen.has(real)) {
+      const own = commonDir(real);
+      const origin = originOf(real);
+      seen.set(real,
+        recorded.find((repo) => own !== null && commonDir(repoDir(projectDir, repo)) === own) ??
+          recorded.find((repo) => {
+            const theirs = origin === null ? null : originOf(repoDir(projectDir, repo));
+            return theirs !== null && sameGitAddress(origin!, theirs);
+          }) ??
+          null);
+    }
+    return seen.get(real) ?? null;
+  };
+}
+
+// A Unit output as the lead's project reads it: a traceability table's targets
+// in a folder recorded as a checkout of one of the work's repos are spelled
+// `<repo>/<path>`, where the lead's checks find the file; the team's own record
+// stays as written. Anything else, or a table that does not read, as it is.
+export function outputForLead(projectDir: string, rel: string, text: string): string {
+  if (!rel.endsWith("/traceability.json")) return text;
+  try {
+    const table = JSON.parse(text) as { coverage?: Array<{ target?: unknown }> };
+    if (!Array.isArray(table.coverage)) return text;
+    const checkouts = readRecordedSourceCheckouts(projectDir);
+    if (checkouts.length === 0) return text;
+    const repoOf = checkoutRepoReader(projectDir, intentRepos(projectDir));
+    let changed = false;
+    for (const entry of table.coverage) {
+      if (typeof entry?.target !== "string") continue;
+      const at = resolve(projectDir, entry.target.trim().replace(/\\/g, "/"));
+      for (const checkout of checkouts) {
+        const within = [checkout.real, resolve(projectDir, checkout.path)]
+          .map((root) => relative(root, at))
+          .find((path) => path !== "" && !path.startsWith("..") && !isAbsolute(path));
+        const repo = within === undefined ? null : repoOf(checkout.real);
+        if (within !== undefined && repo) {
+          entry.target = `${repo}/${within.split(sep).join("/")}`;
+          changed = true;
+          break;
+        }
+      }
+    }
+    return changed ? `${JSON.stringify(table, null, 2)}\n` : text;
+  } catch {
+    return text;
+  }
 }
 
 // The same, by repo only.
