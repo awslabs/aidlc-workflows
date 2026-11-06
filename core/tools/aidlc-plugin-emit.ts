@@ -481,7 +481,8 @@ function copyHookTemplates(
 // person's shell, or PowerShell on Windows; Kiro: /bin/sh, or cmd.exe), so
 // their commands carry no sh -c. The native release runs this, the copy
 // channel the Bun launcher. It names its harness: a compiled aidlc otherwise
-// takes the first one installed in the project, .claude before the others.
+// takes the one whose tool's mark the command carries, else the first one
+// installed in the project, .claude before the others.
 function nativePluginSync(target: PluginTarget): string {
   return `aidlc ${TRUSTED_ROUTE_NAMESPACE} plugin sync --harness-dir ${target.harnessLeaf}`;
 }

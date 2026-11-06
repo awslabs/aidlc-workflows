@@ -1124,9 +1124,10 @@ harness that file names (`runtime/<name>/` beside the binary, through
 `releasedHarnessData`). An update therefore reaches a workflow already under
 way. If that copy is missing or unreadable, the engine keeps the 28 KiB cap. A
 Bun engine reads all of its data from its own tree, so it needs no such copy.
-With more than one harness installed in a project, the engine cannot tell which
-host prints its result (it finds `.claude` before Copilot's `.aidlc`), so the
-smallest limit any installed harness declares wins (`directiveLimitFor`).
+With more than one harness installed in a project, the limit does not rest on
+telling which host prints the result (a command no tool's mark is on runs on
+`.claude` before Copilot's `.aidlc`), so the smallest limit any installed harness
+declares wins (`directiveLimitFor`).
 
 Each part carries an 8-character `receipt`: the first characters of an HMAC over
 the part's payload (stage, part number, bundle and directive digests, route and

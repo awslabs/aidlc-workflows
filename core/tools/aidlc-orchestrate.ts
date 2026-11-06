@@ -7822,7 +7822,7 @@ function createPrintDirective(
   // Beside other work the chat still holds that work's conversation: the
   // person can start this one in a clean chat instead, said once, never as a
   // stop, and only while they can take it (sayPendingPersonLines).
-  const cleanChat = flags.newIntent ? cleanChatLine(projectDir) : null;
+  const cleanChat = flags.newIntent ? cleanChatLine() : null;
   if (cleanChat) saidAsStageComes.set(directive, cleanChat);
   // The agent runs the creation and goes on, so the line rides the first step
   // it speaks from.
@@ -7955,8 +7955,8 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
 // tool the person is in from the tree's own harness.json (its manifest's
 // newChatStep). A tree that names none, or a native engine that cannot tell the
 // person's tool among several installed, offers nothing.
-function cleanChatLine(projectDir: string): string | null {
-  const step = newChatStep(projectDir);
+function cleanChatLine(): string | null {
+  const step = newChatStep();
   return step ? `${CLEAN_CHAT_LEAD}${step}.` : null;
 }
 
