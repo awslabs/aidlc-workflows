@@ -424,8 +424,9 @@ function sincePlanQuestion(pd: string): ((row: AuditShardEvent) => boolean) | nu
   return shown === null ? null : rowsAfterMark(pd, shown);
 }
 
-// The ids of the messages whose turns come since the waiting plan question.
-function messagesSince(rows: readonly AuditShardEvent[], since: (row: AuditShardEvent) => boolean): Set<string> {
+// The ids of the messages whose turns come since a point on the record (the
+// waiting plan question, the row that last handed a side-by-side build to a chat).
+export function messagesSince(rows: readonly AuditShardEvent[], since: (row: AuditShardEvent) => boolean): Set<string> {
   return new Set(rows.flatMap((row) => {
     const id = row.event === "HUMAN_TURN" && since(row) ? auditBlockField(row.block, "Message Id") : null;
     return id === null ? [] : [id];
@@ -477,7 +478,10 @@ export function planApprovalOffWaitsStep(messageId?: string): string {
 // that already gave an approval or a decision; for turning plan approval off,
 // only what can stand for it (planApprovalOffStands). Any other request still
 // is offered such a message (going back to the plan their approval was for).
-export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ id: string; at: string }> {
+// With `after`, only a message whose turn comes after that point is offered.
+export function requestMessages(
+  pd: string, kind: RequestKind = "any", after?: (row: AuditShardEvent) => boolean,
+): Array<{ id: string; at: string }> {
   try {
     const rows = readAuditShardEvents(pd);
     const spentAt = latestSpendingTimestamp(rows);
@@ -488,8 +492,9 @@ export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ 
     const offered = (message: StoredMessage): boolean =>
       sent === null || sent.has(message.id) || spentAt === null || message.at >= spentAt;
     const planApprovalOff = kind === "plan-approval-off";
+    const sentAfter = after === undefined ? null : messagesSince(rows, after);
     return listMessages(pd)
-      .filter((message) => message.session === chat && offered(message) &&
+      .filter((message) => message.session === chat && offered(message) && (sentAfter === null || sentAfter.has(message.id)) &&
         "message" in messageProof(pd, message.id, kind === "any" ? "request" : "setting", { request: true, planApprovalOff }))
       .map((message) => ({ id: message.id, at: message.at }))
       .reverse();
@@ -500,12 +505,13 @@ export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ 
 
 // The step a refused request leads with: the agent names the message that asked
 // for it, when one of theirs can stand behind it, else `otherwise`. `command` is
-// the one to run with it when that is not the refused command, and `then` what
-// follows it.
+// the one to run with it when that is not the refused command, `then` what
+// follows it, and `after` the point only later messages can ask from.
 export function requestMessageStep(
   pd: string, otherwise: string, kind: RequestKind = "any", command = "the same command", then = "",
+  after?: (row: AuditShardEvent) => boolean,
 ): string {
-  const named = requestMessages(pd, kind);
+  const named = requestMessages(pd, kind, after);
   if (named.length === 0) return otherwise;
   return `If their message ${named.map((message) => `${message.id} (sent ${message.at})`).join(" or ")} asked for ` +
     `it, run ${command} with --message <id>${then ? `, then ${then}` : ""}. Otherwise: ${otherwise}`;
