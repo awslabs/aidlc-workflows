@@ -11,9 +11,9 @@
 // ⛔ TRAP 2 (no headless auto-approve). The .sh drove `--stage reverse-engineering
 // --scope bugfix` to completion under a headless auto-approve mode the refactor
 // kills. We assert the deterministic jump (the one engine call + the audit
-// bytes + the post-jump state the tool wrote), stopping the SDK the instant the
-// step the jump lands on arrives, so the continuation is never asserted (the
-// t26/t25/t57 pattern) and no terminal-stop is needed.
+// bytes + the post-jump state the tool wrote), stopping the SDK the instant
+// Requirements Analysis's own step (its run-stage) arrives, so the stage's work
+// is never asserted and no terminal-stop is needed.
 //
 // ⚠️ JOURNEY RE-BASED ON v0.6.x (FINDING, surfaced not softened). The .sh ran
 // `--stage reverse-engineering --scope bugfix` against a STATELESS project and
@@ -36,8 +36,12 @@
 // 2.1), `--stage requirements-analysis` (idx 2.3) resolves direction=forward
 // (aidlc-jump.ts). With state present the person's `next` runs
 // `aidlc-jump.ts execute --target requirements-analysis --direction forward
-// --scope bugfix` itself and returns Requirements Analysis's step, carrying the
-// jump's own line, in that one Bash tool_result.
+// --scope bugfix` itself and returns Requirements Analysis's step in that one
+// Bash tool_result. In a chat that step may come as its rules part first; the
+// jump's own line is kept for the step the agent speaks from (aidlc-jump.ts
+// handleExecute, addPendingPersonLines), so it rides the run-stage the rules
+// part's `continue` returns, or the run-stage `next` returns when the rules
+// ride inside it, and never the rules part.
 // executeJump's forward branch marks the in-flight intermediate
 // reverse-engineering `[S]` (jump.ts), pivots Current Stage to
 // requirements-analysis (jump.ts), keeps Lifecycle Phase INCEPTION
@@ -56,7 +60,8 @@
 //   1 not exit 124 (no silent timeout)
 //       -> the step the jump lands on came back from the person's `next` in
 //          one call (assertJumpInOneCall; a hang leaves no step and the driver
-//          aborts on timeoutMs), with the line saying what it skipped.
+//          aborts on timeoutMs), and its run-stage carries the line saying what
+//          it skipped, once, with no rules part carrying it.
 //   2 aidlc-docs/ created
 //       -> RELOCATED to the fresh-init twins (t52/t54/t59) — see the journey
 //          re-base note. Here aidlc-docs/ is the seeded precondition.
@@ -90,7 +95,7 @@
 //   - Current Stage write:    aidlc-jump.ts
 //   - Lifecycle Phase write:  aidlc-jump.ts (target phase uppercased)
 //   - STAGE_JUMPED emit:      aidlc-jump.ts, with its Direction and Target fields
-//   - the step's jump line:   aidlc-jump.ts forwardJumpNotice
+//   - the step's jump line:   aidlc-jump.ts forwardJumpNotice, on the run-stage's change_notices
 //   - fixture: state-brownfield-init-done.md (Scope=bugfix, Current Stage=
 //     reverse-engineering, Completed=3, Lifecycle Phase=INCEPTION)
 //
@@ -101,13 +106,14 @@
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { assertAuditEvent, assertJumpInOneCall, stopAtStep } from "../harness/assert.ts";
+import { assertAuditEvent, assertJumpInOneCall } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
+  type CapturedToolResult,
   readAuditText,
   driveAidlc,
   readStateField,
@@ -142,6 +148,26 @@ const JUMP_LINE = "Moved to Requirements Analysis; skipped Reverse Engineering."
 const AUDIT_DIRECTION_LINE = "**Direction**: FORWARD"; // aidlc-jump.ts handleExecute
 const AUDIT_TARGET_LINE = `**Target**: ${TARGET_SLUG}`; // aidlc-jump.ts handleExecute
 
+// The engine's directive in a Bash result: its first JSON line (the host may
+// add stderr after it).
+function directiveIn(t: CapturedToolResult): { kind?: unknown; stage?: unknown; change_notices?: unknown } | null {
+  if (t.toolName !== "Bash") return null;
+  const line = t.resultText.split("\n").find((row) => row.trimStart().startsWith("{"));
+  try {
+    return line ? JSON.parse(line) : null;
+  } catch {
+    return null;
+  }
+}
+const targetStep = (kind: string) => (t: CapturedToolResult): boolean => {
+  const d = directiveIn(t);
+  return d?.kind === kind && d.stage === TARGET_SLUG;
+};
+const jumpLinesIn = (t: CapturedToolResult): string[] => {
+  const notices = directiveIn(t)?.change_notices;
+  return Array.isArray(notices) ? notices.filter((n) => typeof n === "string" && n.startsWith(JUMP_LINE)) : [];
+};
+
 describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
   // -------------------------------------------------------------------------
   // Brownfield bugfix workflow seeded at init-done (Current Stage=
@@ -170,17 +196,22 @@ describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
           // AskUserQuestion as option 1 so the harness never stalls.
           answerScript: "default",
           timeoutMs: remainingWorkMs(),
-          stopAfterToolResult: stopAtStep(TARGET_SLUG),
+          // The step the agent speaks from: the run-stage, after any rules part.
+          stopWhen: (results) => results.some(targetStep("run-stage")),
         });
 
         // No silent timeout, and one engine call: the person's `next` made the
         // jump and returned Requirements Analysis's step; the agent never ran the
-        // jump tool. That step carries the line saying what the jump skipped.
+        // jump tool.
         assertJumpInOneCall(r, TARGET_SLUG);
-        const step = r.toolResults.find(
-          (t) => t.toolName === "Bash" && t.resultText.includes(stopAtStep(TARGET_SLUG).resultIncludes),
-        );
-        expect(step?.resultText).toContain(JUMP_LINE);
+        // The run-stage carries the line saying what the jump skipped, once, and
+        // no rules part carried it before.
+        const step = r.toolResults.find(targetStep("run-stage"));
+        expect(step, `no run-stage for ${TARGET_SLUG} came back`).toBeDefined();
+        expect(jumpLinesIn(step as CapturedToolResult)).toHaveLength(1);
+        for (const part of r.toolResults.filter(targetStep("load-steering"))) {
+          expect(jumpLinesIn(part)).toHaveLength(0);
+        }
         // #369: the forward jump did NOT auto-terminate the workflow.
         expect(readStateField(r.stateFile ?? "", "Status")).toBe("Running");
 
