@@ -19515,7 +19515,7 @@ const KIRO_CONTEXT_OFFER_HEARD = "kiro-context-offer";
 // A new chat that picks the work up on the same model starts about as full as
 // this chat got in its first turn on the work (#3642). From half the window,
 // where the statusline turns yellow (contextColor), it would fill again soon,
-// so the line says that instead of recommending one.
+// so the line says a new chat will not help much instead of recommending one.
 const NEW_CHAT_NO_ROOM_PERCENT = 50;
 function addContextParkOffer(
   reply: { kind: string; narration?: string; change_notices?: string[] },
