@@ -3035,17 +3035,7 @@ function checkpointMainMetadata(
     );
   }
   if (paths.length === 0) return { parentOid };
-  // One call whatever the count: Windows caps a command line at 32,767
-  // characters, so the paths go to git on its standard input, NUL-separated,
-  // each read as the same name an argument would be (git 2.25; core already
-  // needs 2.29). An empty list never gets here: with -A and no path git would
-  // take the whole tree.
-  const added = git(
-    projectDir,
-    ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
-    undefined,
-    paths.map((path) => `${path}\0`).join(""),
-  );
+  const added = git(projectDir, ["add", "-A", "--", ...paths]);
   if (!added.ok) {
     fail(
       `Failed to stage main engine metadata checkpoint: ${added.stderr.trim() || added.stdout.trim()}.`,
@@ -4773,7 +4763,17 @@ function commitWorkHere(
 ): { committed: number; leftOut: string[]; unmatched: string[] } {
   const { paths, leftOut, unmatched } = workToCommit(projectDir, work);
   if (paths.length === 0) return { committed: 0, leftOut, unmatched };
-  const added = git(projectDir, ["add", "-A", "--", ...paths]);
+  // One call whatever the count: Windows caps a command line at 32,767
+  // characters, so the paths go to git on its standard input, NUL-separated,
+  // each read as the same name an argument would be (git 2.25; core already
+  // needs 2.29). An empty list never gets here: with -A and no path git would
+  // take the whole tree.
+  const added = git(
+    projectDir,
+    ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+    undefined,
+    paths.map((path) => `${path}\0`).join(""),
+  );
   if (!added.ok) fail(`git add failed: ${added.stderr.trim()}`);
   const committed = git(projectDir, ["commit", "-q", "-m", message]);
   if (!committed.ok) {
