@@ -17392,7 +17392,12 @@ function teamHomeClaims(
       claim.status === "claimed" && !claim.payload.done &&
       (claim.payload.result !== undefined || (claim.payload.proposals ?? []).some((entry) => entry.answer === undefined))
     )));
-    const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now });
+    // While a team holds a Unit not done, the person's message since the last
+    // look is a look again, so a team's push or merge is heard on the lead's
+    // own Unit's steps too.
+    const teamBuilding = overview !== null && [...overview.claims.values()].some((claim) =>
+      claim.status === "claimed" && claim.payload.done !== true);
+    const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now, sincePerson: teamBuilding });
     if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
     if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
     if (refreshed.fetched) overview = readOverview();

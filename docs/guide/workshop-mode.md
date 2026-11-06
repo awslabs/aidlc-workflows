@@ -697,7 +697,8 @@ Generation's summary and test instructions). A review fix pushed later goes
 home the same way.
 
 At the home, while teams build, AI-DLC fetches the work's claims from the
-home's remote once per chat and at each step that shows or acts on them, and
+home's remote once per chat, after your messages while a team is building,
+and at each step that shows or acts on them, and
 checks every pushed Unit's repos against their integration branch, with the
 lead's own login and never a password prompt, then shows the board (when a
 remote cannot be reached, one line says the board may be behind):

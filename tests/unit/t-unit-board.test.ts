@@ -13,7 +13,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync } from "node:fs";
+import { cpSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -23,6 +23,7 @@ import { AgentStandIn, type Directive, PersonScript, type StandInOptions } from 
 import {
   claimPayload,
   cleanupTeamBuild,
+  cloneCode,
   cloneOf,
   codeGenerated,
   codeHost,
@@ -179,6 +180,33 @@ describe("a look at the board records nothing, and says so", () => {
     const after = teamBoard(home.dir);
     expect(after).toContain("- refunds, payments: done");
     expect(after).not.toContain("not recorded yet");
+  });
+
+  test("with no look at the board, a team's merge is recorded at the lead's next message while the lead's project builds its own Unit", () => {
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    // The lead's chat looks at the claims while it builds checkout-ui; alice then takes refunds.
+    const building = next(home.dir, chat);
+    expect(building.unit, JSON.stringify(building).slice(0, 400)).toBe("checkout-ui");
+    const alice = cloneOf(home.remote, "alice");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "carry on" }, home.dir);
+    next(home.dir, chat);
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
   });
 });
 

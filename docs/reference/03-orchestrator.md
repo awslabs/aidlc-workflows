@@ -815,7 +815,8 @@ fetch of `refs/heads/claim/<id8>/*` into the refs the person's own fetch uses
 (or, by the home's address, into `refs/aidlc/home/<id8>/`), once per chat
 (noted in `aidlc/.aidlc-sessions/claims-fetched.json`) and, at the home, again
 at each step that shows or acts on the claims (nothing left for the home to
-build now, a result to check, a proposal to answer); the take offer in a clone
+build now, a result to check, a proposal to answer) and, while a team holds a
+Unit not done, after each of the person's messages; the take offer in a clone
 runs it for each home it lists, and again at each look while nothing is ready;
 solo work built one Unit at a time (`switchSoloToTeams`) runs it once its Unit
 walk has begun (a Unit started, or the step is a per-Unit Construction stage),
