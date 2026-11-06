@@ -235,6 +235,31 @@ describe("t-checkpoint-answer-any-chat: a Unit checkpoint answered in a new chat
     expect(reply).toContain("ok, approve it");
   });
 
+  test("a Unit's checkpoint asked before the work went to teams takes the person's approval after it, once", () => {
+    // A live run: the Unit's checkpoint was open when the person gave another
+    // Unit to a team; their approval was then refused ("Construction
+    // Checkpoints: enabled requires solo Units") and asked twice more.
+    const p = fixture();
+    expect(checkpoint(p, ["--action", "ask", "--session", OLD]).status).toBe(0);
+    const teams = tool(p, "state", ["set-unit-ownership", "team"]);
+    expect(teams.status, teams.out).toBe(0);
+    // The work's home, as the switch records it where the work has code repos.
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Unit Ownership**: team", "- **Unit Ownership**: team\n- **Home Location**: local"));
+    expect(getField(readFileSync(seededStateFile(p), "utf-8"), "Home Location")).toBe("local");
+    person(p, "the orders api looks good, I approve it", OLD);
+    const approved = checkpoint(p, ["--action", "approve", "--session", OLD, "--user-input", "Approve"]);
+    expect(approved.status, approved.out).toBe(0);
+    expect(JSON.parse(approved.stdout).approved).toBe(true);
+    const gates = approvals(p).filter((row) => auditBlockField(row.block, "Unit") === "alpha");
+    expect(gates).toHaveLength(1);
+    expect(auditBlockField(gates[0].block, "Gate Scope")).toBe("unit-end");
+    expect(auditBlockField(gates[0].block, "Person Reply")).toContain("the orders api looks good, I approve it");
+    // The teams' walk reads alpha approved: its approval is not asked again.
+    const after = next(p);
+    expect(JSON.stringify(after)).not.toMatch(/[Aa]pprove (this completed )?alpha/);
+  });
+
   test("with no reply of the person's in the new chat, the agent cannot approve there", () => {
     const p = fixture();
     expect(checkpoint(p, ["--action", "ask", "--session", OLD]).status).toBe(0);
