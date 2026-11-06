@@ -2760,11 +2760,15 @@ async function evaluate(
     rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
     if (await unitBuildPastCodeGeneration(state)) {
       // A Unit's build ends at Code Generation, so once that stage is approved
-      // it is past it: open only for its push, or finished. What the person
-      // asks for then runs (a change, a commit, their redo), their turn
-      // standing behind it with no decision since (the turn that approved
-      // the code is spent by that approval); the agent's own change waits for
-      // their word. The refusal names no step to run: the step is theirs.
+      // it is past it: open only for its push, or finished. Finished, it is
+      // finished work, as solo work past its last stage is: nothing is held
+      // (the human-turn hook records no turn on a finished record, so none
+      // could be read). Open, what the person asks for runs (a change, a
+      // commit, their redo), their turn standing behind it with no decision
+      // since (the turn that approved the code is spent by that approval); the
+      // agent's own change waits for their word, and the refusal names no
+      // step to run: the step is theirs.
+      if (selectedRecordIsFinished(projectDir, workflow.selection)) return 0;
       if (
         !mutation.engineRefused && process.env.AIDLC_UNATTENDED !== "1" &&
         personTurnStands(projectDir, "plain", { requests: true })

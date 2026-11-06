@@ -193,6 +193,11 @@ test("after the push, the person's redo of Code Generation runs", () => {
   expect(pushed.status, pushed.out).toBe(0);
   const after = agent.next();
   expect(after.ask_type === "unit-push", JSON.stringify(after)).toBe(false);
+  // Finished work holds nothing: in a new chat, whose turns a finished record
+  // does not take, a change to the repo after the push runs.
+  host.newSession();
+  person.say("add a note to billing/NOTES.md");
+  host.write("billing/NOTES.md", "after the push\n");
   person.say("Fix the known stale-panel refund issue in refunds: take it back to Code Generation.");
   const accepted = host.bash(`bun ${host.dir}/tools/aidlc-orchestrate.ts report --result resumed --choice redo --target code-generation`);
   expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
