@@ -19920,7 +19920,12 @@ function emitJumpDirective(
     }
     // A named unit this jump cannot honor is never dropped for a jump that
     // redoes the step for every unit. `--every-unit` asks for exactly what the
-    // jump below does here, so it goes through and says so in one line.
+    // jump below does here, so it goes through and says so in one line. A
+    // Unit's build holds that one Unit: the jump for it is the jump for every unit.
+    if (flags.jumpUnit !== undefined && unitBuildOf(unitMajorState)?.unit === flags.jumpUnit) {
+      flags.everyUnit = true;
+      flags.jumpUnit = undefined;
+    }
     if (flags.jumpUnit !== undefined) {
       emit(turnEndingPrint(unitChoiceRefusal(unitMajorState, targetSlug)));
       return;
@@ -22426,8 +22431,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
     // With no unit-major beat, every skip below covers every unit, so a unit
     // pin cannot be honoured. Refuse it before any change rather than drop the
-    // stage for all units while the conductor believes it skipped one.
-    if (unit) {
+    // stage for all units while the conductor believes it skipped one. A
+    // Unit's build holds that one Unit, so a skip for it is the stage's own.
+    const oneUnitBuild = unit !== undefined && unitBuildOf(stateContent)?.unit === unit;
+    if (unit && !oneUnitBuild) {
       emit(errorDirective(
         readConstructionIteration(stateContent) !== "unit-major" &&
           node.phase === "construction" && isPerUnit(node)

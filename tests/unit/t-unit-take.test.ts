@@ -344,6 +344,24 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(labels.some((label) => label.includes("project rules"))).toBe(false);
   });
 
+  // Live runs on Codex and Claude Code: a team's build runs its stages for its
+  // one Unit, and a redo or a skip the person asked for, named for that Unit,
+  // was refused as "only for every unit" and asked again.
+  test("in a Unit's build, a redo or a skip named for its one Unit is the stage's own, never refused as one Unit's", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const alice = cloneOf(home.remote, "alice");
+    expect(take(alice, "refunds").status).toBe(0);
+    const record = buildDir(alice, "payments", "refunds");
+    const skip = run(ORCH, ["report", "--stage", "functional-design", "--unit", "refunds", "--result", "skipped"], alice);
+    expect(skip.out).not.toContain("a one-unit skip works only when");
+    expect(skip.status, skip.out).toBe(0);
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \[S\] functional-design /m, "- [x] functional-design "));
+    const redo = next(alice, undefined, ["--stage", "functional-design", "--unit", "refunds"]);
+    expect(JSON.stringify(redo)).not.toContain("can be reopened for one unit only");
+    expect(JSON.stringify(redo)).not.toContain("Do you want me to reopen it for every unit?");
+  });
+
   test("the team approves each of its stages: the build holds on a stage until it is approved", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const alice = cloneOf(home.remote, "alice");
