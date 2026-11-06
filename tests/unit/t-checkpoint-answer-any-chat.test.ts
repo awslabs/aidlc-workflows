@@ -258,6 +258,12 @@ describe("t-checkpoint-answer-any-chat: a Unit checkpoint answered in a new chat
     // The teams' walk reads alpha approved: its approval is not asked again.
     const after = next(p);
     expect(JSON.stringify(after)).not.toMatch(/[Aa]pprove (this completed )?alpha/);
+    // A live run: the person then picked "Approve once at the end of each
+    // Unit" for the teams, and it was refused as "already being approved
+    // after every stage", though alpha's one approval was at its end.
+    const rhythm = tool(p, "state", ["set-unit-gate-rhythm", "unit-end"]);
+    expect(rhythm.status, rhythm.out).toBe(0);
+    expect(getField(readFileSync(seededStateFile(p), "utf-8"), "Unit Gate Rhythm")).toBe("unit-end");
   });
 
   test("with no reply of the person's in the new chat, the agent cannot approve there", () => {

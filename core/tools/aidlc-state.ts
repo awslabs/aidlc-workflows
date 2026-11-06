@@ -1850,11 +1850,14 @@ function handleSetUnitGateRhythm(args: string[]): void {
     // Each team gate is recorded under the rhythm it was asked in (its Gate
     // Scope), and a rhythm reads only its own; a Unit started or built so far
     // routes the same under either. So the change holds until a Unit's first
-    // approval question opens.
-    if (
-      value !== current &&
-      hasCurrentTeamUnitActivity(pd, content, (row) => values.includes(auditBlockField(row.block, "Gate Scope") ?? ""))
-    ) {
+    // approval question opens under another rhythm than the one asked for: a
+    // Unit built before teams, asked once at its end, is the end-of-Unit
+    // rhythm's already.
+    const other = (row: AuditShardEvent): boolean => {
+      const scope = auditBlockField(row.block, "Gate Scope") ?? "";
+      return values.includes(scope) && scope !== value;
+    };
+    if (value !== current && hasCurrentTeamUnitActivity(pd, content, other)) {
       error(unitGateRhythmStaysLine(pd, content, current));
     }
     content = setOrInsertField(
