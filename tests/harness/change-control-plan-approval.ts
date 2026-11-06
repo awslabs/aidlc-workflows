@@ -215,7 +215,7 @@ export function humanTurn(project: string, session: string): void {
   expect(human.code, human.stderr).toBe(0);
 }
 
-export function answer(project: string, questions: string, session: string): Spawned {
+export function answer(project: string, questions: string, session: string, env: NodeJS.ProcessEnv = {}): Spawned {
   writeFileSync(
     questions,
     readFileSync(questions, "utf-8").replace(/\[Answer\]:\s*$/, "[Answer]: Approve Plan"),
@@ -223,6 +223,8 @@ export function answer(project: string, questions: string, session: string): Spa
   return runChangeControlTool(
     [BUN, LOG, "answer", ...identity(questions, session), "--details", "Approve Plan", "--project-dir", project],
     project,
+    undefined,
+    env,
   );
 }
 
