@@ -16763,10 +16763,13 @@ function teamUnitProgressModel(
     );
   }
 
+  // A Unit a team built as work of its own was approved in that build: the
+  // home records no gate of its own for it.
   const allUnitEndApproved =
     !finalStage ||
     units.every(
       (unit) =>
+        builtElsewhere.has(unit) ||
         rhythmOf(unit) !== "unit-end" ||
         unitGateStatus(
           projectDir,
