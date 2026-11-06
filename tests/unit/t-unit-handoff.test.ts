@@ -22,6 +22,7 @@ import {
   codeHost,
   ENV,
   git,
+  HOME_RECORD,
   homeState,
   makeHome,
   next,
@@ -371,5 +372,47 @@ describe("progress and the result come back as files", () => {
     const late = run(UNIT, ["take-in", older], home.dir);
     expect(late.status, late.out).toBe(0);
     expect(String(late.json?.notice)).toContain("This file is from an earlier attempt of reporting; it is taken in as the team's latest word.");
+  });
+});
+
+describe("a hand-off of a Unit that waits on one the lead's project builds", () => {
+  const WAITS = "# Unit dependencies\n\n```yaml\nunits:\n" +
+    "  - name: refunds\n    repos: [checkout-api]\n    depends_on: []\n" +
+    "  - name: checkout-ui\n    repos: [checkout-api]\n    depends_on: []\n" +
+    "  - name: reporting\n    repos: [checkout-api]\n    depends_on: [refunds]\n```\n";
+  const REPORTING = "aidlc/handoff/fixture-reporting.md";
+
+  test("says once which Unit it waits on while that code is not on the repo's remote, to the lead and in the file, and nothing once it is", () => {
+    const home = makeHome({ dependencies: WAITS, repos: { "checkout-api": codeHost("checkout-api") } });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "checkout-ui=web"], home.dir).status).toBe(0);
+    // refunds, built at the lead's project: committed in the lead's clone of checkout-api, not pushed.
+    const repo = join(home.dir, "checkout-api");
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src", "refunds.ts"), "export const refunds = 1;\n");
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-q", "-m", "refunds"]);
+    const stage = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ repo: "checkout-api", path: "src/refunds.ts" }],
+    }, null, 2)}\n`);
+    const handed = run(UNIT, ["hand-off", "reporting", "--team", "data"], home.dir);
+    expect(handed.status, handed.out).toBe(0);
+    expect(String(handed.json?.notice)).toContain(
+      "reporting waits on refunds, which this project builds: its code is not on origin/main in checkout-api yet.",
+    );
+    const line = "reporting waits on refunds, which the lead's project builds: when this file was written its code was not on " +
+      "origin/main in checkout-api yet.";
+    const partner = partnerWorkspace();
+    const took = run(UNIT, ["take", "--file", deliver(home.dir, REPORTING)], partner.dir);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(line);
+    // Pushed: the next hand-off file for it says nothing of refunds.
+    git(repo, ["push", "-q", "origin", "HEAD:main"]);
+    const again = run(UNIT, ["hand-off", "reporting", "--team", "data"], home.dir);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).not.toContain("waits on refunds");
+    expect(readFileSync(join(home.dir, ...REPORTING.split("/")), "utf-8")).not.toContain("Waits On");
   });
 });

@@ -197,6 +197,9 @@ import {
   unitsInPlanOrder,
   workspaceHomeLocation,
   writesByRepo,
+  unitDependencies,
+  unitsKeptForTeams,
+  unitsLeftOpen,
   unitWordsArg,
   TEAM_RHYTHM_OFFER,
   theTeam,
@@ -7731,7 +7734,8 @@ function handOff(args: string[], projectDir?: string): void {
   const held = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
   if (!held.ok) fail(`${unit} could not be held for ${team}: ${held.refused ?? "its claim moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
-  const rel = writeHandOffFile(pd, unit, team, payload.generation);
+  const waits = leadsCodeNotThere(pd, unit);
+  const rel = writeHandOffFile(pd, unit, team, payload.generation, waits);
   const words = leadSpoke(pd) ? personWordsOf(pd, flags) : "";
   const planChanging = homePlanChangingLine(state, [unit]);
   appendAuditEntry("UNITS_ASSIGNED", {
@@ -7745,13 +7749,65 @@ function handOff(args: string[], projectDir?: string): void {
     file: rel,
     notice: `The hand-off file for ${unit} is ${rel}: send it to ${theTeam(team)}. They take it in by ` +
       "pointing AI-DLC at it in their own workspace, and send its result back to you as a file." +
+      waits.map((wait) => ` ${unit} waits on ${wait.dep}, which this project builds: ${wait.now}.`).join("") +
       (planChanging === null ? "" : ` ${planChanging}`),
   }));
 }
 
+// What a Unit waits on that the lead's project builds itself (no team holds
+// it, none is kept for one or left open for one), where its code is not on its
+// repos' remote yet:
+// the team has nothing of it to build on until it is. Each repo's integration
+// branch is fetched first; one that cannot be reached says nothing.
+function leadsCodeNotThere(pd: string, unit: string): Array<{ dep: string; now: string; written: string }> {
+  const claims = cachedClaims(pd);
+  const rows = readAuditShardEvents(pd);
+  const kept = unitsKeptForTeams(rows);
+  const open = unitsLeftOpen(rows);
+  const found: Array<{ dep: string; now: string; written: string }> = [];
+  for (const dep of unitDependencies(pd).get(unit) ?? []) {
+    if (claims.get(dep)?.status === "claimed" || kept.has(dep) || open.has(dep)) continue;
+    const manifest = readUnitSourceManifest(pd, "code-generation", dep);
+    if (!manifest.ok) {
+      if (!existsSync(join(activeRecordDir(pd), "construction", dep, "code-generation", "source-manifest.json"))) {
+        found.push({ dep, now: "it is still being built here", written: "it was still being built at the lead's project" });
+      }
+      continue;
+    }
+    const missing: string[] = [];
+    for (const [repo, paths] of writesByRepo(pd, manifest.manifest.writes)) {
+      const dir = repo === "." ? pd : repoDir(pd, repo);
+      const remote = isGitRepoDir(dir) ? repositoryRemote(dir) : null;
+      if (remote === null) continue;
+      const integration = repoIntegration(dir, remote);
+      if (!quietFetch(dir, ["-q", remote, integration.slice(remote.length + 1)]).ok) continue;
+      const there = blobsAt(dir, integration, paths);
+      const here = git(dir, ["hash-object", "--", ...paths]);
+      const blobs = here.ok ? here.stdout.split(/\r?\n/).filter(Boolean) : [];
+      if (blobs.length !== paths.length || paths.some((path, at) => there.get(path) !== blobs[at])) {
+        missing.push(`${integration} in ${repo === "." ? "the repo" : repo}`);
+      }
+    }
+    if (missing.length > 0) {
+      found.push({
+        dep,
+        now: `its code is not on ${joinNames(missing)} yet`,
+        written: `when this file was written its code was not on ${joinNames(missing)} yet`,
+      });
+    }
+  }
+  return found;
+}
+
 // The hand-off file for a Unit held for a team by file, from the home's record
 // as it is now. Returns its workspace-relative path.
-function writeHandOffFile(pd: string, unit: string, team: string, attempt: number): string {
+function writeHandOffFile(
+  pd: string,
+  unit: string,
+  team: string,
+  attempt: number,
+  waits: ReadonlyArray<{ dep: string; written: string }> = leadsCodeNotThere(pd, unit),
+): string {
   const state = readStateFile(pd);
   const identity = activeIdentity(pd);
   const integration = fetchIntegration(pd);
@@ -7771,7 +7827,8 @@ function writeHandOffFile(pd: string, unit: string, team: string, attempt: numbe
     `Hand-off: ${unit} of ${label}`,
     `This file hands ${unit} to ${theTeam(team)}. Point AI-DLC at this file in your own workspace and it offers ` +
       "to start it as a piece of work of its own. It is not signed: it is bound by the work's id, the " +
-      "Unit, the attempt and the fingerprints below.",
+      "Unit, the attempt and the fingerprints below." +
+      waits.map((wait) => ` ${unit} waits on ${wait.dep}, which the lead's project builds: ${wait.written}.`).join(""),
     {
       "Home Work": identity.intentUuid,
       "Home Location": homeLocation(state) ?? "",
@@ -7784,6 +7841,7 @@ function writeHandOffFile(pd: string, unit: string, team: string, attempt: numbe
       "Handed Off": isoTimestamp(),
       "Home Approvals": approvals.join("; ") || "none recorded",
       Repos: (row?.repos ?? []).join(", "),
+      ...(waits.length > 0 ? { "Waits On": waits.map((wait) => `${wait.dep}, which the lead's project builds: ${wait.written}`).join("; ") } : {}),
     },
     files,
   ));
@@ -7855,6 +7913,7 @@ function takeFromFile(pd: string, path: string): void {
       `${(fields["Handed Off"] ?? "").slice(0, 10)}. Its build is its own piece of work here, under your team's rules, ` +
       "from what the home approved; its result goes back as a file when it is built." +
       (file.edited ? " This file was changed after the lead wrote it: it is taken in as it is." : "") +
+      (fields["Waits On"] ? ` ${unit} waits on ${fields["Waits On"]}.` : "") +
       notThere.lines + notThere.question,
     ...notThere.offer,
   }));
