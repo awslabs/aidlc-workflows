@@ -144,6 +144,15 @@ export type HarnessManifest = {
    */
   firstRunSteps?: string[];
   /**
+   * How the person starts a clean chat in this host, said once when new work
+   * starts beside other work in a chat ("To start this in a clean chat
+   * instead, <text>."). Only the person's own step, in the host's own words;
+   * `<entry>` is filled in. `inHost` gives one host this tree runs in its own
+   * step, told apart as `hookActivation.missedReplyInHost` is. Absent: the
+   * offer is not made.
+   */
+  newChatStep?: { text: string; inHost?: { env: string[]; text: string } };
+  /**
    * Lower-case name of this harness's own VS Code-based editor, for an editor
    * with no CLI to probe. When `aidlc config` runs in that editor's terminal
    * (TERM_PROGRAM is exactly this name, or the git askpass helper in

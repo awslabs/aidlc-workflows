@@ -39,6 +39,8 @@ const manifest: HarnessManifest = {
   name: "cursor",
   productName: "Cursor",
   configNextStep: "open this project in Cursor, then run `/aidlc --doctor`",
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "open a new chat, then type <entry>" },
   harnessDir: ".cursor",
   orchestratorSkillPath: ".cursor/skills/aidlc/SKILL.md",
   tierFlavor: "cursor",

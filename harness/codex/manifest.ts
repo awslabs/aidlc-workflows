@@ -52,6 +52,8 @@ const manifest: HarnessManifest = {
       "AI-DLC's hooks work only when Codex is started in the project folder. Exit Codex, start it again in " +
       "<folder>, then type <entry>.",
   },
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "open a new chat, then type <entry>" },
   harnessDir: ".codex",
   orchestratorSkillPath: ".agents/skills/aidlc/SKILL.md",
   tierFlavor: "codex",

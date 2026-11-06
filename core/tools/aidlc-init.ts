@@ -5416,6 +5416,7 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "productName",
   "configNextStep",
   "hookActivation",
+  "newChatStep",
   "directiveMaxBytes",
   "harnessDir",
   "rulesSubdir",

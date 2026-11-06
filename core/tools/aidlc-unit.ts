@@ -1,6 +1,7 @@
 // aidlc-unit.ts - atomic Unit claim registry and checkout-local scope binding.
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
+import { LAUNCHER_GLOBAL_FLAGS, UNIT_GRAMMAR } from "./aidlc-command.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -65,6 +66,7 @@ import {
   engineAskMark,
   noteEngineAskMark,
   parseArgs,
+  printUsageAndExit,
   recordDir,
   parseBoltDag,
   readAppendOnlyFileNoFollowOrThrow,
@@ -153,11 +155,13 @@ interface GitBytesResult {
 // Unit's audit shard outgrows that in one long attempt, so the cap is lifted
 // the way the other git readers lift it. A run that could not start, was killed
 // or overflowed is a failed run, whatever its exit status.
-function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
+// `input` is what git reads on its standard input.
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
     env: { ...process.env, ...env },
     maxBuffer: 512 * 1024 * 1024,
+    ...(input === undefined ? {} : { input }),
   });
   const failure = result.error
     ? `${result.error.message}\n`
@@ -172,8 +176,8 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
   };
 }
 
-function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
-  const result = gitBytes(projectDir, args, env);
+function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): GitResult {
+  const result = gitBytes(projectDir, args, env, input);
   return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
@@ -2089,7 +2093,7 @@ function publishUnit(args: string[], projectDir?: string): void {
   // `--commit` takes no value; `publish --commit alpha` reads alpha as its own.
   const commitFirst = bareFlags.has("commit") || flags.commit !== undefined;
   const unit = positional[0] ?? (bareFlags.has("commit") ? undefined : flags.commit);
-  if (!unit) fail("Usage: aidlc-unit publish <unit> [--commit] [--include <path>]...");
+  if (!unit) fail(`usage: ${unitUsage("publish")}`);
   // parseArgs keeps a flag's last value; every --include counts.
   const include = args.flatMap((arg, i) =>
     arg === "--include" && i + 1 < args.length ? [args[i + 1]]
@@ -2569,7 +2573,7 @@ function mergeGateRecord(
 function pinUnit(args: string[], projectDir?: string): void {
   const { positional } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit pin <unit>");
+  if (!unit) fail(`usage: ${unitUsage("pin")}`);
   const pd = resolveProjectDir(projectDir);
   if (readApplicableTeamUnitScopeStamp(pd)) {
     fail("Unit pinning must run from an unscoped main checkout.");
@@ -2698,9 +2702,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     spend = read.spend;
   }
   if (!unit || (decision !== "approve" && decision !== "reject") || !userInput) {
-    fail(
-      "Usage: aidlc-unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
-    );
+    fail(`usage: ${unitUsage("gate")}`);
   }
   if (
     !humanPresenceGuardDisabled() &&
@@ -3743,10 +3745,7 @@ function landUnit(args: string[], projectDir?: string): void {
     !["git", "state", "audit", "all"].includes(step) ||
     (flags.strategy !== undefined && flags.strategy !== "merge")
   ) {
-    fail(
-      "Usage: aidlc-unit land <unit> [--step git|state|audit|all] [--target <branch>] " +
-        "[--strategy merge] [--accept-released-attempt --user-input <human acknowledgment>]",
-    );
+    fail(`usage: ${unitUsage("land")}`);
   }
   const pd = resolveProjectDir(projectDir);
   assertMainCheckout(pd);
@@ -4163,7 +4162,7 @@ function writePendingRelease(
 function adoptUnit(args: string[], projectDir?: string): void {
   const { positional } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit adopt <unit>");
+  if (!unit) fail(`usage: ${unitUsage("adopt")}`);
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
@@ -4247,7 +4246,7 @@ function adoptUnit(args: string[], projectDir?: string): void {
 function claimUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]");
+  if (!unit) fail(`usage: ${unitUsage("claim")}`);
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   if (
@@ -4442,7 +4441,7 @@ function moveClaimTurnRows(projectDir: string, shardPath: string, localPath: str
 function releaseUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit release <unit> [--expect-nonce <claim-nonce>]");
+  if (!unit) fail(`usage: ${unitUsage("release")}`);
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
@@ -4746,7 +4745,17 @@ function commitWorkHere(
 ): { committed: number; leftOut: string[]; unmatched: string[] } {
   const { paths, leftOut, unmatched } = workToCommit(projectDir, work);
   if (paths.length === 0) return { committed: 0, leftOut, unmatched };
-  const added = git(projectDir, ["add", "-A", "--", ...paths]);
+  // One call whatever the count: Windows caps a command line at 32,767
+  // characters, so the paths go to git on its standard input, NUL-separated,
+  // each read as the same name an argument would be (git 2.25; core already
+  // needs 2.29). An empty list never gets here: with -A and no path git would
+  // take the whole tree.
+  const added = git(
+    projectDir,
+    ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+    undefined,
+    paths.map((path) => `${path}\0`).join(""),
+  );
   if (!added.ok) fail(`git add failed: ${added.stderr.trim()}`);
   const committed = git(projectDir, ["commit", "-q", "-m", message]);
   if (!committed.ok) {
@@ -4901,11 +4910,41 @@ function participate(projectDir?: string): void {
   console.log(JSON.stringify({ participant: true }));
 }
 
+// The command a person types for a Unit verb, as its usage shows it.
+function unitUsage(verb: string): string {
+  return `${aidlcInvocation()} ${UNIT_GRAMMAR[verb].usage}`;
+}
+
+// A Unit command's words, read as its verb reads them (parseArgs) before
+// anything is read or written: `--help` or `-h` prints the verb's usage, and a
+// word the verb does not take is named with that usage, so a request to read
+// the usage never commits, pushes or claims. `-h` as an option's value stays
+// that option's. A switch takes no value, so each is read here as `--x=true`
+// and the word after it stays a word: `-h` after `--commit` is still the
+// request for the usage. Every verb also takes --project-dir and the launcher's
+// own flags, switches the dispatcher hands on after the words.
+function checkUnitWords(verb: string, args: readonly string[]): void {
+  if (!Object.hasOwn(UNIT_GRAMMAR, verb)) return;
+  const grammar = UNIT_GRAMMAR[verb];
+  const switches = new Set([...(grammar.switches ?? []), ...[...LAUNCHER_GLOBAL_FLAGS].map((flag) => flag.slice(2)), "help"]);
+  const end = args.indexOf("--");
+  const { positional, flags } = parseArgs(args.map((token, index) =>
+    (end < 0 || index < end) && token.startsWith("--") && switches.has(token.slice(2)) ? `${token}=true` : token
+  ));
+  if (Object.hasOwn(flags, "help") || positional.includes("-h")) printUsageAndExit(`usage: ${unitUsage(verb)}`);
+  const option = Object.keys(flags).find((key) =>
+    key !== "project-dir" && !grammar.options.includes(key) && !switches.has(key)
+  );
+  const extra = positional[grammar.name ? 1 : 0];
+  if (option === undefined && extra === undefined) return;
+  const word = option !== undefined ? `--${option}` : JSON.stringify(extra);
+  console.error(JSON.stringify({ error: `unit ${verb} does not take ${word}`, usage: unitUsage(verb) }));
+  process.exit(2);
+}
+
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
-  // A turn Claude Code started itself is settled before this command reads a turn.
-  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const args = [...argv];
   const projectIdx = args.indexOf("--project-dir");
   if (projectIdx !== -1 && projectIdx + 1 < args.length) {
@@ -4913,6 +4952,9 @@ export function main(argv: string[]): void {
     args.splice(projectIdx, 2);
   }
   const command = args.shift();
+  if (command !== undefined) checkUnitWords(command, args);
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   try {
     if (command === "adopt") adoptUnit(args, projectDir);
     else if (command === "claim") claimUnit(args, projectDir);
@@ -4925,7 +4967,7 @@ export function main(argv: string[]): void {
     else if (command === "land") landUnit(args, projectDir);
     else if (command === "merge-status") {
       const unit = args[0];
-      if (!unit) fail("Usage: aidlc-unit merge-status <unit>");
+      if (!unit) fail(`usage: ${unitUsage("merge-status")}`);
       console.log(JSON.stringify(
         readUnitMergeTransaction(resolveProjectDir(projectDir), unit),
         null,
