@@ -319,8 +319,11 @@ Kiro shows you how full the chat is, but gives AI-DLC no figure while it works.
 So AI-DLC reads the figure Kiro saves for the chat at the end of each turn
 (`~/.kiro/sessions/cli/<chat id>.json`, read only). Once it is 80% or more, the
 next approval question or Unit checkpoint carries one line saying how full the
-chat is, with an offer to pause and carry on in a new chat. Your answer
-decides: nothing pauses on its own, and the line is said once in a chat.
+chat is, with an offer to pause and carry on in a new chat. When the chat
+already reached half full or more in its first turn on the work, and still runs
+on the model that filled it, a new chat on that model would start about as
+full, so the line says that instead of offering one. Your answer decides:
+nothing pauses on its own, and the line is said once in a chat.
 
 The line cannot appear in the middle of a stage (it comes only with a question
 you are asked anyway), before Kiro has saved the chat's first turn, for a chat
