@@ -164,7 +164,9 @@ describe("t-claude-guard-group settings.json wiring", () => {
     const rulesRow = pre.find((group) =>
       group.hooks.some((hook) => hook.command.endsWith(" engine hook deliver-stage-rules"))
     );
-    expect(rulesRow?.matcher).toBe("Task|Agent");
+    // SendMessage too: a message that would continue a finished agent on other
+    // work is refused there (#3549).
+    expect(rulesRow?.matcher).toBe("Task|Agent|SendMessage");
   });
 
   test("the subagent rule delivery also runs as every agent starts, in both channels", () => {
