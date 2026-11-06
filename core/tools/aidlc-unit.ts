@@ -6150,12 +6150,12 @@ const CLAIMS_FETCHED_FILE = "claims-fetched.json";
 export function refreshHomeClaims(
   projectDir: string,
   options: { home?: { target: string | null; id8: string }; sessionId?: string; now?: boolean; sincePerson?: boolean } = {},
-): { fetched: boolean; unreached: string | null } {
+): { fetched: boolean; unreached: string | null; refused?: string } {
   const pd = resolveProjectDir(projectDir);
   const { target, id8 } = options.home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
   if (target === null) return { fetched: false, unreached: null };
   const mark = join(sessionsDir(pd), CLAIMS_FETCHED_FILE);
-  let chats: Record<string, string | { chat: string; at: string; reached: boolean }> = {};
+  let chats: Record<string, string | { chat: string; at: string; reached: boolean; refused?: boolean }> = {};
   try {
     chats = JSON.parse(readFileSync(mark, "utf-8")) as typeof chats;
   } catch {
@@ -6169,14 +6169,54 @@ export function refreshHomeClaims(
   if (!options.now && !spoke && last?.chat === chat) return { fetched: false, unreached: null };
   const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
   const at = isoTimestamp();
-  const ok = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]).ok;
+  const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]);
+  // The lead's project answered, and this repository's own .git refused the
+  // write (Codex's sandbox keeps it read-only): not a project that is down.
+  // The first time in a chat the step stops with its way on, which an agent in
+  // that sandbox takes with the write access the session grants (AI-DLC's
+  // shipped rules allow its engine commands), so the news is read rather than
+  // missed; after that the step goes on and says it plainly, never a loop.
+  const refused = fetched.ok ? null : localGitWriteRefused(fetched.stderr);
+  const ok = fetched.ok;
+  const stopped = refused !== null && last?.chat === chat && last.refused === true;
   try {
     mkdirSync(dirname(mark), { recursive: true });
-    writeFileAtomic(mark, `${JSON.stringify({ ...chats, [id8]: { chat, at, reached: ok } })}\n`);
+    writeFileAtomic(mark, `${JSON.stringify({ ...chats, [id8]: { chat, at, reached: ok, ...(refused !== null ? { refused: true } : {}) } })}\n`);
   } catch {
     // Unnoted, the next step fetches again.
   }
+  if (refused !== null && !stopped) throw new GitWriteRefused(refused);
+  if (refused !== null) return { fetched: false, unreached: null, refused };
   return { fetched: ok, unreached: ok ? null : target };
+}
+
+// The step's stop when the news could not be written into this workspace's
+// .git: every caller that takes a failed look as "the claims stand" lets this
+// one through, so the way on reaches the agent once in the chat.
+export class GitWriteRefused extends Error {
+  constructor(gitLine: string) {
+    super(`The news from the lead's project reached this workspace, but its .git cannot be written in this session ` +
+      `(git: ${gitLine}), so it was not taken in. Run the same command again with write access to it (on Codex, ` +
+      "with escalated permissions, or with the repository's .git in writable_roots as the shipped config.toml shows); " +
+      "nothing else changes.");
+  }
+}
+
+// What a step says once the news could not be written into this workspace's
+// .git and its way on was already given in this chat: from the lead's project
+// in a team's build, from the teams at the lead's project.
+export function newsNotTakenIn(from: string): string {
+  return `News from ${from} could not be taken in here: this workspace's .git cannot be written in this session, ` +
+    "so what you see may be behind.";
+}
+
+// git's own line when it could not write into this repository's .git (a
+// read-only file system or folder), as opposed to a remote it could not read.
+function localGitWriteRefused(stderr: string): string | null {
+  const line = stderr.split(/\r?\n/).find((entry) =>
+    /read-only file system|permission denied|operation not permitted/i.test(entry) &&
+    /cannot open|cannot lock ref|unable to create|unable to write|could not write|failed to write|cannot update/i.test(entry));
+  return line === undefined ? null : line.trim();
 }
 
 // The claims of a home's work listed in this workspace, fetched as
@@ -6189,7 +6229,8 @@ export function refreshListedHome(
 ): { fetched: boolean; unreached: string | null } {
   try {
     return refreshHomeClaims(projectDir, { home: findHomeWork(projectDir, dirName, space), ...options });
-  } catch {
+  } catch (e) {
+    if (e instanceof GitWriteRefused) throw e;
     return { fetched: false, unreached: null };
   }
 }
@@ -6754,7 +6795,8 @@ export function homeResultsPastUnitStages(projectDir: string, stateContent: stri
     if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { sessionId, sincePerson: true });
     back = [...cachedClaims(projectDir).values()]
       .filter((claim) => claim.status === "claimed" && claim.payload.result !== undefined && !claim.payload.done);
-  } catch {
+  } catch (e) {
+    if (e instanceof GitWriteRefused) throw e;
     return null;
   }
   if (back.length === 0) return null;
@@ -6802,7 +6844,8 @@ export function buildTurnedDownNow(projectDir: string, stateContent: string, ses
   if (!isReadOnlyEngineProbe() && getField(stateContent, "Home Result")?.trim() !== "by file") {
     try {
       refreshHomeClaims(projectDir, { home: buildsHome(projectDir, build), sessionId, now: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed" });
-    } catch {
+    } catch (e) {
+      if (e instanceof GitWriteRefused) throw e;
       // The claims stand as this clone last fetched them.
     }
   }
@@ -6953,9 +6996,9 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     const waits = getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed";
     const atStage = `${recordDir(projectDir) ?? ""}:${getField(stateContent, "Current Stage")?.trim() ?? ""}`;
     const newStage = buildStageLooked(projectDir, sessionId) !== atStage;
-    if (home !== null && refreshHomeClaims(projectDir, { home, sessionId, now: waits || newStage }).unreached !== null) {
-      lines.push("The home could not be reached just now, so news from it may be behind.");
-    }
+    const refreshed = home === null ? null : refreshHomeClaims(projectDir, { home, sessionId, now: waits || newStage });
+    if (refreshed?.unreached) lines.push("The home could not be reached just now, so news from it may be behind.");
+    if (refreshed?.refused) lines.push(newsNotTakenIn("the lead's project"));
     if (home !== null && newStage) noteBuildStageLooked(projectDir, sessionId, atStage);
   }
   let claims: Map<string, UnitClaimView>;

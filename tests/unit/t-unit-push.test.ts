@@ -12,7 +12,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -734,6 +734,48 @@ describe("at the home", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
     expect((next(alice).change_notices ?? []) as string[]).toContain(
+      'refunds was turned down in billing at the home: "billing needs the ledger entry too".',
+    );
+  });
+
+  // A live run on Codex: its sandbox keeps the workspace's .git read-only, so
+  // the news fetch could not write there, and the team heard "the home could
+  // not be reached" and never its send-back. The step now says what stopped
+  // it and the way on; run with write access to .git, the news comes.
+  test.skipIf(process.platform === "win32")("news the team's .git cannot take in here is said as that, with the way on, never as the home being down", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
+    // Every file and folder of the clone's .git read-only, as Codex's sandbox has it.
+    const tree = (dir: string): string[] => [dir, ...readdirSync(dir, { withFileTypes: true })
+      .flatMap((entry) => (entry.isDirectory() ? tree(join(dir, entry.name)) : [join(dir, entry.name)]))];
+    const paths = tree(join(alice, ".git"));
+    for (const path of paths) chmodSync(path, statSync(path).isDirectory() ? 0o555 : 0o444);
+    // The person's chat, so every look a live step takes runs.
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat" };
+    let blocked: ReturnType<typeof run>;
+    const after: Array<ReturnType<typeof run>> = [];
+    try {
+      blocked = run(ORCH, ["next"], alice, chat);
+      // Asked once in a chat: the steps after it go on (the Units to take,
+      // offered once in a chat, then the build), and the build's says it plainly.
+      after.push(run(ORCH, ["next"], alice, chat), run(ORCH, ["next"], alice, chat));
+    } finally {
+      for (const path of paths) chmodSync(path, statSync(path).isDirectory() ? 0o755 : 0o644);
+    }
+    expect(blocked.out).not.toContain("could not be reached");
+    expect(blocked.status, blocked.out).not.toBe(0);
+    expect(blocked.out).toContain("cannot be written in this session");
+    expect(blocked.out).toContain("Run the same command again with write access to it");
+    for (const step of after) {
+      expect(step.status, step.out).toBe(0);
+      expect(step.out).not.toContain("Run the same command again");
+      expect(step.out).not.toContain("could not be reached");
+    }
+    expect(after.map((step) => step.out).join("\n")).toContain("News from the lead's project could not be taken in here");
+    expect((next(alice, chat).change_notices ?? []) as string[]).toContain(
       'refunds was turned down in billing at the home: "billing needs the ledger entry too".',
     );
   });

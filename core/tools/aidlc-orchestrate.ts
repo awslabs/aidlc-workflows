@@ -616,6 +616,7 @@ import {
   refreshClaimRefs,
   type ToldMerge,
   writeProposedText,
+  newsNotTakenIn,
   refreshHomeClaims,
   refreshListedHome,
   sendLeadsApprovedChanges,
@@ -17114,6 +17115,7 @@ function teamHomeClaims(
     )));
     const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now });
     if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
+    if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
     if (refreshed.fetched) overview = readOverview();
   }
   const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
