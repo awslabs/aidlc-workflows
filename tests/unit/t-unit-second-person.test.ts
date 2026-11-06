@@ -159,6 +159,25 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(next(bob, chat).ask_type).not.toBe("unit-take");
   });
 
+  test("a bare /aidlc typed after their agent selected the work puts the offer first, never the other person's step", () => {
+    // A live run: in a second chat the agent selected the other person's work;
+    // the teammate's bare /aidlc then walked that person's Unit, as the entry
+    // word alone over work in hand reads as picking it back up.
+    const home = soloAtA();
+    const bob = cloneOf(home.remote, "bob");
+    const chat = personsChat("chat-bob-2");
+    const select = /`([^`]* intent switch [^`]*)`/.exec(String(next(bob, chat, ["--pick", HOME_RECORD]).message))?.[1];
+    expect(select).toBeString();
+    const switched = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), ...select!.split(" ").slice(2)], {
+      cwd: bob, env: { ...chat, CLAUDE_PROJECT_DIR: bob, AIDLC_PROJECT_DIR: bob }, encoding: "utf-8",
+    });
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    expect(hook(bob, chat, { hook_event_name: "UserPromptSubmit", session_id: "chat-bob-2", prompt: "/aidlc" }).status).toBe(0);
+    const ask = next(bob, chat);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 400)).toBe("unit-take");
+    expect(String(ask.question)).toStartWith("fixture is being built from another machine, on refunds");
+  });
+
   test("the same person on their own second machine is not asked: their work carries on as before", () => {
     const home = soloAtA();
     // The lead's laptop: the same git identity as the one who committed the work.

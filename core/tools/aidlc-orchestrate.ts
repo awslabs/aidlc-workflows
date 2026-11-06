@@ -13287,8 +13287,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // machine: the person's bare /aidlc or their words get its offer first, once
   // in a chat, as they do with no work selected, so the step never walks
   // the other person's Unit beside them unasked.
+  // Their bare /aidlc over work in hand reads as picking it back up (resume):
+  // still their plain /aidlc, so the offer comes first.
   const plainNext = Object.entries(flags).every(([key, value]) =>
-    key === "intent" || key === "markedWords" || value === undefined || value === false);
+    key === "intent" || key === "markedWords" || key === "resume" || value === undefined || value === false);
   if (stateContent && plainNext && engineSessionId && !takeOfferedOnWords(pd) && !isReadOnlyEngineProbe()) {
     const chosen = engineSelection(pd);
     const intent = chosen.intent === null ? undefined
