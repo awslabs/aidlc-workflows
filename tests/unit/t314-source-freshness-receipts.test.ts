@@ -6758,6 +6758,28 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     expect(r.rc, r.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // add-repo --path: the repo the person named beside the workspace; the
+  // install writes repos.json and workspace-sync's two files at the root.
+  test("a repo added at the folder the person named: it and the files written at the root are no Unit's change", () => {
+    const outside = join(proj, "..", `${basename(proj)}-billing`);
+    mkdirSync(join(outside, "lib"), { recursive: true });
+    writeFileSync(join(outside, "lib", "bill.ts"), "export const bill = 1;\n", "utf-8");
+    git(outside, ["init", "-q"]);
+    git(outside, ["config", "user.email", "t@test"]);
+    git(outside, ["config", "user.name", "t"]);
+    git(outside, ["add", "-A"]);
+    git(outside, ["commit", "-qm", "seed"]);
+    intent("add-repo", "billing", "--path", `../${basename(proj)}-billing`);
+    expect(existsSync(join(proj, "repos.json"))).toBe(true);
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("no Unit's review covers");
+    expect(r.out).not.toContain("repos.json");
+    expect(r.out).not.toContain("lib/bill.ts");
+    expect(r.rc, r.out).toBe(0);
+    rmSync(outside, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("after a remove and a second add, the latest add's listing is the one that counts", () => {
     intent("add-repo", "payments");
     commitIn("payments", "README.md", "# payments, edited between the adds\n");

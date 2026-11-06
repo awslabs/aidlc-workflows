@@ -1418,6 +1418,26 @@ export function installWorkspaceRepo(
   }
 }
 
+/**
+ * repos.json written as `manifest.next` for a repo already on disk, holding the
+ * workspace lock: the same install as a clone's with nothing to clone, so the
+ * .gitignore block and aidlc.code-workspace follow it, all rolled back on any
+ * error.
+ */
+export function installWorkspaceManifest(root: string, manifest: { raw: string | null; next: string }): void {
+  const parsed = parseWorkspaceManifest(manifest.next);
+  const before = snapshotOutputs(root);
+  commitPlan(
+    root,
+    parsed,
+    { path: join(root, "repos.json"), ...manifest },
+    { toClone: [], toKeep: [], toRemove: [], branchWarnings: [], notCloned: [] },
+    stagePlan(root, parsed, [], () => {}),
+    before,
+    () => {},
+  );
+}
+
 export function discardStagedWorkspaceRepo(staged: StagedWorkspaceRepo): void {
   removeTransaction(staged.clones);
 }

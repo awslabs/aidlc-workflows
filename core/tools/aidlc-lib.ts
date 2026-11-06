@@ -21188,7 +21188,12 @@ export function isValidRepoName(name: string): boolean {
 // A path written on Windows ("..\\billing") reads the same on every platform.
 export function repoDir(projectDir: string, repoName: string): string {
   const mapped = readWorkspaceRepos(projectDir).entries.get(repoName)?.path;
-  return mapped === undefined ? join(projectDir, repoName) : normalizeDriveLetter(resolvePath(projectDir, mapped.replace(/\\/g, "/")));
+  return mapped === undefined ? join(projectDir, repoName) : mappedRepoDir(projectDir, mapped);
+}
+
+// Where a repos.json `path` puts a checkout, read against the workspace.
+export function mappedRepoDir(projectDir: string, path: string): string {
+  return normalizeDriveLetter(resolvePath(projectDir, path.replace(/\\/g, "/")));
 }
 
 // The repo is the workspace folder itself (repos.json gives it `"path": "."`).
@@ -27380,7 +27385,8 @@ function readStageBaseline(
 // A repo that joined the work after the stage's baseline was taken (intent
 // add-repo, a Source Baseline Addition on its INTENT_REPOS_CHANGED row) joins
 // the baseline as it was at the add, so its existing files are nobody's change;
-// so do the workspace files a clone's install wrote (CLONE_WRITES_AT_ROOT). A
+// so do the workspace files a clone's install, or the install of a repos.json
+// entry for a folder the person named, wrote (CLONE_WRITES_AT_ROOT). A
 // repo the baseline already lists is never touched; the latest addition for a
 // repo wins. A repo no longer in the work leaves the baseline, as it left the
 // walk (workspaceSourceState walks intentRepos). An addition missing on this
@@ -27411,7 +27417,8 @@ function withRepoBaselineAdditions(
   for (const row of additions) {
     const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
     if (added.state !== "ready") return added;
-    const cloned = auditBlockField(row.block, "Cloned From") !== null;
+    // A clone's install, or add-repo --path's, wrote repos.json and the two files.
+    const cloned = auditBlockField(row.block, "Cloned From") !== null || auditBlockField(row.block, "Listed At") !== null;
     const byRepo = new Map<string, WorkspaceSourceListing>();
     for (const [key, entry] of added.listing) {
       const parsed = splitSourcePathKey(key);

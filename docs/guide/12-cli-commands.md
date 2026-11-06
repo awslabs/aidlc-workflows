@@ -36,7 +36,7 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
-| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out (never the last) |
+| `/aidlc intent add-repo <name> [--path <folder>] [--url <address>]` | Add a repo to the active piece of work at any stage, from where `repos.json` puts it or the folder you name, cloning it first when it is not here yet; `remove-repo <name>` takes one out (never the last, unless the work goes back to the workspace folder before Construction) |
 | `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers; `--all` keeps every recorded repo |
 | `/aidlc intent add-checkout <path>` | Have the review cover code kept in a worktree in the harness folder or outside the project; `remove-checkout <path>` takes it out |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
@@ -435,12 +435,33 @@ clone fails, nothing is recorded or changed, and the line gives git's reason
 and the `git clone` command to run by hand. With no `repos.json` org and no
 `--url`, the line asks for the address.
 
+When the repo is already cloned somewhere else, beside the workspace say, and
+you tell the agent where ("the code is in ../billing"), it passes that folder
+with `--path`. The folder must be a Git checkout before anything is written;
+then `repos.json` lists the repo with that path (a new file when there is none,
+your comments and layout kept otherwise, with the managed `.gitignore` block and
+`aidlc.code-workspace` refreshed), and the repo is recorded. A path written on
+Windows (`..\billing`) reads the same on every platform. The line says to
+commit `repos.json` to share it, or, for a path on this machine only, that a
+teammate whose copy is elsewhere gives theirs in `repos.local.json`. A repo
+`repos.json` already puts somewhere else is refused with where it is, and how to
+change it.
+
 The name must be a single folder name, and a folder already there must be a Git
 checkout (a real `.git` entry): a folder merely shaped like a repository is
-refused, as is a name with separators. The command serves work that already
-records repos; work that records none treats the workspace folder itself as its
-repo (`workspace reclassify` records its first repos). Removing the last
-recorded repo is refused for the same reason.
+refused, as is a name with separators.
+
+Work that records no repos works on the workspace folder itself. Until
+Construction has started, its first repo is recorded the same way, and the line
+says so once: "Added billing (at ../billing) to this piece of work's repos;
+until now it worked on the workspace folder itself, which it still reads." The
+workspace folder is still read as before. While nothing is built, removing that
+repo again takes the work back to the workspace folder. Once Construction has
+started, the Units' files are already recorded against the workspace folder, so
+the work records no repos from there: the line names
+`/aidlc intent add-checkout <folder>` instead, which has the review and its
+checks cover the other folder as well, and the agent runs it for you. Removing
+the last recorded repo is refused otherwise.
 
 There is no cut-off: after Units Generation is approved the repo is still added
 (or removed), and what that means for the approved Units follows the work's

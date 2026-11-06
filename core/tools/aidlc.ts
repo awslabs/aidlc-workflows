@@ -892,7 +892,7 @@ export const ROUTES: readonly Route[] = [
       "create [args]",
       "archive <name> [--reason <text>]",
       "unarchive <name>",
-      "add-repo <name> [--url <address>] [--reason <text>]",
+      "add-repo <name> [--path <folder>] [--url <address>] [--reason <text>]",
       "remove-repo <name>",
       "set-repos <name,...> | --all",
       "add-checkout <path>",
