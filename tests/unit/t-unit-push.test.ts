@@ -12,7 +12,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -401,6 +401,45 @@ describe("the push", () => {
     expect(String(pushed.json?.notice)).toContain("lib/refund.ts in billing is not in the commit: billing's .gitignore leaves it out.");
     expect(git(billing, ["branch", "--show-current"])).toBe("main");
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts.billing }).status).not.toBe(0);
+  });
+
+  // A live run: the manifest named whole folders and the build's tests left
+  // __pycache__ in them, which the push committed, though the review never
+  // counted them as source and the push question said only what the build wrote.
+  // A file the repo tracks in such a folder (a committed bundle) is theirs to
+  // ship: the build's change to it goes.
+  test("the build names whole folders and its tests leave caches in them: the push carries what it wrote, deletions and tracked bundles too, and never the caches", () => {
+    const { hosts, alice, record } = refundsTaken(undefined, (alice) => {
+      const billing = join(alice, "billing");
+      mkdirSync(join(billing, "lib", "dist"), { recursive: true });
+      writeFileSync(join(billing, "lib", "old.ts"), "export const old = 1;\n");
+      writeFileSync(join(billing, "lib", "dist", "index.js"), "bundle(1);\n");
+      git(billing, ["add", "lib/old.ts", "lib/dist/index.js"]);
+      git(billing, ["commit", "-q", "-m", "old"]);
+      git(billing, ["push", "-q", "origin", "HEAD:main"]);
+    });
+    codeGenerated(alice, record);
+    const billing = join(alice, "billing");
+    rmSync(join(billing, "lib", "old.ts"));
+    writeFileSync(join(billing, "lib", "dist", "index.js"), "bundle(2);\n");
+    mkdirSync(join(billing, "lib", "__pycache__"), { recursive: true });
+    writeFileSync(join(billing, "lib", "__pycache__", "refund.cpython-312.pyc"), Buffer.from([0x61, 0x0d, 0x0d, 0x0a, 0, 1, 2, 3]));
+    writeFileSync(join(billing, "lib", ".coverage"), "coverage data\n");
+    mkdirSync(join(alice, "checkout-api", "src", "node_modules", "left"), { recursive: true });
+    writeFileSync(join(alice, "checkout-api", "src", "node_modules", "left", "index.js"), "module.exports = 1;\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    const written = JSON.parse(readFileSync(manifest, "utf-8")) as { writes: Array<{ repo: string; path: string }> };
+    written.writes = [{ repo: "checkout-api", path: "src/" }, { repo: "billing", path: "lib/" }];
+    writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toEqual(["README.md", "lib/dist/index.js", "lib/refund.ts"]);
+    expect(git(hosts.billing, ["show", "refunds:lib/dist/index.js"])).toBe("bundle(2);");
+    expect(git(hosts["checkout-api"], ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toEqual(["README.md", "src/refunds.ts"]);
+    expect(String(pushed.json?.notice)).not.toMatch(/__pycache__|\.coverage|node_modules/);
+    // What the tests left stays as it was, theirs; nothing is added to their ignore files.
+    expect(git(billing, ["status", "--porcelain", "--untracked-files=all"]).split("\n").sort()).toEqual(["?? lib/.coverage", "?? lib/__pycache__/refund.cpython-312.pyc"]);
+    expect(existsSync(join(billing, ".gitignore"))).toBe(false);
   });
 
   // A live run: a teammate kept the repos in folders of their own

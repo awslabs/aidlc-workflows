@@ -31,6 +31,7 @@ import {
   repoDir,
   REQUEST_TEXT_DIR,
   slugify,
+  sourceCheckoutListingRel,
   UNIT_GATE_RHYTHM_FIELD,
   unitDependencyPath,
 } from "./aidlc-lib.ts";
@@ -641,7 +642,8 @@ export function unitOutputsHomeReads(unit: string, scope: string): string[] {
 }
 
 // A Unit's writes by the repo each is in, as its source manifest records them,
-// with the folder its push runs in: a write names its repo; or is a recorded
+// with the folder its push runs in and how the source walk names that folder's
+// files (its listing keys' prefix): a write names its repo; or is a recorded
 // checkout's (`<label>@checkout/<path>`, a worktree or clone the agent built
 // in and recorded), read as the recorded repo that checkout is of by git's own
 // repository, in the checkout's folder; or is in the work's one recorded repo;
@@ -650,13 +652,13 @@ export function unitOutputsHomeReads(unit: string, scope: string): string[] {
 export function unitWriteTargets(
   projectDir: string,
   writes: ReadonlyArray<{ path: string; repo?: string }>,
-): Map<string, { dir: string; paths: string[] }> {
+): Map<string, { dir: string; paths: string[]; listedAs: string }> {
   const recorded = intentRepos(projectDir);
   const checkouts = writes.some((write) => write.repo === undefined) ? readRecordedSourceCheckouts(projectDir) : [];
   const repoOf = checkoutRepoReader(projectDir, recorded);
-  const targets = new Map<string, { dir: string; paths: string[] }>();
-  const add = (repo: string, dir: string, path: string): void => {
-    const at = targets.get(repo) ?? { dir, paths: [] };
+  const targets = new Map<string, { dir: string; paths: string[]; listedAs: string }>();
+  const add = (repo: string, dir: string, listedAs: string, path: string): void => {
+    const at = targets.get(repo) ?? { dir, paths: [], listedAs };
     at.paths.push(path);
     targets.set(repo, at);
   };
@@ -666,12 +668,12 @@ export function unitWriteTargets(
       const { checkout, rest } = inCheckout;
       const repo = repoOf(checkout.real);
       if (repo) {
-        add(repo, checkout.real, rest);
+        add(repo, checkout.real, `\0${sourceCheckoutListingRel(checkout.label)}/`, rest);
         continue;
       }
     }
     const repo = write.repo ?? (recorded.length === 1 ? recorded[0] : ".");
-    add(repo, repo === "." ? projectDir : repoDir(projectDir, repo), write.path);
+    add(repo, repo === "." ? projectDir : repoDir(projectDir, repo), repo === "." ? "\0" : `${repo}\0`, write.path);
   }
   return targets;
 }

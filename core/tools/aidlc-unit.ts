@@ -165,6 +165,8 @@ import {
   sourceClaimCovers,
   sourcePathKey,
   type SourceClaimModel,
+  workspaceSourceListing,
+  type WorkspaceSourceListing,
 } from "./aidlc-lib.js";
 import {
   type Amendment,
@@ -6043,7 +6045,18 @@ function readTakeTree(record: string): TakeTree {
 // be kept apart it is left out, and the working tree is never touched. Once
 // committed, such a file's take-time content becomes what was just sent, so a
 // later push carries only the Unit's newer change. Returns the paths left out.
-function commitUnitPaths(dir: string, paths: string[], own: Record<string, string>, unit: string, label: string, name: string): string[] {
+// `listed` holds the source walk's names for this repo's files (the listing
+// the Code Generation review binds, keyed under `listedAs`), null when the
+// walk could not be read.
+function commitUnitPaths(
+  dir: string,
+  paths: string[],
+  own: Record<string, string>,
+  unit: string,
+  label: string,
+  name: string,
+  listed: { listing: ReadonlyMap<string, string>; listedAs: string } | null,
+): string[] {
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-commit-"));
   const env = { GIT_INDEX_FILE: join(scratch, "index") };
   const leftOut: string[] = [];
@@ -6057,6 +6070,20 @@ function commitUnitPaths(dir: string, paths: string[], own: Record<string, strin
     if (plain.length > 0) {
       const added = git(dir, ["add", "--", ...plain], env);
       if (!added.ok) fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
+    }
+    // A folder the manifest names brings what git adds from it. A new file
+    // there that the source walk leaves out (a test run's __pycache__, a
+    // coverage file, a build's output, what the repo's .aidlc-source-paths.json
+    // excludes) is none the build wrote and the review never saw, so it stays
+    // out, theirs on disk as it was. A file the repo tracks keeps git's change.
+    const folders = plain.filter((path) => path.endsWith("/"));
+    if (listed !== null && folders.length > 0) {
+      const raw = git(dir, ["diff", "--cached", "--raw", "-z", "--no-renames", "--diff-filter=A", "--", ...folders], env).stdout.split("\0");
+      const notSource: string[] = [];
+      for (let at = 0; at + 1 < raw.length; at += 2) {
+        if (/^:\d{6} 10(?:0644|0755) /.test(raw[at]) && !listed.listing.has(`${listed.listedAs}${raw[at + 1]}`)) notSource.push(raw[at + 1]);
+      }
+      if (notSource.length > 0) git(dir, ["update-index", "-z", "--force-remove", "--stdin"], env, `${notSource.join("\0")}\0`);
     }
     const sent = new Map<string, string>();
     for (const path of paths.filter((path) => own[path] !== undefined)) {
@@ -6957,6 +6984,9 @@ function pushUnit(args: string[], projectDir?: string): void {
   // commit made with their git (hooks, signing, identity), before anything is
   // pushed: a hook that stops one pushes nothing.
   const moved: Array<{ name: string; from: string }> = [];
+  // The source walk as the Code Generation review binds it, read once when a
+  // write names a folder.
+  let sourceListing: WorkspaceSourceListing | null | undefined;
   // Their own commits on a branch this run made from where they were: said in
   // whatever line the run ends with.
   const along: string[] = [];
@@ -7009,7 +7039,10 @@ function pushUnit(args: string[], projectDir?: string): void {
       moved.push({ name, from: from || "the commit you were on" });
     }
     try {
-      for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name)) leftOut.push(`${path} in ${name}`);
+      const listedAs = targets.get(repo)?.listedAs;
+      if (sourceListing === undefined && paths.some((path) => path.endsWith("/"))) sourceListing = workspaceSourceListing(pd);
+      const listed = sourceListing && listedAs !== undefined ? { listing: sourceListing, listedAs } : null;
+      for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name, listed)) leftOut.push(`${path} in ${name}`);
     } catch (error) {
       fail(`${errorMessage(error).replace(/([^.!?])$/, "$1.")} Nothing was pushed.${whereNow()}`);
     }
