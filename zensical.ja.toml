@@ -7,6 +7,13 @@ repo_name = "kato83/aidlc-workflows"
 docs_dir = "docs-ja"
 site_dir = "site"
 
+# 見出しを日本語化したため、本文に残る英語の見出しアンカー参照（#english-anchor）が、
+# 日本語見出しから生成される日本語アンカーと一致しなくなる。ページ内アンカーの検証は
+# 無効にし、ファイルそのものへのリンク切れ検証（invalid_links）は維持する。英語版サイト
+# （zensical.toml）はアンカーが一致するので厳格のまま。
+[validation]
+anchors = "ignore"
+
 nav = [
   { "ホーム" = "README.md" },
   { "ユーザーガイド" = [
