@@ -30,7 +30,6 @@ import {
   slugify,
   unitDependencyPath,
 } from "./aidlc-lib.ts";
-import { memoryDirFor } from "./aidlc-graph.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
 import { applicableTeamUnitScopeStamp } from "./aidlc-record-core.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
@@ -157,7 +156,8 @@ export const LEAD_RULES_FIELD = "Lead Project Rules";
 export function leadProjectRuleNames(projectDir: string, homeSpace: string): string[] {
   let text: string;
   try {
-    text = readFileSync(join(memoryDirFor(projectDir, homeSpace), "project.md"), "utf-8");
+    // The path LEAD_RULES_FIELD records, as the build reads it.
+    text = readFileSync(join(projectDir, "aidlc", "spaces", homeSpace, "memory", "project.md"), "utf-8");
   } catch {
     return [];
   }

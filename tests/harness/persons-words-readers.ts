@@ -1025,6 +1025,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#plainSummaryAttemptRecorded`]: { use: "keeps", why: "the summary's answer as the agent recorded it (Details), for its recovery" },
   [`${LIB}#isSummaryConfirmationChoice`]: { use: "keeps", why: "as above", from: [`${LIB}#plainSummaryAttemptRecorded`] },
   [`${ORCH}#withKeptReplies`]: { use: "keeps", why: "the resume re-show: hands the agent the replies a stage kept" },
+  [`${ORCH}#unitTakeLook`]: { use: "keeps", why: "the take question's choices: a start's command, the team the lead named in it included, carried as written into its twin that follows the lead's project rules too" },
   [`${ORCH}#chatReplies`]: { use: "keeps", why: "the presence shape: whether an answer recorded now carries their words (words !== null), for the step at an open question" },
   [`${LIB}#personsWordsKept`]: { use: "keeps", why: "the presence shape: whether the chat's latest message has any text (a host that hands the hook an empty prompt keeps none), for the step at a question shown again" },
   // next's request (S2b): kept and quoted, never compared; what was read is the message id.
