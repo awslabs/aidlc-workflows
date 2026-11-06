@@ -509,6 +509,7 @@ import {
   authoritativeProjectDescription,
   harnessDir,
   hookActivation,
+  newChatStep,
   hookChildEnv,
   hookLiveness,
   hooksOffAgentStep,
@@ -7655,10 +7656,19 @@ function createPrintDirective(
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   // New work, like the first, carries on in this chat: the creation binds the
-  // chat to the new work, so the next `next` runs its first stage.
+  // chat to the new work, so the next `next` runs its first stage. Beside other
+  // work the chat still holds that work's conversation, so the person can start
+  // this one in a clean chat instead, said once, never as a stop: after the
+  // creation, so the new chat picks this work up, and before its first stage,
+  // while they can still take it. With the creation's narration it rode the
+  // first stage's change_notices, said only before they reply, with the gate.
+  const cleanChat = flags.newIntent ? cleanChatLine() : null;
   const directive = printDirective(
     `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}${unnamed ? messageFill(projectDir) : ""}, ` +
-      `then re-run \`next\` to continue.${labelHint}`,
+      (cleanChat
+        ? `then tell the person in one line: "${cleanChat}" and re-run \`next\` to continue.`
+        : `then re-run \`next\` to continue.`) +
+      labelHint,
   );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
@@ -7685,9 +7695,6 @@ function createPrintDirective(
     directive.narration += ` The folder "${name}" is not part of this work: its name ${repoNameProblem(name)}.`;
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
-  // Beside other work the chat still holds that work's conversation: the
-  // person can start this one in a clean chat instead, said once, never as a stop.
-  if (flags.newIntent) directive.narration += ` ${cleanChatLine(projectDir)}`;
   // The agent runs the creation and goes on, so the line rides the first step
   // it speaks from.
   carriesNarration.add(directive);
@@ -7815,20 +7822,12 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
   );
 }
 
-// The optional line offering a clean chat for new work, in the host's own words.
-function cleanChatLine(projectDir: string): string {
-  const skill = entrySkillInvocation();
-  let harness: string | null = null;
-  try {
-    harness = installedHarnessName(projectDir);
-  } catch {
-    harness = null;
-  }
-  const how = harness === "claude" ? `type /clear, then ${skill}`
-    : harness === "kiro-ide" ? `open a new chat, pick the aidlc agent, then type ${skill}`
-    : harness === "opencode" ? `start a new session, then type ${skill}`
-    : `open a new chat, then type ${skill}`;
-  return `To start this in a clean chat instead, ${how}.`;
+// The optional line offering a clean chat for new work, with the step of the
+// tool the person is in from the tree's own harness.json (its manifest's
+// newChatStep). A tree that names none offers nothing.
+function cleanChatLine(): string | null {
+  const step = newChatStep();
+  return step ? `To start this in a clean chat instead, ${step}.` : null;
 }
 
 // A new project leaves out Reverse Engineering when its plan runs it, and when

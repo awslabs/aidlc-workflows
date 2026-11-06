@@ -138,6 +138,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `notRunYet`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
   been allowed to run commands in, no AI-DLC command can run, so Kiro IDE
   also keeps that step in its orchestrator skill.
+- `newChatStep` (optional) - `{ text, inHost? }`: how the person starts a clean
+  chat in this host, in its own words, with `<entry>` filled in. When new work
+  starts beside other work in a chat, the agent says once, after the creation
+  and before its first stage, "To start this in a clean chat instead, <text>.";
+  without it nothing is said. `inHost` (`{ env, text }`) gives one host this
+  tree runs in its own step, told apart as `missedReplyInHost` is: Kiro IDE uses
+  it beside Kiro CLI's `/chat new`.
 - `directiveMaxBytes` (optional) - for a host that keeps less of one shell
   result than the engine's 28 KiB directive cap. The engine keeps every
   directive at or under it: stage rules ride inline only while they fit, and

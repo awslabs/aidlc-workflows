@@ -759,9 +759,8 @@ preserving any \`--request\` id rather than rebuilding the request.
   The engine returns a \`print\` directive naming the \`intent-create\` command
   (with the \`--label '<2-3 word kebab essence>'\` placeholder). Act on it exactly
   as the loop's \`print\` handling describes: create the intent, then re-run
-  \`next\` and carry on into the new work's first stage in this chat. Say the
-  narration's line about starting it in a clean chat once: it is an option for
-  the person, never a stop.
+  \`next\` and carry on into the new work's first stage in this chat. The line
+  it has you say about a clean chat is an option for the person, never a stop.
 - **On DECLINE**, proceed with the active intent, the normal loop above.
 `;
 }

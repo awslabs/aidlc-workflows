@@ -110,6 +110,9 @@ const manifest: HarnessManifest = {
       'Otherwise show this line: "Type ' +
       '/agent and pick aidlc, then carry on." Then end your turn.',
   },
+  // A clean chat for new work started beside other work: Kiro CLI's own
+  // command, which keeps the old chat for /chat resume (the Kiro CLI guide).
+  newChatStep: { text: "type /chat new, then <entry>" },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
