@@ -19546,10 +19546,11 @@ function addContextParkOffer(
   if (full === null) return;
   const first = kiroFirstTurnFill(chat, since);
   const noRoom = first !== null && first.percent >= NEW_CHAT_NO_ROOM_PERCENT;
+  // The figure names its source: on Kiro CLI 3.1.0 the agent left out the
+  // sentence that gave it bare, twice, and said the ones that name Kiro.
   const line = noRoom
-    ? `${full} A new chat on the same model${first.model ? ` (${first.model})` : ""} will not help much: this chat ` +
-      `reached about ${Math.round(first.percent)}% in its first turn on this work, so a new chat would fill up ` +
-      `${summarized ? "and be summarized again" : "again"} soon.`
+    ? `${full} By Kiro's count this chat was about ${Math.round(first.percent)}% full in its first turn on this ` +
+      `work, so a new chat on the same model${first.model ? ` (${first.model})` : ""} will not help much.`
     : summarized
     ? `${full} Do you want to pause here and carry on in a new chat? I recommend it: your work is saved, and a new ` +
       "chat picks it up from the saved files."
