@@ -14947,6 +14947,10 @@ function eligibleAutonomousSwarmBatches(
   // authority remain the routing signal even though reviewed record artifacts
   // are copied back), even if the knob was flipped afterwards.
   if (readConstructionIteration(stateContent) === "unit-major") return null;
+  // A Unit's build holds that one Unit, built in the team's own checkouts of
+  // its repos: never fanned out to worktrees of them, whatever autonomy the
+  // lead's work runs (a batch of one lands its Bolt on the person's own main).
+  if (unitBuildOf(stateContent) !== null) return null;
   const r = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
   if (r.state !== "ok" || r.batches.length === 0) return null;
   return r.batches;

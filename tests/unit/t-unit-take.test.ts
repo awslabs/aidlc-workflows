@@ -370,6 +370,29 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(JSON.stringify(redo), JSON.stringify(redo).slice(0, 600)).toContain("Reopened Functional Design for refunds.");
   });
 
+  // A live run on Codex: the lead's work ran Construction autonomously, the
+  // team's build of one Unit took that, and its Code Generation went out as a
+  // parallel batch in worktrees: a commit landed on the person's own main and
+  // the build's agent patched AI-DLC's own tool to get past it.
+  test("a Unit's build holds one Unit, so its Code Generation is never a parallel batch, whatever autonomy the lead's work runs", () => {
+    const home = makeHome({ state: homeState(["- **Construction Autonomy Mode**: autonomous"]) });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    expect(take(alice, "refunds").status).toBe(0);
+    const statePath = join(buildDir(alice, "payments", "refunds"), "aidlc-state.md");
+    expect(field(readFileSync(statePath, "utf-8"), "Construction Autonomy Mode")).toBe("autonomous");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[ -]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design) /gm, "- [x] $1 ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+    const step = next(alice);
+    expect(step.kind, JSON.stringify(step).slice(0, 500)).not.toBe("invoke-swarm");
+    expect(step).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+  });
+
   test("the team approves each of its stages: the build holds on a stage until it is approved", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const alice = cloneOf(home.remote, "alice");
