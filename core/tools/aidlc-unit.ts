@@ -51,7 +51,6 @@ import {
   ENGINE_DIR,
   ensureCloneId,
   errorMessage,
-  extractMarkdownSection,
   filterProducesByKind,
   getField,
   loadStageGraph,
@@ -95,6 +94,7 @@ import {
   teamSkeletonOn,
   loadScopeMetadata,
   memorySectionBody,
+  structuredField,
   type UnitMergeEvidence,
   type UnitMergeTransaction,
   UNIT_MERGE_DIR,
@@ -136,6 +136,7 @@ import {
   quoteCommandArgument,
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
+import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -261,24 +262,17 @@ function currentBranch(projectDir: string): string {
   return result.ok && result.stdout.trim() ? result.stdout.trim() : "main";
 }
 
-// A Way of Working line names the team's branch only when it says so: "the
-// integration branch", "the base branch", "the merge-target branch" or "the
-// merge target", with the name in backticks in the same sentence. A line such
-// as "Integration tests live in `tests/integration`" names no branch.
-const INTEGRATION_BRANCH_WORDS =
-  "(?:(?:base|integration|merge[ -]target) branch|merge target)";
-const INTEGRATION_BRANCH_AFTER_WORDS = new RegExp(
-  `\\b${INTEGRATION_BRANCH_WORDS}\\b[^\`\\n.;]*\`([^\`]+)\``,
-  "i",
-);
-const INTEGRATION_BRANCH_BEFORE_WORDS = new RegExp(
-  `\`([^\`]+)\`[^.;\\n]*\\b${INTEGRATION_BRANCH_WORDS}\\b`,
-  "i",
-);
+// An org.md with no `Integration branch:` line is one an earlier release
+// shipped (a refresh keeps the space's memory files as they are), and its
+// prose names `main` as the base branch and merge target.
+const EARLIER_ORG_MD_BRANCH = "main";
 
-// The branch the team wrote down under "## Way of Working", narrowest layer
-// first. Whatever it is called, that branch is used; a name git cannot use as a
-// branch is refused with its file, never skipped for a broader layer's choice.
+// The branch the team wrote down on its own `Integration branch: <name>` line
+// under "## Way of Working", narrowest layer first. Only that line is read: the
+// prose beside it is for people, and a sentence naming the repos beside the
+// branch once gave a repo's name. Whatever the branch is called, it is used; a
+// name git cannot use is refused with its file, never skipped for a broader
+// layer's choice.
 function affirmedIntegrationBranch(
   projectDir: string,
 ): { branch: string; source: string } | null {
@@ -291,12 +285,14 @@ function affirmedIntegrationBranch(
     } catch {
       continue;
     }
-    const section = extractMarkdownSection(body, "## Way of Working");
-    const explicit =
-      INTEGRATION_BRANCH_AFTER_WORDS.exec(section) ??
-      INTEGRATION_BRANCH_BEFORE_WORDS.exec(section);
-    if (!explicit) continue;
-    const branch = explicit[1].trim();
+    const value = structuredField(memorySectionBody(body, "## Way of Working"), "Integration branch");
+    if (value === null) {
+      if (name === "org.md") return { branch: EARLIER_ORG_MD_BRANCH, source };
+      continue;
+    }
+    // A hand-written line may end in a full stop, which no git name ends in,
+    // and wrap the name in a code span, which is Markdown, not the name (`dev`.).
+    const branch = withoutLearnedDate(value).replace(/\.$/, "").replace(/^`([^`]+)`$/, "$1").trim();
     if (!git(projectDir, ["check-ref-format", "--branch", branch]).ok) {
       fail(
         `The integration branch "${branch}", named in ${source} under "Way of Working", ` +
