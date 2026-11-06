@@ -6856,7 +6856,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     // merge on the Unit's own branch with nothing left to resolve is finished
     // first on the person's yes to the push question's choice (`--finish-merge`).
     const underWay = gitOperationUnderWay(dir);
-    if (underWay !== null && finishMerge && unitMergeToFinish(dir, branch)) {
+    if (underWay !== null && finishMerge && unitMergeToFinish(dir, branch, paths)) {
       const made = git(dir, ["commit", "-q", "--no-edit"]);
       if (!made.ok) fail(`The merge in ${name} could not be finished, so nothing was pushed. Git says: "${gitSaid(made.stderr || made.stdout)}".`);
     } else if (underWay !== null) {
@@ -7721,12 +7721,18 @@ export function unitBuildOwnBranch(dir: string, unitBranch: string): string | nu
   return git(dir, ["merge-base", "--is-ancestor", "HEAD", `refs/heads/${unitBranch}`]).ok ? null : current;
 }
 
-export function unitMergeToFinish(dir: string, branch: string): boolean {
+// `own`: the paths the Unit's Code Generation wrote in this repo (a file or a
+// folder), which its build may have staged while the merge was under way;
+// anything else staged is the person's own, and they finish the merge.
+export function unitMergeToFinish(dir: string, branch: string, own: readonly string[] = []): boolean {
   if (gitOperationUnderWay(dir)?.what !== "a merge") return false;
   if (git(dir, ["branch", "--show-current"]).stdout.trim() !== branch) return false;
   if (git(dir, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim() !== "") return false;
   const merged = new Set(git(dir, ["diff", "--name-only", "-z", "HEAD...MERGE_HEAD"]).stdout.split("\0").filter(Boolean));
-  return git(dir, ["diff", "--cached", "--name-only", "-z"]).stdout.split("\0").filter(Boolean).every((path) => merged.has(path));
+  const written = own.map((path) => path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "")).filter(Boolean);
+  const unitsOwn = (path: string): boolean => written.some((entry) => path === entry || path.startsWith(`${entry}/`));
+  return git(dir, ["diff", "--cached", "--name-only", "-z"]).stdout.split("\0").filter(Boolean)
+    .every((path) => merged.has(path) || unitsOwn(path));
 }
 
 export function gitOperationUnderWay(dir: string): { what: string; finish: string; abort: string } | null {

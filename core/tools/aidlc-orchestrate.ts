@@ -9424,7 +9424,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const underWayHere = repos.filter((repo) => existsSync(join(dirOf(repo), ".git")) && gitOperationUnderWay(dirOf(repo)) !== null);
   // A merge on the Unit's own branch with nothing left to resolve is the
   // push's to finish on their yes (unitMergeToFinish); anything else waits.
-  const toFinish = underWayHere.filter((repo) => unitMergeToFinish(dirOf(repo), branch));
+  const toFinish = underWayHere.filter((repo) => unitMergeToFinish(dirOf(repo), branch, byRepo.get(repo)));
   const underWay = underWayHere.find((repo) => !toFinish.includes(repo));
   if (underWay !== undefined) {
     const dir = dirOf(underWay);
