@@ -1048,3 +1048,102 @@ export function knownActiveSpace(workspaceRootDir: string, cursorText: string | 
     return "default";
   }
 }
+
+// The sync services whose macOS File Provider folder is
+// ~/Library/CloudStorage/<name>-<account> (or <name> alone).
+const CLOUD_STORAGE_SERVICES = new Map([
+  ["GoogleDrive", "Google Drive"],
+  ["OneDrive", "OneDrive"],
+  ["Dropbox", "Dropbox"],
+  ["Box", "Box"],
+]);
+
+// A blank or relative value is unset: resolve("") is the working folder, which
+// is the project itself. A root that does not resolve is dropped, never
+// compared as written.
+function realDirectory(path: string | undefined): string | null {
+  if (!path || !isAbsolute(path)) return null;
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+
+function pathWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function dropboxRoots(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, home: string): string[] {
+  const files = platform === "win32"
+    ? [env.APPDATA, env.LOCALAPPDATA].map((dir) => (dir && isAbsolute(dir) ? join(dir, "Dropbox", "info.json") : ""))
+    : [isAbsolute(home) ? join(home, ".dropbox", "info.json") : ""];
+  const roots: string[] = [];
+  for (const file of files) {
+    if (!file) continue;
+    try {
+      const info = JSON.parse(readFileSync(file, "utf-8")) as unknown;
+      if (info === null || typeof info !== "object") continue;
+      for (const account of Object.values(info)) {
+        const path = (account as { path?: unknown } | null)?.path;
+        if (typeof path === "string") roots.push(path);
+      }
+    } catch {
+      // No Dropbox here, or a file it is still writing: nothing to name.
+    }
+  }
+  return roots;
+}
+
+/**
+ * The sync service whose folder holds the project, or null. Named only on a
+ * positive match: the project's real path is a known sync root or under one
+ * (macOS CloudStorage and iCloud, Windows OneDrive, a Dropbox root from
+ * Dropbox's own info.json). A miss is silence.
+ */
+export function syncServiceHolding(
+  projectDir: string,
+  options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; home?: string } = {},
+): string | null {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const home = options.home ?? homedir();
+  const project = realDirectory(projectDir);
+  if (project === null) return null;
+  if (platform === "darwin" && isAbsolute(home)) {
+    const cloud = realDirectory(join(home, "Library", "CloudStorage"));
+    if (cloud !== null && pathWithin(cloud, project)) {
+      const folder = relative(cloud, project).split(sep)[0] ?? "";
+      const service = CLOUD_STORAGE_SERVICES.get(folder.split("-")[0] ?? "");
+      if (service) return service;
+    }
+    const icloud = realDirectory(join(home, "Library", "Mobile Documents"));
+    if (icloud !== null && pathWithin(icloud, project)) return "iCloud Drive";
+  }
+  if (platform === "win32") {
+    for (const name of ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"]) {
+      const root = realDirectory(env[name]);
+      if (root !== null && pathWithin(root, project)) return "OneDrive";
+    }
+  }
+  for (const path of dropboxRoots(platform, env, home)) {
+    const root = realDirectory(path);
+    if (root !== null && pathWithin(root, project)) return "Dropbox";
+  }
+  return null;
+}
+
+// The words doctor's row and the refusals share: the row's label and fix, and
+// the same two as sentences on a refusal of a change nobody may have made.
+export function syncFolderLabel(service: string): string {
+  return `This project is in ${service === "iCloud Drive" ? "an" : "a"} ${service} folder; sync can change files AI-DLC checks`;
+}
+export const SYNC_FOLDER_STEP = "move it out of the synced folder or pause sync for it";
+
+/** The two sentences and a trailing space for a project in a synced folder, else "". */
+export function syncFolderClause(projectDir: string): string {
+  const service = syncServiceHolding(projectDir);
+  if (service === null) return "";
+  return `${syncFolderLabel(service)}. ${SYNC_FOLDER_STEP[0]!.toUpperCase()}${SYNC_FOLDER_STEP.slice(1)}. `;
+}
