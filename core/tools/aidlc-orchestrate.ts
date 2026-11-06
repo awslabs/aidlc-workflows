@@ -604,6 +604,8 @@ import {
   teamsClone,
   teamStanceToRead,
   shareTarget,
+  shareOfferTarget,
+  integrationBranchToRead,
   teamHandoverMarkName,
   teamSharedHere,
   type UnitClaimOverview,
@@ -5419,7 +5421,7 @@ function teamShareOffer(
   if (auditRows.some((row) => row.event === "UNIT_STARTED" && auditBlockField(row.block, "Unit") === unit)) return null;
   const mark = teamHandoverMarkName("share", unit);
   if (handoverOffered(projectDir, mark) || shareBlocker(projectDir) !== null || !claimsOpenHere(projectDir)) return null;
-  const target = shareTarget(projectDir);
+  const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   const work = workToCommitWords(projectDir);
   const plural = unitsLeft === 1 ? "The plan's last Unit is ready for the teams. Share it now?" :
@@ -5542,7 +5544,7 @@ function teamPushOffer(projectDir: string): AskDirective | null {
   const landed = landedNotOnRemote(projectDir);
   const fresh = landed.filter((row) => !handoverOffered(projectDir, teamHandoverMarkName("push", row.commit.slice(0, 12))));
   if (fresh.length === 0 || shareBlocker(projectDir) !== null) return null;
-  const target = shareTarget(projectDir);
+  const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   const units = landed.map((row) => row.unit);
   const work = workToCommitWords(projectDir);
@@ -6063,7 +6065,9 @@ function assembleTeamConstructionBoard(
     })
     .sort((a, b) => compareBoardKeys(a.unit, b.unit));
   const landedHere = landedNotOnRemote(projectDir);
-  const target = landedHere.length > 0 && shareBlocker(projectDir) === null ? shareTarget(projectDir) : null;
+  const target = landedHere.length > 0 && shareBlocker(projectDir) === null && integrationBranchToRead(projectDir) === null
+    ? shareTarget(projectDir)
+    : null;
   const blocked = overview.waiting
     .map((row) => ({
       unit: row.unit,
