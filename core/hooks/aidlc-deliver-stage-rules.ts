@@ -25,10 +25,12 @@ import {
   hookStandsOutside,
   enterHookWorkflow,
   agentsDir,
+  auditBlockField,
   authorityFor,
   getField,
   isAidlcAgentFile,
   markSubagentInflight,
+  readAuditShardEvents,
   recordGuardBlockedRow,
   resolveWorkflowSelection,
   stateFilePath,
@@ -44,7 +46,7 @@ import {
   resolvedRuleBundle,
 } from "../tools/aidlc-steering.ts";
 import { runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
-import { recordSubagentDispatch } from "./aidlc-log-subagent.ts";
+import { AGENT_STAGE_FIELD, AGENT_UNIT_FIELD, recordSubagentDispatch } from "./aidlc-log-subagent.ts";
 
 type HookInput = {
   agent_type?: unknown;
@@ -430,8 +432,85 @@ function deliverAtStart(parsed: HookInput, projectDir: string): number {
   return 0;
 }
 
+// The tool that sends a message to an agent already started (Claude Code). It
+// is not a dispatch: the agent keeps everything it did before, and no
+// SubagentStart runs, so it gets no stage rules.
+const CONTINUE_TOOLS = new Set(["sendmessage"]);
+
+export type ContinuedAgentWork = {
+  agentType: string;
+  stage: string;
+  unit: string | null;
+};
+
+/**
+ * The work an AI-DLC agent finished, when this message would continue it on
+ * other work: its last SUBAGENT_COMPLETED row names a stage or Unit that is no
+ * longer the one on record. Null when the call continues no finished agent, the
+ * row names no stage (an earlier release wrote it), or the work is the same
+ * (a follow-up on the same task stays allowed). Evidence that cannot be read
+ * refuses nothing.
+ */
+export function continuedOnOtherWork(
+  toolName: string,
+  input: Record<string, unknown>,
+  projectDir: string,
+): ContinuedAgentWork | null {
+  if (!CONTINUE_TOOLS.has(toolName.toLowerCase())) return null;
+  const target = typeof input.to === "string" ? input.to.trim() : "";
+  if (!target) return null;
+  try {
+    const row = readAuditShardEvents(projectDir).findLast((event) =>
+      event.event === "SUBAGENT_COMPLETED" && auditBlockField(event.block, "Agent ID") === target);
+    if (!row) return null;
+    const stage = auditBlockField(row.block, AGENT_STAGE_FIELD)?.trim() || null;
+    if (!stage) return null;
+    const unit = auditBlockField(row.block, AGENT_UNIT_FIELD)?.trim() || null;
+    const now = currentWork(projectDir);
+    if (now.stage === null || (now.stage === stage && now.unit === unit)) return null;
+    return { agentType: auditBlockField(row.block, "Agent Type")?.trim() || "agent", stage, unit };
+  } catch {
+    return null;
+  }
+}
+
+function currentWork(projectDir: string): { stage: string | null; unit: string | null } {
+  const path = stateFilePath(projectDir);
+  if (!existsSync(path)) return { stage: null, unit: null };
+  try {
+    const state = readFileSync(path, "utf-8");
+    return {
+      stage: getField(state, "Current Stage")?.trim() || null,
+      unit: getField(state, "Active Unit")?.trim() || null,
+    };
+  } catch {
+    return { stage: null, unit: null };
+  }
+}
+
+function workName(stage: string, unit: string | null): string {
+  return unit ? `${stage} (Unit ${unit})` : stage;
+}
+
+function refuseContinuedAgent(parsed: HookInput, projectDir: string, earlier: ContinuedAgentWork): number {
+  const now = currentWork(projectDir);
+  process.stderr.write(
+    `[aidlc] Not sent: this ${earlier.agentType} finished its work on ${workName(earlier.stage, earlier.unit)}, ` +
+      `and the work is now ${workName(now.stage ?? "another stage", now.unit)}. A subagent continued with a ` +
+      "message keeps everything it did before and does not receive this stage's rules. Dispatch a new " +
+      `${earlier.agentType} instead, and put everything it needs in its prompt.\n`,
+  );
+  recordStageRulesBlocked(parsed, projectDir, "continued-agent");
+  return 2;
+}
+
 function deliver(parsed: HookInput, projectDir: string): number {
   if (parsed.hook_event_name === "SubagentStart") return deliverAtStart(parsed, projectDir);
+  if (CONTINUE_TOOLS.has((parsed.tool_name ?? "").toLowerCase())) {
+    if (parsed.hook_event_name === "PostToolUse") return 0;
+    const earlier = continuedOnOtherWork(parsed.tool_name ?? "", parsed.tool_input ?? {}, projectDir);
+    return earlier ? refuseContinuedAgent(parsed, projectDir, earlier) : 0;
+  }
   // The rules were delivered before the dispatch; afterwards the hook only
   // records a background launch its input did not announce.
   if (parsed.hook_event_name === "PostToolUse") {

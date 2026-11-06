@@ -49,6 +49,26 @@ function recordsHelpers(projectDir: string, selection: ReturnType<typeof resolve
   return getField(stateContent, "Status") === "Running";
 }
 
+/** The `SUBAGENT_COMPLETED` fields naming the stage and Unit the agent worked on. */
+export const AGENT_STAGE_FIELD = "Agent Stage";
+export const AGENT_UNIT_FIELD = "Agent Unit";
+
+/** The stage and Unit on record in the selection's state, each null when absent or unreadable. */
+export function agentWork(
+  projectDir: string,
+  selection: ReturnType<typeof resolveWorkflowSelection>,
+): { stage: string | null; unit: string | null } {
+  try {
+    const state = readFileSync(stateFilePathForSelection(projectDir, selection), "utf-8");
+    return {
+      stage: getField(state, "Current Stage")?.trim() || null,
+      unit: getField(state, "Active Unit")?.trim() || null,
+    };
+  } catch {
+    return { stage: null, unit: null };
+  }
+}
+
 /**
  * Record that helpers were sent (SUBAGENT_DISPATCHED) in the workflow the
  * sending chat has joined; a completion of the same agent closes it
@@ -190,7 +210,15 @@ export async function run(input: string): Promise<number> {
     "Agent Type": agentType,
   };
   if (dispatchAgent !== null) fields["Dispatch Agent"] = dispatchAgent;
-  if (agentId) fields["Agent ID"] = agentId;
+  if (agentId) {
+    fields["Agent ID"] = agentId;
+    // The stage and Unit this agent worked on, so a later message that would
+    // continue it on other work is recognised (deliver-stage-rules). Evidence
+    // only: a state that cannot be read leaves both out.
+    const worked = agentWork(projectDir, selection);
+    if (worked.stage) fields[AGENT_STAGE_FIELD] = worked.stage;
+    if (worked.unit) fields[AGENT_UNIT_FIELD] = worked.unit;
+  }
   if (agentMessage) fields.Message = agentMessage;
   // What a reviewer left in the review file of every request still open for
   // it, at the moment it finished: a side-by-side Unit's too, recorded in the
