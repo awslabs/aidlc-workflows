@@ -326,6 +326,44 @@ describe("t349 audit trail guard: shell commands", () => {
     }
   });
 
+  test("a split cd into the record fails closed like a cwd there, and a for loop's words are read as its values", () => {
+    // Red after the folder-named-audit fix: `cd aidlc; cd spaces/...` names
+    // neither `aidlc/spaces` nor an audit folder in one piece, and the word a
+    // `for`, `read`, `printf -v` or `set --` gives is not an assignment the
+    // guard reads, so each of these landed in the trail.
+    const intent = RECORD.replace(/^aidlc\//, "");
+    for (const command of [
+      `cd aidlc; cd ${intent}; for d in audit; do echo x > "$d/host.md"; done`,
+      `cd aidlc; cd spaces; cd default/intents/260925-login; d=$(echo audit | cat); echo x > "$d/host.md"`,
+      `cd aidlc; cd ${intent}; echo x > "$(echo audit | cat)/host.md"`,
+      `cd aidlc; cd ${intent}; echo x > \`echo audit | cat\`/host.md`,
+      `cd aidlc && cd ${intent} && printf -v d %s audit && echo x > "$d/host.md"`,
+      `cd aidlc && cd ${intent} && read d <<< audit && echo x > "$d/host.md"`,
+      `cd aidlc; cd ${intent}; d="$(tr a-z a-z <<< audit)"; echo x > "$d/host.md"`,
+      `set -- audit; cd aidlc; cd ${intent}; echo x > "$1/host.md"`,
+      `cd aidlc; cd ${intent}; d=$(printf au; printf dit); echo x > "$d/host.md"`,
+      `cd aidlc; cd ${intent}; echo x > "$(ls -d a*)/host.md"`,
+      // The joined spelling is already refused; the split one reads the same.
+      `cd aidlc; cd ${intent} && echo y > "$OUT"`,
+      `cd ${RECORD} && echo y > "$OUT"`,
+      // A for word is the value the variable takes, wherever the write stands.
+      `for a in aidlc; do for s in spaces; do for d in audit; do echo x > "$a/$s/default/intents/260925-login/$d/host.md"; done; done; done`,
+      `for d in notes audit; do echo x > "${RECORD}/$d/host.md"; done`,
+      `for f in ${SHARD}\ndo\n  echo x >> "$f"\ndone`,
+    ]) {
+      expect(bash(command), command).toBe("audit");
+    }
+    // A for word that resolves away from the trail is placed, not failed closed,
+    // and a project's own audit folder stays its own.
+    for (const command of [
+      `cd aidlc; cd ${intent}; for d in notes; do echo x > "$d/host.md"; done`,
+      `for d in src/audit; do echo x > "$d/notes.md"; done`,
+      `cd src && for f in a b; do echo x > "$f.log"; done`,
+    ]) {
+      expect(bash(command), command).toBeNull();
+    }
+  });
+
   test("the project's own folders and an audit command are not the audit trail", () => {
     // A project under a folder named audit, a project named for audits, and a
     // dependency audit, each with a write the parser cannot place.
