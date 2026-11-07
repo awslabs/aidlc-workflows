@@ -359,9 +359,11 @@ of a workflow. It does not change which AI-DLC checkpoints stop for you.
 - In Kiro CLI (its v3 engine), when a side-by-side build's workers or
   reviewers ask, Kiro gathers their requests in a "tool approval pending" box;
   (f) **Approve all pending and auto-approve future subagent requests** lets
-  them run whatever they ask, without asking you again, for the rest of that
-  chat, reviewers that start later included. Requests from the main chat still
-  ask as before, and Kiro writes no setting for it.
+  them run whatever they ask without asking you, reviewers that start later
+  included, though on Kiro CLI 3.1.0 you may see that box again later in the
+  same chat, for example after you answer one of AI-DLC's questions; if it
+  appears again, you can choose (f) again. Requests from the main chat still
+  ask as before, and Kiro writes no setting for (f).
 
 In both modes, AI-DLC still stops and waits for your typed reply at each of its
 questions, at every approval gate, and at Code Generation's **Approve Plan**
