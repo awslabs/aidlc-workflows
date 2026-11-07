@@ -269,6 +269,7 @@ import {
   type GuardAttemptState,
   withWorkspaceSourceStateCache,
   guardRecoveryAnswerAdmits,
+  guardRecoveryAskSelected,
   guardRecoveryAskFromRefusalText,
   guardPolicyStateField,
   SKELETON_STANCES,
@@ -930,13 +931,16 @@ function producedLine(node: GraphStage, unit: string | null, unitFolders: boolea
 }
 
 // The files the person brought that the build changed or deleted, said with the
-// gate that approves Code Generation (aidlc-brought-files.ts). Counted as heard
-// when a step that carries the line is written (writePrepared): a rules part
-// that goes out first carries none, and a read-only probe is shown to nobody.
+// gate that approves Code Generation, or a team Unit's (`unit`), from
+// aidlc-brought-files.ts. Counted as heard when a step that carries the line is
+// written (writePrepared): a rules part that goes out first carries none, and a
+// read-only probe is shown to nobody.
 const broughtFilesLines: { key: string; line: string }[] = [];
-function broughtFilesGateLine(projectDir: string, node: { slug: string }, stateContent: string | null): string | null {
+function broughtFilesGateLine(
+  projectDir: string, node: { slug: string }, stateContent: string | null, unit: string | null = null,
+): string | null {
   if (node.slug !== "code-generation") return null;
-  const unheard = unheardBroughtFilesLine(projectDir, stateContent, engineSessionId);
+  const unheard = unheardBroughtFilesLine(projectDir, stateContent, engineSessionId, false, unit);
   if (unheard === null) return null;
   if (!isReadOnlyEngineProbe()) broughtFilesLines.push(unheard);
   return unheard.line;
@@ -2038,8 +2042,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
     // the build changes them.
     if (directive.stage === "code-generation") {
       const pd = route.codekbCtx.projectDir;
+      const unit = directive.unit !== undefined && directive.unit !== UNIT_NAME_PLACEHOLDER ? directive.unit : null;
       const state = loadStateFileIfPresent(pd);
-      const names = broughtFileNames(pd, state, directive.single === true);
+      const names = broughtFileNames(pd, state, directive.single === true, unit);
       // A Unit's build writes its code in the Unit's repos here, which the
       // listing above names files of as the person's.
       const repos = state !== null && unitBuildOf(state) !== null ? intentRepos(pd) : [];
@@ -3903,12 +3908,16 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
  * this engine kept, when it is one of its own front questions and nothing was
  * started from it. A question whose answer created work is answered, one a
  * newer request replaced waits no more (newestRequestReplaces), and a routing
- * question has its own step (openRoutingQuestion).
+ * question has its own step (openRoutingQuestion). A proposal step's request
+ * was never put to the person (the agent may answer the words beside finished
+ * work from its status and propose nothing), so it is passed over here, as is
+ * a copy saved before such requests were marked, and counts toward no other
+ * open question; the plan question proposed for it is its own copy.
  */
 function openFrontQuestion(
   projectDir: string,
 ): { question: StoredQuestion; sole: boolean } | null {
-  const latest = latestQuestion(projectDir);
+  const latest = latestQuestion(projectDir, { shown: true });
   if (latest === null || latest.origin !== "front" || latest.replacedBy !== undefined) return null;
   if (intentStartedByQuestion(projectDir, latest.id) !== null) return null;
   // A question copy does not say which chat it was shown in, and a reply
@@ -3916,10 +3925,10 @@ function openFrontQuestion(
   // open this engine cannot tell WHICH question the person is answering. It
   // says so instead of naming one: the agent has the question it asked in its
   // own chat, with that question's own commands. A question this one was
-  // derived from (the proposal step's request, answered by the agent's plan) is
+  // derived from (its root, such as the compose entry it was described on) is
   // the same request, not another open question. A replaced one still counts:
   // its own chat may still show it, and its commands still answer it there.
-  const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY);
+  const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY, { shown: true });
   return { question: latest, sole: earliest === null || earliest === latest.id || earliest === latest.composedFrom };
 }
 
@@ -7909,7 +7918,7 @@ function planProposalDirective(
     ? kept
     : saveQuestion(
       pd, description, "", "front", undefined, flags.newIntent === true, derivedFrom, undefined,
-      routingSettings(carriedRoutingFlags(flags)),
+      routingSettings(carriedRoutingFlags(flags)), undefined, undefined, true,
     );
   if (question !== kept && derivedFrom === undefined && finished === undefined) {
     newestRequestReplaces(pd, question.id, description);
@@ -13897,7 +13906,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     let splitSaid = "";
     if (flags.intent && !flags.request && !inFlight) {
       splitSaid = documentSplitSentence(flags.intent);
-      flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
+      flags.request = saveQuestion(
+        pd, flags.intent, flags.scope ?? "", "front", undefined, false, undefined, undefined, undefined, undefined, undefined,
+        false,
+      ).id;
       newestRequestReplaces(pd, flags.request, flags.intent);
     } else if (!flags.request && !inFlight) {
       // A report-only or task-less composition is described only on approval,
@@ -14055,9 +14067,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // Prose alone gets the fresh-start answer (Branch 8), beside the way back to
   // a stage of the finished work, since the words may ask for that. A jump or
   // --resume is a move on the finished workflow itself and keeps its own path.
+  // A Unit's own checkout is never finished work: its claim ends when the Unit
+  // lands, and until then its step is the Unit's (below).
   const finishedWorkDescription = flags.intent?.trim();
   if (
     stateContent &&
+    !unitScope &&
     finishedWorkDescription &&
     !flags.stage &&
     !flags.phase &&
@@ -14742,7 +14757,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
   }
   // In team mode (Unit Ownership: team) the readings above belong to the main
-  // checkout, so words alone are read here: go on, or a request.
+  // checkout, so words alone are read here: go on, or a request. A checkout
+  // that claimed a Unit reads them as re-entry too: its redo or jump is that
+  // Unit's own reopen (emitTypedResumeChoice, then claimedCheckoutMove).
   if (
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
     isTeamUnitOwnership(stateContent) && nextArgsAreOnlyWords(args)
@@ -14751,7 +14768,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
       undefined, routingSettings(carriedRoutingFlags(flags)),
     );
-    emit(leadsWorkElsewhereWords(pd, stateContent, words.id) ?? teamWordsReplyDirective(words.id, pd));
+    emit(unitScope
+      ? reentryReplyDirective(words.id, pd, "", workNamesHere(pd, selection), activeWorkLabel(stateContent))
+      : leadsWorkElsewhereWords(pd, stateContent, words.id) ?? teamWordsReplyDirective(words.id, pd));
     return;
   }
   // A Unit's build its lead turned down or sent back waits for the team's way
@@ -14828,11 +14847,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         emit(errorDirective(errorMessage(e)));
         return;
       }
-      // The record moves on to Build and Test once every Unit's row is done,
-      // here too (and older releases wrote it so). Build and Test is the
-      // lead's, once every Unit lands: this checkout's step stays its Unit's.
+      // The record moves on to Build and Test, or with no stage after the
+      // Units' marks the work finished, once every Unit's row is done, here
+      // too (and older releases wrote it so). What follows is the lead's, once
+      // every Unit lands: this checkout's step stays its Unit's.
       const last = constructionUnitMajorBlock(scope, stateContent, true).at(-1);
-      if (last && cursorPastStage(stateContent, last.slug)) {
+      if (last && (cursorPastStage(stateContent, last.slug) || workflowFinished(stateContent, scope))) {
         emitUnitMajorRunStage(last, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
         return;
       }
@@ -15431,7 +15451,8 @@ function applyGateOnlyShape(
     // the produced sentence stays whole.
     const narration = [
       elsewhere ? FINISHED_IN_OTHER_CHAT : null, line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
-      unitsWithoutInputsNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
+      unitsWithoutInputsNotice(projectDir, gateNode, unit),
+      broughtFilesGateLine(projectDir, gateNode, stateContent, directive.unit_gate ? unit : null),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
@@ -18524,18 +18545,21 @@ function teamUnitMajorWorkBeat(
 // Where the team walk stands for the Current Stage: its step, the block it
 // walks, and the Unit DAG context, or null when the work is not team-owned
 // Units on the per-unit block. The skip report reads its work beat and the plan
-// change all of it, the same walk routing hands out.
+// change all of it, the same walk routing hands out. A null `currentSlug` reads
+// the walk wherever Current Stage is: a claimed checkout reads its own Unit's
+// walk that way, for its redo (unitMajorRedo) and, once the record has moved on
+// past the block, for how far the Unit has got (claimedCheckoutMove).
 function teamUnitMajorWalkBeat(
   projectDir: string,
   scope: string,
   stateContent: string,
-  currentSlug: string,
+  currentSlug: string | null,
 ): { step: TeamUnitWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
   if (readConstructionIteration(stateContent) !== "unit-major" || !isTeamUnitOwnership(stateContent)) return null;
   const resolution = resolveBoltBatches(projectDir);
   if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
   const block = constructionUnitMajorBlock(scope, stateContent, true);
-  if (!block.some((stage) => stage.slug === currentSlug)) return null;
+  if (currentSlug !== null && !block.some((stage) => stage.slug === currentSlug)) return null;
   const scopeStamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
   const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
     if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -19077,7 +19101,8 @@ const OTHER_UNITS_KEPT =
 // paused at, the summary's step, or at a checkpoint the last step the Unit did.
 // A step the Unit has not started has nothing to reset, so next routes it.
 // `named` is a Redo that names a Unit and step: only that Unit on that step is
-// redone here, null otherwise. A named Redo is read on the walk of a team's
+// redone here, null otherwise; with no step named, that Unit's own step is.
+// A named Redo is read on the walk of a team's
 // main that works every Unit itself too, as a jump that names a Unit is
 // (unitJumpWalk); there a Unit waiting at its team approval redoes the stage
 // that approval is for.
@@ -19086,14 +19111,19 @@ function unitMajorRedo(
   scope: string,
   stateContent: string,
   currentSlug: string,
-  named?: { unit: string; stage: string },
+  named?: { unit: string; stage?: string },
 ): { message: string; jump?: readonly string[] } | null {
+  // A checkout that claimed a Unit walks that Unit alone, wherever the record's
+  // stage is, and its Unit with every step done is at the end of its stages,
+  // as a solo walk's Unit at its checkpoint: its redo is the last step it did.
+  const claim = isTeamUnitOwnership(stateContent) ? readApplicableTeamUnitScopeStamp(projectDir, stateContent) : null;
   const walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext } | null =
     unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
       (named && teamMainWorksItsUnits(projectDir, stateContent)
         ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug)
-        : null);
-  if (!walk || walk.step.kind === "covered") return null;
+        : null) ??
+      (claim !== null ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, null) : null);
+  if (!walk || (walk.step.kind === "covered" && claim === null)) return null;
   if (!walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0)) {
     return null;
   }
@@ -19105,15 +19135,15 @@ function unitMajorRedo(
     ? `\`${aidlcToolInvocation("state")} unpark\`, then `
     : "";
   const blockSlugs = walk.block.map((stage) => stage.slug);
-  const unit = step.kind === "paused" ? step.checkpoint.unit : step.unit;
+  const unit = step.kind === "covered" ? (claim?.unit ?? "") : step.kind === "paused" ? step.checkpoint.unit : step.unit;
   const redone = step.kind === "paused"
     ? step.stage
-    : step.kind === "checkpoint"
+    : step.kind === "checkpoint" || step.kind === "covered"
       ? [...walk.block].reverse()
         .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(unit))?.slug ??
         blockSlugs[blockSlugs.length - 1]
       : step.stage.slug;
-  if (named && (named.unit !== unit || named.stage !== redone)) return null;
+  if (named && (named.unit !== unit || (named.stage !== undefined && named.stage !== redone))) return null;
   if (step.kind === "work" && !unitOpenCheckpoints(projectDir, redone).some((open) => open.unit === unit)) {
     return {
       message: `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: ` +
@@ -19275,6 +19305,23 @@ function claimedCheckoutMove(
     );
   }
   const unitStages = unitMajorConstructionStageSlugs(scope, stateContent, true);
+  // A stage the claimed Unit's kind owes nothing (a spec Unit's Infrastructure
+  // Design) is one its walk passes, by the walk's own rule: nothing of it is
+  // there to reopen, and the person hears which stages the Unit has. A Unit
+  // with no kind on record, or a plan whose Units cannot be read, owes them all.
+  if (target && claimedCheckoutReopens(claimedUnit, unitStages, target, flags.jumpUnit)) {
+    const resolution = resolveBoltBatches(projectDir);
+    const kind = resolution.state === "ok" ? resolution.unitKinds?.get(claimedUnit) ?? null : null;
+    const has = constructionUnitMajorBlock(scope, stateContent, true).filter((stage) => teamUnitStageApplies(stage, kind));
+    if (!has.some((stage) => stage.slug === target)) {
+      const names = has.map((stage) => stage.name || stage.slug);
+      const list = names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+      return turnEndingPrint(
+        `Nothing to reopen: tell the person in one line, "unit ${claimedUnit} has no ${name} stage` +
+          `${names.length > 0 ? `; its stages are ${list}` : ""}." Run nothing else.`,
+      );
+    }
+  }
   if (target && flags.everyUnit && claimedCheckoutReopens(claimedUnit, unitStages, target)) {
     return errorDirective(
       `This checkout holds the claim on Unit "${claimedUnit}", so a reopen here is ${claimedUnit}'s alone: run ` +
@@ -19282,9 +19329,25 @@ function claimedCheckoutMove(
     );
   }
   if (target && claimedCheckoutReopens(claimedUnit, unitStages, target, flags.jumpUnit)) {
+    // The recovery question's restart, picked by the person for the Unit's own
+    // step (the one its walk is on, or with every step done its last), redoes
+    // it as the solo walk redoes a Unit's step (unitMajorRedo): recorded as a
+    // redo, and started again. A stage asked for by name keeps the moves below,
+    // as on the solo walk: the step the Unit is on carries on where it stopped.
+    const picked = !flags.change && (["redo-jump", "restore-or-jump"] as const).some((op) =>
+      guardRecoveryAskSelected(projectDir, stateContent, target, claimedUnit, op)
+    );
+    const cursorSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
+    const redo = picked ? unitMajorRedo(projectDir, scope, stateContent, cursorSlug, { unit: claimedUnit, stage: target }) : null;
+    if (redo?.jump) return jumpStepPrint(redo.message, redo.jump);
     const at = unitStages.indexOf(target);
-    // The walk keeps Current Stage on the step it routes the Unit to.
-    const current = unitStages.indexOf(getField(stateContent, "Current Stage")?.trim() ?? "");
+    // The walk keeps Current Stage on the step it routes the Unit to, until
+    // every Unit's row is done and the record moves on past the Unit's stages
+    // (to Build and Test, the work's stage). There the Unit's own walk says
+    // where it is: with no step left, it has passed every one of them.
+    const cursor = unitStages.indexOf(getField(stateContent, "Current Stage")?.trim() ?? "");
+    const walk = cursor === -1 ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, null) : null;
+    const current = walk?.step.kind === "covered" ? unitStages.length : cursor;
     if (current < at) {
       return turnEndingPrint(
         `Nothing to reopen: tell the person in one line, "unit ${claimedUnit} has not reached ${name} yet, so there ` +
@@ -22740,7 +22803,17 @@ function handleResumeReport(
     ));
     return;
   }
-  emitTypedResumeChoice(flags, pd, stateContent, slug);
+  emitTypedResumeChoice(claimedUnitRedo(flags, pd, stateContent), pd, stateContent, slug);
+}
+
+// A redo in a checkout that claimed a Unit is that Unit's: with no Unit named,
+// the claimed one is, so its step is the Unit's own redo (unitMajorRedo) or
+// the checkout's own move (claimedCheckoutMove), never a redo of the whole
+// work's stage from there.
+function claimedUnitRedo(flags: ReportFlags, pd: string, stateContent: string): ReportFlags {
+  if (flags.choice?.trim().toLowerCase() !== "redo" || flags.unit !== undefined || flags.everyUnit) return flags;
+  const claim = isTeamUnitOwnership(stateContent) ? readApplicableTeamUnitScopeStamp(pd, stateContent) : null;
+  return claim === null ? flags : { ...flags, unit: claim.unit };
 }
 
 // The redo of the current stage, run only for a stage and a scope AI-DLC knows,
@@ -22931,8 +23004,14 @@ function emitTypedResumeChoice(
     // Naming the Unit the walk is on, at the step it is on, is that Unit's
     // Redo (#2772): `next --stage <step> --unit <it>` would only route back to
     // where it stopped, picking its old work up again instead of redoing it.
+    // In a checkout that claimed the Unit, a redo that names no stage is the
+    // Unit's own step wherever the record's stage is (past the Unit's stages,
+    // its last one), which its walk names.
+    const ownStep = redoStage === undefined && readApplicableTeamUnitScopeStamp(pd, stateContent) !== null
+      ? undefined
+      : step;
     const own = flags.unit !== undefined && validScopes().has(scope)
-      ? unitMajorRedo(pd, scope, stateContent, slug, { unit: flags.unit, stage: step })
+      ? unitMajorRedo(pd, scope, stateContent, slug, { unit: flags.unit, stage: ownStep })
       : null;
     if (own !== null) {
       emit(move(jumpStepPrint(own.message, own.jump)));
@@ -23687,7 +23766,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // change line.
       if (unitReply.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
         const lines = [
-          leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, loadStateFileIfPresent(pd)),
+          leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, loadStateFileIfPresent(pd), unit),
           failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean);
         if (lines.length > 0) unitReply.narration = lines.join("\n");

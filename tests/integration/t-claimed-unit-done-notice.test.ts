@@ -10,9 +10,11 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
+  ORCH,
   UNIT,
   appendMainHumanTurn,
   cleanupTempDirs,
@@ -73,22 +75,35 @@ describe("a claimed Unit's end-of-Unit notice says where the rest is done", () =
 // done. Build and Test is the lead's, once every Unit lands; here the Unit's
 // own step stays the step, however often the person comes back, and a record
 // an older AI-DLC left there reads the same.
-describe("a claimed checkout whose record moved on to Build and Test", () => {
-  function lastUnitClaimed(publish = true): string {
-    const { seed: lead, remote } = makeSeed(parallelDependencyBody());
-    completeUnitOnMain(lead, "beta");
-    git(lead, ["add", "-A"]);
-    git(lead, ["commit", "-m", "beta built on main"]);
-    git(lead, ["push", "origin", "main"]);
-    return prepareCandidate(remote, "alpha", "team-a", { publish }).checkout;
+// `endsAtCodeGeneration`: the plan has no stage after the Units' (classic with
+// Build and Test taken off), so the walk marks the whole work finished instead.
+function lastUnitClaimed(publish = true, endsAtCodeGeneration = false): string {
+  const { seed: lead, remote } = makeSeed(parallelDependencyBody());
+  completeUnitOnMain(lead, "beta");
+  if (endsAtCodeGeneration) {
+    writeFileSync(
+      seededStateFile(lead),
+      readFileSync(seededStateFile(lead), "utf-8")
+        .replace("- **Scope**: feature", "- **Scope**: classic")
+        .replace("build-and-test \u2014 EXECUTE", "build-and-test \u2014 SKIP")
+        .replace("ci-pipeline \u2014 EXECUTE", "ci-pipeline \u2014 SKIP"),
+    );
   }
-  const currentStage = (checkout: string): string =>
-    /^- \*\*Current Stage\*\*: (.*)$/m.exec(readFileSync(seededStateFile(checkout), "utf-8"))?.[1] ?? "";
+  git(lead, ["add", "-A"]);
+  git(lead, ["commit", "-m", "beta built on main"]);
+  git(lead, ["push", "origin", "main"]);
+  return prepareCandidate(remote, "alpha", "team-a", { publish }).checkout;
+}
+const stateField = (checkout: string, field: string): string =>
+  new RegExp(`^- \\*\\*${field}\\*\\*: (.*)$`, "m").exec(readFileSync(seededStateFile(checkout), "utf-8"))?.[1] ?? "";
+const UNPUBLISHED = 'Unit "alpha" is complete and approved in this checkout. ' +
+  "Once it lands on main, pull main here and this checkout is free again.";
 
+describe("a claimed checkout whose record moved on to Build and Test", () => {
   test("published: the wait for the lead, every time, never Build and Test", () => {
     const checkout = lastUnitClaimed();
     expect(doneIn(checkout)).toMatchObject({ kind: "notice", message: DONE, unit: "alpha" });
-    expect(currentStage(checkout)).toBe("build-and-test");
+    expect(stateField(checkout, "Current Stage")).toBe("build-and-test");
     expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: DONE, unit: "alpha" });
   });
 
@@ -104,11 +119,39 @@ describe("a claimed checkout whose record moved on to Build and Test", () => {
       kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha",
     });
     // Not now runs next: the Unit's own step again, not the same question.
-    expect(nextDirective(checkout)).toMatchObject({
-      kind: "notice",
-      message: 'Unit "alpha" is complete and approved in this checkout. ' +
-        "Once it lands on main, pull main here and this checkout is free again.",
-      unit: "alpha",
+    expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: UNPUBLISHED, unit: "alpha" });
+  });
+});
+
+// The plan ends at Code Generation: the walk marks this checkout's work
+// finished once its Unit, the last, is done. The Unit has still to reach the
+// lead, so its own step stays the step there too, typed words or not.
+describe("a claimed checkout whose plan ends at Code Generation", () => {
+  test("not published: the offer to publish it, then the wait, never finished", () => {
+    const checkout = lastUnitClaimed(false, true);
+    expect(doneIn(checkout)).toMatchObject({
+      kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha",
     });
+    expect(stateField(checkout, "Status")).toBe("Completed");
+    expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: UNPUBLISHED, unit: "alpha" });
+    // Typed words get the step work in progress gets, never the finished-work
+    // route; "carry on" then runs a bare next, the Unit's step. Run as the
+    // agent runs it, with no flag after the words (runMergeTool adds one).
+    const words = spawnSync(process.execPath, [ORCH, "next", "morning, let's carry on with alpha"], {
+      cwd: checkout,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: checkout, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    });
+    expect(words.status, `${words.stdout}${words.stderr}`).toBe(0);
+    const step = JSON.parse(words.stdout);
+    expect(step.kind).toBe("print");
+    expect(step.message).toContain("Work is in progress");
+    expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: UNPUBLISHED, unit: "alpha" });
+  });
+
+  test("published: the wait for the lead, never finished", () => {
+    const checkout = lastUnitClaimed(true, true);
+    expect(doneIn(checkout)).toMatchObject({ kind: "notice", message: DONE, unit: "alpha" });
+    expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: DONE, unit: "alpha" });
   });
 });

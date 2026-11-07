@@ -549,6 +549,8 @@ function scratchProject(): string {
     // aidlc-log.ts writes and removes the Kiro reviewer copy through this.
     "aidlc-kiro-review-copy.ts",
     "aidlc-message-store.ts",
+    // aidlc-message-store.ts reads what an archive replaced through this.
+    "aidlc-doctor-bundle.ts",
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
     // The checkpoint question names the person's files a build changed.

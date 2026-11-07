@@ -519,7 +519,8 @@ function extractStatus(stateContent: string): string {
 export const ARCHIVED_FROM_FIELD = "Archived From";
 
 // Whether the state agrees with a recorded WORKFLOW_COMPLETED: Completed, or a
-// completed workflow the person archived. Both doctor surfaces read it.
+// completed workflow the person archived. Both doctor surfaces read it, and so
+// does the finished-work window (keptSinceFinished), whose finish it picks.
 export function stateShowsCompletion(stateContent: string): boolean {
   const status = extractStatus(stateContent);
   if (status === "Completed") return true;

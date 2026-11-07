@@ -2011,12 +2011,13 @@ sent: on a harness that runs hooks only after the person acts, the steps that
 turn them on; elsewhere, one line for the person: "Your answer didn't reach
 AI-DLC. Please give it once more. If
 it happens again, type /aidlc --doctor." In Kiro CLI, where a reply typed to
-another agent picked in `/agent` is never recorded, that line is "Your answer
-didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." When
-Kiro says agent "aidlc" needs upgrading for its 3.0 engine, the line is "Your
-answer didn't reach AI-DLC. Quit Kiro and start it again in this folder with:
-kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), then give it
-once more." The
+another agent picked in `/agent` is never recorded, that line starts "Your
+answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once
+more." and goes on, for when aidlc is not in that list (Kiro CLI on its v3
+engine with the agent files not upgraded), with Kiro's own upgrade
+(`/upgrade-agent`, choosing the workspace agents, then `kiro-cli --v3` again),
+the switch to Kiro and a start with `kiro-cli --v2 --agent aidlc`, then ", and
+give it there." The
 agent is told never to offer to turn a check off for them.
 
 A `log answer` for a question the agent logged after the person's reply is
@@ -2440,6 +2441,23 @@ work in another, and is not spent by a later approval or decision, and reads
 none of its words. The id is
 engine-to-agent text and is never shown to the person.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
+
+### `aidlc engine log install` - a system install the person asked for
+
+```bash
+aidlc engine log install <package>... --message <id>
+```
+
+A system package install (`sudo apt-get install`, `brew install`, `winget
+install` and the like) waits for the person unless they asked for it. When they
+asked in a message an approval or another decision has already used ("Approve.
+Then install shellcheck and run it."), the install check's refusal names this
+command with their messages. The agent names the one that asked; the engine
+proves it as it proves any request (it exists, came through the person's own
+prompt on this work, carries their words, and no later decision has spent it),
+reads none of its words, and records the packages as `SYSTEM_INSTALL_REQUESTED`.
+The install of those packages then runs, its `SYSTEM_INSTALL_ALLOWED` row naming
+that message and their words, until the next decision of theirs.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 

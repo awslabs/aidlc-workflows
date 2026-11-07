@@ -1,5 +1,5 @@
 // covers: hook:aidlc-plan-approval-guard, hook:system-install, function:systemInstalls, function:unaskedSystemInstall,
-// audit:SYSTEM_INSTALL_BLOCKED, audit:SYSTEM_INSTALL_ALLOWED
+// audit:SYSTEM_INSTALL_BLOCKED, audit:SYSTEM_INSTALL_ALLOWED, audit:SYSTEM_INSTALL_REQUESTED
 //
 // An agent at Build and Test (or a developer at Code Generation) finds the
 // project's test library missing and runs `sudo apt-get install` on its own: a
@@ -12,7 +12,9 @@
 // once. It is not a fence: Guard Policy off and plan approval off hold it too,
 // and a plan nobody approved names nothing. An isolated run with no work is held
 // the same way, and so is finished work, completed or archived: the person's
-// message kept since it finished is their go-ahead there.
+// message kept since it finished is their go-ahead there. An install asked for
+// in the message that approved runs once the agent names that message (`log
+// install`), without asking the person again.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -20,6 +22,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { namedByOnePlan, systemInstalls } from "../../dist/claude/.claude/hooks/system-install.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   auditBlockField,
   getField,
@@ -32,10 +35,12 @@ import {
   createCodeGenerationProject,
   finishedAtCodeGeneration,
   next,
+  openCodeGenerationGate,
   reply,
   runNamed,
   SESSION,
   stageDir,
+  UNJOINED_SESSION,
   writePlan,
 } from "../harness/code-generation-states.ts";
 import {
@@ -317,12 +322,13 @@ function archive(proj: string): void {
   expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Status")).toBe("Archived");
 }
 
-function heldForThePerson(proj: string, session = SESSION): void {
+function heldForThePerson(proj: string, session = SESSION): { stderr: string } {
   const held = guardBash(proj, PYTEST, { session });
   expect(held.code, held.stderr).toBe(2);
   expect(held.stderr).toContain(`\`${PYTEST}\``);
   expect(held.stderr).toContain("Tell the person");
   expect(held.stderr.trim().split("\n")).toHaveLength(1);
+  return held;
 }
 
 describe.each(["strict", "relaxed", "off", "locked"] as const)("Guard Policy %s, finished work", (policy) => {
@@ -372,6 +378,37 @@ describe.each(["strict", "relaxed", "off", "locked"] as const)("Guard Policy %s,
       expect(auditBlockField(rows(proj, "SYSTEM_INSTALL_ALLOWED")[0]?.block ?? "", "Person Reply")).toBe("yes, install it");
     }
   });
+
+  // An archive of work that was running, a redo included, is its finish: the
+  // redo they asked for before it asks for no install. An archive of finished
+  // work spends nothing: their ask between the completion and the archive still
+  // runs the install (keptSinceFinished).
+  test("archived during a redo, the redo's ask runs no install; archived after a finish, an ask before it still does", () => {
+    const redone = finished(policy);
+    joinChat(redone, LATER);
+    expect(reply(redone, "Can you redo Code Generation? I'd like the code built again.", LATER).status).toBe(0);
+    const step = String(next(redone, ["--stage", "code-generation"]).message ?? "");
+    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(step)?.[1];
+    expect(jump, step).toBeDefined();
+    const ran = runNamed(redone, jump as string, { AIDLC_SESSION_OVERRIDE: LATER });
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(getField(readFileSync(seededStateFile(redone), "utf-8"), "Status")).toBe("Running");
+    // The record keeps whole seconds, and a redo runs a while before anyone archives it.
+    Bun.sleepSync(1001 - (Date.now() % 1000));
+    archive(redone);
+    heldForThePerson(redone, LATER);
+    expect(reply(redone, "yes, install it", LATER).status).toBe(0);
+    expect(guardBash(redone, PYTEST, { session: LATER }).code).toBe(0);
+    expect(auditBlockField(rows(redone, "SYSTEM_INSTALL_ALLOWED")[0]?.block ?? "", "Person Reply")).toBe("yes, install it");
+
+    const done = finished(policy);
+    joinChat(done, LATER);
+    expect(reply(done, "pytest is missing, install it with apt", LATER).status).toBe(0);
+    archive(done);
+    const asked = guardBash(done, PYTEST, { session: LATER });
+    expect(asked.code, asked.stderr).toBe(0);
+    expect(rows(done, "SYSTEM_INSTALL_BLOCKED")).toHaveLength(0);
+  });
 });
 
 test("on finished work an install the approved plan names runs at once, and one it does not name waits", () => {
@@ -379,6 +416,115 @@ test("on finished work an install the approved plan names runs at once, and one 
   const ran = guardBash(proj, HYPOTHESIS);
   expect(ran.code, ran.stderr).toBe(0);
   expect(rows(proj, "SYSTEM_INSTALL_BLOCKED")).toHaveLength(0);
+  heldForThePerson(proj);
+});
+
+// One message both approves and asks for the install ("Approve. Then install
+// ..."): the approval uses it up, so the install is held once, and its line names
+// the person's messages and the step. The agent names the one that asked for the
+// packages (`log install`); the engine proves it is theirs on this work and
+// reads none of its words, and the install runs with their words on its row,
+// without asking them again, until their next decision. A bare "Approve" asked
+// for nothing: nobody names it, and the agent's own install stays held.
+const APPROVE_AND_INSTALL = "Approve. Then install python3-pytest with apt and run the tests.";
+
+// The Code Generation gate approved in the person's words; `last`: the work's
+// last stage, so the approval finishes it.
+function approvedWith(policy: Policy, words: string, last: boolean): { proj: string; id: string } {
+  const proj = openCodeGenerationGate(policy === "locked" ? "relaxed" : policy, "on", last);
+  created.push(proj);
+  if (policy === "locked") lockStrict(proj);
+  const said = reply(proj, words);
+  const id = /on record as ([0-9a-f]{8})/.exec(said.stdout)?.[1];
+  expect(id, said.stdout).toBeDefined();
+  // The agent records the approval a moment after the message, as a run does:
+  // a decision in the message's own second is not one after it (messageReach).
+  Bun.sleepSync(1100);
+  const approved = runNamed(
+    proj,
+    'bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation --result approved --user-input "Approve"',
+    { AIDLC_SESSION_OVERRIDE: SESSION },
+  );
+  expect(approved.status, approved.stdout + approved.stderr).toBe(0);
+  expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Status")).toBe(last ? "Completed" : "Running");
+  return { proj, id: id as string };
+}
+
+const logInstall = (proj: string, args: string) =>
+  runNamed(proj, `bun .claude/tools/aidlc.ts engine log install ${args}`, { AIDLC_SESSION_OVERRIDE: SESSION });
+
+function heldNaming(proj: string, id: string): void {
+  const held = heldForThePerson(proj);
+  expect(held.stderr).toContain(`If their message ${id} (sent `);
+  expect(held.stderr).toContain(
+    "engine log install python3-pytest` with --message <id>, then run the install again. Otherwise: Tell the person",
+  );
+}
+
+describe.each(["strict", "relaxed", "off", "locked"] as const)("Guard Policy %s, an install asked for in the approval", (policy) => {
+  test("at a gate and at the approval that finishes the work, it runs on the message the agent names, asked once", () => {
+    for (const last of [false, true]) {
+      const { proj, id } = approvedWith(policy, APPROVE_AND_INSTALL, last);
+      heldNaming(proj, id);
+      const named = logInstall(proj, `python3-pytest --message ${id}`);
+      expect(named.status, named.stdout + named.stderr).toBe(0);
+      for (let again = 0; again < 2; again++) {
+        const ran = guardBash(proj, PYTEST);
+        expect(ran.code, ran.stderr).toBe(0);
+      }
+      const [requested] = rows(proj, "SYSTEM_INSTALL_REQUESTED");
+      expect(auditBlockField(requested?.block ?? "", "Packages")).toBe('["python3-pytest"]');
+      expect(auditBlockField(requested?.block ?? "", "Message Id")).toBe(id);
+      const allowed = rows(proj, "SYSTEM_INSTALL_ALLOWED");
+      expect(allowed.map((row) => auditBlockField(row.block, "Message Id"))).toEqual([id, id]);
+      expect(auditBlockField(allowed[0].block, "Person Reply")).toBe(APPROVE_AND_INSTALL);
+      expect(rows(proj, "SYSTEM_INSTALL_BLOCKED")).toHaveLength(1);
+      // It names the packages it was named for, no other.
+      const other = guardBash(proj, HYPOTHESIS);
+      expect(other.code, other.stderr).toBe(2);
+    }
+  });
+
+  test("a bare Approve names nothing: the agent's own install stays held, its line naming the message and the step", () => {
+    for (const last of [false, true]) {
+      const { proj, id } = approvedWith(policy, "Approve", last);
+      heldNaming(proj, id);
+      heldNaming(proj, id);
+      expect(rows(proj, "SYSTEM_INSTALL_REQUESTED")).toHaveLength(0);
+      expect(rows(proj, "SYSTEM_INSTALL_ALLOWED")).toHaveLength(0);
+    }
+  });
+});
+
+test("log install records nothing for a message that is not the person's on this work, or with no message or package", () => {
+  const { proj, id } = approvedWith("strict", APPROVE_AND_INSTALL, false);
+  const madeUp = logInstall(proj, "python3-pytest --message 0badf00d");
+  expect(madeUp.status).not.toBe(0);
+  expect(madeUp.stdout + madeUp.stderr).toContain("no message record 0badf00d exists in this project");
+  // Kept from a chat that was never on this work, as the prompt hook keeps one there.
+  const elsewhere = saveMessage(proj, {
+    session: UNJOINED_SESSION, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt",
+    text: "install python3-pytest", picker: null, words: "install python3-pytest", settings: [],
+    route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  }).id;
+  const offWork = logInstall(proj, `python3-pytest --message ${elsewhere}`);
+  expect(offWork.status).not.toBe(0);
+  expect(offWork.stdout + offWork.stderr).toContain(`message ${elsewhere} was not sent on this piece of work`);
+  for (const args of [`--message ${id}`, "python3-pytest"]) {
+    const usage = logInstall(proj, args);
+    expect(usage.status).not.toBe(0);
+    expect(usage.stdout + usage.stderr).toContain("log install <package>... --message <id>");
+  }
+  expect(rows(proj, "SYSTEM_INSTALL_REQUESTED")).toHaveLength(0);
+  heldForThePerson(proj);
+});
+
+test("the next decision of theirs ends it: after a later approval the same install waits again", () => {
+  const { proj, id } = approvedWith("strict", APPROVE_AND_INSTALL, false);
+  expect(logInstall(proj, `python3-pytest --message ${id}`).status).toBe(0);
+  expect(guardBash(proj, PYTEST).code).toBe(0);
+  expect(reply(proj, "Approve").status).toBe(0);
+  appendAuditEntry("GATE_APPROVED", { Stage: "build-and-test", "User Input": "Approve" }, proj);
   heldForThePerson(proj);
 });
 

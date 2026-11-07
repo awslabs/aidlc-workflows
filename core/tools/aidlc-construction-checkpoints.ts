@@ -1857,7 +1857,7 @@ export function askConstructionCheckpoint(
     const offer = current.result.stages.map((slug) => findStageBySlug(slug))
       .map((stage) => stage ? reviewCheckOffer(projectDir, stage, unit) : null).find((found) => found !== null) ?? null;
     const changedFiles = current.result.stages.includes("code-generation")
-      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true)
+      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true, unit)
       : null;
     // With their reply already in, the question is not shown: the line about
     // their files rides the next step the agent speaks from instead.

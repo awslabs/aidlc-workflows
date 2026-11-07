@@ -213,13 +213,15 @@ const VALID_EVENT_TYPES = new Set([
   "STAGE_RULES_BLOCKED",
   // A system package install nobody asked for (hook-emitted): held until the
   // person says so (BLOCKED), and run with their turn standing behind it
-  // (ALLOWED, naming their message).
+  // (ALLOWED, naming their message). REQUESTED: the agent named the message
+  // that asked for the packages (`log install`).
   "SYSTEM_INSTALL_BLOCKED",
   "SYSTEM_INSTALL_ALLOWED",
   // Where nothing is built at Code Generation (a Unit's approved build, the
   // lead's project waiting on the teams), a change let through on the person's
   // turn, naming their message (hook-emitted).
   "ASKED_CHANGE_ALLOWED",
+  "SYSTEM_INSTALL_REQUESTED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -432,6 +434,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
   SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
   ASKED_CHANGE_ALLOWED: "Asked Change Allowed",
+  SYSTEM_INSTALL_REQUESTED: "System Install Requested",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
@@ -696,11 +699,12 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // A stand-aside row is a guard's own account of what it let through; a forged
   // one would make an unauthorized action look covered.
   "GUARD_STOOD_ASIDE",
-  // The person's go-ahead for a system install; a forged one would make an
-  // install nobody asked for look like theirs.
+  // The person's go-ahead for a system install, and the message named as asking
+  // for one; a forged one would make an install nobody asked for look like theirs.
   "SYSTEM_INSTALL_ALLOWED",
   // Likewise for a change the guard let through on their turn.
   "ASKED_CHANGE_ALLOWED",
+  "SYSTEM_INSTALL_REQUESTED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);

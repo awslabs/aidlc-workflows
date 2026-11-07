@@ -2192,7 +2192,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
 | **Fence enforcement** | 3 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED`, `ASKED_CHANGE_ALLOWED` | plan-approval-guard hook (the first on every refusal path, the second when its environment off-switch was set, the third when the person's turn let a change through where nothing is built); state-transition-guard and deliver-stage-rules hooks on each refusal; `aidlc-utility.ts` also writes `GUARD_DISABLED` when a fence is switched off for one piece of work |
 | **Guard refusals** | 2 | `STATE_TRANSITION_BLOCKED`, `STAGE_RULES_BLOCKED` | state-transition-guard hook (delegated lifecycle/routing), deliver-stage-rules hook (brief over the output limit, or a rule file that could not be read) |
-| **System install** | 2 | `SYSTEM_INSTALL_BLOCKED`, `SYSTEM_INSTALL_ALLOWED` | plan-approval-guard hook through `hooks/system-install.ts`, at every stage |
+| **System install** | 3 | `SYSTEM_INSTALL_BLOCKED`, `SYSTEM_INSTALL_ALLOWED`, `SYSTEM_INSTALL_REQUESTED` | plan-approval-guard hook through `hooks/system-install.ts`, at every stage; `REQUESTED` by `aidlc-log.ts install` |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
 | **Utility** | 1 | `HEALTH_CHECKED` | `aidlc-utility.ts doctor` |
 | **Error/Recovery** | 3 | `ERROR_LOGGED`, `RECOVERY_COMPLETED`, `COORDINATION_STOOD_ASIDE` | `lib.ts emitError`, `aidlc-continue-workflow.ts`, `aidlc-state.ts acknowledge-compaction`, `aidlc-audit.ts appendCoordinationStoodAside` (Copilot adapter) |
@@ -2595,8 +2595,13 @@ write like the lead's: the `Source Baseline` on the work's `WORKFLOW_STARTED`
 row (what the person brought: a file a teammate or an earlier stage added later
 is not in it), the Code Generation attempt's baseline
 (`currentStageSourceBaseline`, what the build started from) and the workspace
-now. On a brownfield project a changed file is named only when the source walk
-does not read it as code by its name (`isSourceFileName`: a README, LICENSE,
+now. At a Unit's approval (a team Unit's gate, a Unit's checkpoint) the build
+started from the files as that Unit's Code Generation found them, taken on this
+machine when its first step was handed out (`.aidlc-engine/brought-files/`,
+one listing per Unit and attempt), so the line names what that Unit changed and
+puts each file back as that Unit found it, keeping what an earlier Unit's
+approval kept; without that listing here, the attempt's baseline. On a
+brownfield project a changed file is named only when the source walk does not read it as code by its name (`isSourceFileName`: a README, LICENSE,
 docs, `.env`), so the code the work changes on purpose is not; a deleted file
 always is. For each file git holds the content the build replaced (HEAD, read
 for every file in one `git cat-file --batch` per repo, else for a named file one
@@ -2613,9 +2618,9 @@ the build's attempt starts from that listing too when its own is not here
 either. A clone that picks the work up at the gate has taken none, and the line
 says nothing, as it does when a listing cannot be read. The line is said once
 per build attempt in a chat (the
-person-lines said record, keyed with the attempt's starting listing and the
-files, and checked before git is asked), counted as heard only when a step that
-carries it is written. With Construction Checkpoints the Unit's checkpoint says
+person-lines said record, keyed with the attempt's starting listing, or the
+Unit's, and the files, and checked before git is asked), counted as heard only
+when a step that carries it is written. With Construction Checkpoints the Unit's checkpoint says
 it and the stage gate the engine settles after the last Unit does not; when the
 person's reply to the checkpoint came while its review ran, so the question is
 not shown, the line rides the next step the agent speaks from.
