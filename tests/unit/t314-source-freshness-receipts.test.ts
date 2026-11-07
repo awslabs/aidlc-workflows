@@ -6786,3 +6786,84 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     expect(r.rc, r.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
+
+// #3714: work that recorded the project's own submodule as its only repo is
+// taken off it mid-Code-Generation. The stage baseline holds the submodule's
+// files under the submodule's own names; the walk afterwards reads the whole
+// project folder, which lists the same files under project-relative names.
+// The remove records the project-folder view it switches to, so files nobody
+// changed do not read as changed under their new names, and no path is named
+// twice — while a change made after the remove still needs a claim.
+describe("t314 removing the work's only repo, a project submodule, keeps the baseline honest", () => {
+  let proj: string;
+  const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+
+  function intent(...args: string[]): string {
+    const r = spawnSync(BUN, [UTILITY, "intent", ...args, "--project-dir", proj], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) throw new Error(`intent ${args.join(" ")} failed: ${r.stdout}${r.stderr}`);
+    return r.stdout;
+  }
+
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, "state-mid-ideation.md");
+    // The project is a checkout of its own holding a vendor submodule.
+    const library = join(proj, "..", `${basename(proj)}-vendor-lib`);
+    mkdirSync(join(library, "lib"), { recursive: true });
+    writeFileSync(join(library, "lib", "strings.ts"), "export const upper = (s: string) => s.toUpperCase();\n", "utf-8");
+    git(library, ["init", "-q"]);
+    git(library, ["config", "user.email", "t@test"]);
+    git(library, ["config", "user.name", "t"]);
+    git(library, ["add", "-A"]);
+    git(library, ["commit", "-qm", "seed"]);
+    git(proj, ["init", "-q"]);
+    git(proj, ["config", "user.email", "t@test"]);
+    git(proj, ["config", "user.name", "t"]);
+    writeFileSync(join(proj, "own.ts"), "export const own = 1;\n", "utf-8");
+    git(proj, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", library, "vendor"]);
+    git(proj, ["add", ".gitmodules", "vendor", "own.ts"]);
+    git(proj, ["commit", "-qm", "seed"]);
+    // Work an earlier build started, which recorded the submodule as its repo.
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["vendor"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    seedTwoUnitDag(proj);
+    guarded(proj, ["checkbox", "code-generation=in-progress"]);
+    restartBaseline(proj);
+  });
+
+  afterEach(() => cleanupTestProject(proj));
+
+  // Reviews come after the remove, as in the report: their fingerprints and
+  // claims then carry the project-relative keying the walk reads now.
+  function reviewUnitsAtProjectRoot(): void {
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+  }
+
+  test("files nobody changed are not called changed, and none is named twice", () => {
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    intent("remove-repo", "vendor", "--person-words", "the project is the work's repo");
+    reviewUnitsAtProjectRoot();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("vendor");
+    expect(r.out).not.toContain("no Unit's review covers");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a file written after the remove still needs a claim, named once", () => {
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    intent("remove-repo", "vendor", "--person-words", "the project is the work's repo");
+    writeFileSync(join(proj, "rogue.ts"), "export const rogue = true;\n", "utf-8");
+    reviewUnitsAtProjectRoot();
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    const r = gate.rc === 0 ? guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]) : gate;
+    expect(r.rc).not.toBe(0);
+    expect(r.out.split("rogue.ts").length - 1, r.out).toBe(1);
+    expect(r.out).not.toContain("vendor/lib/strings.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+});
