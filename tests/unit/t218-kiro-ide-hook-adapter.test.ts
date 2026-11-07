@@ -6795,14 +6795,14 @@ describe("t218 the Kiro IDE trust step", () => {
       "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
     );
     expect(activation.recovery).not.toContain("hooks");
-    // The adapter takes the Kiro IDE step as everything before this marker.
+    // The cases below take the Kiro IDE step as everything before this marker.
     expect(activation.recovery.split(" In Kiro CLI,").length).toBe(2);
   });
 
   // The state tool's refusal for a reply that was not recorded says what
   // happened, not to ask again now, that the question may come again, and the
-  // step doctor names for the tool the person is in, word for word, with
-  // nothing about how AI-DLC works. Inside
+  // step doctor names for the tool the person is in, word for word but for the
+  // entry (the line is shown unfilled), with nothing about how AI-DLC works. Inside
   // Kiro IDE (TERM_PROGRAM=kiro on the agent's own commands, VSCODE_IPC_HOOK or
   // VSCODE_PID on its hooks) that is its step alone; Kiro CLI and an ACP client, which nothing tells apart, get
   // their own two lines and never Kiro IDE's.
@@ -6812,7 +6812,9 @@ describe("t218 the Kiro IDE trust step", () => {
     }).hookActivation;
     const split = activation.recovery.indexOf(" In Kiro CLI,");
     const ideStep = activation.recovery.slice(0, split);
-    const otherTools = activation.recovery.slice(split + 1);
+    // The missed-reply line is shown unfilled, so its Kiro CLI step leaves out
+    // the entry doctor's ends with.
+    const otherTools = activation.recovery.slice(split + 1).replace(", then type <entry> to carry on.", ".");
     const said = "Your answer was not recorded, so you may be asked for it again.";
     const lead = "If the person already replied, that reply was not recorded. Do not ask them to answer again now. ";
     expect(activation.missedReplyInHost).toEqual({
@@ -6841,15 +6843,11 @@ describe("t218 the Kiro IDE trust step", () => {
     expect(activation.agentStepInHost.env).toEqual(activation.missedReplyInHost.env);
     expect(activation.agentStepInHost.text).toContain(`Show the person this line: "${activation.recovery.slice(0, split)}"`);
     expect(activation.agentStepInHost.text).not.toContain("Kiro CLI");
-    // Doctor's Kiro CLI step, plus the entry that carries the kept request on
-    // (the descriptor holds the text before <entry> is filled).
+    // Doctor's Kiro CLI step word for word, entry included (the descriptor
+    // holds the text before <entry> is filled).
     const cliStep = activation.recovery.slice(split + 1);
-    const restartStep = cliStep.replace(
-      ". If you drive Kiro from an ACP client",
-      ", then type <entry> to carry on. If you drive Kiro from an ACP client",
-    );
-    expect(restartStep).not.toBe(cliStep);
-    expect(activation.agentStep).toContain(`Show the person this line: "${restartStep}"`);
+    expect(cliStep).toContain(", then type <entry> to carry on. If you drive Kiro from an ACP client");
+    expect(activation.agentStep).toContain(`Show the person this line: "${cliStep}"`);
     expect(activation.agentStep).not.toContain("Reload Window");
   });
 
