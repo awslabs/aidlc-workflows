@@ -90,6 +90,7 @@ import {
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
+import { broughtFilesChanged } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
 import {
   fixtureIntentId8,
   AIDLC_SRC,
@@ -6883,6 +6884,16 @@ describe("t314 a submodule taken off the work keeps the stage-entry baseline", (
     const gate = guarded(proj, ["gate-start", "code-generation"]);
     expect(gate.rc, gate.out).toBe(0);
     expect(keptChanges()).toEqual(["src/tasks.ts, vendor/lib/extra.ts, vendor/lib/strings.ts"]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The listing the build-approval line reads the person's files from: a Unit's
+  // own file written before the remove is the Unit's, never one they had.
+  test("a Unit's own file from before the change is not called one the person had", () => {
+    unitsBuildThenTakeVendorOff();
+    rmSync(join(proj, "src", "alpha.ts"));
+    writeIn("src/alpha-tasks.ts", "export const alpha = 1;\n");
+    const changed = broughtFilesChanged(proj, readFileSync(seededStateFile(proj), "utf-8"));
+    expect((changed?.files ?? []).map((file) => file.path)).not.toContain("src/alpha.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // A remove an earlier release recorded carries no listing of the project
