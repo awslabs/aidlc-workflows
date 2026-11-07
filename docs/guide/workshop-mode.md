@@ -604,12 +604,14 @@ runs `/aidlc` in their workspace with no work of their own selected there, and
 AI-DLC offers the Units their team can take, from what the workspace already
 has (the lead's plan and the claims git last brought in). Where the lead has
 practices they agreed (their `team.md`) or project rules of their own (their
-`project.md`) beyond the template's notes, each Unit is offered two ways in
-that same question: **Start <unit> and follow the lead's agreed practices too**
-(or **project rules**, or both, named by their headings), which loads each of
-those files where it is, read only, just before the team's own file of the same
-name, so the team's are on top; or **Start <unit> under your team's own rules
-only**. In a clone where the team's own build is finished or pushed, its
+`project.md`) beyond the template's notes, the same question says so once: each
+**Start <unit>** follows the lead's agreed practices too (or project rules, or
+both, named by their headings in its detail), the recommended way, which loads
+each of those files where it is, read only, just before the team's own file of
+the same name, so the team's are on top. One more choice takes a Unit under the
+team's own rules only: **Start <unit> under your team's own rules only** when
+one Unit is offered, else **Start one under your team's own rules only**, which
+asks which Unit. In a clone where the team's own build is finished or pushed, its
 `/aidlc` or words about the team's other Units put the Units it can start first,
 once in a chat, never "everything is done" or a new piece of work. At the lead's
 project, the learnings question's first choice

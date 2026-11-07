@@ -430,11 +430,16 @@ describe("taking a Unit starts its build in the team's space", () => {
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
     const choices = ask.choices as Array<{ label: string; command: string }>;
+    // Each Unit once: its start follows the lead's rules too, recommended, the
+    // headings in its detail; one row under the team's own rules only.
     expect(choices.map((choice) => choice.label).slice(0, 2)).toEqual([
-      "Start refunds for payments and follow the lead's project rules too (Release Checks)",
+      "Start refunds for payments",
       "Start refunds for payments under your team's own rules only",
     ]);
     expect(choices[0].command).toEndWith(" --lead-rules");
+    expect((choices[0] as { detail?: string }).detail).toContain("The lead's project rules (Release Checks) apply to its build too");
+    expect(choices[1].command).not.toContain("--lead-rules");
+    expect(String(ask.question)).toContain("follows the lead's project rules too");
     const took = take(alice, "refunds", ["--team", "payments", "--lead-rules"]);
     expect(took.status, took.out).toBe(0);
     const record = buildDir(alice, "payments", "refunds");
@@ -463,9 +468,10 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
     const choices = ask.choices as Array<{ label: string; command: string }>;
     expect(choices.map((choice) => choice.label).slice(0, 2)).toEqual([
-      "Start refunds for payments and follow the lead's agreed practices too (Testing Posture)",
+      "Start refunds for payments",
       "Start refunds for payments under your team's own rules only",
     ]);
+    expect((choices[0] as { detail?: string }).detail).toContain("The lead's agreed practices (Testing Posture) apply to its build too");
     const took = take(alice, "refunds", ["--team", "payments", "--lead-rules"]);
     expect(took.status, took.out).toBe(0);
     // The take's own line names what the person chose to follow.
@@ -477,6 +483,36 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(step.rules_in_context as string[]).toContain("aidlc/spaces/default/memory/team.md");
     // The lead's file is read, never written, from the build.
     expect(readFileSync(practices, "utf-8")).toContain("Test first for the refund amount.");
+  });
+
+  // A live run on Claude Code: a teammate read eight options plus Other to
+  // start one Unit, every Unit twice (with the lead's rules, or the team's own).
+  test("with several Units to start, each appears once, and one row takes a Unit under the team's own rules only", () => {
+    const home = makeHome();
+    const practices = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(practices, readFileSync(practices, "utf-8").replace("## Testing Posture\n", "## Testing Posture\nTest first for the refund amount.\n"));
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    const choices = ask.choices as Array<{ label: string; command: string; detail?: string }>;
+    const labels = choices.map((choice) => choice.label);
+    expect(labels.filter((label) => label.startsWith("Start refunds"))).toEqual(["Start refunds for payments"]);
+    expect(labels.filter((label) => label.startsWith("Start checkout-ui"))).toEqual(["Start checkout-ui for web"]);
+    const own = choices.find((choice) => choice.label === "Start one under your team's own rules only");
+    expect(own, labels.join(" | ")).toBeDefined();
+    expect(own!.command).toContain("'<the Unit>'");
+    expect(own!.command).not.toContain("--lead-rules");
+    expect(own!.detail).toContain("I'll ask which Unit");
+    for (const choice of choices.filter((entry) => /^Start (refunds|checkout-ui) /.test(entry.label))) expect(choice.command).toEndWith(" --lead-rules");
+    // The Unit filled in, the own-rules take runs without the lead's rules.
+    const took = run(UNIT, own!.command.replace(/^.*aidlc-unit\.ts /, "").replace("'<the Unit>'", "refunds")
+      .replace("'<their team>'", "payments").split(" ").filter(Boolean), alice);
+    expect(took.status, took.out).toBe(0);
+    expect(field(readFileSync(join(buildDir(alice, "payments", "refunds"), "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBeUndefined();
   });
 
   // A live run on Codex: the take carried the lead's agreed "tests are written

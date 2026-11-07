@@ -9096,21 +9096,27 @@ function unitTakeLook(
           { label: named.length > 0 ? `${label} for another team` : label, detail: `${detail} I'll ask which team builds it.`, command: command("'<their team>'") },
         ];
       };
-      // The lead's project has rules of its own: each start is offered with
-      // them too (read-only, the team's own on top) or under the team's own
-      // rules only, in the one question (Arden's call).
+      // The lead's project has rules of its own: the choice of following them
+      // too (read-only, the team's own on top) or the team's own rules only is
+      // the person's, in the one question (Arden's call). Each start appears
+      // once and follows them too, the recommended way, its detail naming
+      // them; one more row takes a Unit under the team's own rules only, naming
+      // the Unit when one start is offered, else asking which.
       // Their agreed practices (memory/team.md) come with them, named as such.
       const lead = leadRules(projectDir, space);
       const names = [...lead.practices, ...lead.project];
       const brings = lead.practices.length === 0 ? "project rules" : lead.project.length === 0 ? "agreed practices" : "agreed practices and project rules";
-      const withRules = (offered: AskChoice[]): AskChoice[] => names.length === 0 ? offered : offered.flatMap((choice) => [
-        {
-          label: `${choice.label} and follow the lead's ${brings} too (${names.join(", ")})`,
-          detail: `${choice.detail} The lead's ${brings} apply to its build too, as they are, with your team's own on top.`,
+      const ownRules: AskChoice[] = [];
+      const withRules = (offered: AskChoice[]): AskChoice[] => {
+        if (names.length === 0) return offered;
+        ownRules.push(...offered);
+        return offered.map((choice) => ({
+          label: choice.label,
+          detail: `${choice.detail} The lead's ${brings} (${names.join(", ")}) apply to its build too, as they are, with your ` +
+            "team's own on top.",
           command: `${choice.command} --lead-rules`,
-        },
-        { label: `${choice.label} under your team's own rules only`, detail: choice.detail, command: choice.command },
-      ]);
+        }));
+      };
       // The walking skeleton, while the home builds it, is the home's: every
       // other Unit waits on it.
       const skeleton = teamSkeletonOn(state) && !opening.completed.has(opening.skeleton) ? opening.skeleton : null;
@@ -9172,6 +9178,15 @@ function unitTakeLook(
           holder !== null ? `For ${theTeam(holder)}.` : `Open: for ${team !== null ? theTeam(team) : "a team"}.`,
         )));
       }
+      if (ownRules.length === 1) {
+        choices.push({ ...ownRules[0], label: `${ownRules[0].label} under your team's own rules only` });
+      } else if (ownRules.length > 1) {
+        choices.push({
+          label: "Start one under your team's own rules only",
+          detail: `Without the lead's ${brings}. I'll ask which Unit, then start it that way for its team.`,
+          command: `${take.replace("%s", "'<the Unit>'")} --team ${team !== null ? shellArg(team) : "'<their team>'"}`,
+        });
+      }
       const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (the lead's project is at ${homeLocation(state)})` : "";
       const label = intentDisplayLabel(intent);
       if (ready.length > 0 || waiting.length > 0 || building.length > 0 || leads.length > 0 || others.length > 0) {
@@ -9184,6 +9199,10 @@ function unitTakeLook(
             (leads.length > 0 ? ` The lead's project builds: ${leads.join(", ")}.` : "") +
             (others.length > 0 ? ` Held for other teams: ${others.join(", ")}.` : ""),
         );
+      }
+      if (ownRules.length > 0) {
+        sentences.push(`Each start follows the lead's ${brings} too, with your team's own on top, as I'd recommend; ` +
+          "you can take one under your team's own rules only instead.");
       }
     }
   }
