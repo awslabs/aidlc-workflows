@@ -1852,6 +1852,51 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("11b: a compact start whose resume point disagrees with the state carries the reconciliation notice", () => {
+    const dir = scratchProject(true);
+    try {
+      const stateFile = seededStateFile(dir);
+      const before = readFileSync(stateFile, "utf-8");
+      writeFileSync(
+        stateFile,
+        before.replace(
+          "- **Last Completed Stage**: reverse-engineering",
+          "- **Last Completed Stage**: code-generation",
+        ),
+      );
+      const r = runAdapter(
+        dir,
+        "session-start",
+        withCwd({ ...FIXTURES.sessionStart, source: "compact" }, dir),
+      );
+      expect(r.code).toBe(0);
+      const rendered = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: { additionalContext?: string };
+      };
+      const output = rendered.hookSpecificOutput;
+      const ctx = output?.additionalContext ?? "";
+      expect(ctx).toContain("SESSION RESUME POINT DISAGREES WITH THE PERSISTED STATE");
+      expect(ctx).toContain('"code-generation"');
+      expect(ctx).toContain('Current Stage is "requirements-analysis"');
+      expect(ctx).toContain("Last Completed: code-generation");
+      writeFileSync(stateFile, before);
+      const agreeing = runAdapter(
+        dir,
+        "session-start",
+        withCwd({ ...FIXTURES.sessionStart, source: "compact" }, dir),
+      );
+      const agreeingRendered = JSON.parse(agreeing.stdout) as {
+        hookSpecificOutput?: { additionalContext?: string };
+      };
+      const agreeingOutput = agreeingRendered.hookSpecificOutput;
+      const agreeingCtx = agreeingOutput?.additionalContext ?? "";
+      expect(agreeingCtx).toContain("Current Stage: requirements-analysis");
+      expect(agreeingCtx).not.toContain("SESSION RESUME POINT DISAGREES");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("13: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3 rebind wiring)", () => {
     // The genuine M3 fix: Codex now forwards session_id alongside its real
     // `source`, so the core hook's P8 stamp/rebind path is reachable. Proof:
