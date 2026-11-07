@@ -55,6 +55,8 @@ import {
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
+import { hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+export { hasRealGitEntry } from "./aidlc-git.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import { pluginCommandOnLine, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import {
@@ -21350,19 +21352,6 @@ export function repoDir(projectDir: string, repoName: string): string {
   return join(projectDir, repoName);
 }
 
-// A folder a person made a Git checkout of: a real .git entry (a folder, or a
-// worktree's or submodule's file), by lstat, so no link is followed. A commit
-// can never carry a .git entry, so a committed folder merely shaped like a repo
-// never passes and git never runs on its config.
-export function hasRealGitEntry(dir: string): boolean {
-  try {
-    const entry = lstatSync(join(dir, ".git"));
-    return entry.isDirectory() || entry.isFile();
-  } catch {
-    return false;
-  }
-}
-
 // The checkouts a piece of work keeps its code in where the source walk does
 // not reach: a worktree in a harness folder (Claude Code's .claude/worktrees/)
 // or one outside the project. The agent or the person names one (`intent
@@ -25385,8 +25374,10 @@ export type ReadUnitSourceManifestResult =
     }
   // `unrecordedRepo` names the one repo a write claimed that the piece of work
   // does not record: the way on is to record that repo, not to rewrite the
-  // manifest.
-  | { ok: false; reason: string; unrecordedRepo?: string };
+  // manifest. `projectSubmodule` names the project's own submodule the work
+  // records as its only repo while every write is the project's own: the way
+  // on is the person's (remove-repo, or the code goes in it), not a rewrite.
+  | { ok: false; reason: string; unrecordedRepo?: string; projectSubmodule?: string };
 
 function sourceListingFieldEncode(value: string): string {
   return value
@@ -26689,6 +26680,7 @@ function validateUnitSourceManifestBytes(
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
   const notInRepo: string[] = [];
+  let projectOwnWrites = 0;
   const pathModeIndexes: GitPathModeIndexCache = new Map();
   // Cache only this manifest read: later review, verdict, and finalize checks
   // must observe fresh HEAD and ignore rules, even for the same manifest.
@@ -26849,6 +26841,20 @@ function validateUnitSourceManifestBytes(
             `writes[${index}].path ${JSON.stringify(write.path)} is not in repo ${JSON.stringify(canonicalRepo)} or its git history` +
               (rootPath === "" ? "" : ` (from that repo's root: ${JSON.stringify(rootPath)})`),
           );
+          // The project's own repo has the path (a deletion when only its git
+          // history does); one into the repo's folder from the workspace is not.
+          if (declaredRepo === undefined && rootPath === "" && literal !== from) {
+            let own = true;
+            try {
+              lstatSync(join(projectDir, literal));
+            } catch {
+              const project = gitSourceClaimHeadAndTree(projectDir, sourceClaimValidation);
+              own = project.treeModes?.has(literal) === true || (project.head !== null && (spawnSync(
+                "git", ["-C", projectDir, "--literal-pathspecs", "rev-list", "-1", project.head, "--", literal], { encoding: "utf-8" },
+              ).stdout ?? "").trim() !== "");
+            }
+            if (own) projectOwnWrites++;
+          }
         }
       }
     }
@@ -26860,6 +26866,22 @@ function validateUnitSourceManifestBytes(
     writes.push({ ...(declaredRepo === undefined ? {} : { repo: declaredRepo }), path: normalized.path });
   }
   if (notInRepo.length > 0) {
+    // Work that records the project's own submodule as its only repo (as work
+    // did before such a submodule stopped being recorded), every write a file
+    // of the project's own: no path from the submodule's root names them.
+    const only = recordedRepos.length === 1 ? recordedRepos[0] : undefined;
+    if (only !== undefined && projectOwnWrites === value.writes.length && submoduleLeavesProjectRepo(projectDir, only)) {
+      return {
+        ok: false,
+        projectSubmodule: only,
+        reason: `${notInRepo.join("; ")}. This work records ${only}, a submodule of the project, as its only repo, and ` +
+          `${notInRepo.length === 1 ? "that path is" : "those paths are"} in the project's own repo. Ask the person once ` +
+          `whether to take ${only} off this work's repos, so the project's own repo is the work's repo (${only}'s folder ` +
+          `stays as it is): on their yes, run \`${aidlcDispatcherInvocation(`intent remove-repo ${quoteCommandArgument(only)}`)}\`, ` +
+          `and the manifest reads as written; on their no, the Unit's code goes in ${only}, each write giving its path ` +
+          `from ${only}'s root`,
+      };
+    }
     return {
       ok: false,
       reason: `${notInRepo.join("; ")}. Give each write's path from its repo's root, or leave out a path this Unit did not change`,

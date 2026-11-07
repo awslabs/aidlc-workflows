@@ -940,7 +940,6 @@ hasCurrentSharedResumeWait
 hasDurableSourceBindingEvidence
 hasModernSourceBindingEvidence
 hasPendingDecision
-hasRealGitEntry
 hasRunnerGenMarker
 hasSubagentInflight
 hasUnsafeSingleLineCharacter
