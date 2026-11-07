@@ -324,6 +324,7 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import { recordIntegrationBranch } from "./aidlc-unit.ts";
 import {
   approvedOverUnfinishedReview,
   approvedUnitChanges,
@@ -1156,6 +1157,9 @@ export function main(argv: string[]): void {
       case "practices-promote":
         handlePracticesPromote(args.slice(1));
         break;
+      case "practices-branch":
+        handlePracticesBranch(args.slice(1));
+        break;
       case "fork":
         handleFork(args.slice(1));
         break;
@@ -1173,7 +1177,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, checkpoint-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, checkpoint-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, practices-branch, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -9767,6 +9771,26 @@ export function practicesRulesToAdd(
     return rules;
   };
   return { mandated: toAdd("## Mandated"), forbidden: toAdd("## Forbidden") };
+}
+
+// practices-branch --file <project.md|team.md|org.md> (--branch <name> | --none):
+// what the agent read in that layer's Way of Working words, the branch the work
+// merges into or that they name none, recorded where team work reads it
+// (recordIntegrationBranch, aidlc-unit.ts). Rides no event: a branch is the
+// team's own words as one exact line, and git keeps the file.
+function handlePracticesBranch(args: string[]): void {
+  const none = args.includes("--none");
+  const flags = parseFlags(args.filter((arg) => arg !== "--none"));
+  if (!flags.file || none === (flags.branch !== undefined)) {
+    error("Usage: aidlc-state.ts practices-branch --file <project.md|team.md|org.md> (--branch <name> | --none)");
+  }
+  let recorded: ReturnType<typeof recordIntegrationBranch>;
+  try {
+    recorded = recordIntegrationBranch(resolveProjectDir(projectDir), flags.file, none ? null : flags.branch);
+  } catch (e) {
+    error(errorMessage(e));
+  }
+  console.log(JSON.stringify(recorded));
 }
 
 // practices-promote --team-practices <path> --discovered-rules <path>
