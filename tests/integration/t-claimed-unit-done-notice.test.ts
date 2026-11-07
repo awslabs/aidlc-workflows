@@ -10,6 +10,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -134,9 +135,14 @@ describe("a claimed checkout whose plan ends at Code Generation", () => {
     expect(stateField(checkout, "Status")).toBe("Completed");
     expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: UNPUBLISHED, unit: "alpha" });
     // Typed words get the step work in progress gets, never the finished-work
-    // route; "carry on" then runs a bare next, the Unit's step.
-    const words = runMergeTool(ORCH, ["next", "morning, let's carry on with alpha"], checkout);
-    expect(words.status, words.out).toBe(0);
+    // route; "carry on" then runs a bare next, the Unit's step. Run as the
+    // agent runs it, with no flag after the words (runMergeTool adds one).
+    const words = spawnSync(process.execPath, [ORCH, "next", "morning, let's carry on with alpha"], {
+      cwd: checkout,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: checkout, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    });
+    expect(words.status, `${words.stdout}${words.stderr}`).toBe(0);
     const step = JSON.parse(words.stdout);
     expect(step.kind).toBe("print");
     expect(step.message).toContain("Work is in progress");
