@@ -544,6 +544,9 @@ A git submodule is not one of them when the project holding it has code of its
 own beside it (a shared library added with `git submodule add`, say): that
 project is a one-repo project, the workspace folder is the work's repo, and the
 submodule is left alone. A project made only of submodules records them.
+Work started before this recorded the submodule; when its code is written in the
+project itself, Code Generation asks you once whether to take the submodule off the
+work's repos (its folder stays as it is).
 
 Each repo is recorded by its folder's name as you gave it: a space, an accent,
 an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent). A few

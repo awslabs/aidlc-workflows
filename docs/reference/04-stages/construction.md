@@ -1194,7 +1194,11 @@ This stage has a **two-part structure**: planning followed by generation.
    from that repo's root: one the repo does not have counts as deleted only when the repo
    had it (at HEAD, in a commit before it, or, for a file, in a folder still on disk), and
    any other (`{"repo": "billing", "path": "billing/package.json"}`) is refused before the
-   review, every such entry named in one reason.
+   review, every such entry named in one reason. When the work records a git submodule of
+   the project as its only repo (work started before such a submodule stopped being
+   recorded) and every entry is a file of the project's own, the reason asks the person
+   once whether to take the submodule off the work's repos (`intent remove-repo`), after
+   which the manifest reads as written, or to put the code in the submodule.
 
    The stage file gives this shape:
 
