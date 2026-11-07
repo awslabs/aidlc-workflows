@@ -16710,18 +16710,21 @@ function teamUnitMajorWorkBeat(
 // Where the team walk stands for the Current Stage: its step, the block it
 // walks, and the Unit DAG context, or null when the work is not team-owned
 // Units on the per-unit block. The skip report reads its work beat and the plan
-// change all of it, the same walk routing hands out.
+// change all of it, the same walk routing hands out. A null `currentSlug` reads
+// the walk wherever Current Stage is: a claimed checkout's redo reads its own
+// Unit's walk that way once the record has moved on past the block
+// (claimedCheckoutMove).
 function teamUnitMajorWalkBeat(
   projectDir: string,
   scope: string,
   stateContent: string,
-  currentSlug: string,
+  currentSlug: string | null,
 ): { step: TeamUnitWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
   if (readConstructionIteration(stateContent) !== "unit-major" || !isTeamUnitOwnership(stateContent)) return null;
   const resolution = resolveBoltBatches(projectDir);
   if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
   const block = constructionUnitMajorBlock(scope, stateContent, true);
-  if (!block.some((stage) => stage.slug === currentSlug)) return null;
+  if (currentSlug !== null && !block.some((stage) => stage.slug === currentSlug)) return null;
   const scopeStamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
   const held = scopeStamp ? null : teamWalkHeldUnits(projectDir);
   const units = scopeStamp
@@ -17445,6 +17448,23 @@ function claimedCheckoutMove(
     );
   }
   const unitStages = unitMajorConstructionStageSlugs(scope, stateContent, true);
+  // A stage the claimed Unit's kind owes nothing (a spec Unit's Infrastructure
+  // Design) is one its walk passes, by the walk's own rule: nothing of it is
+  // there to reopen, and the person hears which stages the Unit has. A Unit
+  // with no kind on record, or a plan whose Units cannot be read, owes them all.
+  if (target && claimedCheckoutReopens(claimedUnit, unitStages, target, flags.jumpUnit)) {
+    const resolution = resolveBoltBatches(projectDir);
+    const kind = resolution.state === "ok" ? resolution.unitKinds?.get(claimedUnit) ?? null : null;
+    const has = constructionUnitMajorBlock(scope, stateContent, true).filter((stage) => teamUnitStageApplies(stage, kind));
+    if (!has.some((stage) => stage.slug === target)) {
+      const names = has.map((stage) => stage.name || stage.slug);
+      const list = names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+      return turnEndingPrint(
+        `Nothing to reopen: tell the person in one line, "unit ${claimedUnit} has no ${name} stage` +
+          `${names.length > 0 ? `; its stages are ${list}` : ""}." Run nothing else.`,
+      );
+    }
+  }
   if (target && flags.everyUnit && claimedCheckoutReopens(claimedUnit, unitStages, target)) {
     return errorDirective(
       `This checkout holds the claim on Unit "${claimedUnit}", so a reopen here is ${claimedUnit}'s alone: run ` +
@@ -17453,8 +17473,13 @@ function claimedCheckoutMove(
   }
   if (target && claimedCheckoutReopens(claimedUnit, unitStages, target, flags.jumpUnit)) {
     const at = unitStages.indexOf(target);
-    // The walk keeps Current Stage on the step it routes the Unit to.
-    const current = unitStages.indexOf(getField(stateContent, "Current Stage")?.trim() ?? "");
+    // The walk keeps Current Stage on the step it routes the Unit to, until
+    // every Unit's row is done and the record moves on past the Unit's stages
+    // (to Build and Test, the work's stage). There the Unit's own walk says
+    // where it is: with no step left, it has passed every one of them.
+    const cursor = unitStages.indexOf(getField(stateContent, "Current Stage")?.trim() ?? "");
+    const walk = cursor === -1 ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, null) : null;
+    const current = walk?.step.kind === "covered" ? unitStages.length : cursor;
     if (current < at) {
       return turnEndingPrint(
         `Nothing to reopen: tell the person in one line, "unit ${claimedUnit} has not reached ${name} yet, so there ` +
