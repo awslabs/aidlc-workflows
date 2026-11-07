@@ -400,6 +400,17 @@ export type HarnessManifest = {
    */
   agentFinishRecorded?: { env: string[] };
   /**
+   * The variables this host sets in every command its agent runs, read like
+   * `hookActivation.missedReplyInHost`'s `env`. In a project with more than one
+   * harness installed, the native engine runs a command on the harness whose
+   * marks it carries, so each tool gets its own steps; with no harness's marks,
+   * or several, it runs on the first one installed and names no tool's step.
+   * Name only variables the host itself sets for its agent, never one a person's
+   * own terminal carries (an editor's TERM_PROGRAM), or a tool started there would
+   * read as this host. Emitted into <harnessDir>/tools/data/harness.json.
+   */
+  hostShell?: { env: string[] };
+  /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside
    * <harnessDir>/skills/ — the whole skill set (orchestrator, stage/scope

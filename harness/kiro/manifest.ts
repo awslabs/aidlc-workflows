@@ -110,6 +110,8 @@ const manifest: HarnessManifest = {
       'Otherwise show this line: "Type ' +
       '/agent and pick aidlc, then carry on." Then end your turn.',
   },
+  // Kiro CLI names the chat in every command its agent runs (KIRO_SESSION_ID).
+  hostShell: { env: ["KIRO_SESSION_ID"] },
   // A clean chat for new work started beside other work: Kiro CLI's own
   // command, which keeps the old chat for /chat resume (the Kiro CLI guide).
   newChatStep: { text: "type /chat new, then <entry>" },

@@ -76,6 +76,7 @@ import {
   getField,
   hookStandsOutside,
   isolatedRunWithoutWork,
+  selectedRecordIsFinished,
   hostEnvelopeTurnText,
   planApprovalChallengeRelativePath,
   COMMAND_TURN_REPLY,
@@ -858,11 +859,12 @@ try {
   // asks in chat to change with nothing waiting on them (without the id, every
   // such request met the setter's refusal first, and a setting asked in a box
   // answer was recorded on the message typed before it). On the work, every
-  // such message gets it; outside the work or before any exists, only a reply
-  // to this chat's plan question for new work, so a setting asked beside the
-  // plan pick is recorded as theirs and no other prompt in a project with no
-  // AI-DLC work open carries the line. Once a turn. The setter's proof of the
-  // message still decides.
+  // such message gets it, and so does one in a chat that took part in work now
+  // finished, where the message is their turn (standingPersonTurn); outside the
+  // work or before any exists, only a reply to this chat's plan question for
+  // new work, so a setting asked beside the plan pick is recorded as theirs and
+  // no other prompt in a project with no AI-DLC work open carries the line.
+  // Once a turn. The setter's proof of the message still decides.
   let idSaid = false;
   const sayMessageId = (messageId: string | null, notAReply: boolean, onTheWork: boolean): void => {
     if (idSaid || !(promptSubmitted || pickerQuestion !== undefined) || !messageId || notAReply || contextMayReachPerson) {
@@ -884,7 +886,16 @@ try {
     if (turnOrigin.kind !== "host") {
       const kept = keepMessage();
       keepClaudeKey(kept, false);
-      sayMessageId(kept, typedParse?.command === true, false);
+      const tookPart = workflow.participation === "participant" && selectedRecordIsFinished(projectDir, workflow.selection);
+      sayMessageId(kept, typedParse?.command === true, tookPart);
+      // The person wrote after work they took part in finished: a line kept for
+      // their reply that its last steps carried was said there, so it goes, as
+      // on open work (that carry, below, never runs here).
+      if (tookPart && personHere && sessionId) {
+        const session = sessionId;
+        const afterPrompt = pickerQuestion === undefined;
+        forThePerson.push(() => carryPendingPersonLines(projectDir, session, { afterPrompt }));
+      }
     }
     sayIfKeyShaped();
     return 0;
@@ -975,6 +986,8 @@ try {
       })}\n`);
       return 0;
     }
+    // Whether the box they answered asked a question the agent logged first.
+    let boxLogged = false;
     if (personHere) {
       // A command to AIDLC (an `/aidlc` line with no words after its flags, or
       // with its words behind `--`) is an instruction to the framework, not an
@@ -1062,6 +1075,7 @@ try {
               // The question it answered, by its id, when the box asked one
               // open here in the question's own words.
               const id = boxQuestionId(projectDir, sessionId, question);
+              if (id !== null) boxLogged = true;
               const recommended = options === undefined ? [] : recommendedChoices(options);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
@@ -1096,10 +1110,14 @@ try {
     // This turn is now the one lines are keyed to. Anything the person has not
     // heard yet follows them into it: a line queued for the turn before is still
     // about what they asked for, and they may have answered a question the agent
-    // asked of its own accord in between.
+    // asked of its own accord in between. A line kept for their reply that a
+    // step carried in the turn they now answer was said there, so it goes;
+    // after a box the agent showed without logging it, no step stood just
+    // before the box, so the line rides on to the reply that ends the turn.
     if (sessionId) {
       const session = sessionId;
-      forThePerson.push(() => carryPendingPersonLines(projectDir, session));
+      const afterPrompt = pickerQuestion === undefined || boxLogged;
+      forThePerson.push(() => carryPendingPersonLines(projectDir, session, { afterPrompt }));
     }
   }
   // Before any work exists: the reply to this chat's plan question.

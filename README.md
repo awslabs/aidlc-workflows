@@ -93,6 +93,8 @@ guide in the table below. The complete walkthrough is in
 | opencode >= 1.18.29 / OpenCode 2 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
 
+AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two Kiro names the other way: Kiro is `--harness kiro-ide` and Kiro CLI (V2) is `--harness kiro`, and they do not know `kiro-v2`. `--harness kiro-ide` names Kiro on those releases and on this one.
+
 Model-provider setup belongs to the harness. Shipped project configuration
 keeps the provider and model already selected by the user. `aidlc config
 providers` can apply Amazon Bedrock settings on supported project surfaces or
@@ -122,7 +124,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 132-event audit trail plus persistent state, team knowledge, and learned rules
+- 133-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare

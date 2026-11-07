@@ -44,7 +44,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
-import { hasStateUpgrade, stateUpgradeRecord } from "./aidlc-state-upgrade.ts";
+import { hasStateUpgrade, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -2021,7 +2021,33 @@ function workHereStatus(projectDir: string, space: string): string | null {
     `To start new work: ${entry} "build the auth service"\n`;
 }
 
-function handleStatus(projectDir: string, flags: Record<string, string>): void {
+// Work built one Unit at a time, as the walk the engine routes by has it:
+// where each Unit stands and what comes next (unitWalkStanding). The
+// orchestrator is loaded only here, with an awaited import as aidlc-jump.ts
+// loads it (the compiled build takes no require() of it), and only for the
+// work's own record in Construction, which is the record the walk reads, and
+// not while an older AI-DLC's record waits for the next step to bring it up:
+// reading the walk would bring it up in place, and status writes nothing. Null
+// otherwise, or when it cannot be read: status then gives the light count
+// (unitProgress) and the Next Stage field.
+async function soloUnitWalk(
+  projectDir: string,
+  flags: Record<string, string>,
+  scope: string,
+  content: string,
+): Promise<{ clause: string; current: number | null; total: number; next: string | null } | null> {
+  if (flags.intent || flags.space || isTeamUnitOwnership(content) || waitsToBeBroughtUp(content)) return null;
+  if ((getField(content, "Construction Iteration") ?? "").trim() !== "unit-major") return null;
+  if (findStageBySlug((getField(content, "Current Stage") ?? "").trim())?.phase !== "construction") return null;
+  try {
+    const { unitWalkStanding } = await import("./aidlc-orchestrate.ts");
+    return unitWalkStanding(projectDir, scope, content);
+  } catch {
+    return null;
+  }
+}
+
+async function handleStatus(projectDir: string, flags: Record<string, string>): Promise<void> {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
   const selection = resolveWorkflowSelection(projectDir, {
@@ -2055,6 +2081,7 @@ To get started:
   const phase = getField(content, "Lifecycle Phase") || "Unknown";
   const currentStage = getField(content, "Current Stage") || "Unknown";
   const status = getField(content, "Status") || "Unknown";
+  const walk = await soloUnitWalk(projectDir, flags, scope, content);
   // Who is on it and what was done or comes next, in the names the person
   // sees elsewhere; a setup step or an empty value says nothing.
   const agentSlug = (getField(content, "Active Agent") ?? "").trim();
@@ -2081,7 +2108,10 @@ To get started:
     }
   }
   const lastLine = lastName === null ? "" : `Last Completed: ${lastName}${approvedBy}\n`;
-  const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
+  // On a Unit walk the Next Stage field stays on the stage after the block's
+  // first one, so the walk's own next step is said instead.
+  const shownNext = walk === null ? nextName : walk.next;
+  const nextLine = shownNext === null ? "" : `Next Stage:     ${shownNext}\n`;
   const plan = getField(content, PLAN_FIELD);
   // A plan composed for this work runs on a stock scope the person never
   // chose, so a setting that came from that scope reads as the approved
@@ -2292,12 +2322,16 @@ To get started:
     ).length;
     // Working one Unit at a time, the stage boxes tick only when the last Unit
     // finishes a stage, so while a Unit is open the count is of Units: the one
-    // the person is on, of those planned (the status line counts the same way).
-    const units = p === "construction"
+    // the person is on, of those planned, and where each Unit stands. Without
+    // the walk (another record named, or it cannot be read), the light count,
+    // while Current Stage is on the Units' stages.
+    const units = p === "construction" && walk === null && currentEntry !== undefined && isPerUnitStage(currentEntry)
       ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
       : null;
     const phaseSkipped = phaseCheckboxes.filter((c) => c.state === "skipped").length;
-    const count = units
+    const count = p === "construction" && walk !== null
+      ? walk.current === null ? walk.clause : `Unit ${walk.current} of ${walk.total}: ${walk.clause}`
+      : units
       ? `Unit ${units.current} of ${units.total}`
       : phaseSkipped === phaseCheckboxes.length
       ? "skipped"
@@ -5727,9 +5761,9 @@ export async function collectDoctorReport(
     try {
       const auditContent = auditAllShards;
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // The latest run recorded a completion that no later stage start
-      // reopened (a scope change on finished work starts the stage it adds,
-      // #2261). One owner for the rule, the doctor bundle's timeline, which
+      // The latest run recorded a completion that nothing reopened since (a
+      // scope change on finished work starts the stage it adds, #2261; a
+      // Unit's reopen there writes its reopen rows, #3608). One owner for the rule, the doctor bundle's timeline, which
       // reads every shard in time order: shards joined by file name put a
       // teammate's earlier completion after this clone's reopen.
       if (reconstructTimeline(auditContent, stateContent).workflowCompleted) {
@@ -14088,7 +14122,7 @@ export async function main(argv: string[]): Promise<void> {
       process.stdout.write(`${isoTimestamp()}\n`);
       break;
     case "status":
-      handleStatus(projectDir, flags);
+      await handleStatus(projectDir, flags);
       break;
     case "claim":
       unitMain([

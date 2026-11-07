@@ -11,21 +11,29 @@
 // not from a reviewer's appendix, not pieced together from two plans), run at
 // once. It is not a fence: Guard Policy off and plan approval off hold it too,
 // and a plan nobody approved names nothing. An isolated run with no work is held
-// the same way.
+// the same way, and so is finished work, completed or archived: the person's
+// message kept since it finished is their go-ahead there.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { namedByOnePlan, systemInstalls } from "../../dist/claude/.claude/hooks/system-install.ts";
-import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  getField,
+  memoryGuardPolicyDeclarations,
+  readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   answer,
   createCodeGenerationProject,
+  finishedAtCodeGeneration,
   next,
   reply,
+  runNamed,
   SESSION,
   stageDir,
   writePlan,
@@ -34,6 +42,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  DEFAULT_RECORD_DIR,
   removeWorkspaceRecord,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -49,8 +58,9 @@ afterEach(() => {
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const PYTEST = "sudo -n apt-get install -y python3-pytest";
 const HYPOTHESIS = "sudo apt-get install -y python3-hypothesis";
-// A chat the person opens later on the same work.
+// A chat the person opens later on the same work, and one more beside it.
 const LATER = "01995000-7a11-7000-8000-00000000d00d";
+const BESIDE = "01995000-7a11-7000-8000-00000000d0de";
 
 function guardBash(
   proj: string,
@@ -70,7 +80,9 @@ function guardBash(
   return { code: result.status ?? -1, stderr: result.stderr ?? "" };
 }
 
-const rows = (proj: string, event: string) => readAuditShardEvents(proj).filter((row) => row.event === event);
+// Read from the work's record by name: archiving it drops the cursor that selects it.
+const rows = (proj: string, event: string) =>
+  readAuditShardEvents(proj, DEFAULT_RECORD_DIR).filter((row) => row.event === event);
 
 // Code Generation with the plan approved ("1" at the plan question) and the build under way.
 function building(planExtra = "", policy: "strict" | "relaxed" | "off" = "relaxed"): string {
@@ -253,6 +265,121 @@ describe("a system package install nobody asked for", () => {
     expect(long.stderr.trim().split("\n")).toHaveLength(1);
     expect(long.stderr).toContain("...`");
   });
+});
+
+// On finished work the agent's own install waits as at every stage. The
+// human-turn hook keeps the person's messages beside a finished record and
+// writes no turn on it; their message kept since the finish is their go-ahead
+// (standingPersonTurn), in the chat they gave it in. "locked": a team that
+// holds Guard Policy strict in memory, over relaxed work.
+type Policy = "strict" | "relaxed" | "off" | "locked";
+
+function lockStrict(proj: string): void {
+  const dir = join(proj, "aidlc", "spaces", "default", "memory");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "project.md");
+  const existing = existsSync(path) ? readFileSync(path, "utf-8") : "# Project\n";
+  writeFileSync(
+    path,
+    existing.includes("## Guard Policy\n")
+      ? existing.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+      : `${existing.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`,
+    "utf-8",
+  );
+  expect(memoryGuardPolicyDeclarations(proj).map((declaration) => declaration.value)).toContain("strict");
+}
+
+function finished(policy: Policy, planExtra = ""): string {
+  const proj = finishedAtCodeGeneration(policy === "locked" ? "relaxed" : policy, "on", planExtra);
+  created.push(proj);
+  if (policy === "locked") lockStrict(proj);
+  return proj;
+}
+
+function midway(policy: Policy): string {
+  const proj = building("", policy === "locked" ? "relaxed" : policy);
+  if (policy === "locked") lockStrict(proj);
+  return proj;
+}
+
+// A chat the person opens on the work joins it with its first `next`.
+function joinChat(proj: string, chat: string): void {
+  const first = runNamed(proj, "bun .claude/tools/aidlc-orchestrate.ts next", { AIDLC_SESSION_OVERRIDE: chat });
+  expect(first.status, first.stdout + first.stderr).toBe(0);
+}
+
+// Archived from the first chat; a chat still on the work stays on it.
+function archive(proj: string): void {
+  const archived = runNamed(proj, `bun .claude/tools/aidlc.ts engine intent archive ${DEFAULT_RECORD_DIR}`, {
+    AIDLC_SESSION_OVERRIDE: SESSION,
+  });
+  expect(archived.status, archived.stdout + archived.stderr).toBe(0);
+  expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Status")).toBe("Archived");
+}
+
+function heldForThePerson(proj: string, session = SESSION): void {
+  const held = guardBash(proj, PYTEST, { session });
+  expect(held.code, held.stderr).toBe(2);
+  expect(held.stderr).toContain(`\`${PYTEST}\``);
+  expect(held.stderr).toContain("Tell the person");
+  expect(held.stderr.trim().split("\n")).toHaveLength(1);
+}
+
+describe.each(["strict", "relaxed", "off", "locked"] as const)("Guard Policy %s, finished work", (policy) => {
+  test("the agent's own install waits; the person's go-ahead runs it on the record, and the hold does not come back", () => {
+    const proj = finished(policy);
+    heldForThePerson(proj);
+    expect(rows(proj, "SYSTEM_INSTALL_BLOCKED")).toHaveLength(1);
+    const said = reply(proj, "yes, go ahead and install it");
+    expect(said.status).toBe(0);
+    const id = /on record as ([0-9a-f]{8})/.exec(said.stdout)?.[1];
+    expect(id, said.stdout).toBeDefined();
+    for (let again = 0; again < 2; again++) {
+      const ran = guardBash(proj, PYTEST);
+      expect(ran.code, ran.stderr).toBe(0);
+    }
+    const [allowed] = rows(proj, "SYSTEM_INSTALL_ALLOWED");
+    expect(auditBlockField(allowed?.block ?? "", "Message Id")).toBe(id ?? "none");
+    expect(auditBlockField(allowed?.block ?? "", "Person Reply")).toBe("yes, go ahead and install it");
+    expect(rows(proj, "SYSTEM_INSTALL_BLOCKED")).toHaveLength(1);
+    expect(next(proj).kind).toBe("done");
+  });
+
+  test("in a later chat the person's own ask runs it at once; it counts in that chat only", () => {
+    const proj = finished(policy);
+    joinChat(proj, LATER);
+    joinChat(proj, BESIDE);
+    expect(reply(proj, "pytest is missing, install it with apt", LATER).status).toBe(0);
+    const ran = guardBash(proj, PYTEST, { session: LATER });
+    expect(ran.code, ran.stderr).toBe(0);
+    expect(rows(proj, "SYSTEM_INSTALL_BLOCKED")).toHaveLength(0);
+    expect(auditBlockField(rows(proj, "SYSTEM_INSTALL_ALLOWED")[0]?.block ?? "", "Session")).toBe(LATER);
+    heldForThePerson(proj, BESIDE);
+  });
+
+  // Work archived before it finished has no completion: its archive is where
+  // the person's kept messages start to count (keptSinceFinished).
+  test("archived, after it finished or before, the install waits in a chat still on it and the go-ahead runs it", () => {
+    const done = finished(policy);
+    const unfinished = midway(policy);
+    for (const proj of [done, unfinished]) {
+      joinChat(proj, LATER);
+      archive(proj);
+      heldForThePerson(proj, LATER);
+      expect(reply(proj, "yes, install it", LATER).status).toBe(0);
+      const ran = guardBash(proj, PYTEST, { session: LATER });
+      expect(ran.code, ran.stderr).toBe(0);
+      expect(auditBlockField(rows(proj, "SYSTEM_INSTALL_ALLOWED")[0]?.block ?? "", "Person Reply")).toBe("yes, install it");
+    }
+  });
+});
+
+test("on finished work an install the approved plan names runs at once, and one it does not name waits", () => {
+  const proj = finished("strict", `- [ ] Step 2: install the test library with \`${HYPOTHESIS}\`\n`);
+  const ran = guardBash(proj, HYPOTHESIS);
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(rows(proj, "SYSTEM_INSTALL_BLOCKED")).toHaveLength(0);
+  heldForThePerson(proj);
 });
 
 describe("which plan names an install", () => {
