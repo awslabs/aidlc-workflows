@@ -18,12 +18,13 @@
 // (in Command Prompt `&` in `Marks & Spencer` ends a command, and an apostrophe ends a quoted name in every shell).
 // The file is removed once its names are applied; until then it waits, and the check refuses.
 //
-// Usage: hide.ts --out <dir> [--everywhere]   with <dir>/local/hide-names.json: [{ "kind": "<org|customer|product|person|other>", "name": "<value>" }, …]
+// Usage: hide.ts --out <dir>                with <dir>/local/hide-names.json: [{ "kind": "<org|customer|product|person|other>", "name": "<value>" }, …]
+//        hide.ts --out <dir> --everywhere   with the same list in <dir>/local/hide-everywhere.json
 
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkedLists, hiddenAnyway, keptVocab } from "./lib-check.ts";
-import { flagValue, NAMES_FILE, readAgentJson, refuse, reportFolder } from "./lib-cli.ts";
+import { EVERYWHERE_FILE, flagValue, NAMES_FILE, readAgentJson, refuse, reportFolder } from "./lib-cli.ts";
 import { importSecretRules } from "./lib-project.ts";
 import { type Dictionary, type Entry, namesAt, ordinaryWord, PERSON_KINDS, redactValue, useSecretRules } from "./redact.ts";
 
@@ -39,13 +40,15 @@ const KIND_LABEL: Record<(typeof KINDS)[number], string> = {
 const argv = process.argv.slice(2);
 const out = reportFolder(flagValue("out", argv)) ?? refuse("usage: hide.ts --out <report folder made by collect.ts> [--everywhere]");
 const mapPath = join(out, "local", "redaction-map.json");
-const namesPath = join(out, "local", NAMES_FILE);
 const everywhere = argv.includes("--everywhere");
+// The names to hide everywhere come in their own file, so a call that waits keeps the person's yes with its names.
+const namesFile = `local/${everywhere ? EVERYWHERE_FILE : NAMES_FILE}`;
+const namesPath = join(out, namesFile);
 
 // The names in the order the file lists them. A refused file stays for the agent to correct.
 const taken = readAgentJson(namesPath);
-if (taken.kind === "none") refuse("no names: write them to local/hide-names.json in the report folder first", { file: namesPath });
-if (taken.kind === "not-json" || !Array.isArray(taken.value)) refuse('local/hide-names.json is not a list of { "kind", "name" }', { file: namesPath });
+if (taken.kind === "none") refuse(`no names: write them to ${namesFile} in the report folder first`, { file: namesPath });
+if (taken.kind === "not-json" || !Array.isArray(taken.value)) refuse(`${namesFile} is not a list of { "kind", "name" }`, { file: namesPath });
 // An empty list hides nothing: every name was taken out of it.
 if (taken.value.length === 0) {
   rmSync(namesPath, { force: true });
@@ -80,7 +83,7 @@ const inAidlcWords = (e: Entry) => holds(kept.words, e) || holds(kept.phrases, e
 // folder needs a new report.
 const stillHeld = (e: Entry) => checkedLists(kept).some((set) => holds(set, e));
 let added = 0;
-// The names of this call not hidden, by their place in local/hide-names.json (1 is the first): `aidlc-word` (part of
+// The names of this call not hidden, by their place in its file (1 is the first): `aidlc-word` (part of
 // AI-DLC's own words) or `ordinary-word`.
 const notHidden: { name: number; label: string; why: "aidlc-word" | "ordinary-word" }[] = [];
 // A name the map hid before this run (the machine's user, a folder, a name added earlier) keeps the label it has.
@@ -145,7 +148,7 @@ const said = {
   ...(notHidden.length
     ? {
         notHidden,
-        next: "ask the person once about the aidlc-word and ordinary-word ones: hide these anyway (write only them to local/hide-names.json again and run hide.ts with --everywhere), or leave them",
+        next: `ask the person once about the aidlc-word and ordinary-word ones: hide these anyway (write only them to local/${EVERYWHERE_FILE} and run hide.ts with --everywhere), or leave them`,
       }
     : {}),
 };

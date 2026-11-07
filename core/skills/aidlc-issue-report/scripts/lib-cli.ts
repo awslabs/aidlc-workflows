@@ -30,9 +30,11 @@ export function reportFolder(given: string | undefined): string | null {
 
 // The files the agent writes with its own file tool for one call (what the person typed, kept out of the command
 // line). Each stays in local/ until its script has applied it, so a run stopped between writing one and running its
-// script leaves it waiting, and the check refuses until it is applied (lib-check pendingAnswers). A version answer is
-// named for its tool, so it can only be applied to that tool.
+// script leaves it waiting, and the check refuses until it is applied (lib-check pendingAnswers). The names to hide
+// everywhere have their own file, so the person's yes to that is kept with them; a version answer is named for its
+// tool, so it can only be applied to that tool.
 export const NAMES_FILE = "hide-names.json";
+export const EVERYWHERE_FILE = "hide-everywhere.json";
 export const versionFile = (tool: string) => `version-${tool}.json`;
 
 // One such file's JSON. A leading byte-order mark, which some Windows file tools write, is dropped.

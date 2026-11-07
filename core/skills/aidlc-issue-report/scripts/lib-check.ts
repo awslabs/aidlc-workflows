@@ -8,7 +8,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type GateContext, type GateHit, safeHits, skillWords, textHits } from "./lib-gate.ts";
-import { NAMES_FILE, versionFile } from "./lib-cli.ts";
+import { EVERYWHERE_FILE, NAMES_FILE, versionFile } from "./lib-cli.ts";
 import { importSecretRules } from "./lib-project.ts";
 import { TOOL_KEYS } from "./lib-tools.ts";
 import { type RowVocab, VOCAB_KINDS } from "./lib-rows.ts";
@@ -37,6 +37,7 @@ export function pendingAnswers(out: string): { file: string; run: string }[] {
   const waits = (f: string) => existsSync(join(out, "local", f));
   return [
     ...(waits(NAMES_FILE) ? [{ file: `local/${NAMES_FILE}`, run: "hide.ts --out <out>" }] : []),
+    ...(waits(EVERYWHERE_FILE) ? [{ file: `local/${EVERYWHERE_FILE}`, run: "hide.ts --out <out> --everywhere" }] : []),
     ...TOOL_KEYS.filter((t) => waits(versionFile(t))).map((t) => ({ file: `local/${versionFile(t)}`, run: `set-version.ts --out <out> --tool ${t}` })),
   ];
 }

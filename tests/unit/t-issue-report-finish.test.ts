@@ -89,6 +89,7 @@ test("a file the operating system wrote into the folder is not refused, and fini
 test("an answer the agent wrote and no script applied yet keeps the check from passing and finish from deleting", () => {
   for (const [file, run_] of [
     ["hide-names.json", "hide.ts --out <out>"],
+    ["hide-everywhere.json", "hide.ts --out <out> --everywhere"],
     ["version-claude.json", "set-version.ts --out <out> --tool claude"],
   ]) {
     const dir = folderWithLocal();

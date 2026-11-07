@@ -23,10 +23,12 @@ function bun(script: string, args: string[]) {
   return spawnSync(process.execPath, [join(SCRIPTS, script), ...args], { encoding: "utf8" });
 }
 
-// The names go in local/hide-names.json, as the agent writes them with its file tool; the command holds only the folder.
+// The names go in local/hide-names.json (local/hide-everywhere.json with --everywhere), as the agent writes them with its
+// file tool; the command holds only the folder.
 function hide(out: string, names: [string, string][], ...flags: string[]) {
   mkdirSync(join(out, "local"), { recursive: true });
-  writeFileSync(join(out, "local", "hide-names.json"), JSON.stringify(names.map(([kind, name]) => ({ kind, name }))));
+  const file = flags.includes("--everywhere") ? "hide-everywhere.json" : "hide-names.json";
+  writeFileSync(join(out, "local", file), JSON.stringify(names.map(([kind, name]) => ({ kind, name }))));
   return bun("hide.ts", ["--out", out, ...flags]);
 }
 
@@ -402,11 +404,11 @@ test("a names file with a byte-order mark is read; wrong entries are named by th
   expect(readFileSync(join(out, "safe.json"), "utf8")).not.toContain("Contoso");
 });
 
-test("the next step for a name not hidden says to write it to the names file again", () => {
+test("the next step for a name not hidden says to write it to the file for hiding everywhere", () => {
   const out = reportFolder();
   useWords(out, ["BOLT_FAILED"]);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
-  expect(JSON.parse(hide(out, [["customer", "Bolt"]]).stdout).next).toContain("local/hide-names.json");
+  expect(JSON.parse(hide(out, [["customer", "Bolt"]]).stdout).next).toContain("local/hide-everywhere.json");
 });
 
 test("an empty names file hides nothing and is removed, so the check no longer waits on it", () => {
@@ -422,4 +424,16 @@ test("a new report is not collected from one whose answer still waits, so the an
   writeFileSync(join(out, "local", "hide-names.json"), JSON.stringify([{ kind: "customer", name: "Zenith" }]));
   const r = collectFrom(out);
   expect([r.ok, r.reason, r.pending]).toEqual([false, "answers-waiting", [{ file: "local/hide-names.json", run: "hide.ts --out <out>" }]]);
+});
+
+test("a yes to hiding a name everywhere waits in its own file, so the check names the command with --everywhere", () => {
+  const out = reportFolder();
+  useWords(out, ["BOLT_FAILED"]);
+  writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
+  expect(JSON.parse(hide(out, [["customer", "Bolt"]]).stdout).notHidden).toHaveLength(1);
+  writeFileSync(join(out, "local", "hide-everywhere.json"), JSON.stringify([{ kind: "customer", name: "Bolt" }]));
+  const check = JSON.parse(bun("check.ts", ["--out", out]).stdout);
+  expect(check.pending).toEqual([{ file: "local/hide-everywhere.json", run: "hide.ts --out <out> --everywhere" }]);
+  const r = JSON.parse(bun("hide.ts", ["--out", out, "--everywhere"]).stdout);
+  expect([r.ok, r.added, existsSync(join(out, "local", "hide-everywhere.json"))]).toEqual([true, 1, false]);
 });

@@ -121,8 +121,13 @@ When it lists `notHidden`, those names (by their place in the file) were not hid
 is part of AI-DLC's own words (`Bolt` in `BOLT_FAILED`) or of an AI-DLC message's fixed text, or
 `ordinary-word`, it is an everyday word (`Will`). Tell the person in one line each, and ask once whether to hide them
 anyway: each of AI-DLC's words or messages holding the name, or each value holding that word, then becomes a label, and
-the team reads less of the run. If they say yes, write only those names to the file again, run `hide.ts` again
-with `--everywhere`, then collect a new report from this one (the folder it prints in `from`):
+the team reads less of the run. If they say yes, write only those names to `<out>/local/hide-everywhere.json` and run
+
+```bash
+<run> <skill>/scripts/hide.ts --out <out> --everywhere
+```
+
+then collect a new report from this one (the folder it prints in `from`):
 
 ```bash
 <run> <skill>/scripts/collect.ts --from <from>
