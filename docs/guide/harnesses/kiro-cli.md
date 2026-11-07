@@ -298,19 +298,20 @@ has upgraded it for v3, and the v2 engine still runs an upgraded file.
 From Kiro CLI 2.37, Kiro makes that upgrade by itself when it starts on v3
 (`kiro-cli --v3`, or a plain `kiro-cli` once you have chosen V3), unless
 `chat.enableAutoAgentUpgrade` is `false` in your own Kiro CLI settings. It
-rewrites every agent file in `.kiro/agents/` and keeps each original beside it
+rewrites every agent JSON file in `.kiro/agents/` (the `.md` prompts beside them
+stay as they are) and keeps each original beside it
 as `<name>.json.bak` (`.json.bak.1` and on when one is already there), so
-`git status` shows each agent file there changed and a new backup beside it,
+`git status` shows each agent JSON file there changed and a new backup beside it,
 files AI-DLC did not write. On
 Kiro CLI 3.1.0 the files had changed while Kiro was still asking whether to
 trust the folder, and they stayed changed when the answer was not to trust it;
 Kiro said nothing about it on screen. After that, the hooks run on v3 too.
-`aidlc doctor --verbose` counts those agent files as upgraded by Kiro, not as
+`aidlc doctor --verbose` counts those agent JSON files as upgraded by Kiro, not as
 your changes, and a refresh keeps them as Kiro left them except where
 [Refresh Safety](../18-install-and-lifecycle.md#refresh-safety) says
 otherwise. To undo the upgrade, first run `kiro-cli settings
 chat.enableAutoAgentUpgrade false`, or Kiro upgrades the files again at its
-next start on v3, then rename each agent file's newest backup (the highest
+next start on v3, then rename each agent JSON file's newest backup (the highest
 `.json.bak.N`, or `.json.bak` when there is no other) back to `.json`, and
 start Kiro CLI with `kiro-cli --v2`: v3 runs none of the hooks of files it has
 not upgraded.
