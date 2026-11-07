@@ -48,6 +48,7 @@ function runUtility(
   project: string,
   args: string[],
   envOverrides: Record<string, string> = {},
+  tool = "aidlc-utility.ts",
 ) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -66,7 +67,7 @@ function runUtility(
   return spawnSync(
     process.execPath,
     [
-      join(project, ".claude", "tools", "aidlc-utility.ts"),
+      join(project, ".claude", "tools", tool),
       ...args,
       "--project-dir",
       project,
@@ -119,6 +120,14 @@ function asKiroIde(project: string): Record<string, string> {
 }
 
 const KIRO_IDE_ADVICE = ["Trust Folder & Continue", "Kiro IDE", "Reload Window", "agent picker"];
+
+// The Kiro IDE and Kiro CLI v3 tree's step for hooks that stopped running, in
+// the words doctor and the Plan Approval refusal give it. A restarted Kiro CLI
+// is a new chat, so its step ends with the entry.
+const KIRO_RECOVERY =
+  "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on. " +
+  "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue'), then type /aidlc to carry on. " +
+  "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
 
 // A PATH with a supported kiro-cli (a stand-in doctor runs for its version: a
 // .cmd on Windows, a shell script elsewhere) or with none, and the shell marks
@@ -354,7 +363,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
     // Trust takes effect after the reload; the agent picker does not stop the hooks.
     expect(output(run)).not.toContain("agent picker");
-    expect(output(run)).toContain("In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue').");
+    expect(output(run)).toContain(KIRO_RECOVERY);
     // What an ACP client must send is in the Kiro IDE guide, not in this line,
     // and the line says what to do, not how AI-DLC works.
     expect(output(run)).toContain(
@@ -363,6 +372,36 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).not.toContain("for AI-DLC's hooks to run");
     expect(output(run)).not.toContain("clientCapabilities");
     expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Hooks that fired, then stopped: doctor's row and the Plan Approval refusal
+  // give the same step, whose Kiro CLI half ends with the entry.
+  test("Kiro with stale heartbeats gives the step that ends Kiro CLI's restart with the entry, in doctor and the Plan Approval refusal", () => {
+    const project = projectWithWorkflowProgress();
+    writeHeartbeat(project, "2000-01-01T00:00:00Z");
+    const env = asKiroIde(project);
+    const doctor = output(runUtility(project, ["doctor", "--verbose"], env));
+    expect(doctor).toContain("fail  Hooks last fired 2000-01-01T00:00:00Z, but the workflow last advanced ");
+    expect(doctor).toContain(KIRO_RECOVERY);
+    const refused = runUtility(
+      project,
+      [
+        "decision",
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--decision",
+        "Approve this exact Code Generation plan?",
+        "--options",
+        "Approve Plan,Request Changes",
+      ],
+      env,
+      "aidlc-log.ts",
+    );
+    expect(refused.status).not.toBe(0);
+    expect(output(refused)).toContain("hooks are not firing in this session");
+    expect(output(refused)).toContain(KIRO_RECOVERY);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Only shipped hookActivation advice with a notRunYet turns "no heartbeat
