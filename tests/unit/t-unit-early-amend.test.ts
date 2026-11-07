@@ -419,6 +419,35 @@ describe("a change to a shared input", () => {
     expect(heard.filter((line) => line.includes("follow-up work"))).toHaveLength(1);
   });
 
+  // A live run: every Unit was done, the lead's own too, so the step after
+  // the lead's approved redo was Build and Test, which never sent the change.
+  test("the lead's approved change reaches a done team Unit from the lead's step past the Units too", () => {
+    const { home, hosts, alice, record } = refundsTaken(["refunds=payments"]);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    // The lead's project is past its Unit stages, at Build and Test.
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[ -]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
+    const homeRecord = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
+    writeFileSync(join(homeRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, in the lead's new words.\n");
+    appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
+    const lead = personsChat("lead-chat");
+    const step = personsNext(home.dir, lead, "lead-chat");
+    expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain("The requirements you changed reach the teams");
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
+    git(alice, ["fetch", "-q", "origin"]);
+    expect(notices(next(alice))).toContain(
+      "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
+    );
+  });
+
   test("a team that left its copy as it was takes the lead's new version, as before", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");

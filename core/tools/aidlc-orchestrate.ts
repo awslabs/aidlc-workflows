@@ -629,6 +629,7 @@ import {
   refreshHomeClaims,
   refreshListedHome,
   sendLeadsApprovedChanges,
+  GitWriteRefused,
   earlyBaseMerged,
   moveRefusedMark,
   shareBlocker,
@@ -14984,6 +14985,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // A home past every Unit stage while teams build: said on whichever step runs.
   const resultsNotRecorded = stateContent ? homeResultsPastUnitStages(pd, stateContent, engineSessionId) : null;
   if (resultsNotRecorded !== null) sayWithStepOnce(pd, resultsNotRecorded);
+  // The lead's own approved change reaches the teams from whichever step the
+  // lead's project takes, not only the Units' board (teamHomeClaims): after a
+  // redo past the Units, the next step is Build and Test. Sent once; each line
+  // rides the step that sent it.
+  if (stateContent && homeLocation(stateContent) !== null && unitBuildOf(stateContent) === null &&
+    !isReadOnlyEngineProbe() && hasAnyUnitClaimRefs(pd)) {
+    try {
+      for (const line of sendLeadsApprovedChanges(pd)) sayWithStepOnce(pd, line);
+    } catch (e) {
+      if (e instanceof GitWriteRefused) throw e;
+      // Unsent: the next step sends it.
+    }
+  }
 
   // If the current stage is still in-flight (pending / in-progress /
   // awaiting-approval / revising), the next move is normally to run THAT stage
