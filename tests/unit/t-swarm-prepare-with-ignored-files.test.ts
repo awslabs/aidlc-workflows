@@ -100,6 +100,7 @@ test("an untracked file Git does not ignore still has to be committed first", ()
   const result = prepare(pd, UNITS);
   expect(result.code).not.toBe(0);
   expect(`${result.out}\n${result.err}`).toContain("Approved parent source is not committed");
+  expect(`${result.out}\n${result.err}`).toContain("notes.txt is not committed");
   for (const unit of UNITS) expect(existsSync(wt(pd, unit))).toBe(false);
 });
 
@@ -113,6 +114,7 @@ test("a tracked file the .gitignore also matches is compared as any tracked file
   const result = prepare(pd, UNITS);
   expect(result.code).not.toBe(0);
   expect(`${result.out}\n${result.err}`).toContain("Approved parent source is not committed");
+  expect(`${result.out}\n${result.err}`).toContain("settings.log changed after the commit");
 });
 
 test("an ignored file the person registered as source still has to be committed first", () => {
