@@ -133,9 +133,14 @@ describe("a claimed checkout whose plan ends at Code Generation", () => {
     });
     expect(stateField(checkout, "Status")).toBe("Completed");
     expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: UNPUBLISHED, unit: "alpha" });
+    // Typed words get the step work in progress gets, never the finished-work
+    // route; "carry on" then runs a bare next, the Unit's step.
     const words = runMergeTool(ORCH, ["next", "morning, let's carry on with alpha"], checkout);
     expect(words.status, words.out).toBe(0);
-    expect(JSON.parse(words.stdout)).toMatchObject({ kind: "notice", message: UNPUBLISHED, unit: "alpha" });
+    const step = JSON.parse(words.stdout);
+    expect(step.kind).toBe("print");
+    expect(step.message).toContain("Work is in progress");
+    expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: UNPUBLISHED, unit: "alpha" });
   });
 
   test("published: the wait for the lead, never finished", () => {

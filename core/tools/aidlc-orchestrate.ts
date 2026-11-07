@@ -12784,9 +12784,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // Prose alone gets the fresh-start answer (Branch 8), beside the way back to
   // a stage of the finished work, since the words may ask for that. A jump or
   // --resume is a move on the finished workflow itself and keeps its own path.
+  // A Unit's own checkout is never finished work: its claim ends when the Unit
+  // lands, and until then its step is the Unit's (below).
   const finishedWorkDescription = flags.intent?.trim();
   if (
     stateContent &&
+    !unitScope &&
     finishedWorkDescription &&
     !flags.stage &&
     !flags.phase &&
@@ -13493,11 +13496,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         emit(errorDirective(errorMessage(e)));
         return;
       }
-      // The record moves on to Build and Test once every Unit's row is done,
-      // here too (and older releases wrote it so). Build and Test is the
-      // lead's, once every Unit lands: this checkout's step stays its Unit's.
+      // The record moves on to Build and Test, or with no stage after the
+      // Units' marks the work finished, once every Unit's row is done, here
+      // too (and older releases wrote it so). What follows is the lead's, once
+      // every Unit lands: this checkout's step stays its Unit's.
       const last = constructionUnitMajorBlock(scope, stateContent, true).at(-1);
-      if (last && cursorPastStage(stateContent, last.slug)) {
+      if (last && (cursorPastStage(stateContent, last.slug) || workflowFinished(stateContent, scope))) {
         emitUnitMajorRunStage(last, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
         return;
       }
