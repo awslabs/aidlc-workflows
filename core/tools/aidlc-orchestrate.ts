@@ -9181,10 +9181,14 @@ function unitTakeLook(
       if (ownRules.length === 1) {
         choices.push({ ...ownRules[0], label: `${ownRules[0].label} under your team's own rules only` });
       } else if (ownRules.length > 1) {
+        // A start that can only begin early carries --early, which a Unit
+        // ready to start reads as nothing, so the one row starts either.
+        const early = ownRules.some((choice) => / --early(\s|$)/.test(choice.command ?? ""));
         choices.push({
           label: "Start one under your team's own rules only",
-          detail: `Without the lead's ${brings}. I'll ask which Unit, then start it that way for its team.`,
-          command: `${take.replace("%s", "'<the Unit>'")} --team ${team !== null ? shellArg(team) : "'<their team>'"}`,
+          detail: `Without the lead's ${brings}. I'll ask which Unit, then start it that way for its team` +
+            `${early ? ", early where it waits on a pushed Unit" : ""}.`,
+          command: `${take.replace("%s", "'<the Unit>'")}${early ? " --early" : ""} --team ${team !== null ? shellArg(team) : "'<their team>'"}`,
         });
       }
       const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (the lead's project is at ${homeLocation(state)})` : "";

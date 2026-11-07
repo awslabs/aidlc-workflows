@@ -62,6 +62,31 @@ function notices(step: Record<string, unknown>): string[] {
 }
 
 describe("starting early", () => {
+  // A live run on Claude Code: a teammate whose Units could only start early
+  // picked the own-rules row, then a Unit, and the take refused it as not
+  // ready and asked whether to start it early: a third question.
+  test("under the team's own rules only, a Unit that can only start early starts early from the one row", () => {
+    const taken = refundsTaken(["refunds=payments", "checkout-ui=web", "--open", "reporting"]);
+    const practices = join(taken.home.dir, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(practices, readFileSync(practices, "utf-8").replace("## Testing Posture\n", "## Testing Posture\nTest first for the refund amount.\n"));
+    git(taken.home.dir, ["add", "-A"]);
+    git(taken.home.dir, ["commit", "-q", "-m", "the lead's practices"]);
+    git(taken.home.dir, ["push", "-q", "origin", "main"]);
+    codeGenerated(taken.alice, taken.record);
+    expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
+    const dana = cloneOf(taken.home.remote, "dana");
+    cloneCode(taken.hosts.billing, dana, "billing", "dana");
+    const ask = next(dana);
+    const choices = ask.choices as Array<{ label: string; command: string }>;
+    const own = choices.find((choice) => choice.label === "Start one under your team's own rules only");
+    expect(own, choices.map((choice) => choice.label).join(" | ")).toBeDefined();
+    expect(own!.command).toContain(" --early");
+    const took = run(UNIT, own!.command.replace(/^.*aidlc-unit\.ts /, "").replace("'<the Unit>'", "reporting")
+      .replace("'<their team>'", "data").split(" ").filter(Boolean), dana);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain("It starts early on the pushed branch of refunds in billing.");
+  });
+
   test("a waiting Unit whose dependency pushed is offered early, and starts on its branch", () => {
     const { dana, hosts, home } = refundsPushed();
     const ask = next(dana);
