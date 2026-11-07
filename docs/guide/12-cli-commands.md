@@ -3408,6 +3408,10 @@ Three read-only skills surface what `aidlc engine runtime summary` reports, wrap
 
 All three are read-only — no stage advance, no audit emit — and source every number from `aidlc engine runtime summary --json`. If your harness doesn't surface skills as slash commands (so `/aidlc-session-cost` is reported invalid), run that command directly — it produces the same cost view. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
 
+### Issue report — when something went wrong
+
+`/aidlc-issue-report` (Codex: `$aidlc-issue-report`) gathers what a run that went wrong left behind, with sensitive details removed, for you to send to the AI-DLC team. It reads AI-DLC's records and your AI tool's own log for this project, writes the data (`safe.json`) and a cover that says what it holds into `aidlc/diagnostics/issue-reports/<time>/`, and checks them before it says they are ready; it does not diagnose anything and never sends anything itself. See [Skills](17-skills.md).
+
 ---
 
 ## Environment Variables
