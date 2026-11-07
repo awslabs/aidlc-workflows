@@ -27608,12 +27608,27 @@ function withRepoBaselineAdditions(
   for (const row of additions) {
     // The remove that left the work on the project folder: what the walk
     // before it never read joins as it was then (a folder that was neither a
-    // repo it took off nor a checkout, and a removed submodule's own entry).
+    // repo it took off nor a checkout, and a removed submodule's own entry),
+    // less a path a Unit claims, whose write there is the Unit's own.
     const left = read !== null && auditBlockField(row.block, "Repos") === ""
       ? new Set((auditBlockField(row.block, "Removed") ?? "").split(",").map((name) => name.trim()))
       : null;
-    const unread = (path: string): boolean => {
-      if (left === null || read === null) return false;
+    const claimed: SourceClaimModel[] = [];
+    if (left !== null) {
+      const record = recordDir(projectDir);
+      let units: string[] = [];
+      try {
+        units = record === null ? [] : readdirSync(join(record, "construction"));
+      } catch {
+        // Nothing built yet.
+      }
+      for (const unit of units) {
+        const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
+        if (manifest.ok) claimed.push(manifest);
+      }
+    }
+    const unread = (key: string, path: string): boolean => {
+      if (left === null || read === null || claimed.some((claim) => sourceClaimCovers(key, claim))) return false;
       const slash = path.indexOf("/");
       if (slash === -1) return left.has(path);
       const top = path.slice(0, slash);
@@ -27627,7 +27642,7 @@ function withRepoBaselineAdditions(
       const parsed = splitSourcePathKey(key);
       const repo = parsed?.repo ?? "";
       if (repo === "") {
-        if (parsed !== null && !kept.has(key) && unread(parsed.path)) kept.set(key, entry);
+        if (parsed !== null && !kept.has(key) && unread(key, parsed.path)) kept.set(key, entry);
         if (cloned && parsed !== null && CLONE_WRITES_AT_ROOT.has(parsed.path)) written.set(key, entry);
         continue;
       }
