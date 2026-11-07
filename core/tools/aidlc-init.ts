@@ -14114,14 +14114,21 @@ export async function main(
     // A hook file the plan removes (the installed row shipped it) is not one
     // Kiro will run, so it is neither named nor expected after the commit.
     // So is the registration a dropped plugin's own build wrote beside it.
-    const accounted: Record<string, string> = {
+    // That one is recognised by its bytes, and the checks under the lock and
+    // after the commit recognise it again.
+    const planned: Record<string, string> = {
       ...files,
       ...Object.fromEntries(
         operations.filter((operation) => operation.kind === "remove").map((operation) => [operation.path, "remove"]),
       ),
-      ...Object.fromEntries(
-        (hookGate ? droppedPluginRegistrations(projectDir, descriptor.harnessDir) : []).map((path) => [path, "plugin"]),
-      ),
+    };
+    const recogniseRegistrations = () =>
+      [...new Set(droppedPluginRegistrations(projectDir, descriptor.harnessDir))]
+        .filter((path) => !Object.hasOwn(planned, path));
+    const recognised = hookGate ? recogniseRegistrations() : [];
+    const accounted: Record<string, string> = {
+      ...planned,
+      ...Object.fromEntries(recognised.map((path) => [path, "plugin"])),
     };
     const hookScan = hookGate
       ? scanUnownedHooks(projectDir, hooksDir, accounted)
@@ -14385,23 +14392,50 @@ export async function main(
     }
     // Under the transaction lock the hook set is read again before staging,
     // and once more after the files are committed, where a mismatch rolls the
-    // switch back: a file added, removed, renamed, or changed between the
-    // approval and the commit stops the switch.
+    // switch back: a hook file AI-DLC does not own added, removed, renamed, or
+    // changed between the approval and the commit stops the switch, and so
+    // does a recognised registration still there but no longer recognised.
+    // One that is gone leaves Kiro less to run, so it does not.
     // Test seam: a writer that adds a hook file after approval, before the
-    // transaction lock ("1") or while the switch commits ("committed"). The
-    // file is an empty object, which registers nothing.
+    // transaction lock ("1") or while the switch commits ("committed"), adds
+    // a description to a recognised registration at the same points
+    // ("registration", "registration-committed"), or removes one before the
+    // lock ("registration-removed"). The added file is an empty object, which
+    // registers nothing.
     const interference = hookGate ? process.env.AIDLC_TEST_SWITCH_HOOK_INTERFERENCE : undefined;
-    const interfere = () =>
-      writeFileSync(join(projectDir, hooksDir, "aidlc-test-interference.json"), "{}\n");
-    if (interference === "1") interfere();
+    const interfere = () => {
+      if (interference === "1" || interference === "committed") {
+        writeFileSync(join(projectDir, hooksDir, "aidlc-test-interference.json"), "{}\n");
+        return;
+      }
+      if (recognised.length === 0) throw new Error("AIDLC_TEST_SWITCH_HOOK_INTERFERENCE: no recognised registration");
+      const path = join(projectDir, recognised[0]);
+      if (interference === "registration-removed") {
+        rmSync(path);
+        return;
+      }
+      const registration = JSON.parse(readFileSync(path, "utf-8"));
+      writeFileSync(path, `${JSON.stringify({ ...registration, description: "edited while the switch runs" }, null, 2)}\n`);
+    };
+    if (interference === "1" || interference === "registration" || interference === "registration-removed") interfere();
     const checkHooks = (committed: boolean) => {
-      if (committed && interference === "committed") interfere();
-      const now = scanUnownedHooks(projectDir, hooksDir, accounted);
+      if (committed && (interference === "committed" || interference === "registration-committed")) interfere();
+      // A recognised registration stays out of the scan only while it is still
+      // recognised: one still there but no longer recognised is compared like a
+      // hook file AI-DLC does not own, and one that is gone is in neither set. The
+      // registrations are read again only while the directory is reviewable.
+      const still = recognised.length > 0 && !hooksDirProblem(projectDir, hooksDir)
+        ? new Set(recogniseRegistrations())
+        : new Set<string>();
+      const now = scanUnownedHooks(projectDir, hooksDir, {
+        ...planned,
+        ...Object.fromEntries(recognised.filter((path) => still.has(path)).map((path) => [path, "plugin"])),
+      });
       if (now.redirected || now.unreadable || canonical(now.entries) !== canonical(unownedHooks)) {
         throw new SwitchRefusal(
           committed
-            ? `${hooksDir}: hook files AI-DLC does not own changed while this switch was applied, so it was rolled back; review them and run the switch again`
-            : `${hooksDir}: hook files AI-DLC does not own changed after this switch was planned; review them and run the switch again`,
+            ? `${hooksDir}: hook files no longer match this switch's plan, so it was rolled back; review them and run the switch again`
+            : `${hooksDir}: hook files no longer match this switch's plan; review them and run the switch again`,
           { kind: "text", text: "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token" },
         );
       }
