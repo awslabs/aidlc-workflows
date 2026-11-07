@@ -628,6 +628,12 @@ export interface InvokeSwarmDirective {
   legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
   // Code Generation only: plan the listed Units, or build the batch.
   plan_approval?: CodeGenerationPlanApprovalState;
+  // Whether the intent's Construction Verification Command is authorized now
+  // (authorizedVerificationCommand). Kiro's swarm binding reads it to ask for
+  // the command before the workers start rather than between the workers and
+  // their reviewers. A scheduling fact only: check and finalize still verify
+  // the authorization.
+  verification_command_authorized?: boolean;
 }
 
 // present-gate — run the stage-protocol §13 learnings ritual, then render the
@@ -1158,6 +1164,7 @@ const INVOKE_SWARM_FIELDS = [
   "repo",
   "legacy_plan_approval_choices",
   "plan_approval",
+  "verification_command_authorized",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = [
@@ -2067,6 +2074,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "repo", kind, errors);
       checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
       checkOptionalCodeGenerationPlanState(o, kind, errors);
+      checkOptionalBoolean(o, "verification_command_authorized", kind, errors);
       break;
     case "present-gate":
       checkString(o, "stage", kind, errors);

@@ -783,9 +783,19 @@ and a real human approval. An ordinary Unit checkpoint requires verification
 and follows the recorded completion approval policy. A first design-stage review
 is not evidence of a shipped skeleton.
 
+Every `invoke-swarm` carries `verification_command_authorized`: whether the
+intent's Construction Verification Command is authorized now. On Kiro (Kiro IDE
+and Kiro CLI v3), when it is `false` and the batch's plans are approved
+(`plan_approval.status: approved`), the conductor asks for the command before
+the batch's initial `prepare`, so the answer does not fall between the workers
+and their reviewers. When the command is still not authorized at `check`, the
+swarm binding's own `check` step obtains it.
+
 The intent's `Construction Verification Command` is recorded during Delivery
 Planning or, if the human defers because no runnable check exists, at the first
-checkpoint. Before presenting the command, write it to
+checkpoint (on Kiro IDE and Kiro CLI v3, before a side-by-side batch's initial
+`prepare`, as above).
+Before presenting the command, write it to
 `<record>/verification-command.txt` with the harness's file-write tool
 (Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
 be interpolated into a shell line, where substitutions could execute before
