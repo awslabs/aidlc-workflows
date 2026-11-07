@@ -1390,6 +1390,9 @@ describe("t230 dispatcher route parity", () => {
     } catch {
       cpSync(BUN, launcher);
     }
+    // The command under the name aidlc reads its data (the plans `next` lists
+    // for the words) from the runtime beside it, as an install lays it out.
+    cpSync(join(REPO_ROOT, "dist-release", "claude"), join(launcherDir, "runtime", "claude"), { recursive: true });
     const env = { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR };
     const payload = JSON.stringify({
       session_id: "t230-outside",
