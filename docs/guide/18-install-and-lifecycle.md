@@ -1321,10 +1321,13 @@ Switching to Kiro names every `.kiro/hooks/*.json` file AI-DLC does not
 own: Kiro runs those on its v3 engine (`kiro-cli --v3`) and in Kiro IDE. When there is one, the switch applies
 only with your approval of that exact set of files: answer the prompt in a
 terminal, or run the switch with `--dry-run`, review the files, and apply it with
-the `--plan-token` that dry run prints. A hook file added, removed, renamed, or
+the `--plan-token` that dry run prints. A hook file AI-DLC does not own added, removed, renamed, or
 changed after that review stops the switch, including one that appears before
 the switch takes its transaction lock or while it commits its files, which rolls
-the switch back. The switch refuses when `.kiro/hooks` is
+the switch back; so does a change that leaves a dropped plugin's own
+registration, which the switch recognises and does not name, no longer
+recognised as that plugin's (one removed leaves Kiro less to run, so it does not
+stop the switch). The switch refuses when `.kiro/hooks` is
 a link or a file (before reading anything under it), or when a hook entry
 AI-DLC does not own is a link or anything other than a regular file, rather
 than follow it. It needs that baseline
