@@ -123,6 +123,7 @@ import {
   type SourceClaimModel,
 } from "./aidlc-lib.js";
 import {
+  planApprovalPromptSha256,
   parseTestingContract,
   recordedApprovalFingerprint,
   resolveTestingPosture,
@@ -2078,14 +2079,7 @@ function candidateEvidence(
     const questionsSha256 = createHash("sha256")
       .update(questions, "utf-8")
       .digest("hex");
-    const promptSha256 = createHash("sha256")
-      .update(
-        `${questions
-          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
-          .trimEnd()}\n`,
-        "utf-8",
-      )
-      .digest("hex");
+    const promptSha256 = planApprovalPromptSha256(questions);
     if (
       fingerprint &&
       instructions.trim().length > 0 &&

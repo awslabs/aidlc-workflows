@@ -65,7 +65,7 @@ afterAll(cleanupChangeControlProjects, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 describe("t334 F22 initial execution requirements survive a lowered fence", () => {
   const faults = [
-    "never-approved", "missing-receipt", "missing-plan", "missing-instructions",
+    "never-approved", "withdrawn-approval", "missing-plan", "missing-instructions",
     "malformed-contract", "stale-attempt", "invalid-directive", "invalid-target", "missing-target",
   ] as const;
   for (const mode of ["relaxed", "off", "strict"] as const) {
@@ -85,11 +85,18 @@ describe("t334 F22 initial execution requirements survive a lowered fence", () =
       const plan = readFileSync(planPath, "utf-8");
       const instructions = readFileSync(instructionsPath, "utf-8");
       let prompt = `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${parseTestingContract(plan)!.contract_sha256}\n${plan}\n${instructions}`;
-      if (fault === "missing-receipt") {
+      if (fault === "withdrawn-approval") {
+        // The receipt gone and a later answer on record: a receipt gone with the
+        // approval still the latest answer is a clone's case, and builds
+        // (t-plan-approval-kept-on-clone).
         const runtime = join(sessionsDir(project), "plan-approval");
         for (const name of readdirSync(runtime).filter((name) => name.startsWith("receipt-"))) {
           rmSync(join(runtime, name));
         }
+        appendAuditEntry("QUESTION_ANSWERED", {
+          Stage: "code-generation", Checkpoint: "plan-approval", Details: "Request Changes",
+          "Plan Target": resolveCodeGenerationAuthority(project, { unit: null }).targetId,
+        }, project);
       } else if (fault === "missing-plan") rmSync(planPath);
       else if (fault === "missing-instructions") rmSync(instructionsPath);
       else if (fault === "malformed-contract") {
