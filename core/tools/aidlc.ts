@@ -806,7 +806,7 @@ export const ROUTES: readonly Route[] = [
     group: "log",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["decision", "answer", "answers", "review", "link"],
+    verbs: ["decision", "answer", "answers", "review", "link", "install"],
     tool: TOOLS.log,
     verbHelp: true,
     ...HIDDEN_ENGINE,

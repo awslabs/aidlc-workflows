@@ -2168,7 +2168,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
 | **Fence enforcement** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` | plan-approval-guard hook (the first on every refusal path, the second when its environment off-switch was set); state-transition-guard and deliver-stage-rules hooks on each refusal; `aidlc-utility.ts` also writes `GUARD_DISABLED` when a fence is switched off for one piece of work |
 | **Guard refusals** | 2 | `STATE_TRANSITION_BLOCKED`, `STAGE_RULES_BLOCKED` | state-transition-guard hook (delegated lifecycle/routing), deliver-stage-rules hook (brief over the output limit, or a rule file that could not be read) |
-| **System install** | 2 | `SYSTEM_INSTALL_BLOCKED`, `SYSTEM_INSTALL_ALLOWED` | plan-approval-guard hook through `hooks/system-install.ts`, at every stage |
+| **System install** | 3 | `SYSTEM_INSTALL_BLOCKED`, `SYSTEM_INSTALL_ALLOWED`, `SYSTEM_INSTALL_REQUESTED` | plan-approval-guard hook through `hooks/system-install.ts`, at every stage; `REQUESTED` by `aidlc-log.ts install` |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
 | **Utility** | 1 | `HEALTH_CHECKED` | `aidlc-utility.ts doctor` |
 | **Error/Recovery** | 3 | `ERROR_LOGGED`, `RECOVERY_COMPLETED`, `COORDINATION_STOOD_ASIDE` | `lib.ts emitError`, `aidlc-continue-workflow.ts`, `aidlc-state.ts acknowledge-compaction`, `aidlc-audit.ts appendCoordinationStoodAside` (Copilot adapter) |
