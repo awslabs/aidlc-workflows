@@ -95,27 +95,35 @@ the tool's own chat log nor on this machine now. For each one, ask the person on
 ask them to run a command. Tell them where it is: Kiro IDE in the Kiro menu → About Kiro (Windows and Linux: Help →
 About); a CLI tool in the banner it shows when it starts (Claude Code also in `/status`). Always offer "I don't know".
 If `environment.toolsUsed` is empty, no chat log showed which tool the run used (one may have held only this report, or could not be read), so ask which AI tool they used together with its version.
-Record each answer with
+Record each answer: write the version as they gave it to `<out>/local/version-answer.json` with your file-writing
+tool, never in a command (`{ "version": "1.4.13" }`), then run
 
 ```bash
-<run> <skill>/scripts/set-version.ts --out <out> --tool <key> --version <x.y.z>
+<run> <skill>/scripts/set-version.ts --out <out> --tool <key>
 ```
 
-It accepts only a version-shaped value; when it refuses, or the person does not know, move on — do not ask twice.
-When they name the tool but not its version, run it without `--version`: the tool is recorded, its version unknown.
+It accepts only a version-shaped value; when it refuses the value (`not-a-version`), or the person does not know, move
+on — do not ask twice. Each call takes the file it reads, so after any other refusal write the file again before you
+run it again.
+When they name the tool but not its version, run it without writing the file: the tool is recorded, its version unknown.
 
-When the person names a company, customer, product or person they want kept out, hide it:
+When the person names a company, customer, product or person they want kept out, hide it. Write the names to
+`<out>/local/hide-names.json` with your file-writing tool, never in a command, since a shell would read a name's `&` or
+apostrophe as its own syntax (`[{ "kind": "customer", "name": "<name>" }, …]`, kind `customer`, `org`, `product`,
+`person` or `other`), then run
 
 ```bash
-<run> <skill>/scripts/hide.ts --out <out> --kind customer --name '<name>' [--kind org|product|person|other --name '<name>']…
+<run> <skill>/scripts/hide.ts --out <out>
 ```
 
-When it lists `notHidden`, those names (by their place among the `--name` values) were not hidden: `aidlc-word`, the name
+Each call takes the file it reads, so after a refusal correct what it names (`entries` are places in the file) and
+write the file again before you run it again.
+When it lists `notHidden`, those names (by their place in the file) were not hidden: `aidlc-word`, the name
 is part of AI-DLC's own words (`Bolt` in `BOLT_FAILED`) or of an AI-DLC message's fixed text, or
 `ordinary-word`, it is an everyday word (`Will`). Tell the person in one line each, and ask once whether to hide them
 anyway: each of AI-DLC's words or messages holding the name, or each value holding that word, then becomes a label, and
-the team reads less of the run. If they say yes, run `hide.ts` again
-with `--everywhere` and only those names, then collect a new report from this one (the folder it prints in `from`):
+the team reads less of the run. If they say yes, write only those names to the file again, run `hide.ts` again
+with `--everywhere`, then collect a new report from this one (the folder it prints in `from`):
 
 ```bash
 <run> <skill>/scripts/collect.ts --from <from>

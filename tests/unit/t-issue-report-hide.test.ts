@@ -23,6 +23,13 @@ function bun(script: string, args: string[]) {
   return spawnSync(process.execPath, [join(SCRIPTS, script), ...args], { encoding: "utf8" });
 }
 
+// The names go in local/hide-names.json, as the agent writes them with its file tool; the command holds only the folder.
+function hide(out: string, names: [string, string][], ...flags: string[]) {
+  mkdirSync(join(out, "local"), { recursive: true });
+  writeFileSync(join(out, "local", "hide-names.json"), JSON.stringify(names.map(([kind, name]) => ({ kind, name }))));
+  return bun("hide.ts", ["--out", out, ...flags]);
+}
+
 function reportFolder(): string {
   const out = mkdtempSync(join(tmpdir(), "hide-test-"));
   mkdirSync(join(out, "local"));
@@ -37,7 +44,7 @@ function reportFolder(): string {
 
 test("hidden names leave safe.json and are caught in the report", () => {
   const out = reportFolder();
-  const r = bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Contoso Bank", "--kind", "product", "--name", "PayFlow"]);
+  const r = hide(out, [["customer", "Contoso Bank"], ["product", "PayFlow"]]);
   expect(r.status).toBe(0);
   expect(r.stdout).not.toContain("Contoso");
   const safe = readFileSync(join(out, "safe.json"), "utf8");
@@ -58,7 +65,7 @@ test("hidden names leave safe.json and are caught in the report", () => {
 
 test("refuses a folder collect.ts did not make", () => {
   const out = mkdtempSync(join(tmpdir(), "hide-test-"));
-  const r = bun("hide.ts", ["--out", out, "--kind", "org", "--name", "Contoso"]);
+  const r = hide(out, [["org", "Contoso"]]);
   expect(r.status).not.toBe(0);
 });
 
@@ -77,7 +84,7 @@ test("a one-word name that is also an ordinary word or part of AI-DLC's words is
   useWords(out, ["BOLT_FAILED", "units-generation", "acme-aidlc-plugins"]);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
   const r = JSON.parse(
-    bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Bolt", "--kind", "org", "--name", "Acme", "--kind", "person", "--name", "Will"]).stdout,
+    hide(out, [["customer", "Bolt"], ["org", "Acme"], ["person", "Will"]]).stdout,
   );
   expect(r).toMatchObject({
     ok: true,
@@ -127,9 +134,9 @@ test("a name the person still wants hidden goes into a new report collected out 
   expect(c.ok).toBe(true);
   const out = c.out as string;
   expect(readFileSync(join(out, "safe.json"), "utf8")).toContain("BOLT_FAILED");
-  const first = JSON.parse(bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Bolt", "--kind", "org", "--name", "Stage"]).stdout);
+  const first = JSON.parse(hide(out, [["customer", "Bolt"], ["org", "Stage"]]).stdout);
   expect(first.notHidden).toHaveLength(2);
-  const r = JSON.parse(bun("hide.ts", ["--out", out, "--everywhere", "--kind", "customer", "--name", "Bolt", "--kind", "org", "--name", "Stage"]).stdout);
+  const r = JSON.parse(hide(out, [["customer", "Bolt"], ["org", "Stage"]], "--everywhere").stdout);
   expect({ ok: r.ok, added: r.added }).toEqual({ ok: true, added: 2 });
   expect(r.next).toContain("--from");
   // Meanwhile this folder is checked without those AI-DLC words: an audit row's event holding a name is refused.
@@ -150,16 +157,17 @@ test("a name the person still wants hidden goes into a new report collected out 
   expect(existsSync(out)).toBe(true);
   expect(JSON.parse(bun("finish.ts", ["--discard", "--out", out]).stdout).ok).toBe(true);
   expect(existsSync(out)).toBe(false);
-  expect(JSON.parse(bun("hide.ts", ["--out", n.out, "--kind", "customer", "--name", "Bolt"]).stdout).notHidden).toBeUndefined();
+  expect(JSON.parse(hide(n.out, [["customer", "Bolt"]]).stdout).notHidden).toBeUndefined();
   // Asked again in the new report, it needs no other one: its words no longer hold the name.
-  expect(JSON.parse(bun("hide.ts", ["--out", n.out, "--everywhere", "--kind", "customer", "--name", "Bolt"]).stdout).next).toBeUndefined();
+  expect(JSON.parse(hide(n.out, [["customer", "Bolt"]], "--everywhere").stdout).next).toBeUndefined();
 });
 
 test("a new report from an earlier one keeps two labels for two names and the person's tool answer; discard leaves another file's folder", () => {
   const dir = project();
   const out = JSON.parse(bun("collect.ts", ["--project", dir, "--no-doctor", "--days", "1"]).stdout).out as string;
-  expect(bun("set-version.ts", ["--out", out, "--tool", "kiro-cli", "--version", "2.37.0"]).status).toBe(0);
-  const r = JSON.parse(bun("hide.ts", ["--out", out, "--everywhere", "--kind", "customer", "--name", "Zenith", "--kind", "customer", "--name", "Initech"]).stdout);
+  writeFileSync(join(out, "local", "version-answer.json"), JSON.stringify({ version: "2.37.0" }));
+  expect(bun("set-version.ts", ["--out", out, "--tool", "kiro-cli"]).status).toBe(0);
+  const r = JSON.parse(hide(out, [["customer", "Zenith"], ["customer", "Initech"]], "--everywhere").stdout);
   expect(new Set(r.hiddenNames).size).toBe(r.hiddenNames.length);
   const anyway = JSON.parse(readFileSync(join(out, "local", "hide-anyway.json"), "utf8")) as { label: string }[];
   expect(new Set(anyway.map((e) => e.label)).size).toBe(anyway.length);
@@ -176,7 +184,7 @@ test("a new report from an earlier one keeps two labels for two names and the pe
 test("a report whose project moved is collected from only with the project's folder now", () => {
   const dir = project();
   const out = JSON.parse(bun("collect.ts", ["--project", dir, "--no-doctor", "--days", "1"]).stdout).out as string;
-  bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Contoso"]);
+  hide(out, [["customer", "Contoso"]]);
   renameSync(dir, `${dir}-moved`);
   const moved = out.replace(dir, `${dir}-moved`);
   expect(collectFrom(moved).reason).toBe("project-not-found");
@@ -220,7 +228,7 @@ test("a hidden name that is also a label kind is kept out of the cover's label c
   const out = reportFolder();
   useWords(out, []);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ environment: { tools: {} }, trees: [{ row: "<custom-mode-1>" }] }, null, 2));
-  bun("hide.ts", ["--out", out, "--kind", "product", "--name", "Product", "--kind", "org", "--name", "Mode"]);
+  hide(out, [["product", "Product"], ["org", "Mode"]]);
   expect(bun("cover.ts", ["--out", out]).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
   expect(cover.replace(/<[^>]+>/g, "")).not.toMatch(/\bproduct\b|\bmode\b/i);
@@ -235,7 +243,7 @@ test("a name inside the fixed text of an AI-DLC message is said not hidden, aske
   writeFileSync(join(out, "local", "vocab.json"), JSON.stringify({ words: [], phrases: [phrase, "Retry the Zenith step after the gate"], stages: [] }));
   writeFileSync(join(out, "safe.json"), JSON.stringify({ knownGaps: [phrase] }, null, 2));
   // Zenith's phrase is not in this report: the check reads every kept phrase, and so does this test.
-  const r = JSON.parse(bun("hide.ts", ["--out", out, "--kind", "product", "--name", "Atlas", "--kind", "product", "--name", "Zenith"]).stdout);
+  const r = JSON.parse(hide(out, [["product", "Atlas"], ["product", "Zenith"]]).stdout);
   expect({ added: r.added, why: r.notHidden.map((n: { why: string }) => n.why) }).toEqual({ added: 0, why: ["aidlc-word", "aidlc-word"] });
   const map = JSON.parse(readFileSync(join(out, "local", "redaction-map.json"), "utf8")).entries as { value: string; kind: string }[];
   expect(map.find((e) => e.value === "Atlas")?.kind).toBe("report-only");
@@ -246,7 +254,7 @@ test("the cover's own words never carry a hidden name, so the check never refuse
   const out = reportFolder();
   useWords(out, []);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ environment: { tools: {} } }, null, 2));
-  bun("hide.ts", ["--out", out, "--kind", "product", "--name", "Hook", "--kind", "product", "--name", "Safe", "--kind", "product", "--name", "Run Data", "--kind", "org", "--name", "Paths And"]);
+  hide(out, [["product", "Hook"], ["product", "Safe"], ["product", "Run Data"], ["org", "Paths And"]]);
   expect(bun("cover.ts", ["--out", out]).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
   expect(cover).not.toMatch(/\bhook\b|safe\.json|run data|paths\s+and/i);
@@ -265,7 +273,7 @@ test("the cover's label counts are of the lines left, after a line holding the o
   writeFileSync(join(out, "safe.json"), JSON.stringify(safe, null, 2));
   // `Gathered` stands only on the cover's first prose line, which `Paths And` (across that line's end) takes out; this
   // leans on the cover's own wording, which the take-out then shows.
-  bun("hide.ts", ["--out", out, "--kind", "org", "--name", "Gathered", "--kind", "org", "--name", "Paths And"]);
+  hide(out, [["org", "Gathered"], ["org", "Paths And"]]);
   expect(bun("cover.ts", ["--out", out]).status).toBe(0);
   const cover = readFileSync(join(out, "aidlc-issue-report.md"), "utf8");
   expect(cover).toContain("(A line here held a name the person hid, so it was left out.)");
@@ -286,7 +294,7 @@ test("the cover's label counts are of the lines left, after a line holding the o
 test("a hidden name that is a key of a data map in safe.json is replaced too", () => {
   const out = reportFolder();
   writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { contoso: 2 } }, contoso: "field name, kept" }, null, 2));
-  bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "contoso"]);
+  hide(out, [["customer", "contoso"]]);
   const safe = JSON.parse(readFileSync(join(out, "safe.json"), "utf8"));
   expect(Object.keys(safe.audit.counts)).toEqual(["<customer-1>"]);
 });
@@ -295,7 +303,7 @@ test("a name the person hid that is only part of AI-DLC's words is refused in th
   const out = reportFolder();
   useWords(out, ["acme-aidlc-plugins", "BOLT_FAILED"]);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
-  const r = JSON.parse(bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Acme"]).stdout);
+  const r = JSON.parse(hide(out, [["customer", "Acme"]]).stdout);
   expect(r.ok).toBe(true);
   writeFileSync(join(out, "aidlc-issue-report.md"), "The Acme team saw the hook fail; acme-aidlc-plugins was on.\n");
   const hits = JSON.parse(bun("check.ts", ["--out", out]).stdout).hits;
@@ -310,14 +318,14 @@ test("a name the person hid that is only part of AI-DLC's words is refused in th
 
 test("a name the map already hides is answered with the label it has", () => {
   const out = reportFolder();
-  const r = bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "/tmp/p"]);
+  const r = hide(out, [["customer", "/tmp/p"]]);
   expect(r.status).toBe(0);
   expect(JSON.parse(r.stdout).alreadyHidden).toEqual(["<project>"]);
 });
 
 test("a name given twice in one call is added once and not called already hidden", () => {
   const out = reportFolder();
-  const r = bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Contoso", "--kind", "customer", "--name", "CONTOSO"]);
+  const r = hide(out, [["customer", "Contoso"], ["customer", "CONTOSO"]]);
   expect(JSON.parse(r.stdout)).toMatchObject({ ok: true, added: 1 });
   expect(JSON.parse(r.stdout).alreadyHidden).toBeUndefined();
 });
@@ -328,8 +336,8 @@ test("every script that takes a report folder refuses a file or a missing --out 
   for (const [script, args] of [
     ["check.ts", []],
     ["check.ts", ["--out", file]],
-    ["hide.ts", ["--out", file, "--name", "Contoso"]],
-    ["set-version.ts", ["--out", file, "--tool", "claude", "--version", "1.2.3"]],
+    ["hide.ts", ["--out", file]],
+    ["set-version.ts", ["--out", file, "--tool", "claude"]],
     ["finish.ts", ["--out", file, "--no-open"]],
   ] as const) {
     const r = bun(script, [...args]);
@@ -352,7 +360,7 @@ test("a name kept as one of AI-DLC's words is not said to be hidden", () => {
   const dict = JSON.parse(readFileSync(map, "utf8"));
   dict.entries.push({ value: "Acme", label: "<customer-1>", kind: "report-only" });
   writeFileSync(map, JSON.stringify(dict));
-  expect(JSON.parse(bun("hide.ts", ["--out", out, "--kind", "customer", "--name", "Acme"]).stdout).alreadyHidden).toBeUndefined();
+  expect(JSON.parse(hide(out, [["customer", "Acme"]]).stdout).alreadyHidden).toBeUndefined();
 });
 
 test("check.ts says a stray folder is not a report folder, not that it was finished", () => {
@@ -360,4 +368,43 @@ test("check.ts says a stray folder is not a report folder, not that it was finis
   writeFileSync(join(dir, "aidlc-issue-report.md"), "# notes");
   const r = bun("check.ts", ["--out", dir]);
   expect(JSON.parse(r.stdout).reason).toContain("is not a report folder made by collect.ts");
+});
+
+test("a name with shell syntax in it is read from the names file, hidden, and the file is gone after", () => {
+  const out = reportFolder();
+  writeFileSync(join(out, "safe.json"), JSON.stringify({ note: "intent for Marks & Spencer's O'Brien team" }, null, 2));
+  const r = hide(out, [["customer", "Marks & Spencer's"], ["person", "O'Brien"]]);
+  expect([r.status, JSON.parse(r.stdout).ok]).toEqual([0, true]);
+  const safe = readFileSync(join(out, "safe.json"), "utf8");
+  expect(safe).not.toContain("Spencer");
+  expect(safe).not.toContain("Brien");
+  expect(existsSync(join(out, "local", "hide-names.json"))).toBe(false);
+});
+
+test("without a names file hide.ts hides nothing and says where the names go", () => {
+  const out = reportFolder();
+  const r = bun("hide.ts", ["--out", out]);
+  expect([r.status, JSON.parse(r.stdout).ok, JSON.parse(r.stdout).file]).toEqual([2, false, join(out, "local", "hide-names.json")]);
+  expect(readFileSync(join(out, "safe.json"), "utf8")).toContain("Contoso Bank");
+});
+
+test("a names file with a byte-order mark is read; wrong entries are named by their place and the file is taken", () => {
+  const out = reportFolder();
+  const names = join(out, "local", "hide-names.json");
+  const list = (kind: string) => [{ kind: "customer", name: "Contoso Bank" }, { kind, name: "Initech" }, { kind: "org", name: "X" }];
+  writeFileSync(names, `\uFEFF${JSON.stringify(list("company"))}`);
+  const r = JSON.parse(bun("hide.ts", ["--out", out]).stdout);
+  expect([r.ok, r.entries]).toEqual([false, [2, 3]]);
+  expect(existsSync(names)).toBe(false);
+  expect(readFileSync(join(out, "safe.json"), "utf8")).toContain("Contoso Bank");
+  writeFileSync(names, `\uFEFF${JSON.stringify(list("org").slice(0, 2))}`);
+  expect(JSON.parse(bun("hide.ts", ["--out", out]).stdout).ok).toBe(true);
+  expect(readFileSync(join(out, "safe.json"), "utf8")).not.toContain("Contoso");
+});
+
+test("the next step for a name not hidden says to write it to the names file again", () => {
+  const out = reportFolder();
+  useWords(out, ["BOLT_FAILED"]);
+  writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
+  expect(JSON.parse(hide(out, [["customer", "Bolt"]]).stdout).next).toContain("local/hide-names.json");
 });

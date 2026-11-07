@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -16,8 +16,15 @@ function folder(): string {
   writeFileSync(join(out, "safe.json"), JSON.stringify({ environment: { tools: {}, versionsMissing: ["kiro-cli"] } }));
   return out;
 }
-const run = (out: string, version?: string) =>
-  spawnSync(process.execPath, [SET, "--out", out, "--tool", "kiro-cli", ...(version === undefined ? [] : ["--version", version])], { encoding: "utf8" });
+// The version goes in local/version-answer.json, as the agent writes it with its file tool; none means "not known".
+function answer(out: string, version: string) {
+  mkdirSync(join(out, "local"), { recursive: true });
+  writeFileSync(join(out, "local", "version-answer.json"), JSON.stringify({ version }));
+}
+const run = (out: string, version?: string, tool = "kiro-cli") => {
+  if (version !== undefined) answer(out, version);
+  return spawnSync(process.execPath, [SET, "--out", out, "--tool", tool], { encoding: "utf8" });
+};
 
 test("a tool the person names without its version is recorded, its version unknown, and keeps a version given before", () => {
   const out = folder();
@@ -74,6 +81,48 @@ test("a tool found in a log keeps the person from adding another as used", () =>
   const safe = JSON.parse(readFileSync(join(out, "safe.json"), "utf8"));
   writeFileSync(join(out, "safe.json"), JSON.stringify({ ...safe, environment: { ...safe.environment, toolsUsed: ["kiro-cli"] } }));
   expect(run(out, "2.33.1").status).toBe(0);
-  expect(spawnSync(process.execPath, [SET, "--out", out, "--tool", "codex", "--version", "0.166.0"], { encoding: "utf8" }).status).toBe(0);
+  expect(run(out, "0.166.0", "codex").status).toBe(0);
   expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.toolsUsed).toEqual(["kiro-cli"]);
+});
+
+test("the version is read from the answer file, which is gone after; an answer that is not a version is refused", () => {
+  const out = folder();
+  expect(run(out, "2.37.0").status).toBe(0);
+  expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.tools["kiro-cli"]).toEqual({ version: "2.37.0", source: "person" });
+  expect(existsSync(join(out, "local", "version-answer.json"))).toBe(false);
+  const refused = run(out, "2.37.0 & echo x");
+  expect([refused.status, JSON.parse(refused.stdout).reason]).toEqual([1, "not-a-version"]);
+});
+
+test("a refused call takes its answer file away, so the next tool is not given that version", () => {
+  const out = folder();
+  answer(out, "1.4.13");
+  const refused = spawnSync(process.execPath, [SET, "--out", out, "--tool", "kiro"], { encoding: "utf8" });
+  expect([refused.status, JSON.parse(refused.stdout).reason]).toEqual([2, "unknown-tool"]);
+  expect(existsSync(join(out, "local", "version-answer.json"))).toBe(false);
+  expect(run(out, undefined, "claude").status).toBe(0);
+  expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.tools.claude).toEqual({ version: null, source: "person" });
+});
+
+test("an answer with no version, an empty one or null records the tool with its version unknown; a byte-order mark is read", () => {
+  for (const body of ["{}", '{ "version": "" }', '{ "version": null }']) {
+    const out = folder();
+    writeFileSync(join(out, "local", "version-answer.json"), body);
+    expect(spawnSync(process.execPath, [SET, "--out", out, "--tool", "kiro-cli"], { encoding: "utf8" }).status).toBe(0);
+    expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.tools["kiro-cli"]).toEqual({ version: null, source: "person" });
+  }
+  const out = folder();
+  writeFileSync(join(out, "local", "version-answer.json"), '\uFEFF{ "version": "2.37.0" }');
+  expect(spawnSync(process.execPath, [SET, "--out", out, "--tool", "kiro-cli"], { encoding: "utf8" }).status).toBe(0);
+  expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.tools["kiro-cli"].version).toBe("2.37.0");
+});
+
+test("an answer file in another shape is refused, never read as a version not known", () => {
+  for (const body of ['"2.37.0"', '[{ "version": "2.37.0" }]', '{ "Version": "2.37.0" }', '{ "version": 1.10 }', "{ version: 2 }"]) {
+    const out = folder();
+    writeFileSync(join(out, "local", "version-answer.json"), body);
+    const r = spawnSync(process.execPath, [SET, "--out", out, "--tool", "kiro-cli"], { encoding: "utf8" });
+    expect([body, r.status, JSON.parse(r.stdout).reason]).toEqual([body, 1, 'local/version-answer.json is not { "version": "<what the person read>" }']);
+    expect(JSON.parse(readFileSync(join(out, "safe.json"), "utf8")).environment.tools).toEqual({});
+  }
 });

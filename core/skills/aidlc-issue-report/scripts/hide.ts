@@ -14,12 +14,16 @@
 // every field's own rule labels them; the check reads either folder by the same
 // list. The names themselves are never printed.
 //
-// Usage: hide.ts --out <dir> [--everywhere] (--kind <org|customer|product|person|other> --name <value>)…
+// The names come in a file the agent writes with its own file tool, never on the command line: no shell reads them
+// (in Command Prompt `&` in `Marks & Spencer` ends a command, and an apostrophe ends a quoted name in every shell).
+// The file is removed once read, so a later call never takes an earlier call's names.
+//
+// Usage: hide.ts --out <dir> [--everywhere]   with <dir>/local/hide-names.json: [{ "kind": "<org|customer|product|person|other>", "name": "<value>" }, …]
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkedLists, hiddenAnyway, keptVocab } from "./lib-check.ts";
-import { flagValue, refuse, reportFolder } from "./lib-cli.ts";
+import { flagValue, refuse, reportFolder, takeAgentJson } from "./lib-cli.ts";
 import { importSecretRules } from "./lib-project.ts";
 import { type Dictionary, type Entry, namesAt, ordinaryWord, PERSON_KINDS, redactValue, useSecretRules } from "./redact.ts";
 
@@ -33,25 +37,26 @@ const KIND_LABEL: Record<(typeof KINDS)[number], string> = {
 };
 
 const argv = process.argv.slice(2);
-const out = reportFolder(flagValue("out", argv)) ?? refuse("usage: hide.ts --out <report folder made by collect.ts> (--kind <kind> --name <value>)…");
+const out = reportFolder(flagValue("out", argv)) ?? refuse("usage: hide.ts --out <report folder made by collect.ts> [--everywhere]");
 const mapPath = join(out, "local", "redaction-map.json");
-
-// Pairs in order: each --name takes the --kind given before it.
-const pairs: { kind: (typeof KINDS)[number]; name: string }[] = [];
-let kind: (typeof KINDS)[number] = "other";
+const namesPath = join(out, "local", "hide-names.json");
 const everywhere = argv.includes("--everywhere");
-for (let k = 0; k < argv.length; k++) {
-  if (argv[k] === "--kind") {
-    const v = argv[++k] as (typeof KINDS)[number];
-    if (!KINDS.includes(v)) refuse(`unknown kind; use one of ${KINDS.join(", ")}`);
-    kind = v;
-  } else if (argv[k] === "--name") {
-    const v = (argv[++k] ?? "").trim();
-    if (v.length < 2) refuse("a name needs at least two characters");
-    pairs.push({ kind, name: v });
-  }
-}
-if (pairs.length === 0) refuse("no --name given");
+
+// The names in the order the file lists them, taken at once (lib-cli takeAgentJson).
+const taken = takeAgentJson(namesPath);
+if (taken.kind === "none") refuse("no names: write them to local/hide-names.json in the report folder first", { file: namesPath });
+if (taken.kind === "not-json" || !Array.isArray(taken.value) || taken.value.length === 0)
+  refuse('local/hide-names.json is not a list of { "kind", "name" }', { file: namesPath });
+const listed = taken.value as { kind?: unknown; name?: unknown }[];
+const entryOk = (e: { kind?: unknown; name?: unknown } | null) =>
+  KINDS.includes((e?.kind ?? "other") as (typeof KINDS)[number]) && typeof e?.name === "string" && e.name.trim().length >= 2;
+const wrong = listed.flatMap((e, i) => (entryOk(e) ? [] : [i + 1]));
+if (wrong.length > 0)
+  refuse(`each entry needs a kind (${KINDS.join(", ")}) and a name of at least two characters`, {
+    entries: wrong,
+    file: namesPath,
+  });
+const pairs = listed.map((e) => ({ kind: (e.kind ?? "other") as (typeof KINDS)[number], name: (e.name as string).trim() }));
 
 const dict = JSON.parse(readFileSync(mapPath, "utf8")) as Dictionary;
 useSecretRules(await importSecretRules(dict.secretRulesFrom));
@@ -70,7 +75,7 @@ const inAidlcWords = (e: Entry) => holds(kept.words, e) || holds(kept.phrases, e
 // folder needs a new report.
 const stillHeld = (e: Entry) => checkedLists(kept).some((set) => holds(set, e));
 let added = 0;
-// The names of this call not hidden, by their place among its --name values (1 is the first): `aidlc-word` (part of
+// The names of this call not hidden, by their place in local/hide-names.json (1 is the first): `aidlc-word` (part of
 // AI-DLC's own words) or `ordinary-word`.
 const notHidden: { name: number; label: string; why: "aidlc-word" | "ordinary-word" }[] = [];
 // A name the map hid before this run (the machine's user, a folder, a name added earlier) keeps the label it has.
@@ -135,7 +140,7 @@ const said = {
   ...(notHidden.length
     ? {
         notHidden,
-        next: "ask the person once about the aidlc-word and ordinary-word ones: hide these anyway (run hide.ts again with --everywhere for them), or leave them",
+        next: "ask the person once about the aidlc-word and ordinary-word ones: hide these anyway (write only them to local/hide-names.json again and run hide.ts with --everywhere), or leave them",
       }
     : {}),
 };
