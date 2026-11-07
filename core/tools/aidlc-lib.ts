@@ -27576,7 +27576,24 @@ function withRepoBaselineAdditions(
 ): SourceBaselineResult {
   if (baseline.state !== "ready" || from === null) return baseline;
   const repos = new Set(intentRepos(projectDir, intent, space));
-  const inWork = (repo: string): boolean => repo === "" || repos.size === 0 || repos.has(repo);
+  // Work whose last repo came off (a submodule of the project, intent
+  // remove-repo) walks the project folder, which reads that repo's files at the
+  // folder's own paths: they stay in the baseline there, as they were. `read`
+  // keeps the top-level folders the baseline's walk read (those repos, each
+  // checkout).
+  let read: Set<string> | null = null;
+  if (repos.size === 0) {
+    read = new Set();
+    const listing: WorkspaceSourceListing = new Map();
+    for (const [key, entry] of baseline.listing) {
+      const parsed = splitSourcePathKey(key);
+      const path = parsed === null ? null : parsed.repo === "" ? parsed.path : `${parsed.repo}/${parsed.path}`;
+      listing.set(path === null ? key : `\0${path}`, entry);
+      if (path?.includes("/")) read.add(path.slice(0, path.indexOf("/")));
+    }
+    baseline = { state: "ready", listing };
+  }
+  const inWork = (repo: string): boolean => repo === "" || repos.has(repo);
   const kept: WorkspaceSourceListing = new Map(
     [...baseline.listing].filter(([key]) => inWork(splitSourcePathKey(key)?.repo ?? "")),
   );
@@ -27589,6 +27606,19 @@ function withRepoBaselineAdditions(
   const joined = new Map<string, WorkspaceSourceListing>();
   const written = new Map<string, string>();
   for (const row of additions) {
+    // The remove that left the work on the project folder: what the walk
+    // before it never read joins as it was then (a folder that was neither a
+    // repo it took off nor a checkout, and a removed submodule's own entry).
+    const left = read !== null && auditBlockField(row.block, "Repos") === ""
+      ? new Set((auditBlockField(row.block, "Removed") ?? "").split(",").map((name) => name.trim()))
+      : null;
+    const unread = (path: string): boolean => {
+      if (left === null || read === null) return false;
+      const slash = path.indexOf("/");
+      if (slash === -1) return left.has(path);
+      const top = path.slice(0, slash);
+      return !left.has(top) && !read.has(top);
+    };
     const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
     if (added.state !== "ready") return added;
     const cloned = auditBlockField(row.block, "Cloned From") !== null;
@@ -27597,6 +27627,7 @@ function withRepoBaselineAdditions(
       const parsed = splitSourcePathKey(key);
       const repo = parsed?.repo ?? "";
       if (repo === "") {
+        if (parsed !== null && !kept.has(key) && unread(parsed.path)) kept.set(key, entry);
         if (cloned && parsed !== null && CLONE_WRITES_AT_ROOT.has(parsed.path)) written.set(key, entry);
         continue;
       }
