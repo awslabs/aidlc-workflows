@@ -1,11 +1,11 @@
 // covers: subcommand:aidlc-unit:adopt, subcommand:aidlc-unit:publish, function:evaluateCodeGenerationApproval
 //
 // A team Unit's code plan approved in the lead's claim, published, and carried on by a teammate who adopts the
-// Unit in his own clone. The approval's receipt stays in the lead's git-ignored runtime folder; the committed
+// Unit in their own clone. The approval's receipt stays in the lead's git-ignored runtime folder; the committed
 // approval row and questions file travel with the claim. The teammate was asked to approve the plan again, and
 // the engine blanked the lead's answer in the questions file. Now the committed approval for this plan, Unit and
-// stage attempt holds on his clone, under Guard Policy strict, relaxed and off: nothing is asked, the answer
-// stays, and the developer handoff passes the guard. A plan he changes is asked about under strict.
+// stage attempt holds on their clone, under Guard Policy strict, relaxed and off: nothing is asked, the answer
+// stays, and the developer handoff passes the guard. A plan they change is asked about under strict.
 //
 // Drives the real claim, publish, adopt, `next`, human-turn hook, answer command and plan-approval guard over two
 // real clones of one bare remote.

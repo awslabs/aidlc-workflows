@@ -82,6 +82,7 @@ import {
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import {
+  planApprovalPromptSha256,
   approvalFingerprint,
   approvedPlanChangeLine,
   attemptRejectionClosed,
@@ -777,12 +778,6 @@ function questionsFileContent(
   ].join("\n");
 }
 
-function promptSha256(questions: string): string {
-  return createHash("sha256")
-    .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
-    .digest("hex");
-}
-
 // The person's own answer on the `[Answer]:` line, as the file's instructions
 // invite ("write your answer after `[Answer]:` and tell me in chat when you
 // are done"). Empty when they
@@ -1396,7 +1391,7 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
     runFloor: authority.runFloor,
     fingerprint,
     questionsFile,
-    promptSha256: promptSha256(questions),
+    promptSha256: planApprovalPromptSha256(questions),
     directiveEpoch: authority.directiveEpoch,
     sourceFloor: authority.sourceFloor,
     markerRevision: authority.markerRevision,
@@ -1657,7 +1652,7 @@ function approveTarget(
     runFloor: authority.runFloor,
     fingerprint,
     questionsFile,
-    promptSha256: promptSha256(questions),
+    promptSha256: planApprovalPromptSha256(questions),
     directiveEpoch: authority.directiveEpoch,
     sourceFloor: authority.sourceFloor,
     markerRevision: authority.markerRevision,

@@ -1,4 +1,4 @@
-// covers: function:readPlanApprovalReceipt, function:evaluateCodeGenerationApproval, function:publishPlanApprovalAsk
+// covers: function:planApprovalPromptSha256, function:evaluateCodeGenerationApproval, function:publishPlanApprovalAsk
 //
 // A code plan approved on one checkout, then carried on in a git clone of it (a teammate's clone, the same
 // person's second laptop). The receipt the approval wrote lives in the checkout's git-ignored runtime folder, so
@@ -14,14 +14,16 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, FIXTURES_DIR, runOrchestrateNext, seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  readAuditShardEvents, readIssuedDirectiveMarker, stateDigest, writeActiveDirectiveMarker,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(180_000);
@@ -133,7 +135,7 @@ function commit(proj: string, paths: string[] = ["-A"]): void {
   git(proj, ["commit", "-qm", "plan approved"]);
 }
 
-/** Bob's own clone of Alice's work; he picks it up in his chat ("carry on"). */
+/** Bob's own clone of Alice's work; Bob picks it up in a chat of their own ("carry on"). */
 function bobsClone(alice: string, crlf = false): string {
   const parent = mkdtempSync(join(tmpdir(), "aidlc-clone-"));
   created.push(parent);
@@ -157,7 +159,7 @@ function answerLine(proj: string): string | undefined {
 
 /** The developer handoff the build step names, as the guard sees it from Bob's chat. */
 function handoff(proj: string): { code: number; stderr: string } {
-  const brief = engine(proj, BOB, "aidlc-testing-posture.ts", ["brief"]);
+  const brief = engine(proj, BOB, "aidlc-testing-posture.ts", ["brief", "--stage-level"]);
   expect(brief.code, brief.out).toBe(0);
   const result = spawnSync(BUN, [GUARD], {
     cwd: proj, encoding: "utf-8",
@@ -171,6 +173,14 @@ function handoff(proj: string): { code: number; stderr: string } {
   return { code: result.status ?? -1, stderr: result.stderr ?? "" };
 }
 
+/** The status of each Plan Approval receipt this checkout holds. */
+function receipts(proj: string): string[] {
+  const dir = join(proj, "aidlc", ".aidlc-sessions", "plan-approval");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((name) => name.startsWith("receipt-"))
+    .map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { status: string }).status);
+}
+
 const QUESTIONS = "aidlc/spaces/default/intents/fixture-8000000000000001/construction/code-generation/code-generation-questions.md";
 
 describe("a code plan approved on one checkout holds on a clone of it", () => {
@@ -179,18 +189,33 @@ describe("a code plan approved on one checkout holds on a clone of it", () => {
       const alice = approvedByAlice(policy, locked);
       commit(alice);
       const bob = bobsClone(alice);
+      expect(readIssuedDirectiveMarker(bob, null)).toBeNull();
       const step = next(bob);
       expect(step, JSON.stringify(step)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
       expect(answerLine(bob)).toBe("[Answer]: A. Approve Plan");
       expect(git(bob, ["status", "--porcelain", "--", QUESTIONS])).toBe("");
       // The walk never puts the plan question again.
       for (let round = 0; round < 3; round++) expect(next(bob).ask_type).not.toBe("plan-approval");
+      expect(receipts(bob)).toEqual([]);
       const handed = handoff(bob);
       expect(handed.code, handed.stderr).toBe(0);
+      // The build started from the approval on record: the clone's own receipt, written by generation start.
+      expect(receipts(bob)).toEqual(["generation"]);
       expect(next(bob).ask_type).not.toBe("plan-approval");
       expect(answerLine(bob)).toBe("[Answer]: A. Approve Plan");
     });
   }
+
+  test("a clone whose last step here was at an earlier stage keeps the approval", () => {
+    const alice = approvedByAlice("strict");
+    commit(alice);
+    const bob = bobsClone(alice);
+    // The step this checkout's engine left at Functional Design, before the approved plan was pulled.
+    writeActiveDirectiveMarker(bob, { kind: "run-stage", stage: "functional-design", state_sha256: stateDigest("an earlier state\n") });
+    expect(readIssuedDirectiveMarker(bob, null)?.stage).toBe("functional-design");
+    expect(next(bob)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    expect(answerLine(bob)).toBe("[Answer]: A. Approve Plan");
+  });
 
   test("a clone whose files Git checked out with CRLF keeps the approval", () => {
     const alice = approvedByAlice("strict");
@@ -203,12 +228,15 @@ describe("a code plan approved on one checkout holds on a clone of it", () => {
 });
 
 describe("what still asks on the clone", () => {
-  test("Guard Policy strict: a plan changed on the clone is asked about", () => {
+  test("Guard Policy strict: a fresh clone whose plan changed is asked about at its first step", () => {
     const alice = approvedByAlice("strict");
     commit(alice);
     const bob = bobsClone(alice);
     writePlan(bob, "- [ ] Step 2: also trim the title\n");
+    // No step was issued on the clone yet: its first `next` reads the step it is about to issue.
+    expect(readIssuedDirectiveMarker(bob, null)).toBeNull();
     expect(next(bob)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(answerLine(bob)).toBe("[Answer]:");
   });
 
   test("a redo of Code Generation on the clone is a new attempt, and its plan is asked about", () => {
