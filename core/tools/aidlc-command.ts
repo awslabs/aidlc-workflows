@@ -238,6 +238,7 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   "merge-status": { name: true, options: [], usage: "unit merge-status <unit>" },
   participate: { name: false, options: [], usage: "unit participate" },
   pin: { name: true, options: [], usage: "unit pin <unit>" },
+  preflight: { name: true, options: [], usage: "unit preflight <unit>" },
   publish: {
     name: true,
     options: ["include"],

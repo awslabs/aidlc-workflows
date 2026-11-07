@@ -57,7 +57,7 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
 const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"];
 const DELEGATED_JUMP_VERBS = ["execute", "reopen"];
 // Team Unit coordination: claims, publication, the merge pin, the human merge
-// gate, and landing. merge-status and status are reads.
+// gate, and landing. merge-status, status and preflight are reads.
 const DELEGATED_UNIT_VERBS = ["adopt", "claim", "release", "participate", "publish", "pin", "gate", "land"];
 // Bolt and swarm lifecycle, the Construction autonomy grant, merge holds, and
 // checkpoint decisions; the referee's prepare and finalize, and the person's
@@ -134,7 +134,7 @@ export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>
   "aidlc-state.ts": ["get", "count", "resume", "lookup"],
   "aidlc-orchestrate.ts": ["wait", "team-board"],
   "aidlc-jump.ts": ["resolve"],
-  "aidlc-unit.ts": ["merge-status", "status"],
+  "aidlc-unit.ts": ["merge-status", "status", "preflight"],
   "aidlc-log.ts": ["answers"],
   "aidlc-learnings.ts": ["surface"],
   "aidlc-runtime.ts": ["read", "summary"],
