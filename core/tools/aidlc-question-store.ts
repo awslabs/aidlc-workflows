@@ -296,8 +296,10 @@ export function pruneExpiredQuestions(projectDir: string): void {
  * The new-work question asked most recently, when it was asked within `withinMs`:
  * the request a reply at the compose gate or the scope confirmation is about.
  * A `compose` entry counts, so a reply at its gate answers that composition.
+ * With `shown`, a request never put to the person is passed over
+ * (neverPutToThePerson).
  */
-export function latestFrontQuestionId(projectDir: string, withinMs: number): string | null {
+export function latestFrontQuestionId(projectDir: string, withinMs: number, options: { shown?: boolean } = {}): string | null {
   let names: string[];
   try {
     names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
@@ -311,7 +313,8 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
     const question = readStoredQuestion(projectDir, id);
     if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
-    if (question === null || question.origin === "routing" || Number.isNaN(at) || Date.now() - at > withinMs) continue;
+    if (question === null || question.origin === "routing" || (options.shown && neverPutToThePerson(question)) ||
+      Number.isNaN(at) || Date.now() - at > withinMs) continue;
     if (latest === null || at > latest.at) latest = { id, at };
   }
   return latest?.id ?? null;
