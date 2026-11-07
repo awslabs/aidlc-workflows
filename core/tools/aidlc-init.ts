@@ -13227,7 +13227,7 @@ export async function main(
     return;
   }
   if (argv.includes("--channel")) {
-    emitResult(configureChannel(argv), options);
+    emitResult(await configureChannel(argv), options);
     return;
   }
   if (argv.includes("--statusline")) {
