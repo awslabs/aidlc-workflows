@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   allowMainCheckoutChangeCommand,
@@ -26,8 +26,10 @@ import {
   resolveWorkflowSelection,
   selectedRecordIsFinished,
   sessionsDir,
+  stateFilePathForSelection,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
+import { stateShowsCompletion } from "./aidlc-doctor-bundle.ts";
 
 export { MESSAGE_SPENDING_EVENTS, type PersonsWords };
 
@@ -974,22 +976,22 @@ function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOpt
  * This chat's messages (with no chat named, any chat's in this project) kept
  * beside finished work since its latest WORKFLOW_COMPLETED row, oldest first:
  * the window turnKeptSinceFinished stands on, and a change asked there is read
- * from. Work archived before it finished has no such row; its latest
- * WORKFLOW_ARCHIVED row is its finish. Never the later of the two: an archive
- * spends nothing, so a message between the completion and the archive still
- * stands. Empty when the record is not finished, has neither row, or cannot be
- * read.
+ * from. Work archived while it ran (before it finished, or during a redo) has
+ * its latest WORKFLOW_ARCHIVED row as its finish; the state's Archived From says
+ * which (stateShowsCompletion). An archive of finished work spends nothing, so a
+ * message between the completion and that archive still stands. Empty when the
+ * record is not finished, has neither row, or cannot be read.
  */
 export function keptSinceFinished(pd: string, options: { intent?: string; space?: string } = {}): StoredMessage[] {
   try {
-    if (!selectedRecordIsFinished(pd, resolveWorkflowSelection(pd, { intent: options.intent, space: options.space }))) {
-      return [];
-    }
+    const selection = resolveWorkflowSelection(pd, { intent: options.intent, space: options.space });
+    if (!selectedRecordIsFinished(pd, selection)) return [];
+    const showsCompletion = stateShowsCompletion(readFileSync(stateFilePathForSelection(pd, selection), "utf-8"));
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
     if (unreadable.length > 0) return [];
     const latest = (event: string) => rows.filter((row) => row.event === event).map((row) => row.timestamp).sort().at(-1);
-    const finishedAt = latest("WORKFLOW_COMPLETED") ?? latest("WORKFLOW_ARCHIVED");
+    const finishedAt = (showsCompletion ? latest("WORKFLOW_COMPLETED") : undefined) ?? latest("WORKFLOW_ARCHIVED");
     if (finishedAt === undefined) return [];
     const onThisWork = sentOnThisWork(rows);
     const chat = invokingChat(pd);
