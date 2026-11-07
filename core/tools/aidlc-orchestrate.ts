@@ -9133,9 +9133,13 @@ function unitTakeLook(
       const names = [...lead.practices, ...lead.project];
       const brings = lead.practices.length === 0 ? "project rules" : lead.project.length === 0 ? "agreed practices" : "agreed practices and project rules";
       const ownRules: AskChoice[] = [];
-      const withRules = (offered: AskChoice[]): AskChoice[] => {
+      // A start that can only begin early carries --early, which a Unit ready
+      // to start reads as nothing, so the one own-rules row starts either.
+      let ownEarly = false;
+      const withRules = (offered: AskChoice[], early = false): AskChoice[] => {
         if (names.length === 0) return offered;
         ownRules.push(...offered);
+        ownEarly ||= early;
         return offered.map((choice) => ({
           label: choice.label,
           detail: `${choice.detail} The lead's ${brings} (${names.join(", ")}) apply to its build too, as they are, with your ` +
@@ -9191,7 +9195,7 @@ function unitTakeLook(
               `Start ${unit} early`,
               `On the pushed branches of ${blockers.join(" and ")}; ${blockers.length === 1 ? "it" : "they"} may still change before merging.`,
               " --early",
-            )));
+            ), true));
           }
           continue;
         }
@@ -9207,9 +9211,7 @@ function unitTakeLook(
       if (ownRules.length === 1) {
         choices.push({ ...ownRules[0], label: `${ownRules[0].label} under your team's own rules only` });
       } else if (ownRules.length > 1) {
-        // A start that can only begin early carries --early, which a Unit
-        // ready to start reads as nothing, so the one row starts either.
-        const early = ownRules.some((choice) => / --early(\s|$)/.test(choice.command ?? ""));
+        const early = ownEarly;
         choices.push({
           label: "Start one under your team's own rules only",
           detail: `Without the lead's ${brings}. I'll ask which Unit, then start it that way for its team` +
