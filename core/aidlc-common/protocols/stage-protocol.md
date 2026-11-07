@@ -168,6 +168,12 @@ stays English; localize only the prose around it. Fill bracketed placeholders
 such as `[Stage Name]` and `[next stage]` with values governed by their own
 language and token rules.
 
+The trailing `(Recommended)` suffix on an option label is also a preserved
+token: keep it exactly in English in a native question tool and in numbered
+prose. Localize the rest of a freeform label, for example
+`Allégée (Recommended)` in French; keep that same suffix in the option labels
+you log.
+
 For any harness that renders options as prose, every question creates a fresh
 response-key scope: the first visible option is `1`, the second is `2`, and so
 on, regardless of numbered content earlier in the message or other questions
