@@ -81,6 +81,13 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const KIRO_IDE_STATE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "aidlc-state.ts");
 const KIRO_CLI_STATE = join(REPO_ROOT, "dist", "kiro", ".kiro", "tools", "aidlc-state.ts");
+// The Kiro CLI (V2) tree's ways back on Kiro CLI's v3 engine, with this copy
+// tree's own command in the switch to Kiro.
+const KIRO_V3_WAYS_BACK =
+  "type /upgrade-agent and choose the workspace agents, then quit Kiro and start `kiro-cli --v3` again in this folder; " +
+  "or, to switch this project to Kiro, quit Kiro, run `bun .kiro/tools/aidlc.ts config --harness kiro` in a terminal in " +
+  "this folder and, once it has finished, start `kiro-cli --v3`; or quit Kiro and start it again in this folder with: " +
+  "kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide)";
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MINT_HOOK = join(AIDLC_SRC, "tools", "aidlc.ts");
@@ -382,9 +389,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
-  // The kiro tree's hooks run only with its aidlc agent on Kiro CLI's v2
-  // engine. The agent tells the two causes apart by Kiro's own line under its
-  // replies, and shows the one step for the person.
+  // The kiro tree's hooks run with its aidlc agent on Kiro CLI's v2 engine,
+  // or on v3 once Kiro has upgraded its agent files. The agent cannot see
+  // Kiro's needs-upgrading line (Kiro CLI 3.1.0 shows it only on its start
+  // screen), so it shows the person one line with both steps, keyed to
+  // whether aidlc is in /agent's list.
   test("A3: on Kiro CLI the refusal gives the agent and engine lines, and asks for nothing again", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -394,12 +403,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const refusal = JSON.parse(r.out).error as string;
     expect(refusal).toContain("no new human reply");
     expect(refusal).toContain("do not ask them to answer again");
-    expect(refusal).toContain('agent "aidlc" needs upgrading for this agent engine, using "default"');
-    expect(refusal).toContain('"Type /agent and pick aidlc, then carry on."');
+    // aidlc missing from /agent's list is v3 with the agent files not upgraded:
+    // Kiro's own upgrade and a start on v3, the switch to Kiro in the install's
+    // own command, or a start on v2.
     expect(refusal).toContain(
-      '"Quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), ' +
-        'then type /aidlc to carry on."',
+      `"Type /agent and pick aidlc, then carry on. If aidlc is not in that list, ${KIRO_V3_WAYS_BACK}, ` +
+        'and type /aidlc there to carry on."',
     );
+    expect(refusal).not.toContain("Otherwise show");
     expect(refusal).not.toContain("reply again");
     expect(refusal).not.toContain("ACP");
     expect(refusal).not.toContain("Reload Window");
@@ -445,7 +456,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // offers to turn a check off for them. In Kiro CLI, with its hooks running, a
   // reply goes unrecorded when it was typed to another agent (a live run), so
   // the step is to pick aidlc and give it once more, or, when Kiro says the
-  // agent needs upgrading for its 3.0 engine, to start again on v2.
+  // agent needs upgrading for its v3 engine, one of the ways back from there.
   test("A5: a reply that was not recorded gets only the person's step, never hooks or a check to turn off", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
@@ -459,7 +470,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     writeHeartbeat(proj, Date.now());
     for (const [state, line] of [
       [STATE, `"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, type /aidlc --doctor."`],
-      [KIRO_CLI_STATE, `"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more."`],
+      [KIRO_CLI_STATE, `"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more.`],
       [KIRO_IDE_STATE, `"Your answer was not recorded, so you may be asked for it again.`],
     ] as const) {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
@@ -469,15 +480,13 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(refusal).toContain("Never offer to turn a check off for them.");
       expect(refusal).not.toMatch(/hook/i);
       expect(refusal).not.toContain("AIDLC_SKIP");
-      // On Kiro CLI's 3.0 engine with the agent not upgraded, picking aidlc
-      // again never brings the shipped hooks back, even after an earlier v2
-      // session left a heartbeat (AIDA #2042 F1): Kiro's own upgrade line
-      // tells the agent to give the v2 restart instead.
+      // On Kiro CLI's v3 engine with the agent files not upgraded, picking
+      // aidlc again never brings the shipped hooks back, even after an earlier
+      // v2 session left a heartbeat (AIDA #2042 F1): aidlc is then missing from
+      // /agent's list, and the same line gives the ways back from v3.
       if (state === KIRO_CLI_STATE) {
-        expect(refusal).toContain('If Kiro\'s own line under your replies says `agent "aidlc" needs upgrading');
         expect(refusal).toContain(
-          '"Your answer didn\'t reach AI-DLC. Quit Kiro and start it again in this folder with: ' +
-            'kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), then give it once more."',
+          `then give it once more. If aidlc is not in that list, ${KIRO_V3_WAYS_BACK}, and give it there."`,
         );
       }
     }

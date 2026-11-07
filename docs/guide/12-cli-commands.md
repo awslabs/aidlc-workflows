@@ -1737,12 +1737,13 @@ sent: on a harness that runs hooks only after the person acts, the steps that
 turn them on; elsewhere, one line for the person: "Your answer didn't reach
 AI-DLC. Please give it once more. If
 it happens again, type /aidlc --doctor." In Kiro CLI, where a reply typed to
-another agent picked in `/agent` is never recorded, that line is "Your answer
-didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." When
-Kiro says agent "aidlc" needs upgrading for its 3.0 engine, the line is "Your
-answer didn't reach AI-DLC. Quit Kiro and start it again in this folder with:
-kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), then give it
-once more." The
+another agent picked in `/agent` is never recorded, that line starts "Your
+answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once
+more." and goes on, for when aidlc is not in that list (Kiro CLI on its v3
+engine with the agent files not upgraded), with Kiro's own upgrade
+(`/upgrade-agent`, choosing the workspace agents, then `kiro-cli --v3` again),
+the switch to Kiro and a start with `kiro-cli --v2 --agent aidlc`, then ", and
+give it there." The
 agent is told never to offer to turn a check off for them.
 
 A `log answer` for a question the agent logged after the person's reply is
