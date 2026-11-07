@@ -614,6 +614,7 @@ export const ROUTES: readonly Route[] = [
       "lookup",
       "practices-event",
       "practices-promote",
+      "practices-branch",
       "set-unit-ownership",
       "set-unit-gate-rhythm",
       // The engine calls these itself once Delivery Planning records
@@ -667,7 +668,7 @@ export const ROUTES: readonly Route[] = [
       },
       {
         label: "practices",
-        forms: ["practices-event", "practices-promote"],
+        forms: ["practices-event", "practices-promote", "practices-branch"],
       },
       {
         label: "fork/merge",
@@ -783,7 +784,7 @@ export const ROUTES: readonly Route[] = [
     group: "swarm",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["prepare", "check", "finalize", "allow-change"],
+    verbs: ["prepare", "check", "finalize", "allow-change", "take-over"],
     tool: TOOLS.swarm,
     ...HIDDEN_ENGINE,
   },

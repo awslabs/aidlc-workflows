@@ -763,6 +763,7 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     configNextStep: m.configNextStep,
     ...(m.firstRunSteps ? { firstRunSteps: m.firstRunSteps } : {}),
     ...(m.editorTerminalApp ? { editorTerminalApp: m.editorTerminalApp } : {}),
+    ...(m.cliFirst ? { cliFirst: m.cliFirst } : {}),
     harnessDir: m.harnessDir,
     ...(m.onboarding?.harnessDst
       ? { onboarding: `${m.harnessDir}/${m.onboarding.harnessDst}` }

@@ -1003,6 +1003,8 @@ export interface PrintDirective {
   message: string;
   /** As on an ask: the request named a document in the project. */
   document_note?: string;
+  /** The step waits on the person: the agent ends its turn after it (a blocking check's Fix or Override). */
+  ends_turn?: true;
   // next_stage: on the reply that opens (or re-opens) a stage's approval gate,
   // the stage the Approve option continues to, computed when the gate opens so
   // a plan change made during the stage is in it. null = the final in-scope
@@ -1311,7 +1313,7 @@ const ASK_FIELDS = [
   "handovers",
 ] as const;
 const PRINT_FIELDS = [
-  "kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id", "offers",
+  "kind", "message", "ends_turn", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id", "offers",
 ] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues", "done_note"] as const;
@@ -2482,6 +2484,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     }
     case "print":
       checkString(o, "message", kind, errors);
+      checkOptionalTrue(o, "ends_turn", kind, errors);
       checkOptionalNullableString(o, "next_stage", kind, errors);
       checkOptionalRevisionCycle(o, kind, errors);
       checkOptionalQuestionId(o, kind, errors);

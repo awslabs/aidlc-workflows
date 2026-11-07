@@ -6900,9 +6900,9 @@ describe("t218 the Kiro IDE trust step", () => {
     }
     expect(hits).toEqual([]);
     const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
-      hookActivation: { recovery: string; notRunYet: string };
+      hookActivation: { recovery: string; notRunYet: string; notRunYetCliFirst: { text: string } };
     }).hookActivation;
-    for (const text of [activation.recovery, activation.notRunYet]) {
+    for (const text of [activation.recovery, activation.notRunYet, activation.notRunYetCliFirst.text]) {
       expect(text).toContain("Developer: Reload Window");
       expect(text).toContain("select Manage on the Restricted Mode banner, then Trust");
       expect(text).not.toContain("agent picker");

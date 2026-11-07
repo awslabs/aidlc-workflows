@@ -134,6 +134,7 @@ import {
 } from "./aidlc-question-store.ts";
 import {
   latestMessage, listMessages, messageBeforeJoining, noReplySince, personTurnStands, readMessage, standingPersonTurn,
+  requestMessageStep,
 } from "./aidlc-message-store.ts";
 import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices, SUMMARY_CONFIRMATION_CHOICES } from "./aidlc-reply-reader.ts";
 import {
@@ -345,6 +346,7 @@ import {
   finishedWork,
   workStanding,
   readUnitScopeStamp,
+  cursorPastStage,
   workToPickUp,
   readProjectDescriptionAuthority,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
@@ -584,6 +586,7 @@ import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-reco
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
+  autonomyGrantedOnRecord,
   checkpointPolicyEnabled,
   loadConstructionEvidence,
   resolveConstructionCheckpoint,
@@ -593,7 +596,7 @@ import {
 } from "./aidlc-construction-checkpoints.ts";
 import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import { newChatStep } from "./aidlc-new-chat.ts";
-import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
+import { resolveSwarmCheckpoint, swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
 import {
   BUILD_WAITING_CLAUSE,
   otherBuildsTurnedDown,
@@ -636,7 +639,7 @@ import {
   skeletonHeldBackOnShare,
   teamsClone,
   teamStanceToRead,
-  shareTarget,
+  shareOfferTarget,
   teamHandoverMarkName,
   teamSharedHere,
   unitBranchInTheWay,
@@ -839,6 +842,7 @@ import {
   type GuardPreflightAction,
   type GuardPreflightResult,
   completionChecksStep,
+  engineSettlesLateGate,
   failedCheckNotices,
   guardPreflight as stateGuardPreflight,
   leftOutNotice,
@@ -1775,10 +1779,11 @@ function withPersonLine(transported: Directive, line: string | null): Directive 
 
 // Person lines kept from steps the agent passed through this turn are said,
 // in order and once, with the step it speaks from, in its change_notices and
-// under their note (`withAgentNotes` again). One that would push the step over
-// its size limit waits for the next one. They count as said only once that
-// step is written (the returned callback), so a step replaced by an error
-// leaves them for the error, or for the next step.
+// under their note (`withAgentNotes` again); a line kept for the reply rides
+// each such step until the person writes (pendingPersonLines). One that would
+// push the step over its size limit waits for the next one. They count as said
+// only once that step is written (the returned callback), so a step replaced by
+// an error leaves them for the error, or for the next step.
 function sayPendingPersonLines(
   requested: Directive,
   transported: Directive,
@@ -1803,6 +1808,10 @@ function sayPendingPersonLines(
     return { directive: withLead() };
   }
   const pending = pendingPersonLines(projectDir, sessionId);
+  // A line kept for the reply rides every step the agent speaks from, even one
+  // with no line of its own, so the one it stops on carries it whenever that is
+  // (the agent knows when it stops); a rules part never takes it.
+  if (pending.reply && transported.kind !== "load-steering") leadsToSpeech.add(requested);
   if (pending.lines.length === 0) return { directive: transported };
   // A kept pick-up line makes the stage or question step it reaches speak,
   // even one with no line of its own (a waiting Unit checkpoint).
@@ -1887,7 +1896,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // ask whose ways on are the conductor's own work (agent_work) is no question
   // for the person: the turn goes on, and the conductor carries them out.
   const endsTurn = (directive.kind === "ask" && (directive as { agent_work?: unknown }).agent_work !== true) ||
-    turnEndingPrints.has(directive) || showsGateAgain(directive as unknown as Record<string, unknown>);
+    turnEndingPrints.has(directive) || (directive.kind === "print" && directive.ends_turn === true) ||
+    showsGateAgain(directive as unknown as Record<string, unknown>);
   if (
     directive.kind === "run-stage" && directive.construction_policy &&
     directive.gate === false
@@ -5780,7 +5790,7 @@ function teamShareOffer(
   if (auditRows.some((row) => row.event === "UNIT_STARTED" && auditBlockField(row.block, "Unit") === unit)) return null;
   const mark = teamHandoverMarkName("share", unit);
   if (handoverOffered(projectDir, mark) || shareBlocker(projectDir) !== null || !claimsOpenHere(projectDir)) return null;
-  const target = shareTarget(projectDir);
+  const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   const work = workToCommitWords(projectDir);
   const plural = unitsLeft === 1 ? "The plan's last Unit is ready for the teams. Share it now?" :
@@ -5813,7 +5823,9 @@ function teamShareOffer(
 function buildOutShareOffer(projectDir: string, auditRows: readonly AuditShardEvent[]): AskDirective | null {
   if (!unitsAssignedSinceTeams(auditRows) || assignmentNotHeld(auditRows) !== null) return null;
   if (shareBlocker(projectDir) !== null) return null;
-  const target = shareTarget(projectDir);
+  // While the team's branch is still to be read, the offer names "the team's
+  // branch" and the share's own step reads it first (shareMain).
+  const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   // Every Unit held for a team went as a file, and none is open: no team takes
   // anything from the home.
@@ -5972,7 +5984,7 @@ function teamPushOffer(projectDir: string): AskDirective | null {
   const landed = landedNotOnRemote(projectDir);
   const fresh = landed.filter((row) => !handoverOffered(projectDir, teamHandoverMarkName("push", row.commit.slice(0, 12))));
   if (fresh.length === 0 || shareBlocker(projectDir) !== null) return null;
-  const target = shareTarget(projectDir);
+  const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   const units = landed.map((row) => row.unit);
   const work = workToCommitWords(projectDir);
@@ -6574,7 +6586,7 @@ function assembleTeamConstructionBoard(
     })
     .sort((a, b) => compareBoardKeys(a.unit, b.unit));
   const landedHere = landedNotOnRemote(projectDir);
-  const target = landedHere.length > 0 && shareBlocker(projectDir) === null ? shareTarget(projectDir) : null;
+  const target = landedHere.length > 0 && shareBlocker(projectDir) === null ? shareOfferTarget(projectDir) : null;
   const blocked = overview.waiting
     .map((row) => ({
       unit: row.unit,
@@ -10040,8 +10052,10 @@ const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
 const runStageQuestionsFiles = new WeakMap<RunStageDirective, string>();
 // Prints the agent stops after (turnEndingPrint).
 const turnEndingPrints = new WeakSet<Directive>();
-// A plan change the person asked for while the code plan's question is open:
-// the question stays the published step (emit does not replace it).
+// Prints that leave the published step as it is (emit does not replace it): a
+// plan change the person asked for while the code plan's question is open, and
+// a second chat's line about a batch another chat builds, whose step that chat
+// and its commands (allow-change, the plan question) still read.
 const planWaitPrints = new WeakSet<Directive>();
 const hookRefusalAsks = new WeakSet<Directive>();
 const publicationContexts = new WeakMap<
@@ -14812,6 +14826,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         emit(errorDirective(errorMessage(e)));
         return;
       }
+      // The record moves on to Build and Test once every Unit's row is done,
+      // here too (and older releases wrote it so). Build and Test is the
+      // lead's, once every Unit lands: this checkout's step stays its Unit's.
+      const last = constructionUnitMajorBlock(scope, stateContent, true).at(-1);
+      if (last && cursorPastStage(stateContent, last.slug)) {
+        emitUnitMajorRunStage(last, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
+        return;
+      }
     } else if (!beforeTeamUnitWork(pd, stateContent)) {
       try {
         const readOnlyBoard = isReadOnlyEngineProbe();
@@ -15093,7 +15115,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           if (together) directive.approve_together = together;
           // A joint late approval stays the one question it is: the report
           // would show the gate as this stage's alone.
-          if (!together && gateOwesItsReport(pd, stateContent, currentNode, scope)) {
+          const owesReport = !together && gateOwesItsReport(pd, stateContent, currentNode, scope);
+          // A late gate the engine settles itself, already open (the person's
+          // Override opened it, or an earlier report did): its approval is
+          // recorded here and the walk goes on, so its checks are not run, or
+          // asked about, again.
+          if (!together && !owesReport && settleBookkeepingGate(pd, stateContent, directive)) return;
+          if (owesReport) {
             const step = printDirective(
               `The ${currentNode.name} gate's reviewed work changed after its review: run \`${aidlcToolInvocation("orchestrate")} ` +
                 `report --stage ${shellArg(currentSlug)} --result awaiting-approval\` and show the gate with what it returns.`,
@@ -15662,6 +15690,41 @@ function swarmRevisionNeedsPreparation(
   });
 }
 
+// Said in a chat that did not start, or take over, the side-by-side batch it reached.
+const BUILDING_IN_OTHER_CHAT = "Your other chat started building these Units.";
+const TAKEN_OVER_IN_OTHER_CHAT = "Your other chat took over building these Units.";
+
+// A batch another chat of this clone started (or took over) and has not
+// landed is that chat's (#3633): this chat says so and hands out nothing to run
+// for it. Only where the host named this chat; a chat that ended since its row
+// leaves the batch to whichever chat asks (an end a host only inferred when the
+// next chat started says nothing about the other chat). The person's own words
+// take it over: once they have said something here, the step names their
+// messages for it, so nothing is offered before they ask.
+function batchBuiltElsewhereStep(projectDir: string, stage: string, batch: number, units: string[]): Directive | null {
+  const chat = engineSessionId ?? null;
+  if (chat === null || !hostNamesThisChat(projectDir)) return null;
+  const building = swarmBuildingChat(projectDir, batch, stage);
+  if (building === null || building.chat === chat) return null;
+  if (ownShardRows(projectDir).mine.some((row) => building.since(row) && row.event === "SESSION_ENDED" &&
+    auditBlockField(row.block, "Session") === building.chat &&
+    !(auditBlockField(row.block, "Reason") ?? "").startsWith("inferred"))) return null;
+  const tookOver = building.row.event === "SWARM_TAKEN_OVER";
+  const take = `\`${aidlcToolInvocation("swarm")} take-over --batch ${batch}\``;
+  const step: Directive = {
+    ...printDirective(
+      `The side-by-side build of ${units.join(", ")} was ${tookOver ? "taken over by" : "started from"} another chat ` +
+        "on this machine and has not landed. " +
+        requestMessageStep(projectDir, "Run nothing for it here and end your turn.", "any", take,
+          `run bare \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns`, building.since),
+    ),
+    narration: tookOver ? TAKEN_OVER_IN_OTHER_CHAT : BUILDING_IN_OTHER_CHAT,
+  };
+  turnEndingPrints.add(step);
+  planWaitPrints.add(step);
+  return step;
+}
+
 function tryEmitSwarm(
   slug: string,
   scope: string,
@@ -15805,6 +15868,11 @@ function tryEmitSwarm(
     "swarm",
   ];
   if (ceremonyPolicyValues(scope, stateContent).sensors === "on") protocolModules.push("sensors");
+  const elsewhere = batchBuiltElsewhereStep(projectDir, slug, pendingBatch, pendingUnits);
+  if (elsewhere !== null) {
+    emit(elsewhere);
+    return true;
+  }
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
     swarmRevisionNeedsPreparation(projectDir, slug, pendingBatch, pendingUnits);
   if (repos.length === 1) {
@@ -17125,8 +17193,11 @@ function emitPerUnitRunStage(
 // late stage gates are bookkeeping: the person approved the work Unit by Unit
 // and is not asked again. A bare `next` settles each one itself, with the same
 // two reports the conductor would run (so the same rows), then routes again and
-// hands over the next real step. A report that does not go through is shown as
-// it is. True when this call emitted.
+// hands over the next real step; a gate already open (the person's Override
+// opened it) owes only its approval, so its checks are not run, or asked about,
+// again. A report that does not go through is shown as it is, and so is one
+// that answered with a step instead of opening the gate (a team's blocking
+// check): nothing is approved over it. True when this call emitted.
 const MAX_SETTLED_GATES = 12;
 function settleBookkeepingGate(
   projectDir: string,
@@ -17145,7 +17216,8 @@ function settleBookkeepingGate(
   ) {
     return false;
   }
-  for (const result of ["awaiting-approval", "approved"] as const) {
+  const open = checkboxForSlug(stateContent, directive.stage)?.state === "awaiting-approval";
+  for (const result of open ? ["approved" as const] : ["awaiting-approval", "approved"] as const) {
     const run = Bun.spawnSync({
       cmd: aidlcEngineCommand(
         "orchestrate",
@@ -17164,8 +17236,13 @@ function settleBookkeepingGate(
     } catch {
       reported = null;
     }
-    if (run.exitCode !== 0 || reported?.kind !== (result === "approved" ? "done" : "print")) {
-      emit(reported !== null && reported.kind !== "print" && reported.kind !== "done"
+    const after = result === "awaiting-approval" && reported?.kind === "print" ? loadStateFileIfPresent(projectDir) : null;
+    const stayedShut = (result === "awaiting-approval" && reported?.kind === "print" &&
+      (after === null || checkboxForSlug(after, directive.stage)?.state !== "awaiting-approval")) ||
+      // The approval's own re-check of a file changed at the open gate refused it: the person's question.
+      (reported?.kind === "print" && reported.ends_turn === true);
+    if (run.exitCode !== 0 || reported?.kind !== (result === "approved" ? "done" : "print") || stayedShut) {
+      emit(reported !== null && (stayedShut || (reported.kind !== "print" && reported.kind !== "done"))
         ? reported
         : errorDirective(
           `${nodeForSlug(directive.stage)?.name ?? directive.stage} could not be recorded as approved: ` +
@@ -21444,7 +21521,7 @@ const KIRO_CONTEXT_OFFER_HEARD = "kiro-context-offer";
 // A new chat that picks the work up on the same model starts about as full as
 // this chat got in its first turn on the work (#3642). From half the window,
 // where the statusline turns yellow (contextColor), it would fill again soon,
-// so the line says that instead of recommending one.
+// so the line says a new chat will not help much instead of recommending one.
 const NEW_CHAT_NO_ROOM_PERCENT = 50;
 function addContextParkOffer(
   reply: { kind: string; narration?: string; change_notices?: string[] },
@@ -21475,10 +21552,11 @@ function addContextParkOffer(
   if (full === null) return;
   const first = kiroFirstTurnFill(chat, since);
   const noRoom = first !== null && first.percent >= NEW_CHAT_NO_ROOM_PERCENT;
+  // The figure names its source: on Kiro CLI 3.1.0 the agent left out the
+  // sentence that gave it bare, twice.
   const line = noRoom
-    ? `${full} A new chat on the same model${first.model ? ` (${first.model})` : ""} will not help much: this chat ` +
-      `reached about ${Math.round(first.percent)}% in its first turn on this work, so a new chat would fill up ` +
-      `${summarized ? "and be summarized again" : "again"} soon.`
+    ? `${full} By Kiro's count this chat was about ${Math.round(first.percent)}% full in its first turn on this ` +
+      `work, so a new chat on the same model${first.model ? ` (${first.model})` : ""} will not help much.`
     : summarized
     ? `${full} Do you want to pause here and carry on in a new chat? I recommend it: your work is saved, and a new ` +
       "chat picks it up from the saved files."
@@ -21594,6 +21672,15 @@ function validGuardRecoveryAsk(
 // may end there; one the person already made (another pick, their own words)
 // is the agent's to record now. Anything else stops the workflow with the
 // tool's plain words.
+// A team's blocking check stopped the late gate: the agent asks the person Fix
+// or Override and ends its turn. The mark rides the step itself, so `next`
+// keeps it when it hands on a report's step (settleBookkeepingGate).
+function blockingCheckStep(text: string): PrintDirective {
+  const step = turnEndingPrint(text);
+  step.ends_turn = true;
+  return step;
+}
+
 function stateRefusalDirective(lead: string, question: string, detail: string): PrintDirective | ErrorDirective {
   let text = detail;
   let agentGuidance: unknown = null;
@@ -21616,6 +21703,7 @@ function stateRefusalDirective(lead: string, question: string, detail: string): 
     );
   }
   if (agentGuidance === "person-decided") return printDirective(text);
+  if (agentGuidance === "blocking-check") return blockingCheckStep(text);
   return errorDirective(
     lead + (text ? `: ${text}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
   );
@@ -23649,8 +23737,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // At the late gate these refusals name the agent's own next step, as the state tool's do.
+    const refusal = engineSettlesLateGate(pd, stateContent, node) ? printDirective : errorDirective;
     if (readAutonomyMode(stateContent) === "autonomous") {
-      emit(errorDirective(
+      emit(refusal(
         `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
           "is autonomous. Unattended runs must halt on blocking sensor failures. When the person " +
           `chooses the override, run \`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction ` +
@@ -23659,7 +23749,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     if (flags.userInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
-      emit(errorDirective(
+      emit(refusal(
         `A blocking sensor override requires --user-input ` +
           `"${BLOCKING_SENSOR_OVERRIDE_CHOICE}", the exact choice offered to the human.`,
       ));
@@ -23870,6 +23960,24 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       emit(stateRefusalDirective(`Could not update the approval status for "${slug}"`, `"${slug}"`, detail));
       return;
     }
+    // The person's Override opened a late gate of a solo unit-major walk, one
+    // the engine settles itself (settleBookkeepingGate): no one is asked to
+    // approve it, so the reply is the walk's next step, not the gate's question.
+    if (
+      flags.result === "awaiting-approval" && flags.overrideBlockingSensors && !revalidatingOpenGate &&
+      engineSettlesLateGate(pd, stateContent, node)
+    ) {
+      emit(withChangeNotices(
+        printDirective(`The person's Override is recorded and the ${node.name} gate is open: run \`${aidlcToolInvocation("orchestrate")} next\`, which settles it and goes on.`),
+        changeNoticesFromToolOutput(res.stdout),
+      ));
+      return;
+    }
+    // A gate the agent approves itself is passed on its way: what its report
+    // says for the person waits for their reply. A gate they are shown is it.
+    const agentApproves = (flags.result === "awaiting-approval" || flags.result === "revised") &&
+      agentApprovesGate(pd, stateContent, node);
+    const gateNotices = changeNoticesFromToolOutput(res.stdout);
     const gateReply = withChangeNotices(
       printDirective(
         revalidatingOpenGate
@@ -23883,7 +23991,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
             personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)) +
             (flags.result === "rejected" ? reReviewRequestSentence(pd, node, scope) : ""),
       ),
-      changeNoticesFromToolOutput(res.stdout),
+      agentApproves ? keptForReply(pd, gateNotices) : gateNotices,
     );
     // The gate shown again ends the turn, as the gate-only step does: the
     // person's reply that led here (a change, a review they asked for) is
@@ -24261,6 +24369,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
   const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
   const narration = [unbuilt, progress].filter(Boolean).join("\n");
+  const continues = workflowContinues(pd);
+  // The agent's own approval goes on to the next stage, so its lines wait for the reply.
+  const approvalNotices = flags.result === "approved" && continues.workflow_continues === true &&
+      agentApprovesGate(pd, stateContent, node)
+    ? keptForReply(pd, changeNotices)
+    : changeNotices;
   emit(
     withChangeNotices(
       {
@@ -24269,11 +24383,28 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           `Committed ${committed.join(" + ")} for "${approvedTogether.join('", "')}" (scope: ${scope}). ` +
           `State advanced; run next to continue.${keepNote}`,
         ...(narration ? { narration } : {}),
-        ...workflowContinues(pd),
+        ...continues,
       },
-      changeNotices,
+      approvalNotices,
     ),
   );
+}
+
+// A gate the agent approves itself: a Construction gate that needs no person
+// (isAutonomousConstructionGate) under the person's Continue automatically
+// grant. The grant is required: in a gated unit-major run the per-Unit stage
+// gates need no person once each Unit's checkpoint is approved, and their
+// lines ride the next step as before (settleBookkeepingGate).
+function agentApprovesGate(pd: string, stateContent: string, node: StageEntry): boolean {
+  return autonomyGrantedOnRecord(pd, stateContent) && isAutonomousConstructionGate(stateContent, node, pd);
+}
+
+// Lines for the person from a checkpoint the agent approves itself, kept for
+// the reply they read (sayPendingPersonLines); the ones this chat cannot keep
+// ride the step as before.
+function keptForReply(pd: string, lines: string[]): string[] {
+  if (lines.length === 0 || !engineSessionId || isReadOnlyEngineProbe()) return lines;
+  return addPendingPersonLines(pd, engineSessionId, lines, { forReply: true }) ? [] : lines;
 }
 
 // The `park` handler (issue #367). Parks the workflow at the current inter-stage

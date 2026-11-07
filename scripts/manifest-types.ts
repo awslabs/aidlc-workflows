@@ -161,6 +161,17 @@ export type HarnessManifest = {
    */
   editorTerminalApp?: string;
   /**
+   * For a tree two hosts run, one an editor and one a CLI: `configNextStep`
+   * and `firstRunSteps` worded for the CLI, used instead when a supported CLI
+   * of this harness (its probe's version floor) is on an absolute PATH entry
+   * and `aidlc config` runs neither in a shell `env` names (read like
+   * `hookActivation.missedReplyInHost`) nor in the terminal of the editor its
+   * `TERM_PROGRAM=<name>` entry names (that TERM_PROGRAM, or the git askpass
+   * helper, as for `editorTerminalApp`).
+   * `hookActivation.notRunYetCliFirst` is doctor's line chosen the same way.
+   */
+  cliFirst?: { env: string[]; configNextStep: string; firstRunSteps: string[] };
+  /**
    * For a host that runs no project hooks until the person acts (for example
    * trusts the folder and reloads the window, or starts the engine that reads
    * this tree's hook registrations): what to tell them.
@@ -198,6 +209,11 @@ export type HarnessManifest = {
      * none. `<entry>` and `<folder>` are filled in.
      */
     notRunYet?: string;
+    /**
+     * `notRunYet` worded for this harness's CLI, used instead on the terms
+     * `cliFirst` states, with this `env`. Set beside `cliFirst`.
+     */
+    notRunYetCliFirst?: { env: string[]; text: string };
     /**
      * Sentence the engine adds to every directive's change_notices while this
      * workflow has started a stage but no hook heartbeat exists. Set only when

@@ -325,6 +325,7 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import { recordIntegrationBranch } from "./aidlc-unit.ts";
 import {
   approvedOverUnfinishedReview,
   approvedUnitChanges,
@@ -937,6 +938,12 @@ function refuseForAgent(msg: string, options: { personDecided?: boolean } = {}):
   throw new DecisionNotMadeError(msg, options.personDecided === true);
 }
 
+// A team's blocking check refusing the stage gate the engine settles itself:
+// the step is the agent's (ask the person Fix or Override, as at a Unit's
+// checkpoint, whose refusal reaches the agent through the checkpoint's verify),
+// so the router hands it to the agent instead of showing it as an error.
+class BlockingCheckStepError extends StateCommandError {}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -1151,6 +1158,9 @@ export function main(argv: string[]): void {
       case "practices-promote":
         handlePracticesPromote(args.slice(1));
         break;
+      case "practices-branch":
+        handlePracticesBranch(args.slice(1));
+        break;
       case "fork":
         handleFork(args.slice(1));
         break;
@@ -1168,7 +1178,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, checkpoint-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, checkpoint-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, practices-branch, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -1193,6 +1203,9 @@ export function main(argv: string[]): void {
         auditMessage: e.message,
         agentGuidance: e.personDecided ? "person-decided" : "question-open",
       });
+    }
+    if (e instanceof BlockingCheckStepError) {
+      exitWithError({ message: e.message, auditMessage: e.message, agentGuidance: "blocking-check" });
     }
     exitWithError(errorMessage(e));
   }
@@ -4288,7 +4301,14 @@ function overrodeAtEarlierUnits(pd: string, slug: string, unit: string, kind: st
   const pickUnits = new Map<AuditShardEvent, string | null>();
   const questions = new Map<AuditShardEvent, AuditShardEvent>();
   const carried = new Map<string, string>();
-  for (const [pick, choice] of blockingSensorPicks(rows, slug, pickUnits, questions)) {
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(pd);
+  } catch {
+    stateContent = null;
+  }
+  // Read as the verification that carried the pick reads it (blockingSensorPicks, with the state).
+  for (const [pick, choice] of blockingSensorPicks(rows, slug, pickUnits, questions, stateContent)) {
     const at = pickUnits.get(pick) ?? null;
     if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE || at === null || at === unit || carried.has(at)) continue;
     if (!optionsList(auditBlockField(questions.get(pick)?.block ?? "", "Options")).includes(SWITCH_CHECKS_OFF_CHOICE)) continue;
@@ -4355,9 +4375,22 @@ function enforceBlockingGateSensors(
     ? blockingSensorOverrideVerify(at.unit, at.checkpointKind)
     : blockingSensorOverrideReport(slug, at.reportResult);
   const where = at.kind === "checkpoint" ? `"${slug}" for unit "${at.unit}"` : `"${slug}"`;
+  // At the stage gate the engine settles itself after every Unit's checkpoint,
+  // the refusal is the agent's step, as the checkpoint's is.
+  const stage = at.kind === "gate" ? findStageBySlug(slug) : undefined;
+  const late = stage !== undefined && engineSettlesLateGate(pd, stateContent, stage);
+  const refuse = late
+    ? (message: string): never => {
+      throw new BlockingCheckStepError(message);
+    }
+    : error;
+  // The person chose the Override and the agent's own next step is named
+  // (leave Continue automatically first, or the exact choice): it goes on in
+  // the same turn.
+  const refuseOwnStep = late ? (message: string): never => refuseForAgent(message, { personDecided: true }) : error;
   if (overrideRequested) {
     if (isAutonomousMode(stateContent)) {
-      error(
+      refuseOwnStep(
         `Refusing blocking sensor override for ${where}: Construction Autonomy Mode ` +
           "is autonomous. Unattended runs must halt on blocking sensor findings or " +
           "unavailable evaluations. When the person chooses the override, run " +
@@ -4366,13 +4399,13 @@ function enforceBlockingGateSensors(
       );
     }
     if (overrideInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
-      error(
+      refuseOwnStep(
         `Refusing blocking sensor override for ${where}: --user-input must be the ` +
           `exact offered choice "${BLOCKING_SENSOR_OVERRIDE_CHOICE}".`,
       );
     }
     if (!hasBlockingSensorOverrideAuthorization(pd, slug, at.kind === "checkpoint" ? at.unit : null)) {
-      error(
+      refuse(
         `Refusing blocking sensor override for ${where}: no fresh authorization receipt ` +
           `proves that "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" was offered and selected after ` +
           "a HUMAN_TURN. Record the decision and exact answer through aidlc-log.ts, then retry.",
@@ -4380,7 +4413,7 @@ function enforceBlockingGateSensors(
     }
     return;
   }
-  error(
+  refuse(
     `Blocking gate sensor evaluation did not pass for ${where}. Sensors: ` +
       `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
       `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
@@ -7692,6 +7725,18 @@ function handleCheckpointChecks(args: string[]): void {
   console.log(JSON.stringify({ fields, overridden: overriddenKeys }));
 }
 
+// The stage gate the engine settles itself once every Unit of this walk is
+// approved at its checkpoint (the late gate): no person approves it, so a
+// team's blocking check refusing it is the agent's step to put to the person.
+export function engineSettlesLateGate(
+  pd: string,
+  stateContent: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): boolean {
+  return stage.for_each === "unit-of-work" && unitCheckpointChecksApply(stateContent) &&
+    !personAnswersGate(pd, stateContent, stage, null);
+}
+
 // Where a Unit's checkpoint runs its stages' blocking checks, and the late
 // stage gate leaves out what those checkpoints checked: solo work built Unit by
 // Unit with checkpoints. Anywhere else (stage-major work, its skeleton
@@ -9743,6 +9788,26 @@ export function practicesRulesToAdd(
     return rules;
   };
   return { mandated: toAdd("## Mandated"), forbidden: toAdd("## Forbidden") };
+}
+
+// practices-branch --file <project.md|team.md|org.md> (--branch <name> | --none):
+// what the agent read in that layer's Way of Working words, the branch the work
+// merges into or that they name none, recorded where team work reads it
+// (recordIntegrationBranch, aidlc-unit.ts). Rides no event: a branch is the
+// team's own words as one exact line, and git keeps the file.
+function handlePracticesBranch(args: string[]): void {
+  const none = args.includes("--none");
+  const flags = parseFlags(args.filter((arg) => arg !== "--none"));
+  if (!flags.file || none === (flags.branch !== undefined)) {
+    error("Usage: aidlc-state.ts practices-branch --file <project.md|team.md|org.md> (--branch <name> | --none)");
+  }
+  let recorded: ReturnType<typeof recordIntegrationBranch>;
+  try {
+    recorded = recordIntegrationBranch(resolveProjectDir(projectDir), flags.file, none ? null : flags.branch);
+  } catch (e) {
+    error(errorMessage(e));
+  }
+  console.log(JSON.stringify(recorded));
 }
 
 // practices-promote --team-practices <path> --discovered-rules <path>

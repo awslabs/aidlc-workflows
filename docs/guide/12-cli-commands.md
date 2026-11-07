@@ -1162,12 +1162,21 @@ Read the current integration state and claim registry, then print the claimable,
 claimed, and waiting Unit sets as JSON. This is a claim-time/status surface and
 may contact the configured git remote.
 
-Team mode reads the integration branch from the `## Way of Working` section of
-`project.md`, then `team.md`, then `org.md`: the first line that names the
-integration, base or merge-target branch in backticks wins, whatever the branch
-is called. When no layer names one, the remote's default branch is used. A named
-branch that git cannot use, or that is not on the remote, is reported with the
-file it came from instead of being replaced by another layer's choice.
+Team mode reads the integration branch from one line under `## Way of Working`,
+`- **Integration branch**: <name>` (or plain `Integration branch: <name>`), in
+`project.md`, then `team.md`, then `org.md`: the first file with the line wins,
+whatever the branch is called, and the prose around it is not read. Practices
+Discovery writes the line into `team.md` for the branch you affirm; a line you
+add by hand takes effect at once. AI-DLC's `org.md` ships `main`. A file whose
+Way of Working has words but no line (written before the line existed) is read
+by the agent before the first team step that needs the branch: it records the
+branch the words name as the line
+(`aidlc engine state practices-branch --file <file> --branch <name>`), or, when
+they name none, that they name none (`--none`, kept in AI-DLC's own git-ignored
+record, so the same words are not read again) and the broader files answer. You
+are asked only when one sentence names two branches. A named branch that git
+cannot use, or that is not on the remote, is reported with the file it came
+from instead of being replaced by another layer's choice.
 
 ```
 /aidlc unit status
@@ -2862,6 +2871,25 @@ batch's prepare and stage completion keep the change, each recorded as
 Unit being built names in its plan (that change goes through the Unit's own
 checkpoint). Under a strict Guard Policy the team holds in memory it changes
 nothing and says in one line where that is set.
+
+### `aidlc engine swarm take-over` - build in this chat the Units another chat started
+
+```bash
+aidlc engine swarm take-over --batch <n> --message <id>
+```
+
+While Units are built side by side from one chat, `next` in another chat on the
+same machine says "Your other chat started building these Units." and hands out
+nothing to run for them. When the person asks that second chat to build them
+instead, `next` names their message for this command, which proves it, records
+it with this chat as `SWARM_TAKEN_OVER`, and `next` then hands this chat the
+batch; the first chat is then told "Your other chat took over building these
+Units." A batch the person sent back at its checkpoint is held for no chat until
+it is prepared again. Only a message sent since the other chat started or last
+took over the build can take it over, so words from before it changed hands do
+not move it back. It refuses
+where the tool cannot tell its chats apart (there nothing holds the batch for
+another chat) and when the batch is not being built from another chat.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 

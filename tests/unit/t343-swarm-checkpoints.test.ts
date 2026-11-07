@@ -37,6 +37,7 @@ import {
   gitTreeLeafEntries,
   intentRepos,
   latestMainWorkflowStageRunFloorForProject,
+  pendingPersonLines,
   readAuditShardEvents,
   readProtectedQuestion,
   readProtectedResponse,
@@ -1209,6 +1210,27 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
     // Recorded once: the approval adds no second row for the same change.
     expect(readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED")).toHaveLength(1);
+  });
+
+  // Under Continue automatically the agent approves the batch itself and goes
+  // on, so the batch's lines wait for the reply the person reads.
+  test("under Continue automatically, the agent's own approval keeps the batch's line for the reply", () => {
+    const line = "Files from the alpha Unit changed after its batch was checked: src/alpha.ts. Kept them.";
+    for (const chat of ["t343-chat", ""]) {
+      const pd = fixture(true);
+      setPolicy(pd, "off (set by you)");
+      converge(pd);
+      writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+      const approved = approveSwarmCheckpoint(pd, 1, BATCH, undefined, chat) as { approved: boolean; notices?: string[] };
+      expect(approved.approved).toBe(true);
+      if (chat === "") {
+        // No chat to keep it for: the approval says it, as before.
+        expect(approved.notices).toEqual([line]);
+        continue;
+      }
+      expect(approved.notices ?? []).toEqual([]);
+      expect(pendingPersonLines(pd, chat).lines).toEqual([line]);
+    }
   });
 
   test("later unrelated source and native batches do not reopen an approved batch", () => {

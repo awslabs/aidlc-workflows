@@ -796,7 +796,7 @@ export interface DocumentExtractorSpec {
 }
 
 // A host-specific line from harness.json, kept only when well formed.
-export function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "inHost">(
+export function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "inHost" | "notRunYetCliFirst">(
   key: K,
   value: unknown,
 ): Partial<Record<K, { env: string[]; text: string }>> {
@@ -822,6 +822,7 @@ export interface HookActivation {
   missedReplyInHost?: { env: string[]; text: string };
   missesReplies?: true;
   notRunYet?: string;
+  notRunYetCliFirst?: { env: string[]; text: string };
   notRunInWorkflow?: string;
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
@@ -1014,6 +1015,7 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(hostLine("missedReplyInHost", activation.missedReplyInHost)),
           ...(activation.missesReplies === true ? { missesReplies: true as const } : {}),
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+          ...(typeof activation.notRunYet === "string" ? hostLine("notRunYetCliFirst", activation.notRunYetCliFirst) : {}),
           ...(typeof activation.notRunInWorkflow === "string"
             ? { notRunInWorkflow: activation.notRunInWorkflow }
             : {}),
@@ -2550,7 +2552,7 @@ export function suppliedTurnOrigin(value: unknown): TurnOrigin | null {
 
 // The last `maxBytes` of a file as text, from its first whole line. Chat
 // records grow for a whole session; the entry for this turn is at the end.
-function tailText(path: string, maxBytes: number): string | null {
+export function tailText(path: string, maxBytes: number): string | null {
   let fd: number | null = null;
   try {
     fd = openSync(path, "r");
@@ -2820,7 +2822,7 @@ function kiroCliSteersRecordedPath(projectDir: string, sessionId: string): strin
   return segment ? join(sessionsDir(projectDir), `.kiro-cli-steers-${segment}.json`) : "";
 }
 
-function kiroCliSteersRecorded(projectDir: string, sessionId: string): string[] {
+export function kiroCliSteersRecorded(projectDir: string, sessionId: string): string[] {
   try {
     const ids: unknown = JSON.parse(readFileSync(kiroCliSteersRecordedPath(projectDir, sessionId), "utf-8"));
     return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
@@ -7037,6 +7039,13 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // ends the wait, and nothing surfaces in another chat. The same file keeps,
 // per work, the lines this chat has already heard that the engine would
 // otherwise repeat (a finished stage that is out of date).
+//
+// A line kept for the reply (forReply) comes from a checkpoint the agent
+// approved itself under Continue automatically, where the next step it speaks
+// from is still the middle of a long turn. It rides every step the agent speaks
+// from, so the step it stops on carries it whenever the turn ends, and goes
+// only once the person has written after a step carried it (the prompt hook's
+// carry); it has no age limit.
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
 const PERSON_LINES_SAID_MAX = 20;
 
@@ -7045,6 +7054,10 @@ interface PendingPersonLine {
   at: number;
   // The person's turn the line belongs to.
   turn: string;
+  // Kept for the reply the person reads: said until the person writes again.
+  reply?: true;
+  // A step carried this reply line in the turn it belongs to.
+  handed?: true;
 }
 
 interface PendingPersonLines {
@@ -7083,7 +7096,7 @@ function readPendingPersonLines(path: string, turn: string, work: string): Pendi
       if (!entry || typeof entry !== "object") return false;
       const { line, at, turn: lineTurn } = entry as Partial<PendingPersonLine>;
       if (typeof line !== "string" || typeof at !== "number") return false;
-      return lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
+      return lineTurn === turn && ((entry as PendingPersonLine).reply === true || now - at <= PENDING_PERSON_LINES_MAX_AGE_MS);
     });
     const said = saved.work === work && Array.isArray(saved.said)
       ? saved.said.filter((line): line is string => typeof line === "string")
@@ -7109,6 +7122,7 @@ export function addPendingPersonLines(
   projectDir: string,
   sessionId: string,
   lines: readonly string[],
+  options: { forReply?: boolean } = {},
 ): boolean {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const added = lines.filter((line) => line.trim().length > 0);
@@ -7117,7 +7131,7 @@ export function addPendingPersonLines(
   try {
     const saved = readPendingPersonLines(path, turn, work);
     const at = Date.now();
-    for (const line of added) saved.lines.push({ line, at, turn });
+    for (const line of added) saved.lines.push({ line, at, turn, ...(options.forReply ? { reply: true as const } : {}) });
     writePendingPersonLines(projectDir, path, work, saved);
     return true;
   } catch {
@@ -7125,19 +7139,32 @@ export function addPendingPersonLines(
   }
 }
 
-// The lines waiting for the next step the agent speaks from. `said()` clears
-// them once the step carries them; until then they stay waiting.
-export function pendingPersonLines(projectDir: string, sessionId: string): { lines: string[]; said(): void } {
+// The lines waiting for the next step the agent speaks from; with `replyOnly`
+// (a question the agent logs before asking it) only those kept for the reply.
+// `said()` clears the ordinary lines handed out once the step carries them and
+// marks the reply lines carried, which keep riding the steps until the person
+// writes; until then every line stays waiting.
+export function pendingPersonLines(
+  projectDir: string,
+  sessionId: string,
+  options: { replyOnly?: boolean } = {},
+): { lines: string[]; reply: boolean; said(): void } {
   const path = pendingPersonLinesPath(projectDir, sessionId);
-  const none = { lines: [], said: () => {} };
+  const none = { lines: [], reply: false, said: () => {} };
   if (!path || !existsSync(path)) return none;
   const { turn, work } = personTurnAndWork(projectDir);
   const saved = readPendingPersonLines(path, turn, work);
+  const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
   return {
-    lines: saved.lines.map((entry) => entry.line),
+    lines: handed.map((entry) => entry.line),
+    // Whether a line kept for the reply is among them.
+    reply: handed.some((entry) => entry.reply === true),
     said: () => {
       try {
-        writePendingPersonLines(projectDir, path, work, { lines: [], said: saved.said });
+        const waiting = saved.lines
+          .filter((entry) => entry.reply === true || !handed.includes(entry))
+          .map((entry) => (entry.reply === true && handed.includes(entry) ? { ...entry, handed: true as const } : entry));
+        writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
       } catch {
         /* the next step says them again rather than never */
       }
@@ -7152,9 +7179,16 @@ export function pendingPersonLines(projectDir: string, sessionId: string): { lin
  * agent asked of its own accord, which is how a switch line went unsaid on Kiro
  * CLI). Either way the line is still about what they just asked for, so it
  * follows them and the next step the agent speaks from says it. Each line keeps
- * the time it was first queued, so the age cap still ends the wait.
+ * the time it was first queued, so the age cap still ends an ordinary line's
+ * wait; a line kept for the reply has none.
  */
-export function carryPendingPersonLines(projectDir: string, sessionId: string | null): void {
+export function carryPendingPersonLines(
+  projectDir: string,
+  sessionId: string | null,
+  // The person wrote (the prompt hook): a reply line a step carried in the turn
+  // that just ended was said there, so it goes; one no step carried follows them.
+  options: { afterPrompt?: boolean } = {},
+): void {
   if (!sessionId) return;
   const path = pendingPersonLinesPath(projectDir, sessionId);
   if (!path || !existsSync(path)) return;
@@ -7165,15 +7199,22 @@ export function carryPendingPersonLines(projectDir: string, sessionId: string | 
       entry !== null && typeof entry === "object" &&
       typeof (entry as PendingPersonLine).line === "string" &&
       typeof (entry as PendingPersonLine).at === "number" &&
-      now - (entry as PendingPersonLine).at <= PENDING_PERSON_LINES_MAX_AGE_MS);
-    if (waiting.length === 0) return;
+      ((entry as PendingPersonLine).reply === true || now - (entry as PendingPersonLine).at <= PENDING_PERSON_LINES_MAX_AGE_MS) &&
+      !(options.afterPrompt === true && (entry as PendingPersonLine).handed === true));
+    const dropped = options.afterPrompt === true &&
+      (Array.isArray(raw.lines) ? raw.lines : []).some((entry) => (entry as PendingPersonLine)?.handed === true);
+    if (waiting.length === 0 && !dropped) return;
     const { turn, work } = personTurnAndWork(projectDir);
     // What this chat already heard belongs to the work it heard it on.
     const said = raw.work === work && Array.isArray(raw.said)
       ? raw.said.filter((line): line is string => typeof line === "string")
       : [];
     writePendingPersonLines(projectDir, path, work, {
-      lines: waiting.map((entry) => ({ line: entry.line, at: entry.at, turn })),
+      lines: waiting.map((entry) => ({
+        line: entry.line, at: entry.at, turn,
+        ...(entry.reply === true ? { reply: true as const } : {}),
+        ...(entry.handed === true ? { handed: true as const } : {}),
+      })),
       said,
     });
   } catch {
@@ -11837,6 +11878,15 @@ export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
 // label a reply recorded for several questions names), or its number on the
 // decision's own Options. The override's authorization and the review attempt
 // floor both read this one pairing.
+//
+// In solo work built Unit by Unit with checkpoints (the walk aidlc-state.ts
+// unitCheckpointChecksApply names; the state is given), the refusal itself
+// puts the question to the person, so their reply may come before the agent
+// records it: a reply after the refusal's own fire (the stage's latest
+// blocking result the gate refuses on before the question, with no boundary
+// between) backs the pick too, when nothing spent that reply and nothing else
+// was asked or answered between it and the question. Read from the order of
+// the rows, never the words.
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
   slug: string,
@@ -11844,7 +11894,32 @@ export function blockingSensorPicks(
   units?: Map<AuditShardEvent, string | null>,
   // Filled with the question each pick answers, when given.
   questions?: Map<AuditShardEvent, AuditShardEvent>,
+  stateContent: string | null = null,
 ): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
+  const walk = stateContent !== null && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major";
+  const blocking = new Set(walk
+    ? (findStageBySlug(slug)?.sensors_applicable ?? []).flatMap((sensor) =>
+      sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
+    )
+    : []);
+  // The fire whose refusal put the check's question, for a pick of `unit` (any Unit's when none is named):
+  // every result a blocking check refuses on (the gate's account of a check that gave no verified pass).
+  const refuses = (row: AuditShardEvent): boolean =>
+    row.event === "SENSOR_FAILED" || row.event === "SENSOR_COULD_NOT_RUN" || row.event === "SENSOR_BUDGET_OVERRIDE" ||
+    (row.event === "SENSOR_PASSED" && auditBlockField(row.block, "Note") !== null);
+  const refusalFire = (decision: AuditShardEvent, unit: string | null): AuditShardEvent | undefined => {
+    const before = rows.filter((row) => row.shard === decision.shard && row.pos < decision.pos);
+    const fire = before.filter((row) =>
+      refuses(row) &&
+      auditBlockField(row.block, "Stage slug") === slug && blocking.has(auditBlockField(row.block, "Sensor ID") ?? "") &&
+      (unit === null || auditBlockField(row.block, "Unit") === unit)
+    ).reduce<AuditShardEvent | undefined>((latest, row) => (latest === undefined || row.pos > latest.pos ? row : latest), undefined);
+    if (fire === undefined) return undefined;
+    return before.some((row) =>
+      BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event) && auditBlockField(row.block, "Stage") === slug && row.pos > fire.pos
+    ) ? undefined : fire;
+  };
   const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
   // Each clone's shard keeps its own append order, so a teammate's question in
   // another shard never takes the place of the one this answer closes.
@@ -11891,8 +11966,18 @@ export function blockingSensorPicks(
     ) continue;
     const offered = optionsList(auditBlockField(decision.block, "Options"));
     if (!BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) => offered.includes(option))) continue;
+    const fire = walk
+      ? refusalFire(decision, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"))
+      : undefined;
+    // A row that spent the reply (MESSAGE_SPENDING_EVENTS), or another question or answer, between the
+    // reply and the question took the reply for itself.
+    const answeredElse = (turn: AuditShardEvent): boolean => rows.some((other) =>
+      (other.event === "DECISION_RECORDED" || other.event === "QUESTION_ANSWERED" || MESSAGE_SPENDING_EVENTS.has(other.event)) &&
+      other.shard === turn.shard && other.pos > turn.pos && other.pos < decision.pos
+    );
     if (!rows.some((turn) =>
-      turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
+      turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos < row.pos &&
+      (turn.pos > decision.pos || (fire !== undefined && turn.pos > fire.pos && !answeredElse(turn)))
     )) continue;
     const numbered = /^(\d+)[.)]?$/.exec(details);
     const named = numbered ? offered[Number(numbered[1]) - 1] : checkLabel(details);
@@ -11977,6 +12062,8 @@ type SensorFixStage = Parameters<typeof producesArtifactUnit>[0] & Pick<StageEnt
 export function blockingSensorFixes(
   rows: ReadonlyArray<AuditShardEvent>,
   stage: SensorFixStage,
+  // The workflow's state, which says where a pick reads as blockingSensorPicks says.
+  stateContent: string | null = null,
 ): Map<AuditShardEvent, ReadonlySet<string> | null> {
   const blocking = new Set((stage.sensors_applicable ?? []).flatMap((sensor) =>
     sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
@@ -11998,7 +12085,7 @@ export function blockingSensorFixes(
   };
   const fixes = new Map<AuditShardEvent, ReadonlySet<string> | null>();
   const pickUnits = new Map<AuditShardEvent, string | null>();
-  for (const [row, choice] of blockingSensorPicks(rows, stage.slug, pickUnits)) {
+  for (const [row, choice] of blockingSensorPicks(rows, stage.slug, pickUnits, undefined, stateContent)) {
     if (choice !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0]) continue;
     const unit = pickUnits.get(row) ?? null;
     fixes.set(row, unit ? new Set([unit]) : failedUnits(row));
@@ -12041,17 +12128,15 @@ export function hasBlockingSensorOverrideAuthorization(
   unit: string | null = null,
 ): boolean {
   const rows = readAuditShardEvents(projectDir);
-  // Solo work built Unit by Unit with checkpoints is where a pick can be made at a Unit's checkpoint.
-  let unitPicks = unit !== null;
-  if (!unitPicks) {
-    try {
-      const stateContent = readStateFile(projectDir);
-      unitPicks = constructionCheckpointsApply(stateContent) &&
-        getField(stateContent, "Construction Iteration") === "unit-major";
-    } catch {
-      unitPicks = false;
-    }
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(projectDir);
+  } catch {
+    stateContent = null;
   }
+  // Solo work built Unit by Unit with checkpoints is where a pick can be made at a Unit's checkpoint.
+  const unitPicks = unit !== null || (stateContent !== null && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major");
   const unitOf = (row: AuditShardEvent): string | null => auditBlockField(row.block, "Unit");
   const stageRows = rows.filter((row) => {
     const workflow = auditBlockField(row.block, "Workflow");
@@ -12076,13 +12161,14 @@ export function hasBlockingSensorOverrideAuthorization(
       ))
       : []),
   ];
-  // At a Unit's checkpoint the agent re-logging the check's question, or an
-  // answer to it that is no Fix pick of the person's (the Override recorded
-  // again, with --unit or without, or with no new reply), is no new decision:
-  // it does not spend the pick, so the person's Override is never refused into
-  // asking again. A Fix pick, or any answer to another question, still does.
+  // At a Unit's checkpoint, and at the stage gate the engine settles itself
+  // after them, the agent re-logging the check's question, or an answer to it
+  // that is no Fix pick of the person's (the Override recorded again, with
+  // --unit or without, or with no new reply), is no new decision: it does not
+  // spend the pick, so the person's Override is never refused into asking
+  // again. A Fix pick, or any answer to another question, still does.
   const pickUnits = new Map<AuditShardEvent, string | null>();
-  const picks = blockingSensorPicks(rows, slug, pickUnits);
+  const picks = blockingSensorPicks(rows, slug, pickUnits, undefined, stateContent);
   const asksCheck = (row: AuditShardEvent | undefined): boolean =>
     row !== undefined && row.event === "DECISION_RECORDED" &&
     auditBlockField(row.block, "Decision") === BLOCKING_SENSOR_OVERRIDE_DECISION;
@@ -12090,7 +12176,7 @@ export function hasBlockingSensorOverrideAuthorization(
   const answersCheck = (row: AuditShardEvent): boolean => asksCheck(stageRows.filter((other) =>
     other.event === "DECISION_RECORDED" && other.shard === row.shard && other.pos < row.pos
   ).at(-1));
-  const relogged = (row: AuditShardEvent): boolean => unit !== null && (
+  const relogged = (row: AuditShardEvent): boolean => unitPicks && (
     asksCheck(row) ||
     (row.event === "QUESTION_ANSWERED" && answersCheck(row) && picks.get(row) !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0])
   );
@@ -18894,7 +18980,7 @@ export function reviewAttemptWindow(
   keep?: AuditShardEvent,
 ): AttemptView {
   const allEvents = auditRows ?? readAuditShardEvents(projectDir);
-  const sensorFixes = blockingSensorFixes(allEvents, stage);
+  const sensorFixes = blockingSensorFixes(allEvents, stage, stateContent);
   const events = sortAttemptEvents(
     allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event) || sensorFixes.has(row)),
   );
@@ -39432,12 +39518,13 @@ export function printUsageAndExit(usage: string): never {
 // Refusals may need to name something outside the current project dir, such as
 // another checkout's path, on stderr while keeping the committed audit portable.
 // `agentGuidance`: the message is the agent's next step, so callers hand it to
-// the agent instead of the person: the person's question is still open, or the
-// person already decided and the agent records what they chose.
+// the agent instead of the person: the person's question is still open, the
+// person already decided and the agent records what they chose, or a team's
+// blocking check stopped the gate and the agent asks them Fix or Override.
 export type EmitErrorMessage = string | {
   message: string;
   auditMessage: string;
-  agentGuidance?: "question-open" | "person-decided";
+  agentGuidance?: "question-open" | "person-decided" | "blocking-check";
 };
 
 export function emitError(
