@@ -7,17 +7,19 @@ byte-identical across every distribution — only the shell differs. The
 source/development tree is **generated** into ignored local `dist/codex/` from
 `core/` + `harness/codex/` by `bun scripts/package.ts codex`; never hand-edit it.
 
-The project's `.codex/config.toml` sets `developer_instructions` to the Codex
-onboarding, as documented in the
+The project's `.codex/config.toml` sets `developer_instructions` to bounded
+AI-DLC entry guidance, as documented in the
 [Codex configuration reference](https://developers.openai.com/codex/config-reference/).
-A trusted-project Codex session receives this onboarding without reading a file.
-`.codex/onboarding.md` keeps the same content as a human-readable copy. The
-harness-neutral root `AGENTS.md` block lists that copy and is shared with other
+A trusted-project Codex session receives that short entry guidance. The
+orchestrator reads the complete `.codex/onboarding.md` on its first AI-DLC
+invocation, preserving the native setup, question rendering and guard reference
+without adding them to unrelated chats. The harness-neutral root `AGENTS.md`
+block lists that reference and is shared with other
 installed harnesses whose engine directories differ.
 
 In a fresh Codex session ask for the AI-DLC commands for this harness — the answer
-should name `$aidlc` and `.agents/skills/` without reading `.codex/onboarding.md`;
-`$aidlc --doctor` verifies the readable copy.
+should name `$aidlc` and `.agents/skills/` from the short guidance. Starting
+AI-DLC loads `.codex/onboarding.md`; `$aidlc --doctor` verifies the readable file.
 
 ### Root instruction overrides
 
@@ -106,7 +108,7 @@ trust action before those hooks run:
 
 Keep the generated `.codex/config.toml` project-scoped; do not merge it into
 `~/.codex/config.toml`, because `developer_instructions` carries this project's
-AI-DLC onboarding. Keep provider and model settings in your user config. Then
+AI-DLC entry guidance. Keep provider and model settings in your user config. Then
 run `$aidlc --doctor` in Codex.
 
 The generated `sandbox_mode = "workspace-write"` is a top-level TOML setting,
@@ -194,7 +196,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), keep
    the shipped config at `.codex/config.toml` in the trusted project. Do not
    merge it into `~/.codex/config.toml`: its `developer_instructions` carries
-   this project's AI-DLC onboarding. Verify with:
+   this project's AI-DLC entry guidance. Verify with:
 
    ```bash
    cd your-project
