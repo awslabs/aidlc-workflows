@@ -9764,7 +9764,12 @@ function handleIntentRepos(
           ...(staged !== null && clone !== null ? { "Cloned From": maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`) } : {}),
           ...(reason ? { Reason: reason } : {}),
           ...(personWords ? { "Person Words": personWords } : {}),
-          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space) : {}),
+          // add-repo records the joining repo's files at the change; a remove
+          // that leaves the work on the project folder records the
+          // whole-project view it switches to, for the same reason (#3714).
+          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space)
+            : next.length === 0 ? repoBaselineAdditionField(projectDir, [], dirName, space)
+            : {}),
         },
         projectDir,
         dirName,

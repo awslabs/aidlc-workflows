@@ -27563,8 +27563,12 @@ function readStageBaseline(
 // so do the workspace files a clone's install wrote (CLONE_WRITES_AT_ROOT). A
 // repo the baseline already lists is never touched; the latest addition for a
 // repo wins. A repo no longer in the work leaves the baseline, as it left the
-// walk (workspaceSourceState walks intentRepos). An addition missing on this
-// machine leaves the baseline missing, as a missing baseline is.
+// walk (workspaceSourceState walks intentRepos) — including when removing the
+// work's only repo left the project folder as its repo: the remove's own
+// Source Baseline Addition then supplies the project-folder view it switched
+// to, so the same files do not read as changed under their new names (#3714).
+// An addition missing on this machine leaves the baseline missing, as a
+// missing baseline is.
 function withRepoBaselineAdditions(
   projectDir: string,
   stageSlug: string,
@@ -27576,7 +27580,11 @@ function withRepoBaselineAdditions(
 ): SourceBaselineResult {
   if (baseline.state !== "ready" || from === null) return baseline;
   const repos = new Set(intentRepos(projectDir, intent, space));
-  const inWork = (repo: string): boolean => repo === "" || repos.size === 0 || repos.has(repo);
+  // Keys of a repo that left the work leave the baseline even when it was the
+  // last one: a whole-project work's own keys carry the empty repo prefix, so
+  // stale repo-keyed entries only ever name files the walk now lists under
+  // project-relative names.
+  const inWork = (repo: string): boolean => repo === "" || repos.has(repo);
   const kept: WorkspaceSourceListing = new Map(
     [...baseline.listing].filter(([key]) => inWork(splitSourcePathKey(key)?.repo ?? "")),
   );
@@ -27592,12 +27600,19 @@ function withRepoBaselineAdditions(
     const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
     if (added.state !== "ready") return added;
     const cloned = auditBlockField(row.block, "Cloned From") !== null;
+    // A remove that emptied the repo set recorded the project-folder view the
+    // work switched to; its files joined the work at that change, so they are
+    // nobody's change — the reading an added repo's files get. It only speaks
+    // while the work still reads the project folder (#3714).
+    const atProjectFolder = repos.size === 0 && (auditBlockField(row.block, "Repos") ?? "").trim() === "";
     const byRepo = new Map<string, WorkspaceSourceListing>();
+    const atRoot: WorkspaceSourceListing = new Map();
     for (const [key, entry] of added.listing) {
       const parsed = splitSourcePathKey(key);
       const repo = parsed?.repo ?? "";
       if (repo === "") {
         if (cloned && parsed !== null && CLONE_WRITES_AT_ROOT.has(parsed.path)) written.set(key, entry);
+        else if (atProjectFolder && !kept.has(key)) atRoot.set(key, entry);
         continue;
       }
       if (listed.has(repo) || !inWork(repo)) continue;
@@ -27605,6 +27620,7 @@ function withRepoBaselineAdditions(
       byRepo.get(repo)!.set(key, entry);
     }
     for (const [repo, entries] of byRepo) joined.set(repo, entries);
+    if (atProjectFolder) joined.set("", atRoot);
   }
   const listing: WorkspaceSourceListing = new Map(kept);
   for (const entries of joined.values()) for (const [key, entry] of entries) listing.set(key, entry);
