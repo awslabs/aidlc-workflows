@@ -268,6 +268,7 @@ import {
   type GuardAttemptState,
   withWorkspaceSourceStateCache,
   guardRecoveryAnswerAdmits,
+  guardRecoveryAskSelected,
   guardRecoveryAskFromRefusalText,
   guardPolicyStateField,
   SKELETON_STANCES,
@@ -16715,9 +16716,9 @@ function teamUnitMajorWorkBeat(
 // walks, and the Unit DAG context, or null when the work is not team-owned
 // Units on the per-unit block. The skip report reads its work beat and the plan
 // change all of it, the same walk routing hands out. A null `currentSlug` reads
-// the walk wherever Current Stage is: a claimed checkout's redo reads its own
-// Unit's walk that way once the record has moved on past the block
-// (claimedCheckoutMove).
+// the walk wherever Current Stage is: a claimed checkout reads its own Unit's
+// walk that way, for its redo (unitMajorRedo) and, once the record has moved on
+// past the block, for how far the Unit has got (claimedCheckoutMove).
 function teamUnitMajorWalkBeat(
   projectDir: string,
   scope: string,
@@ -17254,7 +17255,8 @@ const OTHER_UNITS_KEPT =
 // paused at, the summary's step, or at a checkpoint the last step the Unit did.
 // A step the Unit has not started has nothing to reset, so next routes it.
 // `named` is a Redo that names a Unit and step: only that Unit on that step is
-// redone here, null otherwise. A named Redo is read on the walk of a team's
+// redone here, null otherwise; with no step named, that Unit's own step is.
+// A named Redo is read on the walk of a team's
 // main that works every Unit itself too, as a jump that names a Unit is
 // (unitJumpWalk); there a Unit waiting at its team approval redoes the stage
 // that approval is for.
@@ -17263,14 +17265,19 @@ function unitMajorRedo(
   scope: string,
   stateContent: string,
   currentSlug: string,
-  named?: { unit: string; stage: string },
+  named?: { unit: string; stage?: string },
 ): { message: string; jump?: readonly string[] } | null {
+  // A checkout that claimed a Unit walks that Unit alone, wherever the record's
+  // stage is, and its Unit with every step done is at the end of its stages,
+  // as a solo walk's Unit at its checkpoint: its redo is the last step it did.
+  const claim = isTeamUnitOwnership(stateContent) ? readApplicableTeamUnitScopeStamp(projectDir, stateContent) : null;
   const walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext } | null =
     unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
       (named && teamMainWorksItsUnits(projectDir, stateContent)
         ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug)
-        : null);
-  if (!walk || walk.step.kind === "covered") return null;
+        : null) ??
+      (claim !== null ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, null) : null);
+  if (!walk || (walk.step.kind === "covered" && claim === null)) return null;
   if (!walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0)) {
     return null;
   }
@@ -17282,15 +17289,15 @@ function unitMajorRedo(
     ? `\`${aidlcToolInvocation("state")} unpark\`, then `
     : "";
   const blockSlugs = walk.block.map((stage) => stage.slug);
-  const unit = step.kind === "paused" ? step.checkpoint.unit : step.unit;
+  const unit = step.kind === "covered" ? (claim?.unit ?? "") : step.kind === "paused" ? step.checkpoint.unit : step.unit;
   const redone = step.kind === "paused"
     ? step.stage
-    : step.kind === "checkpoint"
+    : step.kind === "checkpoint" || step.kind === "covered"
       ? [...walk.block].reverse()
         .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(unit))?.slug ??
         blockSlugs[blockSlugs.length - 1]
       : step.stage.slug;
-  if (named && (named.unit !== unit || named.stage !== redone)) return null;
+  if (named && (named.unit !== unit || (named.stage !== undefined && named.stage !== redone))) return null;
   if (step.kind === "work" && !unitOpenCheckpoints(projectDir, redone).some((open) => open.unit === unit)) {
     return {
       message: `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: ` +
@@ -17476,6 +17483,17 @@ function claimedCheckoutMove(
     );
   }
   if (target && claimedCheckoutReopens(claimedUnit, unitStages, target, flags.jumpUnit)) {
+    // The recovery question's restart, picked by the person for the Unit's own
+    // step (the one its walk is on, or with every step done its last), redoes
+    // it as the solo walk redoes a Unit's step (unitMajorRedo): recorded as a
+    // redo, and started again. A stage asked for by name keeps the moves below,
+    // as on the solo walk: the step the Unit is on carries on where it stopped.
+    const picked = !flags.change && (["redo-jump", "restore-or-jump"] as const).some((op) =>
+      guardRecoveryAskSelected(projectDir, stateContent, target, claimedUnit, op)
+    );
+    const cursorSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
+    const redo = picked ? unitMajorRedo(projectDir, scope, stateContent, cursorSlug, { unit: claimedUnit, stage: target }) : null;
+    if (redo?.jump) return jumpStepPrint(redo.message, redo.jump);
     const at = unitStages.indexOf(target);
     // The walk keeps Current Stage on the step it routes the Unit to, until
     // every Unit's row is done and the record moves on past the Unit's stages
@@ -20910,19 +20928,13 @@ function handleResumeReport(
 }
 
 // A redo in a checkout that claimed a Unit is that Unit's: with no Unit named,
-// the claimed one is, so its step is the checkout's own move to judge
-// (claimedCheckoutMove), never a redo of the whole work's stage from there.
-// With no stage named once the record has moved on past the Unit's stages
-// (Build and Test, the work's stage), the step is the Unit's last one, as a
-// solo walk's redo at a Unit's checkpoint redoes the last step it did.
+// the claimed one is, so its step is the Unit's own redo (unitMajorRedo) or
+// the checkout's own move (claimedCheckoutMove), never a redo of the whole
+// work's stage from there.
 function claimedUnitRedo(flags: ReportFlags, pd: string, stateContent: string): ReportFlags {
   if (flags.choice?.trim().toLowerCase() !== "redo" || flags.unit !== undefined || flags.everyUnit) return flags;
   const claim = isTeamUnitOwnership(stateContent) ? readApplicableTeamUnitScopeStamp(pd, stateContent) : null;
-  if (claim === null) return flags;
-  const stages = unitMajorConstructionStageSlugs(getField(stateContent, "Scope")?.trim() || "feature", stateContent, true);
-  const past = flags.target === undefined && !flags.stage?.trim() &&
-    !stages.includes(getField(stateContent, "Current Stage")?.trim() ?? "");
-  return { ...flags, unit: claim.unit, ...(past && stages.length > 0 ? { target: stages.at(-1) } : {}) };
+  return claim === null ? flags : { ...flags, unit: claim.unit };
 }
 
 // The redo of the current stage, run only for a stage and a scope AI-DLC knows,
@@ -21113,8 +21125,14 @@ function emitTypedResumeChoice(
     // Naming the Unit the walk is on, at the step it is on, is that Unit's
     // Redo (#2772): `next --stage <step> --unit <it>` would only route back to
     // where it stopped, picking its old work up again instead of redoing it.
+    // In a checkout that claimed the Unit, a redo that names no stage is the
+    // Unit's own step wherever the record's stage is (past the Unit's stages,
+    // its last one), which its walk names.
+    const ownStep = redoStage === undefined && readApplicableTeamUnitScopeStamp(pd, stateContent) !== null
+      ? undefined
+      : step;
     const own = flags.unit !== undefined && validScopes().has(scope)
-      ? unitMajorRedo(pd, scope, stateContent, slug, { unit: flags.unit, stage: step })
+      ? unitMajorRedo(pd, scope, stateContent, slug, { unit: flags.unit, stage: ownStep })
       : null;
     if (own !== null) {
       emit(move(jumpStepPrint(own.message, own.jump)));

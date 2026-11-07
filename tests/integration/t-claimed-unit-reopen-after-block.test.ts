@@ -15,7 +15,13 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  GUARD_RECOVERY_ASK_TYPE,
+  readAuditShardEvents,
+  readStateFile,
+  stateDigest,
+  writeActiveDirectiveMarker,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import {
   ORCH,
@@ -36,6 +42,7 @@ afterEach(cleanupTempDirs);
 
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const PLAN_GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const TRANSITION_GUARD = join(AIDLC_SRC, "hooks", "aidlc-state-transition-guard.ts");
 const SESSION = "01995000-7a11-7000-8000-0000000c1a1f";
 const CG = "code-generation";
@@ -92,7 +99,7 @@ function nextWords(checkout: string, words: string): Record<string, unknown> & {
 }
 
 function printedReopen(message: string | undefined): string {
-  const command = /reopen --target [^\s`]+ --stages [^\s`]+ --units [^\s`]+ --scope [^\s`]+(?: --via change)?/
+  const command = /reopen --target [^\s`]+ --stages [^\s`]+ --units [^\s`]+ (?:--via redo )?--scope [^\s`]+(?: --via change)?/
     .exec(message ?? "")?.[0];
   expect(command, message).toBeDefined();
   return command!;
@@ -117,9 +124,53 @@ const SHAPES = [
   ["the project's own checkout that claimed the Unit", "shared"],
 ] as const;
 
+// Both guards on the printed reopen, as the agent runs it.
+function guardsPass(checkout: string, command: string): void {
+  for (const hook of [PLAN_GUARD, TRANSITION_GUARD]) {
+    const judged = spawnSync(process.execPath, [hook], {
+      cwd: checkout,
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        session_id: SESSION,
+        tool_name: "Bash",
+        tool_input: { command: `aidlc engine jump ${command}` },
+        cwd: checkout,
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: checkout },
+      encoding: "utf-8",
+    });
+    expect(judged.status, `${hook}: ${judged.stderr}`).toBe(0);
+  }
+}
+
+const REDO_CG = `reopen --target ${CG} --stages ${CG} --units alpha --via redo --scope feature`;
+const REDO_CG_LINE = '"Redoing Code Generation for unit alpha from the start, plan included.';
+
+// The redo of alpha's Code Generation, run as printed: recorded as a redo, its
+// answer to the re-use question kept, and the work moved back from Build and Test.
+function redoneAsPrinted(checkout: string, message: string | undefined): void {
+  expect(message).toContain(REDO_CG_LINE);
+  const command = printedReopen(message);
+  expect(command).toBe(REDO_CG);
+  guardsPass(checkout, command);
+  const reopened = runMergeTool(JUMP, command.split(" "), checkout);
+  expect(reopened.status, reopened.out).toBe(0);
+  expect(currentStage(checkout)).toBe(CG);
+  const row = lastReopenRow(checkout);
+  expect(row).toContain("**Unit**: alpha");
+  expect(row).toContain("**Reopen**: redo");
+  expect(row).toContain("**Moved From**: build-and-test");
+  const reuse = readAuditShardEvents(checkout).filter((event) => event.event === "ARTIFACT_REUSED").at(-1)?.block ?? "";
+  expect(reuse).toContain(`**Stage**: ${CG}`);
+  expect(reuse).toContain("**Decision**: redo");
+  // The Unit's own step again, not Build and Test or the end-of-Unit notice.
+  expect(nextDirective(checkout)).toMatchObject({ stage: CG, unit: "alpha" });
+  expect(currentStage(checkout)).toBe(CG);
+}
+
 describe("a claimed checkout whose record moved on to Build and Test redoes its Unit's own stage", () => {
   for (const [label, shape] of SHAPES) {
-    test(`${label}: Code Generation is reopened for the Unit, the guards let it through, and the walk takes it again`, () => {
+    test(`${label}: Code Generation asked for by name is reopened for the Unit, and the guards let it through`, () => {
       const checkout = lastUnitDone(shape);
       const printed = nextWith(checkout, ["--stage", CG]);
       expect(printed.kind, JSON.stringify(printed)).toBe("print");
@@ -127,21 +178,7 @@ describe("a claimed checkout whose record moved on to Build and Test redoes its 
       expect(printed.message).toContain('"Reopened Code Generation for unit alpha."');
       const command = printedReopen(printed.message);
       expect(command).toBe(`reopen --target ${CG} --stages ${CG} --units alpha --scope feature`);
-      for (const hook of [PLAN_GUARD, TRANSITION_GUARD]) {
-        const judged = spawnSync(process.execPath, [hook], {
-          cwd: checkout,
-          input: JSON.stringify({
-            hook_event_name: "PreToolUse",
-            session_id: SESSION,
-            tool_name: "Bash",
-            tool_input: { command: `aidlc engine jump ${command}` },
-            cwd: checkout,
-          }),
-          env: { ...process.env, CLAUDE_PROJECT_DIR: checkout },
-          encoding: "utf-8",
-        });
-        expect(judged.status, `${hook}: ${judged.stderr}`).toBe(0);
-      }
+      guardsPass(checkout, command);
       const reopened = runMergeTool(JUMP, command.split(" "), checkout);
       expect(reopened.status, reopened.out).toBe(0);
       expect(currentStage(checkout)).toBe(CG);
@@ -157,6 +194,36 @@ describe("a claimed checkout whose record moved on to Build and Test redoes its 
       expect(currentStage(checkout)).toBe(CG);
     });
   }
+
+  test("the recovery question's reopen, picked for the Unit's Code Generation, redoes it as a redo", () => {
+    const checkout = lastUnitDone();
+    // The question a refused change to alpha's approved code plan puts to the
+    // person, and their pick of its reopen.
+    writeActiveDirectiveMarker(checkout, {
+      kind: "ask",
+      ask_type: GUARD_RECOVERY_ASK_TYPE,
+      stage: CG,
+      unit: "alpha",
+      state_sha256: stateDigest(readStateFile(checkout)),
+      remedies: [{
+        op: "restore-or-jump",
+        label: "Reopen the approved stage",
+        action: `This stage is already approved; jump back with /aidlc --stage ${CG} to redo it.`,
+        interaction: "command",
+        operation: { kind: "restart-stage", stage: CG },
+      }],
+    });
+    says(checkout, "Reopen the approved stage");
+    const picked = runMergeTool(
+      LOG,
+      ["answer", "--stage", CG, "--unit", "alpha", "--checkpoint", "guard-recovery", "--details", "Reopen the approved stage"],
+      checkout,
+      false,
+      { AIDLC_SESSION_OVERRIDE: SESSION },
+    );
+    expect(picked.status, picked.out).toBe(0);
+    redoneAsPrinted(checkout, nextWith(checkout, ["--stage", CG]).message);
+  });
 
   test("an earlier stage reopens with every step after it, for the Unit only", () => {
     const checkout = lastUnitDone();
@@ -185,7 +252,7 @@ describe("a claimed checkout whose record moved on to Build and Test redoes its 
     expect(row).toContain(`**Feedback**: ${words}`);
   });
 
-  test("a redo they type is read as one, and reopens the Unit's own stage", () => {
+  test("a redo they type is read as one, and redoes the Unit's own stage", () => {
     const checkout = lastUnitDone();
     const words = "redo the Code Generation for alpha";
     says(checkout, words);
@@ -197,13 +264,7 @@ describe("a claimed checkout whose record moved on to Build and Test redoes its 
     // The agent reads a redo of alpha's Code Generation.
     const redo = runMergeTool(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", CG, "--unit", "alpha"], checkout);
     expect(redo.status, redo.out).toBe(0);
-    expect(JSON.parse(redo.stdout).message).toContain(`next --stage ${CG} --unit alpha`);
-    const printed = nextWith(checkout, ["--stage", CG, "--unit", "alpha"]);
-    expect(printed.kind, JSON.stringify(printed)).toBe("print");
-    expect(printed.message).toContain('"Reopened Code Generation for unit alpha."');
-    const reopened = runMergeTool(JUMP, printedReopen(printed.message).split(" "), checkout);
-    expect(reopened.status, reopened.out).toBe(0);
-    expect(nextDirective(checkout)).toMatchObject({ kind: "ask", ask_type: "plan-approval", stage: CG, unit: "alpha" });
+    redoneAsPrinted(checkout, JSON.parse(redo.stdout).message);
   });
 
   test("a redo they type with no stage or Unit named redoes the Unit's last stage, never Build and Test", () => {
@@ -211,10 +272,8 @@ describe("a claimed checkout whose record moved on to Build and Test redoes its 
     const redo = runMergeTool(ORCH, ["report", "--result", "resumed", "--choice", "redo"], checkout);
     expect(redo.status, redo.out).toBe(0);
     const message = JSON.parse(redo.stdout).message ?? "";
-    expect(message).toContain(`next --stage ${CG} --unit alpha`);
     expect(message).not.toContain("execute --target");
-    const printed = nextWith(checkout, ["--stage", CG, "--unit", "alpha"]);
-    expect(printed.message).toContain('"Reopened Code Generation for unit alpha."');
+    redoneAsPrinted(checkout, message);
   });
 
   test("a stage that is not the Unit's is still moved elsewhere, with nothing written", () => {
