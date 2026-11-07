@@ -633,7 +633,8 @@ where it looked and the way forward: "billing is not at ../billing, where
 repos.json puts it. Clone it there, or give its path in repos.local.json."
 
 **Writing it from what is here.** When work built by teams records repos, in a
-workspace with no `repos.json`, AI-DLC offers once, at a stage boundary, to
+workspace with no `repos.json`, AI-DLC offers once, at a stage boundary (when
+Units are built one at a time, a Unit's first step of a stage is one), to
 write it from the repos it finds: each one's folder, and the address its own
 `origin` points to (read, never changed), blank when it has none. Your answer
 is kept; it does not ask again in this clone. The list is for teammates'

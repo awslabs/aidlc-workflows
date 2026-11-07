@@ -5514,14 +5514,25 @@ function projectTypeAskDirective(
   };
 }
 
-// Nothing of the stage is written yet in the active work's record (for a stage
-// run once per Unit, in no Unit's folder): its first step. A folder that
-// cannot be read (a file where it goes) is not one.
-function stageNotBegun(projectDir: string, slug: string): boolean {
+// The step `next` hands out is a stage's first: nothing of the stage is written
+// yet in the active work's record (for a stage run once per Unit, in no Unit's
+// folder). A walk that builds one Unit at a time keeps the cursor on its first
+// stage while it hands out each Unit's stages in turn, so there it is the
+// walk's own beat (the one the skip report reads): work, with nothing in that
+// Unit's folder for that stage. A folder that cannot be read (a file where it
+// goes) is not one.
+function stepBeginsStage(projectDir: string, stateContent: string, scope: string, slug: string): boolean {
   const node = nodeForSlug(slug);
   if (!node) return false;
   const record = docsRoot(projectDir);
   try {
+    const walk = isPerUnit(node)
+      ? unitMajorWalkBeat(projectDir, scope, stateContent, slug) ?? teamUnitMajorWalkBeat(projectDir, scope, stateContent, slug)
+      : null;
+    if (walk !== null) {
+      const step = walk.step;
+      return step.kind === "work" && !holdsAnyFile(join(record, step.stage.phase, step.unit, step.stage.slug));
+    }
     if (holdsAnyFile(join(record, node.phase, slug))) return false;
     if (!isPerUnit(node) || !existsSync(join(record, node.phase))) return true;
     return !readdirSync(join(record, node.phase)).some((unit) => holdsAnyFile(join(record, node.phase, unit, slug)));
@@ -5536,8 +5547,10 @@ function stageNotBegun(projectDir: string, slug: string): boolean {
 // only where there are repos besides the workspace folder. The list is for
 // teammates' clones, so one person's work on one repo is never offered it
 // (teams chosen, or two or more repos, are), nor an unattended run, which has
-// nobody to answer. Null when the step goes on.
-function reposManifestAsk(projectDir: string, stateContent: string): AskDirective | null {
+// nobody to answer. `atBoundary` is read last, before the offer is marked, so
+// a step that is no boundary leaves the offer for the next one. Null when the
+// step goes on.
+function reposManifestAsk(projectDir: string, stateContent: string, atBoundary: () => boolean = () => true): AskDirective | null {
   if (process.env.AIDLC_UNATTENDED === "1") return null;
   // The repos.json add-repo made for the workspace folder itself lists none of
   // the repos found here, so the offer still stands for it; any other stands it back.
@@ -5550,7 +5563,7 @@ function reposManifestAsk(projectDir: string, stateContent: string): AskDirectiv
   // and its own submodules come with that clone.
   const inFile = new Set(addedWorkspace ? readWorkspaceRepos(projectDir).manifest?.repos.map((repo) => repo.name) ?? [] : []);
   const names = discoverSiblingRepos(projectDir).filter((name) => !isProjectSubmodule(projectDir, name) && !inFile.has(name));
-  if (names.length === 0) return null;
+  if (names.length === 0 || !atBoundary()) return null;
   if (!isReadOnlyEngineProbe()) noteReposManifestOffered(projectDir);
   const listed = names.length === 1 ? `the repo found here (${names[0]})` : `the ${names.length} repos found here (${names.join(", ")})`;
   return {
@@ -15124,14 +15137,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // gate only on the all-covered re-entry; issue #368) and emits a single
     // directive for every other stage.
     // The person's approval moves the cursor onto the next stage, so the one
-    // offer to write repos.json is made here too, at that stage's first step,
-    // before anything of it is written; never mid-stage, at a gate or while it
-    // is revised.
-    const enteredHere = (currentState === "pending" || currentState === "in-progress") && stageNotBegun(pd, currentSlug);
+    // offer to write repos.json is made here too, at that stage's first step
+    // (in a walk that builds one Unit at a time, each Unit's first step of a
+    // stage), before anything of it is written; never mid-stage, at a gate or
+    // while it is revised.
+    const entering = currentState === "pending" || currentState === "in-progress";
     const staffing = teamStanceReadStep(pd, stateContent, currentSlug, scope, projectType, recordPrefix, codekbCtx) ??
       constructionStaffingAsk(pd, stateContent, currentSlug, scope) ??
       reverseEngineeringScopeAsk(pd, stateContent, currentSlug) ?? unitsReposAsk(pd, stateContent) ??
-      (enteredHere && stateContent !== null ? reposManifestAsk(pd, stateContent) : null);
+      (entering && stateContent !== null
+        ? reposManifestAsk(pd, stateContent, () => stepBeginsStage(pd, stateContent, scope, currentSlug))
+        : null);
     if (staffing) {
       emit(staffing);
       return;

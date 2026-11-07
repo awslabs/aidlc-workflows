@@ -3337,7 +3337,8 @@ writes nothing when `repos.json` already exists, except the one
 `intent add-repo` made for the workspace folder itself (`"path": "."`), unchanged
 since, which gains the repos found here; it leaves a user or token in an origin
 address out. AI-DLC offers to run it once per clone, at a stage
-boundary, the first time the work records repos or teams are chosen; one
+boundary (when Units are built one at a time, a Unit's first step of a stage
+is one), the first time the work records repos or teams are chosen; one
 person's work on one repo is never offered it. A `repos.json` that
 `intent add-repo` made for the workspace folder itself does not stop the offer,
 which then asks to add the repos found here to it.

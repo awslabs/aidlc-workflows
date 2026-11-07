@@ -15,7 +15,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { repoDir, resolveIntentRepoSet, sourceKeyRegistryFiles, sourcePathKey } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { loadStageGraph, repoDir, resolveIntentRepoSet, sourceKeyRegistryFiles, sourcePathKey } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-artifact-vocabulary.ts";
 import {
   localRepoOverrideLines,
   parseWorkspaceManifest,
@@ -31,6 +32,8 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedBoltDag,
+  seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { SHAPES, SESSION, STATES } from "../harness/code-generation-states.ts";
@@ -421,6 +424,67 @@ function boundaryProject(repos: string[], home = true): string {
   return proj;
 }
 
+// One person's work over two child repos in Construction, built one Unit at a
+// time: the walk's cursor stays on the first per-Unit stage throughout, the
+// first Unit (u1-tracker-core) built through every per-Unit stage and the
+// second (u2-tracker-cli) not begun.
+const WALK = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
+function walkProject(): string {
+  const proj = createTestProject();
+  projects.push(proj);
+  seedAidlcMemory(proj);
+  const units = ["u1-tracker-core", "u2-tracker-cli"];
+  const row = (slug: string): string => `- [${slug === WALK[0] ? "-" : " "}] ${slug} ${D} EXECUTE`;
+  writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: repos anywhere walk test
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+- **Unit Ownership**: solo
+- **Skeleton Stance**: on
+
+## Runtime State
+- **Revision Count**: 0
+- **Construction Iteration**: unit-major
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+${WALK.map(row).join("\n")}
+- [ ] build-and-test ${D} EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: functional-design
+- **Status**: Running
+`);
+  seedBoltDag(proj, units);
+  const graph = loadStageGraph();
+  const cover = (unit: string, slug: string): void => {
+    const dir = join(seededRecordDir(proj), "construction", unit, slug);
+    mkdirSync(dir, { recursive: true });
+    for (const name of graph.find((stage) => stage.slug === slug)?.produces ?? []) {
+      writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
+    }
+  };
+  for (const slug of WALK) cover(units[0], slug);
+  for (const name of ["tracker-core", "tracker-cli"]) repoAt(join(proj, name));
+  const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+  const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+  registry[0].repos = ["tracker-core", "tracker-cli"];
+  writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+  git(proj, ["init", "-q", "-b", "main"]);
+  return proj;
+}
+
 const ENV: NodeJS.ProcessEnv = {
   ...process.env,
   AIDLC_SKIP_ARTIFACT_GUARD: "1",
@@ -587,6 +651,33 @@ describe("the one offer to write repos.json", () => {
     const after = (await liveNext(proj, [])).directive;
     expect(after?.ask_type, JSON.stringify(after)).not.toBe("repos-manifest");
     expect(after?.kind).toBe("run-stage");
+  });
+
+  // x2783-f8 F1 re-check: the add came at the second Unit's start, in a walk
+  // that builds one Unit at a time, and the offer waited for Build and Test,
+  // after the whole of that Unit. The next Unit's first step of a stage is a
+  // boundary as a stage's first step is; a step in the middle of one is not.
+  test("in a walk that builds one Unit at a time, the next Unit's first step is a stage boundary for the offer", () => {
+    const proj = walkProject();
+    const added = utility(proj, ["intent", "add-repo", "habits", "--path", "."]);
+    expect(added.rc, added.out).toBe(0);
+    const ask = next(proj);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("repos-manifest");
+    expect(ask.question).toStartWith("Add the 2 repos found here (tracker-cli, tracker-core) to repos.json?");
+    const step = next(proj);
+    expect(step.ask_type ?? null, JSON.stringify(step).slice(0, 600)).not.toBe("repos-manifest");
+    expect([step.kind, step.stage, step.unit]).toEqual(["run-stage", "functional-design", "u2-tracker-cli"]);
+  });
+
+  test("a Unit's step already under way is never interrupted by the offer", () => {
+    const begun = walkProject();
+    expect(utility(begun, ["intent", "add-repo", "habits", "--path", "."]).rc).toBe(0);
+    const questions = join(seededRecordDir(begun), "construction", "u2-tracker-cli", "functional-design");
+    mkdirSync(questions, { recursive: true });
+    writeFileSync(join(questions, "functional-design-questions.md"), "# Questions\n");
+    const step = next(begun);
+    expect(step.ask_type ?? null, JSON.stringify(step).slice(0, 600)).not.toBe("repos-manifest");
+    expect([step.kind, step.stage, step.unit]).toEqual(["run-stage", "functional-design", "u2-tracker-cli"]);
   });
 
   test("an unattended run is never offered it", () => {
