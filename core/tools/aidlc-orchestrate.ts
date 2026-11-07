@@ -17262,7 +17262,9 @@ const OTHER_UNITS_KEPT =
 // `named` is a Redo that names a Unit and step: only that Unit on that step is
 // redone here, null otherwise; with no step named, that Unit's own step is.
 // On the team main's walk a Unit waiting at its team approval redoes the stage
-// that approval is for.
+// that approval is for. A Redo that names no Unit reads that walk only where
+// `next` walks it here (routeNext): once the plan is shared and this checkout
+// holds no Unit, `next` shows the board.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
@@ -17274,9 +17276,16 @@ function unitMajorRedo(
   // stage is, and its Unit with every step done is at the end of its stages,
   // as a solo walk's Unit at its checkpoint: its redo is the last step it did.
   const claim = isTeamUnitOwnership(stateContent) ? readApplicableTeamUnitScopeStamp(projectDir, stateContent) : null;
+  const walksHere = (): boolean => {
+    try {
+      return claimlessTeamCheckout(projectDir) || unitsHeldHere(projectDir) !== null;
+    } catch {
+      return false;
+    }
+  };
   const walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext } | null =
     unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
-      (teamMainWorksItsUnits(projectDir, stateContent)
+      (teamMainWorksItsUnits(projectDir, stateContent) && (named !== undefined || walksHere())
         ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug)
         : null) ??
       (claim !== null ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, null) : null);
