@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-unit:share, subcommand:aidlc-unit:publish, subcommand:aidlc-unit:land, subcommand:aidlc-unit:pin, function:planMadeElsewhere, function:codeGenerationStepOnRecord
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-unit:share, subcommand:aidlc-unit:publish, subcommand:aidlc-unit:land, subcommand:aidlc-unit:pin, function:planMadeElsewhere, function:codeGenerationStepOnRecord
 //
 // In team-owned Construction on the workspace's own repository, each hand-over
 // between people is put to the person as one question at the moment it is due,
@@ -150,6 +150,21 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(git(lead, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
     const board = boardText(nextDirective(lead));
     expect(board).toContain("# Team Construction Dispatcher");
+  });
+
+  // Once shared, the teams build the Units: the lead's "redo" with no Unit
+  // named is never sent to a Unit step this checkout does not build.
+  test("after the share, a redo that names no Unit names no Unit step here", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    expect(isHandover(nextDirective(lead), "share")).toBe(true);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    const redo = runMergeTool(ORCH, ["report", "--result", "resumed", "--choice", "redo"], lead);
+    expect(redo.status, redo.out).toBe(0);
+    const message = String((JSON.parse(redo.stdout) as { message?: string }).message);
+    expect(message).not.toContain('for unit "alpha"');
+    expect(boardText(nextDirective(lead))).toContain("# Team Construction Dispatcher");
   });
 
   // Share commits every path git shows: with a handful of new files the
