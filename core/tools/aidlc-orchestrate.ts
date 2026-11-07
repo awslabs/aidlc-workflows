@@ -17249,8 +17249,9 @@ function unitNames(units: string[]): string {
 const OTHER_UNITS_KEPT =
   "The other units keep their finished work, reviews, Plan Approvals and checkpoint approvals.";
 
-// The person's Redo on re-entry while a solo unit-major walk is on a
-// Unit's step, or null to keep the stage redo. A redo jump's STAGE_JUMPED
+// The person's Redo on re-entry while a unit-major walk (solo, or a team's
+// main that works every Unit itself) is on a Unit's step, or null to keep the
+// stage redo. A redo jump's STAGE_JUMPED
 // starts a new attempt for every Unit's finished steps, so once any Unit has
 // finished work Redo stays with the Unit the walk is on (#1411): it reopens
 // that Unit's step, as a jump back to it does, so the Unit does the step again
@@ -17260,10 +17261,10 @@ const OTHER_UNITS_KEPT =
 // A step the Unit has not started has nothing to reset, so next routes it.
 // `named` is a Redo that names a Unit and step: only that Unit on that step is
 // redone here, null otherwise; with no step named, that Unit's own step is.
-// A named Redo is read on the walk of a team's
-// main that works every Unit itself too, as a jump that names a Unit is
-// (unitJumpWalk); there a Unit waiting at its team approval redoes the stage
-// that approval is for.
+// On the team main's walk a Unit waiting at its team approval redoes the stage
+// that approval is for. A Redo that names no Unit reads that walk only where
+// `next` walks it here (routeNext): once the plan is shared and this checkout
+// holds no Unit, `next` shows the board.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
@@ -17275,9 +17276,16 @@ function unitMajorRedo(
   // stage is, and its Unit with every step done is at the end of its stages,
   // as a solo walk's Unit at its checkpoint: its redo is the last step it did.
   const claim = isTeamUnitOwnership(stateContent) ? readApplicableTeamUnitScopeStamp(projectDir, stateContent) : null;
+  const walksHere = (): boolean => {
+    try {
+      return claimlessTeamCheckout(projectDir) || unitsHeldHere(projectDir) !== null;
+    } catch {
+      return false;
+    }
+  };
   const walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext } | null =
     unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
-      (named && teamMainWorksItsUnits(projectDir, stateContent)
+      (teamMainWorksItsUnits(projectDir, stateContent) && (named !== undefined || walksHere())
         ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug)
         : null) ??
       (claim !== null ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, null) : null);
@@ -20897,9 +20905,9 @@ function unknownWorkspaceWordStep(
 // Resuming from the current checkpoint is read-only; the other three choices
 // are mutations, so the directive NAMES the move (the existing verbs: jump
 // execute --direction redo, next --stage, next --new-intent) and the conductor
-// runs it; report itself never mutates. In a solo unit-major walk with
-// finished Unit work, Redo names no jump: it stays with the Unit's own step
-// (unitMajorRedo).
+// runs it; report itself never mutates. In a unit-major walk with finished
+// Unit work, solo or on a team's main that works every Unit itself, Redo names
+// no jump: it stays with the Unit's own step (unitMajorRedo).
 function handleResumeReport(
   flags: ReportFlags,
   projectDir: string | undefined,
