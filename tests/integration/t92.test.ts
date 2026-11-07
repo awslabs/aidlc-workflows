@@ -1109,7 +1109,7 @@ describe("t92 TypeScript flat config", () => {
     const env = { ...process.env, AIDLC_COMPILED_EXECUTABLE: native, PATH: `${bin}:${process.env.PATH}` };
     const fallback = tsConfigProject("eslint.config.cts", false);
     const unavailable = runLinter(fallback.file, fallback.proj, env);
-    expect(unavailable.status, `${unavailable.stdout}${unavailable.stderr}`).toBe(127);
+    expect(unavailable.status, `${unavailable.stdout}${unavailable.stderr}`).toBe(3);
     expect(readFileSync(join(bin, "bunx.log"), "utf-8").trim()).toBe("--bun eslint@10 --version");
     const local = tsConfigProject("eslint.config.mts", true);
     expect(runLinter(local.file, local.proj, env).status).not.toBe(0);
