@@ -97,6 +97,7 @@ const RULE_LABELS = [
 const REQUIRED_TOKENS = [
   "[Answer]:",
   "X. Other (please specify)",
+  "(Recommended)",
   "A. Accept assumptions",
   "B. Convert to follow-up questions",
   "`None.` / `None`",
@@ -298,6 +299,9 @@ describe("t266 conversation-language rule layer", () => {
       expect(section, `structured-question contract preserves ${label}`).toContain(label);
     }
     expect(section).toContain("is a preserved token and\nstays English");
+    expect(section).toContain("`(Recommended)` suffix");
+    expect(section).toContain("Localize the rest of a freeform label");
+    expect(section).toContain("keep that same suffix in the option labels\nyou log");
   });
 
   // === (c) DELEGATED EXECUTION =============================================
