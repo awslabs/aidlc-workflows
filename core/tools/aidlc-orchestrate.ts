@@ -17427,6 +17427,23 @@ function claimedCheckoutMove(
     );
   }
   const unitStages = unitMajorConstructionStageSlugs(scope, stateContent, true);
+  // A stage the claimed Unit's kind owes nothing (a spec Unit's Infrastructure
+  // Design) is one its walk passes, by the walk's own rule: nothing of it is
+  // there to reopen, and the person hears which stages the Unit has. A Unit
+  // with no kind on record, or a plan whose Units cannot be read, owes them all.
+  if (target && claimedCheckoutReopens(claimedUnit, unitStages, target, flags.jumpUnit)) {
+    const resolution = resolveBoltBatches(projectDir);
+    const kind = resolution.state === "ok" ? resolution.unitKinds?.get(claimedUnit) ?? null : null;
+    const has = constructionUnitMajorBlock(scope, stateContent, true).filter((stage) => teamUnitStageApplies(stage, kind));
+    if (!has.some((stage) => stage.slug === target)) {
+      const names = has.map((stage) => stage.name || stage.slug);
+      const list = names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+      return turnEndingPrint(
+        `Nothing to reopen: tell the person in one line, "unit ${claimedUnit} has no ${name} stage` +
+          `${names.length > 0 ? `; its stages are ${list}` : ""}." Run nothing else.`,
+      );
+    }
+  }
   if (target && flags.everyUnit && claimedCheckoutReopens(claimedUnit, unitStages, target)) {
     return errorDirective(
       `This checkout holds the claim on Unit "${claimedUnit}", so a reopen here is ${claimedUnit}'s alone: run ` +

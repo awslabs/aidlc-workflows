@@ -177,3 +177,70 @@ describe("a claimed checkout whose record moved on to Build and Test redoes its 
     expect(readFileSync(seededStateFile(checkout), "utf-8")).toBe(before);
   });
 });
+
+// A spec Unit has no Infrastructure Design: its kind owes none of that stage's
+// documents, so the walk passes it. A redo of it says so in one line, with the
+// stages the Unit does have, and nothing is reopened or run again, in the
+// Unit's own stages and once the record has moved on past them.
+describe("a stage the claimed Unit's kind does not have", () => {
+  const specDependencies = (alphaLast: boolean): string =>
+    "# Unit dependencies\n\n```yaml\nunits:\n  - name: skeleton\n    depends_on: []\n" +
+    "  - name: alpha\n    kind: spec\n    depends_on: [skeleton]\n" +
+    `  - name: beta\n    depends_on: [${alphaLast ? "skeleton" : "alpha"}]\n\`\`\`\n`;
+  // alpha, a spec Unit, claimed and done with every stage it has; with
+  // alphaLast, beta built on main, so the record moves on to Build and Test.
+  function specUnitDone(alphaLast: boolean): string {
+    const { seed: lead, remote } = makeSeed(specDependencies(alphaLast));
+    if (alphaLast) {
+      completeUnitOnMain(lead, "beta");
+      git(lead, ["add", "-A"]);
+      git(lead, ["commit", "-m", "beta built on main"]);
+      git(lead, ["push", "origin", "main"]);
+    }
+    const { checkout } = prepareCandidate(remote, "alpha", "team-a", {
+      stages: [FD, "nfr-requirements", "nfr-design", CG],
+    });
+    writeFileSync(
+      seededStateFile(checkout),
+      readFileSync(seededStateFile(checkout), "utf-8")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, `- **Current Stage**: ${CG}`),
+    );
+    expect(nextDirective(checkout)).toMatchObject({ kind: "notice", unit: "alpha" });
+    expect(currentStage(checkout)).toBe(alphaLast ? "build-and-test" : CG);
+    return checkout;
+  }
+  const record = (checkout: string): string =>
+    readFileSync(seededStateFile(checkout), "utf-8") + JSON.stringify(readAuditShardEvents(checkout));
+  const LINE = '"unit alpha has no Infrastructure Design stage; its stages are Functional Design, ' +
+    'NFR Requirements, NFR Design and Code Generation."';
+  const CASES = [
+    ["in the Unit's own stages", false],
+    ["once the record has moved on to Build and Test", true],
+  ] as const;
+  for (const [label, alphaLast] of CASES) {
+    test(`${label}: its redo says what the Unit has, and nothing runs again`, () => {
+      const checkout = specUnitDone(alphaLast);
+      const before = record(checkout);
+      const said = nextWith(checkout, ["--stage", "infrastructure-design"]);
+      expect(said.kind, JSON.stringify(said)).toBe("print");
+      expect(said.message).toContain(LINE);
+      expect(said.message).not.toContain("reopen --target");
+      expect(record(checkout)).toBe(before);
+    });
+  }
+
+  test("asked for every Unit, or as a change in words, it says the same and nothing runs again", () => {
+    const checkout = specUnitDone(true);
+    const before = record(checkout);
+    for (const args of [
+      ["--stage", "infrastructure-design", "--every-unit"],
+      ["--stage", "infrastructure-design", "--unit", "alpha", "--change"],
+    ]) {
+      const said = nextWith(checkout, args);
+      expect(said.kind, JSON.stringify(said)).toBe("print");
+      expect(said.message).toContain(LINE);
+      expect(said.message).not.toContain("reopen --target");
+    }
+    expect(record(checkout)).toBe(before);
+  });
+});
