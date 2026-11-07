@@ -1806,8 +1806,11 @@ state; its `redo` or `backward` direction is checked against the effective plan.
 In a checkout that claimed a team Unit, the restart of one of that Unit's stages
 returns the Unit's own
 `jump reopen --target <stage> --stages <list> --units <unit> --scope <scope>`
-instead, admitted the same way when the ask names the claimed Unit and the list
-is exactly that stage and the per-Unit stages after it.
+instead, or for the Unit's own step (the one its walk is on, or with every step
+done its last) the same reopen with `--via redo` before `--scope`, the solo
+walk's redo of a Unit's step; either is admitted the same way when the ask names
+the claimed Unit and the list is exactly that stage and the per-Unit stages
+after it, and a `--via change` in its place is not.
 Forward moves, extra arguments, shell wrappers, and additional work do not
 receive this exception. The reset produces no Plan Approval receipt.
 On Copilot, claiming the selected `next --stage` command temporarily requires
