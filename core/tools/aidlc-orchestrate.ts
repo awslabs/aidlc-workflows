@@ -17647,8 +17647,11 @@ function teamHomeClaims(
   const rows = teamHome ? readAuditShardEvents(projectDir) : [];
   for (const unit of teamHome ? [...unitsKeptForTeams(rows).keys(), ...unitsLeftOpen(rows)] : []) heldElsewhere.add(unit);
   // The lead's own approved change to an input the teams build with goes onto
-  // their claims, said once (a look writes nothing).
-  if (heldElsewhere.size > 0 && !query && !isReadOnlyEngineProbe() && unreached.length === 0) {
+  // their claims, said once (a look writes nothing): a team whose Unit is done
+  // hears it too, so a done team Unit is reason enough to look.
+  const teamDone = [...(overview?.claims.values() ?? [])].some((claim) =>
+    claim.status === "claimed" && claim.payload.done === true && claim.payload.taken_by !== undefined);
+  if ((heldElsewhere.size > 0 || teamDone) && !query && !isReadOnlyEngineProbe() && unreached.length === 0) {
     try {
       // Each is said with the step that wrote it: the write itself happens once.
       settledNotices.push(...sendLeadsApprovedChanges(projectDir));

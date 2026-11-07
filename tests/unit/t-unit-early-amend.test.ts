@@ -368,7 +368,9 @@ describe("a change to a shared input", () => {
   // redid Requirements Analysis with a wording change "so the web team gets
   // it too", and the team's next chat heard nothing.
   test("the lead's own approved change reaches a Unit already done and merged, with the offer of follow-up work", () => {
-    const { home, hosts, alice, record } = refundsTaken();
+    // The team's Unit is the only one a team holds: once it is done, no Unit
+    // waits on a team, and the change still reaches it.
+    const { home, hosts, alice, record } = refundsTaken(["refunds=payments"]);
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
