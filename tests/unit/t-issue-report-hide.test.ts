@@ -165,7 +165,7 @@ test("a name the person still wants hidden goes into a new report collected out 
 test("a new report from an earlier one keeps two labels for two names and the person's tool answer; discard leaves another file's folder", () => {
   const dir = project();
   const out = JSON.parse(bun("collect.ts", ["--project", dir, "--no-doctor", "--days", "1"]).stdout).out as string;
-  writeFileSync(join(out, "local", "version-answer.json"), JSON.stringify({ version: "2.37.0" }));
+  writeFileSync(join(out, "local", "version-kiro-cli.json"), JSON.stringify({ version: "2.37.0" }));
   expect(bun("set-version.ts", ["--out", out, "--tool", "kiro-cli"]).status).toBe(0);
   const r = JSON.parse(hide(out, [["customer", "Zenith"], ["customer", "Initech"]], "--everywhere").stdout);
   expect(new Set(r.hiddenNames).size).toBe(r.hiddenNames.length);
@@ -388,14 +388,14 @@ test("without a names file hide.ts hides nothing and says where the names go", (
   expect(readFileSync(join(out, "safe.json"), "utf8")).toContain("Contoso Bank");
 });
 
-test("a names file with a byte-order mark is read; wrong entries are named by their place and the file is taken", () => {
+test("a names file with a byte-order mark is read; wrong entries are named by their place and the file is kept to correct", () => {
   const out = reportFolder();
   const names = join(out, "local", "hide-names.json");
   const list = (kind: string) => [{ kind: "customer", name: "Contoso Bank" }, { kind, name: "Initech" }, { kind: "org", name: "X" }];
   writeFileSync(names, `\uFEFF${JSON.stringify(list("company"))}`);
   const r = JSON.parse(bun("hide.ts", ["--out", out]).stdout);
   expect([r.ok, r.entries]).toEqual([false, [2, 3]]);
-  expect(existsSync(names)).toBe(false);
+  expect(existsSync(names)).toBe(true);
   expect(readFileSync(join(out, "safe.json"), "utf8")).toContain("Contoso Bank");
   writeFileSync(names, `\uFEFF${JSON.stringify(list("org").slice(0, 2))}`);
   expect(JSON.parse(bun("hide.ts", ["--out", out]).stdout).ok).toBe(true);
@@ -407,4 +407,19 @@ test("the next step for a name not hidden says to write it to the names file aga
   useWords(out, ["BOLT_FAILED"]);
   writeFileSync(join(out, "safe.json"), JSON.stringify({ audit: { counts: { BOLT_FAILED: 1 } } }, null, 2));
   expect(JSON.parse(hide(out, [["customer", "Bolt"]]).stdout).next).toContain("local/hide-names.json");
+});
+
+test("an empty names file hides nothing and is removed, so the check no longer waits on it", () => {
+  const out = reportFolder();
+  const r = hide(out, []);
+  expect([r.status, JSON.parse(r.stdout)]).toEqual([0, { ok: true, added: 0 }]);
+  expect(existsSync(join(out, "local", "hide-names.json"))).toBe(false);
+});
+
+test("a new report is not collected from one whose answer still waits, so the answer is not dropped", () => {
+  const dir = project();
+  const out = JSON.parse(bun("collect.ts", ["--project", dir, "--no-doctor", "--days", "1"]).stdout).out as string;
+  writeFileSync(join(out, "local", "hide-names.json"), JSON.stringify([{ kind: "customer", name: "Zenith" }]));
+  const r = collectFrom(out);
+  expect([r.ok, r.reason, r.pending]).toEqual([false, "answers-waiting", [{ file: "local/hide-names.json", run: "hide.ts --out <out>" }]]);
 });

@@ -31,7 +31,7 @@ import { HOST_TOOLS, Labels, Shaper, time, version } from "./lib-shape.ts";
 import { claude, codex, copilotCli, editorStores, kiroV2, kiroV3, type Local, type Summary } from "./lib-transcripts.ts";
 import { fieldName, shapeValue } from "./lib-rows.ts";
 import { loadVocab } from "./lib-vocab.ts";
-import { gateContext, hiddenAnyway, hiddenIn, keepVocab, keptByKind, keptVocab, withoutHidden } from "./lib-check.ts";
+import { gateContext, hiddenAnyway, hiddenIn, keepVocab, keptByKind, keptVocab, pendingAnswers, withoutHidden } from "./lib-check.ts";
 import { safeHits } from "./lib-gate.ts";
 import { buildDictionary, type Dictionary, type Entry, PERSON_KINDS, redactValue, useSecretRules } from "./redact.ts";
 import { flagValue, reportFolder } from "./lib-cli.ts";
@@ -50,6 +50,12 @@ type Run = { project: string; since: number; until: number; lastActivity: string
 const fromDir = arg("from") ? reportFolder(arg("from")) : null;
 if (arg("from") && (!fromDir || !existsSync(join(fromDir, "local", "run.json")))) {
   console.log(JSON.stringify({ ok: false, reason: "not-a-report-folder", hint: "Pass the folder collect.ts made." }));
+  process.exit(2);
+}
+// An answer still waiting in the earlier folder would not reach the new one: it is applied (or withdrawn) there first.
+const waiting = fromDir ? pendingAnswers(fromDir) : [];
+if (waiting.length > 0) {
+  console.log(JSON.stringify({ ok: false, reason: "answers-waiting", pending: waiting, hint: "Run the command each one names in that folder, or delete its file if the answer was withdrawn, then collect again." }));
   process.exit(2);
 }
 const readLocal = <T>(name: string, fallback: T): T => {

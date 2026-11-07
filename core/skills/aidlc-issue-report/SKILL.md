@@ -95,16 +95,15 @@ the tool's own chat log nor on this machine now. For each one, ask the person on
 ask them to run a command. Tell them where it is: Kiro IDE in the Kiro menu → About Kiro (Windows and Linux: Help →
 About); a CLI tool in the banner it shows when it starts (Claude Code also in `/status`). Always offer "I don't know".
 If `environment.toolsUsed` is empty, no chat log showed which tool the run used (one may have held only this report, or could not be read), so ask which AI tool they used together with its version.
-Record each answer: write the version as they gave it to `<out>/local/version-answer.json` with your file-writing
-tool, never in a command (`{ "version": "1.4.13" }`), then run
+Record each answer: write the version as they gave it to `<out>/local/version-<key>.json` (the `<key>` of the command)
+with your file-writing tool, never in a command (`{ "version": "1.4.13" }`), then run
 
 ```bash
 <run> <skill>/scripts/set-version.ts --out <out> --tool <key>
 ```
 
 It accepts only a version-shaped value; when it refuses the value (`not-a-version`), or the person does not know, move
-on — do not ask twice. Each call takes the file it reads, so after any other refusal write the file again before you
-run it again.
+on — do not ask twice. When it refuses the file itself, write it again and run it again.
 When they name the tool but not its version, run it without writing the file: the tool is recorded, its version unknown.
 
 When the person names a company, customer, product or person they want kept out, hide it. Write the names to
@@ -116,8 +115,8 @@ apostrophe as its own syntax (`[{ "kind": "customer", "name": "<name>" }, …]`,
 <run> <skill>/scripts/hide.ts --out <out>
 ```
 
-Each call takes the file it reads, so after a refusal correct what it names (`entries` are places in the file) and
-write the file again before you run it again.
+When it refuses, correct what it names in the file (`entries` are places in it) and run it again; a name of one
+character cannot be hidden, so take it out and tell the person.
 When it lists `notHidden`, those names (by their place in the file) were not hidden: `aidlc-word`, the name
 is part of AI-DLC's own words (`Bolt` in `BOLT_FAILED`) or of an AI-DLC message's fixed text, or
 `ordinary-word`, it is an everyday word (`Will`). Tell the person in one line each, and ask once whether to hide them
@@ -155,7 +154,9 @@ again.
 `cover.ts` writes `aidlc-issue-report.md` from `safe.json`: the window, the versions, what the folder holds and what
 was replaced by labels. Do not edit it; run it again after any change to `safe.json`. `check.ts` prints, for each hit,
 the file, the line or the `safe.json` field, and the reason — never the value. In `safe.json`, replace the named value
-with `<redacted>`; `refused`: only the cover and `safe.json` are sent, so move any other file out of the folder. Run
+with `<redacted>`; `refused`: only the cover and `safe.json` are sent, so move any other file out of the folder;
+`pending`: an answer you wrote is not applied yet (the run stopped before its script), so run the command it names, or
+delete its file when the person took the answer back. Run
 `cover.ts` and `check.ts` again until `ok: true`. Do not hand over anything until the check passes.
 
 **Then the person reads the cover.** "Please open `<out>/aidlc-issue-report.md` and read it once. It says what is in

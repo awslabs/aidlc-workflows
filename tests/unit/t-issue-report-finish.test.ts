@@ -85,3 +85,19 @@ test("a file the operating system wrote into the folder is not refused, and fini
   expect(r.status).toBe(0);
   expect(existsSync(join(dir, ".DS_Store"))).toBe(false);
 });
+
+test("an answer the agent wrote and no script applied yet keeps the check from passing and finish from deleting", () => {
+  for (const [file, run_] of [
+    ["hide-names.json", "hide.ts --out <out>"],
+    ["version-claude.json", "set-version.ts --out <out> --tool claude"],
+  ]) {
+    const dir = folderWithLocal();
+    writeFileSync(join(dir, "safe.json"), "{}");
+    writeFileSync(join(dir, "aidlc-issue-report.md"), "A run for <customer-1>.\n");
+    writeFileSync(join(dir, "local", "redaction-map.json"), map("Contoso"));
+    writeFileSync(join(dir, "local", file), "[]");
+    const r = run(dir, ["--out", dir]);
+    expect([r.status, JSON.parse(r.stdout).check.pending]).toEqual([1, [{ file: `local/${file}`, run: run_ }]]);
+    expect(existsSync(join(dir, "local", file))).toBe(true);
+  }
+});

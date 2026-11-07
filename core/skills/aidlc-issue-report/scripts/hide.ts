@@ -16,14 +16,14 @@
 //
 // The names come in a file the agent writes with its own file tool, never on the command line: no shell reads them
 // (in Command Prompt `&` in `Marks & Spencer` ends a command, and an apostrophe ends a quoted name in every shell).
-// The file is removed once read, so a later call never takes an earlier call's names.
+// The file is removed once its names are applied; until then it waits, and the check refuses.
 //
 // Usage: hide.ts --out <dir> [--everywhere]   with <dir>/local/hide-names.json: [{ "kind": "<org|customer|product|person|other>", "name": "<value>" }, …]
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkedLists, hiddenAnyway, keptVocab } from "./lib-check.ts";
-import { flagValue, refuse, reportFolder, takeAgentJson } from "./lib-cli.ts";
+import { flagValue, NAMES_FILE, readAgentJson, refuse, reportFolder } from "./lib-cli.ts";
 import { importSecretRules } from "./lib-project.ts";
 import { type Dictionary, type Entry, namesAt, ordinaryWord, PERSON_KINDS, redactValue, useSecretRules } from "./redact.ts";
 
@@ -39,14 +39,19 @@ const KIND_LABEL: Record<(typeof KINDS)[number], string> = {
 const argv = process.argv.slice(2);
 const out = reportFolder(flagValue("out", argv)) ?? refuse("usage: hide.ts --out <report folder made by collect.ts> [--everywhere]");
 const mapPath = join(out, "local", "redaction-map.json");
-const namesPath = join(out, "local", "hide-names.json");
+const namesPath = join(out, "local", NAMES_FILE);
 const everywhere = argv.includes("--everywhere");
 
-// The names in the order the file lists them, taken at once (lib-cli takeAgentJson).
-const taken = takeAgentJson(namesPath);
+// The names in the order the file lists them. A refused file stays for the agent to correct.
+const taken = readAgentJson(namesPath);
 if (taken.kind === "none") refuse("no names: write them to local/hide-names.json in the report folder first", { file: namesPath });
-if (taken.kind === "not-json" || !Array.isArray(taken.value) || taken.value.length === 0)
-  refuse('local/hide-names.json is not a list of { "kind", "name" }', { file: namesPath });
+if (taken.kind === "not-json" || !Array.isArray(taken.value)) refuse('local/hide-names.json is not a list of { "kind", "name" }', { file: namesPath });
+// An empty list hides nothing: every name was taken out of it.
+if (taken.value.length === 0) {
+  rmSync(namesPath, { force: true });
+  console.log(JSON.stringify({ ok: true, added: 0 }));
+  process.exit(0);
+}
 const listed = taken.value as { kind?: unknown; name?: unknown }[];
 const entryOk = (e: { kind?: unknown; name?: unknown } | null) =>
   KINDS.includes((e?.kind ?? "other") as (typeof KINDS)[number]) && typeof e?.name === "string" && e.name.trim().length >= 2;
@@ -148,10 +153,12 @@ if (rebuild) {
   // Hidden anyway: a new report is collected from this one (collect.ts --from), which reads AI-DLC's words without the
   // ones holding these names. Meanwhile the check reads this folder the same way, so it refuses them where they stand.
   writeFileSync(anywayPath, JSON.stringify(anyway, null, 2));
+  rmSync(namesPath, { force: true });
   console.log(JSON.stringify({ ok: true, added, ...said, next: "collect a new report from this folder: collect.ts --from with the folder in `from`", from: out }));
   process.exit(0);
 }
 // safe.json already had its long ids replaced by collect.ts; names are all that is new.
 const safePath = join(out, "safe.json");
 writeFileSync(safePath, JSON.stringify(redactValue(JSON.parse(readFileSync(safePath, "utf8")), dict, { ids: false }), null, 2));
+rmSync(namesPath, { force: true });
 console.log(JSON.stringify({ ok: true, added, ...said }));

@@ -8,7 +8,9 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type GateContext, type GateHit, safeHits, skillWords, textHits } from "./lib-gate.ts";
+import { NAMES_FILE, versionFile } from "./lib-cli.ts";
 import { importSecretRules } from "./lib-project.ts";
+import { TOOL_KEYS } from "./lib-tools.ts";
 import { type RowVocab, VOCAB_KINDS } from "./lib-rows.ts";
 import { type Dictionary, type Entry, findSecrets, loadDictionary, namesAt, useSecretRules } from "./redact.ts";
 import { emptyVocab, type Vocab } from "./lib-vocab.ts";
@@ -26,7 +28,18 @@ export type CheckResult = {
   refused?: string[];
   refusedWhy?: string;
   missing?: string;
+  pending?: { file: string; run: string }[];
 };
+
+// An answer the agent wrote for a script that has not applied it yet (a run stopped between the two): the check does
+// not pass while one waits, so a name the person asked to hide never goes out unhidden.
+export function pendingAnswers(out: string): { file: string; run: string }[] {
+  const waits = (f: string) => existsSync(join(out, "local", f));
+  return [
+    ...(waits(NAMES_FILE) ? [{ file: `local/${NAMES_FILE}`, run: "hide.ts --out <out>" }] : []),
+    ...TOOL_KEYS.filter((t) => waits(versionFile(t))).map((t) => ({ file: `local/${versionFile(t)}`, run: `set-version.ts --out <out> --tool ${t}` })),
+  ];
+}
 
 // AI-DLC's words as collect.ts read them from the install, kept in the folder's local/ (never sent) for the check and
 // hide.ts: an update or a moved project after collect.ts ran changes nothing for this folder. With none kept, none,
@@ -164,10 +177,12 @@ export async function checkFolder(out: string): Promise<CheckResult | null> {
       add(REPORT, textHits(ctx, text));
     }
   }
+  const pending = pendingAnswers(out);
   return {
-    ok: hits.length === 0 && refused.length === 0 && hasReport && hasSafe && hasVocab,
+    ok: hits.length === 0 && refused.length === 0 && pending.length === 0 && hasReport && hasSafe && hasVocab,
     checked,
     hits,
+    ...(pending.length ? { pending } : {}),
     ...(refused.length ? { refused, refusedWhy: `only ${REPORT} and safe.json are sent: move anything else out of the folder` } : {}),
     ...(!hasSafe
       ? { missing: "safe.json is missing: put back the one collect.ts wrote" }
