@@ -3757,9 +3757,9 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
  * newer request replaced waits no more (newestRequestReplaces), and a routing
  * question has its own step (openRoutingQuestion). A proposal step's request
  * was never put to the person (the agent may answer the words beside finished
- * work from its status and propose nothing), so it is passed over here and
- * counts toward no other open question; the plan question proposed for it is
- * its own copy.
+ * work from its status and propose nothing), so it is passed over here, as is
+ * a copy saved before such requests were marked, and counts toward no other
+ * open question; the plan question proposed for it is its own copy.
  */
 function openFrontQuestion(
   projectDir: string,
@@ -3772,10 +3772,9 @@ function openFrontQuestion(
   // open this engine cannot tell WHICH question the person is answering. It
   // says so instead of naming one: the agent has the question it asked in its
   // own chat, with that question's own commands. A question this one was
-  // derived from (the compose entry it was described on, or a proposal step's
-  // request saved before those were marked) is the same request, not another
-  // open question. A replaced one still counts: its own chat may still show it,
-  // and its commands still answer it there.
+  // derived from (its root, such as the compose entry it was described on) is
+  // the same request, not another open question. A replaced one still counts:
+  // its own chat may still show it, and its commands still answer it there.
   const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY, { shown: true });
   return { question: latest, sole: earliest === null || earliest === latest.id || earliest === latest.composedFrom };
 }
@@ -12630,7 +12629,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     let splitSaid = "";
     if (flags.intent && !flags.request && !inFlight) {
       splitSaid = documentSplitSentence(flags.intent);
-      flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
+      flags.request = saveQuestion(
+        pd, flags.intent, flags.scope ?? "", "front", undefined, false, undefined, undefined, undefined, undefined, undefined,
+        false,
+      ).id;
       newestRequestReplaces(pd, flags.request, flags.intent);
     } else if (!flags.request && !inFlight) {
       // A report-only or task-less composition is described only on approval,

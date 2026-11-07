@@ -491,6 +491,33 @@ describe("t-plan-proposed-by-the-agent: a request no plan was shown for is no pl
     expect(step).not.toContain(WAITS);
     expect(step).toContain('The person asked for new work: "make it a web one"');
   });
+
+  test("an update: a request saved before it, with no plan shown, is no plan question either", () => {
+    proj = finishedProject();
+    const id = unproposed(proj, [STATUS_WORDS]);
+    // The copy as a release before the mark wrote it.
+    const file = join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+    const { proposal: _mark, ...before } = JSON.parse(readFileSync(file, "utf-8"));
+    writeFileSync(file, `${JSON.stringify(before)}\n`);
+    const chain = follow(CLAUDE_TOOLS, proj, ["push it when you are done"], "feature");
+    expect(chain.last.ask_type, JSON.stringify(chain.last).slice(0, 300)).toBe("scope-confirm");
+    expect(String(chain.last.question)).toContain('"push it when you are done"');
+    expect(chain.calls).toBe(2);
+  });
+
+  test("a request typed straight to a tailored plan, and a tailored-plan offer shown, still wait for the reply", () => {
+    proj = fresh();
+    const composing = next(CLAUDE_TOOLS, proj, ["compose", "build a todo app"]);
+    expect(String(composing.message), JSON.stringify(composing).slice(0, 300)).toContain("composer");
+    expect(String(next(CLAUDE_TOOLS, proj, ["looks good"]).message)).toContain(`${WAITS} they were asked about "build a todo app"`);
+    cleanupTestProject(proj);
+    proj = fresh();
+    const offer = next(CLAUDE_TOOLS, proj, ["--propose", "compose", "--request", unproposed(proj, ["build a todo app"])]);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("compose-offer");
+    const hop = String(next(CLAUDE_TOOLS, proj, ["yes"]).message);
+    expect(hop).toContain(`${WAITS} they were asked about "build a todo app"`);
+    expect(hop).toContain(`compose --request ${REQUEST.exec(String(offer.compose_command))![1]}`);
+  });
 });
 
 // Every tool asks which work the request belongs to first, naming the plan the
