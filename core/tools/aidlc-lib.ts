@@ -26841,12 +26841,19 @@ function validateUnitSourceManifestBytes(
             `writes[${index}].path ${JSON.stringify(write.path)} is not in repo ${JSON.stringify(canonicalRepo)} or its git history` +
               (rootPath === "" ? "" : ` (from that repo's root: ${JSON.stringify(rootPath)})`),
           );
-          // A file of the project's own, not one given from the workspace into the repo.
-          if (declaredRepo === undefined && rootPath === "") {
+          // The project's own repo has the path (a deletion when only its git
+          // history does); one into the repo's folder from the workspace is not.
+          if (declaredRepo === undefined && rootPath === "" && literal !== from) {
+            let own = true;
             try {
               lstatSync(join(projectDir, literal));
-              projectOwnWrites++;
-            } catch {}
+            } catch {
+              const project = gitSourceClaimHeadAndTree(projectDir, sourceClaimValidation);
+              own = project.treeModes?.has(literal) === true || (project.head !== null && (spawnSync(
+                "git", ["-C", projectDir, "--literal-pathspecs", "rev-list", "-1", project.head, "--", literal], { encoding: "utf-8" },
+              ).stdout ?? "").trim() !== "");
+            }
+            if (own) projectOwnWrites++;
           }
         }
       }
