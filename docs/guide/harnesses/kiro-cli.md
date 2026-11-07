@@ -274,10 +274,12 @@ it runs. In a side-by-side build the workers and reviewers run the test command
 you approved through AI-DLC's own `swarm check`, which does not ask. When a
 side-by-side build's workers or reviewers ask, Kiro gathers their requests in a
 "tool approval pending" box; choosing (f) **Approve all pending and
-auto-approve future subagent requests** there lets them run whatever they ask,
-without asking you again, for the rest of that chat, reviewers that start later
-included. Requests from the main chat still ask as before, and Kiro writes no
-setting for it.
+auto-approve future subagent requests** there lets them run whatever they ask
+without asking you, reviewers that start later included, though on Kiro CLI
+3.1.0 you may see that box again later in the same chat, for example after you
+answer one of AI-DLC's questions; if it appears again, you can choose (f)
+again. Requests from the main chat still ask as before, and Kiro writes no
+setting for (f).
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat
