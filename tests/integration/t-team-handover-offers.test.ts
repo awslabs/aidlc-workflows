@@ -566,6 +566,24 @@ describe("step 5: main is pushed after a land", () => {
     expectTenNamedAndTheCount(offer, lead);
   });
 
+  // Team work begun before the Integration branch line existed: team.md says
+  // the branch only in words, which the share's own step reads first. The push
+  // question and the board both stay, naming the team's branch until then.
+  test("while team.md's words are still to be read, the push offer and the board name the team's branch", () => {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    expect(runMergeTool(UNIT, ["land", "alpha"], lead).status).toBe(0);
+    const teamMd = join(lead, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(teamMd, readFileSync(teamMd, "utf-8").replace("## Way of Working\n", "## Way of Working\n\nWork merges into `main`.\n"));
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "push"), JSON.stringify(offer)).toBe(true);
+    expect(labels(offer)).toEqual(["Push the team's branch", "Not now"]);
+    const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(board.status, board.out).toBe(0);
+    expect(board.stdout).toContain("the team's branch has alpha landed here and not on origin yet");
+  });
+
   test("a land already on origin is not offered", () => {
     const { seed: lead, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "team-a");

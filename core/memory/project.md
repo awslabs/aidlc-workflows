@@ -14,6 +14,8 @@
 <!-- Project-specific specialisation. Example: -->
 <!-- This monorepo requires package-scoped branch names and a package owner -->
 <!-- review in addition to the team's normal merge policy. -->
+<!-- A project that merges into another branch than team.md names says so on its own line, read before team.md's: -->
+<!-- - **Integration branch**: develop -->
 
 ## Walking Skeleton
 

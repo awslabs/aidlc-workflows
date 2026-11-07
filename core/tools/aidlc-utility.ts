@@ -159,6 +159,7 @@ import {
 import {
   composedPluginNames,
   copilotCliTrust,
+  harnessCliLeads,
   insideGitRepository,
   instructionFileDoctorCheck,
   openCodeGlobalShortFormNote,
@@ -5443,11 +5444,21 @@ export async function collectDoctorReport(
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   const hookExecutionRecovery = gitBashLauncherRecovery() ?? hookExecutionRecoveryText(projectDir);
-  const declaredNotRunYet = hookActivation()?.notRunYet;
-  const hooksNotRunYet = declaredNotRunYet === undefined
-    ? undefined
-    : startedInsideProjectStep(projectDir) ??
-      fillHookActivationText(registrationFault(projectDir) ?? declaredNotRunYet, projectDir);
+  const activation = hookActivation();
+  // A chat started inside the project or a broken registration has its own
+  // line; otherwise the CLI's words are for the CLI of the harness whose
+  // shipped data gave the advice.
+  const hooksNotRunYet = (notRunYet: string): string => {
+    const own = startedInsideProjectStep(projectDir);
+    if (own !== null) return own;
+    const fault = registrationFault(projectDir);
+    if (fault !== null) return fillHookActivationText(fault, projectDir);
+    const cliFirst = activation?.notRunYetCliFirst;
+    const text = cliFirst && harnessCliLeads(runtimeHarnessName(projectDir, harnessDir()), cliFirst.env)
+      ? cliFirst.text
+      : notRunYet;
+    return fillHookActivationText(text, projectDir);
+  };
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
@@ -5532,7 +5543,7 @@ export async function collectDoctorReport(
     });
   } else if (
     (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
-    hooksNotRunYet !== undefined
+    activation?.notRunYet !== undefined
   ) {
     // (a) on a host whose hooks leave a heartbeat on the first chat message and
     // run only after the person acts: none yet means nobody has chatted here or
@@ -5541,7 +5552,7 @@ export async function collectDoctorReport(
       pass: false,
       severity: "warn",
       label: "AIDLC hooks have not run in this project yet",
-      fix: hooksNotRunYet,
+      fix: hooksNotRunYet(activation.notRunYet),
     });
   } else if (
     !heartbeatDirExists ||

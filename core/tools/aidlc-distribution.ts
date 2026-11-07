@@ -61,6 +61,7 @@ export type ProjectionDescriptor = {
   configNextStep: string;
   firstRunSteps?: string[];
   editorTerminalApp?: string;
+  cliFirst?: { env: string[]; configNextStep: string; firstRunSteps: string[] };
   harnessDir: string;
   onboarding?: string;
   managedDirectories: string[];
@@ -407,6 +408,17 @@ export function harnessChoiceTextIsPlain(text: { choiceName?: unknown; choiceNot
     (text.choiceNote === undefined || (typeof text.choiceNote === "string" && CHOICE_NOTE.test(text.choiceNote)));
 }
 
+function nonEmptyStrings(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every((line) => typeof line === "string");
+}
+
+function cliFirstGuidanceIsValid(value: unknown): boolean {
+  const guidance = value as { env?: unknown; configNextStep?: unknown; firstRunSteps?: unknown } | null;
+  return nonEmptyStrings(guidance?.env) && guidance.env.every((name) => name !== "") &&
+    typeof guidance.configNextStep === "string" && guidance.configNextStep.trim().length > 0 &&
+    nonEmptyStrings(guidance.firstRunSteps);
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -430,13 +442,11 @@ export function validateProjectionDescriptor(
     throw new Error(`${root}: projection harness-list text is invalid`);
   }
   if (
-    (descriptor.firstRunSteps !== undefined &&
-      (!Array.isArray(descriptor.firstRunSteps) ||
-        descriptor.firstRunSteps.length === 0 ||
-        descriptor.firstRunSteps.some((line) => typeof line !== "string"))) ||
+    (descriptor.firstRunSteps !== undefined && !nonEmptyStrings(descriptor.firstRunSteps)) ||
     (descriptor.editorTerminalApp !== undefined &&
       (typeof descriptor.editorTerminalApp !== "string" ||
-        !/^[a-z0-9][a-z0-9 .-]*$/.test(descriptor.editorTerminalApp)))
+        !/^[a-z0-9][a-z0-9 .-]*$/.test(descriptor.editorTerminalApp))) ||
+    (descriptor.cliFirst !== undefined && !cliFirstGuidanceIsValid(descriptor.cliFirst))
   ) {
     throw new Error(`${root}: projection first-run guidance is invalid`);
   }

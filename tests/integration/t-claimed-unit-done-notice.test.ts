@@ -17,9 +17,11 @@ import {
   appendMainHumanTurn,
   cleanupTempDirs,
   clone,
+  completeUnitOnMain,
   git,
   makeSeed,
   nextDirective,
+  parallelDependencyBody,
   prepareCandidate,
   runMergeTool,
 } from "../harness/team-unit-merge.ts";
@@ -63,5 +65,50 @@ describe("a claimed Unit's end-of-Unit notice says where the rest is done", () =
     const { remote } = makeSeed();
     const { checkout } = prepareCandidate(remote, "alpha", "team-a");
     expect(doneIn(checkout)).toMatchObject({ kind: "notice", message: DONE, unit: "alpha" });
+  });
+});
+
+// The claimed Unit is the plan's last: every other Unit is built on main, so
+// the walk moves this checkout's record on to Build and Test once the Unit is
+// done. Build and Test is the lead's, once every Unit lands; here the Unit's
+// own step stays the step, however often the person comes back, and a record
+// an older AI-DLC left there reads the same.
+describe("a claimed checkout whose record moved on to Build and Test", () => {
+  function lastUnitClaimed(publish = true): string {
+    const { seed: lead, remote } = makeSeed(parallelDependencyBody());
+    completeUnitOnMain(lead, "beta");
+    git(lead, ["add", "-A"]);
+    git(lead, ["commit", "-m", "beta built on main"]);
+    git(lead, ["push", "origin", "main"]);
+    return prepareCandidate(remote, "alpha", "team-a", { publish }).checkout;
+  }
+  const currentStage = (checkout: string): string =>
+    /^- \*\*Current Stage\*\*: (.*)$/m.exec(readFileSync(seededStateFile(checkout), "utf-8"))?.[1] ?? "";
+
+  test("published: the wait for the lead, every time, never Build and Test", () => {
+    const checkout = lastUnitClaimed();
+    expect(doneIn(checkout)).toMatchObject({ kind: "notice", message: DONE, unit: "alpha" });
+    expect(currentStage(checkout)).toBe("build-and-test");
+    expect(nextDirective(checkout)).toMatchObject({ kind: "notice", message: DONE, unit: "alpha" });
+  });
+
+  test("not published: the offer to publish it, once, and Not now is the wait", () => {
+    const checkout = lastUnitClaimed(false);
+    writeFileSync(
+      seededStateFile(checkout),
+      readFileSync(seededStateFile(checkout), "utf-8")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test")
+        .replace(/^- \[ \] build-and-test /m, "- [-] build-and-test "),
+    );
+    expect(nextDirective(checkout)).toMatchObject({
+      kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha",
+    });
+    // Not now runs next: the Unit's own step again, not the same question.
+    expect(nextDirective(checkout)).toMatchObject({
+      kind: "notice",
+      message: 'Unit "alpha" is complete and approved in this checkout. ' +
+        "Once it lands on main, pull main here and this checkout is free again.",
+      unit: "alpha",
+    });
   });
 });

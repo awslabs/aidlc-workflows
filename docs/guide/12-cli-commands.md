@@ -888,12 +888,21 @@ Read the current integration state and claim registry, then print the claimable,
 claimed, and waiting Unit sets as JSON. This is a claim-time/status surface and
 may contact the configured git remote.
 
-Team mode reads the integration branch from the `## Way of Working` section of
-`project.md`, then `team.md`, then `org.md`: the first line that names the
-integration, base or merge-target branch in backticks wins, whatever the branch
-is called. When no layer names one, the remote's default branch is used. A named
-branch that git cannot use, or that is not on the remote, is reported with the
-file it came from instead of being replaced by another layer's choice.
+Team mode reads the integration branch from one line under `## Way of Working`,
+`- **Integration branch**: <name>` (or plain `Integration branch: <name>`), in
+`project.md`, then `team.md`, then `org.md`: the first file with the line wins,
+whatever the branch is called, and the prose around it is not read. Practices
+Discovery writes the line into `team.md` for the branch you affirm; a line you
+add by hand takes effect at once. AI-DLC's `org.md` ships `main`. A file whose
+Way of Working has words but no line (written before the line existed) is read
+by the agent before the first team step that needs the branch: it records the
+branch the words name as the line
+(`aidlc engine state practices-branch --file <file> --branch <name>`), or, when
+they name none, that they name none (`--none`, kept in AI-DLC's own git-ignored
+record, so the same words are not read again) and the broader files answer. You
+are asked only when one sentence names two branches. A named branch that git
+cannot use, or that is not on the remote, is reported with the file it came
+from instead of being replaced by another layer's choice.
 
 ```
 /aidlc unit status

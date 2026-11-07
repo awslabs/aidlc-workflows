@@ -792,7 +792,7 @@ export interface DocumentExtractorSpec {
 }
 
 // A host-specific line from harness.json, kept only when well formed.
-export function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "inHost">(
+export function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "inHost" | "notRunYetCliFirst">(
   key: K,
   value: unknown,
 ): Partial<Record<K, { env: string[]; text: string }>> {
@@ -818,6 +818,7 @@ export interface HookActivation {
   missedReplyInHost?: { env: string[]; text: string };
   missesReplies?: true;
   notRunYet?: string;
+  notRunYetCliFirst?: { env: string[]; text: string };
   notRunInWorkflow?: string;
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
@@ -1010,6 +1011,7 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(hostLine("missedReplyInHost", activation.missedReplyInHost)),
           ...(activation.missesReplies === true ? { missesReplies: true as const } : {}),
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+          ...(typeof activation.notRunYet === "string" ? hostLine("notRunYetCliFirst", activation.notRunYetCliFirst) : {}),
           ...(typeof activation.notRunInWorkflow === "string"
             ? { notRunInWorkflow: activation.notRunInWorkflow }
             : {}),
