@@ -7484,6 +7484,10 @@ const LANG_BY_EXT: Record<string, string> = {
   ".hpp": "C++",
   ".swift": "Swift",
   ".php": "PHP",
+  // Infrastructure code is code (Terraform, Terragrunt and Packer, Bicep).
+  ".tf": "Terraform",
+  ".hcl": "HCL",
+  ".bicep": "Bicep",
 };
 
 const SCAN_SOURCE_DIRS = ["src", "app", "lib", "pages", "components", "tests"];
@@ -7505,6 +7509,8 @@ const SCAN_EXCLUDE = new Set([
   ".next",
   "target",
   "vendor",
+  // Terraform's provider lock file, written beside a root's .tf files.
+  ".terraform.lock.hcl",
 ]);
 
 // Package/build manifests that mark a directory as an application (not just
@@ -12068,18 +12074,24 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
   // command, else the chat most recently active here. At the person's own
   // terminal no chat answer can arrive: the step that works there is named
   // instead.
-  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+  const said = {
     chat: selection.sessionId ?? readCurrentSessionId(projectDir),
-    type: declared === "Brownfield" ? "brownfield" : "greenfield",
-    ...(named.message !== undefined ? { message: named.message } : {}),
+    type: declared === "Brownfield" ? ("brownfield" as const) : ("greenfield" as const),
     intent,
     space,
+  };
+  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+    ...said,
+    ...(named.message !== undefined ? { message: named.message } : {}),
   })) {
     die(personAtOwnTerminal(projectDir)
       ? OWN_TERMINAL_PRESENCE_STEP
       : requestMessageStep(projectDir, "The person has not said yet whether this folder is existing code. Ask them " +
         "the question you were given, end the turn, and run this command after they answer."));
   }
+  // "as you said" only where the record shows them saying it; a message the
+  // agent named and nothing else is the agent's reading of their words.
+  const asTheySaid = named.message === undefined || personSaidProjectType(projectDir, said) ? ", as you said" : "";
 
   // The registry row is workspace state and the plan is the work's own: hold
   // the workspace lock, then the work's lock, across the whole read, audit and
@@ -12182,10 +12194,10 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     // it, in their words. It rides on the directive as its narration.
     const lines: string[] = [
       previous.toLowerCase() !== declared.toLowerCase()
-        ? `Project type is now ${words}, as you said${found}.`
+        ? `Project type is now ${words}${asTheySaid}${found}.`
         : yours
           ? `Project type is already ${words}, as you said${found}.`
-          : `Project type is ${words}, as you said${found}; I won't ask about it again for this piece of work.`,
+          : `Project type is ${words}${asTheySaid}${found}; I won't ask about it again for this piece of work.`,
     ];
     if (declared === "Brownfield" && scan.projectType !== "Brownfield") lines.push(NO_CODE_FOUND_YET);
     // Finished stages these lines name as behind the code.
