@@ -13430,7 +13430,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
   }
   // In team mode (Unit Ownership: team) the readings above belong to the main
-  // checkout, so words alone are read here: go on, or a request.
+  // checkout, so words alone are read here: go on, or a request. A checkout
+  // that claimed a Unit reads them as re-entry too: its redo or jump is that
+  // Unit's own reopen (emitTypedResumeChoice, then claimedCheckoutMove).
   if (
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
     isTeamUnitOwnership(stateContent) && nextArgsAreOnlyWords(args)
@@ -13439,7 +13441,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
       undefined, routingSettings(carriedRoutingFlags(flags)),
     );
-    emit(teamWordsReplyDirective(words.id, pd));
+    emit(unitScope
+      ? reentryReplyDirective(words.id, pd, "", workNamesHere(pd, selection), activeWorkLabel(stateContent))
+      : teamWordsReplyDirective(words.id, pd));
     return;
   }
   // A plan named by its word before the description (`/aidlc bugfix Fix login`)
@@ -20902,7 +20906,23 @@ function handleResumeReport(
     ));
     return;
   }
-  emitTypedResumeChoice(flags, pd, stateContent, slug);
+  emitTypedResumeChoice(claimedUnitRedo(flags, pd, stateContent), pd, stateContent, slug);
+}
+
+// A redo in a checkout that claimed a Unit is that Unit's: with no Unit named,
+// the claimed one is, so its step is the checkout's own move to judge
+// (claimedCheckoutMove), never a redo of the whole work's stage from there.
+// With no stage named once the record has moved on past the Unit's stages
+// (Build and Test, the work's stage), the step is the Unit's last one, as a
+// solo walk's redo at a Unit's checkpoint redoes the last step it did.
+function claimedUnitRedo(flags: ReportFlags, pd: string, stateContent: string): ReportFlags {
+  if (flags.choice?.trim().toLowerCase() !== "redo" || flags.unit !== undefined || flags.everyUnit) return flags;
+  const claim = isTeamUnitOwnership(stateContent) ? readApplicableTeamUnitScopeStamp(pd, stateContent) : null;
+  if (claim === null) return flags;
+  const stages = unitMajorConstructionStageSlugs(getField(stateContent, "Scope")?.trim() || "feature", stateContent, true);
+  const past = flags.target === undefined && !flags.stage?.trim() &&
+    !stages.includes(getField(stateContent, "Current Stage")?.trim() ?? "");
+  return { ...flags, unit: claim.unit, ...(past && stages.length > 0 ? { target: stages.at(-1) } : {}) };
 }
 
 // The redo of the current stage, run only for a stage and a scope AI-DLC knows,

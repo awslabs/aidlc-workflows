@@ -74,6 +74,23 @@ function nextWith(checkout: string, args: string[]): Record<string, unknown> & {
   return JSON.parse(result.stdout);
 }
 
+// Their words alone, as the skill passes them: the project flag goes before
+// the words, which `next` reads as the person's.
+function nextWords(checkout: string, words: string): Record<string, unknown> & { message?: string } {
+  const result = spawnSync(process.execPath, [ORCH, "next", "--project-dir", checkout, words], {
+    cwd: checkout,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    },
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
 function printedReopen(message: string | undefined): string {
   const command = /reopen --target [^\s`]+ --stages [^\s`]+ --units [^\s`]+ --scope [^\s`]+(?: --via change)?/
     .exec(message ?? "")?.[0];
@@ -166,6 +183,38 @@ describe("a claimed checkout whose record moved on to Build and Test redoes its 
     expect(row).toContain("**Reopen**: change");
     expect(row).toContain("**User Input**: Request Changes");
     expect(row).toContain(`**Feedback**: ${words}`);
+  });
+
+  test("a redo they type is read as one, and reopens the Unit's own stage", () => {
+    const checkout = lastUnitDone();
+    const words = "redo the Code Generation for alpha";
+    says(checkout, words);
+    // Their words alone: the reading offers the re-entry report a redo goes
+    // through, not only "go on" or a question about where the work belongs.
+    const reading = nextWords(checkout, words);
+    expect(reading.kind, JSON.stringify(reading)).toBe("print");
+    expect(reading.message).toContain("report --result resumed --choice <redo|jump|fresh>");
+    // The agent reads a redo of alpha's Code Generation.
+    const redo = runMergeTool(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", CG, "--unit", "alpha"], checkout);
+    expect(redo.status, redo.out).toBe(0);
+    expect(JSON.parse(redo.stdout).message).toContain(`next --stage ${CG} --unit alpha`);
+    const printed = nextWith(checkout, ["--stage", CG, "--unit", "alpha"]);
+    expect(printed.kind, JSON.stringify(printed)).toBe("print");
+    expect(printed.message).toContain('"Reopened Code Generation for unit alpha."');
+    const reopened = runMergeTool(JUMP, printedReopen(printed.message).split(" "), checkout);
+    expect(reopened.status, reopened.out).toBe(0);
+    expect(nextDirective(checkout)).toMatchObject({ kind: "ask", ask_type: "plan-approval", stage: CG, unit: "alpha" });
+  });
+
+  test("a redo they type with no stage or Unit named redoes the Unit's last stage, never Build and Test", () => {
+    const checkout = lastUnitDone();
+    const redo = runMergeTool(ORCH, ["report", "--result", "resumed", "--choice", "redo"], checkout);
+    expect(redo.status, redo.out).toBe(0);
+    const message = JSON.parse(redo.stdout).message ?? "";
+    expect(message).toContain(`next --stage ${CG} --unit alpha`);
+    expect(message).not.toContain("execute --target");
+    const printed = nextWith(checkout, ["--stage", CG, "--unit", "alpha"]);
+    expect(printed.message).toContain('"Reopened Code Generation for unit alpha."');
   });
 
   test("a stage that is not the Unit's is still moved elsewhere, with nothing written", () => {
