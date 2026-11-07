@@ -254,6 +254,12 @@ describe("work that records the project's submodule as its only repo", () => {
       expect(both.reason).toContain("and those paths are in the project's own repo");
       expect(both.projectSubmodule).toBe("vendor");
     }
+    // A file of the project's the Unit deleted is the project's own too.
+    unlinkSync(join(project, "src", "app.ts"));
+    writeManifest(record, [{ path: "src/refunds.ts" }, { path: "src/app.ts" }]);
+    const deleted = read(project);
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.projectSubmodule).toBe("vendor");
   });
 
   test("once the work no longer records the submodule, the same manifest reads and binds the project's file", () => {
@@ -272,6 +278,7 @@ describe("work that records the project's submodule as its only repo", () => {
       [{ path: "src/missing.ts" }],
       [{ path: "src/refunds.ts" }, { path: "lib/index.ts" }],
       [{ repo: "vendor", path: "src/refunds.ts" }],
+      [{ path: "vendor/" }],
     ]) {
       writeManifest(record, writes);
       const result = read(project);
