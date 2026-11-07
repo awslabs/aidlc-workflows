@@ -230,6 +230,11 @@ export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
+// The unit tool's verbs (UNIT_GRAMMAR, aidlc-command.ts) are routed at both
+// doors: `aidlc unit`, which people and scripts type, and `aidlc engine unit`,
+// the form aidlcToolInvocation prints for the agent on a native install.
+const UNIT_FORMS = Object.values(UNIT_GRAMMAR).map((grammar) => grammar.usage);
+
 // ROUTES_TABLE_START
 export const ROUTES: readonly Route[] = [
   {
@@ -264,7 +269,18 @@ export const ROUTES: readonly Route[] = [
     ...PUBLIC_ENGINE,
     namespace: "public",
     mutationScope: "project",
-    all: Object.values(UNIT_GRAMMAR).map((grammar) => grammar.usage),
+    all: UNIT_FORMS,
+  },
+  {
+    id: "engine-unit",
+    group: "unit",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: [...UNIT_VERBS.keys()],
+    tool: TOOLS.unit,
+    ...PUBLIC_ENGINE,
+    mutationScope: "project",
+    all: UNIT_FORMS,
   },
   {
     id: "top-compose",
@@ -859,7 +875,7 @@ export const ROUTES: readonly Route[] = [
       "create [args]",
       "archive <name> [--reason <text>]",
       "unarchive <name>",
-      "add-repo <name> [--url <address>] [--reason <text>]",
+      "add-repo <name> [--path <folder>] [--url <address>] [--reason <text>]",
       "remove-repo <name>",
       "set-repos <name,...> | --all",
       "add-checkout <path>",
@@ -1115,7 +1131,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "required",
     mutationScope: "project",
     outputModes: ["human", "quiet", "json"],
-    all: ["[--force] [--project-dir <path>]"],
+    all: ["[--force] [--project-dir <path>]", "--write-manifest [--project-dir <path>]"],
   },
   {
     id: "engine-orchestrate",

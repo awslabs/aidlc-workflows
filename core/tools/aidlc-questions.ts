@@ -48,11 +48,15 @@ export const QUESTION_SHOWN = "QUESTION_SHOWN";
 // has the agent ask for.
 
 // The engine's own asks other than the code plan question: one is the open
-// step at a time, so a newer one, or another step, takes its place.
+// step at a time, so a newer one, or another step, takes its place. The last
+// row is teams building their Units as work of their own, and the one offer to
+// write repos.json.
 export const ENGINE_ASK_TYPES: ReadonlySet<string> = new Set([
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "new-work-routing", "project-type",
   "construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "guard-recovery", "unit-claim",
   "legacy-plan-approval-recovery", "team-handover",
+  "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff", "unit-amend", "unit-signoff",
+  "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone",
 ]);
 
 // The questions a stage asks of its own (logged by the agent); they stay listed
@@ -251,9 +255,24 @@ export function openSlotQuestionId(projectDir: string, slot: { type: string; sta
   return null;
 }
 
+/**
+ * Whether a row since `since` answers the engine question of `type`, by the
+ * ledger's own closing rule (answered): a message sent after it no longer
+ * replies to that question. False when nothing answers it, or on a read error.
+ */
+export function engineAskAnsweredSince(projectDir: string, type: string, since: string): boolean {
+  try {
+    const entry: LedgerEntry = { id: "", type, stage: null, unit: null, askedAt: since, shownIn: {} };
+    return readAuditShardEvents(projectDir).some((row) =>
+      row.timestamp >= since && answered(row.event, blockFields(row.block))?.(entry) === true);
+  } catch {
+    return false;
+  }
+}
+
 function blockFields(block: string): Record<string, string> {
   const fields: Record<string, string> = {};
-  for (const name of ["Stage", "Unit", "Checkpoint"]) {
+  for (const name of ["Stage", "Unit", "Checkpoint", QUESTION_TYPE_FIELD]) {
     const value = auditBlockField(block, name);
     if (value !== null) fields[name] = value;
   }
@@ -440,6 +459,10 @@ function answered(event: string, fields: Record<string, string>): ((entry: Ledge
     case "SUMMARY_CONFIRMATION_RECORDED":
       return typed(["summary-confirmation"]);
     case "QUESTION_ANSWERED": {
+      // The engine's own question, answered by the command it handed out (a
+      // sign-off, an answer to a team's proposed change): the row names its type.
+      const asked = fields[QUESTION_TYPE_FIELD];
+      if (checkpoint === undefined && asked !== undefined && ENGINE_ASK_TYPES.has(asked)) return (entry) => entry.type === asked;
       const type = checkpoint === undefined ? undefined : CHECKPOINT_TYPES[checkpoint];
       return type === undefined ? null : typed([type]);
     }

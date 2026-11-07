@@ -301,6 +301,7 @@ import {
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
+import { buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
@@ -1735,7 +1736,11 @@ function hasCurrentTeamUnitActivity(
 }
 
 function handleSetUnitOwnership(given: string[]): void {
-  const { values: args, message } = withMessageArg(given);
+  const { values: passed, message } = withMessageArg(given);
+  // `--teammate-took`: the switch a teammate's take of solo work brings
+  // (switchSoloToTeams), which records the home in either layout.
+  const teammateTook = passed.includes("--teammate-took");
+  const args = passed.filter((arg) => arg !== "--teammate-took");
   const values = ["team", "solo"];
   if (args.length < 1) {
     error(`Usage: aidlc-state.ts set-unit-ownership <${values.join("|")}>`);
@@ -1756,7 +1761,7 @@ function handleSetUnitOwnership(given: string[]): void {
     }
     if (value === "team") {
       const repos = intentRepos(pd);
-      if (repos.length > 0) {
+      if (repos.length > 0 && workspaceHomeLocation(pd) === null) {
         error(`${teamsAcrossReposLine(repos.length)} Carry on with \`${entrySkillInvocation()}\`.`);
       }
       const resolution = resolveBoltDag(pd);
@@ -1808,8 +1813,14 @@ function handleSetUnitOwnership(given: string[]): void {
       "Unit Ownership",
       value,
     );
+    // The home of team-built work, recorded once as teams are chosen: every copy
+    // of the workspace then knows where its claims are.
+    const home = value === "team" && current !== "team" && homeLocation(content) === null
+      ? buildOutHomeLocation(pd, teammateTook)
+      : null;
+    if (home !== null) content = setOrInsertField(content, "## Runtime State", HOME_LOCATION_FIELD, home);
     if (value === "solo") content = removeUnitProgressSection(content);
-    emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
+    emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value, ...(home !== null ? { [HOME_LOCATION_FIELD]: home } : {}) });
     writeStateFile(pd, content);
     if (switches.length > 0) keepPlanQuestionOver(pd, before, content);
     // Each switch's own line, as the two setters print it. The first team step
@@ -1852,11 +1863,14 @@ function handleSetUnitGateRhythm(args: string[]): void {
     // Each team gate is recorded under the rhythm it was asked in (its Gate
     // Scope), and a rhythm reads only its own; a Unit started or built so far
     // routes the same under either. So the change holds until a Unit's first
-    // approval question opens.
-    if (
-      value !== current &&
-      hasCurrentTeamUnitActivity(pd, content, (row) => values.includes(auditBlockField(row.block, "Gate Scope") ?? ""))
-    ) {
+    // approval question opens under another rhythm than the one asked for: a
+    // Unit built before teams, asked once at its end, is the end-of-Unit
+    // rhythm's already.
+    const other = (row: AuditShardEvent): boolean => {
+      const scope = auditBlockField(row.block, "Gate Scope") ?? "";
+      return values.includes(scope) && scope !== value;
+    };
+    if (value !== current && hasCurrentTeamUnitActivity(pd, content, other)) {
       error(unitGateRhythmStaysLine(pd, content, current));
     }
     content = setOrInsertField(
@@ -6741,7 +6755,7 @@ function teamGateContext(
   if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
     error(`Unit "${unit}" is not in the authoritative unit DAG.`);
   }
-  const { scope, stages } = teamUnitGateStages(pd, content, stage);
+  const { scope, stages } = teamUnitGateStages(pd, content, stage, unit);
   if (scope === "per-stage") {
     return { unit, scope, stages };
   }
@@ -8604,6 +8618,9 @@ function handleApprove(args: string[]): void {
     // the alreadyMarkedCompleted path and skips re-emitting STAGE_COMPLETED.
     // Reentrant call — runs under the depth-2 lock without re-acquire.
     handleAdvance([slug], validationWarning, personCall);
+  } else if (buildWaitsForPush(content)) {
+    // A Unit's build: its push finishes the work (aidlc-unit.ts push).
+    console.log(JSON.stringify({ approved: slug, completed_count: completedCount, status: getField(content, "Status") ?? null }));
   } else {
     // Final stage — complete the workflow. handleCompleteWorkflow re-sets
     // the checkbox to [x] (idempotent) and emits PHASE_COMPLETED +

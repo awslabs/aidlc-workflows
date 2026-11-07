@@ -10,9 +10,12 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   DEFAULT_SPACE,
   errorMessage,
+  getField,
+  readStateFile,
   resolveWorkflowSelection,
   toPosix,
 } from "./aidlc-lib.ts";
+import { LEAD_RULES_FIELD } from "./aidlc-unit-teams.ts";
 import {
   copyFrameworkPhaseRules,
   frameworkMemorySeedDir,
@@ -79,7 +82,7 @@ export function rulesContentEntries(
   const seedPhases = configuredMemoryDir || space === DEFAULT_SPACE
     ? null
     : join(frameworkMemorySeedDir(), "phases");
-  return (node.rules_in_context ?? []).map((rule) => {
+  const entries = (node.rules_in_context ?? []).map((rule) => {
     const marker = "/memory/";
     const index = rule.path.indexOf(marker);
     if (index < 0) {
@@ -98,6 +101,24 @@ export function rulesContentEntries(
     }
     return entry;
   });
+  // A team's build that follows the lead's rules too reads each of the lead's
+  // files (their agreed practices, their project rules) where it is, just
+  // before the team's own file of the same name, so theirs are on top.
+  let leads: string[];
+  try {
+    leads = (getField(readStateFile(projectDir), LEAD_RULES_FIELD) ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+  } catch {
+    leads = [];
+  }
+  let out = entries;
+  for (const lead of leads) {
+    if (out.some((entry) => entry.rel === lead)) continue;
+    const name = lead.slice(lead.lastIndexOf("/") + 1);
+    const own = out.findIndex((entry) => entry.rel.endsWith(`/memory/${name}`));
+    const at = own >= 0 ? own : out.length;
+    out = [...out.slice(0, at), { rel: lead, abs: join(projectDir, lead) }, ...out.slice(at)];
+  }
+  return out;
 }
 
 function missingFile(path: string): boolean {

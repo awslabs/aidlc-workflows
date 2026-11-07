@@ -294,8 +294,14 @@ export function spacesRoot(projectDir: string): string {
 // canonical "what intents exist" record for humans/ordering/status — the cheap
 // on-disk listIntentDirs() scan is the path-resolver's record-presence signal,
 // but the registry carries the uuid/status/scope/repos a human or the --json
-// consumer needs.
+// consumer needs. A Unit's build keeps its row in its own record folder, and
+// is listed here with the rest.
 export function readIntentRegistry(projectDir: string, space?: string): IntentRegistryEntry[] {
+  const listed = readListedIntents(projectDir, space);
+  return [...listed, ...recordKeptEntries(projectDir, listed, space)];
+}
+
+function readListedIntents(projectDir: string, space?: string): IntentRegistryEntry[] {
   let text: string;
   try {
     text = readFileSync(intentsRegistryPath(projectDir, space), "utf-8");
@@ -318,6 +324,72 @@ export function readIntentRegistry(projectDir: string, space?: string): IntentRe
     }
   }
   return rows;
+}
+
+// --- A build's registry row, kept in its own record folder --------------------
+//
+// Two builds started at once in one space then share no file, so the clones
+// they were started in never conflict on a pull. readIntentRegistry lists these
+// rows with the space's own; writeIntentRegistry writes them back here.
+export const RECORD_ENTRY_FILE = "aidlc-intent.json";
+
+function recordEntryPath(projectDir: string, space: string | undefined, dirName: string): string {
+  return join(intentsDir(projectDir, space), dirName, RECORD_ENTRY_FILE);
+}
+
+// The rows kept in record folders that intents.json does not list.
+export function recordKeptEntries(
+  projectDir: string,
+  listed: readonly IntentRegistryEntry[],
+  space?: string,
+): IntentRegistryEntry[] {
+  const kept: IntentRegistryEntry[] = [];
+  for (const dirName of listIntentDirs(projectDir, space)) {
+    if (listed.some((row) => row.dirName === dirName)) continue;
+    let text: string;
+    try {
+      text = readFileSync(recordEntryPath(projectDir, space, dirName), "utf-8");
+    } catch {
+      continue;
+    }
+    try {
+      const entry = JSON.parse(text) as IntentRegistryEntry;
+      if (typeof entry?.uuid !== "string" || listed.some((row) => row.uuid === entry.uuid)) continue;
+      kept.push({ ...entry, dirName });
+    } catch {
+      // A hand-broken file lists nothing; the folder still shows as a record.
+    }
+  }
+  return kept;
+}
+
+export function keepIntentEntryInRecord(projectDir: string, entry: IntentRegistryEntry, space?: string): void {
+  if (!entry.dirName) throw new Error("A row kept in its record folder needs the folder's name.");
+  writeRowIfChanged(recordEntryPath(projectDir, space, entry.dirName), entry);
+}
+
+// The rows for the space's own intents.json: a row its record folder keeps is
+// written back there instead.
+export function keepRecordKeptEntries(
+  projectDir: string,
+  all: readonly IntentRegistryEntry[],
+  space?: string,
+): IntentRegistryEntry[] {
+  return all.filter((entry) => {
+    if (!entry.dirName || !existsSync(recordEntryPath(projectDir, space, entry.dirName))) return true;
+    writeRowIfChanged(recordEntryPath(projectDir, space, entry.dirName), entry);
+    return false;
+  });
+}
+
+function writeRowIfChanged(path: string, entry: IntentRegistryEntry): void {
+  const text = `${JSON.stringify(entry, null, 2)}\n`;
+  try {
+    if (readFileSync(path, "utf-8") === text) return;
+  } catch {
+    // A new row.
+  }
+  writeFileAtomic(path, text);
 }
 
 export interface IntentInfo {
@@ -1781,6 +1853,9 @@ export function auditShardName(projectDir: string): string {
 // clone the board or the Units it can take, never the walk the lead keeps.
 export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
   const ownShard = knownAuditShardName(projectDir);
+  // The person's own word in this checkout that they lead this work (`unit
+  // lead-here`, the lead on another machine): its plan is theirs here.
+  if (ownShard !== null && rows.some((row) => row.event === "LEAD_HERE_SET" && basename(row.shard) === ownShard)) return false;
   const plan = rows.filter((row) =>
     (row.event.startsWith("STAGE_") || row.event.startsWith("GATE_")) && /^\*\*Unit\*\*:/m.test(row.block) === false
   );

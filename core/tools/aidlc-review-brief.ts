@@ -65,6 +65,7 @@ import {
   writeRecordFileNoFollow,
 } from "./aidlc-lib.js";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
+import { unitsBuiltHereGateOpen } from "./aidlc-unit-teams.ts";
 import {
   constructionCheckpointKind,
   resolveConstructionCheckpoint,
@@ -1451,29 +1452,34 @@ interface GateFinding {
 // per-stage rhythm; at the end-of-Unit gate every active per-Unit Construction
 // stage of the Unit's walk, in order, the gate's own last. The approval records
 // these stages' open findings (aidlc-state.ts teamGateContext) and the gate's
-// brief shows them, both from this one list.
+// brief shows them, both from this one list. A Unit the lead built alone before
+// teams, its checkpoint still open, has its one gate at its end, whatever the
+// rhythm (unitsBuiltHereGateOpen).
 export function teamUnitGateStages(
   projectDir: string,
   stateContent: string,
   stage: StageEntry,
+  unit?: string,
 ): { scope: UnitGateScope; stages: StageEntry[] } {
-  if (effectiveUnitGateRhythm(projectDir, stateContent) === "per-stage") {
-    return { scope: "per-stage", stages: [stage] };
-  }
   const stages = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", stateContent, true)
     .map((slug) => findStageBySlug(slug))
     .filter((entry): entry is StageEntry => entry !== undefined);
+  const builtAlone = unit !== undefined && stages.length > 0 &&
+    unitsBuiltHereGateOpen(projectDir, stateContent, stages[stages.length - 1].slug).has(unit);
+  if (!builtAlone && effectiveUnitGateRhythm(projectDir, stateContent) === "per-stage") {
+    return { scope: "per-stage", stages: [stage] };
+  }
   return { scope: "unit-end", stages };
 }
 
 // The stages a team Unit's end-of-Unit gate decides when this stage's gate is
 // that gate; null at any other gate, or with no state to read.
-function endOfUnitGateStages(projectDir: string, stage: ReviewFingerprintStage): StageEntry[] | null {
+function endOfUnitGateStages(projectDir: string, stage: ReviewFingerprintStage, unit: string): StageEntry[] | null {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
     const entry = findStageBySlug(stage.slug);
     if (!isTeamUnitOwnership(state) || entry === undefined) return null;
-    const gate = teamUnitGateStages(projectDir, state, entry);
+    const gate = teamUnitGateStages(projectDir, state, entry, unit);
     return gate.scope === "unit-end" && gate.stages.at(-1)?.slug === stage.slug ? gate.stages : null;
   } catch {
     return null;
@@ -1715,7 +1721,7 @@ function gateReviewScope(
   const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
     ? undefined
     : unit;
-  const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage);
+  const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage, contextUnit);
   const earlier = endOfUnit === null
     ? []
     : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true)

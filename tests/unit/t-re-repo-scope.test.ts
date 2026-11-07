@@ -23,6 +23,7 @@ import {
 } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { codekbSourceSize, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { noteReposManifestOffered } from "../../dist/claude/.claude/tools/aidlc-workspace-repos.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
@@ -66,6 +67,9 @@ function workspace(count: number, named = false): { proj: string; repos: string[
     mkdirSync(join(proj, repo, ".git"), { recursive: true });
     writeFileSync(join(proj, repo, "main.py"), "print('hello')\n");
   }
+  // The one offer to write repos.json was made in this clone already; this
+  // file is about the question before Reverse Engineering.
+  noteReposManifestOffered(proj);
   return { proj, repos };
 }
 

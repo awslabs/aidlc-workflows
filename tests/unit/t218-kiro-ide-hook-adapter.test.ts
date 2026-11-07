@@ -3533,19 +3533,26 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
 
   // A record write the shared guard admits while a Unit's plan waits (the
   // stage's learnings diary, the composer's proposal, a person's answer text or
-  // request)
+  // request, and at the lead's project of teams across repos the lead's own file
+  // in the hand-off folder)
   // reaches PostToolUse with no arguments on Kiro IDE, so the adapter judges it
   // from the result prose alone. None of them is a planning authority file: the
   // write poisons nothing, and the person's approval builds.
   test.each([
-    ["the stage learnings diary", (dir: string) => memoryFilePath(dir, "construction", "code-generation")],
-    ["the composer's proposal", (dir: string) => composerProposalPath(dir)],
-    ["a person's answer text", (dir: string) => join(docsRoot(dir), ANSWER_TEXT_DIR, "answer.md")],
-    ["a person's request", (dir: string) => join(dir, REQUEST_TEXT_DIR, "request.txt")],
-  ])("a write of %s during a Unit's plan wait does not poison Approve Plan", (_label, target) => {
+    ["the stage learnings diary", (dir: string) => memoryFilePath(dir, "construction", "code-generation"), false],
+    ["the composer's proposal", (dir: string) => composerProposalPath(dir), false],
+    ["a person's answer text", (dir: string) => join(docsRoot(dir), ANSWER_TEXT_DIR, "answer.md"), false],
+    ["a person's request", (dir: string) => join(dir, REQUEST_TEXT_DIR, "request.txt"), false],
+    ["the lead's own file for a team", (dir: string) => join(dir, "aidlc", "handoff", "for-data.md"), true],
+  ] as const)("a write of %s during a Unit's plan wait does not poison Approve Plan", (_label, target, atLead) => {
     const dir = scratchProject(true);
     try {
       initGitWorkspace(dir);
+      if (atLead) {
+        const statePath = seededStateFile(dir);
+        writeFileSync(statePath, readFileSync(statePath, "utf-8")
+          .replace("## Runtime State\n", "## Runtime State\n- **Home Location**: /srv/shop-workspace.git\n"));
+      }
       seedCodeGenerationDirective(dir, "u1");
       const choices = seedLegacyDirectiveChoices(dir, {}, "u1");
       expect(runIde(dir, "session-start", null).code).toBe(0);

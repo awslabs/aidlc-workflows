@@ -114,6 +114,7 @@ import {
   committedTextSha256,
 } from "./aidlc-lib.ts";
 import { unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
+import { unitsBuiltHereGateOpen } from "./aidlc-unit-teams.ts";
 import type { ApprovalDecider } from "./aidlc-review-brief.ts";
 
 
@@ -877,7 +878,14 @@ function snapshot(
     throw new Error(`Unit "${unit}" is not in the authoritative unit DAG.`);
   }
   const errors: string[] = [];
-  const enabled = checkpointPolicyEnabled(state);
+  // A Unit built here before the work went to teams keeps the checkpoint it
+  // was asked at: its approval is that Unit's gate at its end, the row the
+  // teams' walk reads, so the person's answer is taken as given.
+  const enabled = checkpointPolicyEnabled(state) || (
+    getField(state, "Construction Checkpoints") === "enabled" &&
+    unitsBuiltHereGateOpen(projectDir, state, unitMajorConstructionStageSlugs(scope, state, true).at(-1) ?? "code-generation",
+      shared.allRows).has(unit)
+  );
   if (!enabled) errors.push("Construction Checkpoints: enabled requires solo Units with an in-scope source-producing stage.");
   if (stages.length === 0) errors.push("No applicable per-unit Construction stages.");
   if (!workflow) errors.push("A current, unambiguous WORKFLOW_STARTED record is required.");

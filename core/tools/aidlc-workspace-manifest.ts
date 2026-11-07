@@ -1,17 +1,30 @@
-// Shared repos.json schema and path rules for workspace sync and doctor.
+// Shared repos.json schema: which repos a workspace declares and where each
+// one's checkout lives, and the lines a person reads about them, for workspace
+// sync, doctor and the engine's one resolver (repoDir in aidlc-lib.ts). This
+// module imports only modules that never import aidlc-lib.ts, so aidlc-lib.ts
+// can read it without an import cycle.
 
-import { dirname, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { readFileSync, statSync } from "node:fs";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
-import { isValidRepoName, repoNameRefusal } from "./aidlc-lib.ts";
+import { normalizeDriveLetter, repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
+
+export const REPOS_FILE = "repos.json";
+// One person's own paths, never committed (AI-DLC's marked .gitignore block).
+export const REPOS_LOCAL_FILE = "repos.local.json";
 
 export interface WorkspaceRepoEntry {
   name: string;
   branch?: string;
   url?: string;
+  // Where the checkout lives: relative to the workspace (it may point outside
+  // it), absolute, or "." for the workspace folder itself.
+  path?: string;
 }
 
 export interface WorkspaceManifest {
-  org: string;
+  org?: string;
   repos: WorkspaceRepoEntry[];
 }
 
@@ -92,6 +105,17 @@ export function stripWorkspaceManifestComments(raw: string): string {
   return output;
 }
 
+// A blank string is a value the person has not set yet.
+function setString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function checkPath(file: string, name: string, value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error(`${file} entry "${name}": "path" must be a string.`);
+  return setString(value);
+}
+
 export function parseWorkspaceManifest(raw: string): WorkspaceManifest {
   let value: unknown;
   try {
@@ -100,13 +124,11 @@ export function parseWorkspaceManifest(raw: string): WorkspaceManifest {
     throw new Error(`repos.json is not valid JSON: ${(err as Error).message}`);
   }
 
-  if (
-    !isObject(value) ||
-    typeof value.org !== "string" ||
-    value.org.trim().length === 0 ||
-    !Array.isArray(value.repos)
-  ) {
-    throw new Error('repos.json must have a non-empty string "org" and an array "repos".');
+  if (!isObject(value) || !Array.isArray(value.repos)) {
+    throw new Error('repos.json must have an array "repos".');
+  }
+  if ("org" in value && typeof value.org !== "string") {
+    throw new Error('repos.json "org" must be a string when set.');
   }
 
   const repos: WorkspaceRepoEntry[] = [];
@@ -115,7 +137,7 @@ export function parseWorkspaceManifest(raw: string): WorkspaceManifest {
     if (!isObject(entry) || typeof entry.name !== "string" || entry.name.length === 0) {
       throw new Error('every repos.json entry needs a non-empty string "name".');
     }
-    if (!isValidRepoName(entry.name)) {
+    if (repoNameProblem(entry.name) !== null) {
       throw new Error(repoNameRefusal("repos.json entry", entry.name));
     }
     if (names.has(entry.name)) {
@@ -131,40 +153,241 @@ export function parseWorkspaceManifest(raw: string): WorkspaceManifest {
         `repos.json entry "${entry.name}": "branch" must be a non-empty string when set.`,
       );
     }
-    if (
-      "url" in entry &&
-      (typeof entry.url !== "string" || entry.url.trim().length === 0)
-    ) {
-      throw new Error(
-        `repos.json entry "${entry.name}": "url" must be a non-empty string when set.`,
-      );
+    if ("url" in entry && typeof entry.url !== "string") {
+      throw new Error(`repos.json entry "${entry.name}": "url" must be a string when set.`);
     }
+    const url = setString(entry.url);
+    const path = checkPath("repos.json", entry.name, entry.path);
 
     repos.push({
       name: entry.name,
       ...(typeof entry.branch === "string" ? { branch: entry.branch } : {}),
-      ...(typeof entry.url === "string" ? { url: entry.url } : {}),
+      ...(url !== undefined ? { url } : {}),
+      ...(path !== undefined ? { path } : {}),
     });
   }
-  return { org: value.org, repos };
+  const org = setString(value.org);
+  return { ...(org !== undefined ? { org } : {}), repos };
 }
 
-export function workspaceRepoPath(root: string, name: string): string {
-  const resolvedRoot = resolve(root);
-  const candidate = resolve(resolvedRoot, name);
-  if (!isValidRepoName(name) || dirname(candidate) !== resolvedRoot) {
-    throw new Error(
-      `repo name "${name}" does not resolve to an immediate child of the workspace root`,
-    );
+export interface LocalRepoOverrides {
+  overrides: Map<string, Pick<WorkspaceRepoEntry, "path" | "url" | "branch">>;
+  // One line each for what the file holds that is not read.
+  ignored: string[];
+}
+
+const LOCAL_FIELDS = new Set(["name", "path", "url", "branch"]);
+
+// repos.local.json: the same shape as repos.json, read only for `path`, `url`
+// and `branch` of the repos repos.json lists. It never adds a repo.
+export function parseLocalRepoOverrides(raw: string, manifest: WorkspaceManifest): LocalRepoOverrides {
+  let value: unknown;
+  try {
+    value = JSON.parse(stripWorkspaceManifestComments(raw));
+  } catch (err) {
+    throw new Error(`repos.local.json is not valid JSON: ${(err as Error).message}`);
   }
-  return candidate;
+  if (!isObject(value) || !Array.isArray(value.repos)) {
+    throw new Error('repos.local.json must have an array "repos".');
+  }
+  const listed = new Set(manifest.repos.map((repo) => repo.name));
+  const overrides: LocalRepoOverrides["overrides"] = new Map();
+  const ignored: string[] = [];
+  for (const key of Object.keys(value)) {
+    if (key !== "repos") ignored.push(`repos.local.json sets "${key}", which only repos.json can set, so it is ignored.`);
+  }
+  for (const entry of value.repos) {
+    if (!isObject(entry) || typeof entry.name !== "string" || entry.name.length === 0) {
+      ignored.push('An entry in repos.local.json has no "name", so it is ignored.');
+      continue;
+    }
+    const name = entry.name;
+    if (!listed.has(name)) {
+      ignored.push(`repos.local.json names ${name}, which repos.json does not list, so it is ignored.`);
+      continue;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!LOCAL_FIELDS.has(key)) {
+        ignored.push(`repos.local.json sets "${key}" for ${name}; only path, url and branch are read there, so it is ignored.`);
+      }
+    }
+    const path = typeof entry.path === "string" ? setString(entry.path) : undefined;
+    const url = typeof entry.url === "string" ? setString(entry.url) : undefined;
+    const branch = typeof entry.branch === "string" ? setString(entry.branch) : undefined;
+    overrides.set(name, {
+      ...(path !== undefined ? { path } : {}),
+      ...(url !== undefined ? { url } : {}),
+      ...(branch !== undefined ? { branch } : {}),
+    });
+  }
+  return { overrides, ignored };
+}
+
+export interface WorkspaceRepos {
+  // Null when the workspace has no repos.json, or one that cannot be read.
+  manifest: WorkspaceManifest | null;
+  error?: string;
+  localError?: string;
+  // repos.json's entries with the person's repos.local.json applied.
+  entries: Map<string, WorkspaceRepoEntry>;
+  // Which file gave an entry its path.
+  pathSource: Map<string, typeof REPOS_FILE | typeof REPOS_LOCAL_FILE>;
+  ignored: string[];
+}
+
+function fileStamp(path: string): string {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return "absent";
+  }
+}
+
+// Read once per change of either file: repoDir runs on hot paths.
+const cache = new Map<string, { stamp: string; repos: WorkspaceRepos }>();
+
+export function readWorkspaceRepos(root: string): WorkspaceRepos {
+  const manifestPath = join(root, REPOS_FILE);
+  const localPath = join(root, REPOS_LOCAL_FILE);
+  const stamp = `${fileStamp(manifestPath)}|${fileStamp(localPath)}`;
+  const cached = cache.get(root);
+  if (cached?.stamp === stamp) return cached.repos;
+  const repos: WorkspaceRepos = { manifest: null, entries: new Map(), pathSource: new Map(), ignored: [] };
+  let raw: string | null = null;
+  try {
+    raw = readFileSync(manifestPath, "utf-8");
+  } catch {
+    // No repos.json: every repo lives at <workspace>/<name>.
+  }
+  if (raw !== null) {
+    try {
+      repos.manifest = parseWorkspaceManifest(raw);
+    } catch (err) {
+      repos.error = (err as Error).message;
+    }
+  }
+  if (repos.manifest !== null) {
+    for (const entry of repos.manifest.repos) {
+      repos.entries.set(entry.name, { ...entry });
+      if (entry.path !== undefined) repos.pathSource.set(entry.name, REPOS_FILE);
+    }
+    let localRaw: string | null = null;
+    try {
+      localRaw = readFileSync(localPath, "utf-8");
+    } catch {
+      // No personal overrides.
+    }
+    if (localRaw !== null) {
+      try {
+        const local = parseLocalRepoOverrides(localRaw, repos.manifest);
+        repos.ignored.push(...local.ignored);
+        for (const [name, override] of local.overrides) {
+          const entry = repos.entries.get(name);
+          if (!entry) continue;
+          Object.assign(entry, override);
+          if (override.path !== undefined) repos.pathSource.set(name, REPOS_LOCAL_FILE);
+        }
+      } catch (err) {
+        repos.localError = (err as Error).message;
+      }
+    }
+  }
+  cache.set(root, { stamp, repos });
+  return repos;
+}
+
+// Where a repos.json `path` puts a checkout, read against the workspace: the one
+// reading repoDir (aidlc-lib.ts) and add-repo --path use. A path written on
+// Windows ("..\\billing") reads the same on every platform.
+export function mappedRepoDir(projectDir: string, path: string): string {
+  return normalizeDriveLetter(resolve(projectDir, path.replace(/\\/g, "/")));
+}
+
+// A path as the person wrote it, with forward slashes, for the lines they read.
+export function displayRepoPath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
+// What this person's repos.local.json holds that is not read, one line each.
+export function localRepoOverrideLines(projectDir: string): string[] {
+  const repos = readWorkspaceRepos(projectDir);
+  return [
+    ...(repos.localError === undefined ? [] : [`${repos.localError} Your own paths in it are not used until it reads.`]),
+    ...repos.ignored,
+  ];
+}
+
+// What the person reads when a repo's checkout is not where AI-DLC looks.
+export function repoNotThereLine(projectDir: string, repoName: string): string {
+  const repos = readWorkspaceRepos(projectDir);
+  const source = repos.pathSource.get(repoName);
+  const where = displayRepoPath(source === undefined ? repoName : repos.entries.get(repoName)?.path ?? repoName);
+  if (source === REPOS_LOCAL_FILE) {
+    return `${repoName} is not at ${where}, where repos.local.json puts it. Clone it there, or change its path in repos.local.json.`;
+  }
+  if (source === REPOS_FILE) {
+    return `${repoName} is not at ${where}, where repos.json puts it. Clone it there, or give its path in repos.local.json.`;
+  }
+  return repos.entries.has(repoName)
+    ? `${repoName} is not at ${where} in this workspace. Clone it there, or give its path in repos.local.json.`
+    : `${repoName} is not at ${where} in this workspace. Clone it there, or list it in repos.json with its path.`;
+}
+
+// Whether repos.json gives a repo an address to clone it from: its own url,
+// or the org's.
+export function repoCloneable(projectDir: string, repoName: string): boolean {
+  const repos = readWorkspaceRepos(projectDir);
+  return repos.entries.get(repoName)?.url !== undefined || (repos.entries.has(repoName) && repos.manifest?.org !== undefined);
+}
+
+// With this person's repos.local.json unreadable: what is wrong, and where the
+// repos its paths may move are looked for until it reads. Null when it reads.
+export function localUnreadableLine(projectDir: string, repoNames: string[]): string | null {
+  const error = readWorkspaceRepos(projectDir).localError;
+  if (error === undefined) return null;
+  const one = repoNames.length === 1;
+  const them = one ? repoNames[0] : `${repoNames.slice(0, -1).join(", ")} and ${repoNames.at(-1)}`;
+  return `${error.replace(/([^.!?])$/, "$1.")} Your own paths in it are not used until it reads, so ${them} ` +
+    `${one ? "is" : "are"} looked for where repos.json puts ${one ? "it" : "them"} for now.`;
+}
+
+// The offer, when repos.json can clone a repo that is not where it puts it.
+export function repoCloneOfferLine(projectDir: string, repoNames: string[]): string {
+  const repos = readWorkspaceRepos(projectDir);
+  const where = (name: string): string => {
+    const source = repos.pathSource.get(name);
+    const at = displayRepoPath(source === undefined ? name : repos.entries.get(name)?.path ?? name);
+    return source === undefined ? `${name} is not at ${at} in this workspace yet` : `${name} is not at ${at} yet, where ${source} puts it`;
+  };
+  return repoNames.length === 1
+    ? `${where(repoNames[0])}. Do you want me to clone it there?`
+    : `${repoNames.map(where).join("; ")}. Do you want me to clone them there?`;
+}
+
+// The lines repos.json's managed .gitignore block holds: the recovery folder
+// and each declared repo whose checkout sits inside the workspace (by its own
+// path in repos.json, never one person's override), never the workspace itself.
+export function workspaceGitignoreEntries(manifest: WorkspaceManifest): string[] {
+  const lines = [WORKSPACE_RECOVERY_GITIGNORE, WORKSPACE_STAGING_GITIGNORE];
+  for (const repo of manifest.repos) {
+    if (repo.path === undefined) {
+      lines.push(`/${repo.name}/`);
+      continue;
+    }
+    if (isAbsolute(repo.path) || /^[A-Za-z]:[\\/]/.test(repo.path)) continue;
+    const inside = normalize(repo.path).replaceAll("\\", "/").replace(/\/+$/, "");
+    if (inside === "." || inside === ".." || inside.startsWith("../") || inside === "") continue;
+    lines.push(`/${inside}/`);
+  }
+  return [...new Set(lines)];
 }
 
 // repos.json after `entry` joins it: one entry added in place, the file's
 // comments and layout kept, or a new file when there is none. Null when the
 // text has no `repos` array to add to.
-export function workspaceManifestWith(raw: string | null, org: string, entry: WorkspaceRepoEntry): string | null {
-  if (raw === null) return `${JSON.stringify({ org, repos: [entry] }, null, 2)}\n`;
+export function workspaceManifestWith(raw: string | null, org: string | undefined, entry: WorkspaceRepoEntry): string | null {
+  if (raw === null) return `${JSON.stringify({ ...(org === undefined ? {} : { org }), repos: [entry] }, null, 2)}\n`;
   return appendJsoncArrayItem(raw, "repos", entry);
 }
 
@@ -188,4 +411,94 @@ export function withoutCredentials(url: string): string {
       : info.includes(":")
         ? `${scheme}${info.slice(0, info.indexOf(":"))}@`
         : whole);
+}
+
+// Parse .gitmodules (ini-like) into submodule entries. Pure and exported for
+// direct unit testing. Line-oriented, tolerant: malformed content degrades to
+// whatever parses (total garbage yields []); it never throws. An entry with no
+// path is dropped, as is any path that is absolute or escapes the project via a
+// `..` segment (a caller joins path under projectDir and must not follow it out).
+export function parseGitmodules(
+  content: string
+): Array<{ name: string; path: string; url: string }> {
+  const entries: Array<{ name: string; path: string; url: string }> = [];
+  let current: { name: string; path: string; url: string } | null = null;
+  const finish = () => {
+    if (!current) return;
+    const p = current.path;
+    const isUnsafe =
+      p === "" ||
+      p.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/.test(p) || // Windows drive-absolute
+      p.split(/[/\\]/).includes("..");
+    if (!isUnsafe) entries.push(current);
+    current = null;
+  };
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
+    if (line.startsWith("[")) {
+      finish();
+      const m = line.match(/^\[submodule\s+"(.+)"\]$/);
+      current = m ? { name: m[1], path: "", url: "" } : null;
+      continue;
+    }
+    if (!current) continue;
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).trim();
+    if (key === "path") current.path = value;
+    else if (key === "url") current.url = value;
+  }
+  finish();
+  return entries;
+}
+
+// A path .gitmodules lists, as the '/'-joined path from the project the scan
+// walks (a Windows path's backslashes, a leading ./ and a trailing slash read
+// the same).
+export function submodulePath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+}
+
+// Whether `name` is a folder the project's .gitmodules lists.
+export function isProjectSubmodule(projectDir: string, name: string): boolean {
+  let content: string;
+  try {
+    content = readFileSync(join(projectDir, ".gitmodules"), "utf-8");
+  } catch {
+    return false;
+  }
+  return parseGitmodules(content).some((entry) => submodulePath(entry.path) === name);
+}
+
+// A repo of the workspace as git cloned it here: the listing `read` makes of
+// the commit the clone checked out, which the first entry of the repo's HEAD
+// reflog (git's own record of the clone) names, so whatever was committed,
+// pushed or pulled there since still reads as a change. A clone that writes
+// links as plain files (core.symlinks false, Git for Windows' default) checked
+// each link out as a file holding its text, so the listing has it as that
+// file, its target unread. Null when git keeps no record of a clone there.
+// Kept per folder and commit for the process.
+const clonedListings = new Map<string, Map<string, string> | null>();
+export function clonedRepoListing(
+  dir: string,
+  read: (commit: string, followLinks: boolean) => ReadonlyMap<string, string> | null,
+): Map<string, string> | null {
+  const git = (args: string[]): string | null => {
+    const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+    return result.status === 0 ? result.stdout.trim() : null;
+  };
+  const first = git(["reflog", "show", "--format=%H %gs", "HEAD"])?.split(/\r?\n/).filter(Boolean).at(-1);
+  const commit = first === undefined ? null : /^([0-9a-f]{40}|[0-9a-f]{64}) clone: /.exec(first)?.[1] ?? null;
+  if (commit === null) return null;
+  const key = `${resolve(dir)}\0${commit}`;
+  if (!clonedListings.has(key)) {
+    const plainLinks = git(["config", "--bool", "core.symlinks"]) === "false";
+    const listing = read(commit, !plainLinks);
+    clonedListings.set(key, listing === null ? null : new Map([...listing].map(([path, entry]) =>
+      [path, plainLinks && entry.startsWith("120000 ") ? `100644 ${entry.slice(7)}` : entry])));
+  }
+  return clonedListings.get(key) ?? null;
 }

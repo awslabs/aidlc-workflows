@@ -1,33 +1,165 @@
 # Multi-Team Construction and Workshop Mode
 
-Team-owned Construction lets several human teams build different Units from one
-approved intent. Workshop mode is one application of the same mechanism; the
-engine contract is scope-agnostic:
+Several teams can build the Units of one approved piece of work. The
+lead's project is where its Inception ran. How the teams build follows where the code lives:
 
-- `Construction Iteration: unit-major`
-- `Unit Ownership: team`
-- a valid Unit dependency DAG
-- a shared git namespace, or sibling worktrees sharing one local ref database
+- **The code is the workspace's own repository** (the work records no code
+  repos of its own; a `repos.json` that names only the workspace itself, as
+  `"."`, counts as that): teams claim, publish, pin, gate and land. The
+  integration lead works from unscoped main, each team from a checkout stamped
+  to one claimed Unit, and main lands each Unit
+  ([Teams on the workspace's own repo](#teams-on-the-workspaces-own-repo)).
+- **The code is in repos of its own** (beside the workspace, anywhere on disk,
+  or under `src/`, as `repos.json` or the work's repo set records them): each
+  team builds its Unit as a piece of work of its own, in its own workspace and
+  under its own rules, from a copy of what the lead approved, and merges it into
+  each repo the way that repo always merges. The lead's project sees a Unit done when
+  every repo it changed has merged, and runs Build and Test once every Unit is
+  in ([Teams across repos](#teams-across-repos)).
 
-Team ownership currently requires the workspace root itself to be the source Git
-repository. Work with a recorded sibling-repo set is not asked who builds its
-Units: when Construction starts, AI-DLC says in one line that this session
-builds them, because teams each owning a Unit is not available yet for work
-across repos, and `set-unit-ownership team` refuses with the same line before
-changing state.
+Which one a piece of work takes is settled when **Several teams** is chosen:
+work that records code repos records where the lead's project is (`Home Location`), and
+work on the workspace's own repo, or team work started before AI-DLC recorded
+`Home Location`, keeps the claim flow. A teammate who takes a Unit of solo work
+builds it as work of their own in either layout
+([A second person on solo work](#a-second-person-on-solo-work-and-the-leads-sign-off)).
+Workshop mode is one use of this; it works the same for any scope whose plan
+splits the work into Units.
 
-The integration lead works from unscoped main. Each delivery team works from a
-checkout stamped to one claimed Unit. A claimed checkout runs that Unit's exact
-Construction chain, stages 3.1 through 3.5, in graph order. Main never reruns
-those stages after merge because the team's keyed receipts arrive with its
-audit shard.
+What both need:
+
+- a Unit plan with two or more Units, built one Unit at a time
+  (`Construction Iteration: unit-major`), which choosing teams sets;
+- the workspace in git, so every clone sees the same Units and claims.
+
+In a workspace that is not a git repository, work with a recorded repo set is
+built by one session: when Construction starts, AI-DLC says in one line that
+the workspace needs to be in git for teams, and `set-unit-ownership team`
+refuses with the same line before changing state.
 
 For the Workshop scope's stage grid and Minimal test floor, see
 [Scopes and Depth](05-scopes-and-depth.md#workshop).
 
 ---
 
-## Roles and topologies
+## Prepare Construction
+
+The integration lead completes Inception, including:
+
+1. the authoritative Unit DAG;
+2. `Construction Iteration: unit-major`;
+3. `Unit Ownership: team`;
+4. the team gate rhythm, `per-stage` or `unit-end`;
+5. the affirmed branching strategy.
+
+When Inception ends with two or more Units, the first step into Construction
+asks who builds them, once, in every scope and in a composed workflow: **Just
+me** records `Unit Ownership: solo` and this session builds the Units;
+**Several teams** records `Unit Ownership: team`, switching a stage-by-stage
+plan to one Unit at a time on the way (the choice says so, and says that each
+team approves its Unit after every stage unless the lead asks for one approval
+at the end of each Unit). A plan with one Unit, no Unit plan, or
+Construction already under way is never asked. A reply that picks neither
+leaves this session building, and the first step says to ask for teams before
+the first Unit is built. Team approvals come after every stage (`per-stage`)
+unless the lead asks for one approval at the end of each Unit
+(`set-unit-gate-rhythm unit-end`) before the first team approval question;
+the first team step offers it. On the workspace's own repo, while no team has
+taken a Unit, that step also says once that this session builds the Units
+here, starting with the first DAG Unit (the walking skeleton, when the scope
+runs one). With a shared remote, the step that would start a Unit here asks
+first whether to share the plan with the teams (see below); without one, the
+line says to share the work through git, and each team then runs `/aidlc` in
+its own clone to take a Unit.
+
+When the work records code repos of its own and the workspace is a Git
+repository, choosing **Several teams** also records where the lead's project
+is: `Home Location` in the state, the address the workspace's own remote points
+to (read, never changed; a user or token in the address is left out), or
+`local` when it has no remote. The next step asks once who builds which Unit
+(after you speak without naming teams, it offers the same choice and builds
+nothing meanwhile), naming each Unit with its likely repos and the Units it
+waits on. Answer in your own words, for example
+"refunds: payments, checkout-ui: web, leave reporting open": each Unit you name
+is held for that team, a Unit you leave open waits for any team to take it, a
+Unit you leave out is built here, and a Unit a team already holds stays with
+that team. **Leave them all open** holds none and leaves every Unit for the
+teams. Your checkout stays the lead's project, never scoped to one Unit. The lead's project then
+builds the Units you left out, skipping a Unit that waits on one a team still
+builds or on one left open, and shows the board while a team still builds a
+Unit or a Unit waits for a team; the board offers once to build a Unit you left
+open here instead (**Build reporting here**), and nothing of it is built here
+until you say so ([Teams across repos](#teams-across-repos)). Work on the workspace's own repo
+records no Home Location and keeps the claim, publish, pin, gate and land flow
+([Teams on the workspace's own repo](#teams-on-the-workspaces-own-repo)).
+
+When the scope records `skeleton: on`, the first DAG Unit is the walking
+skeleton. It runs on unscoped main before claims open and needs no merge-back
+gate; claims open once its Unit Progress row on the pushed main is complete.
+With `skeleton: off`, or `Skeleton Stance: off` recorded in the work's state,
+dependency-ready Units open immediately. When the team's practices answer
+whether to build a thin end-to-end slice first, that answer is read at the
+first step after several teams are chosen, before a Unit is handed out and
+before the plan is shared. While your answer is recorded but the plan the teams
+have still holds every Unit behind the first, the board says so once, with the
+share that fixes it.
+
+On the workspace's own repo, teams take Units from the plan on the shared
+remote. Once claims are open (at once with the skeleton off, once the walking
+skeleton is approved with it on) and the repository has a remote, the step that
+would start a Unit on main asks once whether to share the plan with the teams,
+before each Unit this session would build:
+
+- **Share them with the teams** runs `aidlc unit share`: it commits what git
+  shows changed here (the question names how many files and, by name, up to
+  ten new files outside `aidlc/`, past ten those nearest the project's top, with
+  how many more; `git status` shows the rest before you share; ignored files
+  and AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` stay
+  out)
+  and pushes the integration branch with a plain push, never forced. This
+  checkout then shows the board instead of building Units. A push the remote
+  refuses (it has commits this clone lacks, or the branch is protected) keeps
+  the commit, says why, and the question comes back: pull main, then share.
+- **Build them here for now** builds that Unit in this session; the question
+  comes back before the next Unit.
+
+Typed, the same step is `/aidlc unit share`, or your own commit and
+`git push origin main`.
+
+Where the work records code repos of its own, the lead's project asks who builds which
+Unit instead. When a slice is built first by everyone together, the question
+says which one and why, and naming a team for it gives it to that team instead.
+Once the Units are held for their teams, or left open for any team, the next
+step asks once whether to share the plan with them: **Share them with the
+teams** runs `aidlc unit share --plan`, which commits AI-DLC's record here
+(`aidlc/`, none of your other files) and pushes main with a plain push; **Not
+now** leaves it, and a team's clone sees the plan once main is pushed (or push
+it yourself with `git push origin main`). When every Unit held for a team went
+to it as a hand-off file and none is open, nothing is asked: no team takes the
+plan from here. When the remote does not answer, Share says so and keeps the
+commit, and the question is not put again; run `aidlc unit share --plan` once
+it can be reached. A Unit you add to the plan after sharing it, held for a team
+or left open, is not on the remote until you share again, so the question comes
+back once, naming it.
+
+Claims open by dependency batch. "Delivery planning is complete" does not mean
+every Unit is claimable; a Unit remains blocked until every `depends_on` row is
+merged.
+
+---
+
+## Teams on the workspace's own repo
+
+Where the code is the workspace's own repository, and for team work that
+started before AI-DLC recorded `Home Location`, the integration lead works from
+unscoped main and each delivery team works from a checkout stamped to one
+claimed Unit. A claimed checkout runs that Unit's exact Construction chain,
+stages 3.1 through 3.5, in graph order, and main pins, gates and lands each
+candidate. Main never reruns those stages after merge because the team's keyed
+receipts arrive with its audit shard. The teams share one git namespace, or
+sibling worktrees share one local ref database.
+
+### Roles and topologies
 
 | Role | Responsibility |
 |------|----------------|
@@ -41,7 +173,7 @@ Command examples use the harness-neutral public grammar. Run them through the
 installed harness's `/aidlc` command surface or its packaged `aidlc`
 dispatcher; no example assumes a `.claude/`, `.kiro/`, or `.codex/` tool path.
 
-### Clone per team
+#### Clone per team
 
 Each team clones the shared remote. Claim coordination and candidate publication
 use `refs/heads/claim/<intent-id8>/<unit>`.
@@ -53,7 +185,7 @@ git fetch --all
 aidlc unit claim payments --team "Payments team"
 ```
 
-### Sibling worktrees
+#### Sibling worktrees
 
 One repository creates sibling worktrees. Claims use the shared local branch
 namespace through atomic `git update-ref` only when no remote is configured. If
@@ -127,79 +259,9 @@ those, from the shared remote (best effort, a few seconds at most, no prompt;
 when the remote does not answer, the board says once that it shows what this
 clone last saw).
 
----
+### Claim, build, and publish
 
-## Prepare Construction
-
-The integration lead completes Inception, including:
-
-1. the authoritative Unit DAG;
-2. `Construction Iteration: unit-major`;
-3. `Unit Ownership: team`;
-4. the team gate rhythm, `per-stage` or `unit-end`;
-5. the affirmed branching strategy.
-
-When Inception ends with two or more Units, the first step into Construction
-asks who builds them, once, in every scope and in a composed workflow: **Just
-me** records `Unit Ownership: solo` and this session builds the Units;
-**Several teams** records `Unit Ownership: team`, switching a stage-by-stage
-plan to one Unit at a time on the way (the choice says so, and says that each
-team approves its Unit after every stage unless the lead asks for one approval
-at the end of each Unit). A plan with one Unit, no Unit plan, or
-Construction already under way is never asked. A reply that picks neither
-leaves this session building, and the first step says to ask for teams before
-the first Unit is built. Team approvals come after every stage (`per-stage`)
-unless the lead asks for one approval at the end of each Unit
-(`set-unit-gate-rhythm unit-end`) before the first team approval question;
-the first team step offers it. While no team has taken a Unit, that step also
-says once that this session builds the Units here, starting with the first
-DAG Unit (the walking skeleton, when the scope runs one). With a shared remote,
-the step that would start a Unit here asks first whether to share the plan with
-the teams (see below); without one, the line says to share the work through
-git, and each team then runs `/aidlc` in its own clone to take a Unit.
-
-When the scope records `skeleton: on`, the first DAG Unit is the walking
-skeleton. It runs on unscoped main before claims open and needs no merge-back
-gate; claims open once its Unit Progress row on the pushed main is complete.
-With `skeleton: off`, or `Skeleton Stance: off` recorded in the work's state,
-dependency-ready Units open immediately. When the team's practices answer
-whether to build a thin end-to-end slice first, that answer is read at the
-first step after several teams are chosen, before a Unit is handed out and
-before the plan is shared. While your answer is recorded but the plan the teams
-have still holds every Unit behind the first, the board says so once, with the
-share that fixes it.
-
-Teams take Units from the plan on the shared remote. Once claims are open (at
-once with the skeleton off, once the walking skeleton is approved with it on)
-and the repository has a remote, the step that would start a Unit on main asks
-once whether to share the plan with the teams, before each Unit this session
-would build:
-
-- **Share them with the teams** runs `aidlc unit share`: it commits what git
-  shows changed here (the question names how many files and, by name, up to
-  ten new files outside `aidlc/`, past ten those nearest the project's top, with
-  how many more; `git status` shows the rest before you share; ignored files
-  and AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` stay
-  out)
-  and pushes the integration branch with a plain push, never forced. This
-  checkout then shows the board instead of building Units. A push the remote
-  refuses (it has commits this clone lacks, or the branch is protected) keeps
-  the commit, says why, and the question comes back: pull main, then share.
-- **Build them here for now** builds that Unit in this session; the question
-  comes back before the next Unit.
-
-Typed, the same step is `/aidlc unit share`, or your own commit and
-`git push origin main`.
-
-Claims open by dependency batch. "Delivery planning is complete" does not mean
-every Unit is claimable; a Unit remains blocked until every `depends_on` row is
-merged.
-
----
-
-## Claim, build, and publish
-
-### 1. Claim
+#### 1. Claim
 
 In a team's own clone of the shared remote, `/aidlc` offers the Units open to
 take, once for each set of open Units: "2 Units are open for a team to take:
@@ -234,7 +296,7 @@ Adoption verifies the checked-out payload against the live ref and keeps the
 claim's bound audit shard, so the teammate can resume and publish without
 creating a successor attempt.
 
-### 2. Build
+#### 2. Build
 
 Run `/aidlc` in the claimed checkout. The engine routes only the stamped Unit:
 
@@ -284,14 +346,12 @@ publish names the file: take it out of the branch, make the change on main,
 and publish again. Pin and land refuse it too, and say to do that in the
 checkout where the Unit is claimed.
 
----
-
-## Pin, gate, and land
+### Pin, gate, and land
 
 All merge commands run from unscoped main, or from any checkout of the project
 that holds no Unit claim.
 
-### 1. Pin the candidate
+#### 1. Pin the candidate
 
 On such a checkout `/aidlc` reads the teams' claims from the shared remote
 (above), so when a team has published its Unit the next `/aidlc` asks, once for
@@ -344,7 +404,7 @@ and landing commands refuse. Run `pin` again and review the new OID explicitly.
 If the registry cannot be reached, gate and land fail closed because they
 cannot prove the pin was not tombstoned.
 
-### 2. Present the merge gate
+#### 2. Present the merge gate
 
 Pin's output carries the merge gate (`merge_gate`): the question, its strategy
 and target, and the command that records each answer. The agent asks it in the
@@ -370,7 +430,7 @@ further question. A rejection keeps the candidate unmerged. A candidate carrying
 `Merge-Held: true` is refused until the team resolves the HOLD-MERGE sequence,
 publishes again, and main re-pins.
 
-### 3. Land
+#### 3. Land
 
 ```bash
 aidlc unit land payments --target main
@@ -428,9 +488,7 @@ Dependents become claimable from the merged row. After the last row merges,
 the per-Unit block settles and main routes Build and Test (3.6), then CI
 Pipeline (3.7), exactly as solo Construction does.
 
----
-
-## Dispatcher, status, and health checks
+### Dispatcher, status, and health checks
 
 On unscoped main, `/aidlc` is a turn-terminal dispatcher while team fan-out is
 active. It renders one deterministic board verbatim:
@@ -472,9 +530,7 @@ never answers that there is no work.
 
 Doctor never fetches or releases a claim.
 
----
-
-## Release, salvage, and resume
+### Release, salvage, and resume
 
 If a team cannot finish, the integration lead releases the claim from unscoped
 main:
@@ -516,9 +572,325 @@ registry.
 
 ---
 
+## Teams across repos
+
+Where the work records code repos of its own, choosing **Several teams**
+records `Home Location`, and each team builds its Unit as a piece of work of
+its own. Each team needs to reach the lead's project's repository with its own login, or
+a hand-off file when it cannot.
+
+### The three layouts
+
+- **One workspace for everyone.** Each team member clones the lead's
+  workspace. The Units are offered there, and each team's build lives in its
+  own space (`aidlc/spaces/<team>/`) of the same repository.
+- **A workspace per team.** A team makes its own workspace repository from the
+  lead's. The lead's record comes along, read only, and is never offered to
+  carry on; its Units are reached at the lead's project's address.
+- **A personal copy.** One person clones their own copy; it works as one of
+  the two above, by where its `origin` points.
+
+A team that cannot reach the lead's project at all works from files instead
+([A team that cannot reach the lead's project](#a-team-that-cannot-reach-the-leads-project)). The
+code repos can live anywhere on disk: `repos.json` gives each one's path, and
+one person's `repos.local.json` their own
+([Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)).
+
+### Take a Unit as your team's own work
+
+When the lead's project records `Home Location`, each team builds its Unit as a piece of
+work of its own, in its own workspace and under its own rules. A team member
+runs `/aidlc` in their workspace with no work of their own selected there, and
+AI-DLC offers the Units their team can take, from what the workspace already
+has (the lead's plan and the claims git last brought in). Where the lead has
+practices they agreed (their `team.md`) or project rules of their own (their
+`project.md`) beyond the template's notes, the same question says so once: each
+**Start <unit>** follows the lead's agreed practices too (or project rules, or
+both, named by their headings in its detail), the recommended way, which loads
+each of those files where it is, read only, just before the team's own file of
+the same name, so the team's are on top. One more choice takes a Unit under the
+team's own rules only: **Start <unit> under your team's own rules only** when
+one Unit is offered, else **Start one under your team's own rules only**, which
+asks which Unit. In a clone where the team's own build is finished or pushed, its
+`/aidlc` or words about the team's other Units put the Units it can start first,
+once in a chat, never "everything is done" or a new piece of work. At the lead's
+project, the learnings question's first choice
+reads **Yes, for this project, and offered to any team that takes a Unit**.
+
+- **A clone of the lead's own workspace**: the lead's work is here too, and its
+  Units are offered to take. **Carry on <work> here, as the lead** is offered
+  only in the checkout that made the plan (or a copy of that folder), once in a
+  chat when nothing is ready to take; a teammate's clone never offers it,
+  whatever its git name, and hears where things stand. Even with the lead's
+  work picked there, the lead's own questions (who builds which Unit, a
+  hand-off, a sign-off) are not put in such a clone. The lead in a fresh clone
+  on another machine says so in their own words, and AI-DLC records it there
+  (`unit lead-here`); from then on that checkout gets the lead's questions.
+- **A team's own workspace made from the lead's** (its `origin` is the team's
+  repository): the lead's work that git copied in stays the lead's, read only,
+  and is never offered to carry on. Its Units are, and taking one reaches the
+  home by the address `Home Location` records, with your own login and hooks.
+  No remote is added.
+- **A personal copy** works as one of the two, by where its `origin` points.
+
+Your team is your active space (`/aidlc space switch <team>`). In the default
+space every Unit nobody has taken is offered, with the team it is held for; an
+open one is offered for each team the lead named, or for another team you name.
+A Unit that waits on another is listed as waiting until that Unit is done at the
+lead's project, and a Unit already being built (by a teammate, or at the lead's project) or held for
+another team is listed with where it is. A Unit the lead kept for the lead's project (named
+for no team and not left open, or built there on the lead's word) is listed as the lead's
+project's and never offered. AI-DLC reads the lead's project's claims as the
+lead's project has them now, once per chat and at each look while nothing is ready, so
+nobody has to fetch.
+
+Picking one runs `aidlc unit take <unit> --home <record>`. It holds the Unit at
+the lead's project for your team: one held for your team becomes yours, and an open one
+is held for the team you named. Then it starts the Unit's build: a new piece of work in your team's
+space, named after the Unit, running the Unit's planned Construction stages
+from a copy of what the lead approved. The copy is what the lead's Ideation
+and Inception stages wrote (the mockups and the Unit plan among them), at the
+paths the lead's project holds them, listed with their fingerprints in
+`approved-inputs.md`; the lead's Reverse Engineering and Practices Discovery
+notes stay theirs. The build records the lead's repos, cloned here or not
+yet. The lead's Inception shows as done there and does not run again, and its
+approvals stay the lead's. Your team approves its Unit the way the lead's
+work does: after every stage, or once at its end.
+
+- A Unit another team holds, or that a teammate already took, is not taken
+  again; the line names who holds it.
+- Taking a Unit you took before, from any clone of your workspace, carries its
+  build on (**Carry on <unit>**).
+- A lead's project you can read but not push to: a Unit held for your team is still
+  yours, and its result goes back as a file, said once; once the lead's project takes
+  your pushes, the push sends it by git instead. An open Unit there cannot be
+  held from your side: the lead holds it for your team at the lead's project.
+- A repo the lead's work records that your workspace has no checkout of is
+  said once, with where to clone it or how to give its path in
+  `repos.local.json`. When `repos.json` has its address, the build's first step
+  asks instead, once: "billing is not at ../billing yet, where repos.json puts
+  it. Do you want me to clone it there?" On your yes it is cloned there with your own git, and its
+  files are nobody's change at the Unit's gates. While your own
+  `repos.local.json` cannot be read, the take says what is wrong with it and
+  offers no clone, since your copy may be where that file puts it.
+
+Each build keeps its entry in its own record folder (`aidlc-intent.json`), not in
+the space's `intents.json`, so two people who take two Units in one space share
+no file and their pulls never conflict.
+
+### Push your Unit, and merge it your way
+
+When your Unit's last stage is approved, AI-DLC offers the push: "Refunds is
+built and you approved it. It changed checkout-api and billing. Commit its
+changes on branch refunds in each and push them?" **Push** runs
+`aidlc unit push`. In each repo it puts you on a branch named after the Unit,
+as your own hands would: started from the shared integration branch, fetched,
+when your working tree allows, else from where you are (and the line names any
+of your unpushed commits that come along). Then it commits exactly the files the
+Unit's Code Generation recorded writing (its `source-manifest.json`) with your
+own git, so your hooks, signing and identity run as usual; in a file you had
+changed yourself, only the Unit's change is committed. Your other uncommitted
+work comes along uncommitted and is never committed. Every repo is committed
+before the first push, so a hook that stops one pushes nothing. Each repo's push
+goes to the remote git would push it to; with several remotes and none set, the
+offer names each. The line says where you are and the way back ("You're on
+refunds now in checkout-api and billing. Switch back to main any time."). A
+later push from the branch you went back to takes the Unit's files Code
+Generation changed there onto its branch as they are; when changes of your own
+are in the way, it stops with git's words, nothing moves, and the push is
+offered again once they are committed or put aside. A push the host refuses is
+said once, in its own words, and nothing retries.
+**Not now** pushes nothing; the end of the build says once that the Unit is not
+pushed yet. A repo the Unit changed that the lead's plan did not list is added
+to the build's repos and goes with the push, said once. When the code went but
+the lead's project did not take the result, the next step offers to send it again.
+
+Open a pull request in each repo your usual way and merge it the way that repo
+merges: a merge commit, a squash or a rebase. The push also sends the result
+back on the Unit's claim: in each repo the branch, every head pushed and each
+changed file's blob, and the Unit outputs the lead's project's later stages read (Code
+Generation's summary and test instructions). A review fix pushed later goes
+back the same way.
+
+At the lead's project, while teams build, AI-DLC fetches the work's claims from the
+lead's project's remote once per chat, after your messages while a team is building,
+and at each step that shows or acts on them, and
+checks every pushed Unit's repos against their integration branch, with the
+lead's own login and never a password prompt, then shows the board (when a
+remote cannot be reached, one line says the board may be behind):
+
+```text
+Units of checkout-revamp:
+- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)
+- checkout-ui, web: building, taken by sam
+- reporting, here: waits on refunds
+```
+
+A Unit the lead's project builds itself reads where its Unit Progress has it:
+done once it is through its gate, the stage it is at, waiting for your
+approval while its gate is open, or not started yet. A look at the board on its
+own (`/aidlc team-board`) records nothing: a Unit whose repos it sees merged reads
+"not recorded yet", and the next step at the lead's project records it and opens
+the Units waiting on it.
+
+A Unit is done when every repo it changed has merged, however it merged (when a
+repo merged it in a way the board cannot see, tell the lead's chat and
+AI-DLC runs `aidlc unit merged <unit> --repo <repo>` with your words): the
+lead's project records `UNIT_MERGED`, writes the Unit's outputs into its record where
+Build and Test reads them, and marks the claim done, so the Units waiting on it
+open for the lead's project and for every team. A merge the lead's project sees is the one thing it
+writes for the teams, and the board says it once: "I've told the payments team
+refunds is merged." Another clone or machine of the lead's project reads a Unit done on its claim
+as done too. A repo the lead's project has no checkout of stays
+"not merged yet" there. To send a repo back, the lead says so at the lead's project and
+AI-DLC runs `aidlc unit turned-down <unit> --repo <repo>` with their words; the
+team hears them once at its next step, and its build, finished until then, is
+open again: AI-DLC asks once whether to take the Unit back to Code Generation so
+the team can change it and push it again, which it recommends, and runs the way
+back when they say yes. Once the redo's Code Generation is approved, the end of
+the build offers the push again. What already merged stays merged. A team whose
+chat is on another of its builds hears it there too, once, with how to go back
+to that build. When the lead's Build and Test finds a Unit a team built
+wanting, its retry sends the Unit back to the team in the failure's own words
+(`aidlc unit send-back <unit>`): it is never rebuilt at the lead's project, the
+board shows it back with the team, and its next merge is recorded again.
+
+### Start early, and change a shared input
+
+A Unit opens once the Units it waits on are done. When a Unit it waits on has
+pushed its branches, the offer also has **Start reporting early**: the build
+starts on that pushed branch in each repo it changed (checked out where you
+have no uncommitted work there; otherwise the branch is made and the line says
+to switch when you are ready), and the line says it may still change before it
+merges. Once that Unit is merged, AI-DLC asks once whether to move your build
+onto the branch it merged into (only your build's own commits move, with your
+own git; a build you already pushed then needs a force push of your own, which
+AI-DLC never does). The line says where you are afterwards and the way back to
+your branch; a conflict stops with git's words and the way back, and a move your
+own changes kept git from making is offered again once they are out of the way. You
+hear once when that Unit is turned down, and nothing else changes.
+
+A team that needs a change to something its Unit was approved with (a contract
+summary, the requirements) edits its copy or writes the new text. When its copy
+changed, its build asks once whether to send the change to the lead's project for its
+owner to approve; AI-DLC runs `aidlc unit propose --input <file>` and the team
+carries on while the lead decides. At the lead's project the owner of the shared plan is
+asked once, with the path of the team's version to read: **Approve it**,
+**Not now** or **Turn it down**, answered in their own words; after **Not now**
+the board keeps the same choice.
+An approved change is written into the lead's record, and the stages there
+that used it stay current, so nothing at the lead's project is asked again. Every team
+whose Unit's stages read it gets the new version on its claim (a Unit's build
+fetches its claim from the lead's project once per chat, and when it takes or pushes) and
+hears it once, on every Guard Policy; a team that pushed already hears it as a
+fact, and the others hear the offer to redo a stage that used it:
+"Something Functional Design used changed after it finished. I'm carrying on
+with it as it is. Do you want me to redo Functional Design with the change?"
+A team that edited its own copy and never sent that edit to the lead keeps its copy as
+it left it: the new version is put beside it (`<file>.from-lead.md`), said once,
+and when its result comes to the lead's project the lead hears once that the team's copy has its
+own edit, made on the version before the change.
+A team by file gets a newer hand-off file to take in. A team whose Unit was
+already done and merged hears once that the input changed and the Unit is done,
+with an offer to start follow-up work; the done Unit is never reopened. A
+change turned down reaches the team that proposed it once, with the owner's
+words.
+
+### A team that cannot reach the lead's project
+
+A partner team in another company, or behind a locked network, works from
+files instead of git. While a Unit is held for a team and not taken yet, the
+board offers once to hand it to that team as a file, in case they cannot reach
+this workspace; the lead answers in their own words.
+The lead says to hand the Unit off ("hand off reporting to the data team");
+AI-DLC runs `aidlc unit hand-off reporting --team data`,
+holds the Unit for that team, and writes one readable Markdown file,
+`aidlc/handoff/<work>-<unit>.md`: the work's id, the Unit, the attempt, the
+fingerprints of what it holds at the top, then each document the Unit was
+approved with in its own block. It is not signed; send it the way your teams
+send files, and anyone can read it before taking it in. The board says
+"handed off by file".
+
+The partner takes it in from their own workspace (AI-DLC installed there
+first), however they point at it: "take the Unit in this file", `/aidlc
+<path>`, or `aidlc unit take --file <path>`; the agent hands AI-DLC the file's
+exact path. AI-DLC offers to start it, then creates the Unit's build exactly as
+for a Unit taken by git, under the partner's own rules; Ideation and Inception
+do not run again. A file changed after the lead wrote it is taken in as it is,
+and the line says so; an editor that only reformatted it changes nothing.
+
+While they build, the partner may send a progress file whenever they like
+(`aidlc unit progress`); nobody has to. A change they propose to something the
+Unit was approved with (`aidlc unit propose`) goes into the progress file too:
+the lead is asked about it once they take the file in, as for a team that
+reaches the workspace. An approval sends a newer hand-off file; a repo turn-down
+reaches them only by the lead's own word. A send-back from the lead's Build and
+Test goes in a newer hand-off file too: the partner takes it in as the first,
+hears the failure, and their build goes back to Code Generation at their word;
+the next result file they send is their answer. When they push, the result goes into a
+result file instead of the claim: "The result file is
+aidlc/handoff/<work>-<unit>-result.md; send it to the lead." For each repo the
+lead cannot fetch, the file carries the partner's own check of whether it
+merged; push again after merging to send an updated one. The lead takes either
+file in by giving its path to `/aidlc` (`/aidlc <path>`, or
+`aidlc unit take-in <file>`): a result is checked like a pushed
+one and brings back only the Unit outputs the lead's project's later stages read (anything
+else in it is left out, with a line), a repo the lead's project cannot fetch counts as merged on the partner's word,
+recorded as theirs, until the lead's project can check it itself. A file from an earlier
+attempt is taken in with a line saying so; a file for other work changes
+nothing, and the line says which work it is for. Files are written with LF and
+read with CRLF too.
+
+---
+
+## A second person on solo work, and the lead's sign-off
+
+Solo work built one Unit at a time on one machine can still take a teammate,
+whichever layout its code is in: a Unit they take is built as work of their
+own, as [across repos](#teams-across-repos).
+When they open it in their own clone (a bare `/aidlc` or their own words,
+once in a chat, also after their words picked the work), AI-DLC says it is
+being built from another machine, on which Unit and stage while one is under
+way, and offers three things: **Carry on**
+the whole work here (for when the other person has stopped; today's pickup),
+**Take** an open Unit as their own (never the one the other machine is on), or
+**Follow along** (where it stands, read only). The same person opening their
+own work on a second machine (the same git `user.email`, else `user.name`, as
+the one who committed the other machine's audit) is not asked: the work carries
+on there as before. Taking one holds it on its
+claim at the workspace's `origin` and starts its build in the same space, in a
+folder of its own; the teammate's clone never writes the work's own state. At
+its next step, the lead's session switches to teams by itself: the workspace's
+`origin` becomes the lead's project, the approvals stay as they were (once per Unit at
+its checkpoint, or after every stage), and the teammate's build approves the
+same way; the Units it already built and approved stay done there, one whose
+approval was still open is put to the lead there once, for the whole Unit, and
+it says in one line who took which Unit. Nothing is asked again. The lead's project looks for a teammate's
+take once its Units are being built: once when a chat starts, and once at each
+boundary between Units, however many steps that takes, so the lead never fetches
+for it and never starts a Unit a teammate took; once every Unit is built there,
+it no longer looks. Each look takes a few seconds at
+most, and nothing is said when the remote cannot be reached. The board names each
+teammate by their own git name.
+
+The lead's sign-off is off by default. With `aidlc unit lead-sign-off on` at
+the lead's project, a team's result waits for the lead's own word: the lead's project asks once
+as the result arrives ("refunds came back from payments: ... Sign it off?"),
+and the Unit counts as done only once it is signed off and every repo it
+changed has merged; the board says "waiting for your sign-off" meanwhile, and
+keeps **Sign it off** there after a **Not now**. When solo work switches to
+teams because a teammate took a Unit, the one line the lead hears says they can
+ask for this; asked in their own words ("I want to sign off Bob's part myself"),
+AI-DLC switches it on, and the record keeps their words whole
+(`LEAD_SIGN_OFF_SET`).
+
+---
+
 ## Two-day workshop walkthrough
 
-### Day 1
+### On the workspace's own repo
+
+#### Day 1
 
 1. The facilitator runs Inception with the group.
 2. If enabled, the facilitator builds and gates the walking skeleton on main,
@@ -528,7 +900,7 @@ registry.
 4. Each team runs its scoped 3.1-3.5 chain and team gates.
 5. Each team publishes its Unit when asked.
 
-### Day 2
+#### Day 2
 
 1. The facilitator's board offers Alice's Unit for review; the facilitator
    reviews its evidence, records the merge gate, and lands it.
@@ -542,12 +914,35 @@ registry.
 The teams never race to push main. Candidate refs can move only through
 claim-bound CAS publication; main serializes the reviewed pinned OIDs.
 
+### Across repos
+
+#### Day 1
+
+1. The facilitator runs Inception with the group in the lead's workspace,
+   chooses teams, says who builds which Unit ("billing: payments,
+   notifications: messaging"), and pushes it.
+2. If enabled, the facilitator builds the walking skeleton at the lead's project first.
+3. Each team member clones the workspace (or the team's own), runs `/aidlc`,
+   and takes their team's Unit. Each team approves its own stages.
+
+#### Day 2
+
+1. Each team finishes its Unit, says push, and opens a pull request in each
+   repo; reviewers merge them the way each repo merges.
+2. At the lead's project, `/aidlc` shows the board: how far each Unit merged, which are
+   building, which wait. A Unit that waits on another opens when that one is
+   done, or starts early on its pushed branches.
+3. When every Unit is done, `/aidlc` at the lead's project runs Build and Test, then CI
+   Pipeline.
+4. The group reads `UNIT_TAKEN_IN`, `UNIT_PUSHED` and `UNIT_MERGED` in the
+   audit trail: who took, built and merged what.
+
 ---
 
 ## Related reading
 
 - [Facilitator Guide](facilitator-guide.md) - readiness check, scopes for side tasks, recovery playbook, and how strongly each harness enforces the workflow
-- [CLI Commands](12-cli-commands.md) - claim, publish, pin, gate, and land
+- [CLI Commands](12-cli-commands.md) - assign, take, push, hand-off, take-in, propose, amend and sign-off across repos; claim, publish, pin, gate, and land on the workspace's own repo
 - [State and Audit](10-state-and-audit.md) - per-clone shards and merged receipt floors
 - [Construction](../reference/04-stages/construction.md) - Unit-major routing and gate rhythm
 - [Runtime Graph](../reference/13-runtime-graph.md) - the separate solo/swarm Bolt merge path

@@ -297,7 +297,8 @@ there, so it is not recorded again.
   the adapter owns both tags; `unbindable` when the workspace has no source
   fingerprint), and invokes the reserved decision or answer tool itself. A
   write of the stage's learnings diary, the composer's proposal, a person's
-  answer text, or a person's request directly in `aidlc/.aidlc-request-text/`
+  answer text, a person's request directly in `aidlc/.aidlc-request-text/`, or
+  the lead's own file directly in `aidlc/handoff/` at the lead's project
   (the record files the shared guard admits while the plan waits)
   is not a planning write: the adapter clears its write window and records no
   violation. Kiro discards PostToolUse stdout, so a successful write hook remains silent; when

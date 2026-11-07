@@ -89,6 +89,7 @@ const VALID_EVENT_TYPES = new Set([
   // looked, and what it did: the agent's first report refused, the approval
   // question put to the person, or Guard Policy off standing aside.
   "SOURCE_WORK_NOT_FOUND",
+  "SHARED_INPUT_AMENDED",
   // Phase lifecycle
   "PHASE_STARTED",
   "PHASE_COMPLETED",
@@ -216,6 +217,10 @@ const VALID_EVENT_TYPES = new Set([
   // that asked for the packages (`log install`).
   "SYSTEM_INSTALL_BLOCKED",
   "SYSTEM_INSTALL_ALLOWED",
+  // Where nothing is built at Code Generation (a Unit's approved build, the
+  // lead's project waiting on the teams), a change let through on the person's
+  // turn, naming their message (hook-emitted).
+  "ASKED_CHANGE_ALLOWED",
   "SYSTEM_INSTALL_REQUESTED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
@@ -281,9 +286,15 @@ const VALID_EVENT_TYPES = new Set([
   "BOLT_FAILED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
+  "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
+  "UNIT_SENT_BACK",
   // Worktree lifecycle:
   //   WORKTREE_* emitted by aidlc-worktree.ts
   //   STATE_*    emitted by aidlc-state.ts state-fork/state-merge
@@ -359,6 +370,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_DEFINITION_CHANGED: "Stage Definition Changed",
   STAGE_OUTPUT_AMENDED: "Stage Output Amended",
   SOURCE_WORK_NOT_FOUND: "Source Work Not Found",
+  SHARED_INPUT_AMENDED: "Shared Input Amended",
   STAGE_JUMPED: "Stage Jump",
   STAGE_SKIPPED: "Stage Skip",
   PHASE_STARTED: "Phase Start",
@@ -421,6 +433,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_RULES_BLOCKED: "Stage Rules Blocked",
   SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
   SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
+  ASKED_CHANGE_ALLOWED: "Asked Change Allowed",
   SYSTEM_INSTALL_REQUESTED: "System Install Requested",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
@@ -450,9 +463,15 @@ const EVENT_HEADINGS: Record<string, string> = {
   BOLT_FAILED: "Bolt Failed",
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
   UNIT_OWNERSHIP_SET: "Unit Ownership Set",
+  UNITS_ASSIGNED: "Units Assigned",
+  UNIT_TAKEN_IN: "Unit Taken In",
+  UNIT_PUSHED: "Unit Pushed",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
+  LEAD_SIGN_OFF_SET: "Lead Sign-off Set",
+  LEAD_HERE_SET: "Lead Here Set",
   CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
+  UNIT_SENT_BACK: "Unit Sent Back",
   WORKTREE_CREATED: "Worktree Created",
   WORKTREE_MERGED: "Worktree Merged",
   WORKTREE_DISCARDED: "Worktree Discarded",
@@ -590,6 +609,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // The check's own record of a first refusal opens the gate on the next
   // report; a forged one would skip the agent's refusal.
   "SOURCE_WORK_NOT_FOUND",
+  "SHARED_INPUT_AMENDED",
   "HUMAN_TURN",
   "HOST_TURN",
   "QUESTION_UNANSWERED",
@@ -618,7 +638,12 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
+  "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   // The applied Construction policy decides which stage starts are attempt
   // boundaries for Unit receipts, so only its typed setters may record it.
   "CONSTRUCTION_POLICY_SET",
@@ -633,6 +658,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_COMPLETED",
   "UNIT_SKIPPED",
   "UNIT_MERGED",
+  "UNIT_SENT_BACK",
   // DocumentKB provenance: the knowledge tool emits these through the library
   // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
   // Digest+Source match a real row would make the tool's idempotent
@@ -676,6 +702,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // The person's go-ahead for a system install, and the message named as asking
   // for one; a forged one would make an install nobody asked for look like theirs.
   "SYSTEM_INSTALL_ALLOWED",
+  // Likewise for a change the guard let through on their turn.
+  "ASKED_CHANGE_ALLOWED",
   "SYSTEM_INSTALL_REQUESTED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
@@ -720,7 +748,11 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",

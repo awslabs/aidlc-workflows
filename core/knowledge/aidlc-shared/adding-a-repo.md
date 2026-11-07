@@ -29,6 +29,9 @@ work through one command, at any stage.
   entry, else from the team's `repos.json` `org`. The tool uses the person's
   own git setup, writes the `repos.json` entry, and refreshes the managed
   `.gitignore` block and `aidlc.code-workspace`.
+- When the person names the folder it goes in, pass it with `--path <folder>`;
+  with the address they gave (`--url`) the tool clones it into that folder
+  itself, so never clone it by hand first.
 - Never pass `--url` yourself: a name taken from a search result must resolve
   inside the team's org. An address comes from the person. When they give one,
   pass it with `--url <address>`, and pass their words with

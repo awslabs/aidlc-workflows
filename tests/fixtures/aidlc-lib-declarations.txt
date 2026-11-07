@@ -1189,7 +1189,6 @@ nextStageInvocation
 nextTokenKind
 noReviewerFinishedSinceReview
 noReviewerNotice
-normalizeDriveLetter
 normalizeGenerationPath
 normalizeGitObjectId
 normalizeGuardRecoveryText

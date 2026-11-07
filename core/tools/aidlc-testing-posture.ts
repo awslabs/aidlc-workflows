@@ -106,6 +106,7 @@ import {
   renderSourcePathKeys,
   governedChangeControl,
   intentRepos,
+  repoDir,
   resolveBoltDag,
   resolveBoltIdentity,
   resolveAuditWorktreePath,
@@ -183,6 +184,7 @@ import {
   recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
 import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } from "./aidlc-swarm-source.ts";
+import { LEAD_RULES_FIELD } from "./aidlc-unit-teams.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
@@ -1291,6 +1293,14 @@ export function resolveTestingPosture(
   } catch {
     // Pre-creation and focused tests use deterministic defaults.
   }
+  // A team's build taken with the lead's rules too reads them as the rules
+  // reach it (aidlc-steering.ts): the lead's file of a layer before the
+  // team's own, so the team's Testing Posture wins where it says one.
+  for (const lead of (getField(state, LEAD_RULES_FIELD) ?? "").split(",").map((entry) => entry.trim()).filter(Boolean)) {
+    const layer = (["team", "project"] as const).find((name) => lead.endsWith(`/memory/${name}.md`));
+    if (layer === undefined || (sections[layer] ?? "").trim() !== "" || !existsSync(join(projectDir, lead))) continue;
+    sections[layer] = extractTestingPostureSection(readFileSync(join(projectDir, lead), "utf-8"));
+  }
   return resolveTestingPostureFromSections(sections, {
     scope: (getField(state, "Scope") ?? "feature").trim().toLowerCase(),
     // An isolated Code Generation run builds to its own test strategy; the
@@ -2257,7 +2267,7 @@ export function codeGenerationResume(
     // A multi-repo intent's plan may name paths inside a repository, and a step
     // may name one of this stage's own record files. A bare file name (no
     // folder) is in the project when a file of that name is anywhere in it.
-    const roots = [projectDir, ...intentRepos(projectDir).map((repo) => join(projectDir, repo)), authority.stageDir];
+    const roots = [projectDir, ...intentRepos(projectDir).map((repo) => repoDir(projectDir, repo)), authority.stageDir];
     let names: Set<string> | null = null;
     const anywhere = (name: string): boolean => {
       names ??= new Set(renderSourcePathKeys(workspaceSourceState(projectDir)?.listing.keys() ?? []).map((path) => basename(path)));

@@ -83,6 +83,7 @@ import {
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { hookSessionProjectDir } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -268,9 +269,21 @@ if (!process.stdin.isTTY) {
 
 const projectDirRaw =
   process.env.AIDLC_PROJECT_DIR ?? codex.cwd ?? process.cwd();
-const projectDir = isAbsolute(projectDirRaw)
+const threadDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
+// Codex runs these hooks from the project they are set up in, and the
+// payload's cwd is where the thread works: a helper working in a code repo
+// (beside the workspace, or one of its child folders) is the workspace's own,
+// so its records stay there, never in the person's repo. The project is the
+// host's, as for every hook (hookSessionProjectDir: a session in another git
+// worktree of it acts on that worktree); a host folder that is no AI-DLC
+// project leaves the thread's own folder, as before.
+const hostDir = process.cwd();
+const projectDir = process.env.AIDLC_PROJECT_DIR === undefined &&
+    existsSync(join(hostDir, ".codex")) && existsSync(join(hostDir, "aidlc"))
+  ? hookSessionProjectDir(hostDir, rawInput)
+  : threadDir;
 const payloadSessionId = validSessionId(codex.session_id);
 if (payloadSessionId) {
   process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
@@ -631,7 +644,7 @@ function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "E
   for (const m of command.matchAll(/^\*\*\* (Add|Update) File: (.+)$/gm)) {
     const rel = m[2].trim();
     out.push({
-      path: isAbsolute(rel) ? rel : join(projectDir, rel),
+      path: isAbsolute(rel) ? rel : join(threadDir, rel),
       tool: m[1] === "Add" ? "Write" : "Edit",
     });
   }
@@ -778,7 +791,7 @@ switch (target) {
       const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
       for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
         const rel = m[1].trim();
-        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
+        targets.push({ path: isAbsolute(rel) ? rel : join(threadDir, rel), tool: "Edit" });
       }
       for (const f of targets) {
         const fwd = JSON.stringify({
@@ -820,7 +833,7 @@ switch (target) {
       const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
       for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
         const rel = m[1].trim();
-        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
+        targets.push({ path: isAbsolute(rel) ? rel : join(threadDir, rel), tool: "Edit" });
       }
       for (const f of targets) {
         const fwd = JSON.stringify({
@@ -878,7 +891,7 @@ switch (target) {
       const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
       for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
         const rel = m[1].trim();
-        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
+        targets.push({ path: isAbsolute(rel) ? rel : join(threadDir, rel), tool: "Edit" });
       }
       for (const f of targets) {
         const r = await runCoreHere(

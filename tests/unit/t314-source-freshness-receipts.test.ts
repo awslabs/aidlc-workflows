@@ -51,6 +51,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -6773,6 +6774,110 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("payments/");
     expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // add-repo --path: the repo the person named beside the workspace; the
+  // install writes repos.json and workspace-sync's two files at the root.
+  test("a repo added at the folder the person named: it and the files written at the root are no Unit's change", () => {
+    const outside = join(proj, "..", `${basename(proj)}-billing`);
+    mkdirSync(join(outside, "lib"), { recursive: true });
+    writeFileSync(join(outside, "lib", "bill.ts"), "export const bill = 1;\n", "utf-8");
+    git(outside, ["init", "-q"]);
+    git(outside, ["config", "user.email", "t@test"]);
+    git(outside, ["config", "user.name", "t"]);
+    git(outside, ["add", "-A"]);
+    git(outside, ["commit", "-qm", "seed"]);
+    intent("add-repo", "billing", "--path", `../${basename(proj)}-billing`);
+    expect(existsSync(join(proj, "repos.json"))).toBe(true);
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("no Unit's review covers");
+    expect(r.out).not.toContain("repos.json");
+    expect(r.out).not.toContain("lib/bill.ts");
+    expect(r.rc, r.out).toBe(0);
+    rmSync(outside, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A take's likely repo the work records but this workspace has no copy of:
+  // cloned on the person's yes, after the stage began.
+  test("a repo the work records, cloned after the stage began: its files are no Unit's change", () => {
+    const bare = join(proj, "..", `${basename(proj)}-payments.git`);
+    git(join(proj, "payments"), ["clone", "-q", "--bare", ".", bare]);
+    rmSync(join(proj, "payments"), { recursive: true, force: true });
+    writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }, { name: "payments", url: bare }] })}\n`, "utf-8");
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a", "payments"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    restartBaseline(proj);
+    expect(intent("add-repo", "payments")).toContain("it was already one of this piece of work's repos.");
+    expect(existsSync(join(proj, "payments", "src", "api.ts"))).toBe(true);
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/");
+    expect(r.out).not.toContain("aidlc.code-workspace");
+    expect(r.rc, r.out).toBe(0);
+    rmSync(bare, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The same repo cloned by git itself, inside the stage (a live run's Code
+  // Generation plan, step 1: "Clone the reports repo"): nothing records the
+  // clone, and its files as its remote holds them are still nobody's change.
+  function clonedByGitAfterTheStageBegan(cloneFlags: string[] = []): string {
+    // A link and a script, so the repo as its remote holds it lists as the walk lists it on disk.
+    mkdirSync(join(proj, "payments", "bin"), { recursive: true });
+    writeFileSync(join(proj, "payments", "bin", "run.sh"), "#!/bin/sh\necho run\n", "utf-8");
+    chmodSync(join(proj, "payments", "bin", "run.sh"), 0o755);
+    symlinkSync("api.ts", join(proj, "payments", "src", "api-link.ts"));
+    git(join(proj, "payments"), ["add", "-A"]);
+    git(join(proj, "payments"), ["commit", "-qm", "link and script"]);
+    const bare = join(proj, "..", `${basename(proj)}-payments.git`);
+    git(join(proj, "payments"), ["clone", "-q", "--bare", ".", bare]);
+    rmSync(join(proj, "payments"), { recursive: true, force: true });
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a", "payments"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    restartBaseline(proj);
+    git(proj, ["clone", "-q", ...cloneFlags, bare, "payments"]);
+    git(join(proj, "payments"), ["config", "user.email", "t@test"]);
+    git(join(proj, "payments"), ["config", "user.name", "t"]);
+    return bare;
+  }
+
+  // Git for Windows writes a committed link as a plain file holding its text
+  // (core.symlinks false); here the clone is told to do the same.
+  test.each([
+    ["", [] as string[]],
+    [", its links written as plain files", ["-c", "core.symlinks=false"]],
+  ])("a repo the work records, cloned by git itself after the stage began%s: its files are no Unit's change", (_how, flags) => {
+    const bare = clonedByGitAfterTheStageBegan(flags);
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/");
+    expect(r.rc, r.out).toBe(0);
+    rmSync(bare, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test.each([
+    ["changed", (): void => writeFileSync(join(proj, "payments", "README.md"), "# payments, edited after the clone\n", "utf-8"), "payments/README.md"],
+    ["committed", (): void => commitIn("payments", "src/consent.ts", "export const consent = true;\n"), "payments/src/consent.ts"],
+    ["committed and pushed", (): void => {
+      commitIn("payments", "src/consent.ts", "export const consent = true;\n");
+      git(join(proj, "payments"), ["push", "-q", "origin", "HEAD"]);
+    }, "payments/src/consent.ts"],
+  ] as const)("a repo cloned by git itself after the stage began: a file %s there since is still named", (_how, since, named) => {
+    const bare = clonedByGitAfterTheStageBegan();
+    since();
+    reviewUnitsInAppA();
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    const r = gate.rc === 0 ? guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]) : gate;
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain(named);
+    for (const kept of ["payments/src/api.ts", "payments/src/api-link.ts", "payments/bin/run.sh", "payments/README.md"]) {
+      if (kept !== named) expect(r.out).not.toContain(kept);
+    }
+    rmSync(bare, { recursive: true, force: true });
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("after a remove and a second add, the latest add's listing is the one that counts", () => {

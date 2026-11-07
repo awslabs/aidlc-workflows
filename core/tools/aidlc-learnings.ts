@@ -124,7 +124,6 @@ import {
   isoTimestamp,
   intentsDir,
   auditBlockField,
-  LEARNINGS_CORRECTION_CHOICES,
   LEARNINGS_NOTE_QUESTION_KIND,
   learningsCorrectionQuestion,
   learningsCorrectionText,
@@ -155,6 +154,7 @@ import {
   writeFileAtomic,
   harnessDir,
 } from "./aidlc-lib.ts";
+import { learningsCorrectionChoices } from "./aidlc-unit-teams.ts";
 import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
 import { LEARNED_DATE_SOURCE, learnedDate } from "./aidlc-learned-date.ts";
 import { TESTING_HEADING } from "./aidlc-testing-posture.ts";
@@ -592,7 +592,7 @@ function handleSurface(args: string[], projectDir: string): void {
     questions: candidates.map((c) => ({
       question: learningsCorrectionQuestion(c.correction),
       multi_select: false,
-      options: [...LEARNINGS_CORRECTION_CHOICES],
+      options: learningsCorrectionChoices(stateContent),
       question_kind: LEARNINGS_NOTE_QUESTION_KIND,
     })),
   };

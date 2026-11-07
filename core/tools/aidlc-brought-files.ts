@@ -18,7 +18,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import { holdsRecordedWrite, markedPart, onlyMarkedPartChanged } from "./aidlc-distribution.ts";
 import { isReadOnlyEngineProbe, readRegularFileNoFollowOrThrow } from "./aidlc-locks.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
@@ -72,6 +72,9 @@ interface BroughtFile {
 interface ChangedFile extends BroughtFile {
   // The commit holding that content, as the person types it; null when none does.
   ref: string | null;
+  // The repo's folder as the person types it from the workspace ("" for the
+  // workspace itself): where repos.json or repos.local.json puts it.
+  gitDir: string;
 }
 
 function git(dir: string, args: string[], input?: string): Buffer | null {
@@ -450,17 +453,20 @@ function inLineOrder<T extends BroughtFile>(files: readonly T[]): T[] {
 
 // Each file with the commit that holds what the build replaced: HEAD for all of
 // them in one read per repo, then the history of the named ones HEAD does not hold.
-function withWayBack(projectDir: string, files: readonly BroughtFile[]): ChangedFile[] {
+export function withWayBack(projectDir: string, files: readonly BroughtFile[]): ChangedFile[] {
   const ordered = inLineOrder(files);
   const atHead = new Set<BroughtFile>();
   for (const repo of new Set(ordered.map((file) => file.repo))) {
     const dir = repo === "" ? projectDir : repoDir(projectDir, repo);
     for (const file of heldAtHead(dir, ordered.filter((one) => one.repo === repo))) atHead.add(file);
   }
+  const gitDirOf = (repo: string): string =>
+    repo === "" ? "" : relative(projectDir, repoDir(projectDir, repo)).split(sep).join("/") || ".";
   return ordered.map((file, index) => {
-    if (atHead.has(file)) return { ...file, ref: "HEAD" };
-    if (index >= NAMED_MAX) return { ...file, ref: null };
-    return { ...file, ref: olderCommit(file.repo === "" ? projectDir : repoDir(projectDir, file.repo), file) };
+    const gitDir = gitDirOf(file.repo);
+    if (atHead.has(file)) return { ...file, ref: "HEAD", gitDir };
+    if (index >= NAMED_MAX) return { ...file, ref: null, gitDir };
+    return { ...file, ref: olderCommit(file.repo === "" ? projectDir : repoDir(projectDir, file.repo), file), gitDir };
   });
 }
 
@@ -505,14 +511,15 @@ export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
   const fromGit: ChangedFile[] = [];
   for (const file of ordered) {
     const path = file.ref === null ? null : quoted(file.path);
-    if (file.ref === null || path === null) continue;
+    const dir = file.gitDir === "" ? "" : quoted(file.gitDir);
+    if (file.ref === null || path === null || dir === null) continue;
     fromGit.push(file);
-    const command = `git${file.repo ? ` -C ${file.repo}` : ""} checkout ${file.ref} --`;
+    const command = `git${dir ? ` -C ${dir}` : ""} checkout ${file.ref} --`;
     groups.set(command, [...(groups.get(command) ?? []), path]);
   }
   const commands = andList([...groups].map(([command, paths]) => `\`${command} ${paths.join(" ")}\``));
   const noCopy = named.filter((file) => file.ref === null);
-  const noCommand = named.filter((file) => file.ref !== null && quoted(file.path) === null);
+  const noCommand = named.filter((file) => file.ref !== null && (quoted(file.path) === null || (file.gitDir !== "" && quoted(file.gitDir) === null)));
   // Past the named ones, only HEAD is read, so nothing is said of the rest
   // that git may hold further back.
   if (fromGit.length === 0 && noCommand.length === 0) {

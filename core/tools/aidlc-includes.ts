@@ -33,6 +33,7 @@ import {
   assertProjectionPathHasNoSymlinks,
   jsonEntriesIsSafe,
   managedBlockIsSafe,
+  managedBlockMarkers,
   mergeBlock,
   mergeJsonEntries,
   type ProjectionDescriptor,
@@ -407,7 +408,62 @@ export function addRootBlocks(projectDir: string): string[] {
       // Leave the file as it was; the next session or config tries again.
     }
   }
+  dropOwnWorkingFilesIgnore(projectDir);
   return written;
+}
+
+// While the lead's plan has not reached a teammate's clone (leadsPlanNotHere),
+// AI-DLC's part of the root .gitignore is not written there, as the lead's
+// share may bring that file. AI-DLC's own working files then keep out of git
+// by a file of their own in aidlc/: the aidlc/ entries of that part, anchored
+// there, and the file itself. It hides only what the root part hides, so the
+// teammate's own record shows and commits as anywhere; a file already there is
+// left as it is, and dropOwnWorkingFilesIgnore removes this one once the root
+// part is in.
+const OWN_WORKING_FILES_IGNORE = "aidlc/.gitignore";
+
+function ownWorkingFilesIgnoreText(shipped: string): string | null {
+  const entries = shipped.split(/\r?\n/)
+    .map((line) => /^(?:\*\*\/)?aidlc\/(\S.*)$/.exec(line.trim())?.[1])
+    .filter((entry): entry is string => entry !== undefined);
+  return entries.length === 0
+    ? null
+    : `# AI-DLC: its own working files here\n${[...entries, ".gitignore"].map((entry) => `/${entry}`).join("\n")}\n`;
+}
+
+export function ignoreOwnWorkingFiles(projectDir: string): void {
+  const text = ownWorkingFilesIgnoreText(aidlcRootParts(projectDir).blocks.get(".gitignore")?.shipped ?? "");
+  if (text === null) return;
+  const target = join(projectDir, ...OWN_WORKING_FILES_IGNORE.split("/"));
+  try {
+    assertProjectionPathHasNoSymlinks(projectDir, OWN_WORKING_FILES_IGNORE);
+    if (lstatSync(target, { throwIfNoEntry: false })) return;
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileAtomic(target, text);
+  } catch {
+    // Unwritten: git shows these files until the plan is here and the root part is written.
+  }
+}
+
+// Once AI-DLC's part is in the root .gitignore (written here, or brought by a
+// pull), the file ignoreOwnWorkingFiles wrote has done its work: it is removed
+// while it holds exactly what that wrote, so the root file's rules, the team's
+// own among them, reach these paths again. A file anyone changed stays.
+export function dropOwnWorkingFilesIgnore(projectDir: string): void {
+  const target = join(projectDir, ...OWN_WORKING_FILES_IGNORE.split("/"));
+  try {
+    if (!lstatSync(target, { throwIfNoEntry: false })?.isFile()) return;
+    const part = aidlcRootParts(projectDir).blocks.get(".gitignore");
+    if (!part) return;
+    const { begin, end } = managedBlockMarkers(".gitignore", part.marker);
+    const root = readSafe(join(projectDir, ".gitignore")) ?? "";
+    if (!root.includes(begin) || !root.includes(end)) return;
+    if (readSafe(target) !== ownWorkingFilesIgnoreText(part.shipped)) return;
+    assertProjectionPathHasNoSymlinks(projectDir, OWN_WORKING_FILES_IGNORE);
+    rmSync(target);
+  } catch {
+    // Kept: it hides only what the root part hides.
+  }
 }
 
 // AI-DLC's part of each root file it shares with the team, as this project's

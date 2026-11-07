@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { noteReposManifestOffered } from "../../dist/claude/.claude/tools/aidlc-workspace-repos.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
@@ -65,6 +66,9 @@ function workspace(policy: "strict" | "relaxed" | "off" = "strict"): string {
   rows[0].repos = ["app-a"];
   writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
   appendAuditEntry("STAGE_COMPLETED", { Stage: UNITS, Details: "approved", Artifacts: "units" }, proj);
+  // The one offer to write repos.json was made in this clone already; this
+  // file is about the Units question.
+  noteReposManifestOffered(proj);
   return proj;
 }
 

@@ -1,4 +1,4 @@
-// covers: function:askedQuestionFields, function:noteQuestionRow, function:turnQuestionFields, function:boxQuestionId
+// covers: function:engineAskQuestionId, function:askedQuestionFields, function:noteQuestionRow, function:turnQuestionFields, function:boxQuestionId
 // covers: function:questionEntryDigests, function:recordQuestionStep, function:planApprovalQuestionId
 // covers: audit:QUESTION_ASKED, audit:QUESTION_SHOWN, audit:STAGE_AWAITING_APPROVAL, audit:DECISION_RECORDED, audit:HUMAN_TURN
 // covers: hook:aidlc-record-human-turn, subcommand:aidlc-orchestrate:report, subcommand:aidlc-log:decision
@@ -20,15 +20,17 @@
 // answered by its id.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { activeDirectiveStorageDir, sessionsDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { cleanupTestProject, resetAidlcEnv, seededRecordDir } from "../harness/fixtures.ts";
+import { ENGINE_ASK_TYPES } from "../../dist/claude/.claude/tools/aidlc-questions.ts";
+import { cleanupTestProject, REPO_ROOT, resetAidlcEnv, seededRecordDir } from "../harness/fixtures.ts";
 import {
   A, B, BUN, C, D, built, codeGeneration, engine, field, inception, lastTurn, openIn, reviewedStage, rows, say, shellQuote,
   STAGE, staffing, step, tool,
 } from "../harness/question-record.ts";
+import { cleanupTeamBuild, ENV, makeHome, next as teamNext, run as teamRun, STATE, UNIT } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -39,6 +41,7 @@ const SHOWS = /^sha256:[0-9a-f]{64}$/;
 const projects: string[] = [];
 afterEach(() => {
   while (projects.length) cleanupTestProject(projects.pop());
+  cleanupTeamBuild();
 });
 
 // --- The gate ---
@@ -197,6 +200,40 @@ describe("an engine question", () => {
     expect(step(proj, C, ["next"]).question_id).toBe(ask.question_id);
     expect(rows(proj, "QUESTION_ASKED")).toHaveLength(1);
     expect(rows(proj, "QUESTION_SHOWN").map((row) => field(row, "Question Chat"))).toEqual([B, C]);
+  });
+});
+
+// Teams building their Units as work of their own: the home's question who
+// builds which Unit is an engine ask like the others.
+describe("an engine question of teams building their Units", () => {
+  test("is recorded once, asked again under its id, and open in a turn only while it is the open step", () => {
+    const home = makeHome();
+    expect(teamRun(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: A, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+    const ask = teamNext(home.dir, chat);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-assignment");
+    expect(ask.question_id).toMatch(ID);
+    expect(teamNext(home.dir, chat).question_id).toBe(ask.question_id);
+    const asked = rows(home.dir, "QUESTION_ASKED").filter((row) => field(row, "Question Type") === "unit-assignment");
+    expect(asked.map((row) => field(row, "Question Id"))).toEqual([ask.question_id as string]);
+    say(home.dir, A, "leave them open for now");
+    expect(openIn(home.dir)).toEqual([ask.question_id as string]);
+    expect(teamRun(UNIT, ["assign", "--open"], home.dir).status).toBe(0);
+    // The plan's share question follows it: the open step is that one now.
+    const share = teamNext(home.dir, chat);
+    expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
+    say(home.dir, A, "ok");
+    expect(openIn(home.dir)).toEqual([share.question_id as string]);
+  });
+
+  test("every ask the engine hands out is on its list of engine asks, the code plan question aside", () => {
+    const tools = join(REPO_ROOT, "core", "tools");
+    const types = new Set<string>();
+    for (const file of readdirSync(tools).filter((name) => name.endsWith(".ts"))) {
+      for (const match of readFileSync(join(tools, file), "utf-8").matchAll(/ask_type: "([a-z-]+)"/g)) types.add(match[1]);
+    }
+    types.delete("plan-approval");
+    expect([...types].filter((type) => !ENGINE_ASK_TYPES.has(type)).sort()).toEqual([]);
   });
 });
 

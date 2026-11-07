@@ -110,6 +110,7 @@ import {
 import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
 import {
   askedQuestionFields,
+  engineAskAnsweredSince,
   newQuestionId,
   openSlotQuestionId,
   QUESTION_TEXT_FIELD,
@@ -2095,7 +2096,10 @@ export function openEngineQuestion(projectDir: string): string | null {
     if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) {
       return marker.ask_type;
     }
-    return askedAfter(projectDir, noted.askedAt) ? null : marker.ask_type;
+    // Asked over, or answered by the command it handed out: no longer on screen.
+    return askedAfter(projectDir, noted.askedAt) || engineAskAnsweredSince(projectDir, marker.ask_type, noted.askedAt)
+      ? null
+      : marker.ask_type;
   } catch {
     return null;
   }

@@ -1,26 +1,34 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import type { appendAuditEntryUnlocked as AppendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  acquireAuditLock,
   allowMainCheckoutChangeCommand,
   APPROVED_TOGETHER_WITH_FIELD,
   auditBlockField,
   type AuditShardEvent,
+  errorMessage,
   type GuardRefusalEvent,
   HOOK_HEARTBEAT_STALE_SLACK_MS,
   hookLiveness,
   humanTurnMintAllowed,
   isReplyTurn,
   isRequestTurn,
+  listIntentDirs,
+  listSpaces,
   rowsAfterMark,
   mainCheckoutHeldByTeam,
   MESSAGE_SPENDING_EVENTS,
   type PersonsWords,
+  personsWordsText,
   promptHookRanRecently,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
+  recordHookDrop,
   rejectionIsFreshAttempt,
+  releaseAuditLock,
   removeRecordFileNoFollow,
   resolveInvokingSessionId,
   resolveWorkflowSelection,
@@ -530,6 +538,47 @@ export function mainCheckoutChangeStep(pd: string, paths: readonly string[], oth
     : requestMessageStep(pd, otherwise, "any", `\`${allowMainCheckoutChangeCommand(paths)}\``, then);
 }
 
+/**
+ * The row a guard leaves when it lets a call through because the person's turn
+ * stood behind it (standingPersonTurn): `fields`, then the turn's message and
+ * the person's words. It says that turn stood, never that they approved. The
+ * row is the record, never the decision: a ledger that cannot take it lets the
+ * call through all the same, and the miss goes to the hook health log.
+ */
+export function recordStandingTurnRow(
+  pd: string,
+  hook: string,
+  event: string,
+  turn: { block: string },
+  fields: Record<string, string>,
+): void {
+  const id = auditBlockField(turn.block, "Message Id");
+  let reply: string | null = null;
+  try {
+    const message = id === null ? null : readMessage(pd, id);
+    reply = message === null ? null : personsWordsText(message.words ?? message.text);
+  } catch {
+    reply = null;
+  }
+  if (!acquireAuditLock(pd, 5, 50)) {
+    recordHookDrop(pd, hook, `audit lock contended; ${event} row dropped (the call was let through)`);
+    return;
+  }
+  try {
+    // Loaded here: aidlc-audit.ts reaches this module through aidlc-lib.ts.
+    const audit = require("./aidlc-audit.ts") as { appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked };
+    audit.appendAuditEntryUnlocked(event, {
+      ...fields,
+      ...(id !== null ? { "Message Id": id } : {}),
+      ...(reply ? { "Person Reply": reply } : {}),
+    }, pd);
+  } catch (error) {
+    recordHookDrop(pd, hook, `${event} row not recorded: ${errorMessage(error)}`);
+  } finally {
+    releaseAuditLock(pd);
+  }
+}
+
 // The chat a command serves, when the engine can tell (the hook's override,
 // Codex's thread id, the process ancestry); null when it cannot.
 function invokingChat(pd: string): string | null {
@@ -906,27 +955,88 @@ function rowAfter(a: AuditShardEvent, b: AuditShardEvent, crossShard: boolean): 
  * so a missing fact fails toward the person. It reads ids, times and the
  * engine's own rows, never words. A command that names its message proves that
  * one (proveMessage) instead. With `planApprovalOff`, the turn also stands for
- * turning plan approval off (planApprovalOffStands).
+ * turning plan approval off (planApprovalOffStands). With `broughtHere`, the
+ * chat's word from other work stands here too (turnBroughtHere).
  */
 export function personTurnStands(
   pd: string,
   mode: "request" | "plain",
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean } = {},
+  options: TurnOptions = {},
 ): boolean {
   return standingPersonTurn(pd, mode, options) !== null;
 }
 
-type TurnOptions = { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean };
+type TurnOptions = {
+  replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean; broughtHere?: boolean;
+};
 
 /**
  * The turn personTurnStands reads, when it stands: its HUMAN_TURN row (whose
  * Message Id names the message behind what the command does), else null. On
  * finished work, where the human-turn hook keeps the person's messages beside
  * the record and writes no turn on it, a message of theirs kept since the
- * finish stands too (turnKeptSinceFinished), read as a turn.
+ * finish stands too (turnKeptSinceFinished), read as a turn, and with
+ * `broughtHere` the chat's word from other work (turnBroughtHere).
  */
 export function standingPersonTurn(pd: string, mode: "request" | "plain", options: TurnOptions = {}): AuditShardEvent | null {
-  return turnOnTheRecord(pd, mode, options) ?? turnKeptSinceFinished(pd, options);
+  return turnOnTheRecord(pd, mode, options) ?? turnKeptSinceFinished(pd, options) ?? turnBroughtHere(pd, mode, options);
+}
+
+// What spends a turn in plain mode: a decision, or the work set to run on by
+// itself. Words sent on to separate work (REQUEST_ROUTED) do not.
+function spendsPlainTurn(row: AuditShardEvent): boolean {
+  return (MESSAGE_SPENDING_EVENTS.has(row.event) && row.event !== "REQUEST_ROUTED") ||
+    (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous");
+}
+
+/**
+ * With `broughtHere`, in plain mode, presence the chat brought from other work:
+ * the take of a team's build from the chat of another of its builds carries
+ * the person's word that asked for it, sent there, to the build it asked for
+ * here. It is this chat's latest message (none when no chat is named), when no
+ * turn on this work names it and nothing here spends it at or after its second,
+ * and it was not spent where it was sent: a turn naming it on another record of
+ * this checkout (with `requests`, a request turn) with nothing spending it
+ * after. Kept beside finished work, where no turn is written, nothing decides
+ * on it. A record that cannot be read gives no turn, and neither does turning
+ * plan approval off, which reads its own turn. Ids, times and the engine's own
+ * rows, never words.
+ */
+function turnBroughtHere(pd: string, mode: "request" | "plain", options: TurnOptions): AuditShardEvent | null {
+  if (options.broughtHere !== true || mode !== "plain" || options.replies === true || options.planApprovalOff === true) {
+    return null;
+  }
+  try {
+    const chat = invokingChat(pd);
+    const message = chat === null ? undefined : listMessages(pd).filter((entry) => entry.session === chat).at(-1);
+    if (message === undefined) return null;
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
+    if (unreadable.length > 0 || sentOnThisWork(rows)(message)) return null;
+    if (rows.some((row) => row.timestamp >= message.at && spendsPlainTurn(row))) return null;
+    const here = resolveWorkflowSelection(pd, { intent: options.intent, space: options.space });
+    for (const { name: space } of listSpaces(pd)) {
+      for (const dirName of listIntentDirs(pd, space)) {
+        if (space === here.space && dirName === here.intent) continue;
+        const there = readAuditShardEvents(pd, dirName, space, unreadable);
+        if (unreadable.length > 0) return null;
+        const turn = there.find((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
+        if (turn === undefined) continue;
+        if (options.requests === true && !isRequestTurn(turn)) return null;
+        if (there.some((row) => row !== turn && rowAfter(row, turn, true) && spendsPlainTurn(row))) return null;
+      }
+    }
+    return {
+      event: "HUMAN_TURN",
+      block: [`**Message Id**: ${message.id}`, `**Session**: ${chat}`].join("\n"),
+      timestamp: message.at,
+      shard: "",
+      shardIndex: -1,
+      pos: -1,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOptions): AuditShardEvent | null {

@@ -1,6 +1,11 @@
 // covers: function:resolveInvokingSessionId, function:resolveWorkflowSelection, function:noteHelperSession,
 // function:helperSessionRoot, hook:aidlc-codex-adapter
 //
+// A helper working in a code repo beside the workspace (repos.json's
+// ../shop-api) runs its hooks from the workspace Codex set them up in, with its
+// own cwd in the payload: what the hooks record stays in the workspace, and
+// nothing of AI-DLC's lands in the person's repo.
+//
 // On Codex a spawned helper agent's shell carries its own CODEX_THREAD_ID, not the
 // root chat's. Every hook payload of that helper arrives under the root
 // session_id with agent_id = the helper's thread id, so the engine learns the
@@ -197,4 +202,35 @@ describe("a Codex helper's engine command stays on the chat that spawned it", ()
     expect(helperRecords(dir)).toEqual([`${REVIEW}.helper-of`]);
     expect(activeIntentSeenBy(dir, REVIEW)).toBe(BOUND_RECORD);
   });
+});
+
+describe("a helper working in a code repo of the workspace's", () => {
+  for (const where of ["beside the workspace", "in a child folder of the workspace"] as const) {
+    test(`a repo ${where}: its hooks run from the workspace and record there; nothing of AI-DLC's is written in the repo`, () => {
+      const dir = project();
+      let repo: string;
+      if (where === "beside the workspace") {
+        repo = realpathSync(mkdtempSync(join(tmpdir(), "t-codex-helper-shop-api-")));
+        projects.push(repo);
+      } else {
+        repo = join(dir, "checkout-api");
+        mkdirSync(repo);
+      }
+      expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status).toBe(0);
+      // Codex as it runs the workspace's hooks: from the workspace, no project variable, the thread's cwd in the payload.
+      const r = spawnSync("bun", [join(dir, ".codex", "tools", "aidlc.ts"), "engine", "adapter", "codex", "guard-tool-call"], {
+        cwd: dir,
+        input: JSON.stringify({
+          cwd: repo, hook_event_name: "PreToolUse", session_id: ROOT, agent_id: HELPER, agent_type: "aidlc-developer-agent",
+          tool_name: "Bash", tool_input: { command: "ls" }, turn_id: "01a12051-0000-7000-8000-000000000030", tool_use_id: "call_in_repo",
+        }),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined } as NodeJS.ProcessEnv,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(readdirSync(repo)).toEqual([".git"]);
+      expect(helperRecords(dir)).toEqual([`${HELPER}.helper-of`]);
+    });
+  }
 });

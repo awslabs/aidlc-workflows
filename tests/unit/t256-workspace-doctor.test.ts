@@ -306,6 +306,17 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(after.stdout).toContain(row!.label);
   }, 60_000);
 
+  test("a repos.local.json that cannot be read is a warning, not a passing row", () => {
+    const ws = freshGitWorkspace();
+    writeManifest(ws, MANIFEST);
+    writeFileSync(join(ws, "repos.local.json"), '{ "repos": [ { "name": "checkout-api", "path": "../mine" }, ] }\n', "utf-8");
+    const row = workspaceManifestChecks(ws).find((result) => result.label.startsWith("Your repos.local.json:"));
+    expect(row?.pass).toBe(false);
+    expect(row?.severity).toBe("warn");
+    expect(row?.label).toContain("repos.local.json is not valid JSON");
+    expect(row?.label).toContain("Your own paths in it are not used until it reads.");
+  });
+
   test("visibility ignores negated rules but checks tracked records and nested ignore sources", () => {
     const ws = freshGitWorkspace();
     const intents = join(ws, "aidlc", "spaces", "default", "intents");
@@ -499,7 +510,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
 
   test("schema-invalid repos.json is not reported as synchronized", () => {
     for (const body of [
-      '{ "repos": [{ "name": "checkout-api" }] }',
+      '{ "org": 7, "repos": [{ "name": "checkout-api" }] }',
       '{ "org": "acme", "repos": [{ "name": "../escaped" }] }',
       '{ "org": "acme", "repos": [{ "name": "api", "branch": "" }] }',
       '{ "org": "acme", "repos": [{ "name": "api" }, { "name": "api" }] }',

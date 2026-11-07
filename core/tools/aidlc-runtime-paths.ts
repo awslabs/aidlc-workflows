@@ -446,6 +446,12 @@ export function aidlcToolInvocation(
   return `bun ${path}`;
 }
 
+// The workspace-sync tool, which the dispatcher keeps in the system namespace.
+export function workspaceSyncInvocation(): string {
+  const invoke = aidlcInvocation();
+  return invoke.startsWith("bun ") ? aidlcToolInvocation("workspace-sync") : `${invoke} system workspace-sync`;
+}
+
 function explicitRuntimeProjectDir(argv: readonly string[] = process.argv.slice(1)): string | null {
   const internal = process.env.AIDLC_RUNTIME_PROJECT_DIR;
   if (internal) {
@@ -1145,6 +1151,18 @@ export function knownActiveSpace(workspaceRootDir: string, cursorText: string | 
   } catch {
     return "default";
   }
+}
+
+// Upper-case a leading Windows drive letter and leave every other character
+// alone. VS Code-based hosts (Kiro IDE) report written files as `c:\...` while
+// the project dir carries `C:\...`, and the drive letter is the one path
+// component Windows never compares case-sensitively (per-directory case
+// sensitivity applies to names, not the volume designator), so this makes root
+// prefix checks agree without conflating directories whose names differ only
+// in case. A POSIX absolute path never starts with `<letter>:`, so the call is
+// a no-op there.
+export function normalizeDriveLetter(p: string): string {
+  return /^[a-z]:(?:[\\/]|$)/.test(p) ? p[0].toUpperCase() + p.slice(1) : p;
 }
 
 // The sync services whose macOS File Provider folder is
