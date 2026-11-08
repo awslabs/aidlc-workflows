@@ -29,7 +29,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
 This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto Cursor. On Cursor:
 
-- Approval gates and questions render as **numbered prose options** (no structured-question widget); the questions FILE with \`[Answer]:\` tags remains the source of truth.
+- Approval gates and questions use Cursor's **\`AskQuestion\` box** when the agent has it (a pick counts as the person's reply, recorded by the \`postToolUse\` hook), with **numbered prose options** as the fallback; the questions FILE with \`[Answer]:\` tags remains the source of truth.
 - Hooks ride \`.cursor/hooks.json\` through the AIDLC adapter (\`.cursor/hooks/aidlc-cursor-adapter.ts\`): state-transition, reviewer read-scope, review-freeze, and plan-approval guards block via Cursor's \`permission: deny\` channel before tools; audit and sensors cover write and edit; stage-graph rebuilds, human-turn recording, and pre-compaction state validation run from the matching Cursor moments.
 - The forwarding-loop enforcement (the Stop hook) is **advisory**: Cursor's stop hook cannot refuse a stop, so a pending directive surfaces as a follow-up nudge instead of a block.
 - The AI-DLC method (\`aidlc/spaces/<space>/memory/*.md\`) reaches context through read instructions because Cursor rules do not expand \`@\`-imports: \`.cursor/rules/aidlc.mdc\` always points to org/team/project, while four agent-decided \`.cursor/rules/aidlc-phase-*.mdc\` files point to phase guidance only when relevant. The sessionStart hook separately injects live workflow state; \`/aidlc space <name>\` re-points all five rules in place.

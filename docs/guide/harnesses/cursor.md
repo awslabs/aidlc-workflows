@@ -108,9 +108,11 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
 
 ## What's different on this harness
 
-- **Questions render as numbered prose options** (no structured-question
-  widget); the questions FILE with `[Answer]:` tags remains the source of
-  truth.
+- **Questions use Cursor's `AskQuestion` box** (clickable options) when the
+  agent has it, with numbered prose options as the fallback. A pick counts as
+  your reply, as it does on Claude Code; a dismissed box records nothing and
+  the question is asked again as numbered prose. The questions FILE with
+  `[Answer]:` tags remains the source of truth.
 - **Hooks ride `.cursor/hooks.json`** through the AIDLC adapter
   (`.cursor/hooks/aidlc-cursor-adapter.ts`), which maps Cursor's camelCase hook
   events (`sessionStart`, `sessionEnd`, `beforeSubmitPrompt`, `preToolUse`,

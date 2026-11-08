@@ -9,12 +9,12 @@ is the one place that binds that contract to a concrete mechanism.
 ## Never echo the spec (non-negotiable)
 
 A ` ```question ` fenced block is **INPUT to this annex's rendering, never
-output to paste**. The orchestrator MUST render every ` ```question ` spec as
-the numbered prose the Mechanism below defines, and MUST NEVER echo, print,
-paste, or "quote back" the fenced block, or any of its field lines (`prompt:`,
-`header:`, `multiSelect:`, `options:`, `label:`, `description:`), into the chat
-transcript. The user must never see the raw fence; they see only the numbered
-prose rendering.
+output to paste**. The orchestrator MUST render every ` ```question ` spec
+through the Mechanism below (an `AskQuestion` call, or numbered prose), and
+MUST NEVER echo, print, paste, or "quote back" the fenced block, or any of its
+field lines (`prompt:`, `header:`, `multiSelect:`, `options:`, `label:`,
+`description:`), into the chat transcript. The user must never see the raw
+fence; they see only the question box or the numbered prose rendering.
 
 Echoing the fence as literal text is a **protocol violation**, not a stylistic
 choice. It:
@@ -47,8 +47,50 @@ prohibition is about echoing raw fences in live orchestration turns.)
 
 ## Mechanism
 
-Cursor has no structured-question tool, so every structured question renders
-as **numbered prose options in chat**, and the user answers with a number (or
+Cursor agents have a structured-question tool, **`AskQuestion`**, which shows
+clickable options in the chat. It is the PRIMARY track; numbered prose is the
+permanent floor for sessions where the tool is unavailable (not in your tool
+list, it errors, or the run is headless).
+
+### Track 1 — AskQuestion (when the tool is available)
+
+Map the spec fields:
+
+| Spec field | AskQuestion field |
+|------------|-------------------|
+| `header` | `title` |
+| `prompt` | `questions[].prompt` |
+| `multiSelect` | `questions[].allow_multiple` |
+| `options[].label` | `questions[].options[].label` |
+
+- Give each question the id `q1`, `q2`, ... and each option the id `opt1`,
+  `opt2`, ... in spec order. The reply names these ids; text the person types
+  into "Other" comes back in the same place, so ids a person would not type
+  keep their own words from reading as a pick.
+- Use each option's `label` exactly as the spec gives it. When a question has
+  a recommended option, list it FIRST and append "(Recommended)" to its label.
+- Cursor adds an "Other" choice with a text field itself; do NOT add one.
+- One call can ask several questions; keep to the batching limits below.
+- **Answer capture**: the reply names the picked option ids (comma-separated
+  for a multi-select). Map each id back to its exact option `label` and
+  record that label verbatim (protocol: never summarize User Input). A value
+  that is not one of your ids is text the person typed into "Other": that is
+  their answer, in their words.
+- **No answer**: a dismissed box returns "User cancelled questionnaire".
+  Nothing was answered: ask the same question again in your reply as numbered
+  prose, not in the box, and end the turn; never pick an answer for the
+  person. The engine records that nobody answered and hands you the question
+  already rendered as numbered prose; present that.
+- If the hook says it could not read the reply, nothing was recorded: ask the
+  same question again as numbered prose and end the turn.
+- The box returns inside your turn with the person's reply, as
+  `AskUserQuestion` does on Claude Code: act on it as the step says for their
+  reply.
+
+### Track 2 — numbered prose (the floor)
+
+If `AskQuestion` is unavailable, render every structured question as
+**numbered prose options in chat**, and the user answers with a number (or
 free text). Render the spec like this:
 
 ```question
@@ -83,9 +125,11 @@ it explicitly, such as Requirements Analysis), the stage protocol requires a
 separate confirmation before any stage artifact is generated. Append or update
 `## Consolidated Summary Confirmation` in the questions file with the summary,
 the prompt, both options without A/B file-letter prefixes, and a blank
-`[Answer]:` tag, then render this numbered question in chat, with the summary
-bullets right above it in the same message, so the person reads what they
-confirm:
+`[Answer]:` tag, then render the **Confirm** question through the active
+track, with the summary bullets where the person reads them: with
+`AskQuestion`, write the bullets in your message right before the call and
+give the two options as the box's choices; on the numbered-prose floor,
+render the bullets right above the question in the same message:
 
 ```
 - <each answer, as a summary bullet>
@@ -116,7 +160,8 @@ Do not generate the artifact until the file contains the human's explicit
 `[Answer]: Looks correct` and the receipt command succeeds. Never merge this
 checkpoint with the later reviewer, learnings, or approval steps.
 
-Rules:
+Rules (both tracks unless a rule names one; numbering rules are the
+numbered-prose track's):
 
 - **Approval gate `[next stage]`**: on an approval question, render the
   `Continue to [next stage]` placeholder from the `next_stage` field verbatim
@@ -138,8 +183,8 @@ Rules:
   Use unordered bullets for immediately preceding summaries. Visible `1` maps
   to the first source option label, `2` to the second, and so on.
 - **Always append an "Other" escape** as the final number — the spec's
-  options never include one (on Claude Code the UI provides it; here you
-  render it).
+  options never include one (`AskQuestion` provides it; on the numbered-prose
+  track you render it).
 - **multiSelect: true** → say "Reply with all numbers that apply (e.g. 1, 3)."
 - **Answer capture**: map the user's number back to the exact option `label`
   and record that label verbatim (protocol: never summarize User Input). A

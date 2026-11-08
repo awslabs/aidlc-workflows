@@ -70,6 +70,166 @@ import { TRUSTED_ROUTE_NAMESPACE } from "../tools/aidlc-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
+// --- AskQuestion (Cursor's structured-question tool, #2361) -------------------
+//
+// AskQuestion takes {title?, questions:[{id, prompt, options:[{id,label}],
+// allow_multiple?}]} and, as reported from Cursor IDE, the agent receives the
+// person's reply as plain text keyed by question id and option id(s):
+//
+//   User questions responses:
+//   Question colour: Selected option(s) green
+//
+// Several questions come back one line each; a multi-select's ids are
+// comma-separated; text typed into "Other" comes back verbatim in the same
+// slot, unmarked; a dismissed form is "User cancelled questionnaire".
+// Cursor documents postToolUse's tool_output as the tool's result
+// JSON-stringified, so the text may arrive wrapped in a JSON string or object;
+// it is unwrapped first. The reply is handed to the core hook in the shape it
+// reads for AskUserQuestion: the question as `question`, labels for options,
+// and answers keyed by question id with option ids mapped back to labels.
+// A value that matches no offered id is the person's own words ("Other").
+// Anything the adapter cannot read records nothing: it never guesses a pick.
+
+const ASK_REPLY_HEADER = "User questions responses:";
+const ASK_CANCELLED = "User cancelled questionnaire";
+
+interface AskQuestionAsked {
+  id: string;
+  question: string;
+  multiSelect: boolean;
+  options: Array<{ id: string; label: string }>;
+}
+
+export type AskQuestionReply =
+  | {
+      kind: "answered";
+      toolInput: { questions: Array<{ id: string; question: string; multiSelect: boolean; options: Array<{ label: string }> }> };
+      answers: Record<string, string[]>;
+    }
+  | { kind: "cancelled"; toolInput: { questions: Array<{ id: string; question: string; multiSelect: boolean; options: Array<{ label: string }> }> } }
+  | { kind: "unreadable" };
+
+function askQuestionAsked(toolInput: unknown): AskQuestionAsked[] {
+  if (toolInput === null || typeof toolInput !== "object") return [];
+  const questions = (toolInput as Record<string, unknown>).questions;
+  if (!Array.isArray(questions)) return [];
+  const asked: AskQuestionAsked[] = [];
+  for (const entry of questions) {
+    if (entry === null || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const text = typeof record.prompt === "string" ? record.prompt : record.question;
+    if (typeof record.id !== "string" || record.id === "" || typeof text !== "string" || !Array.isArray(record.options)) {
+      return [];
+    }
+    const options: Array<{ id: string; label: string }> = [];
+    for (const option of record.options) {
+      if (option === null || typeof option !== "object") return [];
+      const { id, label } = option as Record<string, unknown>;
+      if (typeof id !== "string" || id === "") return [];
+      options.push({ id, label: typeof label === "string" && label !== "" ? label : id });
+    }
+    asked.push({ id: record.id, question: text, multiSelect: record.allow_multiple === true, options });
+  }
+  return asked;
+}
+
+// The reply text inside tool_output: the string itself, a JSON string of it,
+// or a string field of a JSON object that holds it. Null when none is found.
+function askQuestionText(toolOutput: unknown, depth = 0): string | null {
+  if (depth > 4) return null;
+  if (typeof toolOutput === "string") {
+    const trimmed = toolOutput.trim();
+    if (trimmed.startsWith(ASK_REPLY_HEADER) || trimmed.startsWith(ASK_CANCELLED)) return trimmed;
+    if (/^[[{"]/.test(trimmed)) {
+      try {
+        return askQuestionText(JSON.parse(trimmed), depth + 1);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+  if (Array.isArray(toolOutput)) {
+    for (const entry of toolOutput) {
+      const text = askQuestionText(entry, depth + 1);
+      if (text !== null) return text;
+    }
+    return null;
+  }
+  if (toolOutput !== null && typeof toolOutput === "object") {
+    for (const value of Object.values(toolOutput as Record<string, unknown>)) {
+      const text = askQuestionText(value, depth + 1);
+      if (text !== null) return text;
+    }
+  }
+  return null;
+}
+
+// One question's reply as labels: option ids (one, or several separated by
+// commas) map to their labels; any other value is the person's own words.
+function askQuestionPicks(asked: AskQuestionAsked, raw: string): string[] {
+  const value = raw.replace(/^Selected option\(s\)\s*/, "").trim();
+  if (value === "") return [];
+  const byId = new Map(asked.options.map((option) => [option.id, option.label]));
+  const whole = byId.get(value);
+  if (whole !== undefined) return [whole];
+  const parts = value.split(/\s*,\s*/).filter((part) => part !== "");
+  if (parts.length > 1 && parts.every((part) => byId.has(part))) return parts.map((part) => byId.get(part)!);
+  return [value];
+}
+
+export function askQuestionReply(toolInput: unknown, toolOutput: unknown): AskQuestionReply {
+  const asked = askQuestionAsked(toolInput);
+  if (asked.length === 0) return { kind: "unreadable" };
+  const shownInput = {
+    questions: asked.map((question) => ({
+      id: question.id,
+      question: question.question,
+      multiSelect: question.multiSelect,
+      options: question.options.map((option) => ({ label: option.label })),
+    })),
+  };
+  const text = askQuestionText(toolOutput);
+  if (text === null) return { kind: "unreadable" };
+  if (!text.startsWith(ASK_REPLY_HEADER)) {
+    return text.startsWith(ASK_CANCELLED) ? { kind: "cancelled", toolInput: shownInput } : { kind: "unreadable" };
+  }
+  // Each answer starts on a line "Question <id>: "; the longest offered id
+  // that fits wins, so an id that is another's prefix is never misread. A
+  // following line that starts no answer belongs to the one before it (text
+  // typed into Other may run over several lines).
+  const ids = asked.map((question) => question.id).sort((a, b) => b.length - a.length);
+  const raw = new Map<string, string>();
+  let current: string | null = null;
+  for (const line of text.slice(ASK_REPLY_HEADER.length).split(/\r?\n/)) {
+    const id = ids.find((candidate) => line.startsWith(`Question ${candidate}: `) || line === `Question ${candidate}:`);
+    if (id !== undefined) {
+      current = id;
+      raw.set(id, line.slice(`Question ${id}:`.length).replace(/^ /, ""));
+    } else if (current !== null) {
+      raw.set(current, `${raw.get(current)}\n${line}`);
+    } else if (line.trim() !== "") {
+      return { kind: "unreadable" };
+    }
+  }
+  const answers: Record<string, string[]> = {};
+  for (const question of asked) {
+    const value = raw.get(question.id);
+    if (value === undefined) continue;
+    const picks = askQuestionPicks(question, value);
+    if (picks.length > 0) answers[question.id] = picks;
+  }
+  if (Object.keys(answers).length === 0) return { kind: "cancelled", toolInput: shownInput };
+  return { kind: "answered", toolInput: shownInput, answers };
+}
+
+// What the agent hears when an AskQuestion reply could not be read: nothing
+// was recorded, so the question goes again as numbered prose in chat.
+const ASK_QUESTION_UNREAD =
+  "AI-DLC could not read the reply to that question box, so nothing was answered or recorded. " +
+  "Ask the same question again in your reply as numbered options, not in the question box, " +
+  "and end the turn; never pick an answer for the person.";
+
 interface CursorHookInput {
   hook_event_name?: string;
   conversation_id?: string;
@@ -3100,7 +3260,41 @@ export async function run(
 
     case "audit-and-sensors": {
       // postToolUse Write|Edit → audit THEN sensors (Claude registration
-      // order); postToolUse Task → subagent completion (log + ledger clear).
+      // order); postToolUse Task → subagent completion (log + ledger clear);
+      // postToolUse AskQuestion → the person's reply to a question box, the
+      // same record-human-turn path AskUserQuestion takes on Claude Code.
+      if (toolName === "AskQuestion") {
+        // A background agent has no person at its question boxes.
+        if (isBackground()) return 0;
+        const reply = askQuestionReply(cursor.tool_input, cursor.tool_output);
+        if (reply.kind === "unreadable") {
+          process.stdout.write(`${JSON.stringify({ additional_context: ASK_QUESTION_UNREAD })}\n`);
+          return 0;
+        }
+        const r = runCore("aidlc-record-human-turn.ts", JSON.stringify({
+          hook_event_name: "PostToolUse",
+          ...(sessionId ? { session_id: sessionId } : {}),
+          tool_name: "AskQuestion",
+          tool_input: reply.toolInput,
+          tool_response: { answers: reply.kind === "answered" ? reply.answers : {} },
+        }));
+        // The core hook answers in Claude's shape; Cursor injects context after
+        // a tool result from {"additional_context"}.
+        let context = "";
+        for (const line of r.stdout.split("\n")) {
+          try {
+            const parsed = JSON.parse(line) as {
+              additionalContext?: string;
+              hookSpecificOutput?: { additionalContext?: string };
+            };
+            context = parsed.hookSpecificOutput?.additionalContext ?? parsed.additionalContext ?? context;
+          } catch {
+            // not a context line
+          }
+        }
+        if (context) process.stdout.write(`${JSON.stringify({ additional_context: context })}\n`);
+        return 0;
+      }
       if (toolName === "Write" || toolName === "Edit") {
         const fwd = claudeShaped("PostToolUse");
         runCore("aidlc-write-audit-log.ts", fwd);

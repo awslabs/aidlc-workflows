@@ -784,14 +784,15 @@ export class KiroIdeScopeHost extends NativeScopeHost {
  * refusal is `{"permission":"deny","agent_message"}`, and with failClosed an
  * answer that is not an allow is a refusal too. The turn end cannot block; it
  * can only send `{"followup_message"}`, which Cursor hands the agent as the
- * next message, so the journey reads it as a blocked hand-off. Questions are
- * numbered prose. Git's own settings are kept out of the hooks, as t276 does,
- * so a developer's aliases cannot change what the adapter reads.
+ * next message, so the journey reads it as a blocked hand-off. A pick is an
+ * AskQuestion call whose reply comes back as the plain text Cursor IDE was
+ * reported to return (#2361), JSON-stringified as Cursor documents
+ * postToolUse's tool_output. Git's own settings are kept out of the hooks, as
+ * t276 does, so a developer's aliases cannot change what the adapter reads.
  */
 export class CursorScopeHost extends NativeScopeHost {
   override readonly dir = ".cursor";
   override readonly skill = ".cursor/skills/aidlc/SKILL.md";
-  override readonly picker = false;
   protected override readonly stopEvent = "stop";
 
   protected override sessionName(n: number): string {
@@ -839,6 +840,22 @@ export class CursorScopeHost extends NativeScopeHost {
   private call(tool: string, input: Payload, extra: Payload = {}): { use: string; fields: Payload } {
     const use = `toolu_${hex(this.hostNumber, 4)}${randomUUID().replace(/-/g, "").slice(0, 20)}`;
     return { use, fields: { tool_name: tool, tool_input: input, tool_use_id: use, ...extra } };
+  }
+
+  /** AskQuestion: the box's reply comes back to the agent in the same turn. */
+  override picked(question: string, options: string[], label: string): void {
+    const input = {
+      title: "Choice",
+      questions: [{ id: "q1", prompt: question, options: options.map((o, i) => ({ id: `opt${i + 1}`, label: o })) }],
+    };
+    const { fields } = this.call("AskQuestion", input);
+    this.refuseOn("AskQuestion", input, this.fire("preToolUse", "AskQuestion", fields));
+    const id = `opt${options.indexOf(label) + 1}`;
+    this.fire("postToolUse", "AskQuestion", {
+      ...fields,
+      tool_output: JSON.stringify(`User questions responses:\nQuestion q1: Selected option(s) ${id}`),
+      duration: 1,
+    });
   }
 
   override bash(line: string): RunResult {
