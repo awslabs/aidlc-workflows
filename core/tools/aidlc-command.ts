@@ -306,7 +306,7 @@ export function launcherRouteUsesPin(argv: readonly string[]): boolean {
   }
   const [head, noun] = route;
   if (head === "engine") {
-    return Boolean(noun && noun !== "--help" && noun !== "-h");
+    return Boolean(noun && noun !== "--help" && noun !== "-h" && noun !== "help");
   }
   if (head === "system") {
     return PINNED_SYSTEM_GROUPS.includes(

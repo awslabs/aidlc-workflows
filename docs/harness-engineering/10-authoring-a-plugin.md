@@ -733,7 +733,10 @@ install and on the copy channel alike (there the verb is
 `bun <harness-dir>/tools/aidlc.ts plugin ...`). `aidlc plugin create` remains
 deferred to
 [RFC #723 section 2e](https://github.com/awslabs/aidlc-workflows/issues/723);
-invoke its shipped Bun tool directly.
+invoke its shipped Bun tool directly. `aidlc plugin --help` lists the
+authoring verbs with their options, and the ENGINE section of
+`aidlc help --all` lists every `aidlc engine` command a plugin's stages,
+sensors and hooks can call.
 
 The repository test helper's `validatePluginContent()` delegates these shared
 rules to the same tool and retains checkout-aware fixture integration.
