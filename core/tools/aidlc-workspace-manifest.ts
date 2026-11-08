@@ -14,6 +14,26 @@ export const REPOS_FILE = "repos.json";
 // One person's own paths, never committed (AI-DLC's marked .gitignore block).
 export const REPOS_LOCAL_FILE = "repos.local.json";
 
+// Where a workspace's repo list is, in the order it is read: aidlc/repos.json,
+// checked in with the team's record, then the root repos.json an AI-DLC before
+// 2.12 wrote. The one order for every reader, on disk and at a commit.
+export const REPOS_MANIFEST_PLACES = ["aidlc/repos.json", "repos.json"] as const;
+export type ReposManifestPlace = (typeof REPOS_MANIFEST_PLACES)[number];
+
+// The repo list found first, given a way to read one of those paths (a file on
+// disk, or `git show <commit>:<path>` for a workspace that is not here). Null
+// when neither place holds one; an invalid list throws parseWorkspaceManifest's
+// error, as a reader of the file on disk does.
+export function workspaceManifestAt(
+  read: (rel: ReposManifestPlace) => string | null,
+): { path: ReposManifestPlace; text: string; manifest: WorkspaceManifest } | null {
+  for (const path of REPOS_MANIFEST_PLACES) {
+    const text = read(path);
+    if (text !== null) return { path, text, manifest: parseWorkspaceManifest(text) };
+  }
+  return null;
+}
+
 export interface WorkspaceRepoEntry {
   name: string;
   branch?: string;
