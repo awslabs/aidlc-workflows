@@ -168,6 +168,10 @@ runs the same commands, as `aidlc ...`, with no card too. Any other
 `config` change (bare `config`, the guided setup, included), the commands that change the machine's AI-DLC install (`use`,
 `update`, `rollback`, `uninstall`, `system`), and an AI-DLC command holding `$`,
 a backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break show Kiro's card first.
+When the work you ask AI-DLC to start, or the change you ask it to make to the
+plan, holds one of them, the agent passes your words through a file it writes in
+`aidlc/.aidlc-request-text/` instead, so those words put no card in front of
+you.
 
 The versioned runtime uses the native `aidlc` command. Framework developers who
 need the Bun-shaped source projection can clone the repository, run

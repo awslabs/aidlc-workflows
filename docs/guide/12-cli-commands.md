@@ -215,7 +215,10 @@ sends a request holding a double quote, a typographic one such as `“` or `’`
 one of `&`, `|`, `<`, `>`, `^`, or a trailing backslash this way, since Windows
 PowerShell or cmd.exe can change them): the agent writes it to
 `aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
---request-file aidlc/.aidlc-request-text/request.txt` with any other flags. The
+--request-file aidlc/.aidlc-request-text/request.txt` with any other flags. On
+Kiro (Kiro IDE and Kiro CLI on its v3 engine) the agent sends a request this way
+on every shell when it holds `$`, a backtick, `>`, `<`, `&`, `@(`, `@{` or a line
+break, since Kiro asks you to approve an AI-DLC command holding one of them. The
 engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
 through no link, up to 64 KiB, uses its words exactly as written, and removes
 the file once the command goes ahead.
