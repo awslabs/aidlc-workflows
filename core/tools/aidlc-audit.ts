@@ -106,6 +106,9 @@ const VALID_EVENT_TYPES = new Set([
   "STATE_UPGRADED",
   "INTENT_REPOS_CHANGED",
   "INTENT_CHECKOUTS_CHANGED",
+  // A code-knowledge source (a code graph another tool built) registered for
+  // a repository of the space, or taken out again (codekb-source add/remove).
+  "CODEKB_SOURCE_CHANGED",
   // Session events (hook-owned)
   "SESSION_STARTED",
   "SESSION_RESUMED",
@@ -374,6 +377,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STATE_UPGRADED: "State Upgraded",
   INTENT_REPOS_CHANGED: "Intent Repos Changed",
   INTENT_CHECKOUTS_CHANGED: "Intent Checkouts Changed",
+  CODEKB_SOURCE_CHANGED: "CodeKB Source Changed",
   SESSION_STARTED: "Session Start",
   SESSION_RESUMED: "Session Resume",
   SESSION_COMPACTED: "Session Compacted",

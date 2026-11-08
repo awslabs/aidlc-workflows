@@ -1695,7 +1695,7 @@ export const TESTING_POSTURE_SUBCOMMANDS = ["resolve", "render", "fingerprint", 
 // The commands aidlc-utility.ts dispatches, as its unknown-command error lists them.
 export const UTILITY_COMMANDS = [
   "help", "version", "now", "status", "doctor", "intent-create", "intent", "space",
-  "space-create", "codekb-path", "codekb-snapshot", "codekb-publish", "project-description",
+  "space-create", "codekb-path", "codekb-source", "codekb-snapshot", "codekb-publish", "project-description",
   "document-input", "codekb-scope-diff", "detect", "reclassify", "select-plugins", "plugin-list",
   "plugin-sync", "plugin-validate", "plugin-build", "recompose", "scope-change", "scope-save",
   "config-change", "config-get", "config-list", "set-status", "detect-scope",

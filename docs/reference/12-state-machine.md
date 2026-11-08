@@ -818,6 +818,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `STATE_UPGRADED` | `tools/aidlc-state-upgrade.ts` | the engine's state read - a record an earlier State Version wrote (7, from 2.1.x to 2.3.0) brought up to the current one in place: renamed stages, their record folders, the state as it was kept beside it |
 | `INTENT_REPOS_CHANGED` | `tools/aidlc-utility.ts` | `intent add-repo <name>` / `intent remove-repo <name>` / `intent set-repos <name,...>` (`Added` and `Removed` list every name, `Named` says the set is the person's) - a sibling repo added to or removed from a piece of work that already records repos, at any stage (an add may carry `Cloned From`, `Reason`, `Person Words` and `Source Baseline Addition`); written to that intent's own shard |
 | `INTENT_CHECKOUTS_CHANGED` | `tools/aidlc-utility.ts` | `intent add-checkout <path>` / `intent remove-checkout <path>` - a checkout recorded for the work's review, or taken out again; written to that intent's own shard |
+| `CODEKB_SOURCE_CHANGED` | `tools/aidlc-utility.ts` | `codekb-source add` / `codekb-source remove` - a code-knowledge source (a code graph another tool built) registered for a repository of the space in `aidlc/spaces/<space>/codekb-sources.json`, or taken out again; Reverse Engineering reads it before the code |
 
 ### Phase lifecycle
 

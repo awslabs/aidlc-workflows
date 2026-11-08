@@ -42,6 +42,7 @@ AI-DLC uses a two-tier knowledge system that separates framework methodology fro
 |   +-- adr-template.md
 +-- aidlc-developer-agent/
 |   +-- code-analysis-guide.md
+|   +-- code-knowledge-sources.md
 |   +-- code-generation-guide.md
 |   +-- code-generation-patterns.md
 |   +-- api-design-guide.md

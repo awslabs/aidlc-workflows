@@ -164,7 +164,7 @@ Events are organized into 27 categories:
 
 | Category | Count | Events |
 |----------|------:|--------|
-| **Workflow Lifecycle** | 9 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `STATE_UPGRADED` (work an older AI-DLC recorded, brought up to this one when the engine first read it), `INTENT_REPOS_CHANGED`, `INTENT_CHECKOUTS_CHANGED` |
+| **Workflow Lifecycle** | 10 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `STATE_UPGRADED` (work an older AI-DLC recorded, brought up to this one when the engine first read it), `INTENT_REPOS_CHANGED`, `INTENT_CHECKOUTS_CHANGED`, `CODEKB_SOURCE_CHANGED` (a code graph another tool built, registered for a repository so Reverse Engineering reads it first) |
 | **Phase Lifecycle** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` |
 | **Stage Lifecycle** | 9 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED`, `STAGE_OUTPUT_AMENDED` (a stage's own document changed after you approved it and before your next message), `SOURCE_WORK_NOT_FOUND` (Code Generation found no new code where it looked, and what it did: told the agent, put the question to you, or stood aside under Guard Policy off) |
 | **Session** | 6 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted), `HOST_TURN` (a prompt the host made for the agent, never a person's turn; on Claude Code one that names a Message Id takes back a turn first recorded as the person's, such as a scheduled wake-up) |

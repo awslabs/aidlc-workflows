@@ -162,6 +162,20 @@ before one stage-level lifecycle report.
    - Code quality indicators (linting, CI/CD, documentation)
    - Technical debt signals
 
+   **Existing code-knowledge sources.** A team may already keep a code graph
+   or inventory of the repository that a tool outside AI-DLC built. When one
+   is registered for the repo (`aidlc engine workspace codekb-source add`,
+   recorded in `aidlc/spaces/<space>/codekb-sources.json`), Step 1 runs
+   `aidlc engine workspace codekb-source --repo <repo> --json` after the
+   snapshot and the brief carries each source with its verdict: `CURRENT`
+   (built from the commit checked out: the developer reads it first and opens
+   code to confirm and to fill in what it does not say), `STALE` or `UNKNOWN`
+   (a map of an older build: the code is read for every fact recorded), or
+   `MISSING` (one line to the person; the code is scanned as usual). The
+   reading method is `knowledge/aidlc-developer-agent/code-knowledge-sources.md`;
+   the scan lists each source read under **Sources read**, and the Run Record
+   names it. The store's snapshot, fingerprint and publish are unchanged.
+
    The developer writes its scan, following the Developer Code Scan Template in
    `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`, to a
    durable handoff file: `<record>/inception/reverse-engineering/developer-scan.md`
