@@ -968,6 +968,39 @@ describe("a team's own workspace, made from the home's", () => {
     expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown }).result).toBeDefined();
   });
 
+  // A live run (M2b): the team's workspace was the lead's clone with its origin
+  // switched; the claim refs the clone kept sent the take to the team's repo.
+  test("a clone of the lead's workspace pointed at the team's own repo claims at the lead's project", () => {
+    const home = homeWithTeams(["refunds=payments", "checkout-ui=web"]);
+    const web = cloneOf(home.remote, "web");
+    git(web, ["fetch", "-q", "origin", "+refs/heads/claim/*:refs/remotes/origin/claim/*"]);
+    const host = tempDir("web-host");
+    git(host, ["init", "-q", "--bare", "-b", "main"]);
+    git(web, ["remote", "set-url", "origin", host]);
+    git(web, ["push", "-q", "origin", "main"]);
+    const took = take(web, "checkout-ui", ["--team", "web"]);
+    expect(took.status, took.out).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "web", taken_by: "web" });
+    expect(git(host, ["for-each-ref", "--format=%(refname)", "refs/heads/claim/"])).toBe("");
+  });
+
+  // A recorded address git would read as an option is never passed to git.
+  test("a recorded lead's address that starts with '-' is refused before any git call reads it", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const web = cloneOf(home.remote, "web");
+    const other = tempDir("web-other");
+    git(other, ["init", "-q", "--bare", "-b", "main"]);
+    git(web, ["remote", "set-url", "origin", other]);
+    git(web, ["push", "-q", "origin", "main"]);
+    const statePath = join(web, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \*\*Home Location\*\*: .*$/m, "- **Home Location**: --upload-pack=touch /tmp/aidlc-no"));
+    const took = take(web, "refunds", ["--team", "payments"]);
+    expect(took.status).not.toBe(0);
+    expect(String(took.json?.error)).toContain('starts with "-"');
+    expect(existsSync("/tmp/aidlc-no")).toBe(false);
+  });
+
   test("a home that takes no push from here: a held Unit is taken and goes back by file; an open one names the lead's step", () => {
     const open = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n  - name: reporting\n    depends_on: []\n```\n";
     const home = homeWithTeams(["refunds=payments"], open);

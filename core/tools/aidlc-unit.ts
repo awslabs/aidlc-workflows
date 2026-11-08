@@ -5828,12 +5828,17 @@ interface HomeWork {
 // This clone's own remote carries the work's claims (git tracks them under
 // it): it is the lead's repo, however its address is spelled (ssh beside
 // https, a host's own ssh port or path, an ssh alias), so the claims are read
-// and written through it with the person's own login.
+// and written through it with the person's own login. The refs a clone kept
+// are only the hint: a clone whose origin was switched to the team's own repo
+// keeps them too, so the remote counts when it holds the claims now.
 function remoteHoldsClaims(projectDir: string, id8: string): boolean {
   try {
     const remote = repositoryRemote(projectDir);
     if (remote === null) return false;
-    return git(projectDir, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/${remote}/claim/${id8}/`]).stdout.trim() !== "";
+    if (git(projectDir, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/${remote}/claim/${id8}/`]).stdout.trim() === "") return false;
+    const listed = quietly(() => git(projectDir, ["ls-remote", remote, `refs/heads/claim/${id8}/*`]));
+    // Not reached now: the clone's remote stands, as before.
+    return !listed.ok || listed.stdout.trim() !== "";
   } catch {
     return false;
   }
@@ -5852,6 +5857,12 @@ function findHomeWork(projectDir: string, dirName: string, space: string): HomeW
   const workspaceOrigin = workspaceHomeLocation(projectDir);
   const location = solo ? (workspaceOrigin === "local" ? null : workspaceOrigin) : homeLocation(state);
   if ((!solo && !isTeamUnitOwnership(state)) || location === null) fail(`${dirName} is not work that teams build.`);
+  // The recorded address is given to git as the remote to read and write: one
+  // that starts with "-" would be read as an option, so it is never passed on.
+  if (location.startsWith("-")) {
+    fail(`${dirName}'s recorded lead's project address starts with "-", so git would read it as an option; nothing was ` +
+      "read or written. Its Home Location in the work's state names the lead's project: correct it to the address it is cloned from.");
+  }
   const row = readIntentRegistry(projectDir, space).find((entry) => entry.dirName === dirName);
   if (!row?.uuid) fail(`${dirName} has no entry in its space's list of work.`);
   const own = workspaceHomeLocation(projectDir);
