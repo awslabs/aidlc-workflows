@@ -77,7 +77,9 @@ question asked. Only **Approve** authorizes the receipt; an unrelated reply,
 Never write `--details "Approve"` unless the human chose it; only then run
 `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
 State field. A human may defer when no runnable
-check exists yet; the first checkpoint then asks. The current approval receipt,
+check exists yet; the first checkpoint then asks (on Kiro IDE and Kiro CLI v3, a
+side-by-side batch asks once its plans are approved, before its initial `prepare`).
+The current approval receipt,
 not the field alone, authorizes execution. Changing it requires a new receipt
 and typed setter, never generic `state set` or an automatic choice.
 

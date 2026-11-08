@@ -202,6 +202,7 @@ import {
   SUMMARY_CONFIRMATION_CHECKPOINT,
   summaryConfirmationCommands,
   VERIFICATION_COMMAND_CHECKPOINT,
+  authorizedVerificationCommand,
   validConstructionPolicyChange,
   swarmNeedsStageMajor,
   auditFilePath,
@@ -14504,6 +14505,8 @@ function tryEmitSwarm(
   }
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
     swarmRevisionNeedsPreparation(projectDir, slug, pendingBatch, pendingUnits);
+  const commandAuthorized = (evidence ? evidence.verificationCommand
+    : authorizedVerificationCommand(projectDir, stateContent ?? "")) !== null;
   if (repos.length === 1) {
     const directive: Directive = {
       kind: "invoke-swarm",
@@ -14513,6 +14516,7 @@ function tryEmitSwarm(
       ...reviewerFields,
       protocol_modules: protocolModules,
       repo: repos[0],
+      verification_command_authorized: commandAuthorized,
     };
     publicationContexts.set(directive, {
       projectDir,
@@ -14527,6 +14531,7 @@ function tryEmitSwarm(
       ...(resumeExisting ? { resume_existing: true as const } : {}),
       ...reviewerFields,
       protocol_modules: protocolModules,
+      verification_command_authorized: commandAuthorized,
     };
     publicationContexts.set(directive, {
       projectDir,

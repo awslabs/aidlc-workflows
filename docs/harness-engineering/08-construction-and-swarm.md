@@ -57,7 +57,9 @@ solo Unit workflows record three independent settings:
 `Construction Verification Command` is a separate intent-level Runtime State
 field, with no automatic default. Delivery Planning proposes a real project check
 and records a human approval receipt before the typed setter writes it. A
-greenfield project without a runnable check may defer to the first checkpoint.
+greenfield project without a runnable check may defer to the first checkpoint;
+on Kiro IDE and Kiro CLI v3 a side-by-side batch then asks once its plans are
+approved, before its initial `prepare`.
 The same command is reused for all Unit/batch checkpoints; choosing or changing
 it requires the [recorded-command flow](../guide/12-cli-commands.md#construction-verification-command-record-human-authorization),
 never generic `state set` or an autonomy grant.
