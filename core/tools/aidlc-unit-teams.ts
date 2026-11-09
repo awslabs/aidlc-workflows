@@ -482,9 +482,9 @@ export function findUnitBuild(projectDir: string, homeWork: string, unit: string
 export const CHECK_IN_LINE = "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.";
 
 // Teams across repos share AI-DLC's record by git, and the person checks it in.
-// The callers say this at the stopping points (a stop, the push, a Unit's end),
-// never from what git status shows: AI-DLC's own audit rows change aidlc/ at
-// every step. Null for other work (main's team Units on the workspace's own
+// The callers say this at the stopping points (a stop, the push or the
+// person's Not now to it, the lead's Build and Test approval), never from what
+// git status shows: AI-DLC's own audit rows change aidlc/ at every step. Null for other work (main's team Units on the workspace's own
 // repo commit the record for the person) and where there is no remote to push.
 export function checkInLine(projectDir: string, stateContent?: string): string | null {
   let state = stateContent;
