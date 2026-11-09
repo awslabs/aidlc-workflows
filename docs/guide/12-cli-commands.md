@@ -83,7 +83,7 @@ diagnostic and lifecycle routes.
 | `/aidlc plugin validate [path]` | Validate an authored plugin (`--with <base-root>` checks a base plugin's agents; `--json` for structured findings) |
 | `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
 | `aidlc plugin test [path] --install <project-root>` | From a terminal: test that an authored plugin composes into a copy of a project, which is never changed (`--harness <name>`, `--with <base-root>`, `--json`) |
-| `/aidlc --version` | Print the framework version |
+| `/aidlc --version` | Print the framework version, and in a pinned project the release it is pinned to |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
 | `aidlc engine worktree restore --slug <slug> [--parked <stamp>] [--raw]` | Recover files from a set-aside Bolt attempt in a separate checkout |
@@ -2060,6 +2060,11 @@ On the other harnesses it says that the tool has no status line and that
 ### `/aidlc --version` — Framework version
 
 Print the framework version (`aidlc <X.Y.Z>`) and exit. Read-only — works without a workflow and never prompts to resume one.
+
+In a project pinned with `aidlc config --pin`, the answer names the pinned
+release, which runs the workflow, and this machine's active release when it is
+a different one: `this project is pinned to aidlc 2.10.0, which runs its
+workflow (machine active: 2.9.0)`.
 
 **Syntax:**
 

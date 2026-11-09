@@ -30,6 +30,7 @@ import {
   heading,
   tipLabel,
 } from "./aidlc-color.ts";
+import { pinnedVersionNote, projectPinnedVersion } from "./aidlc-channel.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
@@ -1230,7 +1231,7 @@ export type Action =
   | { type: "statusline"; path: string; projectDir?: string }
   | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string; projectDir?: string }
   | { type: "sensor-script-file"; id: string; args: string[]; projectDir?: string }
-  | { type: "version"; json: boolean }
+  | { type: "version"; json: boolean; projectDir?: string }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; scope: "human" | "engine" | "system" | "all" | "config" }
   | { type: "noun-help"; message: string }
@@ -1751,7 +1752,7 @@ export function renderCommandHelp(command: PublicCommand): string {
   }
   const descriptions: Record<Exclude<PublicCommand, "config">, string> = {
     doctor: "Check this machine and project and show a fix for every problem",
-    version: "Print binary and selected runtime versions",
+    version: "Print binary and selected runtime versions, and the release a pinned project runs on",
     update: "Install and switch to a newer aidlc release",
     use: "Switch this machine to an exact aidlc release",
     uninstall: "Remove aidlc from this machine",
@@ -2613,8 +2614,11 @@ function resolveActionFrom(
   // Read before anything of ours is put back on the line below.
   const routeArgs = action.type === "delegate" ? [...action.args] : undefined;
   const words = theirWordsOn(argv, route, routeArgs, !(clean[0]?.startsWith("-") ?? false));
-  if (action.type === "version" && globalFlags.includes("--json")) {
-    action.json = true;
+  if (action.type === "version") {
+    if (globalFlags.includes("--json")) action.json = true;
+    // version runs on this machine's release, but it reads the pin from the
+    // folder pin dispatch would read, so it names the release that runs there.
+    action.projectDir = dispatcherProjectDirFrom(argv, limit);
   }
   if (projectDir) {
     const absoluteProjectDir = isAbsolute(projectDir)
@@ -3370,6 +3374,7 @@ async function execute(action: Action): Promise<number> {
     return 0;
   }
   if (action.type === "version") {
+    const pinned = action.projectDir ? projectPinnedVersion(action.projectDir) : null;
     text(
       1,
       action.json
@@ -3377,9 +3382,13 @@ async function execute(action: Action): Promise<number> {
             schemaVersion: 1,
             binaryVersion: AIDLC_VERSION,
             runtimeVersion: AIDLC_VERSION,
+            ...(pinned ? { pinnedVersion: pinned } : {}),
           })}\n`
         : `aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})\n`,
     );
+    // The stdout line stays exactly as it is: an update checks a release it
+    // activates by comparing that line, in whatever folder the update runs.
+    if (pinned && !action.json) text(2, `aidlc: ${pinnedVersionNote(pinned, AIDLC_VERSION)}\n`);
     return 0;
   }
   if (action.type === "hook") {
