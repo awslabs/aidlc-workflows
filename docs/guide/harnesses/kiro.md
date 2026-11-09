@@ -373,6 +373,12 @@ of a workflow. It does not change which AI-DLC checkpoints stop for you.
   same chat, for example after you answer one of AI-DLC's questions; if it
   appears again, you can choose (f) again. Requests from the main chat still
   ask as before, and Kiro writes no setting for (f).
+- In Kiro CLI 3.1.0 (its v3 engine), an approval card from the main chat for
+  one of your own commands has no **Always allow** item: it includes **Allow
+  once** and **Create allow rule to approve future similar actions**. The rule
+  Kiro offers first is **exact match · session** for that command: choosing it
+  lets the same command run again without a card, and a command with different
+  arguments, such as another test file, is not covered by that rule.
 
 In both modes, AI-DLC still stops and waits for your typed reply at each of its
 questions, at every approval gate, and at Code Generation's **Approve Plan**
