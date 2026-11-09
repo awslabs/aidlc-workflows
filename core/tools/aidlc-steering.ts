@@ -10,12 +10,11 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   DEFAULT_SPACE,
   errorMessage,
-  getField,
   readStateFile,
   resolveWorkflowSelection,
   toPosix,
 } from "./aidlc-lib.ts";
-import { LEAD_RULES_FIELD } from "./aidlc-unit-teams.ts";
+import { leadRuleFiles } from "./aidlc-unit-teams.ts";
 import {
   copyFrameworkPhaseRules,
   frameworkMemorySeedDir,
@@ -26,7 +25,9 @@ import { withoutCommentBlocks } from "./aidlc-markdown.ts";
 
 // `seed`: the framework's copy of a phase rule file, for a space that may lack
 // its own (see restoreSpacePhaseRules).
-export type RuleEntry = { rel: string; abs: string; seed?: string };
+// `lead`: one of the lead's files a team's build follows, read where it is
+// (leadRuleFiles), its text null when it cannot be read now.
+export type RuleEntry = { rel: string; abs: string; seed?: string; lead?: { text: string | null } };
 export type RuleContent = { path: string; text: string };
 
 // These are explanatory preambles in the shipped empty team/project templates,
@@ -103,20 +104,23 @@ export function rulesContentEntries(
   });
   // A team's build that follows the lead's rules too reads each of the lead's
   // files (their agreed practices, their project rules) where it is, just
-  // before the team's own file of the same name, so theirs are on top.
-  let leads: string[];
+  // before the team's own file of the same name, so theirs are on top. One
+  // read from the lead's copy is named as the lead's: in a team's own
+  // workspace the team's own file has the same path.
+  let leads: ReturnType<typeof leadRuleFiles>;
   try {
-    leads = (getField(readStateFile(projectDir), LEAD_RULES_FIELD) ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+    leads = leadRuleFiles(projectDir, readStateFile(projectDir));
   } catch {
     leads = [];
   }
   let out = entries;
   for (const lead of leads) {
-    if (out.some((entry) => entry.rel === lead)) continue;
-    const name = lead.slice(lead.lastIndexOf("/") + 1);
+    const rel = lead.fromCopy ? `the lead's ${lead.path}` : lead.path;
+    if (out.some((entry) => entry.rel === rel)) continue;
+    const name = lead.path.slice(lead.path.lastIndexOf("/") + 1);
     const own = out.findIndex((entry) => entry.rel.endsWith(`/memory/${name}`));
     const at = own >= 0 ? own : out.length;
-    out = [...out.slice(0, at), { rel: lead, abs: join(projectDir, lead) }, ...out.slice(at)];
+    out = [...out.slice(0, at), { rel, abs: join(projectDir, lead.path), lead: { text: lead.text } }, ...out.slice(at)];
   }
   return out;
 }
@@ -159,6 +163,14 @@ export function readRuleBundle(
     if (seen.has(entry.rel)) continue;
     seen.add(entry.rel);
     let text: string;
+    // A lead's file that cannot be read now never stops the step: the step
+    // goes on under the team's own rules, and says so once (routeNext).
+    if (entry.lead !== undefined) {
+      if (entry.lead.text === null) continue;
+      const rules = withoutCommentBlocks(entry.lead.text);
+      if (holdsRule(rules)) content.push({ path: entry.rel, text: rules });
+      continue;
+    }
     try {
       text = readRuleText(entry.abs);
     } catch (error) {

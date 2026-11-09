@@ -206,6 +206,7 @@ import {
   type UnitBuild,
   unitBuildOf,
   unitLikelyRepos,
+  unitLikelyReposFrom,
   unitMergeVerdict,
   unitMergesStanding,
   unitOutputsHomeReads,
@@ -227,8 +228,12 @@ import {
   teamOrPerson,
   theTeam,
   clearLeadWaitsOnTeams,
+  isGitAddress,
+  leadCopyRef,
+  textAt,
 } from "./aidlc-unit-teams.js";
-import { displayRepoPath, isProjectSubmodule, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine } from "./aidlc-workspace-manifest.js";
+import { displayRepoPath, isProjectSubmodule, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
   captureStageValidationBasis,
@@ -243,7 +248,7 @@ import {
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
-import { planMadeElsewhere } from "./aidlc-record-core.ts";
+import { planMadeElsewhere, registryList } from "./aidlc-record-core.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
@@ -5823,6 +5828,10 @@ interface HomeWork {
   repos: string[];
   // Solo work, one Unit at a time, built from another machine.
   solo: boolean;
+  // The lead's record is not in this workspace: it is read from the lead's
+  // copy AI-DLC fetched by the lead's address (leadCopyRef), which comes with
+  // the claims (refreshHomeClaims).
+  leadCopy?: boolean;
 }
 
 // This clone's own remote carries the work's claims (git tracks them under
@@ -5857,19 +5866,11 @@ function findHomeWork(projectDir: string, dirName: string, space: string): HomeW
   const workspaceOrigin = workspaceHomeLocation(projectDir);
   const location = solo ? (workspaceOrigin === "local" ? null : workspaceOrigin) : homeLocation(state);
   if ((!solo && !isTeamUnitOwnership(state)) || location === null) fail(`${dirName} is not work that teams build.`);
-  // The recorded address is given to git as the remote to read and write: one
-  // that starts with "-" would be read as an option, so it is never passed on.
-  if (location.startsWith("-")) {
-    fail(`${dirName}'s recorded lead's project address starts with "-", so git would read it as an option; nothing was ` +
-      "read or written. Its Home Location in the work's state names the lead's project: correct it to the address it is cloned from.");
-  }
+  refuseOptionAddress(location, recordedAddressRefusal(dirName));
   const row = readIntentRegistry(projectDir, space).find((entry) => entry.dirName === dirName);
   if (!row?.uuid) fail(`${dirName} has no entry in its space's list of work.`);
-  const own = workspaceHomeLocation(projectDir);
   const id8 = idSuffix(row.uuid);
-  const target = location === "local" || (own !== null && sameGitAddress(location, own)) || remoteHoldsClaims(projectDir, id8)
-    ? repositoryRemote(projectDir)
-    : location;
+  const target = homeTarget(projectDir, location, id8);
   return {
     space,
     dirName,
@@ -5884,12 +5885,147 @@ function findHomeWork(projectDir: string, dirName: string, space: string): HomeW
   };
 }
 
+// An address git is given as the remote to read and write: one that starts
+// with "-" would be read as an option, so it is never passed on.
+function refuseOptionAddress(address: string, refusal: string): void {
+  if (address.startsWith("-")) fail(refusal);
+}
+
+function recordedAddressRefusal(dirName: string): string {
+  return `${dirName}'s recorded lead's project address starts with "-", so git would read it as an option; nothing was ` +
+    "read or written. Its Home Location in the work's state names the lead's project: correct it to the address it is cloned from.";
+}
+
+// Where the lead's claims are read and written: this workspace's own remote
+// when the recorded lead's project is it, else the recorded address.
+function homeTarget(projectDir: string, location: string, id8: string): string | null {
+  const own = workspaceHomeLocation(projectDir);
+  return location === "local" || (own !== null && sameGitAddress(location, own)) || remoteHoldsClaims(projectDir, id8)
+    ? repositoryRemote(projectDir)
+    : location;
+}
+
+// --- The lead's project by its address (a team's own workspace) -------------
+//
+// The person says where the lead's project is, once. Its branch is fetched
+// once into AI-DLC's own ref (leadCopyRef), never a folder or a remote, and the
+// lead's work teams build is read from that commit with git. After the take,
+// each later step reads the lead from the build's own record (leadOfBuild).
+
+export interface LeadWork {
+  space: string;
+  dirName: string;
+  uuid: string;
+  slug: string;
+  repos: string[];
+  state: string;
+  dependencies: string;
+}
+
+// The lead's work teams build at a commit: each record with Home Location and
+// team ownership (a Unit's build is not one), with its row in its space's list.
+export function leadWorkAt(projectDir: string, oid: string): LeadWork[] {
+  const listed = git(projectDir, ["ls-tree", "-r", "--name-only", oid, "--", "aidlc/spaces"]);
+  const works: LeadWork[] = [];
+  for (const path of listed.ok ? listed.stdout.split(/\r?\n/) : []) {
+    const at = /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)\/aidlc-state\.md$/.exec(path);
+    if (at === null) continue;
+    const [, space, dirName] = at;
+    const state = textAt(projectDir, oid, path);
+    if (state === null || !isTeamUnitOwnership(state) || homeLocation(state) === null || unitBuildOf(state) !== null) continue;
+    const row = registryList(textAt(projectDir, oid, `aidlc/spaces/${space}/intents/intents.json`) ?? "")?.find((entry) => entry.dirName === dirName);
+    const dependencies = textAt(projectDir, oid, `aidlc/spaces/${space}/intents/${dirName}/inception/units-generation/unit-of-work-dependency.md`);
+    if (!row?.uuid || dependencies === null) continue;
+    works.push({ space, dirName, uuid: row.uuid, slug: row.slug || dirName, repos: row.repos ?? [], state, dependencies });
+  }
+  return works;
+}
+
+// The lead's project by the address the person said: refused before any git
+// call when git would read it as an option, its branch fetched once, and the
+// lead's work teams build there, each work's copy kept where a take and the
+// later looks read it.
+export function leadWorkByAddress(projectDir: string, address: string): { oid: string; branch: string; works: LeadWork[] } {
+  refuseOptionAddress(address, `The lead's project address ${JSON.stringify(address)} starts with "-", so git would read it as an ` +
+    "option; nothing was read or written. Ask the person for the address the lead's project is cloned from.");
+  const fetched = fetchLeadBranch(projectDir, address, maskUserinfo(address));
+  const works = leadWorkAt(projectDir, fetched.oid);
+  for (const work of works) git(projectDir, ["update-ref", leadCopyRef(idSuffix(work.uuid)), fetched.oid]);
+  return { ...fetched, works };
+}
+
+function homeByAddress(projectDir: string, address: string, dirName: string, space: string): { home: HomeWork; fetched: { branch: string; oid: string } } {
+  const { works, ...fetched } = leadWorkByAddress(projectDir, address);
+  const work = works.find((entry) => entry.dirName === dirName && entry.space === space);
+  if (work === undefined) fail(`The lead's project at ${maskUserinfo(address)} has no work teams build named ${dirName} in space ${space}.`);
+  return {
+    home: {
+      space, dirName, uuid: work.uuid, id8: idSuffix(work.uuid), label: work.slug, location: address, target: address,
+      recordPrefix: `aidlc/spaces/${space}/intents/${dirName}`, repos: work.repos, solo: false, leadCopy: true,
+    },
+    fetched,
+  };
+}
+
+// The lead of a build whose lead's record is not in this workspace, read from
+// the build's own record (Home Location, Home Work, Home Record, Home Label).
+// Null when the lead's record is here or the build's lead is not an address.
+export function leadOfBuild(projectDir: string, build: UnitBuild): HomeWork | null {
+  const at = build.homeRecord.indexOf("/");
+  if (at < 0 || !isGitAddress(build.homeLocation)) return null;
+  const space = build.homeRecord.slice(0, at);
+  const dirName = build.homeRecord.slice(at + 1);
+  if (existsSync(join(intentsDir(projectDir, space), dirName, "aidlc-state.md"))) return null;
+  const here = findUnitBuild(projectDir, build.homeWork, build.unit);
+  refuseOptionAddress(build.homeLocation, recordedAddressRefusal(here?.dirName ?? build.unit));
+  let label = dirName;
+  let repos: string[] = [];
+  if (here !== null) {
+    try {
+      label = getField(readStateFile(projectDir, here.dirName, here.space), "Home Label")?.trim() || dirName;
+      repos = intentRepos(projectDir, here.dirName, here.space);
+    } catch {
+      // The build's own fields stand.
+    }
+  }
+  const id8 = idSuffix(build.homeWork);
+  return {
+    space, dirName, uuid: build.homeWork, id8, label, location: build.homeLocation,
+    target: homeTarget(projectDir, build.homeLocation, id8),
+    recordPrefix: `aidlc/spaces/${space}/intents/${dirName}`, repos, solo: false, leadCopy: true,
+  };
+}
+
+// The lead's branch fetched by the lead's address, once, with the person's own
+// login: the branch the claim names, else the one the lead's HEAD names (main
+// when it names none). Into `into` when the lead's work is known; else the
+// commit is the one ls-remote saw, which the fetch brought.
+function fetchLeadBranch(projectDir: string, address: string, location: string, branch?: string, into?: string): { branch: string; oid: string } {
+  let name = branch;
+  let seen: string | undefined;
+  if (!name) {
+    const advertised = git(projectDir, ["ls-remote", "--symref", address, "HEAD"]);
+    if (!advertised.ok) fail(`The lead's project at ${location} could not be reached: ${advertised.stderr.trim()}`);
+    name = advertised.stdout.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m)?.[1] ?? "main";
+    seen = advertised.stdout.match(/^([0-9a-f]{40,64})\s+HEAD$/m)?.[1];
+  }
+  const fetched = git(projectDir, ["fetch", "--no-tags", address, `+refs/heads/${name}${into ? `:${into}` : ""}`]);
+  if (!fetched.ok) fail(`The lead's project at ${location} could not be fetched: ${fetched.stderr.trim()}`);
+  if (into) return { branch: name, oid: gitOutput(projectDir, ["rev-parse", "--verify", into], "The lead's project's branch is not here") };
+  if (seen === undefined || !git(projectDir, ["cat-file", "-e", `${seen}^{commit}`]).ok) {
+    fail(`The lead's project at ${location} could not be read: its branch ${name} moved while it was fetched. Run the same command again.`);
+  }
+  return { branch: name, oid: seen };
+}
+
 // The home's integration branch, fetched with the person's own login: through
-// this workspace's remote, or by the home's address into AI-DLC's own ref.
+// this workspace's remote, or by the home's address into AI-DLC's own ref
+// (`prefetched`: the branch a take by the lead's address already fetched).
 function fetchHomeIntegration(
   projectDir: string,
   home: HomeWork,
   claim: UnitClaimView | null,
+  prefetched?: { branch: string; oid: string },
 ): { ref: string; branch: string; oid: string } {
   if (home.target === null || !isGitAddress(home.target)) {
     const remote = home.target;
@@ -5905,20 +6041,13 @@ function fetchHomeIntegration(
     return { ref, branch, oid: gitOutput(projectDir, ["rev-parse", "--verify", ref], `The lead's project's branch ${branch} is not here`) };
   }
   const fromClaim = claim?.payload.integration_ref.match(/^refs\/(?:remotes\/[^/]+|heads)\/(.+)$/)?.[1];
-  let branch = fromClaim;
-  if (!branch) {
-    const advertised = git(projectDir, ["ls-remote", "--symref", home.target, "HEAD"]);
-    if (!advertised.ok) fail(`The lead's project at ${home.location} could not be reached: ${advertised.stderr.trim()}`);
-    branch = advertised.stdout.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m)?.[1] ?? "main";
+  const ref = leadCopyRef(home.id8);
+  if (prefetched !== undefined && (!fromClaim || fromClaim === prefetched.branch)) {
+    const kept = git(projectDir, ["update-ref", ref, prefetched.oid]);
+    if (!kept.ok) fail(`The lead's project's branch could not be kept here: ${kept.stderr.trim()}`);
+    return { ref, ...prefetched };
   }
-  const ref = `refs/aidlc/home/${home.id8}/integration`;
-  const fetched = git(projectDir, ["fetch", "--no-tags", home.target, `+refs/heads/${branch}:${ref}`]);
-  if (!fetched.ok) fail(`The lead's project at ${home.location} could not be fetched: ${fetched.stderr.trim()}`);
-  return { ref, branch, oid: gitOutput(projectDir, ["rev-parse", "--verify", ref], "The lead's project's branch is not here") };
-}
-
-function isGitAddress(target: string): boolean {
-  return /[:/\\]/.test(target);
+  return { ref, ...fetchLeadBranch(projectDir, home.target, home.location, fromClaim, ref) };
 }
 
 // What the home's plan says at a commit: its state and Unit plan, read from
@@ -5988,7 +6117,7 @@ function homeAuditAt(projectDir: string, home: HomeWork, oid: string): AuditShar
 }
 
 // A record's audit as a commit holds it.
-function auditRowsAt(projectDir: string, recordPrefix: string, oid: string): AuditShardEvent[] {
+export function auditRowsAt(projectDir: string, recordPrefix: string, oid: string): AuditShardEvent[] {
   const listed = git(projectDir, ["ls-tree", "--name-only", `${oid}:${recordPrefix}/audit`]);
   if (!listed.ok) return [];
   return listed.stdout.split(/\r?\n/).filter((name) => name.endsWith(".md")).flatMap((shard, index) => {
@@ -6044,8 +6173,8 @@ function createUnitBuild(
   source: BuildSource,
   // A build taken from solo work lives in the home's own space.
   inSpace?: string,
-  // The person took it following the lead's project rules too.
-  leadRules = false,
+  // The lead's files the person chose to follow too (leadRules, read where they are).
+  leadPaths: readonly string[] = [],
 ): { space: string; dirName: string } {
   const space = inSpace ?? teamSpaceOf(team);
   if (!listSpacesHere(projectDir).includes(space)) {
@@ -6114,8 +6243,7 @@ function createUnitBuild(
     ] as const) {
       content = setOrInsertField(content, "## Runtime State", field, value);
     }
-    const leads = leadRules ? leadRulesOf(projectDir, home.space).paths : [];
-    if (leads.length > 0) content = setOrInsertField(content, "## Runtime State", LEAD_RULES_FIELD, leads.join(", "));
+    if (leadPaths.length > 0) content = setOrInsertField(content, "## Runtime State", LEAD_RULES_FIELD, leadPaths.join(", "));
     // The plan as the home approved it, never its scope's defaults: each
     // ceremony (Plan Approval, sensors, learnings ...), the depth, the test
     // strategy and the review class the home's plan set.
@@ -6424,14 +6552,22 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (unitError) fail(unitError);
   if (!flags.home) fail("take needs --home <record>: the lead's work this Unit belongs to.");
   const pd = resolveProjectDir(projectDir);
-  const home = findHomeWork(pd, flags.home, flags["home-space"] ?? DEFAULT_SPACE);
+  const homeSpace = flags["home-space"] ?? DEFAULT_SPACE;
+  // --from: the lead's project by the address the person said, read there when
+  // the lead's record is not in this workspace (in a clone of the lead's
+  // workspace it is, and the take goes the local way).
+  const byAddress = flags.from !== undefined && !existsSync(join(intentsDir(pd, homeSpace), flags.home, "aidlc-state.md"))
+    ? homeByAddress(pd, flags.from, flags.home, homeSpace)
+    : null;
+  const home = byAddress?.home ?? findHomeWork(pd, flags.home, homeSpace);
   validateClaimRefUnit(home.id8, unit);
   // Taken here before (this clone or another of this workspace): carry it on.
   const existing = findUnitBuild(pd, home.uuid, unit);
   if (existing !== null) {
     setActiveSpaceCursor(pd, existing.space);
     selectIntentForSession(pd, existing.dirName, existing.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
-    const carrying = `Carrying on ${unit}, ${theTeam(existing.space)}'s build here.`;
+    // A team's own workspace keeps its build in its default space: it is their team's, not a team named default.
+    const carrying = `Carrying on ${unit}, ${existing.space === DEFAULT_SPACE ? "your team" : theTeam(existing.space)}'s build here.`;
     console.log(JSON.stringify({
       taken: true,
       resumed: true,
@@ -6445,7 +6581,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   const ref = claimRef(home.id8, unit);
   if (home.target !== null) ensureFetchedClaim(pd, home, ref);
   const current = currentClaim(pd, home.target, ref);
-  const integration = fetchHomeIntegration(pd, home, current);
+  const integration = fetchHomeIntegration(pd, home, current, byAddress?.fetched);
   const plan = homePlanAt(pd, home, integration.oid, integration.branch);
   const planChanging = unitPlanChangingStage(plan.state);
   const solo = home.solo ? soloOpening(pd, home, plan) : null;
@@ -6498,7 +6634,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   // The Unit's own repos, as its Unit plan lists them (its likely repos; one
   // that lists none works in all of the work's): an early start branches only
   // these, never a repo a dependency pushed that this Unit does not use.
-  const likely = unitLikelyRepos(pd, home.dirName, home.space).get(unit) ?? [];
+  const likely = (home.leadCopy ? unitLikelyReposFrom(plan.dependencies) : unitLikelyRepos(pd, home.dirName, home.space)).get(unit) ?? [];
   const ownRepos = new Set(likely.map((repo) => repo.split("/")[0]));
   const earlyOn = early
     ? blockers.map((dep) => ({
@@ -6560,7 +6696,9 @@ function takeUnit(args: string[], projectDir?: string): void {
   invalidateLiveClaimPayloadCache(pd, unit);
   const withLeadRules = bareFlags.has("lead-rules") || flags["lead-rules"] !== undefined;
   // The lead's rules the build reads too, in the take's own words, as its choice named them.
-  const leads = withLeadRules ? leadRulesOf(pd, home.space) : null;
+  // In a team's own workspace the lead's files are read from the lead's commit, never this workspace's own.
+  const leads = !withLeadRules ? null
+    : home.leadCopy ? leadRulesOf(pd, home.space, (rel) => textAt(pd, integration.oid, rel)) : leadRulesOf(pd, home.space);
   const leadsToo = leads === null || leads.paths.length === 0 ? ""
     : ` and the lead's ${leads.practices.length > 0 && leads.project.length > 0 ? "agreed practices and project rules"
       : leads.practices.length > 0 ? "agreed practices" : "project rules"}`;
@@ -6570,7 +6708,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       return shown.ok ? shown.stdout : null;
     },
     approvals: (produced) => homeApprovals(homeRows, produced),
-  }, home.solo ? home.space : undefined, withLeadRules);
+  }, home.solo ? home.space : home.leadCopy ? activeSpace(pd) : undefined, leads?.paths ?? []);
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
   // out where nothing of the person's is uncommitted.
@@ -6584,8 +6722,10 @@ function takeUnit(args: string[], projectDir?: string): void {
       const start = `${remote}/${repo.branch}`;
       const name = repo.repo === "." ? "the repo" : repo.repo;
       const clean = git(dir, ["status", "--porcelain"]).stdout.trim() === "";
-      if (clean && git(dir, ["switch", "-q", "-c", unit, start]).ok) earlyLines.push(`You are on branch ${unit} in ${name} now.`);
-      else if (git(dir, ["branch", unit, start]).ok) {
+      // Without tracking: the dependency's branch is another team's, so a plain
+      // git push before AI-DLC's own (which sets the Unit's upstream) never goes there.
+      if (clean && git(dir, ["switch", "-q", "--no-track", "-c", unit, start]).ok) earlyLines.push(`You are on branch ${unit} in ${name} now.`);
+      else if (git(dir, ["branch", "--no-track", unit, start]).ok) {
         earlyLines.push(`Branch ${unit} in ${name} starts there; your uncommitted changes kept you on your branch, so switch when you are ready.`);
       }
     }
@@ -6599,7 +6739,7 @@ function takeUnit(args: string[], projectDir?: string): void {
         "so nothing here was switched.");
   }
   // The likely repos this workspace has no checkout of, said with the way to one.
-  const notThere = likelyReposNotHere(pd, likely, home.repos);
+  const notThere = likelyReposNotHere(pd, likely, home.repos, leadRepoAddresses(pd, integration.oid));
   if (resultByFile) {
     withAuditLock(pd, () => {
       const content = readStateFile(pd, build.dirName, build.space);
@@ -6738,7 +6878,7 @@ const CLAIMS_FETCHED_FILE = "claims-fetched.json";
 
 export function refreshHomeClaims(
   projectDir: string,
-  options: { home?: { target: string | null; id8: string }; sessionId?: string; now?: boolean; sincePerson?: boolean } = {},
+  options: { home?: { target: string | null; id8: string; leadCopy?: boolean }; sessionId?: string; now?: boolean; sincePerson?: boolean } = {},
 ): { fetched: boolean; unreached: string | null; refused?: string } {
   const pd = resolveProjectDir(projectDir);
   const { target, id8 } = options.home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
@@ -6778,6 +6918,12 @@ export function refreshHomeClaims(
   // missed; after that the step goes on and says it plainly, never a loop.
   const refused = fetched.ok ? null : localGitWriteRefused(fetched.stderr);
   const ok = fetched.ok;
+  // A lead read by its address: the copy of the lead's workspace (the plan and
+  // the lead's rules a build follows) comes with the claims, when the lead's
+  // HEAD moved; a lead whose HEAD names no branch leaves the copy as it was.
+  if (ok && options.home?.leadCopy === true && isGitAddress(target)) {
+    quietFetch(pd, ["--no-tags", "-q", target, `+HEAD:${leadCopyRef(id8)}`]);
+  }
   const stopped = refused !== null && last?.chat === chat && last.refused === true;
   try {
     mkdirSync(dirname(mark), { recursive: true });
@@ -6900,6 +7046,8 @@ function ownChanges(planned: ReadonlyArray<{ dir: string }>): boolean {
 }
 
 function buildsHome(projectDir: string, build: UnitBuild): HomeWork {
+  const lead = leadOfBuild(projectDir, build);
+  if (lead !== null) return lead;
   const at = build.homeRecord.indexOf("/");
   return findHomeWork(projectDir, build.homeRecord.slice(at + 1), build.homeRecord.slice(0, at));
 }
@@ -8940,6 +9088,23 @@ function takeFromFile(pd: string, path: string): void {
   }));
 }
 
+// The lead's repo list at a commit of the lead's workspace, as addresses by
+// repo name (workspaceManifestAt's order); empty when there is none or it does not read.
+function leadRepoAddresses(projectDir: string, oid: string | null): Map<string, string> {
+  const addresses = new Map<string, string>();
+  if (!oid) return addresses;
+  try {
+    const found = workspaceManifestAt((rel) => textAt(projectDir, oid, rel));
+    for (const repo of found?.manifest.repos ?? []) {
+      const address = workspaceCloneUrl(found?.manifest.org, repo);
+      if (address !== null) addresses.set(repo.name, address);
+    }
+  } catch {
+    // A list that does not read offers nothing.
+  }
+  return addresses;
+}
+
 // On Codex, which writes only inside the folder it started in unless the
 // person adds others: their own step for the Unit's repos that sit outside
 // the workspace (Codex's --add-dir). AI-DLC writes no sandbox setting.
@@ -8962,7 +9127,11 @@ function codexWritableLine(pd: string, repos: string[]): string {
 export function buildCloneOffer(pd: string, stateContent: string): { question: string; choices: Array<{ label: string; command?: string }> } | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
-  const notThere = likelyReposNotHere(pd, unitLikelyRepos(pd).get(build.unit) ?? [], intentRepos(pd));
+  // The lead's list: in the lead's copy when it is here, else at the commit the Unit was taken from.
+  const copy = git(pd, ["rev-parse", "--verify", "--quiet", leadCopyRef(idSuffix(build.homeWork))]).stdout.trim();
+  const takenIn = readAuditShardEvents(pd).findLast((row) => row.event === "UNIT_TAKEN_IN");
+  const notThere = likelyReposNotHere(pd, unitLikelyRepos(pd).get(build.unit) ?? [], intentRepos(pd),
+    leadRepoAddresses(pd, copy || (takenIn === undefined ? null : auditBlockField(takenIn.block, "Home Commit") ?? null)));
   return notThere.offer.offer === undefined ? null : { question: notThere.question.trim(), choices: notThere.offer.offer.choices };
 }
 
@@ -8973,6 +9142,8 @@ function likelyReposNotHere(
   pd: string,
   likely: string[],
   recorded: string[],
+  // The lead's repo list at the commit the Unit was taken from.
+  leadAddresses: Map<string, string> = new Map(),
 ): { lines: string; question: string; offer: { offer?: { choices: Array<{ label: string; command?: string }> } } } {
   const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
     .filter((repo) => recorded.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
@@ -8981,14 +9152,22 @@ function likelyReposNotHere(
   const unreadable = missing.length > 0 ? localUnreadableLine(pd, missing) : null;
   if (unreadable !== null) return { lines: ` ${unreadable}`, question: "", offer: {} };
   const cloneable = missing.filter((repo) => repoCloneable(pd, repo));
+  // A repo this workspace's list has no address for, that the lead's has.
+  const fromLead = missing.filter((repo) => !cloneable.includes(repo) && leadAddresses.has(repo));
+  const leadLine = fromLead.length === 0 ? "" : ` ${joinNames(fromLead.map((repo) => `${repo} is not here yet; the lead's list has it at ` +
+    `${maskUserinfo(leadAddresses.get(repo)!)}`))}. Do you want me to clone ${fromLead.length === 1 ? "it" : "them"} here?`;
   return {
-    lines: missing.filter((repo) => !cloneable.includes(repo)).map((repo) => ` ${repoNotThereLine(pd, repo)}`).join("") +
+    lines: missing.filter((repo) => !cloneable.includes(repo) && !fromLead.includes(repo)).map((repo) => ` ${repoNotThereLine(pd, repo)}`).join("") +
       codexWritableLine(pd, likely.length > 0 ? [...new Set(likely.map((repo) => repo.split("/")[0]))].filter((repo) => recorded.includes(repo)) : recorded),
-    question: cloneable.length > 0 ? ` ${repoCloneOfferLine(pd, cloneable)}` : "",
-    offer: cloneable.length === 0 ? {} : {
+    question: (cloneable.length > 0 ? ` ${repoCloneOfferLine(pd, cloneable)}` : "") + leadLine,
+    offer: cloneable.length === 0 && fromLead.length === 0 ? {} : {
       offer: {
         choices: [
           ...cloneable.map((repo) => ({ label: `Clone ${repo}`, command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)}` })),
+          ...fromLead.map((repo) => ({
+            label: `Clone ${repo}`,
+            command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)} --url ${shellArg(leadAddresses.get(repo)!)}`,
+          })),
           { label: "Not now" },
         ],
       },

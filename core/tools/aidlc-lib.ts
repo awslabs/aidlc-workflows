@@ -39935,6 +39935,8 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   ["--unit", { value: "free" }],
   ["--plan-name", { value: "free" }],
   ["--save-as", { value: "free" }],
+  // The lead's project address a team takes a Unit from, as the agent read it from the person's words.
+  ["--lead-address", { value: "free" }],
   ["--skip", { value: "free" }],
   ["--add", { value: "free" }],
   ["--claim", { value: "free", valueMayLookLikeFlag: true }],

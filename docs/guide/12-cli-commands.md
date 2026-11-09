@@ -766,7 +766,15 @@ yourself:
 ```
 /aidlc unit take refunds --home 261018-checkout-revamp
 /aidlc unit take reporting --home 261018-checkout-revamp --team payments
+/aidlc unit take refunds --from git@example.com:shop/shop-ws.git --home 261018-checkout-revamp --team payments
 ```
+
+`--from <address>` takes it from the lead's project at that address when this
+workspace holds nothing of the lead's: the lead's branch is fetched once into
+a git ref of AI-DLC's own (no folder, no remote added), the build starts in
+the active space, and each later step reads the lead's project from the build.
+Where the lead's record is in this workspace, `--from` changes nothing. An
+address that starts with `-` is refused before any git call.
 
 The Unit is held at the lead's project's remote first, by its address when the workspace
 is the team's own, with a compare-and-swap like any claim: a Unit held for your
