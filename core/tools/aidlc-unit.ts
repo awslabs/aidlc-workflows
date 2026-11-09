@@ -5439,7 +5439,7 @@ function personWordsOf(pd: string, flags: Record<string, string | undefined>): s
 // them (personAskedSinceGate). The five that settle a team's Unit (an answer
 // to a proposal, a turn-down, a merge by word, a sign-off, a send-back) are
 // refused without one (leadsWord), with the step for a reply the hooks may
-// have missed; assign and hand-off go on, and record no words as the lead's.
+// have missed; assign goes on, and records no words as the lead's.
 function leadSpoke(pd: string): boolean {
   return humanPresenceGuardDisabled() || personAskedSinceGate(pd);
 }
@@ -6514,11 +6514,12 @@ function takeUnit(args: string[], projectDir?: string): void {
     // refused is said in git's words with the one way on, and nothing is taken.
     // Git gave no reason when the claim moved under the take.
     if (pushed.refused === undefined) fail(`${unit} was not taken: its claim at the lead's project moved meanwhile. Try again.`);
+    const why = pushed.refused.replace(/\.+$/, "");
     if (current?.status === "claimed") {
-      fail(`${unit} is held for your team at the lead's project, which takes no push from here: ${pushed.refused}. ` +
+      fail(`${unit} is held for your team at the lead's project, which takes no push from here: ${why}. ` +
         `Ask the lead for push access to it, then take ${unit} again.`);
     }
-    fail(`${unit} is open at the lead's project, which takes no push from here: ${pushed.refused}. ` +
+    fail(`${unit} is open at the lead's project, which takes no push from here: ${why}. ` +
       `Ask the lead for push access to it, then take ${unit} again.`);
   }
   invalidateLiveClaimPayloadCache(pd, unit);

@@ -590,6 +590,10 @@ describe("a Unit the lead leaves open waits for a team", () => {
     const again = next(home.dir, chat);
     expect(again.kind).toBe("print");
     expect(JSON.stringify(again.offers ?? [])).not.toContain("Build checkout-ui here");
+    // Put once for the Unit: leaving it open needs no command, so a later chat
+    // does not put the same offer again.
+    const later = next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-assignment-build-here-later" });
+    expect(JSON.stringify(later.offers ?? []), JSON.stringify(later).slice(0, 400)).not.toContain("Build checkout-ui here");
     // The lead's word builds it here.
     const here = run(UNIT, ["assign", "--here", "checkout-ui", "--person-words", "build it here after all"], home.dir);
     expect(here.status, here.out).toBe(0);

@@ -296,8 +296,8 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], web.dir);
     expect(took.status, took.out).not.toBe(0);
     expect(String(took.json?.error)).toBe(
-      "checkout-ui is held for your team at the lead's project, which takes no push from here: read-only for partners. " +
-        "Ask the lead for push access to it, then take checkout-ui again.",
+      "checkout-ui is held for your team at the lead's project, which takes no push from here: read-only for partners " +
+        "(pre-receive hook declined). Ask the lead for push access to it, then take checkout-ui again.",
     );
     expect(existsSync(join(web.dir, "aidlc", "spaces", "web")), "no build record was made").toBe(false);
   });

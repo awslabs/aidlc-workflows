@@ -153,7 +153,7 @@ describe("a team member's clone of the home's workspace", () => {
   // words ("what is ours to build?") got the pick of the work itself, which
   // selected it in their clone and showed them the lead's board.
   // Live runs on Codex: payments' clone selected the lead's work (a pick, an
-  // intent switch) and was asked the lead's own hand-off question.
+  // intent switch) and was asked one of the lead's own questions.
   test("in a clone that did not make the plan, the lead's work selected gets the board and the Units offer, never the lead's questions", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
@@ -986,14 +986,14 @@ describe("a team's own workspace, made from the home's", () => {
     expect(held.status, held.out).not.toBe(0);
     expect(String(held.json?.error)).toBe(
       "refunds is held for your team at the lead's project, which takes no push from here: this host takes no push from " +
-        "here. Ask the lead for push access to it, then take refunds again.",
+        "here (pre-receive hook declined). Ask the lead for push access to it, then take refunds again.",
     );
     expect(existsSync(join(pay, "aidlc", "spaces", "payments")), "no build record was made").toBe(false);
     const openUnit = take(pay, "reporting", ["--team", "payments"]);
     expect(openUnit.status).not.toBe(0);
     expect(String(openUnit.json?.error)).toBe(
-      "reporting is open at the lead's project, which takes no push from here: this host takes no push from here. " +
-        "Ask the lead for push access to it, then take reporting again.",
+      "reporting is open at the lead's project, which takes no push from here: this host takes no push from here " +
+        "(pre-receive hook declined). Ask the lead for push access to it, then take reporting again.",
     );
   });
 });

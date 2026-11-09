@@ -27,6 +27,7 @@ import {
   cloneOf,
   codeHost,
   ENV,
+  git,
   HOME_RECORD,
   hook,
   homeState,
@@ -106,6 +107,8 @@ function leadWaits(policy?: "relaxed" | "off") {
   })}\n`);
   const pushed = run(UNIT, ["push"], partner);
   expect(pushed.status, pushed.out).toBe(0);
+  // The lead's clone fetches the result the push put on the claim.
+  git(home.dir, ["fetch", "-q", "origin"]);
   // The lead's Build and Test failed on reporting.
   const statePath = seededStateFile(home.dir);
   writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));

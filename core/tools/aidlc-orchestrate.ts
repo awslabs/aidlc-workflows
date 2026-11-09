@@ -5831,8 +5831,8 @@ function buildOutShareOffer(projectDir: string, auditRows: readonly AuditShardEv
   // branch" and the share's own step reads it first (shareMain).
   const target = shareOfferTarget(projectDir);
   if (target === null) return null;
-  // Every Unit held for a team went as a file, and none is open: no team takes
-  // anything from the home.
+  // No Unit is held for a team and none is open: no team takes anything from
+  // the home.
   const reach = unitsTakenFromHome(auditRows);
   if (reach.held === 0 && reach.open === 0) return null;
   const added = planUnshared(projectDir, target)
