@@ -153,7 +153,7 @@ describe("a team member's clone of the home's workspace", () => {
   // words ("what is ours to build?") got the pick of the work itself, which
   // selected it in their clone and showed them the lead's board.
   // Live runs on Codex: payments' clone selected the lead's work (a pick, an
-  // intent switch) and was asked the lead's own hand-off question.
+  // intent switch) and was asked one of the lead's own questions.
   test("in a clone that did not make the plan, the lead's work selected gets the board and the Units offer, never the lead's questions", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
@@ -165,18 +165,17 @@ describe("a team member's clone of the home's workspace", () => {
     expect(run(UTILITY, ["intent", "switch", HOME], alice).status).toBe(0);
     const step = next(alice, ENV);
     const said = JSON.stringify(step);
-    expect(said, said.slice(0, 600)).not.toContain("as a file");
-    expect(said).toContain("Taking a Unit starts it as your team's own piece of work here");
+    expect(said, said.slice(0, 600)).toContain("Taking a Unit starts it as your team's own piece of work here");
     expect(said).not.toContain("Who builds which Unit");
     // Again in the same chat: still the Units offer, never the lead's walk.
-    expect(JSON.stringify(next(alice, ENV))).not.toContain("as a file");
+    expect(JSON.stringify(next(alice, ENV))).not.toContain("Who builds which Unit");
     // Their words there are read against the Units offer, never sent on as the lead's work.
     const words = next(alice, ENV, ["we are the payments team and want to take refunds, our Unit"]);
     expect(String(words.message), JSON.stringify(words).slice(0, 500)).toContain(`take refunds --home ${HOME} --team payments`);
     // A Unit not ready to take is said where it stands, never sent on as new work.
     expect(String(words.message)).toContain("tell them in one line where it stands");
     // Nor do the lead's own commands ride a step in this clone.
-    expect(String(words.board_note ?? "")).not.toContain("hand-off <unit>");
+    expect(String(words.board_note ?? "")).not.toContain("assign <unit>=<team>");
   });
 
   test("the lead on a second machine: their own word that they lead this work, recorded, puts the lead's questions there again", () => {
@@ -944,31 +943,6 @@ describe("a team's own workspace, made from the home's", () => {
     expect(next(web).unit).toBe("checkout-ui");
   });
 
-  test("a team that could only read the home when it took its Unit sends the result by git once the home takes its pushes", () => {
-    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
-    const home = makeHome({ repos: hosts });
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
-    commitAll(home.dir, "teams");
-    git(home.dir, ["push", "-q", "origin", "main"]);
-    const hook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\necho 'this host takes no push from here' >&2\nexit 1\n");
-    chmodSync(hook, 0o755);
-    const pay = teamWorkspace(home.remote, "pay");
-    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
-    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
-    const record = buildDir(pay, "payments", "refunds");
-    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Home Result")).toBe("by file");
-    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
-    codeGenerated(pay, record);
-    const pushed = run(UNIT, ["push"], pay);
-    expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toContain("The lead's project takes pushes from here now, so refunds's result goes back by git.");
-    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Home Result")).toBeUndefined();
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "pay" });
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown }).result).toBeDefined();
-  });
-
   // A live run (M2b): the team's workspace was the lead's clone with its origin
   // switched; the claim refs the clone kept sent the take to the team's repo.
   test("a clone of the lead's workspace pointed at the team's own repo claims at the lead's project", () => {
@@ -1002,7 +976,7 @@ describe("a team's own workspace, made from the home's", () => {
     expect(existsSync("/tmp/aidlc-no")).toBe(false);
   });
 
-  test("a home that takes no push from here: a held Unit is taken and goes back by file; an open one names the lead's step", () => {
+  test("a home that takes no push from here: nothing is taken, and the line names git's reason and the way on, held or open", () => {
     const open = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n  - name: reporting\n    depends_on: []\n```\n";
     const home = homeWithTeams(["refunds=payments"], open);
     const hook = join(home.remote, "hooks", "pre-receive");
@@ -1010,15 +984,17 @@ describe("a team's own workspace, made from the home's", () => {
     chmodSync(hook, 0o755);
     const pay = teamWorkspace(home.remote, "pay");
     const held = take(pay, "refunds", ["--team", "payments"]);
-    expect(held.status, held.out).toBe(0);
-    expect(String(held.json?.notice)).toContain(
-      "You can read the lead's project but not write to it, so the result of refunds goes back as a file when it is built.",
+    expect(held.status, held.out).not.toBe(0);
+    expect(String(held.json?.error)).toBe(
+      "refunds is held for your team at the lead's project, which takes no push from here: this host takes no push from " +
+        "here (pre-receive hook declined). Ask the lead for push access to it, then take refunds again.",
     );
-    expect(field(readFileSync(join(buildDir(pay, "payments", "refunds"), "aidlc-state.md"), "utf-8"), "Home Result")).toBe("by file");
+    expect(existsSync(join(pay, "aidlc", "spaces", "payments")), "no build record was made").toBe(false);
     const openUnit = take(pay, "reporting", ["--team", "payments"]);
     expect(openUnit.status).not.toBe(0);
-    expect(String(openUnit.json?.error)).toEndWith(
-      "Ask the lead to hold it for your team.",
+    expect(String(openUnit.json?.error)).toBe(
+      "reporting is open at the lead's project, which takes no push from here: this host takes no push from here " +
+        "(pre-receive hook declined). Ask the lead for push access to it, then take reporting again.",
     );
   });
 });

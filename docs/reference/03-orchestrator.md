@@ -813,8 +813,8 @@ for `unit-end`; `Skeleton Stance` is `off`.
 
 When a build has no stage left, `next` returns `ask_type: unit-push` until its
 state records `Unit Push: pushed` (written once the result reached the home's
-claim or its file was written; `unsent` when the code went and the result did
-not, and the ask is then **Send it again**): **Push** runs `unit push`, **Not now** runs
+claim; `unsent` when the code went and the result did not, the claim refused
+it or was not there, and the ask is then **Send it again**): **Push** runs `unit push`, **Not now** runs
 `unit push --later` (then the end carries one line that it is not pushed yet).
 A repo with several remotes and none set for pushing (`pushRemotesToPick`)
 turns **Push** into one choice per remote, each running `unit push --remote
@@ -822,7 +822,7 @@ turns **Push** into one choice per remote, each running `unit push --remote
 The push's result rides the Unit's claim (`result`: per repo the branch, base,
 heads, changed blobs and patch-id; the outputs the home's later stages read, as
 files under `.aidlc-unit-result/` in the claim commit's tree). A home with
-`Home Location`, and a Unit's build not by file, run `refreshHomeClaims`: one
+`Home Location`, and a Unit's build, run `refreshHomeClaims`: one
 fetch of `refs/heads/claim/<id8>/*` into the refs the person's own fetch uses
 (or, by the home's address, into `refs/aidlc/home/<id8>/`), once per chat
 (noted in `aidlc/.aidlc-sessions/claims-fetched.json`) and, at the home, again
@@ -869,7 +869,7 @@ verdict reads merged "by your word" from then on (a push after a turn-down
 keeps it only for a repo whose head did not change). Every step at a team home
 (the board, and a stage the home builds itself) carries `board_note`
 (`teamCommandsNote`, one builder), the commands for those two, sign-off, amend,
-`lead-sign-off on|off`, `release`, hand-off and take-in, so the lead's word is
+`lead-sign-off on|off` and `release`, so the lead's word is
 recorded from whatever step the chat is at. At such a home `team-board` prints
 the home's own board from the step's builders (`teamHomeClaims`,
 `unitBoardRows`): it fetches the claims and each pushed repo's integration
@@ -889,23 +889,11 @@ a team hears (a turn-down's, an answer to its proposal, an amendment's, a
 send-back's failure) stay the request file's: a team's notice is said once by its
 text (`sayWithStepOnce`), so the lead's typed words go only on the lead's own
 records, and on a turn-down's claim as `person_reply`, which no line reads. `unit
-assign` and `unit hand-off` record `Person Words` only with a turn behind them. The merge
+assign` records `Person Words` only with a turn behind it. The merge
 check's claim reads and its write of the verdicts and `done` (a
 `--force-with-lease` push of the claim ref) run under the same quiet git as the
 claims fetch; an unwritten verdict stays local, the board line says it may be
 behind, and the next step writes it again.
-
-When `next --hand-file <path>` (the agent's exact argument; the engine never
-reads a path out of the person's words) names a file carrying the `aidlc-handoff` mark (located by
-`markdownBlocks`), `next` returns `ask_type: unit-handoff` (**Start <unit>**
-runs `unit take --file <path>`; **Not now** runs nothing); a file carrying the
-`aidlc-result` or `aidlc-progress` mark returns a run-then-continue `print` that
-runs `unit take-in <path>`, and `--hand-file` naming any other file is an
-error directive. Take-in keeps only the outputs in `unitOutputsHomeReads`. A build started from a
-file records `Home Result: by file`; its push writes a result file in place of
-the claim, and `unit take-in` at the home puts a result or progress file onto
-the claim (`result`, `progress`). A claim held by `unit hand-off` carries
-`by_file`, and the board says "handed off by file".
 
 The take offer adds **Start <unit> early** for a waiting Unit once every Unit
 it waits on has a result on its claim (`unit take --early`, recorded as
@@ -942,8 +930,7 @@ carrying the same choice in `offers`; once Code Generation is approved again
 after the last push (`redoneSincePush`), the end offers the push instead, never
 the redo. The board carries `offers` (each a question and its choices, with the
 command each runs), each put once in a chat: a sign-off or a proposal asked once
-and not answered, and the hand-off by file for a Unit held for a team and not
-taken. Who builds which Unit (`ask_type:
+and not answered. Who builds which Unit (`ask_type:
 unit-assignment`) is asked once; after the person spoke without naming teams the
 step is a print with the same choice in `offers`, and an answer kept while the
 home could not be reached (`UNITS_ASSIGNED` with `Held: not yet`), or that

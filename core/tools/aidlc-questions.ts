@@ -55,7 +55,7 @@ export const ENGINE_ASK_TYPES: ReadonlySet<string> = new Set([
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "new-work-routing", "project-type",
   "construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "guard-recovery", "unit-claim",
   "legacy-plan-approval-recovery", "team-handover",
-  "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff", "unit-amend", "unit-signoff",
+  "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-amend", "unit-signoff",
   "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone",
 ]);
 

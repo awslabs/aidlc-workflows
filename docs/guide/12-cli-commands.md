@@ -50,9 +50,6 @@ diagnostic and lifecycle routes.
 | `/aidlc unit assign <unit>=<team> ... \| --open` | At the lead's project, hold each named Unit for a team, or leave every Unit open |
 | `/aidlc unit take <unit> --home <record>` | Take a Unit of the lead's work as your team's own piece of work, or carry its build on |
 | `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--finish-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
-| `/aidlc unit hand-off <unit> --team <team>` | At the lead's project, hold a Unit for a team that cannot reach it and write its hand-off file |
-| `/aidlc unit progress` | In a Unit's build by file, write a progress file for the lead |
-| `/aidlc unit take-in <file>` | At the lead's project, take a team's result or progress file in |
 | `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
@@ -740,8 +737,7 @@ open (`--open <unit>,...`, or `--open` alone for every Unit you did not name)
 waits for any team to take it, and the lead's project builds it only when you say so:
 `--here <unit>` builds it here after all, as the board's **Build <unit> here**
 does. A Unit you leave out is built here. A Unit a team already holds stays
-with it, and the command says so; one handed to that team by file, with nothing
-back from the file yet, is held for it here again, through the workspace. A
+with it, and the command says so. A
 Unit the lead's project already started stays here, and the command says so: when you
 asked for it to go to a team or be left open all the same, the agent adds
 `--started-here <unit>`, your words go on the record, and what was built on it
@@ -782,9 +778,8 @@ waits on another is refused until that Unit is done at the lead's project. The b
 records the lead's repos. The build copies what the lead approved at its pushed commit,
 records `UNIT_TAKEN_IN`, and is selected for this chat. Taking a Unit whose
 build is already in this workspace carries that build on. A lead's project that takes no
-push from here still gives you a Unit held for your team, and its result goes
-back as a file until the lead's project takes your pushes; an open Unit there needs the
-lead to hold it for you.
+push from here gives no Unit, held for your team or open: the take says git's
+reason and the way on, which is push access from the lead.
 `--early` starts a Unit that waits on others once each of them has pushed: its
 branch starts at their pushed heads in each repo, and the line says it may
 still change before it merges.
@@ -837,42 +832,13 @@ under the Unit's name and not pushed yet, it is renamed, as `git branch -m`
 would; every later push, the push offer and the result the lead's project reads use it.
 `/aidlc unit <verb> --help` prints that verb's usage and changes nothing.
 
-### `/aidlc unit hand-off <unit> --team <team>` - Hand a Unit off by file
-
-At the lead's project, for a team that cannot reach the lead's project's repository. The agent
-runs it with your words in the request file its command names
-(`--request-file aidlc/.aidlc-request-text/unit-hand-off-<unit>.txt` from the
-board's offer). The Unit is held
-for that team, and `aidlc/handoff/<work>-<unit>.md` is written: one readable
-Markdown file with the work's id, the Unit, the attempt and fingerprints at the
-top, and each document the Unit was approved with in its own block. Send it to
-the team; they point AI-DLC at it in their own workspace (the agent runs `next
---hand-file <path>`, or `/aidlc unit take --file <path>`), which starts the
-Unit's build from it. While a Unit is
-held for a team and not taken, the lead's project's board offers this once. A Unit another
-team holds or took is not handed off.
-
-### `/aidlc unit progress` and `/aidlc unit take-in <file>` - Files back to the lead's project
-
-In a Unit's build by file, `progress` writes
-`aidlc/handoff/<work>-<unit>-progress.md` with the stage it is at, and `push`
-writes `aidlc/handoff/<work>-<unit>-result.md` with the result, the Unit
-outputs the lead's project's later stages read, and the team's own check of each repo.
-At the lead's project, `take-in <file>` puts either onto the Unit's claim (giving the
-file's path to `/aidlc` does the same); a result keeps only the Unit outputs the
-lead's project's later stages read, and the next step checks it like a pushed one. A file for other work changes nothing, an
-older one is taken in with a line, and a changed one is taken in as it is and
-marked so.
-
 ### `/aidlc unit propose` and `/aidlc unit amend` - Change a shared input
 
 In a Unit's build, `propose --input <file> [--file <changed text>]` sends the
 lead your change to one of the files the Unit was approved with (your edited
 copy, or the text in `--file`), with your words in the request file its command
 names (`--request-file`); the build carries on, and
-offers it once when your copy changed. A build by file writes the change into
-its progress file instead, for you to send to the lead; taking that file in
-(`take-in`) puts it on the claim as if it had been sent. At the lead's project, the owner of the shared
+offers it once when your copy changed. At the lead's project, the owner of the shared
 plan is asked once, with the path of the team's version (the board keeps the
 choice after a "Not now"), and the agent runs
 `amend <unit> --input <file> --answer <approve|reject> --request-file <file>`
@@ -885,7 +851,7 @@ both are shown, and the text the lead puts together from them is approved as
 written with `--file <that text>`. An approved change is written into the lead's project's
 record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
 onto the claim of every Unit whose stages read it; a team it did not reach is
-named, and a team by file gets a newer hand-off file.
+named.
 
 ### `/aidlc unit send-back` - Send a team's Unit back from Build and Test
 
@@ -916,7 +882,7 @@ they are out of the way.
 ### `/aidlc unit lead-here` - Lead the work from another checkout
 
 In a checkout that did not make the work's plan (a fresh clone on another machine), the lead's own questions (who builds which
-Unit, a hand-off, a sign-off, an answer to a team's change) are not put: the step shows the board and the Units to take, as a
+Unit, a sign-off, an answer to a team's change) are not put: the step shows the board and the Units to take, as a
 teammate's clone does. When you say you lead this work and want to carry it on there, the agent runs `unit lead-here` with
 your words; it records `LEAD_HERE_SET` in that checkout's own audit, and from then on the lead's questions are put there.
 
@@ -952,8 +918,7 @@ with your words in the request file its command names
 typed them in the message you said them in (the agent names another with
 `--message <id>`), go onto the Unit's claim, the repo counts as merged at the lead's project's next step, and the Unit's
 done record keeps them ("by your word").
-In a team's own build it names the way on instead: by file, `push` again writes the result file anew with
-the team's own check of each repo; by git, the lead's project checks the merge itself.
+In a team's own build it names the way on instead: the lead's project checks the merge itself.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 

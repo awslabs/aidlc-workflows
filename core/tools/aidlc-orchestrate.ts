@@ -603,7 +603,6 @@ import {
   otherBuildsTurnedDown,
   amendAskName,
   buildClaimNotes,
-  handFileActedOn,
   reopenTurnedDownBuild,
   turnedDownLine,
   buildTurnedDownNow,
@@ -730,8 +729,6 @@ import {
   unitsTakenFromHome,
   leadRules,
   offersLearningsCorrectionChoices,
-  parseHandFile,
-  unitLikelyReposFrom,
   workspaceHomeLocation,
   unitWriteTargets,
   mergedStatus,
@@ -5402,9 +5399,7 @@ function teamCommandsNote(): string {
     `When they ask to hold a Unit for a team, run \`${unitTool} assign <unit>=<team> ${unitWordsArg("assign")}\`; ` +
     `when they ask to leave a Unit open for any team, run \`${unitTool} assign --open <unit> ${unitWordsArg("assign")}\`; ` +
     "for a Unit started here that they asked to go to a team or be left open all the same, add `--started-here <unit>`. " +
-    `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> ${unitWordsArg("hand-off")}\`; ` +
-    `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. ${UNIT_WORDS_NOTE} ` +
-    "Say the notice line each prints.";
+    `${UNIT_WORDS_NOTE} Say the notice line each prints.`;
 }
 
 // The offers a step has not put to the person in this chat yet; each is put
@@ -5837,8 +5832,8 @@ function buildOutShareOffer(projectDir: string, auditRows: readonly AuditShardEv
   // branch" and the share's own step reads it first (shareMain).
   const target = shareOfferTarget(projectDir);
   if (target === null) return null;
-  // Every Unit held for a team went as a file, and none is open: no team takes
-  // anything from the home.
+  // No Unit is held for a team and none is open: no team takes anything from
+  // the home.
   const reach = unitsTakenFromHome(auditRows);
   if (reach.held === 0 && reach.open === 0) return null;
   const added = planUnshared(projectDir, target)
@@ -7205,7 +7200,6 @@ export interface ParsedFlags {
   propose?: string;
   continue?: boolean; // --continue: a routing question's "part of that work" answer
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
-  handFile?: string; // --hand-file <path>: a hand-off, progress or result file the person pointed at
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   carryOn?: boolean; // the pick question's answer: select the record, then carry on in the same turn
   pickedUp?: string; // --resume picking up the only work here: the person's one line for it
@@ -7498,12 +7492,6 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         flags.parseError = "--record requires <record selector>.";
       } else {
         flags.record = value;
-      }
-    } else if (a === "--hand-file") {
-      if (value === undefined) {
-        flags.parseError = "--hand-file requires the file's path.";
-      } else {
-        flags.handFile = value;
       }
     } else if (a === "--scope" && value !== undefined) {
       flags.scope = value;
@@ -9324,81 +9312,6 @@ function unitTakeLook(
   return { sentences, choices, homeHere, stale };
 }
 
-// A request that is only the path of one existing file (`/aidlc <file>`),
-// for handFileStep to read as --hand-file is read: what the file is, its own
-// structure says, never the words. Null for any other request.
-function bareHandFileRequest(flags: ParsedFlags, projectDir: string): string | null {
-  if (flags.handFile !== undefined || flags.intent === undefined) return null;
-  const bare = flags.intent.trim().replace(/^(["'])(.+)\1$/, "$2");
-  if (bare === "" || /[\r\n]/.test(bare)) return null;
-  try {
-    return statSync(resolve(projectDir, bare)).isFile() ? bare : null;
-  } catch {
-    return null;
-  }
-}
-
-// A file AI-DLC wrote for a hand-off, its progress or its result, named as the
-// whole request, is that file, as --hand-file is; any other file named so is
-// the person's request as before.
-function takeBareHandFile(flags: ParsedFlags, projectDir: string): void {
-  const path = bareHandFileRequest(flags, projectDir);
-  if (path === null || handFileStep(projectDir, path) === null) return;
-  flags.handFile = path;
-  delete flags.intent;
-}
-
-// The person's words are just the path of a hand-off file: the offer to start
-// the Unit in it. The path of a team's result or progress file is taken in, at
-// the home it was sent to. A file already acted on here is "done": the words
-// asked for nothing more (the turn keeps them for every `next` in it). Null for
-// any other words.
-function handFileStep(projectDir: string, path: string): AskDirective | PrintDirective | "done" | null {
-  if (path === "") return null;
-  let file: ReturnType<typeof parseHandFile>;
-  try {
-    file = parseHandFile(readFileSync(resolve(projectDir, path), "utf-8"));
-  } catch {
-    return null;
-  }
-  if (file === null) return null;
-  if (handFileActedOn(projectDir, file)) return "done";
-  // A newer hand-off file for a Unit whose build is here, and a team's result
-  // or progress file at the home, are taken in by their commands.
-  const newerHandOff = file.kind === "handoff" &&
-    findUnitBuild(projectDir, file.fields["Home Work"] ?? "", file.fields.Unit ?? "") !== null;
-  if (newerHandOff) {
-    return {
-      kind: "print",
-      message: `Run \`${aidlcToolInvocation("unit")} take --file ${shellArg(path)}\`, then tell the person its notice line in one ` +
-        "line and re-run `next` to continue.",
-    };
-  }
-  if (file.kind !== "handoff") {
-    return {
-      kind: "print",
-      message: `Run \`${aidlcToolInvocation("unit")} take-in ${shellArg(path)}\`, then tell the person its notice line in one ` +
-        "line and re-run `next` to continue.",
-    };
-  }
-  const unit = file.fields.Unit ?? "";
-  const likely = unitLikelyReposFrom(file.files.get("inception/units-generation/unit-of-work-dependency.md") ?? "").get(unit) ?? [];
-  const here = likely.filter((repo) => existsSync(join(repoDir(projectDir, repo.split("/")[0]), ".git")));
-  const repos = likely.length === 0 ? "" : ` It likely changes ${likely.join(", ")}` +
-    (here.length === likely.length ? ", already here." : `; ${likely.filter((repo) => !here.includes(repo)).join(", ")} not here yet.`);
-  return {
-    kind: "ask",
-    ask_type: "unit-handoff",
-    response_route: "command",
-    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, handed off from ${file.fields["Home Label"] ?? "the lead's project"} by its ` +
-      `lead on ${(file.fields["Handed Off"] ?? "").slice(0, 10)}.${repos}`,
-    choices: [
-      { label: `Start ${unit}`, detail: "As a piece of work of its own here, from what the lead approved.", command: `${aidlcToolInvocation("unit")} take --file ${shellArg(path)}` },
-      { label: "Not now", detail: "Nothing is started." },
-    ],
-  };
-}
-
 // A Unit's build its lead turned down or sent back, not redone since its
 // push: not finished, whatever its record says, so its step says so
 // (turnedDownStep) whether the person's words or a bare /aidlc reach it.
@@ -9457,8 +9370,6 @@ function unitCloneAsk(projectDir: string, stateContent: string): AskDirective | 
 function unitProposeAsk(projectDir: string, stateContent: string): AskDirective | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
-  // A team building by file is asked the same: its change goes to the lead
-  // in a progress file (the propose command writes it).
   for (const changed of changedInputs(projectDir, stateContent)) {
     const askName = `unit-propose-${changed.path.replace(/[^A-Za-z0-9.-]+/g, "_")}-${changed.fingerprint.slice("sha256:".length, 19)}.json`;
     if (engineAskMark(projectDir, askName) !== null) continue;
@@ -12197,13 +12108,12 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
     if (open.length === 0) return null;
     const started = (unit: string) => {
       const payload = payloadOf(unit);
-      return payload?.taken_by !== undefined || payload?.by_file !== undefined || payload?.result !== undefined;
+      return payload?.taken_by !== undefined || payload?.result !== undefined;
     };
     const named = open.map((claim) => {
       const payload = payloadOf(claim.unit);
       if (payload?.turned_down) return `${claim.unit} (${turnedDownStatus(payload.turned_down, claim.owner)})`;
       if (payload?.result) return `${claim.unit} (pushed by ${payload.result.by ?? payload.taken_by ?? claim.owner} for ${claim.owner}, not merged yet)`;
-      if (payload?.by_file) return `${claim.unit} (handed to ${claim.owner} by file)`;
       if (payload?.taken_by) return `${claim.unit} (being built by ${payload.taken_by} for ${claim.owner})`;
       return `${claim.unit} (held for ${claim.owner}, not taken yet)`;
     });
@@ -12613,7 +12523,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // Only the park branches still see a resume that carried words.
   const resuming = flags.resume === true || withoutResume !== null;
   handOutSettingsLine(flags, resolveProjectDir(projectDir));
-  takeBareHandFile(flags, resolveProjectDir(projectDir));
   pickingUp = flags.resume === true;
 
   // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
@@ -13605,17 +13514,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(errorDirective(stale));
       return;
     }
-  }
-  // A file the person pointed at, as the exact path the agent hands as
-  // --hand-file: a hand-off file's Unit to start as their own piece of work,
-  // or a team's result or progress file to take in.
-  const handFile = flags.handFile === undefined ? null : handFileStep(pd, flags.handFile);
-  if (handFile !== null && handFile !== "done") {
-    emit(handFile);
-    return;
-  } else if (flags.handFile !== undefined && handFile === null) {
-    emit(errorDirective(`${flags.handFile} is not a file AI-DLC wrote for a hand-off, its progress or its result.`));
-    return;
   }
   // What the home said about a Unit's build reaches its team once, on any step.
   for (const line of stateContent ? buildClaimNotes(pd, stateContent, engineSessionId) : []) sayWithStepOnce(pd, line);
@@ -17991,8 +17889,7 @@ function unitBoardRows(
   results: ReturnType<typeof checkTeamResults>,
   mergedHere: ReadonlySet<string>,
   progress: string,
-): { rows: UnitBoardRow[]; heldNotTaken: Array<{ unit: string; team: string }> } {
-  const heldNotTaken: Array<{ unit: string; team: string }> = [];
+): { rows: UnitBoardRow[] } {
   const dependencies = unitDependencies(projectDir);
   const standing = unitProgressStanding(progress);
   const kept = unitsKeptForTeams(readAuditShardEvents(projectDir));
@@ -18034,18 +17931,13 @@ function unitBoardRows(
         : `, not recorded yet: the next step here records it${named ? ` and opens ${named}` : ""}`;
       return { unit, team, status: `${mergedStatus(verdicts)}${waiting}${unrecorded}` };
     }
-    if (payload.by_file) {
-      const at = payload.progress?.stage ? stageLabel(findStageBySlug(payload.progress.stage), payload.progress.stage) : null;
-      return { unit, team, status: at ? `handed off by file, at ${at}` : "handed off by file" };
-    }
     if (payload.taken_by) {
       const early = (payload.early_on ?? []).map((dep) => dep.unit);
       return { unit, team, status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}, taken by ${payload.taken_by}` };
     }
-    heldNotTaken.push({ unit, team });
     return { unit, team, status: `held for ${team}, not taken yet` };
   });
-  return { rows, heldNotTaken };
+  return { rows };
 }
 
 // `team-board` at a team home: the home's own board, from the same builders as
@@ -18367,23 +18259,13 @@ function emitTeamUnitMajorRunStage(
     }
   }
   if ([...heldElsewhere].some((unit) => !mergedHere.has(unit))) {
-    const { rows, heldNotTaken } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere, refreshedState);
-    // A team the home holds a Unit for may not reach this workspace: the lead
-    // is offered once to hand the Unit to them as a file.
+    const { rows } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere, refreshedState);
     const unitTool = aidlcToolInvocation("unit");
-    // The hand-off and build-here offers are put once for each Unit, in any
-    // chat: keeping it held, or leaving it open, needs no command, so the mark
-    // keeps that answer; their commands stay in the board's note.
+    // The build-here offer is put once for each Unit, in any chat: leaving it
+    // open needs no command, so the mark keeps that answer; its command stays
+    // in the board's note.
     const markOf = (kind: string, unit: string) => `board-${kind}-${unit.replace(/[^A-Za-z0-9.-]+/g, "_")}.json`;
     const marks = new Map<string, string>();
-    const offers = heldNotTaken.filter(({ unit }) => engineAskMark(projectDir, markOf("hand-off", unit)) === null).map(({ unit, team }) => ({
-      question: `If ${team} cannot reach this workspace, I can hand ${unit} to them as a file they build it from. Do you want me to?`,
-      choices: [
-        { label: `Hand ${unit} to ${team} as a file`, command: `${unitTool} hand-off ${unit} --team ${shellArg(team)} ${unitWordsArg("hand-off", unit)}` },
-        { label: `Keep ${unit} for ${team} here`, recommended: true as const },
-      ],
-      mark: markOf("hand-off", unit),
-    }));
     // A sign-off or a proposal the lead was asked about once stays theirs to answer, from the board.
     const answers = [...(overview?.claims.values() ?? [])].filter((claim) => claim.status === "claimed").flatMap((claim) => [
       ...(claim.payload.proposals ?? []).filter((entry) => entry.answer === undefined).map((entry) => {
@@ -18421,9 +18303,9 @@ function emitTeamUnitMajorRunStage(
       ],
       mark: markOf("build-here", unit),
     }));
-    for (const { question, mark } of [...offers, ...buildHere]) marks.set(question, mark);
+    for (const { question, mark } of buildHere) marks.set(question, mark);
     // Each offer is put once in a chat; its command stays in the board's note.
-    const allOffers = offersOnce(projectDir, [...answers, ...offers, ...buildHere].map(({ question, choices }) => ({ question, choices })));
+    const allOffers = offersOnce(projectDir, [...answers, ...buildHere].map(({ question, choices }) => ({ question, choices })));
     for (const offer of allOffers) {
       const mark = marks.get(offer.question);
       if (mark !== undefined && !isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, mark);

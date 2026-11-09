@@ -134,9 +134,7 @@ step asks once whether to share the plan with them: **Share them with the
 teams** runs `aidlc unit share --plan`, which commits AI-DLC's record here
 (`aidlc/`, none of your other files) and pushes main with a plain push; **Not
 now** leaves it, and a team's clone sees the plan once main is pushed (or push
-it yourself with `git push origin main`). When every Unit held for a team went
-to it as a hand-off file and none is open, nothing is asked: no team takes the
-plan from here. When the remote does not answer, Share says so and keeps the
+it yourself with `git push origin main`). When the remote does not answer, Share says so and keeps the
 commit, and the question is not put again; run `aidlc unit share --plan` once
 it can be reached. A Unit you add to the plan after sharing it, held for a team
 or left open, is not on the remote until you share again, so the question comes
@@ -576,8 +574,7 @@ registry.
 
 Where the work records code repos of its own, choosing **Several teams**
 records `Home Location`, and each team builds its Unit as a piece of work of
-its own. Each team needs to reach the lead's project's repository with its own login, or
-a hand-off file when it cannot.
+its own. Each team needs to reach the lead's project's repository with its own login.
 
 ### The three layouts
 
@@ -590,8 +587,7 @@ a hand-off file when it cannot.
 - **A personal copy.** One person clones their own copy; it works as one of
   the two above, by where its `origin` points.
 
-A team that cannot reach the lead's project at all works from files instead
-([A team that cannot reach the lead's project](#a-team-that-cannot-reach-the-leads-project)). The
+The
 code repos can live anywhere on disk: `repos.json` gives each one's path, and
 one person's `repos.local.json` their own
 ([Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)).
@@ -623,7 +619,7 @@ reads **Yes, for this project, and offered to any team that takes a Unit**.
   chat when nothing is ready to take; a teammate's clone never offers it,
   whatever its git name, and hears where things stand. Even with the lead's
   work picked there, the lead's own questions (who builds which Unit, a
-  hand-off, a sign-off) are not put in such a clone. The lead in a fresh clone
+  sign-off) are not put in such a clone. The lead in a fresh clone
   on another machine says so in their own words, and AI-DLC records it there
   (`unit lead-here`); from then on that checkout gets the lead's questions.
 - **A team's own workspace made from the lead's** (its `origin` is the team's
@@ -668,10 +664,9 @@ work does: after every stage, or once at its end.
   offered to its team again with those words. In a fresh clone, before your team is known,
   each team's build is offered with its team named (**Carry on <unit> for the
   payments team**), and picking one makes that team your active space.
-- A lead's project you can read but not push to: a Unit held for your team is still
-  yours, and its result goes back as a file, said once; once the lead's project takes
-  your pushes, the push sends it by git instead. An open Unit there cannot be
-  held from your side: the lead holds it for your team at the lead's project.
+- A lead's project you can read but not push to: nothing is taken, held for your
+  team or open. The take says git's reason and the way on: ask the lead for push
+  access to it, then take the Unit again.
 - A repo the lead's work records that your workspace has no checkout of is
   said once, with where to clone it or how to give its path in
   `repos.local.json`. When `repos.json` has its address, the build's first step
@@ -817,56 +812,11 @@ A team that edited its own copy and never sent that edit to the lead keeps its c
 it left it: the new version is put beside it (`<file>.from-lead.md`), said once,
 and when its result comes to the lead's project the lead hears once that the team's copy has its
 own edit, made on the version before the change.
-A team by file gets a newer hand-off file to take in. A team whose Unit was
+A team whose Unit was
 already done and merged hears once that the input changed and the Unit is done,
 with an offer to start follow-up work; the done Unit is never reopened. A
 change turned down reaches the team that proposed it once, with the owner's
 words.
-
-### A team that cannot reach the lead's project
-
-A partner team in another company, or behind a locked network, works from
-files instead of git. While a Unit is held for a team and not taken yet, the
-board offers once to hand it to that team as a file, in case they cannot reach
-this workspace; the lead answers in their own words.
-The lead says to hand the Unit off ("hand off reporting to the data team");
-AI-DLC runs `aidlc unit hand-off reporting --team data`,
-holds the Unit for that team, and writes one readable Markdown file,
-`aidlc/handoff/<work>-<unit>.md`: the work's id, the Unit, the attempt, the
-fingerprints of what it holds at the top, then each document the Unit was
-approved with in its own block. It is not signed; send it the way your teams
-send files, and anyone can read it before taking it in. The board says
-"handed off by file".
-
-The partner takes it in from their own workspace (AI-DLC installed there
-first), however they point at it: "take the Unit in this file", `/aidlc
-<path>`, or `aidlc unit take --file <path>`; the agent hands AI-DLC the file's
-exact path. AI-DLC offers to start it, then creates the Unit's build exactly as
-for a Unit taken by git, under the partner's own rules; Ideation and Inception
-do not run again. A file changed after the lead wrote it is taken in as it is,
-and the line says so; an editor that only reformatted it changes nothing.
-
-While they build, the partner may send a progress file whenever they like
-(`aidlc unit progress`); nobody has to. A change they propose to something the
-Unit was approved with (`aidlc unit propose`) goes into the progress file too:
-the lead is asked about it once they take the file in, as for a team that
-reaches the workspace. An approval sends a newer hand-off file; a repo turn-down
-reaches them only by the lead's own word. A send-back from the lead's Build and
-Test goes in a newer hand-off file too: the partner takes it in as the first,
-hears the failure, and their build goes back to Code Generation at their word;
-the next result file they send is their answer. When they push, the result goes into a
-result file instead of the claim: "The result file is
-aidlc/handoff/<work>-<unit>-result.md; send it to the lead." For each repo the
-lead cannot fetch, the file carries the partner's own check of whether it
-merged; push again after merging to send an updated one. The lead takes either
-file in by giving its path to `/aidlc` (`/aidlc <path>`, or
-`aidlc unit take-in <file>`): a result is checked like a pushed
-one and brings back only the Unit outputs the lead's project's later stages read (anything
-else in it is left out, with a line), a repo the lead's project cannot fetch counts as merged on the partner's word,
-recorded as theirs, until the lead's project can check it itself. A file from an earlier
-attempt is taken in with a line saying so; a file for other work changes
-nothing, and the line says which work it is for. Files are written with LF and
-read with CRLF too.
 
 ---
 
@@ -971,7 +921,7 @@ claim-bound CAS publication; main serializes the reviewed pinned OIDs.
 ## Related reading
 
 - [Facilitator Guide](facilitator-guide.md) - readiness check, scopes for side tasks, recovery playbook, and how strongly each harness enforces the workflow
-- [CLI Commands](12-cli-commands.md) - assign, take, push, hand-off, take-in, propose, amend and sign-off across repos; claim, publish, pin, gate, and land on the workspace's own repo
+- [CLI Commands](12-cli-commands.md) - assign, take, push, propose, amend and sign-off across repos; claim, publish, pin, gate, and land on the workspace's own repo
 - [State and Audit](10-state-and-audit.md) - per-clone shards and merged receipt floors
 - [Construction](../reference/04-stages/construction.md) - Unit-major routing and gate rhythm
 - [Runtime Graph](../reference/13-runtime-graph.md) - the separate solo/swarm Bolt merge path
