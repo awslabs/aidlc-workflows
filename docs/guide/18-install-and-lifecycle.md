@@ -123,12 +123,15 @@ when the execution policy allows it: on Windows 10 and 11 the default is
 `Restricted`, which runs no script file. The `Set-ExecutionPolicy` line allows
 scripts in this PowerShell window, and in PowerShell started from it, until you
 close it; your saved execution policy is not changed. A Group Policy execution
-policy (a `MachinePolicy` or `UserPolicy` row in `Get-ExecutionPolicy -List`)
-overrides that line, which then prints an error that begins `Windows PowerShell
-updated your execution policy successfully, but the setting is overridden`.
-Under `RemoteSigned` or `Unrestricted` the installer still runs. Under
-`AllSigned` or `Restricted` it refuses the installer: ask your administrator
-how to install it.
+policy (a `MachinePolicy` or `UserPolicy` row in `Get-ExecutionPolicy -List`;
+when both are set, `MachinePolicy` is the one in effect) overrides that line.
+Unless that policy is `Bypass`, the line then prints an error: Windows
+PowerShell names it `ExecutionPolicyOverride`, and in English it says the
+policy was `updated … successfully, but the setting is overridden`. Under
+`Bypass`, `RemoteSigned` or `Unrestricted` the installer still runs. Under
+`AllSigned` it refuses the installer as not digitally signed, and under
+`Restricted` because running scripts is disabled: ask your administrator how to
+install it.
 
 Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps the
 `aidlc` command in `%LOCALAPPDATA%\aidlc\bin\`: `aidlc.exe`, a copy of the AI-DLC
