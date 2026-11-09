@@ -113,9 +113,25 @@ $installer = Join-Path $download install.ps1
 Invoke-WebRequest `
   -Uri https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 `
   -OutFile $installer
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 & $installer
 Remove-Item -Recurse -Force $download
 ```
+
+`install.ps1` is not signed, and Windows PowerShell runs a script file only
+when the execution policy allows it: on Windows 10 and 11 the default is
+`Restricted`, which runs no script file. The `Set-ExecutionPolicy` line allows
+scripts in this PowerShell window, and in PowerShell started from it, until you
+close it; your saved execution policy is not changed. A Group Policy execution
+policy (a `MachinePolicy` or `UserPolicy` row in `Get-ExecutionPolicy -List`;
+when both are set, `MachinePolicy` is the one in effect) overrides that line.
+Unless that policy is `Bypass`, the line then prints an error: Windows
+PowerShell names it `ExecutionPolicyOverride`, and in English it says the
+policy was `updated … successfully, but the setting is overridden`. Under
+`Bypass`, `RemoteSigned` or `Unrestricted` the installer still runs. Under
+`AllSigned` it refuses the installer as not digitally signed, and under
+`Restricted` because running scripts is disabled: ask your administrator how to
+install it.
 
 Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps the
 `aidlc` command in `%LOCALAPPDATA%\aidlc\bin\`: `aidlc.exe`, a copy of the AI-DLC
@@ -412,8 +428,8 @@ the current provider first and Amazon Bedrock second. On the Kiro CLI (V2) row, 
 chosen model, with the preset's session effort, in your personal Kiro settings,
 last, after every AI-DLC step. Under Kiro auto, recommended defaults ask that
 one model question; see
-[Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
-For the Kiro row, see [First run](harnesses/kiro-ide.md#first-run).
+[Kiro CLI (V2) session model and effort](harnesses/kiro.md#kiro-cli-v2-session-model-and-effort).
+For the Kiro row, see [First run](harnesses/kiro.md#first-run).
 Every numbered prompt but that complete picker has
 a bracketed default, invalid input re-asks in place, and each answer is echoed.
 A check-your-answers table accepts Enter to apply or a step number to edit. No
@@ -588,7 +604,7 @@ Presets never set model IDs. Explicit group dials and per-agent exceptions can
 override the preset's efforts. On Kiro CLI, which runs each session on one
 model, each preset is one session effort instead: `minimal` low, `balanced`
 medium, `thorough` xhigh, or the model's next level down
-([Session model and effort](harnesses/kiro-cli.md#session-model-and-effort)).
+([Kiro CLI (V2) session model and effort](harnesses/kiro.md#kiro-cli-v2-session-model-and-effort)).
 
 On upgrade, an install that recorded `preset: balanced` or `preset: minimal`
 picks up these efforts the next time its projections are regenerated. After
@@ -615,7 +631,7 @@ Harnesses receive only settings they can read. Codex clamps `max` effort down
 to `xhigh`. opencode clamps `xhigh` down to `high`. On Kiro CLI a preset sets
 one effort for the whole interactive session, saved with the session model in your personal
 Kiro settings
-([Session model and effort](harnesses/kiro-cli.md#session-model-and-effort));
+([Kiro CLI (V2) session model and effort](harnesses/kiro.md#kiro-cli-v2-session-model-and-effort));
 explicit group dials have no Kiro surface, and a per-agent model exception
 carries its effort through the project's `chat.modelDefaults`, which then
 replaces your personal effort map in that project. An effort set on Kiro CLI
@@ -623,7 +639,7 @@ without a model is kept for other tools, and the command says so in one line.
 Kiro IDE, Cursor, and GitHub Copilot have no surface for a preset or a group
 effort, so setup records no preset there. On Kiro, `aidlc config models --agent`
 still sets one agent's own model and effort
-([One agent on its own model and effort](harnesses/kiro-ide.md#one-agent-on-its-own-model-and-effort)).
+([One agent on its own model and effort](harnesses/kiro.md#one-agent-on-its-own-model-and-effort)).
 On Cursor and Copilot a model or effort you set anyway is kept for teammates on
 tools that apply it, writes no inert keys, and the command says in one line that
 this tool uses the model you choose in its own model picker. On those three,
@@ -644,7 +660,7 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
   Every agent uses the model and effort of the chat you run `/aidlc` in, and
   nothing AI-DLC records changes that, except on Kiro, where
   `aidlc config models --agent` sets one agent's own model and effort
-  ([One agent on its own model and effort](harnesses/kiro-ide.md#one-agent-on-its-own-model-and-effort));
+  ([One agent on its own model and effort](harnesses/kiro.md#one-agent-on-its-own-model-and-effort));
   set it there rather than with a `model:` line by hand, which
   `aidlc config models --check` reports as drift. On Copilot a `model:` pin in an agent's `.md` file
   is not portable, because the CLI and VS Code read model names differently.
@@ -659,8 +675,8 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
   conductor dispatches only once you save it with
   `/model set-current-as-default`. Recommended setup keeps an effort you
   already saved for your model. On Kiro IDE's row setup saves Kiro CLI's
-  session model only. See
-  [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
+  session model only ([First run](harnesses/kiro.md#first-run)). See
+  [Kiro CLI (V2) session model and effort](harnesses/kiro.md#kiro-cli-v2-session-model-and-effort).
 
 If your organization offers only a mid-tier model, such as a Claude Sonnet
 model, without Opus:
@@ -878,7 +894,7 @@ Kiro row, `--show` and `--check` also read Kiro CLI's own Workflows switch
 settings`), which takes the same tools away in Kiro CLI chats;
 `--kiro-cli-workflows off|on` sets it through Kiro CLI, and its answer is kept
 in `kiro-cli-workflows`, apart from Kiro IDE's. With no Kiro CLI answering, it
-is not shown. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
+is not shown. See [Kiro's Workflows feature](harnesses/kiro.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
 
 On Windows, Kiro IDE runs its agent's commands in your default terminal profile
 (`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While
@@ -889,7 +905,7 @@ answered on this computer, setup asks once whether to set it to PowerShell,
 own (and says so when it already is PowerShell); each changes that one key and
 keeps every other byte of the file, and your answer is kept in
 `kiro-ide-terminal` in the AI-DLC install folder. See
-[Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows).
+[Command Prompt as Kiro's terminal](harnesses/kiro.md#command-prompt-as-kiros-terminal-on-windows).
 
 For Codex, the check requires the complete project-specific trust seed entry
 set in `$CODEX_HOME/config.toml`. The two supported remedies are one TUI
@@ -1434,7 +1450,7 @@ Successful config prints the host-specific next step:
 | Harness | Next step |
 |---------|-----------|
 | Claude Code | Open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor` |
-| Kiro CLI | Run `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)), then `/aidlc --doctor` |
+| Kiro CLI | Run `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI (V2) prerequisites](harnesses/kiro.md#kiro-cli-v2-prerequisites)), then `/aidlc --doctor` |
 | Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli --v3` in the project instead; if Kiro asks whether you trust this workspace and you know what is in this folder, choose "Trust, continue"; then run `/aidlc --doctor`) |
 | Codex CLI | Run `codex` (when it asks about hooks, choose Trust all and continue), then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
@@ -1684,6 +1700,7 @@ bash ./aidlc-offline/install.sh \
 ```
 
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 & .\aidlc-offline\install.ps1 `
   -From .\aidlc-offline -Offline
 ```
@@ -1924,7 +1941,8 @@ active-version pointers, and the active `aidlc.exe`) is removed last, after ever
 User PATH entry, so a failed cleanup still leaves a command to retry it. Because
 the PATH entry may already be gone, run that command by its full path, which
 `aidlc doctor` prints (by default
-`& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" uninstall`). If the failure
+`& "$env:LOCALAPPDATA\aidlc\bin\aidlc.exe" uninstall`, or the recorded `aidlc.cmd`
+when `aidlc.exe` and `aidlc.cmd` in bin are not both as AI-DLC installed them). If the failure
 happened while removing those last files and the command no longer runs, run
 the installer again: it retries the pending cleanup first, so you may need to
 run it twice.

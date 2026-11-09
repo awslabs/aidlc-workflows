@@ -36,7 +36,7 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - **MCP servers**: five ship in \`.kiro/settings/mcp.json\`, all disabled by default. Flip \`"disabled": false\` on each server you want to enable. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. AI-DLC's own chat and its 14 delegated personas get every server in this file and in your \`~/.kiro/settings/mcp.json\` as of the last time config ran, and each call asks you first; a server you add later reaches them after you run config again. On Kiro CLI's v3 engine a persona gets every server in those files without a config run, from its second step.
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between Claude Code and Kiro CLI installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
 
-The Kiro-specific guide (install, what differs, the live journey test) is \`docs/guide/harnesses/kiro-cli.md\`.
+The Kiro-specific guide (install, what differs, the live journey test) is the Kiro CLI (V2) section of the Kiro guide, \`docs/guide/harnesses/kiro.md#kiro-cli-v2\`.
 `,
 
     sections_after_resumption: "",

@@ -33,8 +33,11 @@ curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/download/v2.11.1/
 
 ```powershell
 irm https://github.com/awslabs/aidlc-workflows/releases/download/v2.11.1/install.ps1 -OutFile install.ps1
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 ./install.ps1 -Version 2.11.1
 ```
+
+On a PC where a Group Policy sets the PowerShell execution policy, the `Set-ExecutionPolicy` line can print an error saying the setting is overridden. The installer still runs unless that policy is `AllSigned` or `Restricted`; then it is refused, and your administrator can say how to install AI-DLC on that PC.
 
 ## Highlights
 
