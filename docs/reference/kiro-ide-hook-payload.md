@@ -175,6 +175,20 @@ renaming its file, so two chats' cards never do it twice. A project whose hook
 files still register `aidlc-write-audit-log` or `aidlc-after-shell` keeps those
 cards doing the work, and the guard notes nothing for them.
 
+Kiro CLI v3 runs no `UserPromptSubmit` hook for a message the person types while
+the agent works (measured on 3.0.0). Kiro writes it to the chat's record
+(`~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl`) as it is typed,
+as a `steer-<id>` row with `source: "steer"`, and names its id in the
+`steeringConsumedIds` of a `steering-injection` row once it hands it to the
+agent. In the guard card, after its own work, `catch-up` records each such
+message of this turn (after its latest `turn_start` row) that Kiro has handed on
+as the person's turn through the core human-turn hook, in their words, once by
+Kiro's id, and moves the chat's turn on as a typed prompt does; the Stop card
+does the same before the Stop hook judges the turn. Kiro's envelope, a
+workflow's notices (a `notification` mark) and the turn-end `steering_boundary_`
+row are not read as theirs. A message that a prompt hook did receive is noted
+there, so it is not recorded again.
+
 ## Consequences for each hook
 
 - **write-audit-log / run-sensors** — recoverable: scrape the file path from
@@ -203,7 +217,13 @@ cards doing the work, and the guard notes nothing for them.
   alone when a Unit reopen moved the work back to it after that
   `STAGE_STARTED`, or in the same second in another clone's audit file (the
   reopen's rows carry `Moved From`): the move writes no start of its own, so
-  the last start names the stage the work left. Both
+  the last start names the stage the work left. It is also a no-op while the
+  step the engine issued is still current (`statusSyncLeavesCursor`, the
+  same rule as the task path's): `Current Stage` is where the engine put it
+  for that step. A checkout that claimed a Unit rests the cursor on the Unit's
+  stage, and a Unit step writes `UNIT_STARTED`, no `STAGE_STARTED`, so the
+  last start names another stage, and moving to it would retire the issued
+  step after every command. Both
   audit-tail hooks match `execute_bash`, Windows `execute_pwsh`, and the
   `shell` alias — the IDE surfaces no task event the sync could parse.
 - **front gate for the two audit-tail hooks**: they run once for every shell

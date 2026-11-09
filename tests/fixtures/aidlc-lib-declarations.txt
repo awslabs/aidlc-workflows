@@ -53,7 +53,6 @@ BLOCKING_SENSOR_OVERRIDE_CHOICE
 BLOCKING_SENSOR_OVERRIDE_DECISION
 BLOCKING_SENSOR_OVERRIDE_OPTIONS
 BOLT_NAME_REGEX
-BoltDagParse
 BoltDagResolution
 BoltIdentity
 BoltIdentityError
@@ -72,7 +71,6 @@ CHANGE_CONTROL_VALUES
 CHECKBOX_REVERSE
 CLAIM_BOUNDARY_WARNINGS
 CLAIM_GENERATIONS_FILE
-CLAIM_REGISTRY_CACHE_FILE
 CLAUDE_HOST_TEMPLATES
 CLAUDE_HOST_TURN_ORIGINS
 CLAUDE_QUEUED_HOST_ORIGINS
@@ -95,7 +93,6 @@ CREATION_RECEIPT_FILE
 CURRENT_FINGERPRINTS
 CURRENT_SESSION_FILE
 CURRENT_STATE_VERSION
-CachedUnitClaim
 CeremonyKey
 CeremonyPolicy
 CeremonyResolution
@@ -303,7 +300,6 @@ OrderedPipelineEvidenceEvent
 OwedPipelineLinks
 PENDING_PERSON_LINES_MAX_AGE_MS
 PERSONS_WORDS
-PERSON_ASKED_SKIP_REASON
 PERSON_CHECK_SWITCH_VALUES
 PERSON_LINES_SAID_MAX
 PERSON_TEXT_FIELDS
@@ -510,7 +506,6 @@ TurnOrigin
 UNBINDABLE_FINGERPRINT
 UNITS_REPOS_ASK
 UNIT_GATE_RHYTHM_FIELD
-UNIT_KINDS
 UNIT_LIFECYCLE_EVENTS
 UNIT_MERGE_DIR
 UNIT_NAME_PLACEHOLDER
@@ -523,12 +518,9 @@ UNSAVED_REASONS
 UNTRUSTED_AUDIT_NOTICE
 UTILITY_COMMANDS
 UnitCheckpoint
-UnitClaimRegistryCache
-UnitDependencyEdge
 UnitGateRhythm
 UnitGateScope
 UnitGateStatus
-UnitKind
 UnitLifecycleMode
 UnitLifecycleRow
 UnitLifecycleSnapshot
@@ -652,9 +644,7 @@ boltDagMatches
 boltEventUnits
 boltWorktreeBaseCommit
 boundDirectiveMessage
-boundedGitMetadataText
 boxPicksAddANote
-cachedClaimFanoutActive
 candidateAttemptEventMatches
 candidateReviewCoverageProjection
 canonicalEngineCommand
@@ -679,8 +669,6 @@ claimGenerationKey
 claimGenerationsPath
 claimOverOwnJump
 claimPayloadAtTip
-claimRegistryCachePath
-claimRegistryGit
 claimRegistryRemote
 claimRegistryTips
 classifyRuntimeCompileCommand
@@ -748,7 +736,6 @@ composeMarkerPath
 composedPlanLabel
 composedPluginBase
 composerProposalPath
-computeBatches
 constructionCheckpointGaps
 constructionCheckpointsApply
 constructionHasStarted
@@ -845,7 +832,6 @@ exactCopilotMarker
 existingReviewAppendixOffset
 explicitWorkspaceList
 extractScopeBlock
-extractYamlUnitsBlock
 fenceCheckName
 fenceCommandOutput
 fenceKeyBypassed
@@ -891,7 +877,6 @@ gateEventMatchesUnit
 gateOutputWriting
 gatePresentationStart
 gateRejectionMatchesAttempt
-gateStagesFromBlock
 gateWordsDir
 gateWordsPath
 gateWordsSinceUnitReview
@@ -899,9 +884,7 @@ gcSessionPidEntries
 generatedRunnerSkill
 gitAlternateEntry
 gitCommitSourceListing
-gitCommonDirectory
 gitHeadOid
-gitMetadataDirectory
 gitObjectDirectories
 gitObjectTypeByOid
 gitOidFromRef
@@ -957,7 +940,6 @@ hasCurrentSharedResumeWait
 hasDurableSourceBindingEvidence
 hasModernSourceBindingEvidence
 hasPendingDecision
-hasRealGitEntry
 hasRunnerGenMarker
 hasSubagentInflight
 hasUnsafeSingleLineCharacter
@@ -992,12 +974,10 @@ humanAuthorityState
 humanPresenceGuardDisabled
 humanRepliedSinceGate
 humanTurnMarkerPath
-humanTurnMintAllowed
 humanTurnState
 identityScopedUnitPath
 ignoredPathClaimable
 ignoredSourceClaimReason
-inHostShell
 inertPath
 inspectArtifactPath
 inspectContinuationCursor
@@ -1254,7 +1234,6 @@ parseActiveDirectiveOutOfDate
 parseAgentFrontmatter
 parseArgs
 parseAuditShardNotes
-parseBoltDag
 parseBoltName
 parseCeremonySetting
 parseCeremonyStateLine
@@ -1266,7 +1245,6 @@ parseGuardPolicy
 parseGuardPolicyStateLine
 parseGuardsOffLine
 parseGuardsOnLine
-parseInlineDepsList
 parseKnowledgeCommand
 parseLiteralShellInvocation
 parseMemoryEntries
@@ -1283,7 +1261,6 @@ parseStageFrontmatter
 parseStateStageSuffixes
 parseTeamBoardArgs
 parseUnitSourceListing
-parseUnitsBlock
 parseWorkspaceCommand
 parsedNextArgv
 pathContainedBy
@@ -1427,7 +1404,6 @@ readSubagentInflightLedger
 readSummaryAuthorization
 readSyncBufferedBytes
 readSyncBufferedLine
-readUnitClaimRegistryCache
 readUnitGateRhythm
 readUnitMergeTransaction
 readUnitSourceManifest
@@ -1661,7 +1637,6 @@ shellCommandText
 shellToolResponseText
 shippedRulesSubdir
 shownLastWrittenAt
-singleGitMetadataLine
 singleRunRequest
 singleRunRequestDigest
 singleStageAttemptField
@@ -1870,7 +1845,6 @@ unknownRuntimeSessionWarning
 unlistedRecordForQuestion
 unmergedRootSettingsNotices
 unmetProducerInPlan
-unquoteScalar
 unrecordedKiroCliSteers
 unresolvedTeamGateRemedy
 unsavedOutputsMessage

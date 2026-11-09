@@ -286,6 +286,16 @@ function revise(pd: string, contractChanged: boolean, unit = UNIT): void {
   writeFileSync(join(dir, "unit-test-instructions.md"), `# Test instructions\n\nVerify revised ${unit} twice.\n`);
 }
 
+// The content a build started on, which its start keeps on the parent's receipt.
+function startedOn(pd: string, unit = UNIT): string {
+  const dir = codeGenerationRecordDir(pd, unit);
+  const plan = readFileSync(join(dir, "code-generation-plan.md"), "utf-8");
+  const instructions = readFileSync(join(dir, "unit-test-instructions.md"), "utf-8");
+  return approvalFingerprint(
+    plan, instructions, parseTestingContract(plan)!.contract_sha256, resolveCodeGenerationAuthority(pd, { unit }),
+  );
+}
+
 function approvalSnapshot(pd: string, unit = UNIT) {
   const approval = evaluateCodeGenerationApproval(pd, { unit });
   expect(approval.ok, approval.reason).toBe(true);
@@ -480,7 +490,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       for (const [index, unit] of GROUP_UNITS.entries()) {
         const original = originals[index];
         expect(readPlanApprovalReceipt(pd, original.key)).toEqual({
-          ...original.receipt, certifiedSourceSha256: source, status: "generation",
+          ...original.receipt, certifiedSourceSha256: source, status: "generation", startedFingerprint: startedOn(pd, unit),
         });
         expect(changes.some((row) => auditBlockField(row.block, "Unit") === unit &&
           auditBlockField(row.block, "Current") === source)).toBe(true);
@@ -581,7 +591,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
     expect(changes).toHaveLength(1);
     expect(auditBlockField(changes[0].block, "Changed")).toBe(`src/${UNIT}.ts`);
     expect(readPlanApprovalReceipt(pd, original.key)).toEqual({
-      ...original.receipt, certifiedSourceSha256: source, status: "generation",
+      ...original.receipt, certifiedSourceSha256: source, status: "generation", startedFingerprint: startedOn(pd),
     });
     expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvals);
     for (const project of [pd, child(pd)]) {
@@ -703,7 +713,7 @@ describe("delegated continuation follows the parent approval and live fence", ()
       const worker = child(pd, unit);
       const parentReceipt = readPlanApprovalReceipt(pd, original.key);
       const workerReceipt = readPlanApprovalReceipt(worker, original.key);
-      expect(parentReceipt).toEqual({ ...original.receipt, status: "generation" });
+      expect(parentReceipt).toEqual({ ...original.receipt, status: "generation", startedFingerprint: startedOn(pd, unit) });
       expect(workerReceipt).toMatchObject({
         ...original.receipt, status: "generation",
         delegation: { unit, parentProjectDir: realpathSync(pd), worktreeDir: worker },

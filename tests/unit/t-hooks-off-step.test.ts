@@ -1,4 +1,4 @@
-// covers: function:hooksOffAgentStep, function:projectSettingsRepair, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
+// covers: function:hooksOffAgentStep, function:registrationFault, function:claudeSettingsHookTargets, function:hookExecutionRecoveryText, function:projectSettingsRepair, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
 //
 // When the engine KNOWS a harness's hooks have never run in the joined
 // workflow, `next` does no work. It tells the agent what to do itself and the
@@ -71,9 +71,12 @@ const HARNESSES: Harness[] = [
     name: "kiro",
     dir: ".kiro",
     lines: () => [
-      "Type /agent and pick aidlc, then carry on.",
-      "Quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), " +
-        "then type /aidlc to carry on.",
+      "Type /agent and pick aidlc, then carry on. If aidlc is not in that list, type /upgrade-agent and choose the " +
+        "workspace agents, then quit Kiro and start `kiro-cli --v3` again in this folder; or, to switch this project " +
+        "to Kiro, quit Kiro, run `bun .kiro/tools/aidlc.ts config --harness kiro` in a terminal in this folder and, " +
+        "once it has finished, start `kiro-cli --v3`; or quit Kiro and start it again in this folder with: " +
+        "kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), " +
+        "and type /aidlc there to carry on.",
     ],
   },
   {
@@ -1141,7 +1144,7 @@ describe("a refusal for a reply that was not recorded carries the same step when
 // brings them back, so the person is given the file's own repair: doctor's
 // config command for a missing file, the file itself for one config cannot
 // parse either. A file that cannot be opened for another reason keeps the step.
-describe("claude: a .claude/settings.json that is missing or not valid JSON gets its repair, not a setting", () => {
+describe("claude: a .claude/settings.json that is missing, not valid JSON or without AI-DLC's hooks gets its repair, not a setting", () => {
   const h = HARNESSES[0];
   const restart = "then exit Claude Code and start it again in this folder, and type /aidlc";
   const MISSING =
@@ -1177,6 +1180,76 @@ describe("claude: a .claude/settings.json that is missing or not valid JSON gets
     writeFileSync(settings(proj), `<<<<<<< HEAD\n${shipped}=======\n${shipped}>>>>>>> theirs\n`, "utf-8");
     expect(next(proj, h).message).toBe(`${show(INVALID)}."`);
   });
+
+  const UNWIRED =
+    ".claude/settings.json in this project does not register AI-DLC's hooks, so Claude Code runs none of them " +
+    "here. In a terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --from <the " +
+    `runtime/claude root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept), ${restart}`;
+
+  test("registers none of AI-DLC's hooks: the line names the config command that puts them back", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    writeFileSync(settings(proj), `${JSON.stringify({ permissions: {} }, null, 2)}\n`, "utf-8");
+    expect(next(proj, h).message).toBe(`${show(UNWIRED)}."`);
+  });
+
+  // AI-DLC's status line, which the person can keep in settings.local.json, is
+  // not a hook: it writes no heartbeat and brings none of them back.
+  test("registers none of AI-DLC's hooks beside AI-DLC's status line: the same config line", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const shipped = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "harness.json"), "utf-8")).statusLine;
+    expect(shipped?.command).toBeTruthy();
+    writeFileSync(join(proj, ".claude", "settings.local.json"), JSON.stringify({ statusLine: shipped }), "utf-8");
+    writeFileSync(settings(proj), `${JSON.stringify({ permissions: {} }, null, 2)}\n`, "utf-8");
+    expect(next(proj, h).message).toBe(`${show(UNWIRED)}."`);
+  });
+
+  // disableAllHooks set to true by the person or their administrator, with
+  // AI-DLC's hooks registered, is the tool's own step, as before: the stop
+  // reads the registration, never the switch, wherever the switch is set.
+  for (const where of ["settings.local.json", "settings.json", "managed settings"]) {
+    test(`hooks registered and switched off in ${where} keep the tool's step`, () => {
+      const proj = installed(h);
+      intentCreate(proj, h);
+      const extra: Record<string, string> = {};
+      if (where === "managed settings") {
+        const managed = join(mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-hooks-off-managed-")), "managed-settings.json");
+        outsides.push(dirname(managed));
+        writeFileSync(managed, JSON.stringify({ disableAllHooks: true }), "utf-8");
+        extra.AIDLC_MANAGED_SETTINGS_PATH = managed;
+      } else {
+        const path = join(proj, ".claude", where);
+        const current = existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
+        writeFileSync(path, JSON.stringify({ ...current, disableAllHooks: true }), "utf-8");
+      }
+      const message = next(proj, h, extra).message ?? "";
+      for (const line of h.lines(proj)) expect(message).toContain(`"${line}"`);
+      expect(message).not.toContain("does not register");
+    });
+  }
+
+  // Doctor's hooks rows give the same repair as the stop, not the setting.
+  for (const [fault, line, edit] of [
+    ["missing", MISSING, (proj: string) => unlinkSync(settings(proj))],
+    ["not valid JSON", INVALID, (proj: string) => writeFileSync(settings(proj), '{ "hooks": { broken\n', "utf-8")],
+    ["without AI-DLC's hooks", UNWIRED, (proj: string) => writeFileSync(settings(proj), "{}\n", "utf-8")],
+    ["without AI-DLC's hooks beside AI-DLC's status line", UNWIRED, (proj: string) => {
+      const shipped = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "harness.json"), "utf-8")).statusLine;
+      writeFileSync(join(proj, ".claude", "settings.local.json"), JSON.stringify({ statusLine: shipped }), "utf-8");
+      writeFileSync(settings(proj), "{}\n", "utf-8");
+    }],
+  ] as const) {
+    test(`doctor: a settings.json ${fault} gets its repair in the hooks rows`, () => {
+      const proj = installed(h);
+      intentCreate(proj, h);
+      edit(proj);
+      const doctor = run(proj, [join(proj, h.dir, "tools", "aidlc-utility.ts"), "doctor"], attendedEnv());
+      const output = doctor.stdout + doctor.stderr;
+      expect(output).toContain(`${line}.`);
+      expect(output).not.toContain('"disableAllHooks": false');
+    });
+  }
 
   test("a settings.json that cannot be opened as a file keeps the tool's step", () => {
     const proj = installed(h);

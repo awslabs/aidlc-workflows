@@ -6,10 +6,22 @@ harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) materializes each ignored local Bun copy tree
 under `dist/<harness>/` and its native counterpart under
 `dist-release/<harness>/`. Adding another harness is **one directory and one
-manifest row** — the engine, methodology, projection ownership, and
-harness-dir/rules resolution take no `core/` edits at all; the two optional
-exceptions are a per-harness `--doctor` arm (see Step 2) and your tool's
-binding subsections in the protocol modules (see the end of Step 4). This page walks the
+manifest row** for the packager to build it, and the methodology, projection
+ownership, and harness-dir/rules resolution take no `core/` edits. The engine
+still knows each harness by name, so a port also adds its name in `core/`.
+Start with `ModelHarness` (`core/tools/aidlc-model-policy.ts`) and fill in each
+place `bun run typecheck` then names, such as the CLI probe row `HARNESS_CLI` in
+`core/tools/aidlc-config-diagnostics.ts`. Some lists name the shipped harnesses
+where typecheck cannot see them, so search `core/` and `scripts/` for an
+existing harness's id and directory, as a string or a key (for example `cursor`
+and `.cursor`), and add yours beside them where they apply: `aidlc config`
+refuses to set up a name missing from `modelHarness`
+(`core/tools/aidlc-init.ts`), the reader of `harness.json` refuses one missing
+from its `distribution` check (`aidlc-config-diagnostics.ts`), and doctor picks
+its checks by harness directory or name (see Step 2). The steps below name the
+entries that go with a feature your host has, such as your tool's binding
+subsections in the protocol modules (see the end of Step 4) and, in Step 1,
+status-line support, `startedInsideProject` and `cliFirst`. This page walks the
 contract.
 
 > Three senses of "harness" in this repo: **`harness/`** (top-level — the
@@ -20,7 +32,7 @@ contract.
 ## The shape
 
 ```
-core/                      # harness-neutral source — not edited to add a harness (save the optional --doctor arm)
+core/                      # harness-neutral source — a port adds its harness name where core lists each harness (see the top of this page)
 harness/
   claude/  manifest.ts · skills/aidlc/ · onboarding.fills.ts · settings.json
   kiro/    manifest.ts · skills/aidlc/ · agents/*.json · hooks/aidlc-kiro-adapter.ts · settings/cli.json · onboarding.fills.ts
@@ -61,7 +73,8 @@ not read local `dist/` or `dist-release/`.
 The packager **discovers** harnesses by scanning `harness/` for a `manifest.ts`,
 so a new dir is built by the default `bun scripts/package.ts` and `--check` with
 no edit to the packager itself — the literal meaning of "one directory and one
-manifest row, zero shared-code edits."
+manifest row"; how to find the places in `core/` and `scripts/` a harness's
+name goes is at the top of this page.
 
 ## Step 1 — the manifest (the declarative 80%)
 
@@ -78,11 +91,21 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `.,()+-`; a name of 1 to 15 characters and a note of 1 to 60. The packager
   refuses a manifest whose text is not, and `aidlc config` does not offer such a
   projection.
-- `firstRunSteps` / `editorTerminalApp` / `hookActivation` (optional) - only for
+- `firstRunSteps` / `editorTerminalApp` / `cliFirst` / `hookActivation` (optional) - only for
   a host whose first run needs steps the other harnesses do not. `firstRunSteps`
   replaces the two next-step lines that end `aidlc config`. `editorTerminalApp`
   is the `TERM_PROGRAM` value the editor's built-in terminal sets; running
   `aidlc config` there makes this harness the wizard's default choice.
+  `cliFirst` (`{ env, configNextStep, firstRunSteps }`) is for a tree an
+  editor and a CLI both run: the CLI's words for those two lines, used
+  instead when a supported harness CLI (its `--version` at or above the
+  harness's minimum, when one is set) is on an absolute PATH entry and
+  `aidlc config` runs outside the editor (no shell `env` names, read like
+  `missedReplyInHost`, and not the terminal of its `TERM_PROGRAM=<name>`
+  entry); Kiro IDE declares it, with `hookActivation.notRunYetCliFirst`
+  (`{ env, text }`) for doctor's line. Only a harness whose CLI AI-DLC
+  already probes (`probeHarnessCli` in `core/tools/aidlc-config-diagnostics.ts`)
+  can lead with its CLI's words; a new port adds that probe first.
   `hookActivation` is for a host that may run no hooks until the person acts.
   Every text in it names only the person's own step, in the host's own words,
   never hooks, the engine, or why; `<entry>`, `<folder>` and `<next>` are
@@ -109,11 +132,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   taken for Kiro IDE. `agentStepInHost` (`{ env, text }`) does the same for
   `agentStep`, so the agent gets only its own tool's line: given one line
   per tool, an agent showed the wrong one. `registration`
-  (`{ file, missing, invalid }`) names the project JSON file the host reads
-  AI-DLC's hook registrations from: while it is missing or is not valid JSON
-  no setting brings those hooks back, so the step is the line `missing` (its
-  `<repair>` is doctor's command that puts the file back) or `invalid` for the
-  person instead; Claude Code declares it for `.claude/settings.json`.
+  (`{ file, missing, invalid, unwired }`) names the project JSON file the host
+  reads AI-DLC's hook registrations from: while it is missing, is not valid
+  JSON or registers none of AI-DLC's hooks no setting brings those hooks back,
+  so the step is the line `missing` or `unwired` (its `<repair>` is doctor's
+  command that puts the hooks back) or `invalid` for the person instead, and
+  doctor gives the same line instead of `recovery` and `notRunYet`; Claude Code
+  declares it for `.claude/settings.json`.
   `startedInsideProject` is the line for a chat the host started in a folder
   inside the project, where no setting brings the hooks back: the person is
   shown it instead of `agentStep`, and doctor gives it instead of `recovery`
@@ -133,9 +158,34 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   declare `recovery`, `agentStep` and `notRunYet` (Kiro CLI also `missedReply`,
   which names its agent picker); Copilot also
   `notRunInWorkflow`; Kiro IDE `recovery`, `missedReply`, `missedReplyInHost`,
-  `notRunYet`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
+  `notRunYet`, `notRunYetCliFirst`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
   been allowed to run commands in, no AI-DLC command can run, so Kiro IDE
   also keeps that step in its orchestrator skill.
+- `newChatStep` (optional) - `{ text, inHost? }`: how the person starts a clean
+  chat in this host, in its own words, with `<entry>` filled in. When new work
+  starts beside other work in a chat, its first stage step says once, as it
+  comes and before the stage's work, "To start this in a clean chat instead,
+  <text>."; without it nothing is said. `inHost` (`{ env, text }`) gives one
+  host this tree runs in its own step, told apart as `missedReplyInHost` is:
+  Kiro IDE uses it beside Kiro CLI's `/chat new`. A native engine in a project
+  with more than one harness installed says no step when no harness's
+  `hostShell` names the tool the person is in.
+- `hostShell` (optional) - `{ env }`: the variables this host sets in every
+  command its agent runs, read as `missedReplyInHost`'s `env` is. In a project
+  with more than one harness installed, the native engine runs each command on
+  the harness whose `hostShell` the command carries, so every tool gets its own
+  steps and entry, as the copy channel and a project with one harness do. With
+  no harness's variables there, or more than one harness's (a tool started from
+  another's shell), it runs on the first one installed (`.claude`, `.kiro`,
+  `.codex`, `.cursor`, `.aidlc`) and names no tool's step: no `agentStep`, the
+  plain missed-reply line, no `newChatStep`, and `/aidlc` as the entry; doctor
+  keeps that harness's lines, and files written into a tree keep its own entry.
+  Name only variables the host sets for its agent, never one a person's own
+  terminal carries (an editor's `TERM_PROGRAM`), or a tool started there reads
+  as this host. Claude Code declares `CLAUDECODE` and `CLAUDE_CODE_SESSION_ID`,
+  Codex CLI `CODEX_SESSION_ID` and `CODEX_THREAD_ID`, Copilot `COPILOT_CLI`
+  (Copilot CLI only), Cursor `CURSOR_AGENT`, Kiro CLI and Kiro IDE
+  `KIRO_SESSION_ID`, opencode `OPENCODE`.
 - `directiveMaxBytes` (optional) - for a host that keeps less of one shell
   result than the engine's 28 KiB directive cap. The engine keeps every
   directive at or under it: stage rules ride inline only while they fit, and
@@ -216,8 +266,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   authored JSON carries the command without it.
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
-  and drops `skills/` — see emit). The 3 session skills are core dirs for
-  in-tree harnesses (claude, kiro, kiro-ide); codex emits them instead.
+  and drops `skills/` — see emit). The core skills (the 3 session skills,
+  `aidlc-knowledge` and `aidlc-issue-report`) are core dirs for in-tree
+  harnesses (claude, kiro, kiro-ide, cursor, opencode); codex and copilot emit
+  them instead, each from its own list in `emit.ts`.
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into each channel (supported text formats get token
   substitution).
@@ -312,16 +364,20 @@ reviewer agents themselves where the harness supports per-agent hooks (the
 Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
 matching `agent_type`).
 
-> **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
-> (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new
-> harness adds a per-harness arm there for its own install surfaces (adapter +
-> wiring files present, any binary-version floor). This is deliberate
-> per-harness *logic*, not data — a version check spawns the CLI and compares
-> semver, which no manifest row can express (the three-concerns rule: knowledge
-> lives in code) — so it is the blessed exception to "zero `core/` edits", not a
-> violation (a deliberate design tradeoff). It degrades gracefully: a harness with no arm simply
-> gets the generic checks rather than failing. Everything else — dir resolution,
-> the rules-dir rename, packaging — stays pure manifest data.
+> **The doctor arm.** `/aidlc --doctor` (`core/tools/aidlc-utility.ts`)
+> health-checks an installed tree, and a new harness adds per-harness arms in
+> `collectDoctorReport` for the install surfaces the existing arms do not check
+> (adapter + wiring files present, native command trust). This is deliberate
+> per-harness *logic*, not data (the three-concerns rule: knowledge lives in
+> code), so it is one of the places in `core/` a port adds its name (see the top
+> of this page). The arms are picked by harness directory and, in places, by
+> harness name. A tree with no arm of its own gets another tree's file checks
+> (such as the opencode arm in `.aidlc`, or else the last one, which checks
+> `<harness-dir>/settings.json` the way Claude Code's tree has it) and, on a
+> native install, a native command trust row that fails, so doctor reports
+> problems the host never had. The CLI's version floor is the `HARNESS_CLI` row,
+> not an arm. Everything else — dir resolution, the rules-dir rename,
+> packaging — stays pure manifest data.
 
 ## Step 3 — `emit.ts` (the imperative 20%, only if needed)
 

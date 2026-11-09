@@ -192,8 +192,10 @@ Read it in order the first time:
    per-Unit Bolts in an autonomous swarm can run in parallel through
    `units-generation`.
 9. **[Porting to a New Harness](09-porting-to-a-new-harness.md)** — add another
-   CLI harness with one `harness/<name>/` directory and a manifest row, no
-   `core/` edits: the manifest contract, the hook adapter, and `emit.ts`.
+   CLI harness with one `harness/<name>/` directory, a manifest row, and its
+   name in the lists of harnesses `core/` and `scripts/` keep where they apply
+   to it; the chapter covers the manifest contract, the hook adapter, and
+   `emit.ts`.
 10. **[Authoring a Plugin](10-authoring-a-plugin.md)** — package a reusable,
     optional **AIDLC plugin** in `plugins/<name>/`: new stages/agents/scopes/
     sensors/doctor checks + additive contributions to existing core stages,

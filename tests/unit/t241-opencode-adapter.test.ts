@@ -145,10 +145,16 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-markdown.ts",
       "aidlc-locks.ts",
       "aidlc-review-records.ts",
+      "aidlc-unit-dag.ts",
+      "aidlc-git.ts",
       "aidlc-record-core.ts",
       "aidlc-learned-date.ts",
+      "aidlc-git-name.ts",
       "aidlc-unit-landing.ts",
+      "aidlc-unit-holders.ts",
       "aidlc-kiro-chat-record.ts",
+      "aidlc-claude-turn-origin.ts",
+      "aidlc-claude-turn-pending.ts",
       "aidlc-install-paths.ts",
       "aidlc-distribution.ts",
       "aidlc-channel.ts",
@@ -161,6 +167,8 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-lock-line.ts",
       "aidlc-review-manifest.ts",
       "aidlc-command.ts",
+      // aidlc-lib.ts reads a plugin command leading a line with this.
+      "aidlc-plugin-commands.ts",
       "aidlc-color.ts",
     ]) {
       copyFileSync(
@@ -752,6 +760,50 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     if (process.platform !== "win32") {
       expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: folder('bin"q', ["aidlc.cmd"]) })).toBe("refused");
     }
+  });
+
+  // With Claude Code installed in the same project, the native engine looks in
+  // .claude first and would run the plugin's hooks as Claude Code's: the stage
+  // rules would not be added to an agent's brief, since Claude Code hands them
+  // over as the agent starts instead.
+  test("the plugin's hooks run as opencode's when Claude Code is installed in the same project", async () => {
+    const root = freshProject();
+    mkdirSync(join(root, ".claude", "tools"), { recursive: true });
+    const capture = join(root, "launched.json");
+    const engine = join(root, "fake-engine.ts");
+    writeFileSync(
+      engine,
+      [
+        'import { writeFileSync } from "node:fs";',
+        "await Bun.stdin.text();",
+        `writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args: process.argv.slice(2), harnessDir: process.env.AIDLC_HARNESS_DIR ?? null, harnessName: process.env.AIDLC_HARNESS_NAME ?? null }));`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const saved = { dir: process.env.AIDLC_HARNESS_DIR, name: process.env.AIDLC_HARNESS_NAME };
+    delete process.env.AIDLC_HARNESS_DIR;
+    delete process.env.AIDLC_HARNESS_NAME;
+    try {
+      const { client } = fakeClient();
+      const adapter = await createAdapter({
+        client,
+        directory: root,
+        aidlcEntrypoints: TEST_ENTRYPOINTS,
+        aidlcCommand: [process.execPath, engine],
+        platform: process.platform,
+      });
+      await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "first" }] });
+    } finally {
+      if (saved.dir === undefined) delete process.env.AIDLC_HARNESS_DIR;
+      else process.env.AIDLC_HARNESS_DIR = saved.dir;
+      if (saved.name === undefined) delete process.env.AIDLC_HARNESS_NAME;
+      else process.env.AIDLC_HARNESS_NAME = saved.name;
+    }
+    const launched = JSON.parse(readFileSync(capture, "utf-8")) as { args: string[]; harnessDir: string | null; harnessName: string | null };
+    expect(launched.args[0]).toBe("hook");
+    expect(launched.harnessDir).toBe(".aidlc");
+    expect(launched.harnessName).toBe("opencode");
   });
 
   test.skipIf(process.platform !== "win32")("on Windows the plugin's hooks reach the aidlc.cmd launcher the install puts on PATH", async () => {

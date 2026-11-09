@@ -91,8 +91,10 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     expect(unscopedStart.status).not.toBe(0);
     expect(unscopedStart.out).toContain("/aidlc --claim <unit> --team <label>");
 
-    // A fresh clone of the landed main routes the same way.
+    // A fresh clone of the landed main is offered the Unit it can take; Not
+    // now shows the same board.
     const fresh = clone(remote, "fresh");
+    expect(nextDirective(fresh)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["join"] });
     const freshNext = nextDirective(fresh);
     expect(freshNext.kind).toBe("notice");
     expect(freshNext.message as string).toContain("`/aidlc --claim beta`");
@@ -118,7 +120,7 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
       fresh,
     );
     expect(claimStep.status, claimStep.out).toBe(0);
-    expect(JSON.parse(claimStep.stdout).message).toContain("--claim beta --team beta-team");
+    expect(JSON.parse(claimStep.stdout).message).toMatch(/--claim beta --request-file \S+`/);
     const claimed = runMergeTool(UNIT, ["claim", "beta", "--team", "beta-team"], fresh);
     expect(claimed.status, claimed.out).toBe(0);
     expect(JSON.parse(claimed.stdout)).toMatchObject({ claimed: true, unit: "beta", owner: "beta-team" });

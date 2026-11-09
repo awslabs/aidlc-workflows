@@ -3,16 +3,18 @@
  * the engine owns when to present a checkpoint and which Unit is the skeleton.
  */
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { Writable } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import { proveMessage, readMessage } from "./aidlc-message-store.ts";
 import { askedQuestionFields, QUESTION_ID_FIELD, questionShows } from "./aidlc-questions.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
@@ -403,6 +405,29 @@ function checkpointName(kind: ConstructionCheckpointKind): string {
 
 function proofRelativePath(unit: string, kind: ConstructionCheckpointKind): string {
   return `${PROOF_DIR}/${unit}/${kind}.json`;
+}
+
+// The person's "Continue automatically": the state says autonomous and their
+// latest grant on record (WORKFLOW_STARTED or AUTONOMY_MODE_SET, one frontier
+// row) set it. A checkpoint the agent approves under it needs no person.
+export function autonomyGranted(stateContent: string | null, grant: AuditShardEvent | null | undefined): boolean {
+  return isAutonomousMode(stateContent) && grant?.event === "AUTONOMY_MODE_SET" &&
+    auditBlockField(grant.block, "Mode") === "autonomous";
+}
+
+// The same grant read from the record (the main workflow's rows; an isolated
+// run's own rows are not the person's grant).
+export function autonomyGrantedOnRecord(
+  projectDir: string,
+  stateContent: string | null,
+  intent?: string,
+  space?: string,
+): boolean {
+  if (!isAutonomousMode(stateContent)) return false;
+  const frontier = maximalAttemptEvents(readAuditShardEvents(projectDir, intent, space).filter((row) =>
+    (row.event === "AUTONOMY_MODE_SET" || row.event === "WORKFLOW_STARTED") &&
+    !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")));
+  return autonomyGranted(stateContent, frontier.length === 1 ? frontier[0] : null);
 }
 
 function onlyLatest(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
@@ -856,9 +881,7 @@ function snapshot(
   if (!enabled) errors.push("Construction Checkpoints: enabled requires solo Units with an in-scope source-producing stage.");
   if (stages.length === 0) errors.push("No applicable per-unit Construction stages.");
   if (!workflow) errors.push("A current, unambiguous WORKFLOW_STARTED record is required.");
-  const autonomous = isAutonomousMode(state) &&
-    grant?.event === "AUTONOMY_MODE_SET" &&
-    auditBlockField(grant.block, "Mode") === "autonomous";
+  const autonomous = autonomyGranted(state, grant);
   const humanRequired = kind === "skeleton" || !autonomous;
   const floors: Record<string, string> = {};
   const evidence: unknown[] = [];
@@ -1509,11 +1532,76 @@ function outputTail(output: Buffer | null): string {
   );
 }
 
+function lastJson(text: string | null | undefined): Record<string, unknown> | null {
+  const line = (text ?? "").split(/\r?\n/).findLast((entry) => entry.trim().startsWith("{"));
+  try {
+    return line === undefined ? null : JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+// What the Unit's checks still find, beside its checkpoint question: read
+// from their latest results (the checkpoint's verify fired them), nothing
+// fired here. None, or an unreadable record, says nothing.
+function unitCheckNotices(projectDir: string, unit: string, kind: ConstructionCheckpointKind, stages: readonly string[]): string[] {
+  const [command, ...args] = aidlcEngineCommand("state", [
+    "checkpoint-checks", "--unit", unit, "--kind", kind, "--stages", stages.join(","), "--notices", "--project-dir", projectDir,
+  ], fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)));
+  const result = spawnSync(command, args, {
+    encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: projectDir }, timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
+  });
+  const notices = result.status === 0 ? lastJson(result.stdout)?.notices : null;
+  return Array.isArray(notices) ? notices.filter((line): line is string => typeof line === "string") : [];
+}
+
+// The Unit's gate checks, fired on its own outputs before its verification:
+// the state tool's `checkpoint-checks` (fireGateSensors and
+// enforceBlockingGateSensors, which this module cannot load). A blocking check
+// that does not pass is that command's refusal, and the step it names (Fix
+// findings, or the person's Override retried here) is the agent's; what ran is
+// returned for the verification row, with the fingerprint the checks saw.
+function unitGateChecks(
+  projectDir: string, unit: string, kind: ConstructionCheckpointKind,
+  current: Pick<ConstructionCheckpoint, "stages" | "human_required">,
+  override: { requested: boolean; input?: string; keys?: string[] },
+): { fields: Record<string, string>; overridden: string[] } {
+  if (current.stages.length === 0) return { fields: {}, overridden: [] };
+  const [command, ...args] = aidlcEngineCommand("state", [
+    "checkpoint-checks", "--unit", unit, "--kind", kind, "--stages", current.stages.join(","),
+    ...(current.human_required ? ["--person-answers"] : []),
+    ...(override.requested ? ["--override-blocking-sensors", "--user-input", override.input ?? ""] : []),
+    ...(override.keys !== undefined ? ["--override-keys", override.keys.join(",")] : []),
+    "--project-dir", projectDir,
+  ], fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)));
+  const result = spawnSync(command, args, {
+    encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: projectDir },
+    timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
+  });
+  if (result.status === null) {
+    throw new Error(`${unit}'s checks did not finish, so it is not verified. Run ${aidlcToolInvocation("bolt")} checkpoint ` +
+      `--action verify --unit "${unit}" --kind ${kind} again.`);
+  }
+  if (result.status !== 0) {
+    const refusal = lastJson(result.stdout) ?? lastJson(result.stderr);
+    throw new Error(typeof refusal?.error === "string"
+      ? refusal.error
+      : `${unit}'s checks could not run, so it is not verified: ${(result.stderr || result.stdout || String(result.error ?? "")).trim()}`);
+  }
+  const reply = lastJson(result.stdout);
+  const fields = reply?.fields;
+  const overridden = Array.isArray(reply?.overridden) ? reply.overridden.filter((key): key is string => typeof key === "string") : [];
+  return { fields: fields !== null && typeof fields === "object" ? fields as Record<string, string> : {}, overridden };
+}
+
 export async function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  options: { overUnfinishedReview?: boolean; timeoutMs?: number; message?: string } = {},
+  options: {
+    overUnfinishedReview?: boolean; timeoutMs?: number; message?: string;
+    overrideBlockingSensors?: boolean; userInput?: string;
+  } = {},
 ): Promise<ConstructionCheckpoint> {
   // The person's "approve it as it is": the message the agent names
   // (--message), proved, is what lets the Unit go on without its review.
@@ -1526,10 +1614,12 @@ export async function verifyConstructionCheckpoint(
   // A check that formats or regenerates the Unit's files changes what it
   // checked, so it runs once more against the files as they are now.
   const timeoutMs = verificationTimeoutMs(options.timeoutMs);
-  const first = await verifyOnce(projectDir, unit, kind, false, over, timeoutMs);
+  const override = { requested: options.overrideBlockingSensors === true, input: options.userInput };
+  const first = await verifyOnce(projectDir, unit, kind, false, over, timeoutMs, override);
   if (!first.rerun) return first.result;
   // The line about an accepted change is said once, on whichever run made it.
-  const second = (await verifyOnce(projectDir, unit, kind, true, over, timeoutMs)).result;
+  // The check changed the files, so the Unit's gate checks read them again.
+  const second = (await verifyOnce(projectDir, unit, kind, true, over, timeoutMs, { ...override, keys: first.overridden })).result;
   const notices = [...(first.result.change_notices ?? []), ...(second.change_notices ?? [])];
   return notices.length > 0 ? { ...second, change_notices: notices } : second;
 }
@@ -1546,7 +1636,9 @@ async function verifyOnce(
   // The message the person said to approve it as it is in, proved; null when they said nothing of it now.
   overUnfinishedReview: string | null,
   timeoutMs: number,
-): Promise<{ result: ConstructionCheckpoint; rerun: boolean }> {
+  // The person's Override at a blocking check on the Unit, when they chose it.
+  override: { requested: boolean; input?: string; keys?: string[] } = { requested: false },
+): Promise<{ result: ConstructionCheckpoint; rerun: boolean; overridden: string[] }> {
   const personAllows = overUnfinishedReview !== null;
   const before = locked(projectDir, () => {
     withdrawProtectedQuestions(projectDir, "*");
@@ -1577,6 +1669,10 @@ async function verifyOnce(
     const selection = resolveWorkflowSelection(projectDir);
     return { ...current, proof, notices, command: authorization.command, intent: selection.intent!, space: selection.space };
   });
+  // The Unit's gate checks run on the files this verification is bound to,
+  // after the earlier pass is revoked above, so a refusal leaves nothing to
+  // ask over; outside the lock, since a check's dispatch takes it.
+  const checks = unitGateChecks(projectDir, unit, kind, before.result, override);
   // Match swarm checkConverged: preserve Bash project checks where available.
   const command = process.platform === "win32"
     ? process.env.ComSpec ?? "cmd.exe"
@@ -1663,11 +1759,13 @@ async function verifyOnce(
         ...(waiverMessage ? { "Message Id": waiverMessage } : {}),
       } : {}),
       ...claimAttemptFields(projectDir, unit),
+      ...(proof.evidence_unchanged ? checks.fields : {}),
     }, projectDir);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);
     return {
       result: before.notices.length > 0 ? { ...result, change_notices: before.notices } : result,
       rerun: changedByCheck && !secondRun,
+      overridden: checks.overridden,
     };
   }, before.intent, before.space);
 }
@@ -1751,16 +1849,18 @@ export function askConstructionCheckpoint(
     const offer = current.result.stages.map((slug) => findStageBySlug(slug))
       .map((stage) => stage ? reviewCheckOffer(projectDir, stage, unit) : null).find((found) => found !== null) ?? null;
     const changedFiles = current.result.stages.includes("code-generation")
-      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true)
+      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true, unit)
       : null;
     // With their reply already in, the question is not shown: the line about
     // their files rides the next step the agent speaks from instead.
     const carried = changedFiles !== null && earlier !== null &&
       addPendingPersonLines(projectDir, session, [changedFiles.line]);
     if (changedFiles !== null && (earlier === null || carried)) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
+    const findings = unitCheckNotices(projectDir, unit, kind, current.result.stages);
     const result = {
       ...current.result,
       question_id: asked[QUESTION_ID_FIELD],
+      ...(findings.length === 0 ? {} : { check_findings: findings.join(" ") }),
       ...(leftOut === null ? {} : { left_out: leftOut }),
       ...(changedFiles === null || carried ? {} : { changed_files: changedFiles.line }),
       ...(offer === null ? {} : { check_offer: offer.offer }),
@@ -1856,6 +1956,7 @@ export function approveConstructionCheckpoint(
       ...findingDispositions?.(
         gate["Gate Stages"].split(", ").filter(Boolean), [unit], humanRequired ? "person" : "nobody",
       ),
+      ...(humanRequired ? personGitNameField(projectDir) : {}),
     }, projectDir);
     if (humanRequired) consumeProtectedQuestion(projectDir, session);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);
@@ -1925,6 +2026,7 @@ export function rejectConstructionCheckpoint(
       "User Input": userInput, Feedback: reason, Reason: reason,
       ...protectedResponseFields(response),
       ...rejectedFindings?.(gate["Gate Stages"].split(", ").filter(Boolean), [unit]),
+      ...personGitNameField(projectDir),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

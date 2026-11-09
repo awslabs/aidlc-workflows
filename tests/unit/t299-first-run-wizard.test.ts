@@ -25,18 +25,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { TransactionFilesystemError } from "../../core/tools/aidlc-transaction.ts";
 import { projectionFiles } from "../../core/tools/aidlc-distribution.ts";
-import {
-  firstRunFailureLines,
-  firstRunPathRemediation,
-  launchedFromEditorTerminal,
-} from "../../core/tools/aidlc-init.ts";
+import { firstRunFailureLines, firstRunPathRemediation } from "../../core/tools/aidlc-init.ts";
+import { harnessCliLeads, launchedFromEditorTerminal } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
@@ -185,11 +183,14 @@ function detection(
   });
 }
 
-// The editor-terminal markers launchedFromEditorTerminal reads. The runner's
-// own terminal must not decide which harness a case selects.
+// The editor-terminal markers launchedFromEditorTerminal reads, and the Kiro
+// IDE shell marks the Kiro tree's cliFirst lines read. The runner's own
+// terminal must not decide which harness a case selects, or which lines lead.
 const EDITOR_TERMINAL_ENV = [
   "TERM_PROGRAM",
   "VSCODE_GIT_ASKPASS_NODE",
+  "VSCODE_IPC_HOOK",
+  "VSCODE_PID",
 ] as const;
 
 function hostEnv(): NodeJS.ProcessEnv {
@@ -1415,6 +1416,72 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, ".kiro"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // With no Kiro IDE around, the person has only Kiro CLI to start (#3596):
+  // its step leads, and Kiro IDE's comes after it for someone who has both.
+  const kiroCliOnly = {
+    claude: { found: false },
+    kiro: { found: true, version: "kiro-cli 3.1.0" },
+    "kiro-ide": { found: true, version: "kiro-cli 3.1.0" },
+  };
+  const kiroCliSteps = [
+    "  Setup complete. Start your first workflow:",
+    "",
+    "    1. Start `kiro-cli --v3` in this folder. If Kiro asks whether you trust",
+    "       this workspace and you know what is in this folder, choose",
+    '       "Trust, continue".',
+    '    2. /aidlc "what you want built"  describe your first intent',
+    "",
+    "    Using Kiro IDE instead? Open this folder in Kiro IDE. If the Restricted",
+    "    Mode banner shows at the top of the window and you know what is in this",
+    '    folder, select Manage on it, then Trust. Run "Developer: Reload Window"',
+    "    from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose",
+    "    the aidlc agent in the chat panel's agent picker, then step 2.",
+    "",
+  ].join("\n");
+
+  // The ending checks kiro-cli itself, a shell-script stand-in here.
+  test.skipIf(process.platform === "win32")("Kiro chosen where only Kiro CLI is found ends with Kiro CLI's start step, then Kiro IDE's", () => {
+    const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+    const result = runWizard("6\n\n", { harnesses: kiroCliOnly, env: saved.env });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using Kiro.");
+    expect(result.stdout).toContain(kiroCliSteps);
+    expect(result.stdout).not.toContain("1. Open this folder in Kiro IDE.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro IDE's terminal keeps Kiro IDE's steps first when Kiro CLI is found too", () => {
+    const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+    const result = runWizard("\n\n", { harnesses: kiroCliOnly, env: { TERM_PROGRAM: "kiro", ...saved.env } });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using Kiro.");
+    expect(result.stdout).toContain("    1. Open this folder in Kiro IDE. If the Restricted Mode banner shows at the");
+    expect(result.stdout).toContain("    Using Kiro CLI instead? Start `kiro-cli --v3` in this folder. If Kiro asks");
+    expect(result.stdout).not.toContain("Using Kiro IDE instead?");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // `config --harness kiro` checks kiro-cli itself, without the wizard's
+  // injected detection; the stand-in kiro-cli is a shell script.
+  test.skipIf(process.platform === "win32")(
+    "config --harness kiro names Kiro CLI's start first where kiro-cli is found outside Kiro IDE",
+    () => {
+      const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+      const configArgs = ["--from", join(RUNTIME, "kiro-ide"), "--harness", "kiro", "--mcp", "none", "--yes"];
+      const plain = runWizard("", { harnesses: kiroCliOnly, env: saved.env, configArgs });
+      expect(plain.status, plain.stdout + plain.stderr).toBe(0);
+      expect(plain.stdout).toContain(
+          "; next: start `kiro-cli --v3` in the project; if Kiro asks whether you trust this workspace",
+      );
+      expect(plain.stdout).toContain("(in Kiro IDE, open this project instead;");
+      const inIde = runWizard("", { harnesses: kiroCliOnly, env: { TERM_PROGRAM: "kiro", ...saved.env }, configArgs });
+      expect(inIde.status, inIde.stdout + inIde.stderr).toBe(0);
+      expect(inIde.stdout).toContain("; next: open this project in Kiro IDE;");
+      const noCli = runWizard("", { harnesses: { claude: { found: false } }, env: saved.env, configArgs });
+      expect(noCli.status, noCli.stdout + noCli.stderr).toBe(0);
+      expect(noCli.stdout).toContain("; next: open this project in Kiro IDE;");
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+
   test("Kiro IDE's terminal makes Kiro IDE the picker default when another CLI is found", () => {
     const result = runWizard("\n\n", {
       env: { TERM_PROGRAM: "kiro" },
@@ -1576,7 +1643,7 @@ describe("t299 first-run setup wizard", () => {
     runWizard("", {
       ...kiroIdeTerminal({ ...setupMachine, ...env, AIDLC_TEST_CONFIG_INPUT: `${answers.join("\n")}\n` }),
       aidlc: false,
-      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none"],
+      configArgs: ["--from", join(RUNTIME, harness), "--harness", typedHarnessName(harness), "--mcp", "none"],
       ...(project ? { project } : {}),
     });
   const setupScreens = (env: NodeJS.ProcessEnv = {}) => {
@@ -1726,12 +1793,12 @@ describe("t299 first-run setup wizard", () => {
       "",
     ].join("\n"));
     expect(check.stdout).toContain(
-      "\n  Found kiro-ide in .kiro/; using the existing copied projection.\n",
+      "\n  Found kiro in .kiro/; using the existing copied projection.\n",
     );
     // Kiro IDE cannot pin an agent's model or effort, so the Models row names
     // the session instead of asking for a policy, and the walk never offers it.
     expect(check.stdout).toContain([
-      "    [ok]     Harnesses   kiro-ide recorded",
+      "    [ok]     Harnesses   kiro recorded",
       "    [ok]     Models      every agent uses your Kiro session's model and effort unless a model or effort is set for that agent",
       "    [needs]  Runtime     aidlc is absent from the non-interactive hook PATH",
     ].join("\n"));
@@ -1749,7 +1816,7 @@ describe("t299 first-run setup wizard", () => {
       "\n  The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.\n",
     );
     expect(shell.stdout).toContain(
-      "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro-ide --download\n",
+      "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro --download\n",
     );
     // The completion line stays one line, as scripts and tests read it.
     for (const [screen, harness] of [["harness-kiro-ide", "kiro-ide"], ["harness-kiro", "kiro"]] as const) {
@@ -2579,6 +2646,10 @@ describe("t299 first-run guidance helpers", () => {
       const kiroIde = harness === "kiro-ide";
       expect(Object.hasOwn(projection, "firstRunSteps"), harness).toBe(kiroIde);
       expect(Object.hasOwn(projection, "editorTerminalApp"), harness).toBe(kiroIde);
+      // Only Kiro's tree runs in an editor and a CLI, so only it words the
+      // first-run lines and doctor's no-heartbeat line for each.
+      expect(Object.hasOwn(projection, "cliFirst"), harness).toBe(kiroIde);
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYetCliFirst"), harness).toBe(kiroIde);
       const copilot = harness === "copilot";
       expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(harness !== "cursor");
       // The agent's own step needs a hook on its shell command that beats in
@@ -2598,6 +2669,60 @@ describe("t299 first-run guidance helpers", () => {
         .toBe(harness === "claude" || harness === "codex");
     }
   });
+
+  // Kiro's CLI-first lines (#3596) lead only outside Kiro IDE (neither its
+  // shell marks nor its terminal), for a supported kiro-cli on an absolute
+  // PATH entry. The stand-in kiro-cli, which the check runs for its version
+  // and which leaves a mark when it runs, is a .cmd on Windows (the issue's
+  // platform) and a shell script elsewhere.
+  test(
+    "Kiro CLI's words lead only outside Kiro IDE, for a supported kiro-cli on an absolute PATH entry",
+    () => {
+      const kiroIdeMarks = ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"];
+      const windows = process.platform === "win32";
+      const cli = (version: string) => {
+        const bin = temp("aidlc-t299-kiro-cli-");
+        const ran = join(bin, "ran");
+        writeFileSync(
+          join(bin, windows ? "kiro-cli.cmd" : "kiro-cli"),
+          windows
+            ? `@echo off\r\ntype nul > "${ran}"\r\necho ${version}\r\n`
+            : `#!/bin/sh\n: > "${ran}"\nprintf '%s\\n' ${JSON.stringify(version)}\n`,
+          { mode: 0o755 },
+        );
+        return bin;
+      };
+      const leads = (env: NodeJS.ProcessEnv) => harnessCliLeads("kiro-ide", kiroIdeMarks, env);
+      const current = cli("kiro-cli 3.1.0");
+      expect(leads({ PATH: current })).toBe(true);
+      expect(existsSync(join(current, "ran"))).toBe(true);
+      // Kiro CLI in VS Code's terminal: VS Code's own TERM_PROGRAM rules Kiro IDE out.
+      expect(leads({ PATH: current, TERM_PROGRAM: "vscode", VSCODE_PID: "1" })).toBe(true);
+      const inIde = cli("kiro-cli 3.1.0");
+      for (const env of [
+        { PATH: inIde, TERM_PROGRAM: "kiro" },
+        { PATH: inIde, VSCODE_PID: "1" },
+        // A shell started in Kiro IDE's terminal that keeps its askpass helper.
+        { PATH: inIde, TERM_PROGRAM: "tmux", VSCODE_GIT_ASKPASS_NODE: "/opt/Kiro/kiro" },
+      ]) {
+        expect(leads(env), JSON.stringify(env)).toBe(false);
+      }
+      // Inside Kiro IDE the CLI is never run.
+      expect(existsSync(join(inIde, "ran"))).toBe(false);
+      // Below the Kiro row's 2.24.1 floor `kiro-cli --v3` is not there to start.
+      expect(leads({ PATH: cli("kiro-cli 2.10.0") })).toBe(false);
+      expect(leads({ PATH: temp("aidlc-t299-no-kiro-cli-") })).toBe(false);
+      // A temp folder on another drive than the checkout has no relative path.
+      const relativeOnly = cli("kiro-cli 3.1.0");
+      const relativePath = relative(process.cwd(), relativeOnly);
+      if (!isAbsolute(relativePath)) {
+        expect(leads({ PATH: relativePath })).toBe(false);
+        expect(existsSync(join(relativeOnly, "ran"))).toBe(false);
+      }
+      // A harness with no CLI of this kind never leads with one.
+      expect(harnessCliLeads("cursor", kiroIdeMarks, { PATH: current })).toBe(false);
+    },
+  );
 
   test("an editor's terminal is recognized from its editor markers, not KIRO_* variables", () => {
     // Kiro IDE's terminal sets TERM_PROGRAM=kiro; its askpass helper is Kiro.exe.

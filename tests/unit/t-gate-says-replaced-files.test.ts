@@ -7,8 +7,10 @@
 // with the command that puts each back when git holds the old copy, and plainly
 // that there is no committed copy when it does not. A brownfield build's own
 // code changes are not named; a file the work or a teammate added after the
-// work started is not theirs; nothing is said when the engine cannot know. The
-// gate itself is unchanged: no refusal, no question, no step.
+// work started is not theirs; nothing is said when the engine cannot know. Built
+// Unit by Unit, a Unit's approval names what that Unit changed and puts it back
+// as that Unit found it. The gate itself is unchanged: no refusal, no question,
+// no step.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -495,5 +497,154 @@ describe("t-gate-says-replaced-files at a Unit checkpoint", () => {
     );
     expect(String(following.narration ?? "")).not.toContain("you had before this work started");
     expect(told(next(p))).not.toContain("you had before this work started");
+  });
+});
+
+// One Unit after another, the person's .gitignore in git: each Unit's approval
+// names the person's files that Unit changed and puts each back as that Unit
+// found it (its own listing, taken when its first Code Generation step is
+// handed out), so the way back never drops what an earlier Unit's approval
+// kept (x2783-f8 leg A: the second Unit's command named the commit before the
+// first Unit). Code Generation is the one Construction stage each Unit runs.
+const GITIGNORE = "node_modules/\n";
+const GITIGNORE_ALPHA = `${GITIGNORE}orders.json\n`;
+const GITIGNORE_BETA = `${GITIGNORE_ALPHA}__pycache__/\n`;
+const TEAM_ENV = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" };
+
+function unitsProject(team: boolean): string {
+  const p = createTestProject();
+  created.push(p);
+  seedAidlcMemory(p);
+  writeFileSync(seededStateFile(p), `# AI-DLC State Tracking
+## Project Information
+- **Project**: Changed files
+- **Project Type**: Greenfield
+- **Project Type Source**: you
+- **Scope**: feature
+- **State Version**: 8
+## Runtime State
+- **Revision Count**: 0
+- **Skeleton Stance**: off
+- **Plan Approval**: off (set by you)
+- **Construction Iteration**: unit-major
+${team ? "- **Unit Ownership**: team\n- **Unit Gate Rhythm**: per-stage\n" : "- **Unit Ownership**: solo\n- **Construction Checkpoints**: enabled\n- **Construction Execution**: serial\n"}- **Construction Autonomy Mode**: gated
+- **Review Override**: none
+- **Change Control**: strict
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+## Stage Progress
+### CONSTRUCTION PHASE
+${UNIT_STAGES.map((stage) => stage === "code-generation" ? `- [-] ${stage} \u2014 EXECUTE` : `- [S] ${stage} \u2014 SKIP`).join("\n")}
+- [ ] build-and-test \u2014 EXECUTE
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: code-generation
+- **Status**: Running
+`);
+  seedBoltDag(p, ["alpha", "beta"]);
+  write(p, { ".gitignore": GITIGNORE, "README.md": README });
+  git(p, ["init", "-q"]);
+  git(p, ["add", "--", ".gitignore", "README.md"]);
+  git(p, ["commit", "-qm", "the person's files"]);
+  appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", ...sourceBaselineAuditFields(p, workspaceBaselineStageSlugs()) }, p);
+  return p;
+}
+
+const unitListings = (p: string): string[] => {
+  try {
+    return readdirSync(join(seededRecordDir(p), ".aidlc-engine", "brought-files")).filter((name) => name.startsWith("unit-"));
+  } catch {
+    return [];
+  }
+};
+
+// The Unit's Code Generation step, handed out before the Unit writes anything.
+function unitStep(p: string, unit: string): void {
+  const step = next(p, chat(CHAT_A, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }));
+  expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
+  expect([step.stage, step.unit]).toEqual(["code-generation", unit]);
+}
+
+// The Unit's build: its code, the person's file changed, and its outputs with the receipt.
+function unitBuild(p: string, unit: string, files: Record<string, string>, commit: boolean): void {
+  write(p, { [`src/${unit}.ts`]: `export const ${unit} = 1;\n`, ...files });
+  if (commit) {
+    git(p, ["add", "--", `src/${unit}.ts`, ...Object.keys(files)]);
+    git(p, ["commit", "-qm", `${unit}: built`]);
+  }
+  cover(p, unit, ["code-generation"]);
+}
+
+const teamGate = (p: string, unit: string, session: string): Record<string, unknown> =>
+  tool(p, "orchestrate", ["report", "--stage", "code-generation", "--unit", unit, "--result", "awaiting-approval"],
+    { ...TEAM_ENV, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" });
+
+describe("t-gate-says-replaced-files: a later Unit's approval puts back only that Unit's change", () => {
+  test("team Units: the second Unit's gate restores .gitignore as that Unit found it, and the first Unit's line stays", () => {
+    const p = unitsProject(true);
+    const first = git(p, ["rev-parse", "--short", "HEAD"]).trim();
+    unitStep(p, "alpha");
+    unitBuild(p, "alpha", { ".gitignore": GITIGNORE_ALPHA }, true);
+    // The first Unit's line is the line a build with no Units says.
+    expect(said(teamGate(p, "alpha", CHAT_A))).toContain(
+      `The build changed .gitignore, a file you had before this work started. To put it back, run \`git checkout ${first} -- .gitignore\`.`,
+    );
+    tool(p, "orchestrate", ["report", "--stage", "code-generation", "--unit", "alpha", "--result", "approved", "--user-input", "Approve"], TEAM_ENV);
+    unitStep(p, "beta");
+    unitBuild(p, "beta", { ".gitignore": GITIGNORE_BETA }, false);
+    // A new chat at the second Unit's gate, as in the leg.
+    expect(said(teamGate(p, "beta", CHAT_B))).toContain(
+      "The build changed .gitignore, a file you had before this work started. To put it back, run `git checkout HEAD -- .gitignore`.",
+    );
+    git(p, ["checkout", "HEAD", "--", ".gitignore"]);
+    expect(readFileSync(join(p, ".gitignore"), "utf-8")).toBe(GITIGNORE_ALPHA);
+    // Each Unit's listing was taken at its own step.
+    expect(unitListings(p)).toHaveLength(2);
+  });
+
+  test("checkpoints: the second Unit's checkpoint names the commit holding the file as it found it", () => {
+    const p = unitsProject(false);
+    recordCommand(p);
+    const first = git(p, ["rev-parse", "--short", "HEAD"]).trim();
+    unitStep(p, "alpha");
+    unitBuild(p, "alpha", { ".gitignore": GITIGNORE_ALPHA }, true);
+    const alphaCommit = git(p, ["rev-parse", "--short", "HEAD"]).trim();
+    expect((next(p) as { construction_checkpoint?: { unit: string } }).construction_checkpoint?.unit).toBe("alpha");
+    expect(askCheckpoint(p, "alpha").changed_files).toBe(
+      `The build changed .gitignore, a file you had before this work started. To put it back, run \`git checkout ${first} -- .gitignore\`.`,
+    );
+    expect(reply(p, "Approve", CHAT_A).status).toBe(0);
+    tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve", "--session", CHAT_A, "--user-input", "Approve"]);
+    unitStep(p, "beta");
+    // The second Unit commits its own build: the command names the first Unit's commit.
+    unitBuild(p, "beta", { ".gitignore": GITIGNORE_BETA }, true);
+    expect((next(p) as { construction_checkpoint?: { unit: string } }).construction_checkpoint?.unit).toBe("beta");
+    expect(askCheckpoint(p, "beta").changed_files).toBe(
+      `The build changed .gitignore, a file you had before this work started. To put it back, run \`git checkout ${alphaCommit} -- .gitignore\`.`,
+    );
+    expect(unitListings(p)).toHaveLength(2);
+  });
+
+  test("checkpoints: the first Unit's change never committed, so the second Unit's has no committed copy; a file it left alone is not named", () => {
+    const p = unitsProject(false);
+    recordCommand(p);
+    unitStep(p, "alpha");
+    unitBuild(p, "alpha", { ".gitignore": GITIGNORE_ALPHA, "README.md": "# The app's own\n" }, false);
+    expect((next(p) as { construction_checkpoint?: { unit: string } }).construction_checkpoint?.unit).toBe("alpha");
+    expect(askCheckpoint(p, "alpha").changed_files).toBe(
+      "The build changed .gitignore and README.md, files you had before this work started. " +
+        "To put them back, run `git checkout HEAD -- .gitignore README.md`.",
+    );
+    expect(reply(p, "Approve", CHAT_A).status).toBe(0);
+    tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve", "--session", CHAT_A, "--user-input", "Approve"]);
+    unitStep(p, "beta");
+    unitBuild(p, "beta", { ".gitignore": GITIGNORE_BETA }, false);
+    expect((next(p) as { construction_checkpoint?: { unit: string } }).construction_checkpoint?.unit).toBe("beta");
+    expect(askCheckpoint(p, "beta").changed_files).toBe(
+      "The build changed .gitignore, a file you had before this work started. There is no committed copy to put back.",
+    );
   });
 });

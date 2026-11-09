@@ -436,7 +436,12 @@ describe("t341 Construction checkpoint verification and evidence", () => {
   test("exact policy opt-in, authoritative Unit, and complete in-scope stage set", async () => {
     expect(checkpointPolicyEnabled("")).toBe(false);
     expect(checkpointPolicyEnabled("- **Scope**: feature\n- **Construction Checkpoints**: enabled")).toBe(true);
-    expect(checkpointPolicyEnabled("- **Scope**: infra\n- **Construction Checkpoints**: enabled")).toBe(false);
+    // A plan whose Construction writes no workspace code has no checkpoint:
+    // infra builds its IaC in Code Generation, so here the plan skips it.
+    expect(checkpointPolicyEnabled(
+      "- **Scope**: infra\n- **Construction Checkpoints**: enabled\n\n## Stage Progress\n### CONSTRUCTION PHASE\n" +
+        "- [ ] nfr-requirements — EXECUTE\n- [ ] code-generation — SKIP\n- [ ] build-and-test — SKIP\n",
+    )).toBe(false);
     expect(checkpointPolicyEnabled("- **Construction Checkpoints**: enabled-ish")).toBe(false);
     const dir = project();
     const resolved = resolveConstructionCheckpoint(dir, "alpha", "unit");

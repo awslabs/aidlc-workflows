@@ -46,6 +46,7 @@ const HOST_ENV = [
   "AIDLC_PROJECT_DIR", "AIDLC_HARNESS_NAME", "AIDLC_HARNESS_DIR", "AIDLC_RUNTIME_ROOT",
   "AIDLC_RUNTIME_HARNESS_ROOT", "AIDLC_COMPILED_EXECUTABLE", "VSCODE_CODE_CACHE_PATH",
   "AIDLC_TEST_KIRO_IDE_SETTINGS", "AIDLC_TEST_KIRO_IDE_PLATFORM", "AIDLC_TEST_CONFIG_DETECTION_JSON",
+  "VSCODE_NONCE", "VSCODE_INJECTION", "VSCODE_STABLE", "VSCODE_A11Y_MODE",
 ];
 
 const temporary: string[] = [];
@@ -114,7 +115,7 @@ function installKiroIde(extra: Record<string, string>, yes = true): { project: s
   const project = temp("aidlc-t-kiro-terminal-project-");
   mkdirSync(join(project, ".git"));
   const result = runInit(
-    ["config", "--project-dir", project, "--from", DIST_RELEASE, "--harness", "kiro-ide", ...(yes ? ["--yes"] : [])],
+    ["config", "--project-dir", project, "--from", DIST_RELEASE, "--harness", "kiro", ...(yes ? ["--yes"] : [])],
     project,
     extra,
   );
@@ -344,11 +345,19 @@ describe("what the agent reads", () => {
     expect(skill).not.toMatch(/Command timed out[^\n]*Reload Window/);
   });
 
-  test("a result that ends at an `AI-DLC reply:` line is read from that file, and the command is not run again", () => {
+  // Live on Windows (Kiro IDE 1.4.86, no shell integration): a long reply came back cut off after the pointer and the
+  // agent went on from the cut-off part; another ended at the pointer and the agent went on without reading the file.
+  test("a result that ends at an `AI-DLC reply:` line, or is cut off after it, is read from that file, and the command is not run again", () => {
     const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(skill).toContain(
-      "**When a result ends at an `AI-DLC reply:` line**, the command is still running in Command Prompt: read the file " +
-        "that line names; its content is the reply. Do not run the command again.",
+      "**When a result ends at an `AI-DLC reply:` line, or the reply after that line is cut off (a JSON that does not close, " +
+        "a list or a sentence that stops mid-way)**, take the next step from the file that line names, not from the result: " +
+        "once the command finishes it holds the whole reply, below its first line (the command itself). While the file is not " +
+        "there, the command is still running in Kiro's terminal: read it again in a few seconds. If it is still not there after " +
+        "a few reads, tell the person in one line that it is still running and may be waiting for their answer in Kiro's " +
+        "terminal panel, and end your turn; on your next turn read it again a few times, and if it is still not there, tell them " +
+        "in one line that it has not finished yet (a long command can take many minutes, or wait for their answer there) or its " +
+        "reply was not saved, then check what it was meant to change. Do not run the command again.",
     );
   });
 
@@ -602,11 +611,11 @@ describe("the setter when there is nothing to set", () => {
 // within one second and drops the rest (measured on Kiro IDE 1.2.37). A tool
 // that runs in that terminal prints one pointer line first, runs itself as a
 // child, relays the child's reply and writes it to a file the pointer names,
-// so the agent reads a reply the terminal dropped instead of running the
-// command again. Nowhere else does the tool behave differently.
+// so the agent reads a reply the terminal dropped or cut off instead of
+// running the command again. Nowhere else does the tool behave differently.
 describe("the reply file and its pointer under Command Prompt", () => {
   const TOOL = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
-  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-sessions\/replies\/[a-z0-9-]+\.txt) \(Command Prompt shows a reply only when it is ready within a second; when this result ends here, the command is still running: read that file, which appears when it finishes\)$/m;
+  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-sessions\/replies\/[a-z0-9-]+\.txt) \(Command Prompt shows a reply only when it is ready within a second; when this result ends here or its reply is cut off, go on from that file, which holds the whole reply once the command finishes; until it appears, the command is still running\)$/m;
   function project(): string {
     const dir = temp("aidlc-t-kiro-terminal-tee-");
     mkdirSync(join(dir, "aidlc"), { recursive: true });
@@ -618,7 +627,8 @@ describe("the reply file and its pointer under Command Prompt", () => {
       mkdirSync(m.env.AIDLC_INSTALL_ROOT, { recursive: true });
       writeFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), `${shell}\n`);
     }
-    return childEnv({ ...m.env, TERM_PROGRAM: "kiro" });
+    // Kiro's terminal is both ends of the agent's command (measured); the runner's pipes are not.
+    return childEnv({ ...m.env, TERM_PROGRAM: "kiro", AIDLC_TEST_CONFIG_TTY: "1" });
   }
   function run(args: string[], cwd: string, env: Record<string, string>) {
     const r = spawnSync(process.execPath, [TOOL, ...args], { cwd, env, encoding: "utf-8" });
@@ -695,7 +705,7 @@ describe("the reply file and its pointer under Command Prompt", () => {
     expect(`${inPs.stdout}${inPs.stderr}`).not.toContain("AI-DLC reply:");
     const own = machine(CMD_WITH_COMMENTS);
     writeFileSync(join(mkdirSync(own.env.AIDLC_INSTALL_ROOT, { recursive: true }) ?? own.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), "cmd\n");
-    const outside = run(["version"], project(), childEnv(own.env));
+    const outside = run(["version"], project(), childEnv({ ...own.env, AIDLC_TEST_CONFIG_TTY: "1" }));
     expect(`${outside.stdout}${outside.stderr}`).not.toContain("AI-DLC reply:");
     const unrecorded = machine(POWERSHELL_SET);
     const noRecord = run(["version"], project(), inTerminal(unrecorded, null));
@@ -783,5 +793,142 @@ describe("the quote pair Command Prompt left on the words", () => {
     expect(next.status, next.stderr).toBe(0);
     expect(next.stdout).toContain("fix the greeter: it prints hello");
     expect(next.stdout).not.toContain("'fix the greeter");
+  });
+});
+
+// Kiro starts PowerShell with its shell integration script, and the script's
+// first lines clear VSCODE_NONCE. When an execution policy of Restricted or
+// AllSigned stops the unsigned script (VSCODE_INJECTION=1 and VSCODE_A11Y_MODE
+// stay), or Kiro's shell integration setting is off (neither), the nonce stays
+// in every command and the terminal behaves as Command Prompt does: exit code
+// -1 for every run, a reply only within a second (measured on Kiro IDE 1.4.86,
+// Windows PowerShell 5.1). AI-DLC's commands there keep their reply in a file
+// too, and doctor run in that terminal names what to check.
+describe("a PowerShell terminal whose shell integration did not run", () => {
+  const TOOL = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
+  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-sessions\/replies\/[a-z0-9-]+\.txt) \(Kiro's terminal here runs without its shell integration, so it shows a reply only when it is ready within a second and every result ends with exit code -1; when this result ends here or its reply is cut off, go on from that file, which holds the whole reply once the command finishes; until it appears, the command is still running\)$/m;
+  const BLOCKED = { VSCODE_NONCE: "05a79338-0192-4df2-9a5f-b69cc08579cd", VSCODE_INJECTION: "1", VSCODE_STABLE: "1", VSCODE_A11Y_MODE: "0" };
+  const SETTING_OFF = { VSCODE_NONCE: "1ddc280d-fa22-4fd4-b0fd-b637a85c8660" };
+  const LOADED = { VSCODE_INJECTION: "1" };
+  function inTerminal(m: ReturnType<typeof machine>, shell: "cmd" | "powershell", vars: Record<string, string>): Record<string, string> {
+    mkdirSync(m.env.AIDLC_INSTALL_ROOT, { recursive: true });
+    writeFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), `${shell}\n`);
+    return childEnv({ ...m.env, TERM_PROGRAM: "kiro", AIDLC_TEST_CONFIG_TTY: "1", ...vars });
+  }
+  function project(): string {
+    const dir = temp("aidlc-t-kiro-terminal-integration-");
+    mkdirSync(join(dir, "aidlc"), { recursive: true });
+    return dir;
+  }
+  function run(args: string[], cwd: string, env: Record<string, string>) {
+    const r = spawnSync(process.execPath, [TOOL, ...args], { cwd, env, encoding: "utf-8" });
+    return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  }
+
+  test("an AI-DLC command prints the pointer first and keeps its reply in the file, with the script stopped or the setting off", () => {
+    for (const vars of [BLOCKED, SETTING_OFF]) {
+      const m = machine(POWERSHELL_SET);
+      const dir = project();
+      const r = run(["version"], dir, inTerminal(m, "powershell", vars));
+      expect(r.status, r.stderr).toBe(0);
+      const lines = r.stdout.split("\n").filter((line) => line !== "");
+      expect(lines[0]).toMatch(POINTER);
+      expect(lines[1]).toMatch(/^aidlc \d/);
+      expect(lines.filter((line) => line.startsWith("AI-DLC reply:")).length).toBe(1);
+      expect(readFileSync(join(dir, POINTER.exec(r.stdout)![1]), "utf-8")).toContain(lines[1]);
+    }
+  });
+
+  test("nothing changes where the script ran, outside Kiro's terminal, off Windows, or in Command Prompt", () => {
+    const m = machine(POWERSHELL_SET);
+    const dir = project();
+    for (const env of [
+      inTerminal(m, "powershell", LOADED),
+      childEnv({ ...m.env, AIDLC_TEST_CONFIG_TTY: "1", ...BLOCKED }),
+      inTerminal(machine(POWERSHELL_SET, "darwin"), "powershell", BLOCKED),
+    ]) {
+      const r = run(["version"], dir, env);
+      expect(`${r.stdout}${r.stderr}`).not.toContain("AI-DLC reply:");
+    }
+    const inCmd = run(["version"], dir, inTerminal(machine(CMD_WITH_COMMENTS), "cmd", BLOCKED));
+    expect(inCmd.stdout).toContain("(Command Prompt shows a reply only when it is ready within a second;");
+    expect(inCmd.stdout).not.toContain("shell integration");
+  });
+
+  // `config` runs itself again and reads the child's JSON; a person pipes `--json` output; neither is a terminal.
+  test("no pointer where the output goes to a pipe, or where no aidlc/ folder is", () => {
+    const m = machine(POWERSHELL_SET);
+    const { AIDLC_TEST_CONFIG_TTY: _tty, ...piped } = inTerminal(m, "powershell", BLOCKED);
+    const toPipe = run(["version"], project(), piped);
+    expect(toPipe.status, toPipe.stderr).toBe(0);
+    expect(`${toPipe.stdout}${toPipe.stderr}`).not.toContain("AI-DLC reply:");
+    const bare = temp("aidlc-t-kiro-terminal-integration-bare-");
+    const noFolder = run(["version"], bare, inTerminal(m, "powershell", BLOCKED));
+    expect(`${noFolder.stdout}${noFolder.stderr}`).not.toContain("AI-DLC reply:");
+    expect(existsSync(join(bare, "aidlc"))).toBe(false);
+  });
+
+  // Claude Code or Codex started from that terminal carries its variables into its hooks, which read the tool's
+  // output as their structured reply, as the status line's host does.
+  test("a host's hook, adapter or status line, read through a pipe, gets no pointer, here or in Command Prompt", () => {
+    const dispatcher = join(REPO_ROOT, "core", "tools", "aidlc.ts");
+    const dir = project();
+    // Command Prompt first: there the base tees these routes too. A host reads its hook's output through a pipe.
+    for (const env of [inTerminal(machine(CMD_WITH_COMMENTS), "cmd", {}), inTerminal(machine(POWERSHELL_SET), "powershell", BLOCKED)]) {
+      const { AIDLC_TEST_CONFIG_TTY: _tty, ...hostPipe } = env;
+      for (const args of [["engine", "hook", "no-such-hook-for-the-tee-test"], ["engine", "statusline"], ["engine", "adapter", "codex", "no-such-target"]]) {
+        const r = spawnSync(process.execPath, [dispatcher, ...args], { cwd: dir, env: hostPipe, input: "{}", encoding: "utf-8" });
+        expect(`${r.stdout}${r.stderr}`, args.join(" ")).not.toContain("AI-DLC reply:");
+      }
+      // A public command in the same terminal still tees.
+      const version = spawnSync(process.execPath, [dispatcher, "version"], { cwd: dir, env, encoding: "utf-8" });
+      expect(version.stdout).toContain("AI-DLC reply:");
+    }
+  });
+
+  test("PowerShell's own quoting is left alone: no Command Prompt quote rejoin", () => {
+    const m = machine(POWERSHELL_SET);
+    const args = ["next", "'fix", "the", "greeter'"];
+    withEnv(inTerminal(m, "powershell", BLOCKED), () => expect(rejoinCommandPromptQuotes(args, process.env)).toEqual(args));
+  });
+
+  test("doctor run in that terminal warns with the step for what it sees; elsewhere it keeps the profile row", () => {
+    const m = machine(POWERSHELL_SET);
+    const { project: dir } = installKiroIde({ ...m.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(m.root, "none.json") });
+    withEnv(m.env, () => {
+      const blocked = kiroIdeTerminalDoctorCheck(dir, ".kiro", inTerminal(m, "powershell", BLOCKED));
+      expect(blocked).toMatchObject({ pass: false, severity: "warn" });
+      expect(blocked?.label).toBe("Kiro terminal: this terminal runs without Kiro's shell integration, so every command shows exit code -1 and output after its first second is cut off (AI-DLC keeps its own replies in a file)");
+      expect(blocked?.fix).toContain("in Kiro's PowerShell terminal, run `Get-ExecutionPolicy -List` and `$ExecutionContext.SessionState.LanguageMode`");
+      expect(blocked?.fix).toContain("when MachinePolicy or UserPolicy is set, or the language mode is not FullLanguage, your organization manages it");
+      expect(blocked?.fix).toContain("when Process is set, Kiro took it from where it was started: start Kiro from the Start menu instead");
+      expect(blocked?.fix).toContain("when the policy in effect comes from CurrentUser or LocalMachine and is Restricted or AllSigned, `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`");
+      expect(blocked?.fix).toContain("restart Kiro");
+      const off = kiroIdeTerminalDoctorCheck(dir, ".kiro", inTerminal(m, "powershell", SETTING_OFF));
+      expect(off?.fix).toContain("`terminal.integrated.shellIntegration.enabled` is on");
+      expect(off?.fix).not.toContain("ExecutionPolicy");
+      // Kiro sets VSCODE_A11Y_MODE only for PowerShell's script: without it no PowerShell script was started.
+      const other = kiroIdeTerminalDoctorCheck(dir, ".kiro", inTerminal(m, "powershell", { VSCODE_NONCE: "n", VSCODE_INJECTION: "1" }));
+      expect(other?.fix).not.toContain("ExecutionPolicy");
+      expect(kiroIdeTerminalDoctorCheck(dir, ".kiro", inTerminal(m, "powershell", LOADED)))
+        .toEqual({ pass: true, label: "Kiro terminal: PowerShell" });
+      expect(kiroIdeTerminalDoctorCheck(dir, ".kiro", m.env)).toEqual({ pass: true, label: "Kiro terminal: PowerShell" });
+    });
+  });
+
+  test("the agent reads an empty -1 there as cut off, not as trust or a declined command, and names the check once", () => {
+    const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(skill).toContain(
+      "When an `AI-DLC reply:` line in this chat said Kiro's terminal here runs without its shell integration, every command " +
+        "ends with exit code -1 in this terminal whatever its outcome (read a result that shows output by what it printed, " +
+        "not by that code), so a result that shows nothing is a command whose output was cut off, that may still be " +
+        "running, or that Kiro did not run, and neither reading below applies: do not run it again to see its output;",
+    );
+    expect(skill).toMatch(
+      /\*\*When an `AI-DLC reply:` line says Kiro's terminal here runs without its shell integration\*\*, whether or not the reply after it is whole, tell the person this once in the chat, in their language, then go on with their request: "Kiro's terminal here runs without its shell integration, so every command shows exit code -1, replies that take over a second are cut off, and steps take extra turns\. `[^`]+ doctor` run in Kiro's terminal says why and what to change\."/,
+    );
+    // The agent does not run doctor itself: it would cost a command in this terminal, and the skill's utility route
+    // (`engine orchestrate next --doctor`) is a turn-ending print that would stop the person's work.
+    expect(skill).not.toMatch(/run `[^`]*doctor` and tell the person/);
   });
 });

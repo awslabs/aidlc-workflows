@@ -77,7 +77,10 @@ block:
       "scopes": "scopes/",            // NEW scope identities
       "knowledge": "knowledge/",      // methodology knowledge for agents
       "sensors": "sensors/",          // sensor manifests
-      "tools": "tools/"               // runnable sensor + doctor scripts
+      "tools": "tools/"               // runnable sensor, doctor, and command scripts
+    },
+    "commands": {                     // optional: commands people run as `aidlc <name>` (§4)
+      "test-pro-report": { "script": "tools/test-pro-report.ts", "description": "Print the coverage report" }
     }
   }
 }
@@ -88,8 +91,8 @@ not implemented yet, so each present value must use the exact canonical path
 shown above; VALIDATE, BUILD, and TEST reject alternatives such as
 `"stages": "custom-stages/"` instead of silently omitting that content.
 `tools` lands CLI scripts in the harness `tools/` dir so a plugin can ship a
-**runnable sensor** (its manifest in `sensors/` + its script in `tools/`) and an
-optional doctor check.
+**runnable sensor** (its manifest in `sensors/` + its script in `tools/`), an
+optional doctor check, and the scripts behind its commands (`commands`, below).
 Keep tests and fixtures in the plugin's top-level `tests/` directory, never
 inside `tools/`. Compose drops files under `tools/tests/`, `tools/__tests__/`,
 or `tools/fixtures/`, plus co-located `*.test.ts` and `*.spec.ts` files, and
@@ -101,8 +104,9 @@ path without attributing it to the plugin currently composing.
 `contributions/`, whose files are consumed by the merge rather than copied as a
 primitive subtree.
 
-`memory` projection remains deferred. Do not declare `contributes.memory` yet:
-the authoring tools reject it until the default-space method-seed merge ships.
+`memory` (canonical `memory/`) carries your plugin's house rules: `rules.md` and
+`phases/<phase>.md`, with `aidlc.rulesLevel` naming the rule file `rules.md`
+lands in (Method/rules, section 4).
 
 Ship only the keys your plugin uses. `test-pro` ships a support agent, a plugin
 scope, and per-agent methodology knowledge; it still reuses
@@ -139,6 +143,20 @@ that read sensibly and agree with your edges (`test-pro-integration` is
 carries — but the absolute values never land in the graph, inserting a stage
 never renumbers core, and you claim no range (which is why two uncoordinated
 plugins can never collide on numbers).
+
+A stage that runs once per Unit (`for_each: unit-of-work`) runs with its Unit
+whatever number it gets. A Construction stage that `requires_stage:
+[code-generation]` is numbered after `ci-pipeline` (`3.8`), yet each Unit runs
+it right after its own Code Generation, its approvals come before Build and
+Test, and the team's last Unit moves the work on to Build and Test, as for the
+core per-Unit stages
+([Stage Definition](../reference/15-stage-definition.md#for_each)). Such a stage
+cannot require a stage that runs once per intent after the Units (`build-and-test`,
+for example); compile refuses that edge.
+
+Work started before the plugin was installed has no Stage Progress row for its
+stages. The engine writes each row, after the rows of its phase that come
+before it, when the work first reaches the stage.
 
 Gate a stage onto a scope with `scopes:` (it is SKIP everywhere else), and
 optionally declare a `when:` predicate. `test-pro-full-suite` is *intended* to run
@@ -215,7 +233,14 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
 §5/§8 — implement or demote, never a silent no-op):
 
 - `adds.produces` / `adds.consumes` / `adds.sensors` — ✅ set-unioned into the
-  target stage's source frontmatter.
+  target stage's source frontmatter. On a per-Unit stage that maps every
+  required output to Unit kinds with `produces_kinds` (today functional-design
+  and infrastructure-design), an output you add gets an entry for the kinds
+  those outputs cover, so the stage runs for the same Units as before; you do
+  not write the entry yourself. This needs a plugin built with this release or
+  later (the compose hook ships inside the plugin): rebuild it with
+  `aidlc plugin build <harness>` and drop it in again. On an engine older than
+  this release, compose skips that output with a drop and composes the rest.
 - `adds.required_sections` — ✅ merged into the stage's `required_sections`. Note
   it is **not machine-enforced today**: the field is written and validates, but it
   does not reach the compiled graph node, and the shipped `required-sections`
@@ -352,8 +377,7 @@ strips them before it re-composes.
 ## 4. Packaging the other primitives
 
 `test-pro` ships stages, contributions, sensors, a support agent, a scope, and
-methodology knowledge. A richer plugin may also add method/rules later; memory
-projection remains deferred (doc 18 §9 Status).
+methodology knowledge. A plugin may also ship house rules (Method/rules, below).
 
 - **Agents.** Drop `agents/<plugin>-<role>-agent.md` with `plugin:` set. The
   plugin prefix replaces core's `aidlc-` filename prefix, and the filename stem
@@ -367,7 +391,7 @@ projection remains deferred (doc 18 §9 Status).
   creates the native `.opencode/agents/` subagent twin and denies nested
   `task` delegation. See
   [Adding an Agent](03-adding-an-agent.md).
-  On Kiro IDE and Kiro CLI v3 (the `kiro-ide` projection), compose gives your
+  On Kiro IDE and Kiro CLI v3 (the Kiro projection, built with `kiro`), compose gives your
   agent the tools, MCP servers and rules AI-DLC's own personas have, so leave
   Kiro's `tools:` and `permissions:` out of the agent (Claude Code would read a
   `tools:` line as its allowlist); your stages can dispatch it. Kiro asks the
@@ -375,7 +399,7 @@ projection remains deferred (doc 18 §9 Status).
   it asks before each MCP call (the aidlc agent allows only AI-DLC's own
   personas by name). This needs a
   plugin built with this release or later: rebuild it and drop it in again.
-  On Kiro CLI V2 (the `kiro` projection), a plugin's agent that a stage
+  On Kiro CLI V2 (the Kiro CLI (V2) projection, built with `kiro-v2`), a plugin's agent that a stage
   dispatches needs a hand-written agent file, `.kiro/agents/<agent>.json`
   (agent-v1 JSON, naming each MCP server it uses as `@<server>` in `tools`),
   and a trust entry for it in `toolsSettings.subagent.trustedAgents` of
@@ -391,13 +415,17 @@ projection remains deferred (doc 18 §9 Status).
   names the file and the required shape, rather than letting it land dead. Bind
   the sensor to your own stages via `sensors:`, or to a core stage via a
   contribution's `adds.sensors`. See [Sensors](06-sensors.md).
-- **Method/rules.** *(⏳ deferred.)* A future `contributes.memory` surface will
-  merge `memory/phases/<phase>.md` and `memory/{org,team,project}.md` into the
-  default-space method seed (`aidlc/spaces/default/memory/`). The packager and
-  compose hook do not project that subtree yet, and the authoring tools reject
-  the declaration so a build cannot report success while omitting it. Do
-  **not** ship a `rules/` dir — that path is no longer read (the rule layer moved
-  into per-space memory). See [Rules and the Loop](05-rules-and-the-loop.md).
+- **Method/rules.** Ship practice rules in words as `memory/rules.md` (every
+  stage) and `memory/phases/<phase>.md` (one phase), and set
+  `"aidlc": {"rulesLevel": "team"}` (or `org`, `project`) for the rule file
+  `rules.md` lands in. Plugin sync writes each as one section your plugin owns
+  at the end of that file in every space, your headings one level down; a
+  person can move them with `/aidlc plugin select --rules-level <plugin>=<level>`.
+  Write no `## Guard Policy` and no setting line (`Mode:`, `Methodology:`,
+  `Ordering:`): validate refuses them, since a plugin ships rules, never locks.
+  Do **not** ship a `rules/` dir: that path is no longer read. See
+  [Rules and the Loop](05-rules-and-the-loop.md) and
+  [The Plugin Mechanism](../reference/18-plugin-mechanism.md), section 7.
 - **Knowledge.** Ship per-agent **methodology** knowledge under
   `knowledge/<agent-slug>/`, projected into the framework-shipped
   `<harness>/knowledge/` tree and loaded when that agent leads or supports a
@@ -457,6 +485,53 @@ Omit `severity` for the default `error` behavior. Use `advisory` for a visible
 finding that must not fail doctor. Keep the script read-only and dependency-free;
 doctor bounds its runtime/output and turns script failures into diagnostic rows.
 
+### Ship a command
+
+A plugin with a tool people run on demand (a report, a dashboard, a generator)
+names it in `aidlc.commands`, each name mapped to one `.ts` script directly in
+its `tools/` and a one-line description:
+
+```json
+"commands": {
+  "test-pro-report": { "script": "tools/test-pro-report.ts", "description": "Print the coverage report" }
+}
+```
+
+People then run it like AI-DLC's own commands: `aidlc test-pro-report` in a
+terminal (`bun <harness-dir>/tools/aidlc.ts test-pro-report` on a copy install),
+`/aidlc test-pro-report` in the chat (`$aidlc test-pro-report` in Codex), and
+your stage prose names it the same way, `{{INVOKE}} test-pro-report`, which
+becomes the right form for each install.
+AI-DLC starts the script with its own runtime, the way doctor starts a doctor
+check: Bun on a copy install, the `aidlc` binary on a native one, with no shell
+in between, so it works in PowerShell, cmd, and POSIX shells alike. The script
+gets every argument after the name, stdin, stdout, stderr, and its exit code
+passes through. `AIDLC_PROJECT_DIR`, `AIDLC_HARNESS_DIR`, and
+`AIDLC_PLUGIN_NAME` are set. On a native install an `aidlc` command the script
+runs reaches the engine; on a copy install the script reaches it as
+`bun $AIDLC_HARNESS_DIR/tools/aidlc.ts` (run from `AIDLC_PROJECT_DIR`), the
+command people type there. `aidlc --help` lists your commands under your plugin with their
+descriptions.
+
+- **Names:** lowercase letters, digits, and `-`, starting with a letter, at most
+  40 characters. Prefix them with your plugin's name: a short common word can
+  also open a person's own sentence (`/aidlc report the bug`), and AI-DLC then
+  asks the agent to read which they meant.
+- **AI-DLC's names stay AI-DLC's:** `aidlc plugin validate` refuses a name
+  AI-DLC's own commands use (`doctor`, `config`, `plugin`, `space`, ...). A plan's
+  name, or a name an enabled plugin earlier by name already has, is skipped when
+  the plugin is installed, and the sync says so once in one line naming both;
+  doctor keeps that line.
+- **Only on:** a command runs only while its plugin is installed and on in the
+  project. When it is off, `aidlc <name>` says so in one line, with the
+  `aidlc config project --plugins` command that turns it back on.
+- `VALIDATE` and `BUILD` refuse a bad entry (rule `manifest-commands`): a bad
+  name, a script outside `tools/` or missing, no `contributes.tools`, or an
+  unknown key. An AI-DLC older than the field ignores it: the command is simply
+  not there.
+- A project composed before your plugin named commands records them at its next
+  plugin sync (a new session on Claude Code and Codex; `plugin sync` elsewhere).
+
 ## 5. Distribution + install
 
 The shipped builder emits your plugin as **a real host plugin** for one harness
@@ -469,7 +544,10 @@ bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir]
 ```
 
 The default output is `<plugin-root>/dist/<harness>/`. Run it once for each
-harness you publish. The repository packager uses the same emitter to build
+harness you publish. `<harness>` is the name `aidlc config --harness` takes; the
+two Kiro names keep their folder names in the output: `kiro` (Kiro IDE and Kiro
+CLI v3) builds `dist/kiro-ide/`, and `kiro-v2` (Kiro CLI (V2)) builds
+`dist/kiro/`. The repository packager uses the same emitter to build
 first-party `dist/plugins/<name>/<harness>/` trees, so its byte-parity guard also
 guards external builds. Publish the output to a git repo with semver tags and a
 `marketplace.json`; teams then install through the host's native commands.
@@ -547,17 +625,17 @@ AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<pro
 # fallback: run the composer explicitly:
 AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<project>" \
   AIDLC_HARNESS_DIR=.kiro bun "<project>/.kiro/aidlc-plugins/<name>/hooks/compose.ts"
-# open in Kiro IDE or start kiro-cli --v3 (kiro-cli --v2 for the kiro projection, on Kiro CLI 2.21.4 or later) → /aidlc
+# open in Kiro IDE or start kiro-cli --v3 (kiro-cli --v2 for the Kiro CLI (V2) projection built with kiro-v2, on Kiro CLI 2.21.4 or later) → /aidlc
 ```
 
-> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
+> **Kiro note.** Use the Kiro projection (built with `kiro`, in its `kiro-ide/` folder) for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
 > includes a `version: "v1"` `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
 > that runs `aidlc engine plugin sync --harness-dir .kiro --plugin-root ./.kiro/aidlc-plugins/<name>` from the workspace root,
 > or that plugin folder's cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher where `aidlc` is not installed.
 > The registration asks for 1800 seconds, as Kiro stops a hook with no `timeout` after 60. AI-DLC
 > does not add it to a registration already in a project; a projection built with this release or
 > later carries it.
-> The `kiro` projection emits no hook registration,
+> The Kiro CLI (V2) projection (built with `kiro-v2`, in its `kiro/` folder) emits no hook registration,
 > so run one of the explicit composer commands above. Neither projection emits the
 > retired `.kiro.hook` plugin registration.
 
@@ -714,8 +792,8 @@ missing plugin node, or second-pass file change exits `1`; invalid command
 usage exits `2`. The live install is hashed before and after and is never a
 compose target.
 
-Pass `--harness` when the install is ambiguous, including `.kiro` (Kiro CLI vs
-Kiro IDE) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
+Pass `--harness` when the install is ambiguous, including `.kiro` (`kiro-v2` for
+Kiro CLI (V2) vs `kiro` for Kiro) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
 `--with <base-root>` composes your checkout of the base into the candidate
 first, as sync composes bases first, so the install does not need the base. The
 standalone tool reserves `--dist <version>` until RFC #722 milestone 2 defines
@@ -820,8 +898,8 @@ skipped result, so a green test run can mean the live check did not run.
   it may not collide with a core artifact or another plugin's.
 - **Primitive names are unique.** Your scopes/agents/sensors may not
   collide with core or another plugin — a collision is a compose error with
-  attribution. (Method files are not a plugin contribution yet: the validator
-  rejects `contributes.memory`.)
+  attribution. (A plugin's rules land in a section of their own, never in a
+  team's.)
 - **One base at most.** A plugin builds on core and at most one base plugin:
   `"dependencies": ["core", "acme@^1.2.0"]`. The base itself builds on core
   alone. Sync composes the base first, so your stages can order after its

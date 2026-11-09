@@ -5853,6 +5853,50 @@ describe("t218 forward-only sync-statusline (finding 1: no state resurrection)",
   });
 });
 
+// A Kiro IDE run in a checkout that had claimed a Unit (Unit Ownership: team,
+// so unit-major) could not take a step: every shell command ran this sync, the
+// merged audit tail's last STAGE_STARTED was the block's first stage from the
+// facilitator's shard (a Unit step writes UNIT_STARTED, no STAGE_STARTED), and
+// the sync moved Current Stage off the Unit's stage the engine had rested it
+// on. The issued step was retired, so `continue` returned part one again and
+// Plan Approval found no current directive, after every command.
+describe("t218 sync-workflow-state leaves a claimed Unit's cursor on its own stage", () => {
+  test("the audit tail's first-stage start does not move it, and the call is a no-op for the front gate", () => {
+    const dir = scratchProject(true);
+    try {
+      const path = seededStateFile(dir);
+      writeFileSync(path, readFileSync(path, "utf-8")
+        .replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n")
+        .replace("- [-] requirements-analysis — EXECUTE", "- [x] requirements-analysis — EXECUTE")
+        .replace("- [ ] functional-design — EXECUTE", "- [-] functional-design — EXECUTE")
+        .replace("- [ ] code-generation — EXECUTE", "- [-] code-generation — EXECUTE"), "utf-8");
+      setStateField(dir, "Lifecycle Phase", "CONSTRUCTION");
+      setStateField(dir, "Current Stage", "code-generation");
+      setStateField(dir, "In Progress", "code-generation");
+      appendStageStarted(dir, "functional-design", "2026-10-31T16:14:00Z");
+      const before = readFileSync(path, "utf-8");
+      expect(before).toContain("- **Construction Iteration**: unit-major");
+      writeActiveDirectiveMarker(dir, {
+        kind: "run-stage",
+        stage: "code-generation",
+        unit: "u1-contracts",
+        state_sha256: stateDigest(before),
+      });
+
+      const r = runIde(dir, "sync-workflow-state", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+      expect(r.code, r.stderr).toBe(0);
+
+      expect(readFileSync(path, "utf-8")).toBe(before);
+      expect(readActiveDirectiveMarker(dir, before)?.stage).toBe("code-generation");
+      const health = join(seededRecordDir(dir), ".aidlc-engine", "hooks-health");
+      expect(existsSync(join(health, "sync-workflow-state.noop"))).toBe(true);
+      expect(existsSync(join(health, "sync-workflow-state.last"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // A Kiro IDE run reopened Code Generation for two Units from a failed Build
 // and Test, and every reopen was undone by this sync: the last STAGE_STARTED
 // was Build and Test's own, which the reopen had reset to not started, so the
@@ -6751,13 +6795,14 @@ describe("t218 the Kiro IDE trust step", () => {
       "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
     );
     expect(activation.recovery).not.toContain("hooks");
-    // The adapter takes the Kiro IDE step as everything before this marker.
+    // The cases below take the Kiro IDE step as everything before this marker.
     expect(activation.recovery.split(" In Kiro CLI,").length).toBe(2);
   });
 
   // The state tool's refusal for a reply that was not recorded says what
-  // happened, not to ask again, and the step doctor names for the tool the
-  // person is in, word for word, with nothing about how AI-DLC works. Inside
+  // happened, not to ask again now, that the question may come again, and the
+  // step doctor names for the tool the person is in, word for word but for the
+  // entry (the line is shown unfilled), with nothing about how AI-DLC works. Inside
   // Kiro IDE (TERM_PROGRAM=kiro on the agent's own commands, VSCODE_IPC_HOOK or
   // VSCODE_PID on its hooks) that is its step alone; Kiro CLI and an ACP client, which nothing tells apart, get
   // their own two lines and never Kiro IDE's.
@@ -6767,9 +6812,11 @@ describe("t218 the Kiro IDE trust step", () => {
     }).hookActivation;
     const split = activation.recovery.indexOf(" In Kiro CLI,");
     const ideStep = activation.recovery.slice(0, split);
-    const otherTools = activation.recovery.slice(split + 1);
-    const said = "Your answer was not recorded, so you don't need to answer again.";
-    const lead = "If the person already replied, that reply was not recorded. Do not ask them to answer again. ";
+    // The missed-reply line is shown unfilled, so its Kiro CLI step leaves out
+    // the entry doctor's ends with.
+    const otherTools = activation.recovery.slice(split + 1).replace(", then type <entry> to carry on.", ".");
+    const said = "Your answer was not recorded, so you may be asked for it again.";
+    const lead = "If the person already replied, that reply was not recorded. Do not ask them to answer again now. ";
     expect(activation.missedReplyInHost).toEqual({
       env: ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"],
       text: `${lead}Tell them exactly this, with nothing about why: "${said} ${ideStep}"`,
@@ -6796,15 +6843,11 @@ describe("t218 the Kiro IDE trust step", () => {
     expect(activation.agentStepInHost.env).toEqual(activation.missedReplyInHost.env);
     expect(activation.agentStepInHost.text).toContain(`Show the person this line: "${activation.recovery.slice(0, split)}"`);
     expect(activation.agentStepInHost.text).not.toContain("Kiro CLI");
-    // Doctor's Kiro CLI step, plus the entry that carries the kept request on
-    // (the descriptor holds the text before <entry> is filled).
+    // Doctor's Kiro CLI step word for word, entry included (the descriptor
+    // holds the text before <entry> is filled).
     const cliStep = activation.recovery.slice(split + 1);
-    const restartStep = cliStep.replace(
-      ". If you drive Kiro from an ACP client",
-      ", then type <entry> to carry on. If you drive Kiro from an ACP client",
-    );
-    expect(restartStep).not.toBe(cliStep);
-    expect(activation.agentStep).toContain(`Show the person this line: "${restartStep}"`);
+    expect(cliStep).toContain(", then type <entry> to carry on. If you drive Kiro from an ACP client");
+    expect(activation.agentStep).toContain(`Show the person this line: "${cliStep}"`);
     expect(activation.agentStep).not.toContain("Reload Window");
   });
 
@@ -6848,9 +6891,9 @@ describe("t218 the Kiro IDE trust step", () => {
     }
     expect(hits).toEqual([]);
     const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
-      hookActivation: { recovery: string; notRunYet: string };
+      hookActivation: { recovery: string; notRunYet: string; notRunYetCliFirst: { text: string } };
     }).hookActivation;
-    for (const text of [activation.recovery, activation.notRunYet]) {
+    for (const text of [activation.recovery, activation.notRunYet, activation.notRunYetCliFirst.text]) {
       expect(text).toContain("Developer: Reload Window");
       expect(text).toContain("select Manage on the Restricted Mode banner, then Trust");
       expect(text).not.toContain("agent picker");

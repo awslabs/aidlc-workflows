@@ -225,15 +225,22 @@ export function sameGuardOperation(left: unknown, right: unknown): boolean {
 
 export interface GuardRestartContinuation {
   operation: Extract<GuardRecoveryOperation, { kind: "restart-stage" }>;
-  direction: "redo" | "backward";
+  // "reopen" is the restart a checkout scoped to a team Unit makes: the Unit's
+  // own reopen of the stage and every later per-Unit stage (`stages`, `unit`).
+  direction: "redo" | "backward" | "reopen";
   scope: string;
+  stages?: string[];
+  unit?: string;
 }
 
 // next --stage returns this second command to perform the reset. Match the
 // complete native command, not a shell invocation extracted from a larger
 // program: wrappers, redirections, extra commands and flags are not a reset.
 // The hook separately checks the human selection and resolves the direction
-// against the current effective plan before admitting this continuation.
+// against the current effective plan before admitting this continuation. In a
+// checkout scoped to a team Unit the restart is that Unit's reopen,
+// `jump reopen --target <stage> --stages <list> --units <unit> --scope <scope>`,
+// or for the Unit's own step its redo, the same with `--via redo` before `--scope`.
 // A source install prints the same continuation as
 // `bun <harness>/tools/aidlc-jump.ts execute ...`; pass that harness directory
 // to accept it. Any other script path, or a harness directory not passed, is not a reset.
@@ -253,6 +260,30 @@ export function parseGuardRestartContinuationCommand(
     args = words.slice(1);
   } else {
     return null;
+  }
+  // The same reopen as the redo of the Unit's own step (unitMajorRedo in
+  // aidlc-orchestrate.ts) carries `--via redo` before `--scope`; a change
+  // (`--via change`) is not a restart.
+  const reopen = args.length === 11 && args[0] === "reopen" && args[7] === "--via" && args[8] === "redo"
+    ? [...args.slice(0, 7), ...args.slice(9)]
+    : args;
+  if (
+    reopen.length === 9 &&
+    reopen[0] === "reopen" &&
+    reopen[1] === "--target" && identifier(reopen[2]) &&
+    reopen[3] === "--stages" &&
+    reopen[5] === "--units" && identifier(reopen[6]) &&
+    reopen[7] === "--scope" && identifier(reopen[8])
+  ) {
+    const stages = reopen[4].split(",");
+    if (!stages.every(identifier)) return null;
+    return {
+      operation: { kind: "restart-stage", stage: reopen[2] },
+      direction: "reopen",
+      scope: reopen[8],
+      stages,
+      unit: reopen[6],
+    };
   }
   if (
     args.length !== 7 ||

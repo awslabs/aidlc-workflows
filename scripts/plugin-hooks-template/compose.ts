@@ -421,6 +421,12 @@ function selectCommandForPlugin(): string {
     : `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${selection}`;
 }
 
+// The engine command that adds this plugin's rules to the rule files.
+function syncCommandForPlugin(): string {
+  const sync = NATIVE_CHANNEL ? "aidlc engine plugin sync" : `bun ${HARNESS_LEAF}/tools/aidlc-plugin.ts sync`;
+  return HARNESS_NAME === "kiro" || HARNESS_NAME === "opencode" ? `${sync} --plugin-root ${PLUGIN_ROOT}` : sync;
+}
+
 function installedToolCommand(tool: "utility" | "graph" | "runner", args: string[]): string[] {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE?.trim();
   if (!executable) {
@@ -2447,6 +2453,82 @@ try {
   // Probe ONCE whether the installed engine accepts required_sections — writing
   // it into a stage an older engine can't parse would break every later compile.
   const requiredSectionsSafe = await installedSchemaAccepts("required_sections", ["Probe Section"]);
+  // An output added to a stage that maps every required output to Unit kinds
+  // needs a produces_kinds entry, and only the installed engine writes it,
+  // because only that engine's strip takes it out again and its refresh writes
+  // it back. An output that would still fail the compile (for example, because
+  // an older engine gives it no entry) is skipped with a drop, so the compile
+  // does not fail and roll back the whole plugin. The drop names the stage, the
+  // outputs, the kinds the review target does not cover, and what to change.
+  type AddPluginProducesKinds = (content: string, added: readonly string[]) => string;
+  const addPluginProducesKinds: AddPluginProducesKinds | null =
+    await import(join(HARNESS_DIR, "tools", "aidlc-plugin-produces-kinds.ts"))
+      .then((m) => typeof m.addPluginProducesKinds === "function" ? m.addPluginProducesKinds as AddPluginProducesKinds : null)
+      .catch(() => null);
+  const [installedLib, installedSchema] = await Promise.all([installedAidlcLib(), installedStageSchema()]);
+  const parsedStage = (content: string): Record<string, unknown> | null => {
+    if (typeof installedLib?.parseStageFrontmatter !== "function") return null;
+    try {
+      return installedLib.parseStageFrontmatter(content);
+    } catch {
+      return null;
+    }
+  };
+  // The installed engine's schema errors for a stage; null when it has no
+  // schema or the stage does not parse, and the graph compile then judges it.
+  const stageErrors = (content: string): string[] | null => {
+    const stage = parsedStage(content);
+    if (stage === null || typeof installedSchema?.validateStageFrontmatter !== "function") return null;
+    try {
+      return installedSchema.validateStageFrontmatter(stage).errors ?? [];
+    } catch {
+      return null;
+    }
+  };
+  // What an addition breaks, in the installed schema's own words: the errors
+  // `after` has that the stage had before it. Compose never reads which rule
+  // an error is, since another engine can word or add rules differently.
+  const addedErrors = (before: readonly string[], after: string): string | null => {
+    const fresh = (stageErrors(after) ?? []).filter((error) => !before.includes(error));
+    return fresh.length > 0 ? fresh.join("; ") : null;
+  };
+  const giveProducesKinds = (content: string, added: string[]): string => {
+    if (!addPluginProducesKinds || added.length === 0) return content;
+    try {
+      return addPluginProducesKinds(content, added);
+    } catch {
+      return content;
+    }
+  };
+  const withProducesKinds = (target: string, before: string, merged: string, added: string[]): string => {
+    const given = giveProducesKinds(merged, added);
+    const beforeErrors = stageErrors(before);
+    if (beforeErrors === null) return given;
+    const gap = addedErrors(beforeErrors, given);
+    if (gap === null) return given;
+    // An output with no entry is what widens the stage. Merge only the outputs
+    // that have one, one at a time, and keep each that leaves the stage within
+    // its review target, so the drop names only the outputs that widen it.
+    const kinds = parsedStage(given)?.produces_kinds;
+    const mapped = added.filter((name) => typeof kinds === "object" && kinds !== null && Object.hasOwn(kinds, name));
+    const landed: string[] = [];
+    let kept = before;
+    for (const name of mapped) {
+      const one: string[] = [];
+      const next = giveProducesKinds(mergeListField(kept, "produces", [name], target, one), one);
+      if (one.length > 0 && addedErrors(beforeErrors, next) === null) {
+        kept = next;
+        landed.push(...one);
+      }
+    }
+    const skipped = added.filter((name) => !landed.includes(name));
+    const fix = addPluginProducesKinds
+      ? `; skipped — take ${skipped.length === 1 ? "it" : "them"} out of this contribution's adds.produces`
+      : ", and the installed engine cannot write produces_kinds entries; skipped — upgrade the engine, then re-run compose";
+    recordDrop(`contribution to ${target}: adds.produces ${skipped.join(", ")} would make the stage apply to Unit kinds its review target does not cover (${gap})${fix}`);
+    added.splice(0, added.length, ...landed);
+    return kept;
+  };
   const contribRoot = join(PLUGIN_ROOT, "contributions");
   // Per-plugin sidecar of what compose ACTUALLY merged into core stage source,
   // keyed by target stage. Structural additions need it for disable-time strip;
@@ -2573,6 +2655,29 @@ try {
     recordDrop(
       `contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)} is unreadable or invalid (${contribManifestLoadError}); refusing to replace provenance from an already-composed stage - refresh the stock dist/<harness>/ engine, remove the invalid sidecar, then run plugin sync`,
     );
+  }
+  // A plugin's rules are written by the installed engine's plugin sync, which
+  // runs this hook and then writes them. Run without sync, compose asks the
+  // installed engine to write them; an engine without that leaves them.
+  if (
+    pluginEnabledBySelection() && existsSync(join(PLUGIN_ROOT, "memory")) &&
+    process.env.AIDLC_PLUGIN_RULES_BY_SYNC !== "1"
+  ) {
+    // In its own process, so an engine tool that fails cannot stop compose.
+    const tool = join(HARNESS_DIR, "tools", "aidlc-plugin.ts");
+    const run = existsSync(tool)
+      ? spawnSync(process.execPath, [tool, "rules", "--plugin-root", PLUGIN_ROOT], {
+        cwd: PROJECT_DIR,
+        encoding: "utf-8",
+        // A person at a terminal reads the line as compose prints it.
+        env: { ...installedToolEnv(), AIDLC_HARNESS_DIR: HARNESS_LEAF, ...(process.stdout.isTTY ? { AIDLC_PERSON_AT_TERMINAL: "1" } : {}) },
+      })
+      : null;
+    if (run?.status === 0) {
+      if (run.stdout.trim()) process.stdout.write(run.stdout);
+    } else {
+      recordDrop(`${PLUGIN_NAME}'s rules are not in the rule files yet: run ${syncCommandForPlugin()} to add them`, "advisory");
+    }
   }
   const contribPhases =
     !contribManifestLoadError && pluginEnabledBySelection() && existsSync(contribRoot)
@@ -2897,7 +3002,11 @@ try {
         if (refusal) recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" ${refusal}; dropped`);
         return refusal === null;
       });
+      const beforeProduces = stageContent;
       stageContent = mergeListField(stageContent, "produces", listOf("produces"), target, addedProduces);
+      if (addedProduces.length > 0) {
+        stageContent = withProducesKinds(target, beforeProduces, stageContent, addedProduces);
+      }
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target, addedSensors);
       stageContent = mergeListField(stageContent, "scopes", mergeableScopes, target, addedScopes);
       stageContent = mergeConsumes(stageContent, consumes, target, addedConsumes);

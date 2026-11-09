@@ -61,7 +61,7 @@ interface RuntimeStage {
   completed_at: string | null;    // ISO from STAGE_COMPLETED; null when pending OR when `instances` is present
   agent: string | null;           // lead_agent; null when `instances` is present
   memory_path: string;            // <record>/<phase>/<stage>/memory.md (parent stage path even on instance-bearing rows)
-  memory_entries: number | null;  // null = no memory.md file OR `instances` is present; else parseMemoryHeadings.total
+  memory_entries: number | null;  // null = no memory.md file OR `instances` is present; else parseMemoryHeadings.total (a per-Unit stage: every Unit's construction/<unit>/<stage>/memory.md plus this path's)
   memory_breakdown: {             // null when memory_entries is null
     interpretations: number;
     deviations: number;
@@ -512,7 +512,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 132-event taxonomy
+- **The audit log this graph is derived from** - the 135-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

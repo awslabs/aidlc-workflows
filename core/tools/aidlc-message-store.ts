@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   allowMainCheckoutChangeCommand,
@@ -23,9 +23,13 @@ import {
   rejectionIsFreshAttempt,
   removeRecordFileNoFollow,
   resolveInvokingSessionId,
+  resolveWorkflowSelection,
+  selectedRecordIsFinished,
   sessionsDir,
+  stateFilePathForSelection,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
+import { stateShowsCompletion } from "./aidlc-doctor-bundle.ts";
 
 export { MESSAGE_SPENDING_EVENTS, type PersonsWords };
 
@@ -171,6 +175,14 @@ export function hasStoredMessages(projectDir: string): boolean {
 /** The message behind `id`; null when it is missing, unreadable, or not a record of ours. */
 export function readMessage(projectDir: string, id: string): StoredMessage | null {
   return readStoredMessage(projectDir, id);
+}
+
+/**
+ * Remove the record of a message that turned out not to be the person's: a
+ * turn Claude Code started itself (settleClaudeTurns), so no proof finds it.
+ */
+export function forgetMessage(projectDir: string, id: string): void {
+  if (MESSAGE_ID.test(id)) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
 }
 
 function recordIds(projectDir: string): string[] {
@@ -414,8 +426,9 @@ function sincePlanQuestion(pd: string): ((row: AuditShardEvent) => boolean) | nu
   return shown === null ? null : rowsAfterMark(pd, shown);
 }
 
-// The ids of the messages whose turns come since the waiting plan question.
-function messagesSince(rows: readonly AuditShardEvent[], since: (row: AuditShardEvent) => boolean): Set<string> {
+// The ids of the messages whose turns come since a point on the record (the
+// waiting plan question, the row that last handed a side-by-side build to a chat).
+export function messagesSince(rows: readonly AuditShardEvent[], since: (row: AuditShardEvent) => boolean): Set<string> {
   return new Set(rows.flatMap((row) => {
     const id = row.event === "HUMAN_TURN" && since(row) ? auditBlockField(row.block, "Message Id") : null;
     return id === null ? [] : [id];
@@ -467,7 +480,10 @@ export function planApprovalOffWaitsStep(messageId?: string): string {
 // that already gave an approval or a decision; for turning plan approval off,
 // only what can stand for it (planApprovalOffStands). Any other request still
 // is offered such a message (going back to the plan their approval was for).
-export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ id: string; at: string }> {
+// With `after`, only a message whose turn comes after that point is offered.
+export function requestMessages(
+  pd: string, kind: RequestKind = "any", after?: (row: AuditShardEvent) => boolean,
+): Array<{ id: string; at: string }> {
   try {
     const rows = readAuditShardEvents(pd);
     const spentAt = latestSpendingTimestamp(rows);
@@ -478,8 +494,9 @@ export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ 
     const offered = (message: StoredMessage): boolean =>
       sent === null || sent.has(message.id) || spentAt === null || message.at >= spentAt;
     const planApprovalOff = kind === "plan-approval-off";
+    const sentAfter = after === undefined ? null : messagesSince(rows, after);
     return listMessages(pd)
-      .filter((message) => message.session === chat && offered(message) &&
+      .filter((message) => message.session === chat && offered(message) && (sentAfter === null || sentAfter.has(message.id)) &&
         "message" in messageProof(pd, message.id, kind === "any" ? "request" : "setting", { request: true, planApprovalOff }))
       .map((message) => ({ id: message.id, at: message.at }))
       .reverse();
@@ -490,12 +507,13 @@ export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ 
 
 // The step a refused request leads with: the agent names the message that asked
 // for it, when one of theirs can stand behind it, else `otherwise`. `command` is
-// the one to run with it when that is not the refused command, and `then` what
-// follows it.
+// the one to run with it when that is not the refused command, `then` what
+// follows it, and `after` the point only later messages can ask from.
 export function requestMessageStep(
   pd: string, otherwise: string, kind: RequestKind = "any", command = "the same command", then = "",
+  after?: (row: AuditShardEvent) => boolean,
 ): string {
-  const named = requestMessages(pd, kind);
+  const named = requestMessages(pd, kind, after);
   if (named.length === 0) return otherwise;
   return `If their message ${named.map((message) => `${message.id} (sent ${message.at})`).join(" or ")} asked for ` +
     `it, run ${command} with --message <id>${then ? `, then ${then}` : ""}. Otherwise: ${otherwise}`;
@@ -898,15 +916,20 @@ export function personTurnStands(
   return standingPersonTurn(pd, mode, options) !== null;
 }
 
+type TurnOptions = { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean };
+
 /**
  * The turn personTurnStands reads, when it stands: its HUMAN_TURN row (whose
- * Message Id names the message behind what the command does), else null.
+ * Message Id names the message behind what the command does), else null. On
+ * finished work, where the human-turn hook keeps the person's messages beside
+ * the record and writes no turn on it, a message of theirs kept since the
+ * finish stands too (turnKeptSinceFinished), read as a turn.
  */
-export function standingPersonTurn(
-  pd: string,
-  mode: "request" | "plain",
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean } = {},
-): AuditShardEvent | null {
+export function standingPersonTurn(pd: string, mode: "request" | "plain", options: TurnOptions = {}): AuditShardEvent | null {
+  return turnOnTheRecord(pd, mode, options) ?? turnKeptSinceFinished(pd, options);
+}
+
+function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOptions): AuditShardEvent | null {
   try {
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
@@ -944,6 +967,74 @@ export function standingPersonTurn(
       kept ?? { id: id ?? "", at: of.timestamp, session: auditBlockField(of.block, "Session") },
       after,
     ) ? of : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * This chat's messages (with no chat named, any chat's in this project) kept
+ * beside finished work since its latest WORKFLOW_COMPLETED row, oldest first:
+ * the window turnKeptSinceFinished stands on, and a change asked there is read
+ * from. Work archived while it ran (before it finished, or during a redo) has
+ * its latest WORKFLOW_ARCHIVED row as its finish; the state's Archived From says
+ * which (stateShowsCompletion). An archive of finished work spends nothing, so a
+ * message between the completion and that archive still stands. Empty when the
+ * record is not finished, has neither row, or cannot be read.
+ */
+export function keptSinceFinished(pd: string, options: { intent?: string; space?: string } = {}): StoredMessage[] {
+  try {
+    const selection = resolveWorkflowSelection(pd, { intent: options.intent, space: options.space });
+    if (!selectedRecordIsFinished(pd, selection)) return [];
+    const showsCompletion = stateShowsCompletion(readFileSync(stateFilePathForSelection(pd, selection), "utf-8"));
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
+    if (unreadable.length > 0) return [];
+    const latest = (event: string) => rows.filter((row) => row.event === event).map((row) => row.timestamp).sort().at(-1);
+    const finishedAt = (showsCompletion ? latest("WORKFLOW_COMPLETED") : undefined) ?? latest("WORKFLOW_ARCHIVED");
+    if (finishedAt === undefined) return [];
+    const onThisWork = sentOnThisWork(rows);
+    const chat = invokingChat(pd);
+    return listMessages(pd).filter((message) =>
+      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Presence on finished work: once the work is finished (selectedRecordIsFinished,
+ * the reading the human-turn hook stands outside by) the hook keeps the
+ * person's messages beside its record and writes no turn on it. So the turn is
+ * their latest message no turn on the work names (sentOnThisWork: a terminal
+ * message, which has no chat, counts as on the work and stands for nothing
+ * here), kept at or after the work's finish (keptSinceFinished), from this
+ * chat (with no chat named, any chat's message in this project). With
+ * `requests` every kept message counts, as every turn the hook writes today
+ * does (only an older record's question row is left out on the record); with
+ * `replies` none does, as before: whether a message is a reply is the hook's
+ * reading, which the record keeps and the message does not. Nothing on the work decides after
+ * the finish, so no decision spends it. It is handed back in a turn's shape
+ * (its Message Id, Session and time), which is all a caller reads. Both times
+ * are whole seconds; a tie with the finish is harmless, as the message that
+ * gave the finishing approval is named on the record. No finish row, or a
+ * shard that cannot be read: null. Ids, times and the engine's own rows, never
+ * words.
+ */
+function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEvent | null {
+  if (options.replies === true) return null;
+  try {
+    const kept = keptSinceFinished(pd, options).at(-1);
+    if (kept === undefined) return null;
+    const turn: AuditShardEvent = {
+      event: "HUMAN_TURN",
+      block: [`**Message Id**: ${kept.id}`, ...(kept.session === null ? [] : [`**Session**: ${kept.session}`])].join("\n"),
+      timestamp: kept.at,
+      shard: "",
+      shardIndex: -1,
+      pos: -1,
+    };
+    return options.planApprovalOff === true && !planApprovalOffStands(pd, turn) ? null : turn;
   } catch {
     return null;
   }

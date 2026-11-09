@@ -74,6 +74,7 @@ import {
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 import { listMessages } from "../../core/tools/aidlc-message-store.ts";
+import { withoutCommentBlocks } from "../../core/tools/aidlc-markdown.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
 import kiroManifest from "../../harness/kiro/manifest.ts";
 
@@ -1775,10 +1776,10 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.stderr).toContain("file://aidlc/active-memory/**/*.md");
       // The shipped file reads the engine's copy of the active space, so the
       // step named is the one that puts the shipped file back, and that route is real.
-      expect(result.stderr).toContain("config --harness kiro` in a terminal to put AI-DLC's Kiro files back");
+      expect(result.stderr).toContain("config --harness kiro-v2` in a terminal to put AI-DLC's Kiro files back");
       expect(result.stderr).not.toContain("/aidlc space switch");
       expect(result.stderr).toContain("/aidlc --doctor");
-      expect(resolveAction(["config", "--harness", "kiro"]).type).not.toBe("error");
+      expect(resolveAction(["config", "--harness", "kiro-v2"]).type).not.toBe("error");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2004,7 +2005,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       });
       expect(shared.code, shared.stderr).toBe(0);
       const delivered = JSON.parse(shared.stdout).hookSpecificOutput.updatedInput.prompt;
-      expect(delivered).toContain(readFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "utf-8"));
+      expect(delivered).toContain(withoutCommentBlocks(readFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "utf-8")));
 
       const payload = { cwd: dir, tool_name: "invoke_sub_agent", tool_input: { name: agent, prompt } };
       const blocked = runAdapter(dir, "deliver-stage-rules", payload);
@@ -2118,7 +2119,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
   // refused either way; only the person's own chat gets the way back to aidlc.
   describe("5e2: a helper's refusal in the person's own chat names /agent and aidlc", () => {
     const CHAT = "369a3cd4-55a1-4d61-a812-d6b8fe4fba99";
-    const LINE = "\"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more.\"";
+    const LINE = "\"Your answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more.";
     const REFUSED = 'Delegated agent "aidlc-architect-agent" cannot run';
     function helperReports(session: string | undefined, chat: string | undefined) {
       const dir = scratchProject(true);

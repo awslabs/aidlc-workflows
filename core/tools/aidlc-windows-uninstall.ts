@@ -249,7 +249,7 @@ function deletionScopeBinding(journal: WindowsUninstallJournal): string {
   }), "utf-8").toString("base64");
 }
 
-function planPathKey(path: string): string {
+export function planPathKey(path: string): string {
   const full = resolve(path);
   return process.platform === "win32" ? full.toLowerCase() : full;
 }

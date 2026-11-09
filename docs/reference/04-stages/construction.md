@@ -77,7 +77,9 @@ question asked. Only **Approve** authorizes the receipt; an unrelated reply,
 Never write `--details "Approve"` unless the human chose it; only then run
 `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
 State field. A human may defer when no runnable
-check exists yet; the first checkpoint then asks. The current approval receipt,
+check exists yet; the first checkpoint then asks (on Kiro IDE and Kiro CLI v3, a
+side-by-side batch asks once its plans are approved, before its initial `prepare`).
+The current approval receipt,
 not the field alone, authorizes execution. Changing it requires a new receipt
 and typed setter, never generic `state set` or an automatic choice.
 
@@ -200,15 +202,19 @@ routes only the stamped Unit and carries the claim generation on lifecycle,
 review, gate, and fork evidence. Unscoped main emits a terminal fan-out notice
 while claims are live. `aidlc-unit.ts release <unit>` writes a tombstone instead
 of deleting the ref, invalidating stale attempts while preserving history. A
-participant clone opts into the guided claim picker once with
-`aidlc-unit.ts participate`; facilitator main deliberately omits that marker.
+team's clone of the work (every stage or gate row of the plan's own, the ones that
+name no Unit, in another clone's shard, `planMadeElsewhere`) is offered the Units open to take without the participant
+marker, which still opts a clone into the picker by hand
+(`aidlc-unit.ts participate`); facilitator main omits it.
 Scoped routing and receipt writes are offline-first: the claim-time stamp is
 authoritative. Registry liveness is rechecked only at claim-sensitive
 boundaries such as fork/release; an unavailable remote warns and proceeds from
 the stamp, while an online stale or released attempt is refused.
 
-Completed teams commit and run `aidlc unit publish <unit>`. Unscoped main then
-pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
+A completed team is asked once whether to commit and publish
+(`aidlc unit publish <unit> --commit`). An unscoped checkout reads the teams'
+claim refs from the remote on each `next` and offers a published Unit for
+review, then pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
 Plan Approval without materializing a worktree, records one human merge gate,
 and lands the candidate through `aidlc unit land`. Git content lands before the
 Unit row is folded; main-owned state/runtime markers are retained, the team's
@@ -240,8 +246,8 @@ paired-review state, and whether its wave completion receipt is still required.
 Builders receive the parent stage file, inline context roster, warnings, and
 exact accumulated steering content. A blocked builder withholds an applicable
 required path, not an optional or kind-exempt path. After build and review,
-`unit complete --wave` verifies the live entry, fans Unit diary entries into the
-parent diary idempotently, and emits `UNIT_COMPLETED`. The engine holds the
+`unit complete --wave` verifies the live entry and emits `UNIT_COMPLETED`; each
+Unit's notes stay in its own diary. The engine holds the
 current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
@@ -431,7 +437,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md (a Unit whose kind writes no `rules.md`, such as `ui`, names its `functional-spec.md` or `frontend-components.md` instead), `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -1186,7 +1192,15 @@ This stage has a **two-part structure**: planning followed by generation.
    files. Paths are POSIX-relative and use no globs or `..`; a trailing `/`
    claims a generated directory tree. In a main-workspace multi-repo run every
    entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
-   to that selected repo and omit `repo`.
+   to that selected repo and omit `repo`. An entry read in a recorded repo gives its path
+   from that repo's root: one the repo does not have counts as deleted only when the repo
+   had it (at HEAD, in a commit before it, or, for a file, in a folder still on disk), and
+   any other (`{"repo": "billing", "path": "billing/package.json"}`) is refused before the
+   review, every such entry named in one reason. When the work records a git submodule of
+   the project as its only repo (work started before such a submodule stopped being
+   recorded) and every entry is a file of the project's own, the reason asks the person
+   once whether to take the submodule off the work's repos (`intent remove-repo`), after
+   which the manifest reads as written, or to put the code in the submodule.
 
    The stage file gives this shape:
 

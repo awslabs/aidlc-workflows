@@ -174,7 +174,9 @@ before starting a second intent alongside the first:
 
 Saying only that the work should go on (`/aidlc carry on`, "proceed", "keep
 going", in your own words) asks nothing: AI-DLC reads your words and carries on
-with the active work. With work in the project but none selected yet, it asks
+with the active work. Asking where the work stands (`/aidlc how far along are
+we?`, in your own words) asks nothing either: AI-DLC answers your question from
+the status. With work in the project but none selected yet, it asks
 which piece to pick up; name the piece with your words (`/aidlc continue auth`)
 and it picks that piece up and carries on with it at once.
 
@@ -251,19 +253,26 @@ intent record. A session bound by an earlier version keeps working its intent wh
 cursor names the same record; otherwise it is offered a rebind to that intent. A
 session an earlier version stamped but never bound follows its stamp when it
 resumes, so a chat left open across an upgrade continues its own intent.
-A plain `git worktree` created without AI-DLC's worktree command has no local
-evidence either, so it also selects its intent with `/aidlc intent <slug>`. A Unit
+A plain `git worktree` created without AI-DLC's worktree command (or one a host
+makes for each chat) starts without cursors of its own, so it reads the ones its
+main checkout holds on this machine: it opens the space the main checkout is on,
+and the intent too when the worktree has that intent's record, so a chat there is
+on that work as the next paragraph says. Switching intent in the worktree gives it
+an intent cursor of its own, and the main checkout's no longer moves it; archiving
+the intent it is on stops that intent resolving there, as in a main checkout. When
+the main checkout has no cursor either, it selects its intent with
+`/aidlc intent <slug>`. A Unit
 claimed on this machine counts for that Unit's intent; the Unit participant marker
 is checkout-wide and names no intent, so it does not count as joining a
 particular record.
 
 A chat you open while your cursor names a piece of work is on that work: `/aidlc`
 in it carries the work on from where it stands, with nothing asked. On Claude Code,
-Codex CLI, Kiro CLI and opencode, that work's checks (Plan Approval during Code
+Codex CLI, Kiro CLI (V2) and opencode, that work's checks (Plan Approval during Code
 Generation, the review freeze) hold the chat from its first AI-DLC step there
 (`/aidlc`, an answer, a review you ask for, a setting you change), so a chat you opened in the same
 folder for something else runs your requests as in a folder with no workflow. On
-Cursor, GitHub Copilot and Kiro IDE (and Kiro CLI v3), a command cannot tell AI-DLC
+Cursor, GitHub Copilot and Kiro (Kiro IDE, or Kiro CLI started with `kiro-cli --v3`), a command cannot tell AI-DLC
 which chat it runs in, so there the checks hold the chat from the start. A worktree
 AI-DLC made for the work, or a Unit claimed on this machine, holds the chat from
 the start on every host.
@@ -530,6 +539,14 @@ extra. By default AI-DLC auto-discovers every sibling repo (each immediate child
 of the workspace root that has its own `.git`) and records the set in the intent's
 `intents.json` row. During Construction, each git operation is then anchored to
 the right repo automatically.
+
+A git submodule is not one of them when the project holding it has code of its
+own beside it (a shared library added with `git submodule add`, say): that
+project is a one-repo project, the workspace folder is the work's repo, and the
+submodule is left alone. A project made only of submodules records them.
+Work started before this recorded the submodule; when its code is written in the
+project itself, Code Generation asks you once whether to take the submodule off the
+work's repos (its folder stays as it is).
 
 Each repo is recorded by its folder's name as you gave it: a space, an accent,
 an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent). A few

@@ -27,6 +27,11 @@ Where a project runs several environments (staging, production), the default
 keeps one trunk and gates releases with tags or environment-specific deployment
 configs rather than long-lived release branches.
 
+Work that teams build Unit by Unit merges into the branch on this line;
+`team.md` or `project.md` names another the same way:
+
+- **Integration branch**: main
+
 ## Walking Skeleton
 
 When practices are scope-dependent, select the walking skeleton only when the

@@ -3324,7 +3324,7 @@
         "words": "add a --status endpoint to the API",
         "settings": [],
         "never": [
-          "engine status"
+          "engine status`, print its output verbatim"
         ]
       },
       "end": {
@@ -3348,7 +3348,7 @@
         "words": "add a --status endpoint to the API",
         "settings": [],
         "never": [
-          "engine status"
+          "engine status`, print its output verbatim"
         ]
       },
       "end": {
@@ -7262,7 +7262,7 @@
         "words": "add a --status endpoint",
         "settings": [],
         "never": [
-          "engine status"
+          "engine status`, print its output verbatim"
         ]
       },
       "end": {
@@ -17416,7 +17416,7 @@
     "input": "build a to-do app",
     "state": "fresh",
     "meaning": "the person means: new work to build a to-do app",
-    "source": "docs/guide/harnesses/kiro-ide.md:279",
+    "source": "docs/guide/harnesses/kiro.md:328",
     "documented": "Example of typing the whole request then pressing Enter in a Kiro IDE chat.",
     "expected": {
       "engine": {
@@ -18734,6 +18734,200 @@
       "end": {
         "asks": 1,
         "work": "same"
+      }
+    }
+  },
+  {
+    "id": "hs14-w",
+    "category": "help-status-in-sentence",
+    "input": "which stages are done so far?",
+    "state": "work-open",
+    "meaning": "the person means: ask where the work stands and how much remains; the agent answers from the status, nothing starts, moves or unparks",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "which stages are done so far?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs15-w",
+    "category": "help-status-in-sentence",
+    "input": "what comes after this stage?",
+    "state": "work-open",
+    "meaning": "the person means: ask where the work stands and how much remains; the agent answers from the status, nothing starts, moves or unparks",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "what comes after this stage?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs16-k",
+    "category": "help-status-in-sentence",
+    "input": "how far along are we?",
+    "state": "parked",
+    "meaning": "the person means: ask where the work stands and how much remains; the agent answers from the status, nothing starts, moves or unparks",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "how far along are we?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs17-c",
+    "category": "help-status-in-sentence",
+    "input": "how much is left on this?",
+    "state": "second-chat",
+    "meaning": "the person means: ask where the work stands and how much remains; the agent answers from the status, nothing starts, moves or unparks",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "how much is left on this?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs18-d",
+    "category": "help-status-in-sentence",
+    "input": "is all of it done now?",
+    "state": "finished",
+    "meaning": "the person means: ask whether the finished work has anything left; the agent answers from the status, nothing starts",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "is all of it done now?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs19-g",
+    "category": "help-status-in-sentence",
+    "input": "how far along are we?",
+    "state": "gate-open",
+    "meaning": "the person means: ask where the work stands while the approval gate waits; the agent answers from the status and the approval gate stays open",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "how far along are we?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "gate": "open",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs20-s",
+    "category": "help-status-in-sentence",
+    "input": "which stages are done so far?",
+    "state": "stage-question-asked",
+    "meaning": "the person means: ask where the work stands while the stage's question waits; the agent answers from the status and the stage's question stays open",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "which stages are done so far?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "asks": 0
+      }
+    }
+  },
+  {
+    "id": "hs21-p",
+    "category": "help-status-in-sentence",
+    "input": "how much is left on this?",
+    "state": "plan-question-open",
+    "meaning": "the person means: ask where the work stands while the code plan question waits; the agent answers from the status and the code plan question stays open",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "how much is left on this?",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine status"
+        ]
+      },
+      "end": {
+        "work": "same",
+        "plan": "open",
+        "asks": 0
       }
     }
   }

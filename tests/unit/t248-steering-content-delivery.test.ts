@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue,
-// function:activeDirectiveStorageDir, function:copyFrameworkPhaseRules, hook:aidlc-deliver-stage-rules
+// function:activeDirectiveStorageDir, function:copyFrameworkPhaseRules, function:readIssuedDirectiveMarker, hook:aidlc-deliver-stage-rules
 //
 // Deterministic stage-rule delivery. Rules ride inside the run-stage directive
 // (rules_content) whenever run-stage plus rules fit the transport cap; a bundle
@@ -41,16 +41,19 @@ import {
 } from "../../scripts/agent-knowledge.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import { validateDirective } from "../../core/tools/aidlc-directive.ts";
+import { withoutCommentBlocks } from "../../core/tools/aidlc-markdown.ts";
 import {
   stageValidationAuditFields,
   type StageValidityNode,
 } from "../../core/tools/aidlc-validity.ts";
 import {
+  readAllAuditShards,
   subagentInflightMarkerPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   REPO_ROOT,
+  runOrchestrateNext,
   seededRecordDir,
   seededStateFile,
   setupIntegrationProject,
@@ -123,6 +126,14 @@ type HookRewrite = {
     updatedInput?: Record<string, unknown>;
   };
 };
+
+type HookContext = {
+  hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+};
+
+function dispatchedRows(proj: string): string[] {
+  return readAllAuditShards(proj).split("\n---\n").filter((block) => block.includes("**Event**: SUBAGENT_DISPATCHED"));
+}
 
 const projects: string[] = [];
 
@@ -343,11 +354,14 @@ function expectSteeringPayload(payload: Record<string, unknown> | undefined): vo
   }
 }
 
+// harness names a tree the dispatch rewrite ships on (Codex, opencode,
+// Copilot); unset, the hook reads the Claude tree it runs from.
 function runDispatchHook(
   proj: string,
   toolName: string,
   toolInput: Record<string, unknown>,
   sessionId?: string,
+  harness?: string,
 ): { code: number; stdout: string; stderr: string } {
   const result = spawnSync(
     BUN,
@@ -363,6 +377,35 @@ function runDispatchHook(
         cwd: proj,
       }),
       encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...(harness ? { AIDLC_HARNESS_NAME: harness } : {}) },
+    },
+  );
+  return {
+    code: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+// Claude Code starting an agent: the SubagentStart payload carries the agent
+// type, never its brief.
+function runSubagentStart(
+  proj: string,
+  agentType: string,
+): { code: number; stdout: string; stderr: string } {
+  const result = spawnSync(
+    BUN,
+    [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "SubagentStart",
+        agent_id: "agent-1",
+        agent_type: agentType,
+        cwd: proj,
+      }),
+      encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
     },
   );
@@ -371,6 +414,34 @@ function runDispatchHook(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
+}
+
+// What a Claude Code agent is handed as it starts; empty when nothing is.
+function startContext(proj: string, agentType = "aidlc-developer-agent"): string {
+  const result = runSubagentStart(proj, agentType);
+  expect(result.code, result.stderr).toBe(0);
+  if (!result.stdout) return "";
+  return String((JSON.parse(result.stdout) as HookContext).hookSpecificOutput?.additionalContext ?? "");
+}
+
+// The engine issues a step as the conductor's `next` does (every rules part
+// continued), leaving its record of the step on disk.
+function issueStep(proj: string, args: string[]): void {
+  const run = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, args);
+  expect(run.directive?.kind, `${JSON.stringify(run.directive)}\n${run.stderr}`).toBe("run-stage");
+}
+
+const PHASE_RULES = "aidlc/spaces/default/memory/phases";
+
+function phaseRules(proj: string, phase: string): string {
+  return join(proj, PHASE_RULES, `${phase}.md`);
+}
+
+// A rule the team wrote for Inception's stages, in the file they would write it in.
+function addTeamInceptionRule(proj: string): string {
+  const rule = "- List every vendored folder in the code knowledge base.";
+  appendFileSync(phaseRules(proj, "inception"), `\n${rule}\n`);
+  return rule;
 }
 
 // The persona text the harness actually loads. A Codex persona is the
@@ -417,7 +488,7 @@ describe("t248 deterministic steering delivery", () => {
     for (const rel of ["org.md", "phases/ideation.md"]) {
       const path = `aidlc/spaces/default/memory/${rel}`;
       expect(reconstructed(result.contents, path)).toBe(
-        readFileSync(join(memory, rel), "utf-8"),
+        withoutCommentBlocks(readFileSync(join(memory, rel), "utf-8")),
       );
     }
     expect(result.contents.some((entry) => entry.path.endsWith("team.md"))).toBe(false);
@@ -446,7 +517,7 @@ describe("t248 deterministic steering delivery", () => {
         result.contents,
         "aidlc/spaces/default/memory/team.md",
       ),
-    ).toBe(readFileSync(teamPath, "utf-8"));
+    ).toBe(withoutCommentBlocks(readFileSync(teamPath, "utf-8")));
     expect(result.final.rules_in_context).toContain(
       "aidlc/spaces/default/memory/team.md",
     );
@@ -1217,7 +1288,7 @@ describe("t248 deterministic steering delivery", () => {
     );
     for (const path of first.directive.rules_in_context ?? []) {
       expect(reconstructed(content, path)).toBe(
-        readFileSync(join(proj, path), "utf-8"),
+        withoutCommentBlocks(readFileSync(join(proj, path), "utf-8")),
       );
     }
     expect(first.directive).not.toHaveProperty("receipt");
@@ -1264,7 +1335,7 @@ describe("t248 deterministic steering delivery", () => {
     );
     for (const path of result.final.rules_in_context ?? []) {
       expect(reconstructed(result.contents, path)).toBe(
-        readFileSync(join(proj, path), "utf-8"),
+        withoutCommentBlocks(readFileSync(join(proj, path), "utf-8")),
       );
     }
     const marker = readMarker(statefulMarkerPath(proj));
@@ -1468,7 +1539,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(directive).not.toHaveProperty("rules_content");
     for (const path of directive.rules_in_context ?? []) {
       expect(reconstructed(contents, path)).toBe(
-        readFileSync(join(proj, path), "utf-8"),
+        withoutCommentBlocks(readFileSync(join(proj, path), "utf-8")),
       );
     }
     expect(existsSync(statefulMarkerPath(proj))).toBe(false);
@@ -1725,7 +1796,7 @@ describe("t248 deterministic steering delivery", () => {
     const result = runDispatchHook(proj, "Task", {
       subagent_type: "aidlc-product-agent",
       prompt: "Run .claude/aidlc-common/stages/inception/user-stories.md.",
-    });
+    }, undefined, "codex");
     expect(result.code, result.stderr).toBe(0);
     const prompt = String(
       (JSON.parse(result.stdout) as HookRewrite).hookSpecificOutput?.updatedInput?.prompt ?? "",
@@ -2069,14 +2140,14 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.final.context_warnings?.join("\n")).not.toContain("inline_context_paths");
   });
 
-  test("Claude dispatch rewrites carry exact rules once", () => {
+  test("a dispatch rewrite carries exact rules once (Codex, opencode, Copilot)", () => {
     const proj = project();
     const original = {
       subagent_type: "aidlc-product-agent",
       prompt:
         "Run .claude/aidlc-common/stages/inception/user-stories.md and write the requested contribution.",
     };
-    const first = runDispatchHook(proj, "Task", original);
+    const first = runDispatchHook(proj, "Task", original, undefined, "codex");
     expect(first.code, first.stderr).toBe(0);
 
     const output = JSON.parse(first.stdout) as HookRewrite;
@@ -2101,15 +2172,59 @@ describe("t248 deterministic steering delivery", () => {
       "utf-8",
     );
 
-    expect(prompt).toContain(org);
+    expect(prompt).toContain(withoutCommentBlocks(org));
     expect(prompt).toContain(inception);
     expect(prompt).toContain("first-class");
     expect(prompt).toContain("Given/When/Then");
     expect(prompt.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
 
-    const second = runDispatchHook(proj, "Task", updated ?? {});
+    const second = runDispatchHook(proj, "Task", updated ?? {}, undefined, "codex");
     expect(second.code, second.stderr).toBe(0);
     expect(second.stdout).toBe("");
+  });
+
+  // Claude Code auto mode reviews the Agent call the model wrote and refuses one
+  // a hook changed after that review (#3456), so on Claude Code the call goes
+  // as written and the rules reach the agent as it starts.
+  test("on Claude Code a dispatch runs as the agent wrote it, and is recorded once", () => {
+    const proj = statefulProject(ONE_MESSAGE_STATE);
+    const result = runDispatchHook(proj, "Agent", {
+      subagent_type: "aidlc-product-lead-agent",
+      prompt: "Review the Requirements Analysis output for this stage.",
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(dispatchedRows(proj)).toHaveLength(1);
+  });
+
+  test("on Claude Code the agent gets the stage's exact rules as it starts, and nothing is recorded twice", () => {
+    const proj = statefulProject(ONE_MESSAGE_STATE);
+    const result = runSubagentStart(proj, "aidlc-product-lead-agent");
+    expect(result.code, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout) as HookContext;
+    expect(output.hookSpecificOutput?.hookEventName).toBe("SubagentStart");
+    const context = String(output.hookSpecificOutput?.additionalContext ?? "");
+    const memory = join(proj, "aidlc", "spaces", "default", "memory");
+    expect(context).toContain(withoutCommentBlocks(readFileSync(join(memory, "org.md"), "utf-8")));
+    expect(context).toContain(readFileSync(join(memory, "phases", "inception.md"), "utf-8"));
+    expect(context).toContain("stage:requirements-analysis");
+    expect(context.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
+    // Over 10,000 characters Claude Code shows the agent the first 2,000 and
+    // the file it saved the whole text to, so the way to the rest comes first.
+    const read = context.indexOf("read that whole file");
+    expect(read).toBeGreaterThanOrEqual(0);
+    expect(read).toBeLessThan(2000);
+    expect(dispatchedRows(proj)).toHaveLength(0);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+  });
+
+  test("on Claude Code an agent that is not one of AI-DLC's starts with nothing added", () => {
+    const proj = statefulProject(ONE_MESSAGE_STATE);
+    for (const agent of ["Explore", "general-purpose", "aidlc-composer-agent"]) {
+      const result = runSubagentStart(proj, agent);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout, agent).toBe("");
+    }
   });
 
   test("rule text under adversarial framing does not replace the authoritative bundle", () => {
@@ -2137,7 +2252,7 @@ describe("t248 deterministic steering delivery", () => {
     const result = runDispatchHook(proj, "Task", {
       subagent_type: "aidlc-product-agent",
       prompt: originalPrompt,
-    });
+    }, undefined, "codex");
 
     expect(result.code, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as HookRewrite;
@@ -2168,7 +2283,7 @@ describe("t248 deterministic steering delivery", () => {
 
     expect(result.code).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("attaching them to a subagent");
+    expect(result.stderr).toContain("handing them to a subagent");
     expect(result.stderr).toContain("output limit");
     expect(result.stderr).toContain("nothing partial was written");
     expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
@@ -2188,7 +2303,7 @@ describe("t248 deterministic steering delivery", () => {
       prompt:
         "Assess platform fit for the draft. The user-stories elaboration " +
         "will consume this later; write your contribution file now.",
-    });
+    }, undefined, "codex");
     expect(result.code, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as HookRewrite;
     const prompt = String(output.hookSpecificOutput?.updatedInput?.prompt ?? "");
@@ -2211,13 +2326,77 @@ describe("t248 deterministic steering delivery", () => {
       prompt:
         "Inspect .claude/aidlc-common/stages/inception/not-a-real-stage.md " +
         "as background, then complete the active contribution.",
-    });
+    }, undefined, "codex");
 
     expect(result.code, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as HookRewrite;
     const prompt = String(output.hookSpecificOutput?.updatedInput?.prompt ?? "");
     expect(prompt).toContain("stage:feasibility");
     expect(prompt).toContain("## Active AI-DLC Rule Bundle");
+  });
+
+  // A stage run on its own (`--single`) leaves the work's Current Stage where it
+  // is, so its helpers' rules come from the engine's record of the step (#3660).
+  describe("a stage run on its own", () => {
+    test("on Claude Code its helper gets that stage's rules, the team's own included", () => {
+      const proj = statefulProject(); // Current Stage: feasibility (ideation)
+      const team = addTeamInceptionRule(proj);
+      issueStep(proj, ["--stage", "reverse-engineering", "--single"]);
+      const context = startContext(proj);
+      expect(context).toContain("stage:reverse-engineering");
+      expect(context).toContain(team);
+      expect(context).toContain(readFileSync(phaseRules(proj, "inception"), "utf-8"));
+      expect(context).not.toContain(`### ${PHASE_RULES}/ideation.md`);
+      expect(context.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
+    });
+
+    test("a rewritten brief that names no stage file carries that stage's rules (Codex, opencode, Copilot)", () => {
+      const proj = statefulProject();
+      const team = addTeamInceptionRule(proj);
+      issueStep(proj, ["--stage", "reverse-engineering", "--single"]);
+      const result = runDispatchHook(proj, "Task", {
+        subagent_type: "aidlc-developer-agent",
+        prompt: "Scan the repository and write the code knowledge base files.",
+      }, undefined, "codex");
+      expect(result.code, result.stderr).toBe(0);
+      const prompt = String((JSON.parse(result.stdout) as HookRewrite).hookSpecificOutput?.updatedInput?.prompt ?? "");
+      expect(prompt).toContain("stage:reverse-engineering");
+      expect(prompt).toContain(team);
+      expect(prompt).not.toContain(`### ${PHASE_RULES}/ideation.md`);
+    });
+
+    test("with no work in progress its helper still gets that stage's rules", () => {
+      const proj = project();
+      issueStep(proj, ["--scope", "feature", "--stage", "reverse-engineering", "--single"]);
+      expect(startContext(proj)).toContain("stage:reverse-engineering");
+    });
+
+    test("a stage of another phase run on its own does the same", () => {
+      const proj = statefulProject(ONE_MESSAGE_STATE); // Current Stage: requirements-analysis (inception)
+      issueStep(proj, ["--stage", "feasibility", "--single"]);
+      const context = startContext(proj);
+      expect(context).toContain("stage:feasibility");
+      expect(context).toContain(readFileSync(phaseRules(proj, "ideation"), "utf-8"));
+      expect(context).not.toContain(`### ${PHASE_RULES}/inception.md`);
+    });
+
+    test("a step of the work itself hands its helpers the work's stage", () => {
+      const proj = statefulProject(ONE_MESSAGE_STATE);
+      issueStep(proj, []);
+      expect(startContext(proj)).toContain("stage:requirements-analysis");
+    });
+
+    test("once it is reported, a helper gets the work's stage again", () => {
+      const proj = statefulProject();
+      issueStep(proj, ["--stage", "requirements-analysis", "--single"]);
+      expect(startContext(proj)).toContain("stage:requirements-analysis");
+      const report = spawnSync(BUN, [
+        join(proj, ".claude", "tools", "aidlc-orchestrate.ts"),
+        "report", "--single", "--stage", "requirements-analysis", "--result", "completed", "--project-dir", proj,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
+      expect(startContext(proj)).toContain("stage:feasibility");
+    });
   });
 
   test("installed plugin agents receive the active-stage rule bundle", () => {
@@ -2236,7 +2415,7 @@ describe("t248 deterministic steering delivery", () => {
       subagent_type: "test-pro-metrics-agent",
       prompt:
         "Run .claude/aidlc-common/stages/inception/user-stories.md and record metrics.",
-    });
+    }, undefined, "codex");
 
     expect(result.code, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as HookRewrite;
@@ -2257,7 +2436,7 @@ describe("t248 deterministic steering delivery", () => {
         },
       ],
     };
-    const result = runDispatchHook(proj, "spawn_agent", original);
+    const result = runDispatchHook(proj, "spawn_agent", original, undefined, "codex");
     expect(result.code, result.stderr).toBe(0);
 
     const output = JSON.parse(result.stdout) as HookRewrite;

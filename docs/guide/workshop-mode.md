@@ -120,8 +120,12 @@ merge, discard, and purge to completion only with matching intent provenance;
 new Bolts never use that shape. `doctor` reports both shapes.
 
 Normal scoped `next`, lifecycle, review, and gate work is offline-first. Network
-access is confined to explicit claim, publish, status, pin, and merge-ref
-verification operations.
+access is confined to explicit claim, share, publish, status, pin, and merge-ref
+verification operations, and to the board on a checkout that holds no Unit
+claim: each `/aidlc` there in team mode fetches the teams' claim refs, and only
+those, from the shared remote (best effort, a few seconds at most, no prompt;
+when the remote does not answer, the board says once that it shows what this
+clone last saw).
 
 ---
 
@@ -147,19 +151,45 @@ leaves this session building, and the first step says to ask for teams before
 the first Unit is built. Team approvals come after every stage (`per-stage`)
 unless the lead asks for one approval at the end of each Unit
 (`set-unit-gate-rhythm unit-end`) before the first team approval question;
-the first team step offers it.
+the first team step offers it. While no team has taken a Unit, that step also
+says once that this session builds the Units here, starting with the first
+DAG Unit (the walking skeleton, when the scope runs one). With a shared remote,
+the step that would start a Unit here asks first whether to share the plan with
+the teams (see below); without one, the line says to share the work through
+git, and each team then runs `/aidlc` in its own clone to take a Unit.
 
 When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back
 gate; claims open once its Unit Progress row on the pushed main is complete.
 With `skeleton: off`, or `Skeleton Stance: off` recorded in the work's state,
-dependency-ready Units open immediately.
+dependency-ready Units open immediately. When the team's practices answer
+whether to build a thin end-to-end slice first, that answer is read at the
+first step after several teams are chosen, before a Unit is handed out and
+before the plan is shared. While your answer is recorded but the plan the teams
+have still holds every Unit behind the first, the board says so once, with the
+share that fixes it.
 
-Publish the approved Inception state and artifacts before teams claim:
+Teams take Units from the plan on the shared remote. Once claims are open (at
+once with the skeleton off, once the walking skeleton is approved with it on)
+and the repository has a remote, the step that would start a Unit on main asks
+once whether to share the plan with the teams, before each Unit this session
+would build:
 
-```bash
-git push origin main
-```
+- **Share them with the teams** runs `aidlc unit share`: it commits what git
+  shows changed here (the question names how many files and, by name, up to
+  ten new files outside `aidlc/`, past ten those nearest the project's top, with
+  how many more; `git status` shows the rest before you share; ignored files
+  and AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` stay
+  out)
+  and pushes the integration branch with a plain push, never forced. This
+  checkout then shows the board instead of building Units. A push the remote
+  refuses (it has commits this clone lacks, or the branch is protected) keeps
+  the commit, says why, and the question comes back: pull main, then share.
+- **Build them here for now** builds that Unit in this session; the question
+  comes back before the next Unit.
+
+Typed, the same step is `/aidlc unit share`, or your own commit and
+`git push origin main`.
 
 Claims open by dependency batch. "Delivery planning is complete" does not mean
 every Unit is claimable; a Unit remains blocked until every `depends_on` row is
@@ -171,14 +201,16 @@ merged.
 
 ### 1. Claim
 
-In a participant clone:
-
-```bash
-git fetch --all
-aidlc unit participate
-```
-
-Run `/aidlc` for the guided picker, or claim directly:
+In a team's own clone of the shared remote, `/aidlc` offers the Units open to
+take, once for each set of open Units: "2 Units are open for a team to take:
+payments and refunds; billing is with Billing team. Take one for your team? I'd
+label your team "Alice"; say another name to use it instead." Each
+choice says what waits on that Unit ("invoicing waits on it"). Picking one
+claims it for your team under that label, your git user name, or under the name
+you give with your pick; **Not now** shows the board. A clone
+that ran the work itself (the lead's own checkout) is not asked. The
+participant marker still marks a clone for the picker by hand
+(`aidlc unit participate`), and a claim can be typed directly:
 
 ```bash
 aidlc unit claim payments --team "Payments team"
@@ -220,10 +252,18 @@ Gate rhythm controls the team review points:
 - `unit-end`: one team completion gate after 3.5;
 - both rhythms still add one pinned merge gate on main.
 
-Commit the completed artifacts, source, state mirror, and audit shard. Publication
-requires a clean tracked checkout; AI-DLC's own part of `.gitignore`, `AGENTS.md`
-and `opencode.json`, which it writes when a session starts in a fresh clone, does
-not count:
+When the Unit is complete and approved, `/aidlc` asks once whether to commit it
+and publish it for review on main. **Commit and publish** runs
+`aidlc unit publish payments --commit`, which commits the Unit's own work (every
+tracked change, the record under `aidlc/` and the new files its source manifest
+lists; the question names how many files and up to ten new ones, as the share
+question does) and then publishes. Other new files, such as AI-DLC's own install
+or an unignored `node_modules`, stay on disk uncommitted, and the publish says
+once how many it left out; say which you want in and it publishes again with
+them (`--include <path>`). **Not now** leaves it, and the step then says it is
+not published yet, so asking for it later publishes it. Publication requires a clean tracked checkout;
+AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json`, which it
+writes when a session starts in a fresh clone, does not count. By hand:
 
 ```bash
 git add -A
@@ -237,18 +277,30 @@ CAS-updates the claim ref. Publication is not integration. The candidate carries
 the claim's audit shard with the rows pin accepts and the review records its
 receipts name (AI-DLC keeps those out of commits), and every other audit shard
 and the stages' shared diaries as main has them; what is left out stays in the
-checkout's own history, and publish says how many rows.
+checkout's own history, and publish says how many rows. A change to any other
+record outside the Unit's `construction/<unit>/` folder (an Inception artifact
+such as `contract-summary.md`) is published too, but pin will refuse it, so
+publish names the file: take it out of the branch, make the change on main,
+and publish again. Pin and land refuse it too, and say to do that in the
+checkout where the Unit is claimed.
 
 ---
 
 ## Pin, gate, and land
 
-All merge commands run from unscoped main.
+All merge commands run from unscoped main, or from any checkout of the project
+that holds no Unit claim.
 
 ### 1. Pin the candidate
 
+On such a checkout `/aidlc` reads the teams' claims from the shared remote
+(above), so when a team has published its Unit the next `/aidlc` asks, once for
+each published commit: "payments is ready from Payments team: review and merge
+it?" **Review and merge payments** runs `aidlc unit pin payments`, which fetches
+what it needs itself; the merge gate below follows in the same turn. **Not
+now** leaves a line on the board. Typed:
+
 ```bash
-git fetch --all
 aidlc unit pin payments
 ```
 
@@ -281,7 +333,11 @@ only the rows pin accepts to the claim's shard; everything else it records
 landing keeps every row. Pin and land also refuse
 workflow-record changes outside the claimed Unit subtree. Product-source paths
 outside the Unit's record tree remain visible in the gate evidence for human
-overlap judgment.
+overlap judgment, and so does a rule the team kept while working the Unit (the
+space's `memory/project.md` or `memory/team.md`), which lands on main with the
+Unit. Like any shared file, a rules file main changed since the claim (another
+Unit's kept rule landed first) stops the land: rebase onto main, publish again,
+and pin again.
 
 If the claim is released/re-claimed, or the ref moves after pinning, the gate
 and landing commands refuse. Run `pin` again and review the new OID explicitly.
@@ -323,14 +379,16 @@ aidlc unit land payments --target main
 Landing is ordered and resumable:
 
 1. **Git content first.** Re-fetch the integration branch and verify that the
-   approved Unit DAG, Unit kind, active stage columns, and evidence are still
-   current, then merge the pinned OID. Contract drift refuses before mutation
-   and requires rebase, republish, re-pin, and a new merge gate. Main's
+   approved Unit's entry in the Unit DAG, its kind, the active stage columns,
+   and the evidence are still current, then merge the pinned OID. Contract
+   drift refuses before mutation and requires rebase, republish, re-pin, and a
+   new merge gate. Main's
    `aidlc-state.md`, runtime graph, cursors, and engine markers are retained; the team's new
    audit shard and per-Unit artifacts/source land. Real source conflicts abort
    back to a clean checkout and list the files. A clean automatic merge of a
    shared file is also refused when its result differs from the pinned candidate;
-   rebase and republish. No Unit row has been folded.
+   rebase and republish. No Unit row has been folded. A Unit lands only after
+   every Unit it depends on has landed.
 2. **State fold.** Under the per-intent lock, derive the candidate's transported
    receipts, write the merged Unit row while preserving main's singletons and
    other rows, then emit `UNIT_MERGED`.
@@ -355,8 +413,12 @@ Each step is idempotent. `merge-status` shows the local transaction:
 aidlc unit merge-status payments
 ```
 
-Push the landed target branch so other teams and future claim checks observe
-the new integration state:
+Other teams and future claim checks observe the new integration state once the
+landed target branch is pushed. When the remote does not have the landed commit
+yet, the land's output names the next step, and that step asks once: "Push main
+to origin now so the other teams see payments landed?" **Push main** runs
+`aidlc unit share` (a plain push); **Not now** leaves a line on the board. By
+hand:
 
 ```bash
 git push origin main
@@ -383,7 +445,8 @@ Run `/aidlc --status` from main or any scoped checkout for the same board as a
 read-only snapshot. It performs no fetch and writes no state, cache, or audit
 row. Explicit space/intent selectors keep the status header, Unit DAG, claims,
 and merge journals on one identity. The board names the next claim, gate, or
-`aidlc unit land` recovery command. A participant with no currently claimable
+`aidlc unit land` recovery command, each Unit a team published that waits for
+review there, and a landing the remote does not have yet. A participant with no currently claimable
 Unit receives this terminal board instead of falling into main's solo walk.
 Released claim history alone does not keep fan-out active: when no live claim
 and no incomplete merge transaction remains, main resumes the normal
@@ -459,16 +522,17 @@ registry.
 
 1. The facilitator runs Inception with the group.
 2. If enabled, the facilitator builds and gates the walking skeleton on main,
-   then pushes main.
-3. Alice claims `billing`; Bob claims `notifications`.
+   then shares the plan with the teams when asked.
+3. Alice takes `billing`; Bob takes `notifications`, each from the question in
+   their own clone.
 4. Each team runs its scoped 3.1-3.5 chain and team gates.
-5. Each team commits and runs `aidlc unit publish`.
+5. Each team publishes its Unit when asked.
 
 ### Day 2
 
-1. The facilitator pins Alice's candidate, reviews its evidence, records the
-   merge gate, and lands it.
-2. Main is pushed; any Unit depending on `billing` becomes claimable.
+1. The facilitator's board offers Alice's Unit for review; the facilitator
+   reviews its evidence, records the merge gate, and lands it.
+2. Main is pushed when asked; any Unit depending on `billing` becomes claimable.
 3. The facilitator repeats pin/gate/land for Bob's pinned candidate.
 4. When the final row is merged, `/aidlc` on main routes Build and Test, then
    CI Pipeline.

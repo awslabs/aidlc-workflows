@@ -22,6 +22,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   activeIntentUuid,
   auditBlockField,
@@ -81,6 +82,7 @@ import {
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import {
+  planApprovalPromptSha256,
   approvalFingerprint,
   approvedPlanChangeLine,
   attemptRejectionClosed,
@@ -776,12 +778,6 @@ function questionsFileContent(
   ].join("\n");
 }
 
-function promptSha256(questions: string): string {
-  return createHash("sha256")
-    .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
-    .digest("hex");
-}
-
 // The person's own answer on the `[Answer]:` line, as the file's instructions
 // invite ("write your answer after `[Answer]:` and tell me in chat when you
 // are done"). Empty when they
@@ -1395,7 +1391,7 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
     runFloor: authority.runFloor,
     fingerprint,
     questionsFile,
-    promptSha256: promptSha256(questions),
+    promptSha256: planApprovalPromptSha256(questions),
     directiveEpoch: authority.directiveEpoch,
     sourceFloor: authority.sourceFloor,
     markerRevision: authority.markerRevision,
@@ -1462,6 +1458,23 @@ function currentPlanApprovalAsk(
 function shownFromNow(projectDir: string): { repliesFrom: AuditMark; shownFrom: AuditMark } {
   const mark = auditMark(projectDir);
   return { repliesFrom: mark, shownFrom: mark };
+}
+
+// Whether the person replied after the mark their answer is read from. A
+// question shown before marks kept a time, whose answer is still read from its
+// showing, lends it the time it was last shown, never earlier than the first,
+// for a shard a claim put back short of the mark (replyTurnsAfter). Still the
+// showing's: repliesFrom is shownFrom, or, on a record from before shownFrom,
+// it is asking with nothing answered, since only the person's edit of the
+// files moved it and that ends with an answer. Moved, it lends none. A record
+// reopened for a fresh look on the old release and not shown since keeps its
+// old time; its replies were cleared, so it is asked again before this counts.
+function repliedSinceShown(projectDir: string, record: PlanApprovalAskRecord, mark: AuditMark): boolean {
+  const shown = record.shownFrom;
+  const unmoved = mark.at === undefined && (shown !== undefined
+    ? shown.shard === mark.shard && shown.offset === mark.offset
+    : record.mode === "ask" && !record.results?.length);
+  return personRepliedAfter(projectDir, mark, unmoved ? record.issuedAt : undefined);
 }
 
 /**
@@ -1639,7 +1652,7 @@ function approveTarget(
     runFloor: authority.runFloor,
     fingerprint,
     questionsFile,
-    promptSha256: promptSha256(questions),
+    promptSha256: planApprovalPromptSha256(questions),
     directiveEpoch: authority.directiveEpoch,
     sourceFloor: authority.sourceFloor,
     markerRevision: authority.markerRevision,
@@ -1680,6 +1693,7 @@ function approveTarget(
     ...(theirLine ? { "Answer Line In File": theirLine } : {}),
     ...(words && messageId ? { "Message Id": messageId } : {}),
     ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
+    ...personGitNameField(projectDir),
   }, projectDir);
   clearPlanApprovalReviewRequest(projectDir, authority.targetId, authority.intentId);
   collectStalePlanApprovalReceipts(projectDir, authority.intentId, authority.targetId, authority.runFloor);
@@ -1768,13 +1782,27 @@ function pickerAsksThisQuestion(picker: PlanApprovalPickerQuestion, record: Plan
   return pickerOffersChoices(picker.options, record.choices);
 }
 
+// What a picker carried back for this question: the box's reply when it asked
+// this question alone; in a box of several questions, the reply to the one
+// question among them that is this one, never another question's. Null when
+// the box answered some other question, asked this one twice, or left it blank.
+function pickerReplyToThisQuestion(
+  picker: PlanApprovalPickerQuestion,
+  record: PlanApprovalAskRecord,
+  text: string,
+): string | null {
+  if (picker.questions === undefined) return pickerAsksThisQuestion(picker, record) ? text : null;
+  const own = picker.questions.filter((question) => pickerAsksThisQuestion(question, record));
+  return own.length === 1 ? own[0].reply : null;
+}
+
 /**
  * The human-turn hook's part while the engine's Plan Approval question is
  * open: keep the person's message, for the conductor to read and record the
  * choice it makes. A pick in a question box that offered this question's
  * choices is the host's own structure and is recorded now. True when the
- * question kept the reply; false when no question is open or a picker answered
- * some other question.
+ * question kept the reply; false when no question is open or a picker carried
+ * no answer to this one.
  */
 export function notePlanApprovalAskReply(
   projectDir: string,
@@ -1793,8 +1821,9 @@ export function notePlanApprovalAskReply(
     const answeredAll = record.mode === "ask" &&
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
-    if (picker && !pickerAsksThisQuestion(picker, record)) return false;
-    const reply = text.trim();
+    const asked = picker === undefined ? text : pickerReplyToThisQuestion(picker, record, text);
+    if (asked === null) return false;
+    const reply = asked.trim();
     if (!reply || isNonAnswer(reply)) return true;
     const replies = [
       ...(record.replies ?? []),
@@ -1985,7 +2014,7 @@ export function planApprovalReplyEditableFiles(projectDir: string): string[] {
     if (open === null || open.record.mode !== "ask" || replies.length === 0) return [];
     // Kept words can be a question about the switch ("skip plan approval?"),
     // which is no reply: the files open only after a reply to the question.
-    if (open.record.repliesFrom && !personRepliedAfter(projectDir, open.record.repliesFrom)) return [];
+    if (open.record.repliesFrom && !repliedSinceShown(projectDir, open.record, open.record.repliesFrom)) return [];
     const answered = new Set((open.record.results ?? []).map((result) => result.unit));
     return open.record.targets.filter((target) => !answered.has(target.unit)).flatMap((target) => {
       const dir = codeGenerationRecordDir(projectDir, target.unit);
@@ -2090,7 +2119,7 @@ export function planApprovalKeptReplyWaits(projectDir: string): boolean {
   try {
     const open = currentPlanApprovalAsk(projectDir);
     return open !== null && open.record.mode === "ask" && (open.record.replies?.length ?? 0) > 0 &&
-      (open.record.repliesFrom === undefined || personRepliedAfter(projectDir, open.record.repliesFrom));
+      (open.record.repliesFrom === undefined || repliedSinceShown(projectDir, open.record, open.record.repliesFrom));
   } catch {
     return false;
   }
@@ -2130,7 +2159,7 @@ export function recordPlanApprovalAnswer(
     // alone. An approval needs a reply after the question.
     const asked = answer.choice === "request-changes" ? answer.opening : undefined;
     const opening = asked && record.mode === "ask" && !record.replies?.length && !record.results?.length &&
-        record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom) &&
+        record.repliesFrom && !repliedSinceShown(projectDir, record, record.repliesFrom) &&
         !readAuditShardEvents(projectDir).some((row) => row.event === "QUESTION_ANSWERED" &&
           auditBlockField(row.block, "Checkpoint") === "plan-approval" && row.timestamp >= asked.at)
       ? { session: session || "unidentified-session", text: asked.words.slice(0, ASK_REPLY_MAX_CHARS) }
@@ -2199,7 +2228,7 @@ export function recordPlanApprovalAnswer(
     }
     // Words kept since the question can be a question or a command to AIDLC
     // ("skip plan approval?"), which answers nothing: a choice needs a reply.
-    if (opening === null && record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom)) {
+    if (opening === null && record.repliesFrom && !repliedSinceShown(projectDir, record, record.repliesFrom)) {
       throw new Error(
         "The person has not answered the plan question since it was shown: their message since then was a " +
           "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +

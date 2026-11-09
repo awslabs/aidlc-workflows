@@ -1,8 +1,8 @@
 // covers: file:hooks/aidlc-plan-approval-guard.ts, function:codeGenerationStepOnRecord, subcommand:aidlc-orchestrate:next, subcommand:aidlc-unit:publish, function:settleCopilotCommand
 //
 // A team Unit claimed in its own checkout, its stages done and approved: the
-// engine's `next` says the Unit is complete there and to commit it and publish.
-// That notice was no step on record, so the plan-approval guard still read
+// engine's `next` offers to commit and publish it, then says the Unit is
+// complete there. That step was no step on record, so the plan-approval guard still read
 // Code Generation as running with no build in hand (on Copilot, which keeps
 // the notice, and on every harness where no build step was on record): the
 // Unit's own commit and every file change were refused with `next` as the way
@@ -10,7 +10,7 @@
 // the real guard and the real Copilot adapter in a claimed checkout built on
 // the t326 fixture:
 //
-//   - done, commit it: the notice names the Unit and is the step on record; the
+//   - done, commit it: the offer names the Unit and is the step on record; the
 //     commit (in a spelling the guard cannot read whole), a `git rm` and a
 //     file edit pass, the Unit publishes, and what publish leaves is committed;
 //   - no loop: once the chat is compacted the step on record is out of date, a
@@ -43,6 +43,8 @@ const COPILOT_TREE = join(REPO_ROOT, "dist", "copilot", ".aidlc");
 const SESSION = "c1a1c0de-0000-4000-8000-000000003286";
 const NEXT = "bun .aidlc/tools/aidlc-orchestrate.ts next";
 const DONE = 'Unit "alpha" is complete and approved in this checkout.';
+// The done step's first word: the offer to publish the Unit, naming it.
+const OFFER = { kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha" };
 const COMMIT = "git add -A && git commit -q -m $'Complete alpha\\n\\nThe greeting is fixed.'";
 // The engine checks the t326 fixture's hand-written records leave out, as the
 // fixture's own tool runs do (runMergeTool).
@@ -209,26 +211,25 @@ function commitTheUnit(harness: Harness, dir: string): void {
 describe("a claimed Unit's own commit once the engine says it is done", () => {
   test("Copilot: the commit, a git rm and an edit pass, the Unit publishes, and what publish leaves commits", () => {
     const { checkout: dir } = claimedCheckout("copilot");
-    const notice = agentNext("copilot", dir);
-    expect(notice).toMatchObject({ kind: "notice" });
-    expect(String(notice.message)).toContain(DONE);
+    const offer = agentNext("copilot", dir);
+    expect(offer).toMatchObject(OFFER);
+    expect(String(offer.question)).toContain("Alpha is complete and you approved it.");
 
     commitTheUnit("copilot", dir);
-    expect(notice.unit).toBe("alpha");
-    expect(marker(dir)).toMatchObject({ kind: "notice", stage: "code-generation", unit: "alpha" });
+    expect(marker(dir)).toMatchObject({ kind: "ask", stage: "code-generation", unit: "alpha" });
 
     const published = agentRuns("copilot", dir, "bun .aidlc/tools/aidlc.ts unit publish alpha");
     expect(published.refused).toBeNull();
     expect(JSON.parse(String(published.stdout).trim())).toMatchObject({ published: true, unit: "alpha" });
     // Whatever publish and the hooks left in the checkout commits too.
-    expect(marker(dir)).toMatchObject({ kind: "notice", unit: "alpha" });
+    expect(marker(dir)).toMatchObject({ unit: "alpha" });
     expect(agentRuns("copilot", dir, "git add -A && git commit -q --allow-empty -m $'After publish\\n'").refused).toBeNull();
     expect(git(dir, ["log", "-1", "--format=%s"]).trim()).toBe("After publish");
   });
 
   test("Copilot: after the chat compacts, the refusal's own step lets the write in", () => {
     const { checkout: dir } = claimedCheckout("copilot");
-    expect(agentNext("copilot", dir)).toMatchObject({ kind: "notice" });
+    expect(agentNext("copilot", dir)).toMatchObject(OFFER);
     const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", session_id: SESSION, cwd: dir });
     expect(compacted.code, compacted.stderr).toBe(0);
     expect(marker(dir)).toMatchObject({ kind: "error" });
@@ -236,14 +237,17 @@ describe("a claimed Unit's own commit once the engine says it is done", () => {
     const source = join(dir, "src", "alpha.ts");
     const refused = refusal("copilot", dir, editCall("copilot", dir, source));
     expect(refused).toContain(NEXT);
-    expect(agentNext("copilot", dir)).toMatchObject({ kind: "notice" });
+    // The offer was put: the step now is the done notice, which names the Unit too.
+    const notice = agentNext("copilot", dir);
+    expect(notice).toMatchObject({ kind: "notice", unit: "alpha" });
+    expect(String(notice.message)).toContain(DONE);
     expect(refusal("copilot", dir, editCall("copilot", dir, source))).toBeNull();
     expect(agentRuns("copilot", dir, COMMIT).refused).toBeNull();
   });
 
   test("what the guard stops in a claimed checkout is still stopped", () => {
     const { checkout: done, seed } = claimedCheckout("copilot");
-    expect(agentNext("copilot", done)).toMatchObject({ kind: "notice" });
+    expect(agentNext("copilot", done)).toMatchObject(OFFER);
     const install = refusal("copilot", done, bashCall(done, "sudo apt-get install -y jq"));
     expect(install).not.toBeNull();
     expect(install).toContain("jq");
@@ -253,21 +257,24 @@ describe("a claimed Unit's own commit once the engine says it is done", () => {
     const { checkout: waiting } = claimedCheckout("copilot", codeGenerationNotDone);
     const step = agentNext("copilot", waiting);
     expect(JSON.stringify(step)).not.toContain(DONE);
+    expect(step.ask_type).not.toBe("team-handover");
     expect(refusal("copilot", waiting, editCall("copilot", waiting, join(waiting, "src", "alpha.ts")))).not.toBeNull();
 
-    // The unscoped checkout's board notice names no Unit.
+    // The unscoped checkout's review offer and board notice name no Unit.
     git(seed, ["fetch", "-q", "origin", "+refs/heads/claim/*:refs/remotes/origin/claim/*"]);
-    const board = runMergeTool(ORCH, ["next"], seed);
-    expect(board.status, board.out).toBe(0);
-    const directive = JSON.parse(board.stdout.trim()) as Record<string, unknown>;
-    expect(directive.kind).toBe("notice");
-    expect(directive).not.toHaveProperty("unit");
+    for (const kind of ["ask", "notice"]) {
+      const board = runMergeTool(ORCH, ["next"], seed);
+      expect(board.status, board.out).toBe(0);
+      const directive = JSON.parse(board.stdout.trim()) as Record<string, unknown>;
+      expect(directive.kind).toBe(kind);
+      expect(directive).not.toHaveProperty("unit");
+    }
   });
 
   test("Claude Code: the commit, a git rm and an edit pass after its next", () => {
     const { checkout: dir } = claimedCheckout("claude");
-    expect(agentNext("claude", dir)).toMatchObject({ kind: "notice" });
+    expect(agentNext("claude", dir)).toMatchObject(OFFER);
     commitTheUnit("claude", dir);
-    expect(marker(dir)).toMatchObject({ kind: "notice", stage: "code-generation", unit: "alpha" });
+    expect(marker(dir)).toMatchObject({ kind: "ask", stage: "code-generation", unit: "alpha" });
   });
 });

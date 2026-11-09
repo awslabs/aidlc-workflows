@@ -50,6 +50,26 @@ const SUMMARIZED_LINE =
   "Do you want to pause here and carry on in a new chat? I recommend it: your work is saved, and a new chat " +
   "picks it up from the saved files.";
 const offered = (text: string | undefined): boolean => /full by Kiro's count|Kiro has summarized this chat/.test(text ?? "");
+// A chat whose first turn on the work already took half the window: a new chat
+// on the same model would start about that full (#3642). The figure names
+// Kiro's count as its source: on Kiro CLI 3.1.0 the agent left out the sentence
+// that gave it bare, twice.
+const onSameModel = (n: number, model?: string) =>
+  `By Kiro's count this chat was about ${n}% full in its first turn on this work, so a new chat on the same ` +
+  `model${model ? ` (${model})` : ""} will not help much.`;
+const noRoomSummarized = (n: number, model?: string) =>
+  "Kiro has summarized this chat to make room, so the agent now works from a summary of what came before. " +
+  onSameModel(n, model);
+// Every sentence of the line that gives a figure says whose figure it is.
+const figuresSourced = (line: string | undefined): boolean =>
+  (line ?? "").split(/(?<=\.) /).filter((sentence) => /\d+%/.test(sentence)).every((sentence) => /by Kiro's count/i.test(sentence));
+// The near-full line asks nothing, so it rides as a change notice, which the
+// agent says as written (left out of the narration, measured live on Kiro CLI
+// 3.1.0); today's offer stays in the narration.
+const notices = (reply: { change_notices?: string[] }) => reply.change_notices ?? [];
+const noRoomUsage = (figure: number, n: number, model?: string) =>
+  `This chat is about ${figure}% full by Kiro's count, and once it fills the agent carries on from a summary. ` +
+  onSameModel(n, model);
 
 function home(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "t-kiro-ctx-home-")));
@@ -58,18 +78,31 @@ function home(): string {
 }
 
 // Kiro CLI's default engine: one JSON file per chat, the figure saved at the end of a turn.
-function v2Record(homeDir: string, chat: string, percentage: unknown): void {
+function v2Record(
+  homeDir: string, chat: string, percentage: unknown, turns: Array<Record<string, unknown>> = [], model?: string,
+): void {
   const dir = join(homeDir, ".kiro", "sessions", "cli");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${chat}.json`), `${JSON.stringify({
     session_id: chat, cwd: "/work", created_at: "2026-10-21T00:00:00Z", updated_at: "2026-10-21T00:10:00Z",
     session_state: {
       version: "v1", agent_name: "aidlc",
-      conversation_metadata: { last_context_usage: { percentage, model_id: "auto" }, user_turn_metadatas: [] },
-      rts_model_state: { context_usage_percentage: percentage, model_info: { context_window_tokens: 200000 } },
+      conversation_metadata: { last_context_usage: { percentage, model_id: model ?? "auto" }, user_turn_metadatas: turns },
+      rts_model_state: {
+        context_usage_percentage: percentage,
+        model_info: { ...(model ? { model_id: model } : {}), context_window_tokens: 200000 },
+      },
     },
   })}\n`);
 }
+
+// One turn's figures as Kiro CLI's default engine saves them, its end time with
+// the nine fractional digits Kiro writes.
+const kiroTime = (offsetMs: number) => at(offsetMs).replace(/\.(\d{3})Z$/, ".$1091369Z");
+const v2Turn = (offsetMs: number, start: number, end: number, model = "auto") => ({
+  end_reason: "UserTurnEnd", end_timestamp: kiroTime(offsetMs), model,
+  context_usage_percentage: start, final_context_usage_percentage: end,
+});
 
 // Kiro CLI's default engine also logs the chat beside it, one `kind` per line;
 // a `Compaction` row is Kiro compacting the chat when it overflows, mid-turn too.
@@ -89,6 +122,31 @@ function v3Record(homeDir: string, chat: string, rows: Array<Record<string, unkn
   writeFileSync(join(dir, "messages.jsonl"), `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`);
 }
 const at = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+// The chat's own settings file beside its record: the model now, and the model
+// Kiro last told the agent about.
+function v3Session(homeDir: string, chat: string, body: string): void {
+  writeFileSync(join(homeDir, ".kiro", "sessions", "0123456789abcdef", chat, "session.json"), body);
+}
+const AUTO_DISPLAY = "Auto (model selected dynamically on the server)";
+const sessionOn = (chat: string, modelId: string, told = modelId) =>
+  JSON.stringify({
+    id: chat, agentMode: "aidlc", modelId,
+    contextSnapshotModelDisplay: { modelId: told, display: told === "auto" ? AUTO_DISPLAY : told },
+  });
+// The note Kiro writes at a chat's first prompt, and again after each summary.
+const snapshotRow = (display: string, when: string) => ({
+  id: `context_snapshot_${display.length}-${when}`, timestamp: when,
+  payload: {
+    type: "agent_note",
+    content: "<session_context>\nOnly the last <session_context> block is current; it remains current until a later " +
+      `block supersedes it.\nThe current model is ${display}.\n</session_context>`,
+  },
+});
+// A figure in one turn (Kiro's `executionId` names the turn).
+const turnRow = (percent: number, when: string, turn: string) => ({
+  id: `meta-${turn}-${percent}`, timestamp: when,
+  payload: { type: "session_metadata", key: "contextUsage", value: { usagePercentage: percent }, executionId: turn },
+});
 const usageRow = (percent: number, when = at(0)) => ({
   id: `meta-${percent}`, timestamp: when,
   payload: { type: "session_metadata", key: "contextUsage", value: { usagePercentage: percent }, executionId: "e1" },
@@ -272,7 +330,7 @@ describe("t-kiro-context-offer: Kiro CLI v3 and Kiro IDE, right after Kiro summa
     const chat = "sess_f3fedea3-3cb6-41f9-9e75-da9bf2fd1d36";
     const homeDir = home();
     const proj = project(chat);
-    v3Record(homeDir, chat, [userRow("/aidlc"), usageRow(79.4, at(-1000)), tombstone("summarization", at(60_000)), usageRow(20.1, at(61_000))]);
+    v3Record(homeDir, chat, [userRow("/aidlc"), usageRow(79.4, at(-120_000)), tombstone("summarization", at(60_000)), usageRow(20.1, at(61_000))]);
     const before = homeDigest(homeDir);
     const first = report(proj, { tree: "kiro-ide", homeDir, chat });
     expect(first.narration?.split("\n").at(-1)).toBe(SUMMARIZED_LINE);
@@ -308,8 +366,136 @@ describe("t-kiro-context-offer: Kiro CLI v3 and Kiro IDE, right after Kiro summa
     const chat = "sess_aa48a8fe-1745-43d7-93d3-3bf59abab7d2";
     const homeDir = home();
     const proj = project(chat);
-    v3Record(homeDir, chat, [usageRow(70), usageRow(85.2)]);
+    v3Record(homeDir, chat, [turnRow(30.2, at(0), "t1"), usageRow(70), usageRow(85.2)]);
     expect(report(proj, { tree: "kiro-ide", homeDir, chat }).narration?.split("\n").at(-1)).toBe(usageLine(85));
+  });
+});
+
+// Measured on Kiro CLI 3.1.0 with a 200k model: a chat starts at 24% before any
+// work, and the turn that picked the work up in a new chat took it to 63.6%;
+// Kiro summarized that chat 12 minutes later and 10 times in all (#3642).
+describe("t-kiro-context-offer: a new chat on the same model would start about as full", () => {
+  test("a new chat its first turn on the work took to 64% hears that a new chat will not help, once (Kiro CLI v3)", () => {
+    const chat = "sess_9aba7ab2-47f4-415d-a4a3-a826eb21c559";
+    const homeDir = home();
+    const proj = project(chat);
+    v3Record(homeDir, chat, [
+      turnRow(90, at(-3_600_000), "t0"), snapshotRow("claude-opus-4.5", at(2_000)),
+      turnRow(24.662, at(3_000), "t1"), turnRow(41.8705, at(30_000), "t1"), turnRow(63.619, at(110_000), "t1"),
+      turnRow(64.5, at(150_000), "t2"), turnRow(79.8575, at(500_000), "t3"),
+      tombstone("summarization", at(700_000)), turnRow(20, at(700_010), "t3"), turnRow(25.9, at(720_000), "t4"),
+    ]);
+    v3Session(homeDir, chat, sessionOn(chat, "claude-opus-4.5"));
+    const before = homeDigest(homeDir);
+    const first = report(proj, { tree: "kiro", homeDir, chat });
+    expect(notices(first)).toContain(noRoomSummarized(64, "claude-opus-4.5"));
+    expect(notices(first).filter((line) => /\d+%/.test(line)).every(figuresSourced)).toBe(true);
+    expect(offered(first.narration)).toBe(false);
+    expect(first.narration).not.toContain("I recommend it");
+    const again = report(proj, { tree: "kiro", homeDir, chat });
+    expect(offered([again.narration, ...notices(again)].join(" "))).toBe(false);
+    // Read only: no model or setting of Kiro's changed.
+    expect(homeDigest(homeDir)).toBe(before);
+  });
+
+  test("a first turn Kiro summarized part way counts at its highest figure (Kiro IDE)", () => {
+    const chat = "sess_66160e7a-e9f7-4c65-bbf1-486f5d61b60e";
+    const homeDir = home();
+    const proj = project(chat);
+    v3Record(homeDir, chat, [
+      snapshotRow("claude-opus-4.5", at(1_000)),
+      turnRow(25.4, at(2_000), "t1"), turnRow(79.849, at(60_000), "t1"), tombstone("summarization", at(61_000)),
+      turnRow(20, at(61_010), "t1"), turnRow(34.5, at(90_000), "t1"), turnRow(39.9, at(400_000), "t2"),
+    ]);
+    v3Session(homeDir, chat, sessionOn(chat, "claude-opus-4.5"));
+    expect(notices(report(proj, { tree: "kiro-ide", homeDir, ideChat: chat }))).toContain(noRoomSummarized(80, "claude-opus-4.5"));
+  });
+
+  test("a model Kiro picks (auto) names no model; a settings file that does not parse keeps today's line", () => {
+    const chat = "sess_7f937405-f1b8-46f0-9584-f881bb034a9e";
+    const homeDir = home();
+    const rows = [
+      snapshotRow(AUTO_DISPLAY, at(1_000)), turnRow(51, at(2_000), "t1"), turnRow(60.2, at(9_000), "t1"),
+      tombstone("summarization", at(60_000)),
+    ];
+    const proj = project(chat);
+    v3Record(homeDir, chat, rows);
+    v3Session(homeDir, chat, sessionOn(chat, "auto"));
+    expect(notices(report(proj, { tree: "kiro", homeDir, chat }))).toContain(noRoomSummarized(60));
+    const other = "sess_0b1d2c3e-4f50-4617-8829-3a4b5c6d7e8f";
+    const proj2 = project(other);
+    v3Record(homeDir, other, rows);
+    v3Session(homeDir, other, "{\"modelId\": ");
+    expect(report(proj2, { tree: "kiro", homeDir, chat: other }).narration?.split("\n").at(-1)).toBe(SUMMARIZED_LINE);
+  });
+
+  // The figure is a share of the window of the model that filled it: after a
+  // switch with /model, a new chat would start on the model switched to (#3650).
+  test("a chat switched to another model after its first turn, or with no model on record then, keeps today's line", () => {
+    const homeDir = home();
+    const rows = [
+      snapshotRow("claude-opus-4.5", at(1_000)), turnRow(24.7, at(2_000), "t1"), turnRow(63.6, at(30_000), "t1"),
+      turnRow(79.8, at(400_000), "t2"), tombstone("summarization", at(500_000)), turnRow(20, at(500_010), "t2"),
+    ];
+    const cases: Array<[string, string | null]> = [
+      // Switched with /model, before Kiro tells the agent about it.
+      ["sess_3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b", sessionOn("x", "claude-sonnet-4.5", "claude-opus-4.5")],
+      // Switched, and Kiro has told the agent.
+      ["sess_4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c", sessionOn("x", "claude-sonnet-4.5")],
+      // Switched to Kiro's own pick.
+      ["sess_5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d", sessionOn("x", "auto")],
+      // No settings file beside the record.
+      ["sess_6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e", null],
+    ];
+    for (const [chat, session] of cases) {
+      const proj = project(chat);
+      v3Record(homeDir, chat, rows);
+      if (session !== null) v3Session(homeDir, chat, session);
+      expect(report(proj, { tree: "kiro", homeDir, chat }).narration?.split("\n").at(-1), chat).toBe(SUMMARIZED_LINE);
+    }
+    // A record with no note of the model before its first turn.
+    const bare = "sess_7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
+    const proj = project(bare);
+    v3Record(homeDir, bare, rows.slice(1));
+    v3Session(homeDir, bare, sessionOn(bare, "claude-opus-4.5"));
+    expect(report(proj, { tree: "kiro", homeDir, chat: bare }).narration?.split("\n").at(-1)).toBe(SUMMARIZED_LINE);
+    // Kiro CLI's default engine names each turn's model.
+    const v2 = "56565656-5656-4565-8565-565656565656";
+    const proj2 = project(v2);
+    v2Record(homeDir, v2, 85.2, [v2Turn(20_000, 63.9, 64.2, "claude-opus-4.5"), v2Turn(400_000, 85.2, 85.2, "claude-sonnet-4.5")], "claude-sonnet-4.5");
+    expect(report(proj2, { tree: "kiro", homeDir, chat: v2 }).narration?.split("\n").at(-1)).toBe(usageLine(85));
+  });
+
+  test("a first turn under half the window, or none since the work began, keeps today's line", () => {
+    const chat = "sess_1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    const homeDir = home();
+    const proj = project(chat);
+    v3Record(homeDir, chat, [
+      turnRow(24, at(2_000), "t1"), turnRow(30.4, at(20_000), "t1"), turnRow(79, at(400_000), "t2"),
+      tombstone("summarization", at(500_000)), turnRow(20, at(500_010), "t2"),
+    ]);
+    v3Session(homeDir, chat, JSON.stringify({ id: chat, modelId: "claude-opus-4.5" }));
+    expect(report(proj, { tree: "kiro", homeDir, chat }).narration?.split("\n").at(-1)).toBe(SUMMARIZED_LINE);
+    const quiet = "sess_2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a";
+    const proj2 = project(quiet);
+    v3Record(homeDir, quiet, [turnRow(70, at(-3_600_000), "t0"), tombstone("summarization", at(60_000))]);
+    expect(report(proj2, { tree: "kiro", homeDir, chat: quiet }).narration?.split("\n").at(-1)).toBe(SUMMARIZED_LINE);
+  });
+
+  test("Kiro CLI's default engine: the first turn's figures it saved decide, with the model it names", () => {
+    const chat = "12121212-1212-4121-8121-121212121212";
+    const homeDir = home();
+    const proj = project(chat);
+    v2Record(homeDir, chat, 85.2, [
+      v2Turn(-3_600_000, 90, 91), v2Turn(20_000, 63.9, 64.2, "claude-opus-4.5"), v2Turn(400_000, 85.2, 85.2, "claude-opus-4.5"),
+    ], "claude-opus-4.5");
+    const near = notices(report(proj, { tree: "kiro", homeDir, chat }));
+    expect(near).toContain(noRoomUsage(85, 64, "claude-opus-4.5"));
+    expect(near.filter((line) => /\d+%/.test(line)).every(figuresSourced)).toBe(true);
+    const light = "34343434-3434-4343-8343-343434343434";
+    const proj2 = project(light);
+    v2Record(homeDir, light, 85.2, [v2Turn(20_000, 22.1, 30.4), v2Turn(400_000, 85.2, 85.2)]);
+    expect(report(proj2, { tree: "kiro", homeDir, chat: light }).narration?.split("\n").at(-1)).toBe(usageLine(85));
   });
 });
 

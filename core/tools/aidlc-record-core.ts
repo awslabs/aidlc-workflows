@@ -12,11 +12,11 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
-import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
+import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
 
@@ -44,15 +44,25 @@ export function canonicalPathKey(path: string): string {
 // The record the per-user `active-intent` cursor names, when it names a real
 // record — never the lone-record fallback. The cursor is gitignored and written
 // only by intent create and switch on this machine, so unlike a lone committed
-// record it is local evidence of a choice.
+// record it is local evidence of a choice. A git worktree with no cursor of its
+// own reads its main checkout's, as activeSpace does, when it names a record
+// this checkout has; an empty one of its own (an archive there leaves it) names none.
 export function readActiveIntentCursor(projectDir: string, space?: string): string | null {
-  const dir = intentsDir(projectDir, space ?? activeSpace(projectDir));
+  const sp = space ?? activeSpace(projectDir);
+  const dir = intentsDir(projectDir, sp);
+  let raw: string;
   try {
-    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
-    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
+    raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
   } catch {
-    // no cursor
+    const main = mainCheckoutOfWorktree(projectDir);
+    if (main === null) return null;
+    try {
+      raw = readFileSync(join(intentsDir(main, sp), ACTIVE_INTENT_POINTER), "utf-8").trim();
+    } catch {
+      return null;
+    }
   }
+  if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
   return null;
 }
 
@@ -1054,6 +1064,22 @@ function hostNamedChat(projectDir: string): string | null {
 // tree, which the chats of one window share.
 export const CHAT_NAMING_HOSTS: ReadonlySet<string> = new Set(["claude", "codex", "kiro", "opencode"]);
 
+// Whether the host itself names the chat this command runs in (its own
+// variable in the agent's shell, or the id its plugin hands each command), not
+// the process tree, which the chats of one window share and a restart renames.
+// Read per command, not per host: Kiro CLI V3 runs Kiro IDE's tree and names
+// its chat in KIRO_SESSION_ID, while Kiro IDE's own chats name none.
+export function hostNamesThisChat(projectDir: string): boolean {
+  if (validSessionId(process.env.AIDLC_SESSION_OVERRIDE) !== null) {
+    return process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+  }
+  try {
+    return hostNamedChat(projectDir) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function claudeNamedChat(): { pid: number; session: string } | null {
   const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
   const session = Number.isSafeInteger(pid) && processIsAlive(pid)
@@ -1177,9 +1203,11 @@ function localWorktreeRecord(projectDir: string): string | null {
 
 // Whether this conversation's hooks may write into, or enforce, the record a
 // selection names. Resolution (which record the path helpers name) keeps the
-// lone-record fallback, because worktrees inherit no cursor; participation asks
-// for local evidence that this conversation chose the record. A lone committed
-// record is not such evidence: in a fresh clone it is a teammate's.
+// lone-record fallback, because a checkout may have no cursor (a fresh clone, a
+// worktree whose main checkout has none); participation asks for local evidence
+// that this conversation chose the record. The cursor is such evidence, and in a
+// git worktree with none of its own that is its main checkout's on this machine.
+// A lone committed record is not: in a fresh clone it is a teammate's.
 export function workflowParticipation(
   projectDir: string,
   selection: WorkflowSelection,
@@ -1669,10 +1697,13 @@ export function cloneIdentity(projectDir: string): CloneIdentity {
 }
 
 // Where the audit trail stood when a question was shown: the shard and its
-// size then, so the turns after it are the replies it can have.
+// size then, so the turns after it are the replies it can have, and when
+// (replyTurnsAfter reads it for another shard of the work).
 export interface AuditMark {
   shard: string;
   offset: number;
+  /** When it was taken; a mark kept before marks had a time has none. */
+  at?: string;
 }
 
 // Read the FIRST `**Field**: value` line from one audit block (tolerates an
@@ -1690,6 +1721,29 @@ export function auditBlockField(block: string, fieldName: string): string | null
     if (line.startsWith(prefix)) return line.slice(prefix.length).trim();
   }
   return null;
+}
+
+export function gateStagesFromBlock(block: string): string[] {
+  const explicit = auditBlockField(block, "Gate Stages");
+  if (explicit) {
+    return explicit
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+  }
+  const stage = auditBlockField(block, "Stage");
+  return stage ? [stage] : [];
+}
+
+// A unit-end gate's stages the Unit skipped. Gate Stages keeps a skipped final
+// stage, where the gate sits, so the gate's own rows and pin still find it.
+export const GATE_SKIPPED_STAGES_FIELD = "Skipped Stages";
+
+// The stages a gate row's Request Changes starts again: never one the Unit
+// skipped, so the person's skip stands.
+export function gateStagesReopened(block: string): string[] {
+  const skipped = (auditBlockField(block, GATE_SKIPPED_STAGES_FIELD) ?? "").split(",").map((value) => value.trim());
+  return gateStagesFromBlock(block).filter((stage) => !skipped.includes(stage));
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
@@ -1717,6 +1771,20 @@ export function auditShardName(projectDir: string): string {
   const name = `${identity.host}-${identity.token}.md`;
   AUDIT_SHARD_NAMES.set(key, name);
   return name;
+}
+
+// The work's plan was made in another checkout: every stage or gate row of the
+// work's own (one that names no Unit, as Inception's do) is in another clone's
+// shard, or this clone has written none. A team's clone stays one after it
+// builds a Unit, whose rows name the Unit; the lead's own checkout, and a copy
+// of it, keep the plan's rows in their own shard. Team routing shows such a
+// clone the board or the Units it can take, never the walk the lead keeps.
+export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
+  const ownShard = knownAuditShardName(projectDir);
+  const plan = rows.filter((row) =>
+    (row.event.startsWith("STAGE_") || row.event.startsWith("GATE_")) && /^\*\*Unit\*\*:/m.test(row.block) === false
+  );
+  return plan.length > 0 && plan.every((row) => basename(row.shard) !== ownShard);
 }
 
 // This clone's shard name when it is already known, without minting a token or
@@ -1828,6 +1896,130 @@ export function readAuditShardTexts(
 // than carrying its own copy of the grammar.
 export function auditShardBlocks(content: string): string[] {
   return content.replace(/\r\n/g, "\n").split(/\n---\n/);
+}
+
+// The HUMAN_TURN blocks a later HOST_TURN takes back, by position. The hook
+// records a Claude Code turn as the person's before Claude Code has written its
+// own row for it; once that row says the host started the turn (a scheduled
+// wake-up), settleClaudeTurns (aidlc-claude-turn-origin.ts) appends a HOST_TURN
+// naming the turn's Message Id after it, in the same clone's shard. Every
+// reader that counts a person's turns skips these, whether it walks parsed rows
+// (parseAuditShardEvents) or a shard's blocks itself.
+export function withdrawnTurnPositions(blocks: readonly string[]): Set<number> {
+  const withdrawn = new Set<number>();
+  // Most shards hold no such HOST_TURN: one substring test per block then.
+  if (!blocks.some((block) => block.includes("HOST_TURN") && block.includes("**Message Id**"))) return withdrawn;
+  const takenBack = new Set<string>();
+  for (let pos = blocks.length - 1; pos >= 0; pos--) {
+    const event = auditBlockField(blocks[pos], "Event");
+    const id = event === "HOST_TURN" || event === "HUMAN_TURN" ? auditBlockField(blocks[pos], "Message Id") : null;
+    if (id === null) continue;
+    if (event === "HOST_TURN") takenBack.add(id);
+    else if (takenBack.has(id)) withdrawn.add(pos);
+  }
+  return withdrawn;
+}
+
+// A shard's blocks without the turns a HOST_TURN took back (withdrawnTurnPositions),
+// for a reader that counts a person's turns in the text and needs no positions.
+export function auditShardTurnBlocks(content: string): string[] {
+  const blocks = auditShardBlocks(content);
+  const withdrawn = withdrawnTurnPositions(blocks);
+  return withdrawn.size === 0 ? blocks : blocks.filter((_, pos) => !withdrawn.has(pos));
+}
+
+// The work a project-relative shard path is written for: its record folder,
+// for a tracked shard (`<record>/audit/<name>`) and a claimed Unit's own record
+// (`<record>/.aidlc-engine/audit/<name>`) alike. Null for any other path.
+function auditShardWork(shard: string): string | null {
+  const parts = shard.split("/");
+  const name = parts.pop() ?? "";
+  if (!/^[A-Za-z0-9._-]+\.md$/.test(name) || parts.pop() !== "audit") return null;
+  if (parts.at(-1) === ENGINE_DIR) parts.pop();
+  return parts.length > 0 ? parts.join("/") : null;
+}
+
+const AUDIT_MARK_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+// The HOST_TURNs in a shard's text, by the Message Id they take back, with
+// the latest time each is stamped.
+function hostTurnTimes(text: string): Map<string, string> {
+  const times = new Map<string, string>();
+  if (!text.includes("HOST_TURN")) return times;
+  for (const block of auditShardBlocks(text)) {
+    const id = auditBlockField(block, "Event") === "HOST_TURN" ? auditBlockField(block, "Message Id") : null;
+    const at = auditBlockField(block, "Timestamp") ?? "";
+    if (id !== null && (times.get(id) ?? "") <= at) times.set(id, at);
+  }
+  return times;
+}
+
+// The person's reply turns after a question's mark, oldest first; `isReply`
+// says which turns are replies (isReplyTurn, aidlc-lib.ts). In the mark's own
+// shard they are the turns after its offset. A team checkout that claims a
+// Unit writes the work's rows to the Unit's own record from then on, and to
+// its tracked shard again once the claim is gone, so when the shard written
+// now is another shard of the same work, its turns stamped after the mark
+// count too, and a HOST_TURN in either shard takes back a turn in the other.
+// A mark from before marks kept a time takes the first row at or after its
+// offset as one: never earlier than the showing, since a claim only trims that
+// shard or resets it to a prefix, though a row stamped before its wait for the
+// audit lock can make it a second early. When the claim left no row there, it
+// takes `shownAt`, a time its question was shown again, if the caller has one.
+// Times are whole seconds and only a later one counts. Rows a handover adopted
+// into the Unit's record read as the checkout's own: no row names the checkout
+// it came from. Another clone's shard and another work's prove nothing.
+export function replyTurnsAfter(
+  projectDir: string,
+  mark: AuditMark,
+  isReply: (block: string) => boolean,
+  shownAt?: string,
+): string[] {
+  const shardPath = auditFilePath(projectDir);
+  const current = relative(projectDir, shardPath).split(sep).join("/");
+  if (mark.shard === current) {
+    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
+    return auditShardTurnBlocks(after).filter(isReply);
+  }
+  const work = auditShardWork(current);
+  if (work === null || auditShardWork(mark.shard) !== work) return [];
+  const read = (path: string, offset = 0): string => {
+    try {
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, path));
+      return readAppendOnlyFileNoFollowOrThrow(path, "audit shard").subarray(offset).toString("utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
+    }
+  };
+  const marked = read(join(projectDir, ...mark.shard.split("/")), mark.offset);
+  const now = read(shardPath);
+  const at = typeof mark.at === "string" && AUDIT_MARK_AT.test(mark.at)
+    ? mark.at
+    : auditShardBlocks(marked).map((block) => auditBlockField(block, "Timestamp"))
+      .find((stamp) => stamp !== null) ?? (shownAt !== undefined && AUDIT_MARK_AT.test(shownAt) ? shownAt : null);
+  const takenBack = (block: string, times: Map<string, string>): boolean => {
+    const id = auditBlockField(block, "Message Id");
+    const taken = id === null ? undefined : times.get(id);
+    return taken !== undefined && taken >= (auditBlockField(block, "Timestamp") ?? "");
+  };
+  const takenNow = hostTurnTimes(now);
+  const turns = auditShardTurnBlocks(marked).filter((block) => isReply(block) && !takenBack(block, takenNow));
+  const seen = new Set(turns.map((block) => block.trim()));
+  if (at !== null) {
+    const takenThere = hostTurnTimes(marked);
+    for (const block of auditShardTurnBlocks(now)) {
+      const stamp = auditBlockField(block, "Timestamp");
+      if (stamp === null || stamp <= at || !isReply(block) || takenBack(block, takenThere)) continue;
+      if (seen.has(block.trim())) continue;
+      seen.add(block.trim());
+      turns.push(block);
+    }
+  }
+  return turns
+    .map((block, pos) => ({ block, pos, stamp: auditBlockField(block, "Timestamp") ?? "" }))
+    .sort((a, b) => (a.stamp < b.stamp ? -1 : a.stamp > b.stamp ? 1 : a.pos - b.pos))
+    .map(({ block }) => block);
 }
 
 // A shard file that a sync tool or a person copied (a "<shard> 2.md" conflict
@@ -1957,8 +2149,9 @@ export function parseAuditShardEvents(
 ): AuditShardEvent[] {
   const rows: AuditShardEvent[] = [];
   const blocks = auditShardBlocks(content);
+  const withdrawn = withdrawnTurnPositions(blocks);
   for (let pos = 0; pos < blocks.length; pos++) {
-    if (copied.has(pos)) continue;
+    if (copied.has(pos) || withdrawn.has(pos)) continue;
     const event = auditBlockField(blocks[pos], "Event");
     const timestamp = auditBlockField(blocks[pos], "Timestamp");
     if (!event || !timestamp) continue;
@@ -2454,4 +2647,17 @@ export function setCheckbox(
 
 export function isoTimestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+// The reason the engine's skip step hands the agent for a stage the person
+// asked to skip where it stands (orchestrate's planChangeDirective). report
+// and the state tool read it back: that skip is the person's, so a stage that
+// must run, or one waiting at its own question, is skipped as they asked.
+export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
+
+// Whether a skip's reason is the person's: the engine's token, as the step
+// names it or with the agent's words after it (the person's why, which stays
+// in the record).
+export function isPersonAskedSkipReason(reason: string | null | undefined): boolean {
+  return reason?.startsWith(PERSON_ASKED_SKIP_REASON) === true;
 }

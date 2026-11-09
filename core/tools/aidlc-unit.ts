@@ -1,22 +1,27 @@
 // aidlc-unit.ts - atomic Unit claim registry and checkout-local scope binding.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
+import { LAUNCHER_GLOBAL_FLAGS, UNIT_GRAMMAR } from "./aidlc-command.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
-import { scopeStampLanded, unitRowMerged } from "./aidlc-unit-landing.ts";
+import { completedUnits, scopeStampLanded, unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
+import { gitUserName, personGitNameField } from "./aidlc-git-name.ts";
 import {
   managedBlockMarkers,
   markedPart,
@@ -26,6 +31,7 @@ import {
   rootIntegrationTarget,
 } from "./aidlc-distribution.ts";
 import { aidlcRootParts } from "./aidlc-includes.ts";
+import { KEPT_RULE_SCOPES, keptRuleFile } from "./aidlc-graph.ts";
 import {
   activeIntentUuid,
   activeSpace,
@@ -34,18 +40,20 @@ import {
   auditBlockField,
   auditShardBlocks,
   auditShardName,
+  knownAuditShardName,
   type AuditShardEvent,
   type CachedUnitClaim,
   candidateReviewCoverageProjection,
   clearClaimGeneration,
+  clearEngineAskMark,
   clearUnitScopeStamp,
   committedTextBytes,
   ENGINE_DIR,
   ensureCloneId,
   errorMessage,
-  extractMarkdownSection,
   filterProducesByKind,
   getField,
+  loadStageGraph,
   humanPresenceGuardDisabled,
   idSuffix,
   invalidateLiveClaimPayloadCache,
@@ -54,12 +62,17 @@ import {
   isTeamUnitOwnership,
   isoTimestamp,
   loadStageGraphAll,
+  engineAskMark,
+  noteEngineAskMark,
   parseArgs,
+  printUsageAndExit,
+  recordDir,
   parseBoltDag,
   readAppendOnlyFileNoFollowOrThrow,
   readAuditShardEvents,
   readUnitClaimRegistryCache,
   readApplicableTeamUnitScopeStamp,
+  unitsWalkedWithoutClaim,
   readUnitMergeTransaction,
   recordFileTargetOrThrow,
   REQUEST_TEXT_DIR,
@@ -79,6 +92,11 @@ import {
   resolveProjectDir,
   resolveReviewClass,
   teamSkeletonOn,
+  loadScopeMetadata,
+  memorySectionBody,
+  structuredField,
+  sessionsDir,
+  writeFileAtomic,
   type UnitMergeEvidence,
   type UnitMergeTransaction,
   UNIT_MERGE_DIR,
@@ -87,6 +105,7 @@ import {
   unitLifecycleSnapshot,
   unitDependencyPath,
   unitMergedReceipts,
+  unitMergeTransactions,
   unitMajorConstructionStageSlugs,
   unitParticipantPath,
   unitReleasePendingPath,
@@ -98,20 +117,29 @@ import {
   writeStateFile,
   writeUnitScopeStamp,
   writeClaimGeneration,
+  readUnitSourceManifest,
+  sourceClaimCovers,
+  sourcePathKey,
+  type SourceClaimModel,
 } from "./aidlc-lib.js";
 import {
+  planApprovalPromptSha256,
   parseTestingContract,
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
+import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
+import { planMadeElsewhere } from "./aidlc-record-core.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
   aidlcInvocation,
+  aidlcToolInvocation,
   isCompiledExecutable,
   quoteCommandArgument,
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
+import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -134,11 +162,13 @@ interface GitBytesResult {
 // Unit's audit shard outgrows that in one long attempt, so the cap is lifted
 // the way the other git readers lift it. A run that could not start, was killed
 // or overflowed is a failed run, whatever its exit status.
-function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
+// `input` is what git reads on its standard input.
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
     env: { ...process.env, ...env },
     maxBuffer: 512 * 1024 * 1024,
+    ...(input === undefined ? {} : { input }),
   });
   const failure = result.error
     ? `${result.error.message}\n`
@@ -153,8 +183,8 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
   };
 }
 
-function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
-  const result = gitBytes(projectDir, args, env);
+function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): GitResult {
+  const result = gitBytes(projectDir, args, env, input);
   return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
@@ -211,9 +241,12 @@ export interface UnitClaimView {
 
 export interface UnitClaimOverview {
   claimable: string[];
-  claimed: Array<{ unit: string; owner: string; generation: number }>;
+  /** `blockedBy`, when present: Units a revised plan made this claimed Unit depend on that have not landed. */
+  claimed: Array<{ unit: string; owner: string; generation: number; blockedBy?: string[] }>;
   waiting: Array<{ unit: string; blockedBy: string[] }>;
   claims: Map<string, UnitClaimView>;
+  /** Units a checkout walks without a claim (the lead's own, begun before the teams took the others). */
+  walked?: string[];
   warning?: string;
 }
 
@@ -232,51 +265,160 @@ function currentBranch(projectDir: string): string {
   return result.ok && result.stdout.trim() ? result.stdout.trim() : "main";
 }
 
-// A Way of Working line names the team's branch only when it says so: "the
-// integration branch", "the base branch", "the merge-target branch" or "the
-// merge target", with the name in backticks in the same sentence. A line such
-// as "Integration tests live in `tests/integration`" names no branch.
-const INTEGRATION_BRANCH_WORDS =
-  "(?:(?:base|integration|merge[ -]target) branch|merge target)";
-const INTEGRATION_BRANCH_AFTER_WORDS = new RegExp(
-  `\\b${INTEGRATION_BRANCH_WORDS}\\b[^\`\\n.;]*\`([^\`]+)\``,
-  "i",
-);
-const INTEGRATION_BRANCH_BEFORE_WORDS = new RegExp(
-  `\`([^\`]+)\`[^.;\\n]*\\b${INTEGRATION_BRANCH_WORDS}\\b`,
-  "i",
-);
+const WAY_OF_WORKING = "## Way of Working";
+const INTEGRATION_BRANCH_FIELD = "Integration branch";
+const MEMORY_LAYERS = ["project.md", "team.md", "org.md"] as const;
 
-// The branch the team wrote down under "## Way of Working", narrowest layer
-// first. Whatever it is called, that branch is used; a name git cannot use as a
-// branch is refused with its file, never skipped for a broader layer's choice.
-function affirmedIntegrationBranch(
-  projectDir: string,
-): { branch: string; source: string } | null {
-  const space = activeSpace(projectDir);
-  for (const name of ["project.md", "team.md", "org.md"]) {
-    const source = `aidlc/spaces/${space}/memory/${name}`;
+// The one path both the reader (integrationBranchLayer) and the writer
+// (recordIntegrationBranch) use for a memory layer.
+function memoryLayerSource(projectDir: string, name: string): string {
+  return `aidlc/spaces/${activeSpace(projectDir)}/memory/${name}`;
+}
+
+// The layers whose Way of Working words the agent read as naming no branch,
+// each keyed to those words, so the read is not asked again for the same text.
+// AI-DLC's own per-machine record, beside the sessions (git-ignored), never
+// the person's file: a teammate's clone reads its words once for itself.
+const BRANCH_FREE_WORDS_FILE = "integration-branch-free-words.json";
+
+function wordsKey(section: string): string {
+  return createHash("sha256").update(section.trim()).digest("hex");
+}
+
+function branchFreeWords(projectDir: string): Record<string, string> {
+  try {
+    const read = JSON.parse(readFileSync(join(sessionsDir(projectDir), BRANCH_FREE_WORDS_FILE), "utf-8"));
+    return read !== null && typeof read === "object" ? read : {};
+  } catch {
+    return {};
+  }
+}
+
+// The branch the team wrote down on its own `Integration branch: <name>` line
+// under "## Way of Working", narrowest layer first. Only that line is read: a
+// sentence naming the repos beside the branch once gave a repo's name. A layer
+// whose section has words but no line stops the walk there until the agent has
+// read them: they may name the team's branch, so it records the line, or that
+// they name none, first; never a broader layer's line or `main` in its place
+// (an update must not move a team whose team.md says `develop` in a sentence).
+// A layer with no words (the shipped comment-only files), or words read as
+// naming none, is passed. Nothing is checked here, so the share offers can ask
+// without a refusal.
+function integrationBranchLayer(projectDir: string): { value: string; source: string } | { toRead: string } | null {
+  let branchFree: Record<string, string> | undefined;
+  for (const name of MEMORY_LAYERS) {
+    const source = memoryLayerSource(projectDir, name);
     let body: string;
     try {
       body = readFileSync(join(projectDir, ...source.split("/")), "utf-8");
     } catch {
       continue;
     }
-    const section = extractMarkdownSection(body, "## Way of Working");
-    const explicit =
-      INTEGRATION_BRANCH_AFTER_WORDS.exec(section) ??
-      INTEGRATION_BRANCH_BEFORE_WORDS.exec(section);
-    if (!explicit) continue;
-    const branch = explicit[1].trim();
-    if (!git(projectDir, ["check-ref-format", "--branch", branch]).ok) {
-      fail(
-        `The integration branch "${branch}", named in ${source} under "Way of Working", ` +
-          "is not a valid git branch name. Correct it there and run the command again.",
-      );
-    }
-    return { branch, source };
+    const section = memorySectionBody(body, WAY_OF_WORKING);
+    const value = structuredField(section, INTEGRATION_BRANCH_FIELD);
+    if (value !== null) return { value, source };
+    if (section.trim() === "") continue;
+    branchFree ??= branchFreeWords(projectDir);
+    if (branchFree[source] !== wordsKey(section)) return { toRead: source };
   }
   return null;
+}
+
+// The layer whose Way of Working words are still to be read, or null.
+export function integrationBranchToRead(projectDir: string): string | null {
+  const layer = integrationBranchLayer(projectDir);
+  return layer !== null && "toRead" in layer ? layer.toRead : null;
+}
+
+// What the agent does before a step that needs the branch, while a layer's
+// words are still to be read: every such step says these words.
+function integrationBranchReadStep(source: string, then: string): string {
+  const file = source.slice(source.lastIndexOf("/") + 1);
+  const record = `${aidlcToolInvocation("state")} practices-branch --file ${file}`;
+  return `Run these now, in this turn: read the "${WAY_OF_WORKING.slice(3)}" section of ${source} for the one ` +
+    `branch the work merges into. Record it with \`${record} --branch <name>\`, or, when the words name no ` +
+    `branch, with \`${record} --none\` (the broader layers then answer, and nothing is asked). Ask the person only ` +
+    "when one sentence names two branches and you cannot tell which the work merges into. Say the line it prints, " +
+    `if any, to the person, ${then}.`;
+}
+
+// A hand-written line may end in a full stop, which no git name ends in, and
+// wrap the name in a code span, which is Markdown, not the name (`dev`.).
+function integrationBranchName(value: string): string {
+  return withoutLearnedDate(value).replace(/\.$/, "").replace(/^`([^`]+)`$/, "$1").trim();
+}
+
+function requireBranchName(projectDir: string, branch: string, source: string): void {
+  if (!git(projectDir, ["check-ref-format", "--branch", branch]).ok) {
+    fail(
+      `The integration branch "${branch}", named in ${source} under "Way of Working", ` +
+        "is not a valid git branch name. Correct it there and run the command again.",
+    );
+  }
+}
+
+// The branch team work uses, from the narrowest layer's line. Whatever it is
+// called, it is used; a name git cannot use is refused with its file, never
+// skipped for a broader layer's choice.
+function affirmedIntegrationBranch(
+  projectDir: string,
+): { branch: string; source: string } | null {
+  const layer = integrationBranchLayer(projectDir);
+  if (layer === null) return null;
+  if ("toRead" in layer) fail(integrationBranchReadStep(layer.toRead, "then run the command again"));
+  const branch = integrationBranchName(layer.value);
+  requireBranchName(projectDir, branch, layer.source);
+  return { branch, source: layer.source };
+}
+
+// `practices-branch` (aidlc-state.ts): what the agent read in a layer's Way of
+// Working words. A branch becomes the line the reader reads, at the end of the
+// section, a fixed place, so a lead and a teammate's clone that record the same
+// words write the same bytes and a land merges clean. Null (`--none`) records
+// that these words name no branch, in AI-DLC's own record, keyed to them.
+export function recordIntegrationBranch(
+  projectDir: string,
+  file: string,
+  given: string | null,
+): { recorded: string | null; file: string; line: string | null } {
+  if (!(MEMORY_LAYERS as readonly string[]).includes(file)) fail(`--file is one of ${MEMORY_LAYERS.join(", ")}.`);
+  const source = memoryLayerSource(projectDir, file);
+  const path = join(projectDir, ...source.split("/"));
+  let body: string;
+  try {
+    body = readFileSync(path, "utf-8");
+  } catch {
+    fail(`${source} is not here.`);
+  }
+  if (given === null) {
+    const dir = sessionsDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    mkdirSync(dir, { recursive: true });
+    const words = { ...branchFreeWords(projectDir), [source]: wordsKey(memorySectionBody(body, WAY_OF_WORKING)) };
+    writeFileAtomic(join(dir, BRANCH_FREE_WORDS_FILE), `${JSON.stringify(words, null, 2)}\n`);
+    return { recorded: null, file: source, line: null };
+  }
+  const branch = integrationBranchName(given);
+  requireBranchName(projectDir, branch, source);
+  if (structuredField(memorySectionBody(body, WAY_OF_WORKING), INTEGRATION_BRANCH_FIELD) !== null) {
+    fail(`${source} already has an "${INTEGRATION_BRANCH_FIELD}:" line under "Way of Working"; change it there.`);
+  }
+  const crlf = body.includes("\r\n");
+  const lf = body.replace(/\r\n/g, "\n");
+  const recorded = `- **${INTEGRATION_BRANCH_FIELD}**: ${branch}`;
+  const at = lf.search(new RegExp(`^${WAY_OF_WORKING}[ \\t]*$`, "m"));
+  const next = at < 0 ? -1 : lf.slice(at + WAY_OF_WORKING.length).search(/^## /m);
+  const end = at < 0 || next < 0 ? lf.length : at + WAY_OF_WORKING.length + next;
+  const after = lf.slice(end);
+  const written = `${lf.slice(0, end).trimEnd()}\n\n${at < 0 ? `${WAY_OF_WORKING}\n\n` : ""}${recorded}\n` +
+    (after === "" ? "" : `\n${after}`);
+  writeFileSync(path, crlf ? written.replace(/\n/g, "\r\n") : written);
+  return {
+    recorded,
+    file: source,
+    line: `Team work merges into ${branch}, read from ${source}, where it is now the "${INTEGRATION_BRANCH_FIELD}" ` +
+      'line under "Way of Working"; change it there to use another branch.',
+  };
 }
 
 function integrationBranch(projectDir: string, remote: string | null): string {
@@ -658,45 +800,6 @@ function dependencyBodyAtOid(projectDir: string, oid: string): string {
   return shown.stdout;
 }
 
-function completedUnits(state: string): Set<string> {
-  const match = /^## Unit Progress\s*$/m.exec(state);
-  if (!match) return new Set();
-  const after = match.index + match[0].length;
-  const next = /^## /m.exec(state.slice(after));
-  const section = state.slice(after, next ? after + next.index : state.length);
-  const table = section
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("|"))
-    .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
-  const header = table.find((cells) => cells[0]?.toLowerCase() === "unit");
-  if (!header) return new Set();
-  const mergedIndex = header.findIndex(
-    (cell) => cell.toLowerCase() === "merged",
-  );
-  const done = new Set<string>();
-  for (const cells of table) {
-    if (cells.length !== header.length || cells.length < 4) continue;
-    if (
-      (cells[0].toLowerCase() === "unit" &&
-        cells[1].toLowerCase() === "owner") ||
-      cells.every((cell) => /^-+$/.test(cell))
-    ) {
-      continue;
-    }
-    const workCells = cells.slice(
-      2,
-      mergedIndex >= 0 ? mergedIndex : undefined,
-    );
-    if (
-      workCells.every((cell) => cell === "[x]") &&
-      (mergedIndex < 0 || unitRowMerged(state, cells[0]))
-    ) {
-      done.add(cells[0]);
-    }
-  }
-  return done;
-}
-
 type OpeningStatus = {
   units: string[];
   blockers: Map<string, string[]>;
@@ -718,6 +821,18 @@ function localOpeningStatus(projectDir: string): OpeningStatus {
   const state = readStateFile(projectDir);
   const dependencyBody = readFileSync(unitDependencyPath(projectDir), "utf-8");
   return openingStatusFrom(state, dependencyBody);
+}
+
+// Claims can open from what this checkout holds: no walking skeleton is still
+// to be built on main first (openingStatusFrom, the claim's own rule). False
+// when the plan cannot be read.
+export function claimsOpenHere(projectDir: string): boolean {
+  try {
+    const opening = localOpeningStatus(resolveProjectDir(projectDir));
+    return ![...opening.blockers.values()].some((blockers) => blockers.includes("walking-skeleton"));
+  } catch {
+    return false;
+  }
 }
 
 // The one opening rule for the claim, status, release, the picker and the
@@ -757,14 +872,18 @@ function allClaims(
   return claims;
 }
 
+// A Unit a checkout walks without a claim (the lead's own, begun before the
+// teams took the others) is that checkout's, so it is never claimable (#3610).
 function buildOverview(
   opening: ReturnType<typeof openingStatus>,
   claims: Map<string, UnitClaimView>,
+  walked: ReadonlySet<string>,
   warning?: string,
 ): UnitClaimOverview {
   const claimable: string[] = [];
-  const claimed: Array<{ unit: string; owner: string; generation: number }> = [];
+  const claimed: UnitClaimOverview["claimed"] = [];
   const waiting: Array<{ unit: string; blockedBy: string[] }> = [];
+  const walkedUnits: string[] = [];
   for (const unit of opening.units) {
     const claim = claims.get(unit);
     if (opening.completed.has(unit)) {
@@ -772,14 +891,33 @@ function buildOverview(
       continue;
     }
     if (claim?.status === "claimed") {
-      claimed.push({ unit, owner: claim.owner, generation: claim.generation });
+      // A claimed Unit lands after the Units it depends on; a revised plan can
+      // add one that has not landed (the walking skeleton is not one).
+      const blockedBy = (opening.blockers.get(unit) ?? []).filter((dep) => dep !== "walking-skeleton");
+      claimed.push({
+        unit,
+        owner: claim.owner,
+        generation: claim.generation,
+        ...(blockedBy.length > 0 ? { blockedBy } : {}),
+      });
+      continue;
+    }
+    if (walked.has(unit)) {
+      walkedUnits.push(unit);
       continue;
     }
     const blockedBy = opening.blockers.get(unit) ?? [];
     if (blockedBy.length > 0) waiting.push({ unit, blockedBy });
     else claimable.push(unit);
   }
-  return { claimable, claimed, waiting, claims, ...(warning ? { warning } : {}) };
+  return {
+    claimable,
+    claimed,
+    waiting,
+    claims,
+    ...(walkedUnits.length > 0 ? { walked: walkedUnits } : {}),
+    ...(warning ? { warning } : {}),
+  };
 }
 
 function cacheClaims(
@@ -902,6 +1040,12 @@ function cachedClaimsForIdentity(
       );
     }
     const prior = claims.get(payload.unit);
+    // The cache keeps a claim's summary only; the ref at the same commit hands
+    // over its whole payload (a published candidate's commit among it).
+    if (prior && prior.oid === oid) {
+      prior.payload = payload;
+      continue;
+    }
     if (
       prior &&
       (prior.generation > payload.generation ||
@@ -956,7 +1100,7 @@ export function cachedUnitClaimOverview(
   if (options.writeCache !== false && !isReadOnlyEngineProbe()) {
     claims = cacheClaims(pd, claims, cache?.warning);
   }
-  return buildOverview(opening, claims, cache?.warning);
+  return buildOverview(opening, claims, new Set(unitsWalkedWithoutClaim(pd).keys()), cache?.warning);
 }
 
 export function localUnitClaimOverviewForIntent(
@@ -985,7 +1129,9 @@ export function localUnitClaimOverviewForIntent(
     },
     true,
   );
-  return buildOverview(opening, claims);
+  // The walked Units are read from the active work's own record.
+  const active = selector.space === activeSpace(pd) && selector.intentUuid === activeIntentUuid(pd, selector.space);
+  return buildOverview(opening, claims, active ? new Set(unitsWalkedWithoutClaim(pd).keys()) : new Set());
 }
 
 export function unitClaimOverview(projectDir: string): UnitClaimOverview {
@@ -999,7 +1145,7 @@ export function unitClaimOverview(projectDir: string): UnitClaimOverview {
   const opening = openingStatus(pd, integration.oid);
   const claims = allClaims(pd, integration.remote, identity.intentId8, opening.units);
   const observedClaims = cacheClaims(pd, claims);
-  return buildOverview(opening, observedClaims);
+  return buildOverview(opening, observedClaims, new Set(unitsWalkedWithoutClaim(pd).keys()));
 }
 
 function updateCachedClaim(
@@ -1192,7 +1338,7 @@ function candidateReviewCoverage(
   };
 }
 
-function namesInProse(names: string[]): string {
+export function namesInProse(names: string[]): string {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
@@ -1389,8 +1535,8 @@ export function claimAuditRules(
 
 // The record's shared files as `baseOid` has them: every audit shard but the
 // claim's own, and the stages' shared diaries (`<phase>/<stage>/memory.md`,
-// written at each stage start outside any Unit's folder). Pin refuses a change
-// to either (candidateBoundary), and `git add -A` commits both: a checkout
+// outside any Unit's folder). Pin refuses a change to either
+// (candidateBoundary), and `git add -A` commits both: a checkout
 // whose own shard was on main before the claim still recorded its pre-claim
 // rows there. They stay in the clone's history and working copy, as the
 // projected rows do.
@@ -1485,6 +1631,45 @@ function withClaimReviewRecords(
   return { tree, missing };
 }
 
+const OUTSIDE_UNIT_RECORD_TREE = "outside claimed Unit record tree";
+const OUTSIDE_UNIT_SUFFIX = ` (${OUTSIDE_UNIT_RECORD_TREE})`;
+
+function outsideUnitTreePaths(violations: string[]): string[] {
+  return violations
+    .filter((violation) => violation.endsWith(OUTSIDE_UNIT_SUFFIX))
+    .map((violation) => violation.slice(0, -OUTSIDE_UNIT_SUFFIX.length));
+}
+
+// The one text publish, pin and land give for a record outside the Unit's
+// tree, so the three cannot drift apart. It starts mid-sentence: publish puts
+// it after "Pin will refuse this candidate:", pin and land after their refusal.
+// Pin and land run in the main checkout, so they name the owner's checkout
+// where publish, run in that checkout, says "this branch".
+function outsideUnitTreeNextStep(unit: string, integrationRef: string, owner?: string): string {
+  const where = owner === undefined
+    ? "Take these out of this branch"
+    : `In the checkout where ${owner} claimed ${unit} (not this one), take these out of its branch`;
+  return "a claimed Unit lands only " +
+    `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
+    `such as contract-summary.md, or a stage-level file) is changed on main. ${where} ` +
+    "(git rm a file main does not have, or " +
+    `git checkout ${integrationRef.replace(/^refs\/(remotes|heads)\//, "")} -- <path> for one it does), commit, and ` +
+    "publish again.";
+}
+
+function refuseWithNextStep(
+  message: string,
+  violations: string[],
+  unit: string,
+  integrationRef: string,
+  owner: string,
+): string {
+  if (outsideUnitTreePaths(violations).length === 0) return message;
+  const step = outsideUnitTreeNextStep(unit, integrationRef, owner);
+  return `${message} ${step[0].toUpperCase()}${step.slice(1)}`;
+}
+
+// `candidateOid` may be a tree: publish asks before it has a commit to ask about.
 function candidateBoundary(
   projectDir: string,
   baseOid: string,
@@ -1501,7 +1686,8 @@ function candidateBoundary(
       "diff",
       "--no-renames",
       "--name-status",
-      `${baseOid}..${candidateOid}`,
+      baseOid,
+      candidateOid,
       "--",
       auditRoot,
     ],
@@ -1543,7 +1729,7 @@ function candidateBoundary(
 
   const changedPaths = gitOutput(
     projectDir,
-    ["diff", "--no-renames", "--name-only", `${baseOid}..${candidateOid}`],
+    ["diff", "--no-renames", "--name-only", baseOid, candidateOid],
     "Cannot inspect pinned candidate diff",
   )
     .split(/\r?\n/)
@@ -1554,6 +1740,11 @@ function candidateBoundary(
   const unitRootKey = unitRoot.toLowerCase();
   const constructionRootKey = constructionRoot.toLowerCase();
   const recordPrefixKey = `${recordPrefix}/`.toLowerCase();
+  // A rule the person kept while working the Unit is written to the space's
+  // project.md or team.md, not the Unit's folder; it travels with the Unit as
+  // its source does, named at the merge gate.
+  const space = activeSpace(projectDir);
+  const keptRules = new Set(KEPT_RULE_SCOPES.map((scope) => keptRuleFile(space, scope)));
   const outsideUnitRecordPaths: string[] = [];
   for (const path of changedPaths) {
     if (isEngineMergeMetadata(projectDir, path, recordPrefix)) continue;
@@ -1569,12 +1760,16 @@ function candidateBoundary(
     }
     if (pathKey.startsWith(unitRootKey)) continue;
     if (changedAudit.includes(path)) continue;
+    if (keptRules.has(path)) {
+      outsideUnitRecordPaths.push(path);
+      continue;
+    }
     if (
       pathKey.startsWith(constructionRootKey) ||
       pathKey.startsWith(recordPrefixKey) ||
       pathKey.startsWith("aidlc/")
     ) {
-      violations.push(`${path} (outside claimed Unit record tree)`);
+      violations.push(`${path} (${OUTSIDE_UNIT_RECORD_TREE})`);
       continue;
     }
     outsideUnitRecordPaths.push(path);
@@ -1633,19 +1828,23 @@ function candidateEvidence(
     true,
   );
   const baseDag = parseBoltDag(dependencyBodyAtOid(projectDir, candidateBaseOid));
-  const dag = parseBoltDag(dependencyBodyAtOid(projectDir, liveIntegrationOid));
+  const dagBody = dependencyBodyAtOid(projectDir, liveIntegrationOid);
+  const dag = parseBoltDag(dagBody);
   if (!baseDag.ok) {
     fail(`Pinned candidate base Unit DAG is ${baseDag.reason}: ${baseDag.detail}.`);
   }
   if (!dag.ok) {
     fail(`Pinned integration Unit DAG is ${dag.reason}: ${dag.detail}.`);
   }
+  // The contract a candidate is built against is its own Unit's entry (kind,
+  // dependencies) and the per-Unit stage columns: a Unit the plan adds, drops or
+  // changes elsewhere does not make this Unit's work stale.
   const contract = (
     units: typeof dag.units,
     stageColumns: string[],
   ): string => JSON.stringify({
     stage_columns: stageColumns,
-    units: units.map((entry) => ({
+    unit: units.filter((entry) => entry.name === claim.unit).map((entry) => ({
       name: entry.name,
       kind: entry.kind ?? null,
       depends_on: [...entry.depends_on].sort(),
@@ -1659,6 +1858,18 @@ function candidateEvidence(
   }
   const unit = dag.units.find((entry) => entry.name === claim.unit);
   if (!unit) fail(`Pinned integration Unit DAG has no Unit "${claim.unit}".`);
+  // A Unit lands after every Unit it depends on, read by the claim's own
+  // opening rule. A revised plan can give a Unit already claimed a dependency
+  // that has not landed yet (the walking skeleton is not one).
+  const notLanded = (openingStatusFrom(integrationState, dagBody).blockers.get(claim.unit) ?? [])
+    .filter((dep) => dep !== "walking-skeleton").sort();
+  if (notLanded.length > 0) {
+    const names = notLanded.map((dep) => `"${dep}"`).join(" and ");
+    fail(
+      `Unit "${claim.unit}" now depends on ${names}, which ${notLanded.length === 1 ? "has" : "have"} not landed on ` +
+        `main yet; it lands after ${notLanded.length === 1 ? "it does" : "they do"}. Nothing was pinned or landed.`,
+    );
+  }
   const unitKind = unit.kind ?? null;
   const forcedMergeJournals = gitOutput(
     projectDir,
@@ -1694,9 +1905,15 @@ function candidateEvidence(
   }
   if (boundary.violations.length > 0) {
     fail(
-      `Pinned candidate violates claimed Unit ownership at: ${
-        boundary.violations.join(", ")
-      }.`,
+      refuseWithNextStep(
+        `Pinned candidate violates claimed Unit ownership at: ${
+          boundary.violations.join(", ")
+        }.`,
+        boundary.violations,
+        claim.unit,
+        claim.payload.integration_ref,
+        claim.owner,
+      ),
     );
   }
   const changedAudit = boundary.changedAudit;
@@ -1718,12 +1935,31 @@ function candidateEvidence(
     return (stage?.produces ?? []).length > 0 &&
       filterProducesByKind(stage?.produces_kinds, stage?.produces ?? [], unitKind).length === 0;
   }));
+  // The clone stamped each receipt with the run floor it read from the whole
+  // audit record (the workflow's own rows plus its own). Read the candidate's
+  // receipts against the same floor: main's rows that are not Unit attempt
+  // rows, as the commit this evidence is read against holds them, with the
+  // transported rows on top. Transported rows alone hold no WORKFLOW_STARTED,
+  // so every real receipt would miss the floor; a file in this checkout that
+  // was never committed does not move it.
+  const mainShards = gitOutput(
+    projectDir,
+    ["ls-tree", "--name-only", liveIntegrationOid, "--", `${recordPrefix}/audit/`],
+    "Cannot list the integration audit shards",
+  )
+    .split(/\r?\n/)
+    .filter((path) => isActiveIntentAuditPath(path, recordPrefix));
+  const floorRows = candidateAuditEvents(projectDir, liveIntegrationOid, mainShards).filter((row) =>
+    !TRANSPORTED_ATTEMPT_EVENTS.has(row.event) &&
+    !TRANSPORTED_DATA_EVENTS.has(row.event)
+  );
+  const snapshotRows = [...floorRows, ...authorityRows];
   const snapshots = new Map(stages.map((stage) => [
     stage,
     unitLifecycleSnapshot(
       projectDir,
       stage,
-      authorityRows,
+      snapshotRows,
       integrationState,
       {
         artifactFingerprint: (stageNode, unitName) =>
@@ -1843,14 +2079,7 @@ function candidateEvidence(
     const questionsSha256 = createHash("sha256")
       .update(questions, "utf-8")
       .digest("hex");
-    const promptSha256 = createHash("sha256")
-      .update(
-        `${questions
-          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
-          .trimEnd()}\n`,
-        "utf-8",
-      )
-      .digest("hex");
+    const promptSha256 = planApprovalPromptSha256(questions);
     if (
       fingerprint &&
       instructions.trim().length > 0 &&
@@ -1931,13 +2160,70 @@ function candidateEvidence(
   return evidence;
 }
 
+// What a Unit's publish left out of its commit, said once with its result: how
+// many, the files themselves when few, else the top-level folders or files
+// holding most of them (git's order breaks a tie), where to see them, and for
+// the agent the command that puts any in; and an --include that named none.
+function leftOutFields(unit: string, leftOut: string[], unmatched: string[]): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  if (unmatched.length > 0) {
+    const named = unmatched.map((path) => `\`${path}\``);
+    fields.include_unmatched_note = `No new file here is at ${named.length < 2 ? named.join("") : `${named.slice(0, -1).join(", ")} or ${named.at(-1)}`}, ` +
+      "so nothing from there went in.";
+  }
+  if (leftOut.length === 0) return fields;
+  const one = leftOut.length === 1;
+  let which: string;
+  if (leftOut.length <= 3) {
+    which = `: ${namesInProse(leftOut)}`;
+  } else {
+    const counts = new Map<string, number>();
+    for (const path of leftOut) {
+      const top = path.includes("/") ? `${path.slice(0, path.indexOf("/"))}/` : path;
+      counts.set(top, (counts.get(top) ?? 0) + 1);
+    }
+    which = `, like ${namesInProse([...counts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([top]) => top))}`;
+  }
+  return {
+    ...fields,
+    left_out: leftOut.length,
+    // The tool knows what the Unit's build listed, not what it wrote, so the
+    // line says that.
+    left_out_note: `I left out ${leftOut.length} new file${one ? "" : "s"} here that this Unit's build did not list as ` +
+      `its own${which} (\`git status\` shows ${one ? "it" : "them"}); tell me if you want ${one ? "it" : "any of them"} in.`,
+    left_out_include: "When they want any of them in, run " +
+      `\`${aidlcInvocation()} unit publish ${quoteCommandArgument(unit)} --commit --include '<path>'\`` +
+      ", with one --include for each file or folder they name, or `--include .` for all of them.",
+  };
+}
+
 function publishUnit(args: string[], projectDir?: string): void {
-  const { positional } = parseArgs(args);
-  const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit publish <unit>");
+  const { positional, flags, bareFlags } = parseArgs(args);
+  // `--commit` takes no value; `publish --commit alpha` reads alpha as its own.
+  const commitFirst = bareFlags.has("commit") || flags.commit !== undefined;
+  const unit = positional[0] ?? (bareFlags.has("commit") ? undefined : flags.commit);
+  if (!unit) fail(`usage: ${unitUsage("publish")}`);
+  // parseArgs keeps a flag's last value; every --include counts.
+  const include = args.flatMap((arg, i) =>
+    arg === "--include" && i + 1 < args.length ? [args[i + 1]]
+    : arg.startsWith("--include=") ? [arg.slice("--include=".length)]
+    : []
+  );
   const pd = resolveProjectDir(projectDir);
   const stamp = requireLiveClaimForTeamUnit(pd, unit);
   if (!stamp) fail("Unit publication requires a scoped team checkout.");
+  let leftOut: Record<string, unknown> = {};
+  if (commitFirst) {
+    // A commit git refused leaves HEAD where it was, so the offer to publish
+    // at this HEAD is due again.
+    try {
+      const done = commitWorkHere(pd, `Complete the ${unit} Unit`, { unit, include });
+      leftOut = leftOutFields(unit, done.leftOut, done.unmatched);
+    } catch (error) {
+      clearTeamHandoverMarks(pd, ["publish"]);
+      fail(`${errorMessage(error)} Then publish again.`);
+    }
+  }
   const changed = worktreeChanges(pd, "no", "Cannot inspect candidate worktree");
   const own = aidlcOwnRootParts(pd, changed);
   if (changed.some((path) => !own.has(path))) {
@@ -1992,6 +2278,19 @@ function publishUnit(args: string[], projectDir?: string): void {
   const missingReviews = reviews.missing.length > 0
     ? { review_records_missing: reviews.missing }
     : {};
+  // Pin refuses any other record outside the Unit's tree, so publish names
+  // them now, beside the review records, rather than leaving the team to learn
+  // it at pin; the change is theirs to take out, so publish still publishes.
+  const outside = outsideUnitTreePaths(candidateBoundary(
+    pd, publicationBaseOid, headTree, recordPrefix, unit, current.generation, auditShard,
+  ).violations);
+  const outsideTree = outside.length > 0
+    ? {
+      records_outside_unit_tree: outside,
+      records_outside_unit_tree_note:
+        `Pin will refuse this candidate: ${outsideUnitTreeNextStep(unit, publicationIntegrationRef)}`,
+    }
+    : {};
   if (
     current.payload.candidate_tree_oid === headTree &&
     current.payload.candidate_head_oid === headOid &&
@@ -2007,6 +2306,8 @@ function publishUnit(args: string[], projectDir?: string): void {
       candidate_oid: current.oid,
       generation: current.generation,
       ...missingReviews,
+      ...outsideTree,
+      ...leftOut,
     }));
     return;
   }
@@ -2059,6 +2360,8 @@ function publishUnit(args: string[], projectDir?: string): void {
     candidate_head_oid: headOid,
     generation: published.generation,
     ...missingReviews,
+    ...outsideTree,
+    ...leftOut,
   }));
 }
 
@@ -2379,7 +2682,7 @@ function mergeGateRecord(
 function pinUnit(args: string[], projectDir?: string): void {
   const { positional } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit pin <unit>");
+  if (!unit) fail(`usage: ${unitUsage("pin")}`);
   const pd = resolveProjectDir(projectDir);
   if (readApplicableTeamUnitScopeStamp(pd)) {
     fail("Unit pinning must run from an unscoped main checkout.");
@@ -2508,9 +2811,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     spend = read.spend;
   }
   if (!unit || (decision !== "approve" && decision !== "reject") || !userInput) {
-    fail(
-      "Usage: aidlc-unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
-    );
+    fail(`usage: ${unitUsage("gate")}`);
   }
   if (
     !humanPresenceGuardDisabled() &&
@@ -2578,6 +2879,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
         ? { "User Input": userInput }
         : { Feedback: userInput }),
       ...(afterPin ? mergeGateReplyFields(pd, afterPin) : {}),
+      ...personGitNameField(pd),
     },
     pd,
   );
@@ -3034,10 +3336,19 @@ function assertLandCandidateBoundary(
     transaction.audit_shard,
   );
   if (boundary.violations.length > 0) {
+    const remote = repositoryRemote(projectDir);
     fail(
-      `Unit "${transaction.unit}" landing violates claimed Unit ownership at: ${
-        boundary.violations.join(", ")
-      }.`,
+      refuseWithNextStep(
+        `Unit "${transaction.unit}" landing violates claimed Unit ownership at: ${
+          boundary.violations.join(", ")
+        }.`,
+        boundary.violations,
+        transaction.unit,
+        remote
+          ? `refs/remotes/${remote}/${transaction.integration_branch}`
+          : transaction.integration_branch,
+        transaction.owner,
+      ),
     );
   }
 }
@@ -3392,6 +3703,24 @@ function landGit(
   }
 }
 
+// Why main has no Unit stages left to record a landed Unit in, or null while
+// it has: a forward jump on main skips every Unit stage (functional-design to
+// code-generation, say) for every Unit at once.
+function unitStagesSkippedOnMain(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+): string | null {
+  const state = readStateFile(projectDir);
+  if (unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).length > 0) {
+    return null;
+  }
+  const stages = transaction.evidence.stages_expected;
+  const span = stages.length > 1 ? `${stages[0]} to ${stages[stages.length - 1]}` : stages.join("");
+  const at = getField(state, "Current Stage")?.trim();
+  return `main skipped the Unit stages (${span})${at ? ` when it moved on to ${at}` : ""}, ` +
+    "so there is nothing on main to record the Unit in";
+}
+
 function runStateFold(
   projectDir: string,
   transaction: UnitMergeTransaction,
@@ -3525,10 +3854,7 @@ function landUnit(args: string[], projectDir?: string): void {
     !["git", "state", "audit", "all"].includes(step) ||
     (flags.strategy !== undefined && flags.strategy !== "merge")
   ) {
-    fail(
-      "Usage: aidlc-unit land <unit> [--step git|state|audit|all] [--target <branch>] " +
-        "[--strategy merge] [--accept-released-attempt --user-input <human acknowledgment>]",
-    );
+    fail(`usage: ${unitUsage("land")}`);
   }
   const pd = resolveProjectDir(projectDir);
   assertMainCheckout(pd);
@@ -3607,6 +3933,17 @@ function landUnit(args: string[], projectDir?: string): void {
     fail(`Unit "${unit}" state step has not folded.`);
   }
   if (runGitStep && transaction.status === "approved") {
+    // The state step records the Unit in main's Unit stages; with none left
+    // (a forward jump on main skipped them), merging would leave a merge on
+    // main that nothing records, so nothing is merged.
+    const skipped = unitStagesSkippedOnMain(pd, transaction);
+    if (skipped) {
+      fail(
+        `Unit "${unit}" was not merged: ${skipped}. Its pin and your merge approval stay as they are; ` +
+          `main takes Units in again once it is back on ${transaction.evidence.stages_expected[0]}, ` +
+          "and going back starts the Unit stages again on main.",
+      );
+    }
     if (!claimCheck) {
       fail(`Unit "${unit}" git landing has no current pinned-claim evidence.`);
     }
@@ -3660,16 +3997,19 @@ function landUnit(args: string[], projectDir?: string): void {
       transaction.git_commit_oid,
       target,
     );
+    const skipped = unitStagesSkippedOnMain(pd, transaction);
+    if (skipped) {
+      fail(
+        `Unit "${unit}" is merged into main at ${transaction.git_commit_oid}, but not recorded yet: ${skipped}. ` +
+          `Run aidlc unit land ${unit} again once main is back on ${transaction.evidence.stages_expected[0]}.`,
+      );
+    }
     const liveState = readStateFile(pd);
-    const liveScope = getField(liveState, "Scope") ?? "";
     const liveStageColumns = unitMajorConstructionStageSlugs(
-      liveScope,
+      getField(liveState, "Scope") ?? "",
       liveState,
       true,
     );
-    if (liveStageColumns.length === 0) {
-      fail(`Unit "${unit}" live main state has no active per-unit Construction columns.`);
-    }
     transaction = {
       ...transaction,
       live_stage_columns: liveStageColumns,
@@ -3714,12 +4054,19 @@ function landUnit(args: string[], projectDir?: string): void {
     transaction = { ...transaction, status: "complete" };
     writeUnitMergeTransaction(pd, transaction);
   }
+  // A landing the remote does not have yet: the next step offers the push, in
+  // this turn, so the other teams see it (landedNotOnRemote owns when).
+  const pushDue = transaction.status === "complete" &&
+    landedNotOnRemote(pd).some((landed) => landed.unit === unit);
   console.log(JSON.stringify({
     landed: transaction.status === "complete",
     status: transaction.status,
     unit,
     pinned_oid: transaction.pinned_oid,
     git_commit_oid: transaction.git_commit_oid ?? null,
+    ...(pushDue
+      ? { next_step: `Then run \`${aidlcToolInvocation("orchestrate")} next\` and follow the step it returns.` }
+      : {}),
   }));
 }
 
@@ -3748,11 +4095,94 @@ function validateClaimRefUnit(intentId8: string, unit: string): void {
   }
 }
 
+// A team's revised Unit plan (Units Generation's units block) against what the
+// team already did. Every name must be able to be a claim ref, and with the
+// walking skeleton on the built skeleton stays the Unit built first: a plan that
+// breaks either is repaired. A Unit that landed or is claimed keeps its name,
+// since its receipts, row and claim are read by name; dropping or renaming one is
+// the person's call, so their own request (personAsked) lifts that check, and
+// `lifted` says it did. The first problem as the step that fixes the plan
+// (`liftable` when the person's request would lift it); message null when the
+// plan holds.
+export function unitPlanRefusal(
+  projectDir: string,
+  personAsked = false,
+): { message: string | null; liftable: boolean; lifted: boolean } {
+  let lifted = false;
+  const refuse = (message: string, liftable = false) => ({ message, liftable, lifted });
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (!isTeamUnitOwnership(state)) return { message: null, liftable: false, lifted };
+  const parsed = parseBoltDag(readFileSync(unitDependencyPath(pd), "utf-8"));
+  if (!parsed.ok) return { message: null, liftable: false, lifted };
+  const planned = new Set(parsed.units.map((edge) => edge.name));
+  const identity = activeIdentity(pd);
+  for (const unit of planned) {
+    try {
+      validateClaimRefUnit(identity.intentId8, unit);
+    } catch (e) {
+      return refuse(`${errorMessage(e)} Rename it in the units block.`);
+    }
+  }
+  const completed = completedUnits(state);
+  const leftOut = (unitProgressTable(state)?.rows.map((cells) => cells[0]) ?? [])
+    .filter((name) => !planned.has(name)).sort();
+  for (const unit of leftOut) {
+    if (!completed.has(unit)) continue;
+    if (personAsked) {
+      lifted = true;
+      continue;
+    }
+    return refuse(
+      `Unit "${unit}" has landed on main, and the revised plan leaves it out. A landed Unit's work, row and ` +
+        `receipts are read by its name, so keep "${unit}" in the units block under that name.`,
+      true,
+    );
+  }
+  // The claims are read only for a Unit the plan leaves out: a plan that keeps
+  // every Unit asks nothing of the claim registry.
+  let claims: Map<string, UnitClaimView> = new Map();
+  if (leftOut.length > 0) {
+    try {
+      claims = allClaims(pd, repositoryRemote(pd), identity.intentId8, leftOut);
+    } catch {
+      // Claims that cannot be read here are read again at the next claim.
+    }
+  }
+  for (const [unit, claim] of [...claims].sort(([a], [b]) => a.localeCompare(b))) {
+    if (claim.status !== "claimed") continue;
+    if (personAsked) {
+      lifted = true;
+      continue;
+    }
+    return refuse(
+      `Unit "${unit}" is claimed by ${claim.owner} (attempt ${claim.generation}), and the revised plan leaves ` +
+        `it out. Keep "${unit}" in the units block under that name while it is claimed, or release the claim ` +
+        `first from main, which ends ${claim.owner}'s claim on it: ` +
+        `\`${aidlcInvocation()} unit release ${quoteCommandArgument(unit)}\`.`,
+      true,
+    );
+  }
+  const roots = parsed.batches[0] ?? [];
+  const built = roots.find((name) => completed.has(name));
+  if (teamSkeletonOn(state) && built !== undefined && roots[0] !== built) {
+    return refuse(
+      `Unit "${roots[0]}" depends on nothing and its name sorts before "${built}", so it would take over as the ` +
+        `walking skeleton, which "${built}" already is and has built. Add "${built}" to "${roots[0]}"'s depends_on: ` +
+        "every Unit waits on the walking skeleton anyway.",
+    );
+  }
+  return { message: null, liftable: false, lifted };
+}
+
+// The label a claim writes when the person gives none, as the Take question
+// says it.
+export function defaultTeamLabel(projectDir: string): string {
+  return gitUserName(projectDir) || "team";
+}
+
 function claimOwnerLabel(projectDir: string, supplied?: string): string {
-  const owner =
-    supplied?.trim() ||
-    git(projectDir, ["config", "user.name"]).stdout.trim() ||
-    "team";
+  const owner = supplied?.trim() || defaultTeamLabel(projectDir);
   if (/[\r\n|]/.test(owner)) {
     fail("Team labels cannot contain pipes or newlines.");
   }
@@ -3841,7 +4271,7 @@ function writePendingRelease(
 function adoptUnit(args: string[], projectDir?: string): void {
   const { positional } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit adopt <unit>");
+  if (!unit) fail(`usage: ${unitUsage("adopt")}`);
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
@@ -3925,7 +4355,7 @@ function adoptUnit(args: string[], projectDir?: string): void {
 function claimUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit claim <unit> [--team <label>] [--rhythm per-stage|unit-end]");
+  if (!unit) fail(`usage: ${unitUsage("claim")}`);
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   if (
@@ -3936,6 +4366,17 @@ function claimUnit(args: string[], projectDir?: string): void {
     fail(`Invalid --rhythm "${flags.rhythm}"; expected per-stage or unit-end.`);
   }
   const pd = resolveProjectDir(projectDir);
+  // The team name in the file `next --claim` wrote for this command, so no
+  // shell read it on the way; spent once the claim holds.
+  let team = flags.team;
+  let spend = (): void => {};
+  if (flags["request-file"] !== undefined) {
+    if (team !== undefined) fail("Pass either --team or --request-file, not both.");
+    const read = readRequestFile(pd, flags["request-file"]);
+    if (typeof read === "string") fail(read);
+    team = read.text;
+    spend = read.spend;
+  }
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   const identity = activeIdentity(pd);
@@ -3960,12 +4401,23 @@ function claimUnit(args: string[], projectDir?: string): void {
       recovered.nonce === existingStamp.nonce
     ) {
       finalizeClaimCheckout(pd, existingStamp, recovered);
+      spend();
       console.log(JSON.stringify({ claimed: true, recovered: true, ...existingStamp }));
       return;
     }
     clearUnitScopeStamp(pd);
   }
   const integration = fetchIntegration(pd);
+  // Main back before the per-Unit block is changing the Unit plan: the claim
+  // goes ahead on the plan as it stands there, and its result says the risk once.
+  const integrationStage = getField(stateAtOid(pd, integration.oid), "Current Stage")?.trim() ?? "";
+  const graph = loadStageGraph();
+  const planWarning = beforePerUnitBlock(graph, integrationStage)
+    ? `Main is changing the Unit plan (${graph.find((node) => node.slug === integrationStage)?.name ?? integrationStage} ` +
+      `is open again on ${integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch}), ` +
+      `so "${unit}" is claimed on the plan as it stands there: if the approved plan changes "${unit}"'s own entry, ` +
+      "pin asks this checkout to rebase onto main and publish again."
+    : null;
   const opening = openingStatus(pd, integration.oid);
   if (!opening.units.includes(unit)) fail(`Unit "${unit}" is not in the authoritative Unit DAG.`);
   if (opening.completed.has(unit)) {
@@ -3986,12 +4438,19 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (current?.status === "claimed") {
     fail(`Unit "${unit}" is already claimed by "${current.owner}".`);
   }
+  // Another checkout was building it without a claim (#3610): the person asked
+  // for it by name, so the claim is taken and they hear it once.
+  const walkedIn = unitsWalkedWithoutClaim(pd).get(unit);
+  const walkedWarning = walkedIn !== undefined && walkedIn !== knownAuditShardName(pd)
+    ? `Unit "${unit}" was being built in the checkout that started it, before any team took a Unit; from now on ` +
+      "it is yours, and that checkout sees it claimed."
+    : null;
   const generation =
     current?.status === "released"
       ? current.generation
       : (current?.generation ?? 0) + 1;
   const nonce = randomUUID();
-  const owner = claimOwnerLabel(pd, flags.team);
+  const owner = claimOwnerLabel(pd, team);
   // Pin takes exactly one newly added team shard (candidateBoundary). A
   // checkout whose own shard main already has (the lead's own checkout, or a
   // copy of it) keeps the claim's evidence in a shard of the claim's own: the
@@ -4063,7 +4522,9 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
-  console.log(JSON.stringify({ claimed: true, ...stamp }));
+  spend();
+  const warning = [planWarning, walkedWarning].filter((line): line is string => !!line).join(" ");
+  console.log(JSON.stringify({ claimed: true, ...stamp, ...(warning ? { warning } : {}) }));
 }
 
 // A checkout whose own shard main already holds claims into a shard of the
@@ -4089,7 +4550,7 @@ function moveClaimTurnRows(projectDir: string, shardPath: string, localPath: str
 function releaseUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  if (!unit) fail("Usage: aidlc-unit release <unit> [--expect-nonce <claim-nonce>]");
+  if (!unit) fail(`usage: ${unitUsage("release")}`);
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
@@ -4266,10 +4727,429 @@ function clearUnitOwner(projectDir: string, unit: string): void {
   });
 }
 
+// A team hand-over question (share, join, publish, review, push) is put once in
+// the state it is due in: its mark names the offer and that state, so a new
+// state is a new mark and the reply that does not take it never meets it again.
+export function teamHandoverMarkName(kind: string, key: string): string {
+  return `team-handover-${kind}-${key.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 120)}.json`;
+}
+
+const TEAM_SHARED = "team-shared.json";
+
+// This checkout shared the plan with the teams (`aidlc unit share`), so it
+// shows the board from then on, not the walk that builds the Units here.
+function noteTeamShared(projectDir: string): void {
+  noteEngineAskMark(projectDir, TEAM_SHARED);
+}
+
+export function teamSharedHere(projectDir: string): boolean {
+  return engineAskMark(projectDir, TEAM_SHARED) !== null;
+}
+
+// A hand-over that did not happen (a commit or a push refused) is due again.
+function clearTeamHandoverMarks(projectDir: string, kinds: readonly string[]): void {
+  const root = recordDir(projectDir);
+  if (root === null) return;
+  let names: string[];
+  try {
+    names = readdirSync(join(root, ".aidlc-engine"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (kinds.some((kind) => name.startsWith(`team-handover-${kind}-`))) clearEngineAskMark(projectDir, name);
+  }
+}
+
+// A team's publish commits a Unit's own work, and the files the person named
+// to put in as well (`--include`, a file or a folder).
+export interface UnitWork {
+  unit: string;
+  include?: readonly string[];
+}
+
+export interface WorkToCommit {
+  paths: string[];
+  untracked: string[];
+  // New files a Unit's publish leaves out, and the --include paths that named none.
+  leftOut: string[];
+  unmatched: string[];
+}
+
+// What a Unit's source manifests claim, as brought-files reads them: the
+// stages that write source (Code Generation in core) each keep one.
+function unitSourceClaims(projectDir: string, unit: string): SourceClaimModel[] {
+  const record = recordDir(projectDir);
+  if (record === null) return [];
+  let stages: string[];
+  try {
+    stages = readdirSync(join(record, "construction", unit));
+  } catch {
+    return [];
+  }
+  return stages.flatMap((stage) => {
+    if (!existsSync(join(record, "construction", unit, stage, "source-manifest.json"))) return [];
+    const read = readUnitSourceManifest(projectDir, stage, unit);
+    return read.ok ? [{ claims: read.claims, prefixes: read.prefixes }] : [];
+  });
+}
+
+// What a commit of the work here takes: every change git shows, files git does
+// not track included and ignored files left out, except AI-DLC's own part of a
+// shared root file (publish leaves it uncommitted too). For a Unit's publish
+// (`unit`), a new file outside aidlc/ is taken only when its source manifest
+// claims it or an `include` path names it; the rest is left out, so AI-DLC's
+// own install and an unignored node_modules stay out of the shared project. A
+// Unit with no manifest that reads wrote no source this can tell, so all of
+// those are left out and said. The share, publish and push questions name
+// these, and commitWorkHere commits them.
+export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit {
+  const pd = resolveProjectDir(projectDir);
+  const status = git(pd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  if (!status.ok) return { paths: [], untracked: [], leftOut: [], unmatched: [] };
+  const paths: string[] = [];
+  const untracked: string[] = [];
+  const records = status.stdout.split("\u0000");
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record.length < 4) continue;
+    const code = record.slice(0, 2);
+    paths.push(record.slice(3));
+    if (code === "??") untracked.push(record.slice(3));
+    if (/[RC]/.test(code) && records[i + 1]) paths.push(records[++i]);
+  }
+  const own = aidlcOwnRootParts(pd, paths);
+  const kept = paths.filter((path) => !own.has(path));
+  const keptUntracked = untracked.filter((path) => !own.has(path));
+  if (work === undefined) return { paths: kept, untracked: keptUntracked, leftOut: [], unmatched: [] };
+  const claims = unitSourceClaims(pd, work.unit);
+  // As the person or the agent types it, on Windows too: `\` is `/`, a folder
+  // may end in `/`, and `.` is the whole project (every file left out).
+  const include = [...new Set((work.include ?? [])
+    .filter((path) => path.trim() !== "")
+    .map((path) => path.replaceAll("\\", "/").replace(/\/+$/, "").replace(/^(\.\/)+/, "") || "."))];
+  const under = (path: string, folder: string): boolean =>
+    folder === "." || path === folder || path.startsWith(`${folder}/`);
+  const outsideWork = keptUntracked.filter((path) =>
+    !under(path, "aidlc") && !claims.some((claim) => sourceClaimCovers(sourcePathKey("", path), claim))
+  );
+  const leftOut = outsideWork.filter((path) => !include.some((folder) => under(path, folder)));
+  const unmatched = include.filter((folder) => !outsideWork.some((path) => under(path, folder)));
+  const out = new Set(leftOut);
+  return {
+    paths: kept.filter((path) => !out.has(path)),
+    untracked: keptUntracked.filter((path) => !out.has(path)),
+    leftOut,
+    unmatched,
+  };
+}
+
+// Commits what workToCommit names, as the person, with their own git setup;
+// nothing to commit commits nothing. Returns how many paths it took, and what
+// a Unit's publish left out.
+function commitWorkHere(
+  projectDir: string,
+  message: string,
+  work?: UnitWork,
+): { committed: number; leftOut: string[]; unmatched: string[] } {
+  const { paths, leftOut, unmatched } = workToCommit(projectDir, work);
+  if (paths.length === 0) return { committed: 0, leftOut, unmatched };
+  // One call whatever the count: Windows caps a command line at 32,767
+  // characters, so the paths go to git on its standard input, NUL-separated,
+  // each read as the same name an argument would be (git 2.25; core already
+  // needs 2.29). An empty list never gets here: with -A and no path git would
+  // take the whole tree.
+  const added = git(
+    projectDir,
+    ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+    undefined,
+    paths.map((path) => `${path}\0`).join(""),
+  );
+  if (!added.ok) fail(`git add failed: ${added.stderr.trim()}`);
+  const committed = git(projectDir, ["commit", "-q", "-m", message]);
+  if (!committed.ok) {
+    if (NO_GIT_IDENTITY.test(committed.stderr)) {
+      fail(
+        "Git has no name and email for your commits yet. Set them with " +
+          'git config --global user.name "Your Name" and git config --global user.email "you@example.com".',
+      );
+    }
+    fail(`git did not commit: ${(committed.stderr || committed.stdout).trim()}.`);
+  }
+  return { committed: paths.length, leftOut, unmatched };
+}
+
+// The remote and integration branch a share pushes to, or null with no remote.
+export function shareTarget(projectDir: string): { remote: string; branch: string } | null {
+  const remote = repositoryRemote(projectDir);
+  if (!remote) return null;
+  return { remote, branch: affirmedIntegrationBranch(projectDir)?.branch ?? integrationBranch(projectDir, remote) };
+}
+
+// What a share or push offer names: the share target, or "the team's branch"
+// while a layer's Way of Working words are still to be read (the share's own
+// step reads them first, shareMain).
+export function shareOfferTarget(projectDir: string): { remote: string; branch: string } | null {
+  if (integrationBranchToRead(projectDir) === null) return shareTarget(projectDir);
+  const remote = repositoryRemote(projectDir);
+  return remote ? { remote, branch: "the team's branch" } : null;
+}
+
+// A clone that took part or holds a claim is a team's, not the lead's.
+export function teamsClone(projectDir: string, stateContent: string): boolean {
+  return existsSync(unitParticipantPath(projectDir)) ||
+    readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
+}
+
+// The team's own answer on building a walking skeleton first, not read yet:
+// team work whose scope runs one, no stance recorded, and the team's or the
+// project's memory says something under `## Walking Skeleton` (Practices
+// Discovery writes the team's). org.md's section is the framework's default,
+// which reads as the scope's own answer, so it is not one. Which way the answer
+// goes is the agent's to read (the classify round-trip); this reads only
+// whether there is one.
+export function teamSkeletonAnswerUnread(projectDir: string, stateContent: string): boolean {
+  if (!isTeamUnitOwnership(stateContent) || getField(stateContent, "Skeleton Stance")) return false;
+  if (loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton !== true) return false;
+  let memory: string;
+  try {
+    memory = memoryDirFor(projectDir);
+  } catch {
+    return false;
+  }
+  return ["team.md", "project.md"].some((file) => {
+    try {
+      return memorySectionBody(readFileSync(join(memory, file), "utf-8"), "## Walking Skeleton").trim() !== "";
+    } catch {
+      return false;
+    }
+  });
+}
+
+// The team's own walking-skeleton answer is read on the lead's checkout before
+// any team step decides from it (the handout line, the share, a teammate's
+// claim): a team's clone reads the lead's record and never writes the stance.
+export function teamStanceToRead(projectDir: string, stateContent: string | null): boolean {
+  return stateContent !== null && teamSkeletonAnswerUnread(projectDir, stateContent) &&
+    !teamsClone(projectDir, stateContent) && !planMadeElsewhere(projectDir);
+}
+
+// The first Unit, when the plan as this checkout last shared or fetched it
+// holds every Unit behind it as a walking skeleton while this checkout's own
+// record opens them (its recorded answer is no thin slice first). Null when the
+// two agree or the shared plan cannot be read.
+export function skeletonHeldBackOnShare(projectDir: string): string | null {
+  try {
+    const pd = resolveProjectDir(projectDir);
+    const state = readStateFile(pd);
+    if (!isTeamUnitOwnership(state) || getField(state, "Skeleton Stance") === null || teamSkeletonOn(state)) return null;
+    const target = shareTarget(pd);
+    if (target === null) return null;
+    const ref = git(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${target.remote}/${target.branch}`]);
+    if (!ref.ok) return null;
+    const shared = openingStatus(pd, ref.stdout.trim());
+    return [...shared.blockers.values()].some((blockers) => blockers.includes("walking-skeleton")) ? shared.skeleton : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether a share can run here: team work, a checkout holding no Unit claim, a
+// remote, and HEAD on the integration branch. Null when it can; the reason
+// otherwise. The share offer is put only where this is null.
+export function shareBlocker(projectDir: string): string | null {
+  const pd = resolveProjectDir(projectDir);
+  try {
+    if (readApplicableTeamUnitScopeStamp(pd)) return "This checkout holds a Unit claim; share main from a checkout that holds none.";
+    if (!isTeamUnitOwnership(readStateFile(pd))) return "Sharing main is for work that several teams build.";
+    if (!repositoryRemote(pd)) return "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.";
+    // The branch is read from the Way of Working words first, by the share's own step.
+    if (integrationBranchToRead(pd) !== null) return null;
+    const target = shareTarget(pd)!;
+    const current = currentBranch(pd);
+    if (current !== target.branch) {
+      return `This checkout is on ${current}, not ${target.branch}. Switch to ${target.branch}, then share again.`;
+    }
+    return null;
+  } catch (error) {
+    return errorMessage(error);
+  }
+}
+
+// `aidlc unit share`: commit the work here and push the integration branch to
+// the remote, so the teams can take Units (after Inception) or see a landed
+// one. A plain push, never forced. A share that did not happen (a commit git
+// refused, a push the remote refused) keeps what it committed and leaves both
+// offers due again (their marks cleared), so the next step asks again instead
+// of building here.
+function shareMain(projectDir?: string): void {
+  const pd = resolveProjectDir(projectDir);
+  const blocker = shareBlocker(pd);
+  if (blocker !== null) fail(blocker);
+  // The branch the share pushes, read from the team's own words before
+  // anything is committed or pushed; the offers stay due in case the share
+  // does not run again.
+  const toRead = integrationBranchToRead(pd);
+  if (toRead !== null) {
+    clearTeamHandoverMarks(pd, ["share", "push"]);
+    console.log(JSON.stringify({
+      shared: false,
+      step: integrationBranchReadStep(toRead, `then run \`${aidlcInvocation()} unit share\` again and tell the person ` +
+        "in plain words what it reports"),
+    }));
+    return;
+  }
+  // The team's own answer on building a thin slice first is read before the
+  // plan goes to the teams, by the rule the reading step in `next` and the
+  // report go by (teamStanceToRead), so the shared plan carries it. Nothing is
+  // committed or pushed until it is; the offers stay due in case the share
+  // does not run again.
+  if (teamStanceToRead(pd, readStateFile(pd))) {
+    clearTeamHandoverMarks(pd, ["share", "push"]);
+    const memory = relative(pd, memoryDirFor(pd)).replaceAll("\\", "/");
+    console.log(JSON.stringify({
+      shared: false,
+      step: "Run these now, in this turn: read the \"## Walking Skeleton\" section of " +
+        `${memory}/project.md over ${memory}/team.md and settle what the team says it does: on if the team always ` +
+        "runs a walking skeleton, off if it says it does not run one, scope-dependent if it says neither. Run " +
+        `\`${aidlcToolInvocation("orchestrate")} report --skeleton-stance <on|off|scope-dependent>\` with that stance, ` +
+        `then run \`${aidlcInvocation()} unit share\` again and tell the person in plain words what it reports.`,
+    }));
+    return;
+  }
+  const { remote, branch } = shareTarget(pd)!;
+  const landed = landedNotOnRemote(pd).map((row) => row.unit);
+  let committed: number;
+  try {
+    committed = commitWorkHere(
+      pd,
+      landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams",
+    ).committed;
+  } catch (error) {
+    clearTeamHandoverMarks(pd, ["share", "push"]);
+    fail(`${errorMessage(error)} Then share again.`);
+  }
+  const pushed = git(pd, ["push", remote, `HEAD:refs/heads/${branch}`], { GIT_TERMINAL_PROMPT: "0" });
+  if (!pushed.ok) {
+    clearTeamHandoverMarks(pd, ["share", "push"]);
+    fail(
+      `${remote} did not take ${branch}: ${pushRefusal(pushed.stderr)}. ` +
+        `${committed > 0 ? "The commit is kept here: " : ""}pull ${branch}, then share again.`,
+    );
+  }
+  noteTeamShared(pd);
+  console.log(JSON.stringify({
+    shared: true,
+    remote,
+    branch,
+    commit: gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve HEAD"),
+    committed_paths: committed,
+    step: "Tell the person in plain words what it reports, then end your turn.",
+  }));
+}
+
+const CLAIM_REFRESH_TIMEOUT_MS = 3000;
+
+// Each team's claim refs as the remote has them now, for the board and the
+// offers on a checkout that has fetched nothing since: one fetch of the claim
+// refs only, no prompt, a few seconds at most. Best effort: false when the
+// remote did not answer, and the caller shows what this clone last saw.
+export function refreshClaimRefs(projectDir: string): boolean {
+  const pd = resolveProjectDir(projectDir);
+  let remote: string | null;
+  try {
+    remote = repositoryRemote(pd);
+  } catch {
+    return false;
+  }
+  if (!remote) return true;
+  const result = spawnSync("git", [
+    "fetch", "--quiet", "--no-tags", "--no-filter", remote,
+    `+refs/heads/claim/*:refs/remotes/${remote}/claim/*`,
+  ], {
+    cwd: pd,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: CLAIM_REFRESH_TIMEOUT_MS,
+  });
+  return result.status === 0 && !result.error && !result.signal;
+}
+
+// Units landed here that the remote's integration branch, as last fetched,
+// does not have yet: the push after a land is due for them.
+export function landedNotOnRemote(projectDir: string): Array<{ unit: string; commit: string }> {
+  const pd = resolveProjectDir(projectDir);
+  let remote: string | null;
+  try {
+    remote = repositoryRemote(pd);
+  } catch {
+    return [];
+  }
+  if (!remote) return [];
+  const landed: Array<{ unit: string; commit: string }> = [];
+  for (const transaction of unitMergeTransactions(pd)) {
+    const commit = transaction.git_commit_oid;
+    if (transaction.status !== "complete" || !commit) continue;
+    const ref = `refs/remotes/${remote}/${transaction.integration_branch}`;
+    if (!localGit(pd, ["rev-parse", "--verify", "--quiet", ref]).ok) continue;
+    if (localGit(pd, ["merge-base", "--is-ancestor", commit, ref]).ok) continue;
+    if (!localGit(pd, ["merge-base", "--is-ancestor", commit, "HEAD"]).ok) continue;
+    landed.push({ unit: transaction.unit, commit });
+  }
+  return landed;
+}
+
+// The claimed checkout's Unit is published at what it holds now: the claim's
+// latest commit here names this HEAD as its candidate.
+export function publishedAtHead(projectDir: string): boolean {
+  const pd = resolveProjectDir(projectDir);
+  try {
+    const stamp = readApplicableTeamUnitScopeStamp(pd);
+    if (!stamp?.claim_oid) return false;
+    const payload = readPayload(pd, stamp.claim_oid, { localOnly: true });
+    const head = localGit(pd, ["rev-parse", "HEAD"]);
+    return payload?.candidate_head_oid !== undefined && head.ok && payload.candidate_head_oid === head.stdout.trim();
+  } catch {
+    return false;
+  }
+}
+
 function participate(projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   writeFileSync(unitParticipantPath(pd), "participant\n", "utf-8");
   console.log(JSON.stringify({ participant: true }));
+}
+
+// The command a person types for a Unit verb, as its usage shows it.
+function unitUsage(verb: string): string {
+  return `${aidlcInvocation()} ${UNIT_GRAMMAR[verb].usage}`;
+}
+
+// A Unit command's words, read as its verb reads them (parseArgs) before
+// anything is read or written: `--help` or `-h` prints the verb's usage, and a
+// word the verb does not take is named with that usage, so a request to read
+// the usage never commits, pushes or claims. `-h` as an option's value stays
+// that option's. A switch takes no value, so each is read here as `--x=true`
+// and the word after it stays a word: `-h` after `--commit` is still the
+// request for the usage. Every verb also takes --project-dir and the launcher's
+// own flags, switches the dispatcher hands on after the words.
+function checkUnitWords(verb: string, args: readonly string[]): void {
+  if (!Object.hasOwn(UNIT_GRAMMAR, verb)) return;
+  const grammar = UNIT_GRAMMAR[verb];
+  const switches = new Set([...(grammar.switches ?? []), ...[...LAUNCHER_GLOBAL_FLAGS].map((flag) => flag.slice(2)), "help"]);
+  const end = args.indexOf("--");
+  const { positional, flags } = parseArgs(args.map((token, index) =>
+    (end < 0 || index < end) && token.startsWith("--") && switches.has(token.slice(2)) ? `${token}=true` : token
+  ));
+  if (Object.hasOwn(flags, "help") || positional.includes("-h")) printUsageAndExit(`usage: ${unitUsage(verb)}`);
+  const option = Object.keys(flags).find((key) =>
+    key !== "project-dir" && !grammar.options.includes(key) && !switches.has(key)
+  );
+  const extra = positional[grammar.name ? 1 : 0];
+  if (option === undefined && extra === undefined) return;
+  const word = option !== undefined ? `--${option}` : JSON.stringify(extra);
+  console.error(JSON.stringify({ error: `unit ${verb} does not take ${word}`, usage: unitUsage(verb) }));
+  process.exit(2);
 }
 
 let projectDir: string | undefined;
@@ -4282,18 +5162,22 @@ export function main(argv: string[]): void {
     args.splice(projectIdx, 2);
   }
   const command = args.shift();
+  if (command !== undefined) checkUnitWords(command, args);
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   try {
     if (command === "adopt") adoptUnit(args, projectDir);
     else if (command === "claim") claimUnit(args, projectDir);
     else if (command === "release") releaseUnit(args, projectDir);
     else if (command === "participate") participate(projectDir);
+    else if (command === "share") shareMain(projectDir);
     else if (command === "publish") publishUnit(args, projectDir);
     else if (command === "pin") pinUnit(args, projectDir);
     else if (command === "gate") gateUnitMerge(args, projectDir);
     else if (command === "land") landUnit(args, projectDir);
     else if (command === "merge-status") {
       const unit = args[0];
-      if (!unit) fail("Usage: aidlc-unit merge-status <unit>");
+      if (!unit) fail(`usage: ${unitUsage("merge-status")}`);
       console.log(JSON.stringify(
         readUnitMergeTransaction(resolveProjectDir(projectDir), unit),
         null,
@@ -4304,7 +5188,7 @@ export function main(argv: string[]): void {
       console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
     } else {
       fail(
-        "Usage: aidlc-unit <adopt|claim|release|participate|publish|pin|gate|land|merge-status|status> ...",
+        "Usage: aidlc-unit <adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
       );
     }
   } catch (error) {

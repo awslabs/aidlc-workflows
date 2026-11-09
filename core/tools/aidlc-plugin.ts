@@ -19,6 +19,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { projectInvocationTokens } from "./aidlc-command.ts";
 import {
   acquireAuditLock,
+  addPendingPersonLines,
   committedTextBytes,
   errorMessage,
   escapeRegex,
@@ -27,14 +28,23 @@ import {
   parseStageFrontmatter,
   pausedBySelection,
   PHASES,
+  pluginsEnabled,
   releaseAuditLock,
   resolveProjectDir,
+  validScopes,
 } from "./aidlc-lib.ts";
+import { removeOrphanProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
+import { type PluginCommandSkip, projectPluginCommands } from "./aidlc-plugin-commands.ts";
+import { markdownBlocks } from "./aidlc-markdown.ts";
+import { PLUGIN_RULES_OPENING } from "./aidlc-plugin-rules.ts";
+import { refreshActiveMemory } from "./aidlc-includes.ts";
+import { resolveInvokingSessionId } from "./aidlc-record-core.ts";
 import {
   aidlcInvocation,
   compiledExecutable,
   discoverProjectHarnesses,
+  entrySkillInvocation,
   LinkedFolderError,
   pinNamedHarness,
   quoteCommandArgument,
@@ -58,8 +68,10 @@ import {
   hostIdSegment,
   pluginStageSlugs,
   readPluginBase,
+  readPluginCommands,
   scopeIncludes,
   type PluginBaseProblem,
+  type PluginCommandEntry,
   type PluginDependency,
 } from "./aidlc-plugin-validate.ts";
 
@@ -69,6 +81,7 @@ const COMPOSE_DIRS = [
   "agents",
   "contributions",
   "knowledge",
+  "memory",
   "scopes",
   "sensors",
   "stages",
@@ -89,6 +102,8 @@ export type InstalledPlugin = {
   // manifest cannot say.
   base: PluginDependency | null;
   baseProblem: PluginBaseProblem | { kind: "unreadable"; reason: string } | null;
+  // The commands its own manifest names (aidlc.commands), well-formed ones only.
+  commands?: Record<string, PluginCommandEntry>;
   // The host's own id for it (name@marketplace), where the host lists plugins.
   hostId?: string;
 };
@@ -117,6 +132,11 @@ export type CompositionStamp = {
   // The base plugin this one builds on. A host with no plugin list reads it
   // here to keep layering one level deep.
   base?: string;
+  // The commands it adds whose script it installed (pluginCommandTable reads
+  // them), and the names the sync that wrote this found taken, so it says each
+  // once. Absent when it has none.
+  commands?: Record<string, PluginCommandEntry>;
+  skippedCommands?: string[];
 };
 
 export type PluginStatusName =
@@ -342,7 +362,49 @@ export function normalizeInstalledPlugin(
     enabled,
     sourceHash: pluginSourceHash(canonicalRoot),
     ...installedBase(canonicalRoot, key),
+    commands: installedCommands(canonicalRoot),
   };
+}
+
+// A projection built before the plugin's own manifest travelled with it names
+// no commands; nor does a manifest that cannot be read.
+function installedCommands(root: string): Record<string, PluginCommandEntry> {
+  try {
+    const manifest = readJson(join(root, ".aidlc-plugin", "plugin.json")) as { aidlc?: unknown } | null;
+    return readPluginCommands(manifest?.aidlc).commands;
+  } catch {
+    return {};
+  }
+}
+
+// The commands a plugin adds: those whose script is a file it installed, as its
+// ownership record says, so a name never runs a file core or another plugin owns.
+function ownedCommands(
+  plugin: InstalledPlugin,
+  ownedPaths: ReadonlySet<string>,
+  harnessDir: string,
+): Record<string, PluginCommandEntry> {
+  const leaf = harnessDir.split(sep).join("/");
+  return Object.fromEntries(
+    Object.entries(plugin.commands ?? {}).filter(([, entry]) => ownedPaths.has(`${leaf}/${entry.script}`)),
+  );
+}
+
+function sameCommands(
+  left: Record<string, PluginCommandEntry> | undefined,
+  right: Record<string, PluginCommandEntry>,
+): boolean {
+  return JSON.stringify(Object.entries(left ?? {}).sort()) === JSON.stringify(Object.entries(right).sort());
+}
+
+// The one line a sync says, once, for a plugin command it does not add.
+export function skippedCommandLine(skip: PluginCommandSkip): string {
+  const holder = skip.by.kind === "core"
+    ? `AI-DLC's own ${skip.name} command has that name`
+    : skip.by.kind === "plan"
+      ? `the ${skip.by.name} plan has that name`
+      : `the ${skip.by.plugin} plugin's command has that name`;
+  return `${skip.plugin}'s command '${skip.name}' is not added: ${holder}.`;
 }
 
 // A projection built before the plugin's own manifest travelled with it
@@ -991,7 +1053,7 @@ export function comparePluginState(
       state: provedMissing ? "installed-missing" : "inventory-unavailable",
       action: provedMissing ? "attention" : "current",
       message: provedMissing
-        ? `installed plugin missing; reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove what it added`
+        ? `installed plugin missing from your host's list; if you composed it from its folder, it keeps working and needs nothing; otherwise reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove it and everything it added to this project`
         : "not compared: no host plugin list",
     });
   }
@@ -1158,12 +1220,14 @@ function writeCompositionRecords(
     name: plugin.key,
     files: [...files.values()].sort((left, right) => left.path.localeCompare(right.path)),
   };
+  const commands = ownedCommands(plugin, new Set(files.keys()), harnessDir);
   const stamp: CompositionStamp = {
     schemaVersion: 1,
     name: plugin.key,
     version: plugin.version,
     sourceHash: plugin.sourceHash,
     ...(plugin.base ? { base: plugin.base.name } : {}),
+    ...(Object.keys(commands).length > 0 ? { commands } : {}),
   };
   writeFileSync(
     join(dataDir, `plugin-owned-${plugin.key}.json`),
@@ -1173,6 +1237,30 @@ function writeCompositionRecords(
     join(dataDir, `plugin-compose-${plugin.key}.json`),
     `${JSON.stringify(stamp, null, 2)}\n`,
   );
+}
+
+// The plugin commands this run does not add, written into each composed
+// plugin's stamp, and the line for each one the previous stamp did not record:
+// said once by the sync that meets it, as a held plugin is.
+function recordSkippedCommands(
+  plugins: InstalledPlugin[],
+  stagedData: string,
+  evidence: ProjectEvidence,
+): string[] {
+  const table = projectPluginCommands({ pluginsEnabled, validScopes }, stagedData);
+  const lines: string[] = [];
+  for (const plugin of plugins) {
+    const path = join(stagedData, `plugin-compose-${plugin.key}.json`);
+    const stamp = parseStamp(path);
+    if (stamp === null) continue;
+    const skips = table.skipped.filter((skip) => skip.plugin === plugin.key);
+    const said = new Set(evidence.stamps.get(plugin.key)?.skippedCommands ?? []);
+    for (const skip of skips) if (!said.has(skip.name)) lines.push(skippedCommandLine(skip));
+    const { skippedCommands: _previous, ...rest } = stamp;
+    const next: CompositionStamp = skips.length > 0 ? { ...rest, skippedCommands: skips.map((skip) => skip.name) } : rest;
+    writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+  }
+  return lines;
 }
 
 function firstLinkInside(
@@ -1245,6 +1333,7 @@ function composeEnvironment(
     CLAUDE_PROJECT_DIR: projectDir,
     AIDLC_HARNESS_DIR: harnessDir,
     AIDLC_PLUGIN_KEY: plugin.key,
+    AIDLC_PLUGIN_RULES_BY_SYNC: "1",
     AIDLC_PLUGIN_ROOT: plugin.root,
     CLAUDE_PLUGIN_ROOT: plugin.root,
     PLUGIN_ROOT: plugin.root,
@@ -1268,6 +1357,7 @@ async function runComposer(
       "CLAUDE_PROJECT_DIR",
       "AIDLC_HARNESS_DIR",
       "AIDLC_PLUGIN_KEY",
+      "AIDLC_PLUGIN_RULES_BY_SYNC",
       "AIDLC_PLUGIN_ROOT",
       "CLAUDE_PLUGIN_ROOT",
       "PLUGIN_ROOT",
@@ -1424,6 +1514,7 @@ export function stripRecordedAdds(content: string, record: StageContribRecord): 
     const items = record[field];
     if (items?.length) value = removeRecordedValues(value, field, new Set(items), false);
   }
+  if (record.produces?.length) value = removeOrphanProducesKinds(value, record.produces);
   if (record.consumes?.length) {
     const artifacts = record.consumes.flatMap((entry) =>
       typeof entry === "string"
@@ -1749,9 +1840,15 @@ export function withFileLineEndings(content: string, edit: (lf: string) => strin
   return edit(content.replace(/\r\n/g, "\n")).replace(/\n/g, "\r\n");
 }
 
-function removeFragments(content: string, key: string, path: string): string {
+// The opening marker of a block a plugin composed into a file: a stage or
+// persona fragment, or the plugin's rules section in a rule file.
+function pluginMarkerPattern(key: string, anchor: string, flags = ""): RegExp {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const opening = new RegExp(`<!-- plugin:${escaped}:.+?:\\d+:[0-9a-f]+ -->`, "g");
+  return new RegExp(`<!-- plugin:${escaped}:${anchor}:\\d+:[0-9a-f]+ -->`, flags);
+}
+
+function removeFragments(content: string, key: string, path: string): string {
+  const opening = pluginMarkerPattern(key, ".+?", "g");
   let output = content;
   let match = opening.exec(output);
   while (match) {
@@ -1763,6 +1860,473 @@ function removeFragments(content: string, key: string, path: string): string {
     match = opening.exec(output);
   }
   return output;
+}
+
+// A plugin's house rules: one `##` section of its own at the end of a rule file
+// (memory/<level>.md, memory/phases/<phase>.md in each space). The heading
+// comes before the opening marker on purpose: the team's own writers
+// (practices-promote's replaceSection, learnings' appendUnderHeading) stop at
+// the next `## ` line, so whatever they add lands above the heading, never
+// between the markers. The plugin's own headings are written one level down,
+// so the section stays one section and no team heading can match inside it.
+export type RulesLevel = "org" | "team" | "project";
+export const RULES_LEVELS: readonly RulesLevel[] = ["org", "team", "project"];
+const RULES_ANCHOR = "rules";
+const ANY_RULES_OPENING = new RegExp(PLUGIN_RULES_OPENING.source.slice(1, -1), "g");
+
+function rulesHeading(key: string): string {
+  return `## Rules from the ${key} plugin`;
+}
+
+export function nestRulesHeadings(text: string): string {
+  const lf = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const lines = lf.split("\n");
+  const kinds = markdownBlocks(lf).lines;
+  const out: string[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const info = kinds[index];
+    // A heading inside a quote or list never starts a line with `#`, so no
+    // team writer reads it as a section.
+    if (info?.kind !== "heading" || info.containers.length > 0) {
+      out.push(line);
+      continue;
+    }
+    const atx = /^( {0,3})(#{1,6})(?=[ \t]|$)(.*)$/.exec(line);
+    if (atx) {
+      out.push(`${atx[1]}${"#".repeat(Math.min(6, Math.max(3, atx[2].length + 1)))}${atx[3]}`);
+      continue;
+    }
+    // A setext heading: its text lines and the underline share one block.
+    let end = index;
+    while (kinds[end + 1]?.kind === "heading" && kinds[end + 1].block === info.block) end++;
+    out.push(`### ${lines.slice(index, Math.max(index + 1, end)).map((part) => part.trim()).join(" ")}`);
+    index = end;
+  }
+  return out.join("\n");
+}
+
+export function renderRulesBlock(key: string, text: string): string {
+  const body = nestRulesHeadings(text).replace(/^\n+/, "").replace(/\n+$/, "");
+  const marker = `plugin:${key}:${RULES_ANCHOR}:0:${fragmentProseHash(body)}`;
+  return `${rulesHeading(key)}\n<!-- ${marker} -->\n` +
+    `<!-- The ${key} plugin owns this section and plugin sync rewrites it; ` +
+    "put the team's own rules in team.md, outside this section. -->\n" +
+    `${body}\n<!-- /${marker} -->\n`;
+}
+
+// Where a plugin's rules section sits in LF text: from its heading line (the
+// line right above the opening marker) through the closing marker's newline.
+function rulesBlockExtent(content: string, key: string, path: string): { start: number; end: number } | null {
+  const open = pluginMarkerPattern(key, RULES_ANCHOR).exec(content);
+  if (!open) return null;
+  const closing = `<!-- /${open[0].slice(5)}`;
+  const close = content.indexOf(closing, open.index);
+  if (close === -1) throw new Error(`${path}: unpaired plugin fragment for ${key}`);
+  let end = close + closing.length;
+  if (content[end] === "\n") end++;
+  const markerLine = content.lastIndexOf("\n", open.index - 1) + 1;
+  let start = markerLine;
+  if (markerLine > 0) {
+    const headingLine = content.lastIndexOf("\n", markerLine - 2) + 1;
+    if (content.slice(headingLine, markerLine - 1).startsWith("## ")) start = headingLine;
+  }
+  return { start, end };
+}
+
+function placeRulesLf(content: string, key: string, block: string, path: string): string {
+  const extent = rulesBlockExtent(content, key, path);
+  if (extent) return content.slice(0, extent.start) + block + content.slice(extent.end);
+  // Sections sit in plugin-name order, so a plugin turned off and on again
+  // comes back to the same bytes.
+  let later: number | null = null;
+  for (const match of content.matchAll(ANY_RULES_OPENING)) {
+    if (match[1] <= key) continue;
+    const found = rulesBlockExtent(content, match[1], path);
+    if (found && (later === null || found.start < later)) later = found.start;
+  }
+  if (later !== null) return `${content.slice(0, later)}${block}\n${content.slice(later)}`;
+  if (content === "") return block;
+  return `${content}${content.endsWith("\n") ? "\n" : "\n\n"}${block}`;
+}
+
+function stripRulesLf(content: string, key: string, path: string): string {
+  const extent = rulesBlockExtent(content, key, path);
+  if (!extent) return content;
+  const { start, end } = extent;
+  // The blank line placed with it: the one after it when something follows,
+  // else the one before it.
+  if (content[end] === "\n") return content.slice(0, start) + content.slice(end + 1);
+  if (start >= 2 && content.slice(start - 2, start) === "\n\n") return content.slice(0, start - 1) + content.slice(end);
+  return content.slice(0, start) + content.slice(end);
+}
+
+export function placeRulesBlock(content: string, key: string, block: string, path = "rule file"): string {
+  return withFileLineEndings(content, (lf) => placeRulesLf(lf, key, block, path));
+}
+
+export function stripRulesBlock(content: string, key: string, path = "rule file"): string {
+  return withFileLineEndings(content, (lf) => stripRulesLf(lf, key, path));
+}
+
+// The section is there with exactly the plugin's bytes: a hand edit inside it
+// is not current, so the next sync writes the plugin's text back, as its
+// owner line says.
+export function rulesBlockCurrent(content: string, key: string, block: string, path = "rule file"): boolean {
+  let current = false;
+  withFileLineEndings(content, (lf) => {
+    const extent = rulesBlockExtent(lf, key, path);
+    current = extent !== null && lf.slice(extent.start, extent.end) === block;
+    return lf;
+  });
+  return current;
+}
+
+function rulesBlockText(content: string, key: string, path: string): string | null {
+  let text: string | null = null;
+  withFileLineEndings(content, (lf) => {
+    const extent = rulesBlockExtent(lf, key, path);
+    text = extent === null ? null : lf.slice(extent.start, extent.end);
+    return lf;
+  });
+  return text;
+}
+
+// The level the plugin's rules sit at, chosen at install or left at the
+// plugin's default, and the sections it placed (a space's memory-relative file
+// and the sha256 of the section). One record per project, beside the rule files
+// every harness in it shares, so each harness and each clone keep the level the
+// person chose.
+export type RulesRecord = { schemaVersion: 1; level: RulesLevel; files: Record<string, string> };
+
+const RULE_PHASES = PHASES.filter((phase) => phase !== "initialization");
+
+const RULES_RECORD_DIR = ["aidlc", "plugin-rules"] as const;
+
+function rulesRecordPath(projectDir: string, key: string): string {
+  return join(projectDir, ...RULES_RECORD_DIR, `${key}.json`);
+}
+
+// The plugins with a rules record in this project.
+export function pluginRulesRecords(projectDir: string): string[] {
+  const dir = join(projectDir, ...RULES_RECORD_DIR);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((file) => /^[a-z][a-z0-9-]*\.json$/.test(file)).map((file) => file.slice(0, -5)).sort();
+}
+
+export function readRulesRecord(projectDir: string, key: string): RulesRecord | null {
+  const path = rulesRecordPath(projectDir, key);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = readJson(path);
+    if (
+      isPlainObject(parsed) && RULES_LEVELS.includes(parsed.level as RulesLevel) &&
+      isPlainObject(parsed.files) && Object.values(parsed.files).every((value) => typeof value === "string")
+    ) return parsed as RulesRecord;
+  } catch {
+    // An unreadable record is rebuilt by the next merge.
+  }
+  return null;
+}
+
+function writeRulesRecord(projectDir: string, key: string, record: RulesRecord): void {
+  mkdirSync(join(projectDir, ...RULES_RECORD_DIR), { recursive: true });
+  writeFileSync(rulesRecordPath(projectDir, key), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+function sha256Text(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+// The rules a plugin ships: memory/rules.md for its level, and one file per
+// phase. Null when it ships none.
+function pluginRulesSource(root: string): { level: RulesLevel | null; files: Map<string, string> } | null {
+  const memory = join(root, "memory");
+  if (!existsSync(memory)) return null;
+  const files = new Map<string, string>();
+  if (existsSync(join(memory, "rules.md"))) files.set("rules.md", readFileSync(join(memory, "rules.md"), "utf-8"));
+  for (const phase of RULE_PHASES) {
+    const path = join(memory, "phases", `${phase}.md`);
+    if (existsSync(path)) files.set(`phases/${phase}.md`, readFileSync(path, "utf-8"));
+  }
+  if (files.size === 0) return null;
+  let level: RulesLevel | null = null;
+  try {
+    const manifest = readJson(join(root, ".aidlc-plugin", "plugin.json"));
+    const declared = isPlainObject(manifest) && isPlainObject(manifest.aidlc) ? manifest.aidlc.rulesLevel : undefined;
+    if (RULES_LEVELS.includes(declared as RulesLevel)) level = declared as RulesLevel;
+  } catch {
+    // Validate names a manifest it cannot read; the rules still land.
+  }
+  return { level, files };
+}
+
+function spaceMemoryDirs(projectDir: string): string[] {
+  const spaces = join(projectDir, "aidlc", "spaces");
+  if (!existsSync(spaces)) return [];
+  return readdirSync(spaces).sort()
+    .map((space) => join(spaces, space, "memory"))
+    .filter((dir) => existsSync(dir) && lstatSync(dir).isDirectory());
+}
+
+// The rule files of one space a plugin's section can sit in, memory-relative.
+function ruleFilesIn(memoryDir: string): string[] {
+  return [...RULES_LEVELS.map((level) => `${level}.md`), ...RULE_PHASES.map((phase) => `phases/${phase}.md`)]
+    .filter((rel) => existsSync(join(memoryDir, rel)) && lstatSync(join(memoryDir, rel)).isFile());
+}
+
+function rulesBlocks(key: string, source: { files: Map<string, string> }, level: RulesLevel): Map<string, string> {
+  const blocks = new Map<string, string>();
+  for (const [rel, text] of source.files) {
+    blocks.set(rel === "rules.md" ? `${level}.md` : rel, renderRulesBlock(key, text));
+  }
+  return blocks;
+}
+
+function placementLine(key: string, level: RulesLevel, files: string[]): string {
+  const others = RULES_LEVELS.filter((other) => other !== level);
+  const phases = files.filter((rel) => rel.startsWith("phases/"));
+  const where = `${level}.md${phases.length > 0 ? ` (and ${phases.join(", ")})` : ""}`;
+  return `${key}'s rules are in ${where}, in a section of their own at the end. ` +
+    `To keep them in ${others.map((other) => `${other}.md`).join(" or ")} instead: ` +
+    `${entrySkillInvocation()} plugin select --rules-level ${key}=${others[0]}`;
+}
+
+// The one place a plugin's rules are written into a project: every space's
+// rule files get the plugin's section at the level the record names (or the
+// one asked for now, or the plugin's default), and lose it from every other
+// file. Returns the line to say once, when the rules are placed for the first
+// time or moved; a restore or an unchanged merge says nothing.
+export function mergePluginRules(
+  projectDir: string,
+  plugin: { key: string; root: string },
+  requested?: RulesLevel,
+): string | null {
+  const source = pluginRulesSource(plugin.root);
+  const record = readRulesRecord(projectDir, plugin.key);
+  if (source === null) {
+    if (record !== null) stripPluginRules(projectDir, plugin.key, false);
+    return null;
+  }
+  const level = requested ?? record?.level ?? source.level ?? "project";
+  const blocks = rulesBlocks(plugin.key, source, level);
+  for (const memoryDir of spaceMemoryDirs(projectDir)) {
+    for (const rel of ruleFilesIn(memoryDir)) {
+      const path = join(memoryDir, rel);
+      const before = readFileSync(path, "utf-8");
+      const block = blocks.get(rel);
+      const after = block === undefined
+        ? stripRulesBlock(before, plugin.key, path)
+        : placeRulesBlock(before, plugin.key, block, path);
+      if (after !== before) writeFileSync(path, after);
+    }
+  }
+  writeRulesRecord(projectDir, plugin.key, {
+    schemaVersion: 1,
+    level,
+    files: Object.fromEntries([...blocks].map(([rel, block]) => [rel, sha256Text(block)])),
+  });
+  const said = source.files.has("rules.md") && (record === null || record.level !== level);
+  return said ? placementLine(plugin.key, level, [...blocks.keys()]) : null;
+}
+
+// A sync a host hook runs (a session start) prints to the agent, not the
+// person, so the line waits for the next step the agent speaks from in that
+// chat. At a terminal the person reads it as it prints.
+export function sayRulesPlacement(projectDir: string, lines: readonly string[]): void {
+  if (lines.length === 0 || process.stdout.isTTY || process.env.AIDLC_PERSON_AT_TERMINAL === "1") return;
+  try {
+    const session = resolveInvokingSessionId(projectDir);
+    if (session !== null) addPendingPersonLines(projectDir, session, lines);
+  } catch {
+    // The printed line still reaches the agent.
+  }
+}
+
+// Best-effort: the copy is the chat's convenience, and the next session start
+// or stage delivery writes it again.
+export function refreshRulesCopy(projectDir: string): void {
+  try {
+    refreshActiveMemory(projectDir);
+  } catch {
+    // The rule files themselves are written.
+  }
+}
+
+// The same merge for a plugin known only by its root (the utility's
+// plugin-sync front, which composes in the live project): its key is the
+// name in its own manifest.
+export function mergePluginRulesFromRoot(
+  projectDir: string,
+  harnessDir: string,
+  root: string,
+  enabled?: (key: string) => boolean,
+): string | null {
+  if (!existsSync(join(root, "memory"))) return null;
+  let key: unknown;
+  try {
+    key = (readJson(join(root, ".aidlc-plugin", "plugin.json")) as { name?: unknown }).name;
+  } catch {
+    return null;
+  }
+  if (typeof key !== "string" || !SAFE_PLUGIN_KEY.test(key)) return null;
+  const selection = selectedPlugins(projectDir, harnessDir);
+  if (enabled ? !enabled(key) : selection !== null && !selection.has(key)) return null;
+  return mergePluginRules(projectDir, { key, root });
+}
+
+// Takes the plugin's sections out of every space. Turning it off keeps its
+// record as it is (the level it sat at; its missing sections compose again once
+// it is on); pruning it forgets it.
+export function stripPluginRules(projectDir: string, key: string, keepLevel: boolean): boolean {
+  const record = readRulesRecord(projectDir, key);
+  let stripped = false;
+  for (const memoryDir of spaceMemoryDirs(projectDir)) {
+    for (const rel of ruleFilesIn(memoryDir)) {
+      const path = join(memoryDir, rel);
+      const before = readFileSync(path, "utf-8");
+      const after = stripRulesBlock(before, key, path);
+      if (after !== before) {
+        writeFileSync(path, after);
+        stripped = true;
+      }
+    }
+  }
+  if (record !== null && !keepLevel) rmSync(rulesRecordPath(projectDir, key), { force: true });
+  return stripped;
+}
+
+// The same strip as writes to plan, for a refresh that commits the team's rule
+// files through its own transaction: each changed file, project-relative.
+export function pluginRulesStripWrites(projectDir: string, key: string): Array<{ rel: string; content: string }> {
+  const writes: Array<{ rel: string; content: string }> = [];
+  for (const memoryDir of spaceMemoryDirs(projectDir)) {
+    for (const rel of ruleFilesIn(memoryDir)) {
+      const path = join(memoryDir, rel);
+      const before = readFileSync(path, "utf-8");
+      const after = stripRulesBlock(before, key, path);
+      if (after !== before) writes.push({ rel: relative(projectDir, path).split(sep).join("/"), content: after });
+    }
+  }
+  return writes;
+}
+
+// The person chose another level for a plugin's rules: its section moves to
+// that file in every space now, and the record keeps the choice for every
+// later merge (a plugin that is off comes back there).
+export function movePluginRules(projectDir: string, harnessDir: string, key: string, level: RulesLevel): string | null {
+  const record = readRulesRecord(projectDir, key);
+  if (record?.level === level) return null;
+  const levelFile = (rel: string): boolean => RULES_LEVELS.some((other) => rel === `${other}.md`);
+  const files: Record<string, string> = {};
+  for (const [rel, digest] of Object.entries(record?.files ?? {})) files[levelFile(rel) ? `${level}.md` : rel] = digest;
+  let moved = false;
+  for (const memoryDir of spaceMemoryDirs(projectDir)) {
+    for (const rel of RULES_LEVELS.map((other) => `${other}.md`)) {
+      if (rel === `${level}.md`) continue;
+      const from = join(memoryDir, rel);
+      const to = join(memoryDir, `${level}.md`);
+      if (!existsSync(from) || !existsSync(to)) continue;
+      const before = readFileSync(from, "utf-8");
+      const block = rulesBlockText(before, key, from);
+      if (block === null) continue;
+      writeFileSync(from, stripRulesBlock(before, key, from));
+      writeFileSync(to, placeRulesBlock(readFileSync(to, "utf-8"), key, block.replace(/\r\n/g, "\n"), to));
+      moved = true;
+    }
+  }
+  writeRulesRecord(projectDir, key, { schemaVersion: 1, level, files });
+  return moved
+    ? placementLine(key, level, Object.keys(files).sort())
+    : `${key}'s rules will be in ${level}.md, in a section of their own at the end, ${
+      nextCompose(runtimeHarnessName(projectDir, harnessDir), key, null)
+    }.`;
+}
+
+// What sync composes again for: the plugin ships rules and a space lacks its
+// section with the plugin's bytes (a copy-channel refresh took it, a person
+// edited inside it, or it was never placed), or it stopped shipping them.
+function rulesNeedMerge(projectDir: string, plugin: InstalledPlugin, requested?: RulesLevel): boolean {
+  const source = pluginRulesSource(plugin.root);
+  const record = readRulesRecord(projectDir, plugin.key);
+  if (source === null) return record !== null && Object.keys(record.files).length > 0;
+  if (record === null || (requested !== undefined && requested !== record.level)) return true;
+  const blocks = rulesBlocks(plugin.key, source, record.level);
+  if (Object.keys(record.files).sort().join("\n") !== [...blocks.keys()].sort().join("\n")) return true;
+  return spaceMemoryDirs(projectDir).some((memoryDir) =>
+    [...blocks].some(([rel, block]) => {
+      const path = join(memoryDir, rel);
+      return existsSync(path) && !rulesBlockCurrent(readFileSync(path, "utf-8"), plugin.key, block, path);
+    })
+  );
+}
+
+// Doctor's words for a plugin's section that is not where its record says,
+// from the record alone (doctor reads no plugin source).
+export function rulesRecordGaps(projectDir: string, key: string): string[] {
+  const record = readRulesRecord(projectDir, key);
+  if (record === null) return [];
+  const gaps: string[] = [];
+  for (const memoryDir of spaceMemoryDirs(projectDir)) {
+    for (const [rel, digest] of Object.entries(record.files).sort(([a], [b]) => a.localeCompare(b))) {
+      const path = join(memoryDir, rel);
+      if (!existsSync(path)) continue;
+      const shown = relative(projectDir, path).split(sep).join("/");
+      let text: string | null;
+      try {
+        text = rulesBlockText(readFileSync(path, "utf-8"), key, path);
+      } catch (error) {
+        gaps.push(`rules in ${shown} cannot be read (${errorMessage(error)})`);
+        continue;
+      }
+      if (text === null) gaps.push(`rules missing from ${shown}`);
+      else if (sha256Text(text) !== digest) gaps.push(`rules in ${shown} differ from the plugin's`);
+    }
+  }
+  return gaps;
+}
+
+// A new space starts with the sections every plugin placed in the space it is
+// copied from, so its next session start has nothing to compose again.
+export function copyPluginRulesToSpace(projectDir: string, fromMemoryDir: string, toMemoryDir: string): void {
+  for (const key of pluginRulesRecords(projectDir)) {
+    const record = readRulesRecord(projectDir, key);
+    if (record === null) continue;
+    for (const rel of Object.keys(record.files).sort()) {
+      const from = join(fromMemoryDir, rel);
+      const to = join(toMemoryDir, rel);
+      if (!existsSync(from) || !existsSync(to)) continue;
+      const block = rulesBlockText(readFileSync(from, "utf-8"), key, from);
+      if (block === null) continue;
+      const before = readFileSync(to, "utf-8");
+      const after = placeRulesBlock(before, key, block.replace(/\r\n/g, "\n"), to);
+      if (after !== before) writeFileSync(to, after);
+    }
+  }
+}
+
+// `--rules-level <plugin>=<org|team|project>`, repeated or comma-joined.
+export function parseRulesLevels(argv: readonly string[]): Map<string, RulesLevel> {
+  const levels = new Map<string, RulesLevel>();
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg !== "--rules-level" && !arg.startsWith("--rules-level=")) continue;
+    const value = arg === "--rules-level" ? argv[++index] : arg.slice(14);
+    const pairs = value === undefined || value.startsWith("--") ? [] : value.split(",").filter(Boolean);
+    if (pairs.length === 0) {
+      throw new PluginUsageError("--rules-level takes <plugin>=<org|team|project>, such as --rules-level test-pro=team");
+    }
+    for (const pair of pairs) {
+      const [key, level] = pair.split("=");
+      if (!SAFE_PLUGIN_KEY.test(key ?? "") || !RULES_LEVELS.includes(level as RulesLevel)) {
+        throw new PluginUsageError(
+          `--rules-level takes <plugin>=<org|team|project>, such as --rules-level test-pro=team; got ${pair}`,
+        );
+      }
+      levels.set(key, level as RulesLevel);
+    }
+  }
+  return levels;
 }
 
 function pruneContributions(stagedProject: string, harnessDir: string, key: string): void {
@@ -1828,6 +2392,7 @@ function pruneOwnedPlugin(
     }
   }
   pruneContributions(stagedProject, harnessDir, key);
+  stripPluginRules(stagedProject, key, false);
   for (const file of ownership.files) {
     rmSync(assertOwnedPath(stagedProject, file.path), { force: true });
   }
@@ -2055,8 +2620,13 @@ function compositionIsCurrent(
   if ((selection === null || selection.has(plugin.key)) && recordedAdditionGone(projectDir, harnessDir, plugin.key)) {
     return false;
   }
+  if ((selection === null || selection.has(plugin.key)) && rulesNeedMerge(projectDir, plugin)) return false;
   const ownership = evidence.ownership.get(plugin.key);
   if (!ownership) return false;
+  // A project composed before a plugin's commands were recorded records them.
+  if (!sameCommands(stamp.commands, ownedCommands(plugin, new Set(ownership.files.map((file) => file.path)), harnessDir))) {
+    return false;
+  }
   return ownership.files.every((file) => {
     const target = assertOwnedPath(projectDir, file.path);
     return existsSync(target) &&
@@ -2111,8 +2681,9 @@ export function hostListsPlugins(harnessName: string): boolean {
 // person to sync. A host that lists its plugins (Claude Code, Codex) finds
 // them itself; elsewhere sync needs the plugin's folder (`root`, when the
 // tool knows it). A tool acts on its own harness folder and the native aidlc
-// on the first one installed here, so where the target `harnessDir` is another
-// it is told which, as the plugin hooks do.
+// on the one whose tool runs it, else the first one installed here, so where
+// the target `harnessDir` is not the first it is told which, as the plugin
+// hooks do.
 export function syncCommand(
   harnessName: string,
   key: string,
@@ -2354,6 +2925,8 @@ async function syncPluginsLocked(
   newlyHeld: HeldRecord[];
   paused: string[];
   superseded: string[];
+  skippedCommands: string[];
+  rules: string[];
 }> {
   const harness = harnessKind(harnessDir, projectDir);
   const inventory = currentRoots().length > 0
@@ -2362,6 +2935,8 @@ async function syncPluginsLocked(
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   const prune = argv.includes("--prune-missing");
+  const requestedLevels = parseRulesLevels(argv);
+  const rules: string[] = [];
   let plugins: InstalledPlugin[];
   let missing: string[] = [];
   let hostList: InstalledPlugin[] | null = null;
@@ -2470,13 +3045,27 @@ async function syncPluginsLocked(
     return recorded?.version !== record.version || recorded.reason !== record.reason;
   });
   const paused = order.paused.map((plugin) => plugin.key);
+  // A level asked for a plugin this project does not have is said, never dropped.
+  const knownKeys = new Set([
+    ...inventory.installed.map((plugin) => plugin.key),
+    ...evidence.stamps.keys(),
+    ...pluginRulesRecords(projectDir),
+  ]);
+  const unknownLevels = [...requestedLevels.keys()].filter((key) => !knownKeys.has(key));
+  if (unknownLevels.length > 0) {
+    throw new PluginUsageError(
+      `--rules-level names ${unknownLevels.join(", ")}, which ${unknownLevels.length === 1 ? "is" : "are"} not installed in this project` +
+        (knownKeys.size > 0 ? `; installed: ${[...knownKeys].sort().join(", ")}` : ""),
+    );
+  }
   const pruned = prune ? missing : [];
   announcePrune(argv, pruned);
   if (
     pruned.length === 0 &&
     staleHeld.length === 0 &&
     newlyHeld.length === 0 &&
-    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir, harnessDir, selection))
+    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir, harnessDir, selection)) &&
+    [...requestedLevels].every(([key, level]) => readRulesRecord(projectDir, key)?.level === level)
   ) {
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
@@ -2486,6 +3075,8 @@ async function syncPluginsLocked(
       newlyHeld,
       paused,
       superseded,
+      skippedCommands: [],
+      rules: [],
     };
   }
   const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-sync-"));
@@ -2513,6 +3104,18 @@ async function syncPluginsLocked(
         { force: true },
       );
       await runComposer(plugin, stagedProject, harnessDir);
+      if (selection === null || selection.has(plugin.key)) {
+        const line = mergePluginRules(stagedProject, plugin, requestedLevels.get(plugin.key));
+        if (line !== null) rules.push(line);
+      }
+    }
+    // A plugin that is off or paused merges nothing now: its level is kept for
+    // when it is on again, and the line says so.
+    const merged = new Set(plugins.filter((plugin) => selection === null || selection.has(plugin.key)).map((plugin) => plugin.key));
+    for (const [key, level] of requestedLevels) {
+      if (merged.has(key)) continue;
+      const line = movePluginRules(stagedProject, harnessDir, key, level);
+      if (line !== null) rules.push(line);
     }
     for (const key of pruned) {
       // The staged copy holds no link, so a plugin file behind one is checked
@@ -2539,6 +3142,7 @@ async function syncPluginsLocked(
         claimedPaths,
       );
     }
+    const skippedCommands = recordSkippedCommands(plugins, stagedData, evidence);
     if (pruned.length > 0) regenerateAfterPrune(stagedProject, harnessDir);
     const plan = projectDiffPlan(projectDir, stagedProject, harnessDir);
     const failAfter = Number(process.env.AIDLC_PLUGIN_SYNC_FAIL_AFTER ?? "0");
@@ -2576,10 +3180,14 @@ async function syncPluginsLocked(
           newlyHeld: [],
           paused,
           superseded,
+          skippedCommands: [],
+          rules: [],
         };
       }
       throw error;
     }
+    // The chat's copy of the rules follows the rule files a plugin changed.
+    if (plan.operations.some((operation) => operation.path.startsWith("aidlc/spaces/"))) refreshRulesCopy(projectDir);
     // A sync that exits 0 must leave its plugins composed; a silent miss would
     // leave a blocking gate sensor absent with nothing to tell the user.
     if (pruned.length === 0) {
@@ -2602,6 +3210,8 @@ async function syncPluginsLocked(
       newlyHeld,
       paused,
       superseded,
+      skippedCommands,
+      rules,
     };
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -2623,7 +3233,13 @@ function jsonEnvelope(
   })}\n`;
 }
 
+const PLUGIN_USAGE = "usage: aidlc engine plugin <list|sync [--prune-missing] [--rules-level <plugin>=<org|team|project>]>";
+
 export async function main(argv: string[]): Promise<void> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(`${PLUGIN_USAGE}\n`);
+    return;
+  }
   const { positional, flags } = parseArgs(argv);
   const command = positional[0];
   const projectDir = resolveProjectDir(flags["project-dir"]);
@@ -2644,15 +3260,30 @@ export async function main(argv: string[]): Promise<void> {
       // A plugin hook names its harness too.
       if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
       const result = await syncPlugins(projectDir, argv);
+      sayRulesPlacement(projectDir, result.rules);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
         (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
         result.newlyHeld.map((record) => `\n${record.reason}`).join("") +
-        result.superseded.map((line) => `\n${line}`).join("");
+        result.skippedCommands.map((line) => `\n${line}`).join("") +
+        result.superseded.map((line) => `\n${line}`).join("") +
+        result.rules.map((line) => `\n${line}`).join("");
       if (flags.json === "true") process.stdout.write(jsonEnvelope(0, message, result));
       else if (flags.quiet !== "true") process.stdout.write(`${message}\n`);
       return;
     }
-    throw new Error("usage: aidlc engine plugin <list|sync [--prune-missing]>");
+    // A compose hook run without sync asks the engine to write its plugin's
+    // rules, the same merge sync runs.
+    if (command === "rules" && flags["plugin-root"]) {
+      if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
+      const line = mergePluginRulesFromRoot(projectDir, runtimeHarnessDir(projectDir), resolve(flags["plugin-root"]));
+      if (line !== null) {
+        process.stdout.write(`${line}\n`);
+        sayRulesPlacement(projectDir, [line]);
+      }
+      refreshRulesCopy(projectDir);
+      return;
+    }
+    throw new Error(PLUGIN_USAGE);
   } catch (error) {
     const message = withTransactionFix(error, errorMessage(error));
     const code = error instanceof PluginUsageError ? 2 : 1;

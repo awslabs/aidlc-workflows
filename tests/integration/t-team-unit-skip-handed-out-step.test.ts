@@ -111,9 +111,9 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
         // No summary, review or approval is asked for the skipped step: the
         // claimed Unit is done in this checkout.
         const after = nextDirective(checkout);
-        expect(String(after.message ?? after.reason ?? ""), JSON.stringify(after)).toContain(
-          'Unit "alpha" is complete and approved in this checkout.',
-        );
+        expect(after, JSON.stringify(after)).toMatchObject({
+          kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha",
+        });
         const cells = unitProgressRow(checkout, "alpha").split("|").slice(1, -1).map((cell) => cell.trim());
         expect(cells.slice(2)).toEqual(["[x]", "[x]", "[x]", "[x]", "[x]", "[x]"]);
       },
@@ -148,6 +148,25 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
         expect(JSON.parse(skipped.stdout).kind, skipped.out).toBe("done");
         expect(unitSkips(checkout)).toHaveLength(1);
         expect(readFileSync(seededStateFile(checkout), "utf-8")).not.toMatch(/^- \[S\] infrastructure-design/m);
+      },
+    });
+  });
+
+  // The claimed checkout walks its one Unit: the plan-change step offers no
+  // "this Unit only / every Unit from here" reading there (t-team-skip-mid-walk
+  // has it on a main that works every Unit itself).
+  test("the person's typed skip in the claimed checkout gets no Unit reading", () => {
+    const { remote } = teamSeed();
+    prepareCandidate(remote, "alpha", "alpha-team", {
+      stages: WORKED,
+      beforeCommit: (checkout) => {
+        handedOut(checkout);
+        const typed = runMergeTool(ORCH, ["next", "--skip", STAGE], checkout);
+        expect(typed.status, typed.out).toBe(0);
+        const step = JSON.parse(typed.stdout) as { kind?: string; message?: string };
+        expect(step.kind, typed.out).toBe("print");
+        expect(String(step.message)).not.toContain("Unit only");
+        expect(String(step.message)).not.toContain("every Unit from here");
       },
     });
   });

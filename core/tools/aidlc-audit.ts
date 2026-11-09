@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
@@ -100,6 +101,9 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_UNPARKED",
   "WORKFLOW_ARCHIVED",
   "WORKFLOW_UNARCHIVED",
+  // A record an earlier State Version wrote, brought up in place by the
+  // engine's state read (aidlc-state-upgrade.ts).
+  "STATE_UPGRADED",
   "INTENT_REPOS_CHANGED",
   "INTENT_CHECKOUTS_CHANGED",
   // Session events (hook-owned)
@@ -111,9 +115,11 @@ const VALID_EVENT_TYPES = new Set([
   // approval/interview gate requires a HUMAN_TURN appended AFTER the last gate
   // resolution (in ledger order) before it commits.
   "HUMAN_TURN",
-  // Hook-owned, advisory, never a human turn: a prompt the host made for the
-  // agent (a workflow notice, a background task's notice, a brief) reached
-  // the prompt-submit seam and was not counted as the person's turn.
+  // Hook-owned, never a human turn: a prompt the host made for the agent (a
+  // workflow notice, a background task's notice, a brief) reached the
+  // prompt-submit seam and was not counted as the person's turn. One that names
+  // a Message Id takes back the HUMAN_TURN of that message (a Claude Code
+  // wake-up, settled once its own row was on record: settleClaudeTurns).
   "HOST_TURN",
   // Initialization events (fire IN ADDITION TO STAGE_COMPLETED)
   "WORKSPACE_SCAFFOLDED",
@@ -206,9 +212,11 @@ const VALID_EVENT_TYPES = new Set([
   "STAGE_RULES_BLOCKED",
   // A system package install nobody asked for (hook-emitted): held until the
   // person says so (BLOCKED), and run with their turn standing behind it
-  // (ALLOWED, naming their message).
+  // (ALLOWED, naming their message). REQUESTED: the agent named the message
+  // that asked for the packages (`log install`).
   "SYSTEM_INSTALL_BLOCKED",
   "SYSTEM_INSTALL_ALLOWED",
+  "SYSTEM_INSTALL_REQUESTED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -328,6 +336,10 @@ const VALID_EVENT_TYPES = new Set([
   // are built in parallel: `aidlc-swarm.ts allow-change` records them with the
   // message they asked in, and the guard and the landings read it.
   "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  // The person asked a second chat to build a side-by-side batch another chat
+  // started: `aidlc-swarm.ts take-over` records it with the message they asked
+  // in, and `next` hands the batch to that chat from then on.
+  "SWARM_TAKEN_OVER",
   // Commit provenance -- emitted only by `aidlc-attest.ts anchor`: a workspace
   // commit observed to land reviewed unit claims. Enrichment ONLY: attest
   // resolve derives attribution purely from committed receipts + evidence and
@@ -363,6 +375,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_UNPARKED: "Workflow Unparked",
   WORKFLOW_ARCHIVED: "Workflow Archived",
   WORKFLOW_UNARCHIVED: "Workflow Unarchived",
+  STATE_UPGRADED: "State Upgraded",
   INTENT_REPOS_CHANGED: "Intent Repos Changed",
   INTENT_CHECKOUTS_CHANGED: "Intent Checkouts Changed",
   SESSION_STARTED: "Session Start",
@@ -412,6 +425,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_RULES_BLOCKED: "Stage Rules Blocked",
   SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
   SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
+  SYSTEM_INSTALL_REQUESTED: "System Install Requested",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
@@ -471,6 +485,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SWARM_UNIT_CONVERGED: "Swarm Unit Converged",
   SWARM_SOURCE_MERGED: "Swarm Source Merged",
   MAIN_CHECKOUT_CHANGE_ALLOWED: "Main Checkout Change Allowed",
+  SWARM_TAKEN_OVER: "Swarm Taken Over",
   SWARM_UNIT_FAILED: "Swarm Unit Failed",
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
@@ -491,8 +506,9 @@ function jsonError(message: string): never {
 
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
-  // Hook-owned like HUMAN_TURN: only the hook that saw the host's prompt may
-  // say a turn was the host's.
+  // Hook-owned like HUMAN_TURN: only the hook that saw the host's prompt, or
+  // settleClaudeTurns reading Claude Code's own row for a turn the hook could
+  // not yet tell apart (aidlc-claude-turn-origin.ts), may say a turn was the host's.
   "HOST_TURN",
   // Hook-owned like HUMAN_TURN: it spends a person's turn, so only the hook
   // that saw the empty question box may write it.
@@ -563,13 +579,17 @@ export interface AuditEntryInput {
 // (verifyReviewerPrecondition), swarm attempt/convergence (the finalize and
 // artifact-guard boundaries), and the autonomy grant. Each has exactly one owning emitter that
 // reaches appendAuditEntry through the library import (hooks, aidlc-state,
-// aidlc-log, aidlc-swarm, aidlc-bolt). The public CLI refuses them so a
+// aidlc-log, aidlc-swarm, aidlc-bolt), except HOST_TURN, which the human-turn
+// hook and settleClaudeTurns (aidlc-claude-turn-origin.ts) write from the one
+// decider of who started a Claude Code turn (claudeTranscriptOrigin). The public CLI refuses them so a
 // conductor cannot mint authority it does not have; everything else stays
 // CLI-appendable as the diagnostic escape hatch. Test fixtures that simulate
 // the owning emitters set AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 (the same escape
 // idiom as AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS in aidlc-state.ts).
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
+  // Its Stages added sends `next` back to a stage the work just passed over.
+  "STATE_UPGRADED",
   "STAGE_DEFINITION_CHANGED",
   "STAGE_OUTPUT_AMENDED",
   // The check's own record of a first refusal opens the gate on the next
@@ -599,6 +619,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_SOURCE_MERGED",
   // The person's request a strict landing keeps; a forged one would keep a change nobody asked for.
   "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  // The person's request that moves a batch to the chat they asked in.
+  "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -656,9 +678,10 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // A stand-aside row is a guard's own account of what it let through; a forged
   // one would make an unauthorized action look covered.
   "GUARD_STOOD_ASIDE",
-  // The person's go-ahead for a system install; a forged one would make an
-  // install nobody asked for look like theirs.
+  // The person's go-ahead for a system install, and the message named as asking
+  // for one; a forged one would make an install nobody asked for look like theirs.
   "SYSTEM_INSTALL_ALLOWED",
+  "SYSTEM_INSTALL_REQUESTED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);
@@ -699,6 +722,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   // The source-work check's own record opens the main checkout's gate.
   "SOURCE_WORK_NOT_FOUND",
   "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -2548,6 +2572,8 @@ function handleTurns(args: string[], projectDir: string): void {
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   // Extract --project-dir before general parsing

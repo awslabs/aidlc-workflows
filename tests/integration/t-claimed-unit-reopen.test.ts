@@ -170,6 +170,23 @@ function next(cwd: string, args: string[] = []): Directive {
   return directive;
 }
 
+// Their words alone, as the skill passes them: the project flag goes before
+// the words, which `next` reads as the person's.
+function nextWords(cwd: string, words: string): Directive {
+  const result = spawnSync(process.execPath, [ORCH, "next", "--project-dir", cwd, words], {
+    cwd,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    },
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return JSON.parse(result.stdout) as Directive;
+}
+
 const FD = "functional-design";
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 
@@ -351,6 +368,27 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect(row).not.toContain("/aidlc --stage");
     });
 
+    test(`${label}: a redo they type is read as one, and reopens the Unit's own stage`, () => {
+      const { checkout } = claimedPastFunctionalDesign(shape);
+      const words = "redo the Functional Design for alpha";
+      says(checkout, words);
+      // Their words alone: the reading offers the re-entry report a redo goes
+      // through, not only "go on" or a question about where the work belongs.
+      const reading = nextWords(checkout, words);
+      expect(reading.kind, JSON.stringify(reading)).toBe("print");
+      expect(reading.message).toContain("report --result resumed --choice <redo|jump|fresh>");
+      // The agent reads a redo of alpha's Functional Design.
+      const redo = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", FD, "--unit", "alpha"], checkout);
+      expect(redo.status, redo.out).toBe(0);
+      expect((JSON.parse(redo.stdout) as Directive).message).toContain(`next --stage ${FD} --unit alpha`);
+      const printed = next(checkout, ["--stage", FD, "--unit", "alpha"]);
+      expect(printed.kind, JSON.stringify(printed)).toBe("print");
+      expect(printed.message).toContain('"Reopened Functional Design for unit alpha."');
+      const reopened = run(JUMP, printedReopen(printed.message).split(" "), checkout);
+      expect(reopened.status, reopened.out).toBe(0);
+      expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha", gate: false });
+    });
+
     test(`${label}: a move outside the Unit names a place the person can go`, () => {
       const { checkout } = claimedPastFunctionalDesign(shape);
       const before = recordSnapshot(checkout);
@@ -388,6 +426,60 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect(readAuditShardEvents(checkout).some((event) => event.event === "GATE_REJECTED")).toBe(false);
     });
   }
+
+  test("a redo they type with no Unit named is the claimed Unit's, never a redo of the whole stage", () => {
+    const { checkout } = claimedPastFunctionalDesign("clone");
+    // A stage alpha finished, named with no Unit while beta still owes it.
+    const named = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", FD], checkout);
+    expect(named.status, named.out).toBe(0);
+    const namedMessage = (JSON.parse(named.stdout) as Directive).message ?? "";
+    expect(namedMessage).toContain(`next --stage ${FD} --unit alpha`);
+    expect(namedMessage).not.toContain("has not run yet");
+    // "Redo" alone, and the stage alpha is on: alpha's own step, which it has
+    // not started, so it is done from the start.
+    for (const args of [[], ["--target", "nfr-requirements"]]) {
+      const redo = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", ...args], checkout);
+      expect(redo.status, redo.out).toBe(0);
+      const message = (JSON.parse(redo.stdout) as Directive).message ?? "";
+      expect(message).toContain('Redo accepted at "nfr-requirements" for unit "alpha"');
+      expect(message).not.toContain("execute --target");
+    }
+  });
+
+  test("the step the Unit is on, with its work started: asked for by name it carries on, a typed redo starts it again", () => {
+    const { checkout } = claimedPastFunctionalDesign("clone");
+    const started = run(STATE, ["unit", "start", "--stage", "nfr-requirements", "--unit", "alpha"], checkout);
+    expect(started.status, started.out).toBe(0);
+    const dir = stageDir(checkout, "alpha", "nfr-requirements");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, artifactFilename("tech-stack-decisions")), "# tech-stack-decisions 1\n");
+    const reopens = (): number =>
+      readAuditShardEvents(checkout).filter((event) => event.event === "GATE_REJECTED").length;
+    // /aidlc --stage <it>: the stage named, not a redo, so nothing they made is
+    // redone; the Unit carries on where it stopped, as on the solo walk.
+    expect(next(checkout, ["--stage", "nfr-requirements"])).toMatchObject({
+      kind: "run-stage", stage: "nfr-requirements", unit: "alpha",
+    });
+    expect(reopens()).toBe(0);
+    // A redo they type, read by the re-entry reading: the step from the start,
+    // recorded as a redo.
+    const redo = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", "nfr-requirements"], checkout);
+    expect(redo.status, redo.out).toBe(0);
+    const message = (JSON.parse(redo.stdout) as Directive).message ?? "";
+    expect(message).toContain('"Redoing NFR Requirements for unit alpha from the start."');
+    const command = /reopen --target \S+ --stages \S+ --units alpha --via redo --scope feature/.exec(message)?.[0];
+    expect(command, message).toBe(
+      "reopen --target nfr-requirements --stages nfr-requirements,nfr-design,infrastructure-design,code-generation " +
+        "--units alpha --via redo --scope feature",
+    );
+    const reopened = run(JUMP, command!.split(" "), checkout);
+    expect(reopened.status, reopened.out).toBe(0);
+    const row = readAuditShardEvents(checkout).filter((event) => event.event === "GATE_REJECTED").at(-1)?.block ?? "";
+    expect(row).toContain("**Reopen**: redo");
+    expect(next(checkout)).toMatchObject({
+      kind: "run-stage", stage: "nfr-requirements", unit: "alpha", artifact_reuse: { decision: "redo", unit: "alpha" },
+    });
+  });
 
   test("a reopen they ask for as a jump keeps its jump row", () => {
     const { checkout } = claimedPastFunctionalDesign("clone");

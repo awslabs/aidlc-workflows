@@ -39,6 +39,7 @@ import {
   projectSettingsPath,
   resolveAidlcSettings,
 } from "../../core/tools/aidlc-settings.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -105,7 +106,7 @@ function install(harness: string): string {
     "--from",
     join(DIST_RELEASE, harness),
     "--harness",
-    harness,
+    typedHarnessName(harness),
     "--mcp",
     "none",
     "--yes",
@@ -1643,7 +1644,7 @@ describe("t293 doctor model policy advisory", () => {
     };
     const shared = check({ schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } });
     expect(shared.status, shared.stdout).toBe(0);
-    expect(shared.stdout).toContain("model policy is reflected on kiro-ide");
+    expect(shared.stdout).toContain("model policy is reflected on kiro");
     // One agent's own model and effort are Kiro's: a file without them is drift.
     const named = check({
       schemaVersion: 1,

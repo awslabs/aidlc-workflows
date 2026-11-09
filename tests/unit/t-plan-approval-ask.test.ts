@@ -2370,7 +2370,10 @@ describe("after approval, whatever the engine said last", () => {
     }
   });
 
-  // Only this work's own Code Generation step stands in when it is out of date.
+  // An out-of-date step of another stage (a second checkout whose last step
+  // there came before the plan), or a marker naming another piece of work,
+  // gives the step no authority of its own: it is read on this work's own
+  // record, and this work's recorded approval holds.
   test("an out-of-date step of another stage or another piece of work is not read for the approval", () => {
     const { pd } = groupedProject();
     replyAndRecord(pd, "approve all", "Approve all");
@@ -2384,8 +2387,8 @@ describe("after approval, whatever the engine said last", () => {
       } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
     };
     expect(route({}).plan_approval).toEqual({ status: "approved" });
-    expect(route({ stage: "functional-design" }).kind).toBe("ask");
-    expect(route({ intent_uuid: "01995000-7a11-7000-8000-00000000ffff" }).kind).toBe("ask");
+    expect(route({ stage: "functional-design" }).plan_approval).toEqual({ status: "approved" });
+    expect(route({ intent_uuid: "01995000-7a11-7000-8000-00000000ffff" }).plan_approval).toEqual({ status: "approved" });
   });
 
   // "Review the plan first" is the person's own request, whatever the engine
@@ -3249,6 +3252,27 @@ describe("what the engine names while a plan waits", () => {
     expect(auditText(proj)).toContain("**Person Reply**: approve the plan, but let's stop there for today");
   });
 
+  // From a live Codex run: "approve the plan. and skip build and test" at the
+  // plan question. The skip's step ended the turn, so the approval in the same
+  // message was dropped and nothing was built until the person asked.
+  test("approve and skip in one reply while the plan waits: the skip is made, then the approval, and the build starts", () => {
+    const proj = waitingPlan();
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const words = "approve the plan. and skip build and test, I will run npm test myself";
+    reply(proj, words);
+    const named = next(proj, ["--skip", "build-and-test"]);
+    expect(named.message, JSON.stringify(named)).toContain("answer --stage code-generation --checkpoint plan-approval");
+    expect(named.message).not.toContain("Then stop.");
+    const recompose = namedCommands(named).find((command) => command.includes("engine recompose"));
+    expect(recompose, JSON.stringify(named)).toBeDefined();
+    expect(guardBash(proj, recompose as string).code).toBe(0);
+    runInstalled(proj, recompose as string);
+    const said = answer(proj, "Approve Plan");
+    expect(said.code, said.message).toBe(0);
+    expect(auditText(proj)).toContain(`**Person Reply**: ${words}`);
+    expect(next(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+  });
+
   // Skipping Code Generation itself while its plan waits: the skip the engine
   // names gets through and runs, the plan question goes with the stage, and the
   // work goes on to Build and Test without asking about the plan again.
@@ -3307,7 +3331,11 @@ describe("what the engine names while a plan waits", () => {
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
     reply(proj, typed);
     const named = next(proj, [...args]);
-    const commands = namedCommands(named);
+    // A skip's step also names the plan question's answer, for a reply that
+    // gave one; this reply gave none, so the agent does not run it.
+    const answerStep = namedCommands(named).filter((command) => command.includes("--checkpoint plan-approval"));
+    expect(answerStep.length, JSON.stringify(named)).toBe((args as readonly string[]).includes("--skip") ? 1 : 0);
+    const commands = namedCommands(named).filter((command) => !answerStep.includes(command));
     expect(commands.length, JSON.stringify(named)).toBeGreaterThan(0);
     for (const command of commands) {
       const verdict = guardBash(proj, command);

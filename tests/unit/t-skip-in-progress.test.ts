@@ -214,6 +214,33 @@ describe("a stage the person asks to skip at its own approval question is skippe
     expect(JSON.stringify(step.kept_replies ?? null)).not.toContain("skip requirements analysis");
   });
 
+  // The agent may keep the person's why after the engine's reason: the skip
+  // is still theirs, at the stage's question and while it is in progress, and
+  // the words they typed for it are spent.
+  for (const [where, at] of [["at its question", atItsQuestion], ["in progress", startedAt]] as const) {
+    test(`${where}, with the person's why after the engine's reason: still their skip, and their words are spent`, () => {
+      const proj = at("feature", "requirements-analysis");
+      says(proj, "skip requirements analysis, the requirements are in the ticket");
+      // What the person typed at the question is kept for it until it is spent.
+      const kept = join(dirname(stateFile(proj)), ".aidlc-engine", "gate-words");
+      if (where === "at its question") expect(existsSync(kept)).toBe(true);
+      const skipped = run(proj, "aidlc-orchestrate.ts", [
+        "report", "--stage", "requirements-analysis", "--result", "skipped",
+        "--reason", "the person asked to skip it: the requirements are in the ticket",
+      ]);
+      expect(skipped.status, skipped.out).toBe(0);
+      expect(skipped.out).toContain('"kind":"done"');
+      expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [S] requirements-analysis \u2014 EXECUTE");
+      expect(existsSync(kept)).toBe(false);
+      const questions = join(dirname(stateFile(proj)), "inception", "user-stories", "user-stories-questions.md");
+      mkdirSync(dirname(questions), { recursive: true });
+      writeFileSync(questions, "# User Stories Questions\n\n## Question 1\nWho uses it?\n\n[Answer]:\n");
+      const step = nextStep(proj);
+      expect(step.stage, JSON.stringify(step)).toBe("user-stories");
+      expect(JSON.stringify(step.kept_replies ?? null)).not.toContain("the requirements are in the ticket");
+    });
+  }
+
   test("the last stage on the plan: skipped at its question, and the work ends", () => {
     const proj = atItsQuestion("poc", "build-and-test");
     const message = personSkips(proj, "build-and-test");

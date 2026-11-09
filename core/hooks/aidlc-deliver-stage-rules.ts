@@ -2,14 +2,19 @@
 // PreToolUse hook: make required active-stage rules deterministic across the
 // conductor-to-subagent boundary.
 //
-// Claude, Codex, and Copilot consume the emitted updatedInput directly.
-// OpenCode's adapter consumes the same output and mutates output.args. Kiro CLI
-// has no input-rewrite channel, so its adapter observes the proposed rewrite
-// and relies on native agent resource preload. Kiro IDE does not register this
+// Codex and Copilot consume the emitted updatedInput directly. OpenCode's
+// adapter consumes the same output and mutates output.args. Kiro CLI has no
+// input-rewrite channel, so its adapter observes the proposed rewrite and
+// relies on native agent resource preload. Kiro IDE does not register this
 // hook because tool-argument delivery is not uniform across supported
 // generations; it instead preloads active memory through always-included
 // workspace steering that carries the memory text (aidlc-includes.ts).
 //
+// Claude Code gets no rewrite: in auto mode its review covers the Agent call
+// the model wrote and it refuses a call a hook changed after that review. The
+// same bundle goes to the agent as it starts instead (SubagentStart). The
+// project rules a Claude agent loads (.claude/rules/aidlc.md) are the copy read
+// when the session started, so a rule changed since reaches it only this way.
 // On Claude it also runs at PostToolUse, only to confirm a background launch
 // the PreToolUse input did not announce (see isBackgroundDispatch).
 
@@ -24,6 +29,7 @@ import {
   getField,
   isAidlcAgentFile,
   markSubagentInflight,
+  readIssuedDirectiveMarker,
   recordGuardBlockedRow,
   resolveWorkflowSelection,
   stateFilePath,
@@ -38,9 +44,11 @@ import {
   type RuleContent,
   resolvedRuleBundle,
 } from "../tools/aidlc-steering.ts";
+import { runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { recordSubagentDispatch } from "./aidlc-log-subagent.ts";
 
 type HookInput = {
+  agent_type?: unknown;
   cwd?: string;
   hook_event_name?: string;
   session_id?: unknown;
@@ -83,17 +91,23 @@ function currentStage(projectDir: string): string | null {
   }
 }
 
+// The stage the work is doing. A stage run on its own (`--single`) never moves
+// Current Stage, so its stage comes from the step the engine issued for it.
+function stageOnRecord(projectDir: string): string | null {
+  const issued = readIssuedDirectiveMarker(projectDir, null);
+  return issued?.single === true ? issued.stage : currentStage(projectDir);
+}
+
 // Resolve which stage a brief belongs to, most-authoritative signal first:
 // 1. An explicit stage-file path in the brief (the protocol tells dispatched
 //    briefs to name it) - unambiguous.
-// 2. The state file's Current Stage - dispatches happen DURING a stage, so
-//    when a workflow is live this is the stage whose rules apply. It outranks
-//    prose mentions: a brief that happens to name one OTHER stage's slug in
-//    passing ("after scope-definition completes...") must not bind that
-//    stage's bundle.
-// 3. A unique slug mention in the brief - last resort for stateless contexts
-//    (single-stage runner before state exists). Ambiguous mentions bind
-//    nothing.
+// 2. The stage on record (stageOnRecord): the stage of a stage run on its own,
+//    else the state file's Current Stage - dispatches happen DURING a stage, so
+//    this is the stage whose rules apply. It outranks prose mentions: a brief that
+//    happens to name one OTHER stage's slug in passing ("after
+//    scope-definition completes...") must not bind that stage's bundle.
+// 3. A unique slug mention in the brief - last resort when no stage is on
+//    record. Ambiguous mentions bind nothing.
 function promptStage(prompt: string, fallback: string | null): GraphStage | null {
   const graph = loadGraph();
   const bySlug = new Map(graph.map((node) => [node.slug, node]));
@@ -258,7 +272,7 @@ export function augmentDispatchRules(
   projectDir: string,
 ): DispatchRuleResult {
   if (!DISPATCH_TOOLS.has(toolName.toLowerCase())) return { changed: false };
-  const fallbackStage = currentStage(projectDir);
+  const fallbackStage = stageOnRecord(projectDir);
   if (toolName.toLowerCase() !== "subagent") {
     return augmentSingleDispatch(input, projectDir, fallbackStage);
   }
@@ -402,7 +416,29 @@ function recordStageRulesBlocked(parsed: HookInput, projectDir: string, reason: 
   }
 }
 
+// Claude Code shows a hook's context inline up to 10,000 characters; over
+// that it shows the agent the first 2,000 and the file it saved the whole text
+// to, and does not ask the agent to read it. So the way to the rest comes first.
+const START_LEAD =
+  "If this text was saved to a file instead of shown here in full, read that whole file before you start: " +
+  "it holds the required rules for this stage.";
+
+// Claude Code starting an agent: the bundle for the stage on record, read now,
+// as its context. Nothing is recorded (the dispatch was, at PreToolUse), and
+// nothing can be refused here: an unreadable rule already refused the dispatch.
+function deliverAtStart(parsed: HookInput, projectDir: string): number {
+  if (!isAidlcAgent(parsed.agent_type)) return 0;
+  const delivered = augmentText("", projectDir, stageOnRecord(projectDir));
+  if (!delivered.changed) return 0;
+  const output = `${JSON.stringify({
+    hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: START_LEAD + delivered.prompt },
+  })}\n`;
+  if (Buffer.byteLength(output, "utf-8") <= DISPATCH_HOOK_OUTPUT_MAX_BYTES) process.stdout.write(output);
+  return 0;
+}
+
 function deliver(parsed: HookInput, projectDir: string): number {
+  if (parsed.hook_event_name === "SubagentStart") return deliverAtStart(parsed, projectDir);
   // The rules were delivered before the dispatch; afterwards the hook only
   // records a background launch its input did not announce.
   if (parsed.hook_event_name === "PostToolUse") {
@@ -441,8 +477,8 @@ function deliver(parsed: HookInput, projectDir: string): number {
     }
     process.stderr.write(
       `[aidlc] This stage's rule files add up to ${outputBytes} bytes, exceeding the safe ` +
-        `${DISPATCH_HOOK_OUTPUT_MAX_BYTES}-byte output limit for attaching them to a subagent ` +
-        "brief. The subagent was not started, and nothing partial was written. Shorten or split " +
+        `${DISPATCH_HOOK_OUTPUT_MAX_BYTES}-byte output limit for handing them to a subagent. ` +
+        "The subagent was not started, and nothing partial was written. Shorten or split " +
         "the rule files for the active stage, then start the subagent again.\n",
     );
     recordStageRulesBlocked(parsed, projectDir, "oversize");
@@ -450,7 +486,8 @@ function deliver(parsed: HookInput, projectDir: string): number {
   }
   recordAcceptedBackgroundDispatch(parsed, projectDir);
   recordDispatch(parsed, projectDir);
-  process.stdout.write(output);
+  // Claude Code runs the call as written; its agent gets the rules at start.
+  if (runtimeHarnessName(projectDir) !== "claude") process.stdout.write(output);
   return 0;
 }
 

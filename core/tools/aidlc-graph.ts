@@ -10,11 +10,14 @@
 //     complete DAG. Compiled from YAML into stage-graph.json.
 //   - A scope is a sub-DAG: scope-mapping.json's EXECUTE slice +
 //     whichever requires_stage edges exist among those nodes.
-//   - The serial runtime linearizes each sub-DAG to numeric order for
-//     iteration. Numeric order is a valid topological sort of the full
-//     graph (proven by t65 assertion 17; protected by compile's
-//     edge-local invariant check below). The future worktree scheduler
-//     will consume the sub-DAG structure directly for parallel Bolts.
+//   - The serial runtime linearizes each sub-DAG to run order for
+//     iteration: numeric order, with each phase's per-Unit stages as one
+//     block (stageRouteOrder). Compile writes stage-graph.json in that
+//     order, and every runtime walk reads the file in it. Run order is a
+//     valid topological sort of the full graph (proven by t65 assertion 17;
+//     protected by compile's edge-local and run-order checks below). The
+//     future worktree scheduler will consume the sub-DAG structure directly
+//     for parallel Bolts.
 //   - topoSort and findCycles exist in the library for analysis
 //     (doctor consumes them) and for future scheduling; they do not
 //     gate runtime iteration today.
@@ -94,6 +97,7 @@ import {
   type GuardPolicy,
   guardPolicyAtLeast,
   guardPolicyMemoryStrictRefusal,
+  isPerUnitStage,
   memoryGuardPolicyDeclarations,
   noteGuardPolicyRename,
   parseGuardPolicy,
@@ -115,12 +119,17 @@ import {
   withAuditLock,
   writeFileAtomic,
   writeRecordFileNoFollow,
+  effectivePlanAction,
+  escapeRegex,
+  getField,
+  parseCheckboxes,
 } from "./aidlc-lib.ts";
 import {
   parseRuleFrontmatter,
   type RuleFrontmatter,
   validateRuleFrontmatter,
 } from "./aidlc-rule-schema.ts";
+import { PLUGIN_RULES_OPENING } from "./aidlc-plugin-rules.ts";
 import {
   parseSensorManifest,
   type SensorManifest,
@@ -455,6 +464,16 @@ export function memoryDirFor(projectDir: string, space?: string): string {
   const resolvedSpace =
     space ?? resolveWorkflowSelection(projectDir).space;
   return join(projectDir, ...memorySegmentsForSpace(resolvedSpace));
+}
+
+/** The file a rule the person keeps is written to, relative to the project in
+ *  posix form: the space's `project.md` or `team.md`, the learning loop's two
+ *  scopes (practiceFilePath, aidlc-learnings.ts, writes the same files). A
+ *  claimed Unit's candidate carries it like the Unit's source
+ *  (candidateBoundary, aidlc-unit.ts). */
+export const KEPT_RULE_SCOPES = ["project", "team"] as const;
+export function keptRuleFile(space: string, scope: (typeof KEPT_RULE_SCOPES)[number]): string {
+  return [...memorySegmentsForSpace(space), `${scope}.md`].join("/");
 }
 
 /** The TPL template-override source-of-truth dir for a workspace:
@@ -1115,7 +1134,7 @@ function parseRuleHeadings(raw: string): Map<string, string> {
   let inFence = false;
   let inComment = false;
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     if (/^```/.test(line)) {
       inFence = !inFence;
       continue;
@@ -1138,7 +1157,10 @@ function parseRuleHeadings(raw: string): Map<string, string> {
     }
 
     if (/^## /.test(line)) {
-      current = line.slice(3).trim();
+      // A plugin's rules section says whose it is, so doctor's overlap row
+      // names the plugin, not the file's own layer, as the source.
+      const owner = PLUGIN_RULES_OPENING.exec(lines[index + 1]?.trim() ?? "")?.[1];
+      current = `${line.slice(3).trim()}${owner ? ` (plugin ${owner})` : ""}`;
       if (!out.has(current)) out.set(current, "");
       continue;
     }
@@ -1387,6 +1409,45 @@ export function loadGraph(): GraphStage[] {
   return _graph;
 }
 
+// A stage a plugin added after the work started has no row in the state file's
+// Stage Progress, so a transition onto it would write nothing and the stage
+// would never read as started or done. Its first transition writes the row
+// (not started, with the plan's action) after the rows of its phase that come
+// before it in the graph, or before the first one after it. A stage that has a
+// row, a slug the graph does not know, or a phase with no rows leaves the
+// content as it is.
+export function withStageProgressRow(content: string, slug: string): string {
+  if (parseCheckboxes(content).some((row) => row.slug === slug)) return content;
+  const graph = loadGraph();
+  const at = graph.findIndex((stage) => stage.slug === slug);
+  if (at === -1) return content;
+  const phase = graph[at].phase;
+  const lines = content.split("\n");
+  const rowsOf = (stages: GraphStage[]) =>
+    stages
+      .filter((stage) => stage.phase === phase)
+      .map((stage) => lines.findIndex((line) => new RegExp(`^- \\[[ xSR?-]\\] ${escapeRegex(stage.slug)} —`).test(line)))
+      .filter((row) => row !== -1);
+  const before = rowsOf(graph.slice(0, at));
+  const after = rowsOf(graph.slice(at + 1));
+  const insertAt = before.length > 0 ? Math.max(...before) + 1 : after.length > 0 ? Math.min(...after) : -1;
+  if (insertAt === -1) return content;
+  const eol = lines[before.length > 0 ? insertAt - 1 : insertAt].endsWith("\r") ? "\r" : "";
+  const action = effectivePlanAction(slug, getField(content, "Scope"), content) ?? "EXECUTE";
+  lines.splice(insertAt, 0, `- [ ] ${slug} — ${action}${eol}`);
+  return lines.join("\n");
+}
+
+// True when `slug` runs before the first per-Unit stage of `stages` (a graph in
+// run order): Inception and earlier, where the Unit plan itself is made. A team
+// that goes back there is changing its Unit plan, which leaves each Unit's own
+// work to its claim. False for a slug the graph does not know.
+export function beforePerUnitBlock(stages: readonly { slug: string; for_each?: string }[], slug: string): boolean {
+  const at = stages.findIndex((stage) => stage.slug === slug);
+  const firstPerUnit = stages.findIndex((stage) => isPerUnitStage(stage));
+  return at !== -1 && firstPerUnit !== -1 && at < firstPerUnit;
+}
+
 /** Stages that produce the given artifact. Empty array = orphan
  *  consumer candidate (doctor surfaces). Unions produces and
  *  optional_produces so a conditionally-produced artifact still resolves to
@@ -1593,11 +1654,11 @@ export function findCycles(stages: GraphStage[]): string[][] {
   return cycles;
 }
 
-/** The scope's sub-DAG as a linear array, sorted by numeric order.
- *  Filter to scope-mapping's EXECUTE slice, then sort by number.
- *  No topological sort at runtime — numeric order is a valid topo-
+/** The scope's sub-DAG as a linear array, in the graph's run order
+ *  (stageRouteOrder, the order compile writes): scope-mapping's EXECUTE
+ *  slice. No topological sort at runtime — run order is a valid topo-
  *  order of the full graph (proven by t65, protected by compile's
- *  invariant) and therefore of any node subset. The future worktree
+ *  invariants) and therefore of any node subset. The future worktree
  *  scheduler will consume the sub-DAG structure directly for
  *  parallelism.
  *
@@ -1619,9 +1680,7 @@ export function subgraphForScope(scope: string): GraphStage[] {
       .filter(([, action]) => action === "EXECUTE")
       .map(([slug]) => slug)
   );
-  return loadGraph()
-    .filter((s) => executeSlugs.has(s.slug))
-    .sort((a, b) => numericStageOrder(a.number, b.number));
+  return loadGraph().filter((s) => executeSlugs.has(s.slug));
 }
 
 /** Rank every graph/plugin-authored stock scope by grid distance from the given
@@ -1676,8 +1735,6 @@ export function resolvePlanForScope(
   const entry = loadScopeGrid()[scope];
   const stages = entry?.stages ?? {};
   return loadGraph()
-    .slice()
-    .sort((a, b) => numericStageOrder(a.number, b.number))
     .map((s) => ({
       slug: s.slug,
       phase: s.phase,
@@ -2471,6 +2528,26 @@ function enabledScopeNames(): ReadonlySet<string> | null {
   return new Set(Object.keys(loadScopeMetadata()).sort());
 }
 
+// The order the work runs the stages in: number order, except that a phase's
+// per-Unit stages run as one block where its first per-Unit stage stands. Each
+// Unit walks the block, and the stages that run once per intent come after it.
+// Numbers are pinned and a plugin's new stage is numbered past its phase's
+// highest, so a plugin's per-Unit stage can be numbered after Build and Test;
+// it still runs with its Unit. compileStageGraph writes stage-graph.json in this
+// order and refuses a requires_stage edge it would break.
+export function stageRouteOrder<T extends { slug: string; number: string; phase: string; for_each?: string }>(
+  stages: readonly T[],
+): T[] {
+  const byNumber = [...stages].sort((a, b) => numericStageOrder(a.number, b.number));
+  const routed: T[] = [];
+  for (const stage of byNumber) {
+    if (routed.includes(stage)) continue;
+    if (!isPerUnitStage(stage)) routed.push(stage);
+    else routed.push(...byNumber.filter((other) => other.phase === stage.phase && isPerUnitStage(other)));
+  }
+  return routed;
+}
+
 /** Parse a numeric stage identifier like "3.5" into a tuple [phase, index]
  *  for total-ordering comparison. Returns negative, zero, or positive. */
 export function numericStageOrder(a: string, b: string): number {
@@ -2870,8 +2947,9 @@ export function compileStageGraph(): {
     }
   }
 
-  // Sort by numeric order (phase-prefix.index).
-  stages.sort((a, b) => numericStageOrder(a.number, b.number));
+  // Run order (stageRouteOrder): numeric order, with each phase's per-Unit
+  // stages as one block.
+  stages.splice(0, stages.length, ...stageRouteOrder(stages));
 
   // A team plugin's scope runs the base stages its include_stages names, so
   // each included stage's row carries that scope, as if the stage named it.
@@ -2938,6 +3016,22 @@ export function compileStageGraph(): {
             `direction, or remove the offending requires_stage edge.`
         );
       }
+    }
+  }
+
+  // Run-order invariant: the runtime walks a phase's per-Unit stages as one
+  // block, so a per-Unit stage must not require a stage that runs once per
+  // intent after that block starts; each Unit would reach it before the stage
+  // it needs had run.
+  const runPosition = new Map(stages.map((s, i) => [s.slug, i]));
+  for (const stage of stages) {
+    for (const dep of stage.requires_stage ?? []) {
+      if ((runPosition.get(dep) ?? -1) < (runPosition.get(stage.slug) ?? -1)) continue;
+      throw new Error(
+        `Stage "${stage.slug}" runs once per Unit of Work, but it requires "${dep}", ` +
+          `which runs once for the whole intent after the Units. ` +
+          `Fix: remove "${dep}" from its requires_stage, or drop its for_each: unit-of-work.`
+      );
     }
   }
 

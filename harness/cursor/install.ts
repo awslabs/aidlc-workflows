@@ -124,6 +124,16 @@ async function activeSpaceFor(targetRoot: string): Promise<string> {
   return module.knownActiveSpace(join(targetRoot, "aidlc"), readFileSync(pointer, "utf-8"));
 }
 
+// Loaded from the distribution being installed, so a rebuilt stage gets the
+// same produces_kinds entries that compose writes.
+interface ProducesKinds {
+  addPluginProducesKinds: (content: string, added: readonly string[]) => string;
+  removeOrphanProducesKinds: (content: string, names: readonly string[]) => string;
+}
+async function loadProducesKinds(): Promise<ProducesKinds> {
+  return await import(pathToFileURL(join(DIST_ROOT, ".cursor", "tools", "aidlc-plugin-produces-kinds.ts")).href) as ProducesKinds;
+}
+
 function parseBufferObject(content: Buffer, label: string): JsonObject {
   let parsed: unknown;
   try {
@@ -842,6 +852,7 @@ function rebuildPluginComposedStage(
   state: PluginStageState,
   target: string,
   requiresEdgeHolds: RequiresEdgeHolds,
+  producesKinds: ProducesKinds,
 ): { desired: Buffer; base: Buffer; retiredRequires: string[] } | null {
   if (state.unsafe) return null;
   const installed = current.toString("utf-8");
@@ -891,6 +902,7 @@ function rebuildPluginComposedStage(
 
   let base = stripPluginFragments(installed, fragments);
   base = removeListValues(base, "produces", owned.produces, false);
+  base = producesKinds.removeOrphanProducesKinds(base, [...owned.produces]);
   base = removeListValues(base, "sensors", owned.sensors, false);
   base = removeListValues(base, "scopes", owned.scopes, false);
   base = removeListValues(base, "requires_stage", owned.requires_stage, false);
@@ -903,8 +915,13 @@ function rebuildPluginComposedStage(
   );
 
   let desired: string | null = source.toString("utf-8");
+  const shippedProduces = new Set(listFieldValues(desired, "produces") ?? []);
   desired = mergeListValues(desired, "produces", ordered.produces);
   if (desired === null) return null;
+  desired = producesKinds.addPluginProducesKinds(
+    desired,
+    ordered.produces.filter((name) => !shippedProduces.has(name)),
+  );
   desired = mergeListValues(desired, "sensors", ordered.sensors);
   if (desired === null) return null;
   desired = mergeListValues(desired, "scopes", ordered.scopes);
@@ -1212,6 +1229,9 @@ export async function install(targetDir: string): Promise<void> {
   const selectedPlugins = activePluginSelection(targetRoot);
   const pluginRuntime = pluginRuntimeState(targetRoot);
   const requiresEdgeHolds = requiresEdgeOracle(targetRoot, priorReceipt);
+  // Loaded when a plugin composed into this install, the only case in which the
+  // loop below rebuilds a stage.
+  const pluginProducesKinds = pluginRuntime.stages.size > 0 ? await loadProducesKinds() : null;
   const managedFiles: Record<string, string> = {};
 
   for (const top of [".cursor", "aidlc"]) {
@@ -1245,7 +1265,7 @@ export async function install(targetDir: string): Promise<void> {
         rel.endsWith(".md")
           ? pluginRuntime.stages.get(basename(rel, ".md"))
           : undefined;
-      if (targetBytes && pluginStage) {
+      if (targetBytes && pluginStage && pluginProducesKinds) {
         // Rebuild from the content this install writes (managedContent), not
         // the raw distribution bytes, so the rebuilt file is what the install
         // would write and its receipt comparison holds.
@@ -1255,6 +1275,7 @@ export async function install(targetDir: string): Promise<void> {
           pluginStage,
           basename(rel, ".md"),
           requiresEdgeHolds,
+          pluginProducesKinds,
         );
         if (rebuilt) {
           desired = rebuilt.desired;

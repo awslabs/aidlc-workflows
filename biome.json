@@ -48,7 +48,7 @@
     {
       "includes": ["core/tools/aidlc-lib.ts"],
       "files": {
-        "maxSize": 1795000
+        "maxSize": 1778000
       }
     },
     {

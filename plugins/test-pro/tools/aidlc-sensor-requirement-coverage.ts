@@ -44,8 +44,8 @@ function passThrough(): never {
   process.exit(0);
 }
 
-function main(): void {
-  const flags = parseFlags(process.argv.slice(2));
+export function main(argv: string[]): void {
+  const flags = parseFlags(argv);
   if (!flags.outputPath) fail("--output-path is required");
   if (!flags.outputPath.endsWith("test-pro-test-results.json")) passThrough();
   if (!existsSync(flags.outputPath)) passThrough();
@@ -71,4 +71,4 @@ function main(): void {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-main();
+if (import.meta.main) main(process.argv.slice(2));

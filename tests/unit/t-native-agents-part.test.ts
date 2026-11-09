@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { copyChannelOmits, projectionFiles, rootBlockPath, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -41,7 +42,7 @@ function config(project: string, from: string, harness: string): { status: numbe
   const machine = temp("aidlc-t-native-part-machine-");
   const result = spawnSync(
     BUN,
-    [INIT, "config", "--project-dir", project, "--from", from, "--harness", harness, "--mcp", "none", "--yes"],
+    [INIT, "config", "--project-dir", project, "--from", from, "--harness", typedHarnessName(harness), "--mcp", "none", "--yes"],
     {
       cwd: project,
       env: { ...process.env, AIDLC_INSTALL_ROOT: join(machine, "share"), AIDLC_BIN_DIR: join(machine, "bin") },

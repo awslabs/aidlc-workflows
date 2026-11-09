@@ -166,6 +166,16 @@ describe("t-claude-guard-group settings.json wiring", () => {
     );
     expect(rulesRow?.matcher).toBe("Task|Agent");
   });
+
+  test("the subagent rule delivery also runs as every agent starts, in both channels", () => {
+    for (const channel of ["dist", "dist-release"] as const) {
+      const start = shippedSettings(channel).hooks.SubagentStart ?? [];
+      const row = start.find((group) =>
+        group.hooks.some((hook) => hook.command.endsWith(" engine hook deliver-stage-rules"))
+      );
+      expect(row?.matcher, channel).toBe("");
+    }
+  });
 });
 
 describe("t-claude-guard-group one process", () => {

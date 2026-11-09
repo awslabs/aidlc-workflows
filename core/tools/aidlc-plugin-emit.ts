@@ -32,6 +32,7 @@ import {
 } from "node:path";
 import {
   assertPluginContentHasNoSymlinks,
+  assertPluginCommands,
   assertSupportedPluginContributionPaths,
   pluginMarketplaceIssue,
   scanPluginFiles,
@@ -41,9 +42,10 @@ import {
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "./aidlc-command.ts";
-import { sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
+import { readBoundedRegularFile, sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
 import { committedTextBytes, runWithOwnerStampedLock } from "./aidlc-lib.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { typedHarnessName } from "./aidlc-runtime-paths.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -104,6 +106,7 @@ const CONTENT_DIRS = [
   "scopes",
   "agents",
   "knowledge",
+  "memory",
 ] as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -478,7 +481,8 @@ function copyHookTemplates(
 // person's shell, or PowerShell on Windows; Kiro: /bin/sh, or cmd.exe), so
 // their commands carry no sh -c. The native release runs this, the copy
 // channel the Bun launcher. It names its harness: a compiled aidlc otherwise
-// takes the first one installed in the project, .claude before the others.
+// takes the one whose tool's mark the command carries, else the first one
+// installed in the project, .claude before the others.
 function nativePluginSync(target: PluginTarget): string {
   return `aidlc ${TRUSTED_ROUTE_NAMESPACE} plugin sync --harness-dir ${target.harnessLeaf}`;
 }
@@ -590,6 +594,9 @@ function writtenRegistrations(
   ];
 }
 
+// Far above any registration a build writes.
+const REGISTRATION_MAX_BYTES = 64 * 1024;
+
 // The hook files in a project that are exactly the registrations the builds of
 // its dropped plugins wrote, so config can tell them from hook files a person
 // added. An edited one is not the plugin's any more; a CRLF checkout is the
@@ -611,13 +618,11 @@ export function droppedPluginRegistrations(
   const ownIfWritten = (pluginName: unknown, hostName: string | null): void => {
     if (typeof pluginName !== "string" || !/^[a-z][a-z0-9-]*$/.test(pluginName)) return;
     const written = writtenRegistrations(target, pluginName, hostName);
-    let onDisk: Buffer;
-    try {
-      onDisk = committedTextBytes(readFileSync(join(projectDir, written[0].path)));
-    } catch {
-      // No registration: a Kiro CLI projection writes none.
-      return;
-    }
+    // Builds write this registration as a plain file; a Kiro CLI projection
+    // writes none.
+    const found = readBoundedRegularFile(join(projectDir, written[0].path), REGISTRATION_MAX_BYTES);
+    if (found === null) return;
+    const onDisk = committedTextBytes(Buffer.from(found, "utf-8"));
     if (written.some(({ text }) => onDisk.equals(Buffer.from(text, "utf-8")))) {
       owned.push(written[0].path);
     }
@@ -854,8 +859,8 @@ export function assertPluginBuildOutput(
   ) {
     throw new Error(
       `refusing to replace "${outDir}" - its ${PLUGIN_PROJECTION_MARKER} belongs to ` +
-        `plugin "${marker.plugin}" for harness "${marker.harness}", not plugin "${pluginName}" ` +
-        `for harness "${target.harnessName}".`,
+        `plugin "${marker.plugin}" for harness "${typedHarnessName(marker.harness)}", not plugin "${pluginName}" ` +
+        `for harness "${typedHarnessName(target.harnessName)}".`,
     );
   }
 }
@@ -874,6 +879,7 @@ export function buildPluginProjection(
   const manifest = readPluginManifest(pluginRoot);
   const pluginName = pluginNameFromManifest(pluginRoot, manifest);
   assertSupportedPluginContributionPaths(manifest);
+  assertPluginCommands(manifest);
   const firstParty = options.firstParty === true;
   const marketplaceIssue = firstParty ? null : pluginMarketplaceIssue(manifest.aidlc);
   if (marketplaceIssue) {

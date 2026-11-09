@@ -6,7 +6,8 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
+import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -17,9 +18,12 @@ import { phaseReviewRole, resolveReviewGranularity } from "./aidlc-review-granul
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   askedQuestionFields,
+  commandChat,
+  latestAskedQuestion,
   QUESTION_ID_FIELD,
   questionEntryDigests,
   questionShows,
+  shownOnlyInOtherChats,
 } from "./aidlc-questions.ts";
 import {
   chatsSince,
@@ -85,6 +89,7 @@ import {
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  pendingPersonLines,
   resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   runtimeSessionHint,
@@ -249,6 +254,8 @@ import {
   summaryQuestionFileRelative,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
+  summaryAuthorizationThisAttempt,
+  readSummaryAuthorization,
   summaryConfirmationAnswer,
   summaryConfirmationContentHash,
   singleStageAttemptIsOpen,
@@ -318,8 +325,10 @@ import {
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   APPROVAL_GATE_CHOICES,
+  recommendedChoices,
   SUMMARY_CONFIRMATION_CHOICES,
 } from "./aidlc-reply-reader.ts";
 
@@ -339,9 +348,13 @@ const ANSWER_CHECKPOINTS: readonly string[] = [...DECISION_CHECKPOINTS, "guard-r
 function unitManifestRefusal(
   unit: string,
   manifestPath: string,
-  manifest: { reason: string; unrecordedRepo?: string },
+  manifest: { reason: string; unrecordedRepo?: string; projectSubmodule?: string },
   rewrite: string,
 ): string {
+  // The reason names the person's question and the way on for each answer.
+  if (manifest.projectSubmodule !== undefined) {
+    return `unit "${unit}"'s source manifest at ${manifestPath}: ${manifest.reason}. Then request the review again.`;
+  }
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
@@ -994,6 +1007,98 @@ function revisedSummaryNote(
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
 // choices) on a stage that owes one, refuse it and name the command that counts.
+// The questions file with its summary answer line put back to `[Answer]:
+// Looks correct`, every other byte as it was (line endings included): a chat
+// still showing the summary wrote over (or blanked) a confirmation another chat
+// already recorded, before the engine could say the stage was done. The one
+// summary reader (summaryConfirmationAnswer) says which `[Answer]:` line is the
+// summary's. Null when the section holds no single answer, or it reads Looks
+// correct.
+function summaryAnswerPutBack(content: string): string | null {
+  const answer = summaryConfirmationAnswer(content);
+  if (answer === null || answer === "Looks correct") return null;
+  const parts = content.split(/(\r\n|\r|\n)/);
+  for (let at = parts.length - 1; at >= 0; at -= 1) {
+    if (!/^(?:\uFEFF)?\[Answer\]:/.test(parts[at])) continue;
+    const candidate = [...parts];
+    candidate[at] = `${parts[at].startsWith("\uFEFF") ? "\uFEFF" : ""}[Answer]: Looks correct`;
+    const putBack = candidate.join("");
+    if (summaryConfirmationAnswer(putBack) === "Looks correct") return putBack;
+  }
+  return null;
+}
+
+// The positive summary confirmation this questions file stands on: the
+// stage's own for this attempt, or the Unit's.
+function summaryConfirmedOnRecord(pd: string, stage: string, unit: string | null, questions: string): boolean {
+  const authorization = unit === null ? summaryAuthorizationThisAttempt(pd, stage) : readSummaryAuthorization(pd, stage, unit);
+  return authorization !== null && authorization.choice === "Looks correct" &&
+    authorization.questions_file.replaceAll("\\", "/") === questions;
+}
+
+// A stage's own question asked or answered while its gate waits (a chat that
+// was still showing it when another chat finished the stage): the stage is
+// done, so the step is that gate, shown with `next`, the documents as they are,
+// and nothing is recorded. The summary is closed once the gate opens, whichever
+// chat asks; the stage's other questions only in a chat that never saw the
+// gate, opened in another chat of this clone (shownOnlyInOtherChats), since a
+// chat at its own gate may still ask the person something about it. The
+// summary's answer line the chat wrote over or blanked first (the stage
+// protocol has it written before it is recorded) is put back as confirmed, so
+// the gate's own check finds the file as the other chat left it. True when it
+// printed the step.
+function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "answer"): boolean {
+  if (flags.single !== undefined) return false;
+  // A Unit's own question at the stage's gate (Construction stage by stage):
+  // the Unit's summary and documents are done too.
+  const unit = flags.unit ?? null;
+  if (flags.checkpoint !== undefined && flags.checkpoint !== "summary-confirmation") return false;
+  const stage = flags.stage;
+  const pd = resolveActiveProjectDir(projectDir, stage);
+  let content: string;
+  try {
+    content = readFileSync(stateFilePath(pd), "utf-8");
+  } catch {
+    return false;
+  }
+  if (getField(content, "Current Stage")?.trim() !== stage) return false;
+  if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") return false;
+  if (stageBox(content, stage) !== "awaiting-approval") return false;
+  // Unit by Unit, a Unit the person asked to change is redone while the
+  // stage's box stays at its gate, and its summary is asked again: only built
+  // stage by stage is a Unit's question at that gate a late one.
+  if (unit !== null && getField(content, "Construction Iteration")?.trim() === "unit-major") return false;
+  const gate = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage });
+  const elsewhere = gate !== null && shownOnlyInOtherChats(pd, gate.id, commandChat(pd));
+  if (flags.checkpoint === undefined && !elsewhere) return false;
+  const node = loadStageGraphAll().find((entry) => entry.slug === stage);
+  const questions = node ? summaryQuestionFileRelative(pd, node, content, unit) : null;
+  // Only a confirmation on record for this attempt is put back: a summary the
+  // person asked to change, with summary confirmation off since, stays as it is.
+  if (questions !== null && summaryConfirmedOnRecord(pd, stage, unit, questions)) {
+    try {
+      const path = resolve(pd, questions);
+      const putBack = summaryAnswerPutBack(readFileSync(path, "utf-8"));
+      if (putBack !== null) writeFileAtomic(path, putBack);
+    } catch {
+      // The gate's own check says what is wrong with the file.
+    }
+  }
+  const next = aidlcDispatcherInvocation("orchestrate next");
+  const waits = `Stage "${stage}" is finished and waiting for the person's approval` +
+    `${elsewhere ? ", opened in another chat," : ""} with its documents as they are, so nothing was recorded`;
+  const change = `When it asked for a change, run \`${requestChangesReportCommand(pd, stage, flags.unit)}\` and ` +
+    "follow what it returns: their messages go on the record as what should change.";
+  const message = verb === "decision"
+    ? `${waits}: there is no question of it to ask now. When the person's last reply asked for nothing to change, ` +
+      `run \`${next}\` and show the gate it returns. ${change}`
+    : `${waits}: ${flags.checkpoint === undefined ? "its questions were answered" : "its summary was confirmed"} ` +
+      "before its documents were written. When the person's reply confirmed or answered it, it decides nothing at " +
+      `the gate: run \`${next}\` and show the gate it returns. ${change}`;
+  console.log(JSON.stringify({ recorded: null, message }));
+  return true;
+}
+
 function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
   if (flags.checkpoint !== undefined) return;
   // An answer names a summary choice by its label, with what to change after it.
@@ -1129,6 +1234,12 @@ function keptMessageRefusal(pd: string): string | null {
     `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
+// Choices written in the grammar optionsList reads: the `|` form when one holds
+// a comma, else commas. The one writer of that list form here.
+function optionsText(choices: readonly string[]): string {
+  return choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+}
+
 // A question's choices given one --option each, so a choice may hold a comma
 // with no separator on the command line for a shell to read: they join any
 // --options list in the grammar optionsList reads.
@@ -1137,8 +1248,7 @@ function withEachOption(args: string[], flags: Record<string, string>): void {
   for (let i = 0; i < args.length - 1; i++) if (args[i] === "--option") each.push(args[++i]);
   delete flags.option;
   if (each.length === 0) return;
-  const choices = [...(flags.options === undefined ? [] : optionsList(flags.options)), ...each];
-  flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+  flags.options = optionsText([...(flags.options === undefined ? [] : optionsList(flags.options)), ...each]);
 }
 
 function handleDecision(args: string[]): void {
@@ -1172,6 +1282,7 @@ function handleDecision(args: string[]): void {
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
+  if (stageWaitsAtItsGate(flags, "decision")) return;
   refusePlainSummaryConfirmation(flags, "decision");
   const pd = resolveActiveProjectDir(projectDir, flags.stage);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
@@ -1239,6 +1350,8 @@ function handleDecision(args: string[]): void {
           )
         ? "[protected exact choices]"
         : flags.options;
+    const recommended = recommendedChoices(optionsList(fields.Options));
+    if (recommended.length > 0) fields.Recommended = optionsText(recommended);
   }
   if (flags.rationale) fields.Rationale = flags.rationale;
   // Which of the engine's own questions this is, as the step note's command
@@ -1360,6 +1473,18 @@ function handleDecision(args: string[]): void {
     }
   }
 
+  // The question the agent asks now is the reply the person reads, so the lines
+  // kept for that reply (a landing settled by hand under Continue
+  // automatically) ride with it, once, with their order; a run that keeps none
+  // prints as before.
+  let forReply: { lines: string[]; said(): void } = { lines: [], said: () => {} };
+  try {
+    const chat = fields.Session || resolveInvokingSessionId(pd);
+    if (chat) forReply = pendingPersonLines(pd, chat, { replyOnly: true });
+  } catch {
+    // The next reply says them.
+  }
+  for (const line of forReply.lines) if (!changeNotices.includes(line)) changeNotices.push(line);
   console.log(
     JSON.stringify({
       emitted: "DECISION_RECORDED",
@@ -1382,8 +1507,10 @@ function handleDecision(args: string[]): void {
           }
         : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+      ...(forReply.lines.length > 0 ? { change_notices_note: CHANGE_NOTICES_NOTE } : {}),
     })
   );
+  forReply.said();
 }
 
 // What a logged question shows the person (aidlc-questions.ts): the command or
@@ -1421,9 +1548,12 @@ function sameInteractionScope(a: AuditShardEvent, b: AuditShardEvent): boolean {
 }
 
 function questionView(row: AuditShardEvent) {
+  // Only a row that kept the field lists it: an older row reads as it did.
+  const recommended = auditBlockField(row.block, "Recommended");
   return {
     question: auditBlockField(row.block, "Decision") ?? "",
     options: optionsList(auditBlockField(row.block, "Options")).filter(Boolean),
+    ...(recommended === null ? {} : { recommended: optionsList(recommended).filter(Boolean) }),
     ...interactionScope(row),
     askedAt: row.timestamp,
   };
@@ -2217,6 +2347,7 @@ function handleAnswer(args: string[]): void {
     console.log(JSON.stringify({ recorded: picked.op, message }));
     return;
   }
+  if (stageWaitsAtItsGate(flags, "answer")) return;
   refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
@@ -2440,7 +2571,7 @@ function handleAnswer(args: string[]): void {
       }, namedProtectedReply(pd, flags.stage, fields.Session, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
-      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
+      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", { ...fields, ...personGitNameField(pd) });
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage, command_sha256: verificationCommand.sha256 }));
@@ -2459,7 +2590,7 @@ function handleAnswer(args: string[]): void {
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.
-      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);
+      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", { ...fields, ...personGitNameField(pd) });
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
       consumeProtectedQuestion(pd, fields.Session);
       console.log(JSON.stringify({ emitted, checkpoint: "construction-policy", stage: flags.stage }));
@@ -2615,7 +2746,7 @@ function handleAnswer(args: string[]): void {
         );
       }
       try {
-        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", fields);
+        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", { ...fields, ...personGitNameField(pd) });
       } catch (e) {
         // Restore the registry to its exact prior bytes (or absence) so no
         // authorization exists without the receipt that minted it. A restore
@@ -2730,6 +2861,7 @@ function handleAnswer(args: string[]): void {
               Fingerprint: planEvidence!.fingerprint,
               ...(personReply?.words ? { "Person Reply": personReply.words } : {}),
               ...(personReply ? { "Message Id": personReply.messageId } : {}),
+              ...personGitNameField(pd),
             });
           },
         );
@@ -2739,6 +2871,7 @@ function handleAnswer(args: string[]): void {
       }
       const changeNotices = [...planEvidence!.changeNotices, ...recorded.changeNotices];
       if (recorded.overridden) fields.Override = "yes";
+      Object.assign(fields, personGitNameField(pd));
       try {
         emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
       } catch (e) {
@@ -2785,6 +2918,7 @@ function handleAnswer(args: string[]): void {
       }
       try {
         if (flags.details === "Approve Plan") {
+          Object.assign(fields, personGitNameField(pd));
           emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
         } else {
           emitAudit(pd, "QUESTION_ANSWERED", fields);
@@ -3014,6 +3148,26 @@ function codekbReceiptNotes(pd: string, node: StageEntry): Record<string, unknow
 // and attempt freshness are checked under the audit lock so two concurrent
 // conductors cannot advance the same chain; a link the attempt already holds
 // is answered without a second receipt.
+// The person asked for a system package install (in the message that approved
+// a stage, say), which that approval's decision spends: the agent names the
+// message and the packages, the tool proves the message as any request's and
+// records them, and the install check reads the record (system-install.ts). It
+// reads no words.
+function handleInstall(args: string[]): void {
+  const { positional, flags } = parseFlags(args);
+  if (positional.length === 0 || flags.message === undefined) error(`Usage: ${logUsage("install").split("\n")[0]}`);
+  const pd = resolveProjectDir(projectDir);
+  const proof = proveMessage(pd, flags.message, "request", { request: true });
+  if ("refusal" in proof) error(proof.refusal);
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  emitAudit(pd, "SYSTEM_INSTALL_REQUESTED", {
+    Packages: JSON.stringify(positional),
+    "Message Id": proof.message.id,
+    ...(words ? { "Person Reply": words } : {}),
+  });
+  console.log(JSON.stringify({ requested: positional }));
+}
+
 function handleLink(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -4081,6 +4235,7 @@ function handleReview(args: string[]): void {
     if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
       error("Starting a review requires --iteration <positive integer>.");
     }
+    let planLifted = false;
     // Construction walks its Units from Units Generation's units block, so a
     // block the engine cannot read is fixed before the review, while the
     // document can still change. Writing it is the agent's step, so it comes
@@ -4088,7 +4243,28 @@ function handleReview(args: string[]): void {
     // would have the agent tell the person a step to take.
     if (flags.stage === "units-generation" && flags.single !== "true") {
       const dag = resolveBoltDag(pd, intent, space);
-      if (dag.state === "malformed") {
+      // A team's revised plan is read against the Units it already landed or
+      // claimed (unitPlanRefusal) once the block itself reads. Dropping such a
+      // Unit is the person's call: the message they asked in (--person-asked
+      // --message, proved as the review-pass lift proves it) lifts that check,
+      // and the lift goes on the row.
+      let plan: { message: string | null; liftable: boolean; lifted: boolean } | null = null;
+      if (dag.state === "ok") {
+        let personAsked = false;
+        if (flags["person-asked"] === "true" && flags.message !== undefined) {
+          const proof = proveMessage(pd, flags.message, "request", { request: true });
+          if ("refusal" in proof) error(proof.refusal);
+          personAsked = messageSinceReviewRequest(
+            pd, flags.stage, flags.reviewer as string, flags.unit, proof.message, intent, space,
+          );
+        }
+        // Loaded only here: no other review request pays for the Unit tool.
+        const { unitPlanRefusal } = require("./aidlc-unit.ts") as typeof import("./aidlc-unit.ts");
+        plan = unitPlanRefusal(pd, personAsked);
+        planLifted = plan.lifted;
+      }
+      const repair = dag.state === "malformed" ? unitsBlockRepair(dag.reason, dag.detail) : plan?.message ?? null;
+      if (repair !== null) {
         const again = renderReviewRequestCommand({
           projectDir: pd,
           stage: flags.stage,
@@ -4096,9 +4272,12 @@ function handleReview(args: string[]): void {
           iteration: Number(flags.iteration),
           ...(retryPending ? { retryPending: true } : {}),
         });
+        const lift = plan?.liftable
+          ? ` If the person asked for this plan themselves, run it with --person-asked --message <id>${messageFill(pd)}.`
+          : "";
         console.log(JSON.stringify({
           kind: "print",
-          message: `${unitsBlockRepair(dag.reason, dag.detail)} Then run \`${again}\` again.`,
+          message: `${repair} Then run \`${again}\` again.${lift}`,
         }));
         return;
       }
@@ -4690,7 +4869,7 @@ function handleReview(args: string[]): void {
         fields["Artifact Fingerprint"] = snapshot.fingerprint;
         requestId = mintReviewRequestId();
         fields["Request Id"] = requestId;
-        if (lifted) {
+        if (lifted || planLifted) {
           fields["Person Asked"] = "true";
           const reply = personsGateReply(pd, invokingChat(pd), flags.stage as string);
           if (reply.words) fields["Person Reply"] = reply.words;
@@ -5527,6 +5706,11 @@ function logUsage(subcommand: string | undefined): string {
       `  Options: ${flags(ANSWER_OPTIONS)}`,
     ],
     answers: [`${invoke("answers")} --stage <slug> [--unit <unit>]`, "  Lists the answers recorded for a stage."],
+    install: [
+      `${invoke("install")} <package>... --message <id>`,
+      "  Records that the person's message asked to install these system packages, so the install check runs that " +
+        "install. Required: a package and --message.",
+    ],
     link: [
       `${invoke("link")} --stage <slug> --link <agent> [--repo <repo>] [--artifact <path>] [--single]`,
       "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
@@ -5548,6 +5732,8 @@ let projectDir: string | undefined;
 let readOnlyCommand = false;
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   // Extract --project-dir
@@ -5565,7 +5751,7 @@ export function main(argv: string[]): void {
   if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(logUsage(undefined));
   if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(logUsage(subcommand));
   readOnlyCommand = subcommand === "answers";
-  // What the chat records here (a decision, an answer, a link, a review) is its
+  // What the chat records here (a decision, an answer, a link, a review, an install asked for) is its
   // step on the work (chatTookStepHere); reading the answers is not.
   if (!readOnlyCommand) chatTookStepHere(resolveProjectDir(projectDir));
   if (subcommand === "decision" || subcommand === "answer") {
@@ -5586,6 +5772,9 @@ export function main(argv: string[]): void {
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
+      case "install":
+        handleInstall(filteredArgs.slice(1));
+        break;
       case "review":
         // One review command runs the review accounting per unit, each pass
         // recomputing the whole-tree source identity. Share one computation
@@ -5595,7 +5784,7 @@ export function main(argv: string[]): void {
         );
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review, install`);
     }
     spendRequestFile();
     // The stage's work went on through the record, not through `next`: on the
@@ -5644,9 +5833,10 @@ function error(msg: string, changeNotices: readonly string[] = []): never {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {

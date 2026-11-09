@@ -1,4 +1,4 @@
-// covers: file:core/tools/aidlc-native-launcher.ts function:nativeLauncherRoot function:startNativeLauncher file:core/tools/aidlc-lifecycle.ts file:scripts/install.ps1
+// covers: file:core/tools/aidlc-native-launcher.ts function:nativeLauncherRoot function:startNativeLauncher file:core/tools/aidlc-lifecycle.ts function:activationProbeCommands file:scripts/install.ps1
 //
 // A native Windows install puts a copy of the aidlc binary in its bin folder
 // as aidlc.exe, which PowerShell finds before aidlc.cmd and Git Bash finds
@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { windowsPosixShim, windowsShim } from "../../core/tools/aidlc-lifecycle.ts";
+import { activationProbeCommands, windowsPosixShim, windowsShim } from "../../core/tools/aidlc-lifecycle.ts";
 import { installRoot } from "../../core/tools/aidlc-install-paths.ts";
 import { nativeLauncherRoot } from "../../core/tools/aidlc-native-launcher.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
@@ -52,6 +52,22 @@ describe("the bin copy reads its install from the aidlc.cmd beside it", () => {
     expect(nativeLauncherRoot("@echo off\r\n")).toBeNull();
     expect(nativeLauncherRoot(cmdFor("C:\\aidlc\\other.ps1"))).toBeNull();
     expect(nativeLauncherRoot(`${cmdFor("C:\\aidlc\\aidlc-shim.ps1")}echo more\r\n`)).toBeNull();
+  });
+});
+
+// aidlc.cmd starts aidlc-shim.ps1 with -File, which a Group Policy execution
+// policy (AllSigned, Restricted) refuses whatever -ExecutionPolicy it passes.
+describe("an activation checks the release through aidlc.exe when it is in place", () => {
+  const cmd = "C:\\Users\\a\\AppData\\Local\\aidlc\\bin\\aidlc.cmd";
+  const exe = "C:\\Users\\a\\AppData\\Local\\aidlc\\bin\\aidlc.exe";
+
+  test("with aidlc.exe in place it runs only aidlc.exe, never aidlc.cmd", () => {
+    expect(activationProbeCommands(cmd, exe)).toEqual([exe]);
+  });
+
+  test("without aidlc.exe it runs the launcher there is", () => {
+    expect(activationProbeCommands(cmd, null)).toEqual([cmd]);
+    expect(activationProbeCommands("/home/a/.local/bin/aidlc", null)).toEqual(["/home/a/.local/bin/aidlc"]);
   });
 });
 
@@ -131,6 +147,30 @@ describe("a native Windows install hands aidlc's arguments on as typed", () => {
         const first = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `& '${join(bin, "aidlc.cmd")}' version`]);
         expect(first.out).toContain(`aidlc ${AIDLC_VERSION}`);
         typed();
+
+        // A folder with a non-ASCII letter, from a console on code page 437 as a
+        // person's window is (the console a test runs in can be on UTF-8): the
+        // release's own lines the installer prints spell it byte for byte as the
+        // installer's own lines do, and the console's code page comes back.
+        const accented = join(root, "Jos\u00e9", "machine");
+        const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+        const printed = spawnSync("powershell.exe", [
+          "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+          "$e = [Console]::OutputEncoding; [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(437); " +
+            `try { & ${quote(join(release, "install.ps1"))} -From ${quote(release)} -NoModifyPath; $code = $LASTEXITCODE; ` +
+            "\"code page after: $([Console]::OutputEncoding.CodePage)\" } finally { [Console]::OutputEncoding = $e }; exit $code",
+        ], {
+          cwd: work,
+          encoding: "latin1",
+          env: { ...env, AIDLC_INSTALL_ROOT: accented, AIDLC_BIN_DIR: join(accented, "bin") },
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(printed.status, `${printed.stdout}${printed.stderr}`).toBe(0);
+        const out = `${printed.stdout}${printed.stderr}`;
+        const folder = /Command: (.+)\\bin\\aidlc\.exe/.exec(out)?.[1];
+        expect(folder, out).toBeDefined();
+        expect(out).toContain(`${folder}\\plugins`);
+        expect(out).toContain("code page after: 437");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

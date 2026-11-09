@@ -60,6 +60,10 @@
 //       budget-exhausted / cap-exhausted — recorded faithfully (the conductor
 //       judges WHY a unit gave up; the tool only records it, never for a claimed
 //       unit, whose reason is always the tool's own re-verify verdict).
+//   take-over --batch <n> --message <id>
+//       The person asked this chat to build a side-by-side batch another chat
+//       started: proves the message, records SWARM_TAKEN_OVER with their words
+//       and this chat, and `next` hands this chat the batch from then on.
 //   allow-change <file>... --message <id>
 //       The person asked for files in the main checkout to change while the
 //       Units are built, which a strict Guard Policy holds for the landings:
@@ -86,6 +90,7 @@
 //   - aidlc-bolt fail              -> close a failed unit's Bolt lifecycle
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -94,6 +99,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { commandChat } from "./aidlc-questions.ts";
+import { hostNamesThisChat } from "./aidlc-record-core.ts";
+import { swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   activeIntentUuid,
@@ -180,10 +188,10 @@ import {
   committedTextSha256,
   currentFingerprintForm,
 } from "./aidlc-lib.ts";
-import { proveMessage } from "./aidlc-message-store.ts";
+import { messagesSince, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { codeGenerationPlanNamedPaths } from "./aidlc-plan-approval-ask.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   beginCodeGeneration,
   bindCodeGenerationWorktreeApproval,
@@ -2072,6 +2080,11 @@ function bindReviewedSource(
 // downgrade. The per-unit pair, the per-failed-unit baton row, and the batch
 // tally all fire from `finalize`, the authoritative gate.
 
+function buildingChatField(pd: string): { Session?: string } {
+  const chat = hostNamesThisChat(pd) ? commandChat(pd) : null;
+  return chat ? { Session: chat } : {};
+}
+
 function emitSwarmStarted(
   pd: string,
   batch: string,
@@ -2093,6 +2106,9 @@ function emitSwarmStarted(
       Stage: attempt.stage,
       "Run floor": attempt.floor,
       ...(landingBranch ? { "Landing branch": landingBranch } : {}),
+      // The chat that started the batch, where the host names it: a second
+      // chat's `next` leaves the batch to it (swarmBuildingChat).
+      ...buildingChatField(pd),
       ...(Object.keys(resumed).length ? {
         "Resumed": "true",
         "Checkpoint": "swarm-batch",
@@ -3867,12 +3883,60 @@ function handleAllowChange(rest: string[]): void {
   }));
 }
 
+// The person asked this chat to build a side-by-side batch another chat of this
+// clone started ("build them here instead"): the agent names the message they
+// asked in, the tool proves it and records this chat with their words, and
+// `next` hands the batch to this chat from then on (swarmBuildingChat). It
+// reads no words. Prepare cannot say it: worktrees it finds in place start no
+// new batch row.
+function handleTakeOver(rest: string[]): void {
+  const { flags } = parseArgs(rest);
+  const projectDir = resolveProjectDir(flags["project-dir"]);
+  resolveSwarmSelection(projectDir, flags);
+  if (!flags.batch || !/^[1-9][0-9]*$/.test(flags.batch)) fail("take-over requires --batch <n>: the batch the person asked to build here");
+  const next = aidlcDispatcherInvocation("orchestrate next");
+  const chat = hostNamesThisChat(projectDir) ? commandChat(projectDir) : null;
+  if (chat === null) {
+    fail(`This chat cannot be told apart from the others here, so nothing holds the batch for another one: run \`${next}\` and follow what it returns.`);
+  }
+  const stage = "code-generation";
+  const building = swarmBuildingChat(projectDir, Number(flags.batch), stage);
+  if (building === null || building.chat === chat) {
+    fail(`Batch ${flags.batch} is not being built from another chat here: run \`${next}\` and follow what it returns.`);
+  }
+  // The agent has no other place to learn the id: the step names their messages
+  // since the other chat last took the build, the only ones that can ask for it.
+  if (!flags.message || flags.message === "true") {
+    fail(requestMessageStep(projectDir, "take-over requires --message <id>: the person's message that asked to build here.",
+      "any", `\`${aidlcDispatcherInvocation("swarm take-over")} --batch ${flags.batch}\``, "", building.since));
+  }
+  const proof = proveMessage(projectDir, flags.message, "request", { request: true });
+  if ("refusal" in proof) fail(proof.refusal);
+  if (!messagesSince(readAuditShardEvents(projectDir), building.since).has(flags.message)) {
+    fail(requestMessageStep(projectDir, `Message ${flags.message} came before the other chat ` +
+      `${building.row.event === "SWARM_TAKEN_OVER" ? "took this build over" : "started this build"}, so it does not ` +
+      "ask to build it here now. Run nothing for it here and end your turn.", "any", "the same command", "", building.since));
+  }
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  appendAuditEntry("SWARM_TAKEN_OVER", {
+    "Batch number": flags.batch,
+    Stage: stage,
+    "Run floor": latestMainWorkflowStageRunFloorForProject(projectDir, stage),
+    Session: chat,
+    ...(words ? { "Person Reply": words } : {}),
+    "Message Id": proof.message.id,
+  }, projectDir);
+  console.log(JSON.stringify({ taken_over: Number(flags.batch), message: `Recorded. Run \`${next}\` now: it hands this chat the batch.` }));
+}
+
 function fail(msg: string): never {
   console.error(JSON.stringify({ error: msg }));
   process.exit(1);
 }
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   // The subcommand is the first bare token that is NOT a flag NOR a flag's value.
   // Walk argv skipping `--flag value` / `--flag=value` pairs so
   // `--project-dir <path> check ...` and `check --project-dir <path> ...` both
@@ -3906,10 +3970,13 @@ export function main(argv: string[]): void {
     case "allow-change":
       handleAllowChange(rest);
       break;
+    case "take-over":
+      handleTakeOver(rest);
+      break;
     default:
       console.error(
         JSON.stringify({
-          error: `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: prepare, check, finalize, allow-change`,
+          error: `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: prepare, check, finalize, allow-change, take-over`,
         })
       );
       process.exit(1);

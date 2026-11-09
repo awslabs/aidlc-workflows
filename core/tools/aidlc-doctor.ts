@@ -30,12 +30,16 @@ import { collectPluginStatus } from "./aidlc-plugin.ts";
 import { isKiroPreset, kiroSessionDoctorFindings } from "./aidlc-kiro-session.ts";
 import {
   describeWindowsUninstallFailure,
+  planPathKey,
   scanWindowsUninstallJournals,
   windowsUninstallContinuationState,
+  type WindowsUninstallJournal,
 } from "./aidlc-windows-uninstall.ts";
+import { transactionState } from "./aidlc-transaction.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
@@ -101,11 +105,33 @@ function windowsRecoveryCheck(): DoctorCheck | null {
     }`,
     // By full path: a failed PATH or final step can leave aidlc off PATH.
     fix: failed.length > 0
-      ? `resolve the reported problem, then run \`& '${failed[0].journal.commandPath.replaceAll("'", "''")}' uninstall${failed[0].journal.purge ? " --purge" : ""}\` to retry (or reinstall if that command is gone); a cleanup that stopped before removing files is planned again from what is on disk`
+      ? windowsUninstallRetryFix(failed[0].journal)
       : recovery.invalid.length > 0
         ? "keep the listed journal, cleanup script, and fence for inspection; see Troubleshooting"
         : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
   };
+}
+
+// The retry goes through bin\aidlc.exe while the uninstall plan lists it and
+// aidlc.cmd beside it, both unchanged: the plan took each only as the copy
+// AI-DLC wrote for this install, and the copy starts the active release only
+// beside that aidlc.cmd (startNativeLauncher). aidlc.cmd starts aidlc-shim.ps1,
+// which a Group Policy execution policy (AllSigned, Restricted) refuses.
+// Otherwise the recorded command is printed.
+export function windowsUninstallRetryFix(
+  journal: Pick<WindowsUninstallJournal, "commandPath" | "purge" | "files">,
+): string {
+  const unchanged = (path: string): boolean => {
+    const planned = journal.files?.find((file) => planPathKey(file.path) === planPathKey(path));
+    try {
+      return planned !== undefined && transactionState(path) === planned.expected;
+    } catch {
+      return false;
+    }
+  };
+  const exe = join(dirname(journal.commandPath), "aidlc.exe");
+  const command = unchanged(exe) && unchanged(journal.commandPath) ? exe : journal.commandPath;
+  return `resolve the reported problem, then run \`& '${command.replaceAll("'", "''")}' uninstall${journal.purge ? " --purge" : ""}\` to retry (or reinstall if that command no longer runs); a cleanup that stopped before removing files is planned again from what is on disk`;
 }
 
 // An earlier release's launcher helper forwards @args, so Windows PowerShell
@@ -287,7 +313,7 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   const issues: string[] = [];
   for (const harness of harnesses) {
     if (!isModelHarness(harness.distribution)) {
-      issues.push(`unsupported harness policy surface: ${harness.distribution}`);
+      issues.push(`unsupported harness policy surface: ${typedHarnessName(harness.distribution)}`);
       continue;
     }
     try {
@@ -297,11 +323,11 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
           harness.distribution,
           modelPolicyForHarness(resolved.models, harness.distribution),
         )
-          .map((issue) => `${harness.distribution}: ${issue}`),
+          .map((issue) => `${typedHarnessName(harness.distribution)}: ${issue}`),
       );
     } catch (error) {
       issues.push(
-        `${harness.distribution}: ${
+        `${typedHarnessName(harness.distribution)}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

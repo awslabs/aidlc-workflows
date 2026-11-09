@@ -17,7 +17,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readAuditShardEvents, unitParticipantPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -60,6 +60,16 @@ const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do yo
   "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units: teams each owning a Unit is " +
   "not available yet for work across repos.";
+// How a team takes a Unit, said while none has (#3363), in a project with no
+// remote to share the work with: a team's own clone offers it the Units.
+const HANDOUT_LINE = "No team has taken a Unit yet, so this session builds them here, starting with the alpha " +
+  "Unit. To hand Units to teams instead, share this work through git; each team then runs `/aidlc` in its own " +
+  "clone to take one.";
+const SKELETON_HANDOUT_LINE = "No team has taken a Unit yet, so this session builds them here, starting with the " +
+  "alpha Unit, the walking skeleton the others build on. To hand the others to teams, share this work through " +
+  "git once it is built and approved; each team then runs `/aidlc` in its own clone to take one.";
+const saysHandout = (d: Directive) =>
+  (d.change_notices ?? []).some((line) => line === HANDOUT_LINE || line === SKELETON_HANDOUT_LINE);
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -299,6 +309,7 @@ describe("who builds the Units is asked once as Inception ends", () => {
     const first = next(proj);
     expect(first.kind, JSON.stringify(first)).toBe("run-stage");
     expect(first.stage).toBe("functional-design");
+    expect(saysHandout(first)).toBe(false);
     expect(next(proj).kind).toBe("run-stage");
     const clone = createTestProject();
     tempDirs.push(clone);
@@ -318,6 +329,51 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(step.kind, JSON.stringify(step)).not.toBe("ask");
     expect(step.change_notices ?? [], JSON.stringify(step)).toContain(APPROVALS_LINE);
     expect(next(proj, [], CHAT).change_notices ?? []).not.toContain(APPROVALS_LINE);
+  });
+
+  // #3363: nothing said how Units reach the teams, and this checkout went on
+  // to build the first one. The walk is as it was; the step says so, once.
+  test("Several teams says once how a team takes a Unit, while none has", () => {
+    const proj = project();
+    const ran = pick(proj, next(proj, [], CHAT), "Several teams", CHAT);
+    expect(ran.rc, ran.out).toBe(0);
+    const step = next(proj, [], CHAT);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.unit).toBe("alpha");
+    expect(step.change_notices ?? [], JSON.stringify(step)).toContain(HANDOUT_LINE);
+    expect(step.change_notices ?? []).toContain(APPROVALS_LINE);
+    expect(saysHandout(next(proj, [], CHAT))).toBe(false);
+  });
+
+  test("with a walking skeleton, the line says it is built here first", () => {
+    const proj = project({ stance: "on" });
+    const ran = pick(proj, next(proj, [], CHAT), "Several teams", CHAT);
+    expect(ran.rc, ran.out).toBe(0);
+    const step = next(proj, [], CHAT);
+    expect(step.unit, JSON.stringify(step)).toBe("alpha");
+    expect(step.change_notices ?? [], JSON.stringify(step)).toContain(SKELETON_HANDOUT_LINE);
+    expect(step.change_notices ?? []).not.toContain(HANDOUT_LINE);
+  });
+
+  test("the approvals picked with Several teams in one turn still hear how a team takes a Unit", () => {
+    const proj = project();
+    const ran = pick(proj, next(proj, [], CHAT), "Several teams", CHAT);
+    expect(ran.rc, ran.out).toBe(0);
+    const rhythm = runState(proj, ["set-unit-gate-rhythm", "unit-end"], CHAT);
+    expect(rhythm.rc, rhythm.out).toBe(0);
+    const step = next(proj, [], CHAT);
+    expect(step.change_notices ?? [], JSON.stringify(step)).toContain(HANDOUT_LINE);
+    expect(step.change_notices ?? []).not.toContain(APPROVALS_LINE);
+  });
+
+  test("a clone that took part hears none of it", () => {
+    const proj = project();
+    const ran = pick(proj, next(proj, [], CHAT), "Several teams", CHAT);
+    expect(ran.rc, ran.out).toBe(0);
+    writeFileSync(unitParticipantPath(proj), "participant\n");
+    const step = next(proj, [], CHAT);
+    expect(saysHandout(step), JSON.stringify(step)).toBe(false);
+    expect(step.change_notices ?? []).not.toContain(APPROVALS_LINE);
   });
 
   // Seen live on Claude Code: the line rode the step that settles the walking

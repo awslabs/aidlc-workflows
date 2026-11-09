@@ -61,7 +61,7 @@ Write and edit files yourself with your file tools, never through the shell (no 
 ## Keeping the diary (memory.md)
 
 Only when `directive.protocol_modules` lists `learnings` and `directive.single !== true`, keep an observation diary at the `memory_path` the `run-stage`
-directive carries (`<record>/<phase>/<stage>/memory.md`). Otherwise keep no diary and run no learnings ritual. When enabled:
+directive carries (`<record>/<phase>/<stage>/memory.md`, or at a per-Unit stage the Unit's own `<record>/construction/<unit>/<stage>/memory.md`). Otherwise keep no diary and run no learnings ritual. When enabled:
 
 1. The engine creates `memory.md` from
    `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` when it emits the
