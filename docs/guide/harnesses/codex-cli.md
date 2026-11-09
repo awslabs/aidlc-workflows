@@ -84,12 +84,14 @@ codex
 
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
-On Windows, download `install.ps1` and run
+On Windows, download `install.ps1`, allow scripts in that PowerShell window
+with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`, and run
 `& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
-`& $installer -From <release-directory> -Offline` on Windows.
+`& $installer -From <release-directory> -Offline` on Windows, after the same
+`Set-ExecutionPolicy` line.
 
 `aidlc config` projects the Codex shell, merges the AI-DLC blocks in `.gitignore`
 and `AGENTS.md`, and writes `.codex/config.toml`, hooks, permission rules, and

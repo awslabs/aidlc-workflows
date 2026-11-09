@@ -113,9 +113,22 @@ $installer = Join-Path $download install.ps1
 Invoke-WebRequest `
   -Uri https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 `
   -OutFile $installer
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 & $installer
 Remove-Item -Recurse -Force $download
 ```
+
+`install.ps1` is not signed, and Windows PowerShell runs a script file only
+when the execution policy allows it: on Windows 10 and 11 the default is
+`Restricted`, which runs no script file. The `Set-ExecutionPolicy` line allows
+scripts in this PowerShell window, and in PowerShell started from it, until you
+close it; your saved execution policy is not changed. A Group Policy execution
+policy (a `MachinePolicy` or `UserPolicy` row in `Get-ExecutionPolicy -List`)
+overrides that line, which then prints an error that begins `Windows PowerShell
+updated your execution policy successfully, but the setting is overridden`.
+Under `RemoteSigned` or `Unrestricted` the installer still runs. Under
+`AllSigned` or `Restricted` it refuses the installer: ask your administrator
+how to install it.
 
 Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps the
 `aidlc` command in `%LOCALAPPDATA%\aidlc\bin\`: `aidlc.exe`, a copy of the AI-DLC
@@ -1684,6 +1697,7 @@ bash ./aidlc-offline/install.sh \
 ```
 
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 & .\aidlc-offline\install.ps1 `
   -From .\aidlc-offline -Offline
 ```
@@ -1920,7 +1934,8 @@ active-version pointers, and the active `aidlc.exe`) is removed last, after ever
 User PATH entry, so a failed cleanup still leaves a command to retry it. Because
 the PATH entry may already be gone, run that command by its full path, which
 `aidlc doctor` prints (by default
-`& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" uninstall`). If the failure
+`& "$env:LOCALAPPDATA\aidlc\bin\aidlc.exe" uninstall`, or the recorded `aidlc.cmd`
+when `aidlc.exe` and `aidlc.cmd` in bin are not both as AI-DLC installed them). If the failure
 happened while removing those last files and the command no longer runs, run
 the installer again: it retries the pending cleanup first, so you may need to
 run it twice.

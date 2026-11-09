@@ -412,7 +412,7 @@ export function promotionNotes(p: Promotion): string {
     "### macOS and Linux",
     `\`\`\`bash\ncurl -fsSL ${download}/install.sh | sh -s -- --version ${p.version}\n\`\`\``,
     "### Windows PowerShell",
-    `\`\`\`powershell\nirm ${download}/install.ps1 -OutFile install.ps1\n./install.ps1 -Version ${p.version}\n\`\`\``,
+    `\`\`\`powershell\nirm ${download}/install.ps1 -OutFile install.ps1\nSet-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force\n./install.ps1 -Version ${p.version}\n\`\`\``,
     "## Highlights",
     ...highlightBlocks(entry.highlights),
     ...contributorSections(p.contributors, p.repository),

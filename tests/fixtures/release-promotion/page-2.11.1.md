@@ -33,6 +33,7 @@ curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/download/v2.11.1/
 
 ```powershell
 irm https://github.com/awslabs/aidlc-workflows/releases/download/v2.11.1/install.ps1 -OutFile install.ps1
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 ./install.ps1 -Version 2.11.1
 ```
 
