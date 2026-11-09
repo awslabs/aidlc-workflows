@@ -1177,7 +1177,10 @@ describe("t148 dist/kiro file structure", () => {
     const gettingStarted = read("01-getting-started.md");
     expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) | `/aidlc` |");
     expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) |");
-    const doctorSteps = read("harnesses", "kiro-ide.md").split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
+    // The guide's Kiro CLI (V2) section is another distribution, with no agent picker.
+    const [kiroPart, v2Part] = read("harnesses", "kiro.md").split("\n## Kiro CLI (V2)\n");
+    expect(v2Part).toBeDefined();
+    const doctorSteps = kiroPart.split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
     expect(doctorSteps.length).toBeGreaterThanOrEqual(2);
     for (const paragraph of doctorSteps) expect(paragraph).toContain("agent picker");
     const conductor = readFileSync(join(KI, "agents", "aidlc-aidlc.md"), "utf-8");

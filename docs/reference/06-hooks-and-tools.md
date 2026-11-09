@@ -1087,7 +1087,7 @@ card (catch-up, which stands in for Kiro's missing after-command card) reads
 that command's shape with the same parser the file-redirect refusal uses and
 forgets what the chat's last step named (`forgetRulesDelivered`), so the chat's
 next step carries the text again, once. Nothing is refused and nothing is shown;
-a redirect to a file is still refused before it runs (see the Kiro IDE guide).
+a redirect to a file is still refused before it runs (see the [Kiro guide](../guide/harnesses/kiro.md#how-hooks-work-on-kiro)).
 
 A harness whose host keeps less of one shell result declares a smaller budget as
 `directiveMaxBytes` in its `tools/data/harness.json`, and every directive the
