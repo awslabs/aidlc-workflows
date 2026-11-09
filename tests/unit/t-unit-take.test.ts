@@ -1001,26 +1001,23 @@ describe("a team's own workspace, made from the home's", () => {
     expect(existsSync("/tmp/aidlc-no")).toBe(false);
   });
 
-  test("a home that takes no push from here: nothing is taken, and the line names git's reason and the way on, held or open", () => {
+  test("a home that takes no push from here: the take goes on, held or open, with one line naming git's reason", () => {
     const open = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n  - name: reporting\n    depends_on: []\n```\n";
     const home = homeWithTeams(["refunds=payments"], open);
-    const hook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\necho 'this host takes no push from here' >&2\nexit 1\n");
-    chmodSync(hook, 0o755);
+    refusePushes(home.remote);
     const pay = teamWorkspace(home.remote, "pay");
     const held = take(pay, "refunds", ["--team", "payments"]);
-    expect(held.status, held.out).not.toBe(0);
-    expect(String(held.json?.error)).toBe(
-      "refunds is held for your team at the lead's project, which takes no push from here: this host takes no push from " +
-        "here (pre-receive hook declined). Ask the lead for push access to it, then take refunds again.",
+    expect(held.status, held.out).toBe(0);
+    expect(String(held.json?.notice)).toContain(
+      "The lead's project takes no push from here (this host takes no push from here (pre-receive hook declined)), so the lead " +
+        "and the other teams cannot see that you took refunds until it does; AI-DLC records it there when a push next goes through.",
     );
-    expect(existsSync(join(pay, "aidlc", "spaces", "payments")), "no build record was made").toBe(false);
+    expect(existsSync(join(buildDir(pay, "payments", "refunds"), "aidlc-state.md"))).toBe(true);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
     const openUnit = take(pay, "reporting", ["--team", "payments"]);
-    expect(openUnit.status).not.toBe(0);
-    expect(String(openUnit.json?.error)).toBe(
-      "reporting is open at the lead's project, which takes no push from here: this host takes no push from here " +
-        "(pre-receive hook declined). Ask the lead for push access to it, then take reporting again.",
-    );
+    expect(openUnit.status, openUnit.out).toBe(0);
+    expect(String(openUnit.json?.notice)).toContain("so the lead and the other teams cannot see that you took reporting until it does");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toBeNull();
   });
 });
 
@@ -1697,5 +1694,192 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     expect(String(asked.json?.message)).toContain('starts with "-"');
     expect(existsSync(marker)).toBe(false);
     expect(traced(trace).filter((line) => line.includes(marker))).toEqual([]);
+  });
+});
+
+
+// The lead's project takes no push from here: its pre-receive hook refuses every one.
+function refusePushes(remote: string): void {
+  const hook = join(remote, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\necho 'this host takes no push from here' >&2\nexit 1\n");
+  chmodSync(hook, 0o755);
+}
+
+function takePushes(remote: string): void {
+  writeFileSync(join(remote, "hooks", "pre-receive"), "#!/bin/sh\nexit 0\n");
+}
+
+const chatOf = (session: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: session });
+
+describe("a take the lead's project could not record then", () => {
+  test("held for the team: recorded at a later look once the lead's project takes pushes, with nothing said about it", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    // Still refused: the look says nothing, and nothing is written.
+    const still = nextSaying(pay, chatOf("pay-1"));
+    expect(still.said).not.toContain("cannot see that you took");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
+    takePushes(home.remote);
+    const later = nextSaying(pay, chatOf("pay-2"));
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "payments", taken_by: "pay", generation: 1 });
+    expect(later.said).not.toContain("cannot see that you took");
+    expect(later.said).not.toContain("before your take could be recorded");
+  });
+
+  test("open: the claim is made at a later look once the lead's project takes pushes", () => {
+    const open = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n  - name: reporting\n    depends_on: []\n```\n";
+    const home = homeWithTeams(["refunds=payments"], open);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    expect(take(pay, "reporting", ["--team", "payments"]).status).toBe(0);
+    takePushes(home.remote);
+    next(pay, chatOf("pay-2"));
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ status: "claimed", owner: "payments", taken_by: "pay" });
+  });
+
+  test("released by the lead before it was recorded: recorded at the claim's new attempt, the build's following it", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    takePushes(home.remote);
+    expect(run(UNIT, ["release", "refunds"], home.dir).status).toBe(0);
+    const later = nextSaying(pay, chatOf("pay-2"));
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ status: "claimed", owner: "payments", taken_by: "pay", generation: 2 });
+    expect(field(readFileSync(join(buildDir(pay, "payments", "refunds"), "aidlc-state.md"), "utf-8"), "Home Attempt")).toBe("2");
+    expect(later.said).not.toContain("before your take could be recorded");
+  });
+
+  test("taken by a teammate meanwhile: said once with who and when, their claim never written over, a give back sets the build aside here only", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    takePushes(home.remote);
+    const pal = teamWorkspace(home.remote, "pal");
+    expect(take(pal, "refunds", ["--team", "payments"]).status).toBe(0);
+    const theirs = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    expect(theirs).toMatchObject({ taken_by: "pal" });
+    const today = git(home.remote, ["log", "-1", "--format=%cs", "refs/heads/claim/00000001/refunds"]);
+    const chat = chatOf("pay-2");
+    const look = nextSaying(pay, chat);
+    expect(look.said).toContain(
+      `refunds was taken at the lead's project by pal for the payments team on ${today}, before your take could be recorded there, ` +
+        "so the lead and the other teams see theirs, not yours. Your build is still here: agree with pal who carries it on, or give yours back.",
+    );
+    expect(nextSaying(pay, chat).said).not.toContain("before your take could be recorded");
+    // The push sends the code to the team's own repos and no result onto pal's claim, and offers no send again.
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    const pushed = run(UNIT, ["push"], pay, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice ?? pushed.out)).toContain("before your take could be recorded there");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(theirs);
+    expect(next(pay, chat).ask_type ?? null).not.toBe("unit-push");
+    const back = run(UNIT, ["release", "refunds"], pay);
+    expect(back.status, back.out).toBe(0);
+    expect(back.json?.notice).toBe(
+      "Nothing changed for refunds at the lead's project, which still has it as it was, for the payments team. Its build here is " +
+        "set aside, with everything in it kept.",
+    );
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(theirs);
+  });
+
+  test("held for another team before it was recorded: said once, the way on the lead's", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    takePushes(home.remote);
+    expect(run(UNIT, ["release", "refunds"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=web"], home.dir).status).toBe(0);
+    const chat = chatOf("pay-2");
+    const look = nextSaying(pay, chat);
+    expect(look.said).toContain(
+      "refunds's claim at the lead's project changed before your take could be recorded there: it is held for the web team now, so " +
+        "the lead and the other teams do not see your take. Your build is still here: agree with the lead who carries it on, or give yours back.",
+    );
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "web" });
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
+  });
+
+  test("its push while the lead's project still takes none: the code goes, the result waits on the way it always has", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice ?? pushed.out)).toContain(
+      "The lead's project did not take refunds's result: this host takes no push from here (pre-receive hook declined). Do you want me to send it again?",
+    );
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Unit Push")).toBe("unsent");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
+    // Once the lead's project takes pushes, sending it again records the take, then the result on it.
+    takePushes(home.remote);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { taken_by?: string; result?: unknown };
+    expect(claim.taken_by).toBe("pay");
+    expect(claim.result).toBeDefined();
+  });
+
+  test("a teammate's clone of the team's workspace says and writes nothing for a take another checkout made", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    refusePushes(home.remote);
+    const host = tempDir("pay-host-shared");
+    git(host, ["init", "-q", "--bare", "-b", "main"]);
+    const seed = cloneOf(home.remote, "pay-seed");
+    git(seed, ["remote", "set-url", "origin", host]);
+    git(seed, ["push", "-q", "origin", "main"]);
+    const pay = cloneOf(host, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    commitAll(pay, "refunds taken");
+    git(pay, ["push", "-q", "origin", "main"]);
+    const pat = cloneOf(host, "pat");
+    takePushes(home.remote);
+    const look = nextSaying(pat, chatOf("pat-1"));
+    expect(look.said).not.toContain("before your take could be recorded");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
+  });
+
+  test.skipIf(process.platform === "win32")("with commits signed, a look never signs one to record the take: the push does", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    takePushes(home.remote);
+    git(pay, ["config", "commit.gpgsign", "true"]);
+    git(pay, ["config", "gpg.program", "false"]);
+    const look = run(ORCH, ["next"], pay, chatOf("pay-2"));
+    expect(look.status, look.out).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
+  });
+
+  test("by the lead's address from a team's own workspace: the take goes on, and is recorded once the lead's project takes pushes", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    refusePushes(home.remote);
+    const pay = freshTeamWorkspace("pay");
+    const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--team", "payments"], pay.dir);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain("so the lead and the other teams cannot see that you took refunds until it does");
+    takePushes(home.remote);
+    next(pay.dir, chatOf("pay-2"));
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "payments", taken_by: "pay" });
   });
 });

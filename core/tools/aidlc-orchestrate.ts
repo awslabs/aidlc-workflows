@@ -636,6 +636,7 @@ import {
   leadOfBuild,
   leadWorkAt,
   leadWorkByAddress,
+  takeAside,
   sendLeadsApprovedChanges,
   GitWriteRefused,
   earlyBaseMerged,
@@ -9573,6 +9574,10 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   }
   if (!unitPushToOffer(projectDir, stateContent)) return null;
   const unitTool = aidlcToolInvocation("unit");
+  // Someone else's take, a hold for another team or the Unit done is on the
+  // claim before this take was recorded: said once (buildClaimNotes), never
+  // offered again as a result to send.
+  if (push === "unsent" && takeAside(projectDir, stateContent)) return null;
   if (push === "unsent") {
     return {
       kind: "ask",

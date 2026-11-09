@@ -290,7 +290,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ done: true });
   });
 
-  test("read but not write: nothing is taken, and the line names git's reason and the way on", () => {
+  test("read but not write: the take goes on, and its line names git's reason and when the lead sees it", () => {
     const home = makeHome();
     teamsChosen(home, ["refunds=payments", "checkout-ui=web"]);
     const hook = join(home.remote, "hooks", "pre-receive");
@@ -299,12 +299,12 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     const kiroIde = tree("kiro-ide");
     const web = teamWorkspace(home.remote, "wendy");
     const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], web.dir);
-    expect(took.status, took.out).not.toBe(0);
-    expect(String(took.json?.error)).toBe(
-      "checkout-ui is held for your team at the lead's project, which takes no push from here: read-only for partners " +
-        "(pre-receive hook declined). Ask the lead for push access to it, then take checkout-ui again.",
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(
+      "The lead's project takes no push from here (read-only for partners (pre-receive hook declined)), so the lead and the other " +
+        "teams cannot see that you took checkout-ui until it does; AI-DLC records it there when a push next goes through.",
     );
-    expect(existsSync(join(web.dir, "aidlc", "spaces", "web")), "no build record was made").toBe(false);
+    expect(existsSync(join(web.dir, "aidlc", "spaces", "web")), "the build record was made").toBe(true);
   });
 });
 
