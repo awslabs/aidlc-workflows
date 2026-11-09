@@ -254,8 +254,9 @@ inside a harness directory. Scope definitions and mutable compiled workflow
 data remain subject to their existing rules.
 
 Use normal engine commands for workflow work. For installation maintenance,
-`aidlc update` updates the machine runtime; run `aidlc config` in each project
-to configure or refresh its installed files, and open work carries on. To intentionally repair
+`aidlc update` updates the machine runtime, and each project catches up the next
+time it is opened (`aidlc config` configures a project or refreshes its installed
+files by hand); open work carries on. To intentionally repair
 or replace enforcement files directly, stop the agent workflow and use an
 external terminal or editor, then restart the session. Lowering a workflow
 fence does not authorize those file replacements. Framework development edits

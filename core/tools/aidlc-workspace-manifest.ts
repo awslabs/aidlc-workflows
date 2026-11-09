@@ -65,8 +65,26 @@ export function reposListGoingBackLine(root: string, release: string): string | 
   const earlier = major < REPOS_IN_AIDLC_SINCE.major ||
     (major === REPOS_IN_AIDLC_SINCE.major && minor < REPOS_IN_AIDLC_SINCE.minor);
   if (!earlier || !entryAt(join(root, "aidlc", REPOS_FILE))?.isFile() || entryAt(join(root, REPOS_FILE))) return null;
+  const move = gitTracks(root, `aidlc/${REPOS_FILE}`) ? "git mv" : "mv";
   return `AI-DLC ${release} reads repos.json only at the project root; to keep your repo list on it, run ` +
-    "`git mv aidlc/repos.json repos.json`.";
+    `\`${move} aidlc/repos.json repos.json\`.`;
+}
+
+// A root repos.json is AI-DLC's repo list only when it reads as one; any other
+// file of that name is the project's own, never moved or counted as AI-DLC's.
+function rootFileIsTheList(root: string): boolean {
+  try {
+    parseWorkspaceManifest(readFileSync(join(root, REPOS_FILE), "utf-8"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Whether the root repos.json key is AI-DLC's list rather than the project's
+// source: it reads as the list, or it has gone where the move puts it.
+export function rootReposManifestIsAidlcs(root: string): boolean {
+  return rootFileIsTheList(root) || reposManifestMovedIntoAidlc(root);
 }
 
 function gitTracks(root: string, path: string): boolean {
@@ -79,11 +97,15 @@ function gitTracks(root: string, path: string): boolean {
 // and a teammate whose AI-DLC made the same move still pulls the lead's commit
 // cleanly (a plain rename leaves an untracked aidlc/repos.json that blocks it);
 // when git refuses, the list stays at the root, where it is still read. With a
-// list already in aidlc/, both stay as they are and aidlc/'s is read.
+// list already in aidlc/, both stay as they are and aidlc/'s is read; a root
+// repos.json that does not read as the list stays the project's.
 export function moveReposManifestIntoAidlc(root: string): { moved: boolean; tracked: boolean } {
   const from = join(root, REPOS_FILE);
   const to = join(root, "aidlc", REPOS_FILE);
-  if (!entryAt(from)?.isFile() || !entryAt(join(root, "aidlc"))?.isDirectory() || entryAt(to)) {
+  if (
+    !entryAt(from)?.isFile() || !entryAt(join(root, "aidlc"))?.isDirectory() || entryAt(to) ||
+    !rootFileIsTheList(root)
+  ) {
     return { moved: false, tracked: false };
   }
   if (gitTracks(root, REPOS_FILE)) {
@@ -104,7 +126,7 @@ export function moveReposManifestIntoAidlc(root: string): { moved: boolean; trac
 // For a refresh run in another process: whether a root repos.json git tracks is
 // here now, and afterwards whether that move happened (REPOS_MOVED_LINE's case).
 export function trackedReposManifestAtRoot(root: string): boolean {
-  return entryAt(join(root, REPOS_FILE))?.isFile() === true && gitTracks(root, REPOS_FILE);
+  return entryAt(join(root, REPOS_FILE))?.isFile() === true && rootFileIsTheList(root) && gitTracks(root, REPOS_FILE);
 }
 
 export function reposManifestMovedIntoAidlc(root: string): boolean {

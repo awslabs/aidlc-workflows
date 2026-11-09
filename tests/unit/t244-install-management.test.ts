@@ -139,8 +139,9 @@ const readsListOnlyAtRoot = (version: string): boolean => {
   const [major, minor] = version.split(".").map(Number);
   return major < 2 || (major === 2 && minor < 12);
 };
+// The lists here are not tracked, so the way back is a plain move.
 const goingBackLine = (version: string): string =>
-  `AI-DLC ${version} reads repos.json only at the project root; to keep your repo list on it, run \`git mv aidlc/repos.json repos.json\`.`;
+  `AI-DLC ${version} reads repos.json only at the project root; to keep your repo list on it, run \`mv aidlc/repos.json repos.json\`.`;
 const LIVE_PIN_VERSION = patchVersion(2);
 const STALE_PIN_VERSION = patchVersion(3);
 const REMOVABLE_VERSION = patchVersion(4);

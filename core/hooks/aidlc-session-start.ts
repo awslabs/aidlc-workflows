@@ -190,6 +190,7 @@ function catchUpProjectFiles(projectDir: string): boolean {
     delete env[key];
   }
   for (let pass = 0; pass < 2 && pending.length > 0; pass++) {
+    const tried = pending.length;
     for (const harness of pending) {
       spawnSync(
         process.execPath,
@@ -203,6 +204,9 @@ function catchUpProjectFiles(projectDir: string): boolean {
       );
     }
     pending = behind();
+    // A second pass only after the first brought a folder up: one config
+    // refused stays refused, so it runs once per chat start.
+    if (pending.length === tried) break;
   }
   return trackedList && reposManifestMovedIntoAidlc(projectDir);
 }

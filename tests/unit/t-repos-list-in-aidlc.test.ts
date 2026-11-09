@@ -192,8 +192,22 @@ describe("the one move into aidlc/", () => {
     expect(readFileSync(join(both, "aidlc", "repos.json"), "utf-8")).toBe(list("storefront"));
   });
 
+  test("a root repos.json that is not AI-DLC's list stays where it is, and stays the project's source", () => {
+    const dir = workspace();
+    const theirs = `${JSON.stringify({ name: "my-app", mirrors: ["a", "b"] }, null, 2)}\n`;
+    writeFileSync(join(dir, "repos.json"), theirs);
+    git(dir, ["add", "repos.json"]);
+    git(dir, ["commit", "-q", "-m", "app"]);
+    expect(moveReposManifestIntoAidlc(dir)).toEqual({ moved: false, tracked: false });
+    expect(readFileSync(join(dir, "repos.json"), "utf-8")).toBe(theirs);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(false);
+    expect(aidlcOwnedSourceKey(dir)(sourcePathKey("", "repos.json"))).toBe(false);
+  });
+
   test("the move is nobody's change to the workspace's source", () => {
     const dir = workspace();
+    // After the move: the list is in aidlc/ and the root one is gone.
+    writeFileSync(join(dir, "aidlc", "repos.json"), list("billing"));
     const before = new Map([[sourcePathKey("", "repos.json"), "a"], [sourcePathKey("", "src/app.ts"), "b"]]);
     const after = new Map([[sourcePathKey("", "src/app.ts"), "b"]]);
     expect(sourceChangedOutsideAidlc(dir, before, after)).toEqual([]);
@@ -205,6 +219,12 @@ describe("the one move into aidlc/", () => {
   test("going back to an earlier release says where it reads the list, and only then", () => {
     const dir = workspace();
     writeFileSync(join(dir, "aidlc", "repos.json"), list("billing"));
+    // A list git does not track goes back by a plain move.
+    expect(reposListGoingBackLine(dir, "2.11.3")).toBe(
+      "AI-DLC 2.11.3 reads repos.json only at the project root; to keep your repo list on it, run `mv aidlc/repos.json repos.json`.",
+    );
+    git(dir, ["add", "aidlc/repos.json"]);
+    git(dir, ["commit", "-q", "-m", "list"]);
     expect(reposListGoingBackLine(dir, "2.11.3")).toBe(
       "AI-DLC 2.11.3 reads repos.json only at the project root; to keep your repo list on it, run `git mv aidlc/repos.json repos.json`.",
     );

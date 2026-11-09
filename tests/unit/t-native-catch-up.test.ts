@@ -109,8 +109,12 @@ function hookCommand(dir: string, event: string): string {
   return settings.hooks?.[event]?.[0]?.hooks?.[0]?.command ?? "";
 }
 
-function sessionStart(dir: string, label: string): { status: number | null; stdout: string; stderr: string } {
-  const payload = { session_id: SESSION, transcript_path: join(dir, "t.jsonl"), cwd: dir, hook_event_name: "SessionStart", source: "startup" };
+function sessionStart(
+  dir: string,
+  label: string,
+  extra: Record<string, unknown> = {},
+): { status: number | null; stdout: string; stderr: string } {
+  const payload = { session_id: SESSION, transcript_path: join(dir, "t.jsonl"), cwd: dir, hook_event_name: "SessionStart", source: "startup", ...extra };
   const started = Date.now();
   const r = sh(dir, hookCommand(dir, "SessionStart"), JSON.stringify(payload));
   timings.push(`${label}: ${Date.now() - started} ms`);
@@ -211,13 +215,31 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(existsSync(join(later, "repos.json"))).toBe(true);
   });
 
-  test("the status line and a tool call's hook never run the refresh", () => {
+  test("the status line, a tool call's hook, a compaction's start and Cursor's per-prompt probe never run the refresh", () => {
     const dir = project(earlierTree);
-    sh(dir, hookCommand(dir, "statusLine"), JSON.stringify({ session_id: SESSION, cwd: dir }));
+    // AI-DLC's status line command, as Claude Code runs it.
+    const line = sh(dir, "aidlc engine statusline", JSON.stringify({ session_id: SESSION, cwd: dir }));
+    expect(line.status, line.stdout + line.stderr).toBe(0);
     const tool = { session_id: SESSION, cwd: dir, hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: join(dir, "repos.json") } };
-    sh(dir, hookCommand(dir, "PreToolUse"), JSON.stringify(tool));
+    const pre = sh(dir, hookCommand(dir, "PreToolUse"), JSON.stringify(tool));
+    expect(pre.status, pre.stdout + pre.stderr).toBe(0);
+    expect(sessionStart(dir, "compaction", { source: "compact" }).status).toBe(0);
+    expect(sessionStart(dir, "probe", { source: "resume", rebind_check: true }).status).toBe(0);
     expect(stampVersion(dir)).toBe(shifted(AIDLC_VERSION, -1));
     expect(existsSync(join(dir, "repos.json"))).toBe(true);
+  });
+
+  test("a refresh config refuses says nothing and stops nothing", () => {
+    const dir = project(earlierTree);
+    // A file of AI-DLC's the person changed: config refuses to refresh over it.
+    const agent = join(dir, ".claude", "agents", "aidlc-developer-agent.md");
+    writeFileSync(agent, `${readFileSync(agent, "utf-8")}\nmine\n`);
+    const started = sessionStart(dir, "refused refresh");
+    expect(started.status, started.stdout + started.stderr).toBe(0);
+    expect(started.stdout).not.toContain("repos.json");
+    expect(stampVersion(dir)).toBe(shifted(AIDLC_VERSION, -1));
+    expect(existsSync(join(dir, "repos.json"))).toBe(true);
+    expect(readFileSync(agent, "utf-8")).toEndWith("\nmine\n");
   });
 
 });

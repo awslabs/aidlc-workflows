@@ -335,7 +335,8 @@ an ownership baseline. It does not create a workflow intent.
 
 The workspace's repo list lives in `aidlc/repos.json`, checked in with the
 team's record. A refresh that puts this release's files in moves a `repos.json`
-at the project root there with its contents kept: a `git mv` when git tracks it,
+at the project root there with its contents kept (only a file that reads as the
+repo list; any other `repos.json` stays the project's): a `git mv` when git tracks it,
 so the rename is staged and the refresh says `AI-DLC moved repos.json into
 aidlc/. Commit it so your team gets it; teammates need AI-DLC 2.12 or newer.`,
 and a plain rename otherwise. Running config again changes nothing. A refresh
@@ -1527,7 +1528,7 @@ the project follow the machine again ([Project Pins and CI](#project-pins-and-ci
 A release before 2.12 reads the repo list only from `repos.json` at the project
 root. When the list is in `aidlc/repos.json`, `aidlc use` and `aidlc config --pin`
 to such a release say so in one line, with the way to keep the list on it:
-`git mv aidlc/repos.json repos.json`.
+`git mv aidlc/repos.json repos.json` (`mv` for a list git does not track).
 
 Releases before 2.8.0 have no native release, so `aidlc use` and
 `aidlc config --pin` cannot select them; they stop with `No published native

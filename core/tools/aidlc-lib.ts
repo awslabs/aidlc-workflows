@@ -525,7 +525,7 @@ export {
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
 import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
-import { clonedRepoListing, mappedRepoDir, readWorkspaceRepos, repoNotThereLine, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
+import { clonedRepoListing, mappedRepoDir, readWorkspaceRepos, repoNotThereLine, REPOS_FILE, rootReposManifestIsAidlcs } from "./aidlc-workspace-manifest.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -4693,15 +4693,17 @@ export function codekbFingerprintExcludes(projectDir: string, sourceDir: string)
 // file, like its settings files, and every repo root may hold one, a recorded
 // checkout's included: known by its listing name
 // (`<label>@checkout/.aidlc-source-paths.json`), as a claim is read. The root
-// repos.json is the workspace's repo list, which config's refresh moves into
-// aidlc/ while work may be open: that move is nobody's change to the source.
+// repos.json, when it is the workspace's repo list (rootReposManifestIsAidlcs),
+// is AI-DLC's: config's refresh moves it into aidlc/ while work may be open, and
+// that move is nobody's change to the source.
 export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => boolean {
   const owned = codekbFingerprintExcludes(projectDir, projectDir);
+  let rootList: boolean | undefined;
   return (pathKey) => {
     const parsed = splitSourcePathKey(pathKey);
     if (parsed === null) return false;
     if (parsed.path === SOURCE_FINGERPRINT_REGISTRY) return true;
-    if (parsed.repo === "" && parsed.path === REPOS_FILE) return true;
+    if (parsed.repo === "" && parsed.path === REPOS_FILE) return rootList ??= rootReposManifestIsAidlcs(projectDir);
     const slash = parsed.path.indexOf("/");
     if (
       parsed.repo === "" && slash > 0 && parsed.path.slice(slash + 1) === SOURCE_FINGERPRINT_REGISTRY &&
