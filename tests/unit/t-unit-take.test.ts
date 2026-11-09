@@ -1655,6 +1655,58 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     expect(branchFetches, branchFetches.join("\n")).toHaveLength(1);
   });
 
+  // The address the person said can carry a sign-in: the build's record, which
+  // the team commits, keeps the address without it, as the lead's own record does.
+  test("an address that carries a sign-in is recorded without it", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const pay = freshTeamWorkspace("pay");
+    const said = "https://pay:s3cret-token@lead.example/shop-ws.git";
+    git(pay.dir, ["config", `url.${home.remote}.insteadOf`, said]);
+    git(pay.dir, ["config", "--add", `url.${home.remote}.insteadOf`, "https://lead.example/shop-ws.git"]);
+    const took = run(UNIT, ["take", "refunds", "--from", said, "--home", HOME, "--team", "payments"], pay.dir);
+    expect(took.status, took.out).toBe(0);
+    const record = buildDir(pay.dir, "default", "refunds");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Home Location")).toBe("https://lead.example/shop-ws.git");
+    const written = spawnSync("git", ["grep", "--no-index", "-l", "s3cret-token", "--", "aidlc"], { cwd: pay.dir, encoding: "utf-8" });
+    expect(written.stdout.trim()).toBe("");
+  });
+
+  test("a build carried on with the lead's address said again needs nothing of the lead's project", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const pay = freshTeamWorkspace("pay");
+    expect(run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--team", "payments"], pay.dir).status).toBe(0);
+    renameSync(home.remote, `${home.remote}-moved`);
+    const again = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay.dir);
+    expect(again.status, again.out).toBe(0);
+    expect(again.json).toMatchObject({ resumed: true, space: "default" });
+  });
+
+  test("in a clone of the lead's workspace that is behind, the lead's address said is never answered that nothing is shared", () => {
+    const home = makeHome();
+    const alice = cloneOf(home.remote, "alice");
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ask = run(ORCH, ["next", "--lead-address", home.remote], alice);
+    expect(ask.status, ask.out).toBe(0);
+    expect(ask.out).not.toContain("has no work built by teams");
+  });
+
+  // Codex keeps a repository's .git read-only unless its session grants write access.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a .git this session cannot write: the lead's address said gets the way on, never a dead end", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const pay = freshTeamWorkspace("pay");
+    const dotGit = join(pay.dir, ".git");
+    chmodSync(dotGit, 0o555);
+    try {
+      const ask = run(ORCH, ["next", "--lead-address", home.remote], pay.dir);
+      expect(ask.out).toContain("Run the same command again with write access");
+    } finally {
+      chmodSync(dotGit, 0o755);
+    }
+  });
+
   test("an address starting with '-' is refused before any git call, at the take and at the offer", () => {
     homeWithTeams(["refunds=payments"]);
     const pay = freshTeamWorkspace("pay");

@@ -281,14 +281,19 @@ export function leadRuleFiles(projectDir: string, stateContent: string): Array<{
   const paths = (getField(stateContent, LEAD_RULES_FIELD) ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
   if (paths.length === 0) return [];
   const build = unitBuildOf(stateContent);
-  const at = build?.homeRecord.indexOf("/") ?? -1;
-  const leadHere = build === null || at < 0 ||
-    existsSync(join(intentsDir(projectDir, build.homeRecord.slice(0, at)), build.homeRecord.slice(at + 1), "aidlc-state.md"));
-  if (leadHere || build === null || !isGitAddress(build.homeLocation)) {
+  if (build === null || leadRecordHere(projectDir, build.homeRecord) || !isGitAddress(build.homeLocation)) {
     return paths.map((path) => ({ path, text: readTextOrNull(join(projectDir, ...path.split("/"))), fromCopy: false }));
   }
   const copy = leadCopyRef(idSuffix(build.homeWork));
   return paths.map((path) => ({ path, text: textAt(projectDir, copy, path), fromCopy: true }));
+}
+
+// Whether the lead's record (`<space>/<dirName>`, a build's Home Record) is in
+// this workspace: a clone of the lead's, or the lead's own. A record name
+// without a space is taken as here, so nothing is read from elsewhere for it.
+export function leadRecordHere(projectDir: string, homeRecord: string): boolean {
+  const at = homeRecord.indexOf("/");
+  return at < 0 || existsSync(join(intentsDir(projectDir, homeRecord.slice(0, at)), homeRecord.slice(at + 1), "aidlc-state.md"));
 }
 
 // The line said once when a lead's file the build follows cannot be read: the
@@ -521,6 +526,16 @@ export function buildWaitsForPush(stateContent: string): boolean {
 // The build of a home's Unit in this workspace, in any space: what taking that
 // Unit again here carries on. A build given back (archived) is not carried on.
 export function findUnitBuild(projectDir: string, homeWork: string, unit: string): { space: string; dirName: string } | null {
+  return findBuild(projectDir, (build) => build.unit === unit && build.homeWork === homeWork);
+}
+
+// A build here of a Unit of the lead's record (`<space>/<dirName>`), found
+// with no read of the lead's project.
+export function findUnitBuildOfRecord(projectDir: string, homeRecord: string, unit: string): { space: string; dirName: string } | null {
+  return findBuild(projectDir, (build) => build.unit === unit && build.homeRecord === homeRecord);
+}
+
+function findBuild(projectDir: string, matches: (build: UnitBuild) => boolean): { space: string; dirName: string } | null {
   let spaces: string[];
   try {
     spaces = readdirSync(join(projectDir, "aidlc", "spaces"));
@@ -536,7 +551,7 @@ export function findUnitBuild(projectDir: string, homeWork: string, unit: string
         continue;
       }
       const build = unitBuildOf(state);
-      if (build?.unit === unit && build.homeWork === homeWork && getField(state, "Status")?.trim() !== "Archived") return { space, dirName };
+      if (build !== null && matches(build) && getField(state, "Status")?.trim() !== "Archived") return { space, dirName };
     }
   }
   return null;

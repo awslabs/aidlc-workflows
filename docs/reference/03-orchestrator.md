@@ -809,15 +809,17 @@ project by the address the person says once: `next --lead-address <address>`
 (the agent's exact argument) returns the same `ask_type: unit-take`, built by
 the same `unitTakeLook`, read from the lead's branch fetched once into
 `refs/aidlc/home/<id8>/integration` (`leadWorkByAddress`); each choice runs
-`unit take <unit> --from <address> --home <record>`, which reads the lead's work
-at that commit without a second fetch and starts the build in the active
-space. An address that starts with `-` is refused before any git call
+`unit take <unit> --from <address> --home <record>`, which fetches the lead's
+branch once and reads the lead's work at that commit (no second fetch for the
+integration branch), then starts the build in the active space; a build of it
+already here is carried on with nothing of the lead's project read. An address that starts with `-` is refused before any git call
 (`refuseOptionAddress`, the check `findHomeWork` makes on a recorded address).
 Where the lead's record for that address is here, `--lead-address` and `--from`
 take the local route, with no fetch by the address. After the take each step
 reads the lead from the build's own `Home Location`, `Home Work`, `Home Record`
 and `Home Label` (`leadOfBuild`), and `refreshHomeClaims` brings the lead's
-`HEAD` into that ref with the claims, quietly and once per chat, so a later
+`HEAD` into that ref with the claims, quietly, once per chat and at a build's
+new stage, so a later
 plain `next` offers the lead's next Unit (`unitTakeLook` lists the lead's work
 known from the builds here) and `buildCloneOffer` offers a likely repo from the
 lead's repo list there (`workspaceManifestAt`, running `intent add-repo <repo>
@@ -827,7 +829,10 @@ is here, else in that ref at the same paths, named `the lead's <path>` in
 `rules_in_context`, so the team's own default memory is never read as the
 lead's. Steering, Testing Posture and the take question read through it; a
 lead's file that cannot be read never stops the step, which goes on under the
-team's own rules and says so once (`leadRulesUnreadLine`).
+team's own rules and says so once (`leadRulesUnreadLine`). The build's record
+keeps the address without a sign-in (`withoutCredentials`). Where the lead's
+address said holds no work built by teams, the step says so; with nothing to
+offer otherwise, it goes on as a plain `next`.
 
 A Unit's build is solo work with one Unit: its state records `Unit Build`,
 `Home Location`, `Home Work`, `Home Record` and `Home Attempt`;

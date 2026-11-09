@@ -9077,8 +9077,9 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
 // The lead's project by the address the person said (--lead-address): the
 // Units to take there, as the one take offer (unitTakeLook) says them, never
 // held back by other work of theirs here; in a clone of the lead's own
-// workspace, the offer as it is here.
-function leadAddressStep(projectDir: string, address: string): Directive {
+// workspace, the offer as it is here. Null when there is nothing to offer and
+// the address was not read empty: the step goes on as a plain next.
+function leadAddressStep(projectDir: string, address: string): Directive | null {
   let looked: ReturnType<typeof unitTakeLook>;
   try {
     looked = unitTakeLook(projectDir, true, address);
@@ -9087,7 +9088,9 @@ function leadAddressStep(projectDir: string, address: string): Directive {
     return errorDirective(e instanceof Error ? e.message : String(e));
   }
   if (looked.choices.length === 0 && looked.sentences.length === 0) {
-    return lineEndingTurn(`The lead's project at ${maskUserinfo(address)} has no work built by teams on its branch yet: the lead shares the plan first.`);
+    return looked.readAtAddress === 0
+      ? lineEndingTurn(`The lead's project at ${maskUserinfo(address)} has no work built by teams on its branch yet: the lead shares the plan first.`)
+      : null;
   }
   if (looked.choices.length === 0) return lineEndingTurn(`${looked.sentences.join(" ")} Nothing is ready to take yet.`);
   return {
@@ -9140,7 +9143,7 @@ function homesOnDisk(projectDir: string): LookedHome[] {
 // builds here whose lead's record is not here (the address said once, at the
 // first take), and the address the person said now (`address`), unless the
 // lead's work there is on disk here, which is then the one looked at.
-function homesByAddress(projectDir: string, onDisk: LookedHome[], now: boolean, address?: string): LookedHome[] {
+function homesByAddress(projectDir: string, onDisk: LookedHome[], now: boolean, address?: string): { homes: LookedHome[]; readAtAddress: number | null } {
   const leads = new Map<string, { address: string }>();
   for (const { name: space } of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space)) {
@@ -9165,8 +9168,11 @@ function homesByAddress(projectDir: string, onDisk: LookedHome[], now: boolean, 
   const own = workspaceHomeLocation(projectDir);
   const said = address !== undefined && !(own !== null && sameGitAddress(address, own)) &&
     !onDisk.some((home) => sameGitAddress(homeLocation(home.state) ?? "", address));
+  let readAtAddress: number | null = null;
   if (said) {
-    for (const work of leadWorkByAddress(projectDir, address).works) {
+    const works = leadWorkByAddress(projectDir, address).works;
+    readAtAddress = works.length;
+    for (const work of works) {
       if (!onDisk.some((home) => home.intent.uuid === work.uuid)) leads.set(work.uuid, { address });
     }
   }
@@ -9185,7 +9191,7 @@ function homesByAddress(projectDir: string, onDisk: LookedHome[], now: boolean, 
       space: work.space, state: work.state, dependencyBody: work.dependencies, lead: { address: lead.address, oid }, refreshed,
     });
   }
-  return homes;
+  return { homes, readAtAddress };
 }
 
 function unitTakeLook(
@@ -9193,7 +9199,7 @@ function unitTakeLook(
   now: boolean,
   // The lead's project by the address the person said now (--lead-address).
   address?: string,
-): { sentences: string[]; choices: AskChoice[]; homeHere: IntentInfo[]; stale: boolean } {
+): { sentences: string[]; choices: AskChoice[]; homeHere: IntentInfo[]; stale: boolean; readAtAddress: number | null } {
   const active = engineSelection(projectDir).space;
   const team = active === DEFAULT_SPACE ? null : active;
   const unitTool = aidlcToolInvocation("unit");
@@ -9203,7 +9209,8 @@ function unitTakeLook(
   // A home whose claims this look did not fetch (fetched earlier in the chat).
   let stale = false;
   const onDisk = homesOnDisk(projectDir);
-  for (const looked of [onDisk, homesByAddress(projectDir, onDisk, now, address)]) {
+  const byAddressLook = homesByAddress(projectDir, onDisk, now, address);
+  for (const looked of [onDisk, byAddressLook.homes]) {
     for (const { intent, space, state, dependencyBody, lead: byAddress, refreshed: lookedAlready } of looked) {
       if (!intent.dirName || !intent.uuid) continue;
       if (!isReadOnlyEngineProbe()) {
@@ -9366,7 +9373,7 @@ function unitTakeLook(
       }
     }
   }
-  return { sentences, choices, homeHere, stale };
+  return { sentences, choices, homeHere, stale, readAtAddress: byAddressLook.readAtAddress };
 }
 
 // A request that is only the path of one existing file (`/aidlc <file>`),
@@ -13669,8 +13676,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const leadUnread = stateContent !== null ? leadRulesUnreadLine(pd, stateContent) : null;
   if (leadUnread !== null) sayWithStepOnce(pd, leadUnread);
   // The lead's project by the address the person said: its Units to take.
-  if (flags.leadAddress !== undefined) {
-    emit(leadAddressStep(pd, flags.leadAddress));
+  const leadAddress = flags.leadAddress === undefined ? null : leadAddressStep(pd, flags.leadAddress);
+  if (leadAddress !== null) {
+    emit(leadAddress);
     return;
   }
   // A copy the team changed is theirs to send home, offered once per its text.

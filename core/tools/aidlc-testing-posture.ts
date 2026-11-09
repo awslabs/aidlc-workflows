@@ -1299,7 +1299,7 @@ export function resolveTestingPosture(
   // template's notes say none: a team's own default space keeps them).
   for (const lead of leadRuleFiles(projectDir, state)) {
     const layer = (["team", "project"] as const).find((name) => lead.path.endsWith(`/memory/${name}.md`));
-    if (layer === undefined || classifyPosture(sections[layer] ?? "") !== null || lead.text === null) continue;
+    if (layer === undefined || visiblePostureText(sections[layer] ?? "") !== "" || lead.text === null) continue;
     sections[layer] = extractTestingPostureSection(lead.text);
   }
   return resolveTestingPostureFromSections(sections, {
