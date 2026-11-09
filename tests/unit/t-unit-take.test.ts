@@ -1752,6 +1752,44 @@ describe("a take the lead's project could not record then", () => {
     expect(later.said).not.toContain("before your take could be recorded");
   });
 
+  test("released by the lead before it was recorded, in a clone of the lead's own repo: recorded with nothing said, never as taken by yourself", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    refusePushes(home.remote);
+    const pay = cloneOf(home.remote, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    takePushes(home.remote);
+    expect(run(UNIT, ["release", "refunds"], home.dir).status).toBe(0);
+    const chat = chatOf("pay-2");
+    const later = nextSaying(pay, chat);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "payments", taken_by: "pay", generation: 2 });
+    expect(later.said).not.toContain("was taken at the lead's project by");
+    expect(nextSaying(pay, chat).said).not.toContain("was taken at the lead's project by");
+  });
+
+  test("a push after the lead released it before it was recorded: the take is recorded, then the result goes on it", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    refusePushes(home.remote);
+    const pay = cloneOf(home.remote, "pay");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    takePushes(home.remote);
+    expect(run(UNIT, ["release", "refunds"], home.dir).status).toBe(0);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(pushed.out).not.toContain("was taken at the lead's project by");
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { taken_by?: string; generation?: number; result?: unknown };
+    expect(claim).toMatchObject({ taken_by: "pay", generation: 2 });
+    expect(claim.result).toBeDefined();
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Unit Push")).toBe("pushed");
+  });
+
   test("taken by a teammate meanwhile: said once with who and when, their claim never written over, a give back sets the build aside here only", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
@@ -1853,6 +1891,9 @@ describe("a take the lead's project could not record then", () => {
     git(pay, ["push", "-q", "origin", "main"]);
     const pat = cloneOf(host, "pat");
     takePushes(home.remote);
+    // Pat carries the build on in that clone: its step is the build's own.
+    const carried = take(pat, "refunds");
+    expect(carried.json, carried.out).toMatchObject({ resumed: true });
     const look = nextSaying(pat, chatOf("pat-1"));
     expect(look.said).not.toContain("before your take could be recorded");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
@@ -1864,10 +1905,16 @@ describe("a take the lead's project could not record then", () => {
     const pay = teamWorkspace(home.remote, "pay");
     expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
     takePushes(home.remote);
+    // A signer that leaves a mark when it is asked to sign.
+    const marks = tempDir("signer");
+    const signer = join(marks, "sign.sh");
+    writeFileSync(signer, `#!/bin/sh\ntouch '${join(marks, "asked")}'\nexit 1\n`);
+    chmodSync(signer, 0o755);
     git(pay, ["config", "commit.gpgsign", "true"]);
-    git(pay, ["config", "gpg.program", "false"]);
+    git(pay, ["config", "gpg.program", signer]);
     const look = run(ORCH, ["next"], pay, chatOf("pay-2"));
     expect(look.status, look.out).toBe(0);
+    expect(existsSync(join(marks, "asked")), "a look asked to sign").toBe(false);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
   });
 

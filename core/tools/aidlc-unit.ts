@@ -6789,13 +6789,24 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
     return { state: "recorded" };
   }
   const me = git(projectDir, ["config", "user.name"]).stdout.trim() || "a teammate";
+  const myEmail = git(projectDir, ["config", "user.email"]).stdout.trim();
+  // The build's attempt as its record has it now (a take recorded later at a
+  // new attempt writes it there), never as the caller read it before.
+  let attempt = build.attempt;
+  try {
+    attempt = unitBuildOf(readStateFile(projectDir, here.dirName, here.space))?.attempt ?? attempt;
+  } catch {
+    // The caller's stands.
+  }
   // The claim's own history, back from what git fetched: this take there once
-  // is recorded, whatever the lead did with the Unit since.
+  // is recorded, whatever the lead did with the Unit since. It is this person's
+  // by their git name then, or the email the claim commit was made with.
   let oid = current?.oid ?? null;
   for (let steps = 0; oid !== null && steps < 200; steps++) {
     const payload = readPayload(projectDir, oid, { localOnly: true });
     if (payload === null) break;
-    if (payload.taken_by === me && payload.generation === build.attempt) return { state: "recorded" };
+    if (payload.taken_by !== undefined && payload.generation === attempt && (payload.taken_by === me ||
+      (myEmail !== "" && localGit(projectDir, ["log", "-1", "--format=%ce", oid]).stdout.trim() === myEmail))) return { state: "recorded" };
     oid = payload.predecessor_oid;
   }
   const team = auditBlockField(row.block, "Team") ?? "";
@@ -7260,8 +7271,13 @@ function pushUnit(args: string[], projectDir?: string): void {
   const ref = claimRef(home.id8, unit);
   if (home.target !== null) ensureFetchedClaim(pd, home, ref);
   // A take the lead's project did not record then is recorded first, so the
-  // result goes onto this build's own claim, never onto anyone else's.
+  // result goes onto this build's own claim, never onto anyone else's: read
+  // against the claims as the lead's project has them now.
   let standing = takeStanding(pd, build);
+  if (standing.state === "pending") {
+    refreshHomeClaims(pd, { home, now: true });
+    standing = takeStanding(pd, build);
+  }
   const recorded = standing.state === "pending" ? recordTakeHere(pd, build, home, standing, true) : null;
   if (recorded?.ok) {
     if (home.target !== null) ensureFetchedClaim(pd, home, ref);
@@ -8099,8 +8115,9 @@ export function earlyBaseMerged(
     return [];
   }
   const branch = unitBranchOf(stateContent, build.unit);
-  if (takeStanding(projectDir, build).state !== "recorded") return [];
-  return (claims.get(build.unit)?.payload.early_on ?? []).flatMap((dep) => {
+  const earlyOn = claims.get(build.unit)?.payload.early_on ?? [];
+  if (earlyOn.length === 0 || takeStanding(projectDir, build).state !== "recorded") return [];
+  return earlyOn.flatMap((dep) => {
     const theirs = claims.get(dep.unit)?.payload;
     if (!theirs?.done || skip(dep.unit)) return [];
     const moves = (from: typeof dep.repos, look: boolean) => from.flatMap(({ repo, head }) => {
