@@ -847,8 +847,9 @@ describe("builds in one workspace", () => {
     git(alice, ["push", "-q", "origin", "main"]);
     const laptop = cloneOf(home.remote, "alice-laptop");
     const offer = next(laptop);
-    const carry = (offer.choices as Array<{ label: string; detail?: string }>).find((choice) => choice.label === "Carry on refunds");
-    expect(carry?.detail, JSON.stringify(offer)).toBe("The data-team's build of it, here.");
+    // A fresh clone does not know its team yet: the build is offered with its team named.
+    const carry = (offer.choices as Array<{ label: string; detail?: string }>).find((choice) => choice.label === "Carry on refunds for the data team");
+    expect(carry?.detail, JSON.stringify(offer)).toBe("alice's build of it, from another computer.");
     const resumed = run(UNIT, ["take", "refunds", "--home", HOME], laptop);
     expect(resumed.json?.notice, resumed.out).toBe("Carrying on refunds, the data-team's build here.");
     expect(`${JSON.stringify(offer)}${resumed.out}`).not.toContain("team team");
@@ -909,7 +910,7 @@ describe("builds in one workspace", () => {
     const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: "5b6f0c1e-1d2a-4c3b-9e4f-0a1b2c3d4e5f", CLAUDE_PID: String(process.pid) };
     const ask = next(laptop, chat);
     const choices = ask.choices as Array<{ label: string; command: string }>;
-    expect(choices.map((choice) => choice.label)).toContain("Carry on refunds");
+    expect(choices.map((choice) => choice.label)).toContain("Carry on refunds for the payments team");
     const resumed = run(UNIT, ["take", "refunds", "--home", HOME], laptop, chat);
     expect(resumed.status, resumed.out).toBe(0);
     expect(resumed.json).toMatchObject({ resumed: true });

@@ -660,7 +660,14 @@ work does: after every stage, or once at its end.
 - A Unit another team holds, or that a teammate already took, is not taken
   again; the line names who holds it.
 - Taking a Unit you took before, from any clone of your workspace, carries its
-  build on (**Carry on <unit>**).
+  build on (**Carry on <unit>**). Only your own team's builds are offered, each
+  with whose build it is and whether it was last worked on this computer or
+  another. Another team's build is listed as being built, by whom and where,
+  never offered. A pushed build is listed as waiting for its merge, until the
+  lead turns it down or sends it back from Build and Test; then it is offered to
+  its team again with those words. In a fresh clone, before your team is known,
+  each team's build is offered with its team named (**Carry on <unit> for the
+  payments team**), and picking one makes that team your active space.
 - A lead's project you can read but not push to: a Unit held for your team is still
   yours, and its result goes back as a file, said once; once the lead's project takes
   your pushes, the push sends it by git instead. An open Unit there cannot be
@@ -754,6 +761,25 @@ to that build. When the lead's Build and Test finds a Unit a team built
 wanting, its retry sends the Unit back to the team in the failure's own words
 (`aidlc unit send-back <unit>`): it is never rebuilt at the lead's project, the
 board shows it back with the team, and its next merge is recorded again.
+
+### Check in your team's record
+
+What AI-DLC records about the work (the plan, each team's build, the approvals
+and the audit trail) lives in `aidlc/`, and the people on the workspace get it
+the way they get any change: each person commits and pushes it. Commit
+`aidlc/` (the repo list, `aidlc/repos.json`, is in it) and, when the team keeps
+one, `aidlc.settings.json` at the workspace root. Tool folders (`.claude/`,
+`.codex/`, `.kiro/` and the other tools' folders) are not committed: each person
+runs `aidlc config` in their own clone for the tool they use.
+
+AI-DLC says so once at each stopping point of teams' work: when you stop for
+now, at your Unit's push, at the end of a build you have not pushed, and at the
+lead's project when Build and Test is approved: "Your teammates get where this
+work stands when you check it in: `git add aidlc`, then commit and push." It
+never goes by what git shows changed, since AI-DLC's own record changes at every
+step. Asked where things stand (`/aidlc --status`), a clone also says what its
+last `git pull` brought from the other teams, for example "From others: the web
+team's checkout-ui (at your last pull)".
 
 ### Start early, and change a shared input
 
@@ -922,8 +948,10 @@ claim-bound CAS publication; main serializes the reviewed pinned OIDs.
    chooses teams, says who builds which Unit ("billing: payments,
    notifications: messaging"), and pushes it.
 2. If enabled, the facilitator builds the walking skeleton at the lead's project first.
-3. Each team member clones the workspace (or the team's own), runs `/aidlc`,
-   and takes their team's Unit. Each team approves its own stages.
+3. Each team member clones the workspace (or the team's own), runs
+   `aidlc config` there for their own tool, then `/aidlc`, and takes their
+   team's Unit. Each team approves its own stages, and checks in `aidlc/` when
+   AI-DLC says so.
 
 #### Day 2
 

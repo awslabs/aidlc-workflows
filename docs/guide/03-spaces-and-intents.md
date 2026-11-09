@@ -512,11 +512,11 @@ to confirm the folder (in a script, pass `--project-dir`). What that means for
   the workspace repo must not track them, so keep them out first: for the repos
   listed in `repos.json`, the
   [`aidlc-workspace-sync`](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
-  tool does it for you; otherwise add an ignore line for each. Then run
-  `git status` and commit what it lists (everything `aidlc config` wrote that git
-  does not ignore, plus `repos.json`); the exact files differ by harness, so
-  don't pick paths by hand. A teammate clones the workspace repo and runs the
-  sync tool to clone the code repos beside it.
+  tool does it for you; otherwise add an ignore line for each. Then commit
+  `aidlc/` (the repo list, `aidlc/repos.json`, is in it) and, when the team keeps
+  one, `aidlc.settings.json`; tool folders such as `.claude/` or `.codex/` are
+  not committed. A teammate clones the workspace repo, runs `aidlc config` there
+  for their own tool, and runs the sync tool to clone the code repos beside it.
 - **Codex CLI and Cursor:** Codex finds its hooks only in a git repo, and
   Cursor may skip them outside one
   ([Getting Started](01-getting-started.md)), so run `git init` in the folder

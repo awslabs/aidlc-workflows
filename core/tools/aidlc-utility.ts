@@ -184,7 +184,7 @@ import {
   localUnitClaimOverviewForIntent,
   main as unitMain,
 } from "./aidlc-unit.ts";
-import { homeLocation, PROJECT_TYPE_SOURCE_FIELD, PROJECT_TYPE_SOURCE_HOME, unitBuildOf } from "./aidlc-unit-teams.ts";
+import { arrivedAtLastPull, homeLocation, PROJECT_TYPE_SOURCE_FIELD, PROJECT_TYPE_SOURCE_HOME, unitBuildOf } from "./aidlc-unit-teams.ts";
 import {
   codeGenerationBuildsWithoutSource,
   PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY,
@@ -2452,6 +2452,10 @@ To get started:
   const alsoOpen = others.length === 0
     ? ""
     : `Also open:      ${others.join(", ")} (ask to switch to ${others.length === 1 ? "it" : "one"})\n`;
+  // Teams across repos sharing one workspace by git: what the last pull here brought from the others.
+  const acrossRepos = unitBuildOf(content) !== null || (isTeamUnitOwnership(content) && homeLocation(content) !== null);
+  const arrived = acrossRepos ? arrivedAtLastPull(projectDir, selection.space) : null;
+  const arrivedLine = arrived === null ? "" : `From others:    ${arrived} (at your last pull)\n`;
   // Work an older AI-DLC recorded, brought up to this one in place: said here
   // on purpose, never in chat.
   const upgrade = stateUpgradeRecord(projectDir, selection.intent ?? undefined, selection.space);
@@ -2471,7 +2475,7 @@ Completion:     ${completed}/${total} stages (${pct}%)${skippedNote}
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${upgradedLine}`;
+${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${arrivedLine}${upgradedLine}`;
   if (isTeamUnitOwnership(content)) {
     const selectorArgs = [
       ...(flags.intent ? ["--intent", flags.intent] : []),

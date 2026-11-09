@@ -222,6 +222,7 @@ import {
   unitGateRhythmChosen,
   unitWriteTargets,
   outputForLead,
+  checkInLine,
   unitWordsArg,
   TEAM_RHYTHM_OFFER,
   teamOrPerson,
@@ -7354,6 +7355,8 @@ function pushUnit(args: string[], projectDir?: string): void {
     }, pd);
   });
   if (homeHasIt) finishBuildRecord(pd);
+  const checkIn = checkInLine(pd);
+  if (checkIn !== null) lines.push(checkIn);
   console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), notice: lines.join(" ") }));
 }
 

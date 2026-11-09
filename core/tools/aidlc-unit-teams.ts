@@ -18,6 +18,7 @@ import {
   engineDir,
   filterProducesByKind,
   getField,
+  intentDisplayLabel,
   intentRepos,
   isPerUnitStage,
   isTeamUnitOwnership,
@@ -44,7 +45,7 @@ import {
   writeEngineFileNoFollow,
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
-import { applicableTeamUnitScopeStamp } from "./aidlc-record-core.ts";
+import { applicableTeamUnitScopeStamp, listIntents } from "./aidlc-record-core.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
 
@@ -476,6 +477,64 @@ export function findUnitBuild(projectDir: string, homeWork: string, unit: string
     }
   }
   return null;
+}
+
+export const CHECK_IN_LINE = "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.";
+
+// Teams across repos share AI-DLC's record by git, and the person checks it in.
+// The callers say this at the stopping points (a stop, the push, a Unit's end),
+// never from what git status shows: AI-DLC's own audit rows change aidlc/ at
+// every step. Null for other work (main's team Units on the workspace's own
+// repo commit the record for the person) and where there is no remote to push.
+export function checkInLine(projectDir: string, stateContent?: string): string | null {
+  let state = stateContent;
+  if (state === undefined) {
+    try {
+      state = readStateFile(projectDir);
+    } catch {
+      return null;
+    }
+  }
+  if (unitBuildOf(state) === null && !(isTeamUnitOwnership(state) && homeLocation(state) !== null)) return null;
+  const remotes = spawnSync("git", ["-C", projectDir, "remote"], { encoding: "utf-8", timeout: 10_000 });
+  return remotes.status === 0 && remotes.stdout.trim() !== "" ? CHECK_IN_LINE : null;
+}
+
+// What the person's last `git pull` here brought from the other spaces of a
+// workspace teams share: each record by its Unit, or the work's own name, with
+// whose it is. Read from this clone's own reflog, so it holds until the next
+// pull and nothing is written. Null with no pull here, nothing from others, or
+// no git.
+export function arrivedAtLastPull(projectDir: string, ownSpace: string): string | null {
+  const reflog = spawnSync("git", ["-C", projectDir, "reflog", "-n", "200", "--format=%H%x00%gs"], { encoding: "utf-8", timeout: 10_000 });
+  if (reflog.status !== 0) return null;
+  const rows = reflog.stdout.split("\n").filter((row) => row.includes("\u0000")).map((row) => row.split("\u0000") as [string, string]);
+  // Newest first: the last pull's entries (a rebase pull writes several), then where it started.
+  const first = rows.findIndex(([, subject]) => /^pull\b/.test(subject));
+  if (first === -1) return null;
+  let last = first;
+  while (last + 1 < rows.length && /^pull\b/.test(rows[last + 1][1])) last++;
+  if (last + 1 >= rows.length) return null;
+  const diff = spawnSync("git", ["-C", projectDir, "diff", "--name-only", rows[last + 1][0], rows[first][0], "--", "aidlc/spaces"], { encoding: "utf-8", timeout: 10_000 });
+  if (diff.status !== 0) return null;
+  const records = new Map<string, Set<string>>();
+  for (const path of diff.stdout.split("\n")) {
+    const match = /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)\//.exec(path.trim());
+    if (match === null || match[1] === ownSpace) continue;
+    const [, space, dirName] = match;
+    let label = dirName;
+    try {
+      const build = unitBuildOf(readStateFile(projectDir, dirName, space));
+      const entry = listIntents(projectDir, space).find((intent) => intent.dirName === dirName);
+      label = build?.unit ?? (entry !== undefined ? intentDisplayLabel(entry) : dirName);
+    } catch {
+      // A record no longer here keeps its folder name.
+    }
+    records.set(space, (records.get(space) ?? new Set()).add(label));
+  }
+  if (records.size === 0) return null;
+  const whose = (space: string): string => space === "default" ? "the lead's" : `${theTeam(space)}'s`;
+  return [...records].map(([space, labels]) => `${whose(space)} ${[...labels].join(", ")}`).join("; ");
 }
 
 // A build walks only its own Unit: its copy of the home's plan names every

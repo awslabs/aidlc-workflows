@@ -134,7 +134,8 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     const pushed = run(cursor.unit, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
-      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in checkout-api and billing. Switch back to main any time.",
+      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in checkout-api and billing. Switch back to main any time. " +
+        "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.",
     );
 
     expect(boardAt(home)).toBe([
@@ -204,7 +205,10 @@ describe("scenario 2: one big code repo", () => {
     ]);
     const pushed = run(codex.unit, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(pushed.json?.notice).toBe("Pushed branch refunds in platform. Open a PR in it your usual way. You're on refunds now in platform. Switch back to main any time.");
+    expect(pushed.json?.notice).toBe(
+      "Pushed branch refunds in platform. Open a PR in it your usual way. You're on refunds now in platform. Switch back to main any time. " +
+        "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.",
+    );
     expect(git(platform, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n").sort())
       .toEqual(["README.md", "services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);
     expect(boardAt(home)).toContain("- refunds, payments: platform not merged yet");
@@ -272,7 +276,8 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     // A teammate clones the team's workspace and carries the build on.
     const will = cloneOf(web.host, "will");
     const carry = kiroIde.next(will);
-    expect((carry.choices as Array<{ label: string }>).map((c) => c.label), JSON.stringify(carry)).toContain("Carry on checkout-ui");
+    // A pushed build waits for its merge: it is said, never offered to carry on; its take still carries it on.
+    expect(String(carry.question), JSON.stringify(carry)).toContain("checkout-ui (pushed, waiting for its merge)");
     expect(run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], will).json).toMatchObject({ resumed: true });
     // Its repo is not checked out in this clone: the build's step offers to clone it, once.
     expect(kiroIde.next(will).ask_type).toBe("unit-clone");

@@ -716,6 +716,7 @@ import { isProjectSubmodule, localRepoOverrideLines, readWorkspaceRepos, REPOS_F
 import { noteReposManifestOffered, reposManifestListsOnlyAddedWorkspace, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
   builtFromAnotherMachine,
+  checkInLine,
   lastCommittedByThisPerson,
   findUnitBuild,
   homeLocation,
@@ -7047,9 +7048,27 @@ function parkedAfterPark(pd: string, parkStdout: string, lead?: string): ParkedD
     );
   }
   const parkedAt = stateContent ? (getField(stateContent, "Parked At Stage") ?? "").trim() : "";
-  return stateContent
-    ? workflowParkedDirective(pd, stateContent, parkedAt, lead)
-    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`, parkedAt, pausedLine(stagePlace(parkedAt), lead));
+  if (!stateContent) {
+    return parkedDirective(`Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`, parkedAt, pausedLine(stagePlace(parkedAt), lead));
+  }
+  // The person's stop is said here, where it is made; a later look over the
+  // parked work re-emits the park without it.
+  const parked = workflowParkedDirective(pd, stateContent, parkedAt, lead);
+  parked.narration = withCheckIn(pd, parked.narration ?? "", stateContent);
+  return parked;
+}
+
+// A stopping point's narration with the check-in line (checkInLine), once in
+// the person's turn: a step emitted twice, or Build and Test's end before the
+// work's own end, says it once.
+function withCheckIn(projectDir: string, narration: string, stateContent?: string): string {
+  const line = checkInLine(projectDir, stateContent);
+  if (line === null) return narration;
+  if (engineSessionId) {
+    if (personLineHeardThisTurn(projectDir, engineSessionId, line)) return narration;
+    if (!isReadOnlyEngineProbe()) markPersonLineHeardThisTurn(projectDir, engineSessionId, line);
+  }
+  return narration ? `${narration} ${line}` : line;
 }
 
 // "Approve, but let's stop there for today": the approval is recorded, then
@@ -9066,6 +9085,38 @@ function planMadeHere(projectDir: string, dirName: string, space: string): boole
   return !planMadeElsewhere(projectDir, readAuditShardEvents(projectDir, dirName, space));
 }
 
+// A Unit build's last hand on it, for the take menu: the Git Name its newest
+// audit row recorded (else who its claim says took it), whether that row is
+// this checkout's, and whether it waits for its merge: pushed, with no stage
+// started since (a redo after the push is building again).
+function buildLastWorked(
+  projectDir: string,
+  built: { space: string; dirName: string },
+  takenBy: unknown,
+): { by: string | null; here: boolean; awaitingMerge: boolean } {
+  let pushed = false;
+  try {
+    pushed = getField(readStateFile(projectDir, built.dirName, built.space), UNIT_PUSH_FIELD)?.trim() === "pushed";
+  } catch {
+    // An unreadable build reads as not pushed.
+  }
+  let rows: ReturnType<typeof readAuditShardEvents> = [];
+  try {
+    rows = sortAttemptEvents(readAuditShardEvents(projectDir, built.dirName, built.space));
+  } catch {
+    // No audit: nobody named.
+  }
+  const last = rows.at(-1);
+  const named = rows.findLast((row) => auditBlockField(row.block, "Git Name"));
+  const pushedAt = rows.findLastIndex((row) => row.event === "UNIT_PUSHED");
+  const startedSince = pushedAt >= 0 && rows.slice(pushedAt + 1).some((row) => row.event === "STAGE_STARTED");
+  return {
+    by: named !== undefined ? auditBlockField(named.block, "Git Name") : typeof takenBy === "string" && takenBy.trim() !== "" ? takenBy.trim() : null,
+    here: last !== undefined && basename(last.shard) === auditShardName(projectDir),
+    awaitingMerge: pushed && !startedSince,
+  };
+}
+
 function unitTakeLook(
   projectDir: string,
   now: boolean,
@@ -9172,7 +9223,32 @@ function unitTakeLook(
         // The claim is the one record of who holds a Unit.
         const holder = claim?.status === "claimed" ? claim.owner : null;
         if (built !== null) {
-          choices.push({ label: `Carry on ${unit}`, detail: `${theTeam(built.space).replace(/^the/, "The")}'s build of it, here.`, command: take.replace("%s", shellArg(unit)) });
+          // Only the person's own team's build is offered to carry on; another
+          // team's is said, with who builds it and where, and a pushed one waits
+          // for its merge. A fresh clone does not know its team yet: each team's
+          // build is offered with its team named, and the take moves the clone to
+          // that team's space. A build in the default space is this workspace's
+          // own (a team's own workspace builds there).
+          const worked = buildLastWorked(projectDir, built, claim?.payload.taken_by);
+          const down = claim?.payload.turned_down;
+          const sentBack = down !== undefined && claim !== undefined ? turnedDownStatus(down, claim.owner) : null;
+          const own = built.space === DEFAULT_SPACE;
+          // The team as the lead named it ("data team"), else its space.
+          const builders = theTeam(claim !== undefined && teamSpaceOf(claim.owner) === built.space ? claim.owner : built.space);
+          if (worked.awaitingMerge && sentBack === null) {
+            building.push(`${unit} (pushed, waiting for its merge)`);
+            continue;
+          }
+          if (team !== null && !own && built.space !== team) {
+            building.push(`${unit} (${sentBack ?? `being built by ${worked.by ?? builders} ${worked.here ? "on this computer" : "on another computer"}`})`);
+            continue;
+          }
+          const whose = worked.by !== null ? `${worked.by}'s` : own ? "Your team's" : `${builders.replace(/^the/, "The")}'s`;
+          choices.push({
+            label: team === null && !own ? `Carry on ${unit} for ${builders}` : `Carry on ${unit}`,
+            detail: `${whose} build of it, ${worked.here ? "on this computer" : "from another computer"}${sentBack === null ? "" : `; ${sentBack}`}.`,
+            command: take.replace("%s", shellArg(unit)),
+          });
           continue;
         }
         if (claim?.payload.taken_by !== undefined) {
@@ -15249,13 +15325,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
     // No stage left to run — the workflow is complete.
     const notPushed = build !== null && (getField(stateContent ?? "", UNIT_PUSH_FIELD)?.trim() !== "pushed" || redone);
+    const finished = "That is everything on the plan. Your work is finished and written up.";
     emit({
       kind: "done",
       reason: `Workflow complete - no in-scope stage remains after ${currentSlug} (scope: ${scope}).${NEW_WORK_HINT}`,
       // The genuine end of the work. The other `done` emissions in this file are
       // loop bookkeeping (a report landed, a read-only command already ran) and
-      // stay silent: the user did not ask about the round-trip.
-      narration: "That is everything on the plan. Your work is finished and written up.",
+      // stay silent: the user did not ask about the round-trip. A Unit's end on
+      // teams across repos is a stopping point; a pushed build heard the
+      // check-in with its push.
+      narration: build !== null && !notPushed ? finished : withCheckIn(pd, finished, stateContent ?? undefined),
       ...(notPushed ? { done_note: `When the person says push, run \`${aidlcToolInvocation("unit")} push\` and say its notice line.` } : {}),
     });
     return;
@@ -24449,7 +24528,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
   const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
-  const narration = [unbuilt, progress].filter(Boolean).join("\n");
+  const approvedLines = [unbuilt, progress].filter(Boolean).join("\n");
+  // The lead's own Build and Test end on teams across repos is a stopping point.
+  const narration = approvedState !== null && approvedTogether.includes("build-and-test") && unitBuildOf(approvedState) === null
+    ? withCheckIn(pd, approvedLines, approvedState)
+    : approvedLines;
   const continues = workflowContinues(pd);
   // The agent's own approval goes on to the next stage, so its lines wait for the reply.
   const approvalNotices = flags.result === "approved" && continues.workflow_continues === true &&

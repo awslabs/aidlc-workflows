@@ -73,7 +73,8 @@ describe("the push", () => {
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
       "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in " +
-        "checkout-api and billing; your other changes are still yours, uncommitted. Switch back to main any time.",
+        "checkout-api and billing; your other changes are still yours, uncommitted. Switch back to main any time. " +
+        "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.",
     );
     expect(git(hosts["checkout-api"], ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toEqual(["README.md", "src/refunds.ts"]);
     // On the Unit's branch, as their own hands would put them; their note came along, uncommitted.
