@@ -11,7 +11,6 @@ import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
 import { normalizeDriveLetter, repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
 
 export const REPOS_FILE = "repos.json";
-// One person's own paths, never committed (AI-DLC's marked .gitignore block).
 export const REPOS_LOCAL_FILE = "repos.local.json";
 
 // Where a workspace's repo list is, in the order it is read: aidlc/repos.json,
@@ -19,6 +18,12 @@ export const REPOS_LOCAL_FILE = "repos.local.json";
 // 2.12 wrote. The one order for every reader, on disk and at a commit.
 export const REPOS_MANIFEST_PLACES = ["aidlc/repos.json", "repos.json"] as const;
 export type ReposManifestPlace = (typeof REPOS_MANIFEST_PLACES)[number];
+
+// One person's own paths, beside the list's first place and read only there:
+// no release before it shipped the file. Never committed: AI-DLC's marked
+// .gitignore block has an unanchored repos.local.json line, which matches here.
+export const REPOS_LOCAL_PLACE =
+  `${REPOS_MANIFEST_PLACES[0].slice(0, REPOS_MANIFEST_PLACES[0].lastIndexOf("/") + 1)}${REPOS_LOCAL_FILE}`;
 
 // The repo list found first, given a way to read one of those paths (a file on
 // disk, or `git show <commit>:<path>` for a workspace that is not here). Null
@@ -368,7 +373,7 @@ const cache = new Map<string, { stamp: string; repos: WorkspaceRepos }>();
 
 export function readWorkspaceRepos(root: string): WorkspaceRepos {
   const manifestPath = reposManifestPath(root);
-  const localPath = join(root, REPOS_LOCAL_FILE);
+  const localPath = join(root, ...REPOS_LOCAL_PLACE.split("/"));
   const stamp = `${manifestPath}|${fileStamp(manifestPath)}|${fileStamp(localPath)}`;
   const cached = cache.get(root);
   if (cached?.stamp === stamp) return cached.repos;
@@ -443,13 +448,13 @@ export function repoNotThereLine(projectDir: string, repoName: string): string {
   const source = repos.pathSource.get(repoName);
   const where = displayRepoPath(source === undefined ? repoName : repos.entries.get(repoName)?.path ?? repoName);
   if (source === REPOS_LOCAL_FILE) {
-    return `${repoName} is not at ${where}, where repos.local.json puts it. Clone it there, or change its path in repos.local.json.`;
+    return `${repoName} is not at ${where}, where repos.local.json puts it. Clone it there, or change its path in ${REPOS_LOCAL_PLACE}.`;
   }
   if (source === REPOS_FILE) {
-    return `${repoName} is not at ${where}, where repos.json puts it. Clone it there, or give its path in repos.local.json.`;
+    return `${repoName} is not at ${where}, where repos.json puts it. Clone it there, or give its path in ${REPOS_LOCAL_PLACE}.`;
   }
   return repos.entries.has(repoName)
-    ? `${repoName} is not at ${where} in this workspace. Clone it there, or give its path in repos.local.json.`
+    ? `${repoName} is not at ${where} in this workspace. Clone it there, or give its path in ${REPOS_LOCAL_PLACE}.`
     : `${repoName} is not at ${where} in this workspace. Clone it there, or list it in repos.json with its path.`;
 }
 

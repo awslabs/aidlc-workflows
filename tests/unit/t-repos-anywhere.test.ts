@@ -166,7 +166,8 @@ describe("repoDir is the one resolver", () => {
   test("one person's repos.local.json overrides path for a listed repo; an unlisted name is one line and ignored", () => {
     const { root, ws } = layout();
     writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", path: "../billing" }] }));
-    writeFileSync(join(ws, "repos.local.json"), JSON.stringify({
+    mkdirSync(join(ws, "aidlc"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", "repos.local.json"), JSON.stringify({
       repos: [{ name: "billing", path: join(root, "src", "billing") }, { name: "extra", path: "../extra" }],
     }));
     expect(repoDir(ws, "billing")).toBe(join(root, "src", "billing"));
@@ -186,10 +187,10 @@ describe("repoDir is the one resolver", () => {
     const { ws } = layout();
     writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", path: "../billing" }, { name: "web" }] }));
     expect(repoNotThereLine(ws, "billing")).toBe(
-      "billing is not at ../billing, where repos.json puts it. Clone it there, or give its path in repos.local.json.",
+      "billing is not at ../billing, where repos.json puts it. Clone it there, or give its path in aidlc/repos.local.json.",
     );
     expect(repoNotThereLine(ws, "web")).toBe(
-      "web is not at web in this workspace. Clone it there, or give its path in repos.local.json.",
+      "web is not at web in this workspace. Clone it there, or give its path in aidlc/repos.local.json.",
     );
     expect(repoNotThereLine(ws, "ghost")).toBe(
       "ghost is not at ghost in this workspace. Clone it there, or list it in repos.json with its path.",
@@ -335,7 +336,8 @@ describe("workspace-sync clones to the path, by path", () => {
     const { root, ws } = layout();
     const bare = bareWithCommit(root, "billing");
     writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", url: bare, path: "../billing" }] }));
-    writeFileSync(join(ws, "repos.local.json"), JSON.stringify({ repos: [{ name: "billing", path: join(root, "src", "billing") }] }));
+    mkdirSync(join(ws, "aidlc"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", "repos.local.json"), JSON.stringify({ repos: [{ name: "billing", path: join(root, "src", "billing") }] }));
     const result = sync(ws);
     expect(result.status, result.out).toBe(0);
     expect(existsSync(join(root, "src", "billing", ".git"))).toBe(true);
@@ -348,8 +350,8 @@ describe("workspace-sync clones to the path, by path", () => {
     const result = sync(ws);
     expect(result.status, result.out).toBe(2);
     expect(result.out).toContain(
-      "billing is not at ../billing, where repos.json puts it. Clone it there, or give its path in repos.local.json. " +
-        'repos.json gives it no "url" and no "org" to clone it from: add its "url" in repos.json, or in repos.local.json for your own copy.',
+      "billing is not at ../billing, where repos.json puts it. Clone it there, or give its path in aidlc/repos.local.json. " +
+        'repos.json gives it no "url" and no "org" to clone it from: add its "url" in repos.json, or in aidlc/repos.local.json for your own copy.',
     );
   });
 

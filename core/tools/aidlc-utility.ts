@@ -149,6 +149,8 @@ import {
   repoCloneable,
   parseWorkspaceManifest,
   readWorkspaceRepos,
+  REPOS_LOCAL_FILE,
+  REPOS_LOCAL_PLACE,
   reposManifestPath,
   repoNotThereLine,
   type WorkspaceManifest,
@@ -4066,7 +4068,7 @@ export function registeredRepoDoctorChecks(projectDir: string): DoctorCheck[] {
         severity: "warn",
         label: `Registered repo "${repo}" has no folder at ${displayRepoPath(repos.entries.get(repo)?.path ?? repo)}, where ${source} puts it: ` +
           "Reverse Engineering would analyse the whole workspace under its name",
-        fix: `${clone}, or ${source === "repos.local.json" ? "change" : "give"} its path in repos.local.json; ${drop}`,
+        fix: `${clone}, or ${source === REPOS_LOCAL_FILE ? "change" : "give"} its path in ${REPOS_LOCAL_PLACE}; ${drop}`,
       });
       continue;
     }
@@ -10023,7 +10025,7 @@ function plannedRepoPath(
     const source = repos.pathSource.get(name) ?? "repos.json";
     die(
       `intent add-repo refused: ${source} puts ${name} at ${displayRepoPath(listed.path ?? name)}, not ${shown}. ` +
-        "Change its path there (or in repos.local.json for your own copy), then add it again. Nothing was changed.",
+        `Change its path there (or in ${REPOS_LOCAL_PLACE} for your own copy), then add it again. Nothing was changed.`,
     );
   }
   const there = hasRealGitEntry(dir);
@@ -10043,7 +10045,7 @@ function plannedRepoPath(
   const next = workspaceManifestWith(raw, repos.manifest?.org, { name, path: shown, ...(kept === undefined ? {} : { url: kept }) });
   if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
   const share = isAbsolute(shown) || /^[A-Za-z]:\//.test(shown)
-    ? "It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in repos.local.json."
+    ? `It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in ${REPOS_LOCAL_PLACE}.`
     : "Commit it to share it with your team.";
   const stripped = kept !== address ? " Its address there leaves out the credential." : "";
   const where = resolve(dir) === resolve(projectDir) ? "as the workspace folder itself" : `at ${shown}`;
@@ -10132,7 +10134,7 @@ function plannedRepoClone(
     if (url === undefined && entry.url === undefined && manifest.org === undefined) {
       die(
         `${repoNotThereLine(projectDir, name)} repos.json gives it no "url" and no "org" to clone it from: ` +
-          "add its \"url\" in repos.json, or in repos.local.json for your own copy, or give it with --url. Nothing was changed.",
+          `add its "url" in repos.json, or in ${REPOS_LOCAL_PLACE} for your own copy, or give it with --url. Nothing was changed.`,
       );
     }
     const repo = url === undefined ? entry : { ...entry, url };

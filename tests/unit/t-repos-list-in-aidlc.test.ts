@@ -1,4 +1,4 @@
-// covers: function:workspaceManifestAt, function:reposManifestPath, function:moveReposManifestIntoAidlc, function:trackedReposManifestAtRoot, function:reposManifestMovedIntoAidlc, function:reposListGoingBackLine, function:readWorkspaceRepos, function:aidlcOwnedSourceKey, function:sourceChangedOutsideAidlc, function:workspaceManifestChecks, subcommand:aidlc-unit:share, file:core/tools/aidlc-workspace-manifest.ts
+// covers: function:workspaceManifestAt, function:reposManifestPath, function:moveReposManifestIntoAidlc, function:trackedReposManifestAtRoot, function:reposManifestMovedIntoAidlc, function:reposListGoingBackLine, function:readWorkspaceRepos, function:repoNotThereLine, function:aidlcOwnedSourceKey, function:sourceChangedOutsideAidlc, function:workspaceManifestChecks, subcommand:aidlc-unit:share, file:core/tools/aidlc-workspace-manifest.ts
 //
 // The workspace's repo list lives in aidlc/repos.json from 2.12, checked in with
 // the team's record; a root repos.json an older AI-DLC wrote is still read. One
@@ -18,8 +18,10 @@ import { join } from "node:path";
 import {
   moveReposManifestIntoAidlc,
   readWorkspaceRepos,
+  REPOS_LOCAL_PLACE,
   REPOS_MANIFEST_PLACES,
   REPOS_MOVED_LINE,
+  repoNotThereLine,
   reposListGoingBackLine,
   reposManifestMovedIntoAidlc,
   reposManifestPath,
@@ -92,14 +94,23 @@ describe("where the repo list is read", () => {
     expect(existsSync(join(bare, "aidlc"))).toBe(false);
   });
 
-  test("one person's repos.local.json stays at the root and still gives the paths for aidlc/'s list", () => {
-    const dir = workspace();
-    writeFileSync(join(dir, "aidlc", "repos.json"), list("storefront"));
-    writeFileSync(join(dir, "repos.local.json"), JSON.stringify({ repos: [{ name: "storefront", path: "../mine" }] }));
-    expect(readWorkspaceRepos(dir).entries.get("storefront")?.path).toBe("../mine");
+  test("one person's repos.local.json sits beside the list in aidlc/ and is read only there", () => {
+    expect(REPOS_LOCAL_PLACE).toBe("aidlc/repos.local.json");
+    for (const listAt of ["aidlc/repos.json", "repos.json"]) {
+      const dir = workspace();
+      writeFileSync(join(dir, ...listAt.split("/")), list("storefront", "billing"));
+      writeFileSync(join(dir, "aidlc", "repos.local.json"), JSON.stringify({ repos: [{ name: "storefront", path: "../mine" }] }));
+      writeFileSync(join(dir, "repos.local.json"), JSON.stringify({ repos: [{ name: "billing", path: "../theirs" }] }));
+      const repos = readWorkspaceRepos(dir);
+      expect(repos.entries.get("storefront")?.path, listAt).toBe("../mine");
+      expect(repos.entries.get("billing")?.path, listAt).toBeUndefined();
+      expect(repoNotThereLine(dir, "billing"), listAt).toBe(
+        "billing is not at billing in this workspace. Clone it there, or give its path in aidlc/repos.local.json.",
+      );
+    }
   });
 
-  test("the shipped .gitignore blocks keep aidlc/repos.json in git and the root repos.local.json out", () => {
+  test("the shipped .gitignore blocks keep aidlc/repos.json in git and aidlc/repos.local.json out", () => {
     for (const harness of readdirSync(join(REPO_ROOT, "harness"))) {
       const block = join(REPO_ROOT, "harness", harness, "dot-gitignore");
       if (!existsSync(block)) continue;
@@ -107,7 +118,7 @@ describe("where the repo list is read", () => {
       writeFileSync(join(dir, ".gitignore"), readFileSync(block, "utf-8"));
       const ignored = (path: string) => spawnSync("git", ["check-ignore", "-q", path], { cwd: dir }).status === 0;
       expect(ignored("aidlc/repos.json"), harness).toBe(false);
-      expect(ignored("repos.local.json"), harness).toBe(true);
+      expect(ignored("aidlc/repos.local.json"), harness).toBe(true);
     }
   });
 

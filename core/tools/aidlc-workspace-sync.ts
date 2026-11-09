@@ -51,6 +51,7 @@ import {
   isProjectSubmodule,
   parseWorkspaceManifest,
   readWorkspaceRepos,
+  REPOS_LOCAL_PLACE,
   reposManifestPath,
   repoNotThereLine,
   type WorkspaceManifest,
@@ -854,7 +855,7 @@ function preflight(
       if (cloneUrl(manifest, repo) === null) {
         notCloned.push(
           `${repoNotThereLine(root, repo.name)} repos.json gives it no "url" and no "org" to clone it from: ` +
-            `add its "url" in repos.json, or in repos.local.json for your own copy.`,
+            `add its "url" in repos.json, or in ${REPOS_LOCAL_PLACE} for your own copy.`,
         );
         continue;
       }

@@ -445,7 +445,7 @@ your comments and layout kept otherwise, with the managed `.gitignore` block and
 `aidlc.code-workspace` refreshed), and the repo is recorded. A path written on
 Windows (`..\billing`) reads the same on every platform. The line says to
 commit `repos.json` to share it, or, for a path on this machine only, that a
-teammate whose copy is elsewhere gives theirs in `repos.local.json`. A repo
+teammate whose copy is elsewhere gives theirs in `aidlc/repos.local.json`. A repo
 `repos.json` already puts somewhere else is refused with where it is, and how to
 change it.
 
@@ -3375,7 +3375,7 @@ are replaced successfully remain under the ignored
 `.aidlc-workspace-sync-txn-*` folder left by a run that was cut off is ignored
 too and can be deleted. The tool clones
 repos declared in `repos.json` but missing on disk into the folder each one's
-`path` gives (yours from `repos.local.json` when you set one; a clone into a
+`path` gives (yours from `aidlc/repos.local.json` when you set one; a clone into a
 path outside the workspace is staged beside that folder, so another drive works),
 rewrites the managed block in the workspace `.gitignore` to one `/{path}/` line
 per repo whose checkout sits inside the workspace (never the workspace itself,

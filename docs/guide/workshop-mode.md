@@ -672,7 +672,7 @@ work does: after every stage, or once at its end.
   access to it, then take the Unit again.
 - A repo the lead's work records that your workspace has no checkout of is
   said once, with where to clone it or how to give its path in
-  `repos.local.json`. When `repos.json` has its address, the build's first step
+  `aidlc/repos.local.json`. When `repos.json` has its address, the build's first step
   asks instead, once: "billing is not at ../billing yet, where repos.json puts
   it. Do you want me to clone it there?" On your yes it is cloned there with your own git, and its
   files are nobody's change at the Unit's gates. While your own

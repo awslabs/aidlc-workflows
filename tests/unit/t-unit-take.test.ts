@@ -1048,7 +1048,7 @@ describe("a likely repo this workspace has no copy of", () => {
     const offer = next(alice);
     expect(offer.ask_type, JSON.stringify(offer).slice(0, 500)).toBe("unit-clone");
     expect(String(offer.question)).toBe("billing is not at billing in this workspace yet. Do you want me to clone it there?");
-    expect(String(offer.question)).not.toContain("give its path in repos.local.json");
+    expect(String(offer.question)).not.toContain("give its path in aidlc/repos.local.json");
     const choices = offer.choices as Array<{ label: string; command?: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Clone billing", "Not now"]);
     expect(choices[0].command).toEndWith("aidlc-utility.ts intent add-repo billing");
@@ -1074,7 +1074,7 @@ describe("a likely repo this workspace has no copy of", () => {
     const mine = tempDir("alice-code");
     cloneCode(hosts["checkout-api"], mine, "api", "alice");
     // Their own path for checkout-api, with a slip: a trailing comma.
-    writeFileSync(join(alice, "repos.local.json"), `{ "repos": [ { "name": "checkout-api", "path": ${JSON.stringify(join(mine, "api"))} }, ] }\n`);
+    writeFileSync(join(alice, "aidlc", "repos.local.json"), `{ "repos": [ { "name": "checkout-api", "path": ${JSON.stringify(join(mine, "api"))} }, ] }\n`);
     const took = run(UNIT, ["take", "refunds", "--home", HOME, "--team", "payments"], alice);
     expect(took.status, took.out).toBe(0);
     const notice = String(took.json?.notice);
@@ -1097,7 +1097,7 @@ describe("a likely repo this workspace has no copy of", () => {
     const alice = cloneOf(home.remote, "alice");
     // Her own copies live beside the workspace, as her repos.local.json says.
     for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as "billing"], join(alice, ".."), `${name}-mine`, "alice");
-    writeFileSync(join(alice, "repos.local.json"), `${JSON.stringify({ repos: [
+    writeFileSync(join(alice, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [
       { name: "checkout-api", path: "../checkout-api-mine" },
       { name: "billing", path: "../billing-mine" },
     ] })}\n`);

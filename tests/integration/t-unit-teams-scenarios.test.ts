@@ -110,7 +110,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
       org: "your-org",
       repos: Object.keys(hosts).map((name) => ({ name, url: "", path: `../${name}` })),
     }, null, 2)}\n`);
-    writeFileSync(join(home.dir, "repos.local.json"), `${JSON.stringify({
+    writeFileSync(join(home.dir, "aidlc", "repos.local.json"), `${JSON.stringify({
       repos: Object.keys(hosts).map((name) => ({ name, path: join(home.dir, name).replace(/\\/g, "/") })),
     }, null, 2)}\n`);
     appendFileSync(join(home.dir, ".gitignore"), "repos.local.json\n");
@@ -190,7 +190,7 @@ describe("scenario 2: one big code repo", () => {
     // The lead keeps platform in a folder of their own.
     const leads = tempDir("lead-src");
     git(leads, ["clone", "-q", platform, join(leads, "platform")]);
-    writeFileSync(join(home.dir, "repos.local.json"), `${JSON.stringify({ repos: [{ name: "platform", path: join(leads, "platform") }] }, null, 2)}\n`);
+    writeFileSync(join(home.dir, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [{ name: "platform", path: join(leads, "platform") }] }, null, 2)}\n`);
     appendFileSync(join(home.dir, ".gitignore"), "repos.local.json\n");
     commitAll(home.dir, "the workspace beside platform");
     teamsChosen(home, ["refunds=payments", "checkout-ui=web"]);

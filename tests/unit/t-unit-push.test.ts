@@ -457,7 +457,7 @@ describe("the push", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(home.remote, "alice");
     for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as "billing"], join(alice, ".."), `${name}-mine`, "alice");
-    writeFileSync(join(alice, "repos.local.json"), `${JSON.stringify({ repos: [
+    writeFileSync(join(alice, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [
       { name: "checkout-api", path: "../checkout-api-mine" },
       { name: "billing", path: "../billing-mine" },
     ] })}\n`);

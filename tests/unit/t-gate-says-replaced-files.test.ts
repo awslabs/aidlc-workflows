@@ -366,7 +366,7 @@ describe("t-gate-says-replaced-files for a repo beside the workspace", () => {
     // The content the build replaced, as the walk hashes it.
     const sha = committedTextSha256(Buffer.from(README, "utf-8"));
     writeFileSync(join(ws, "repos.json"), `${JSON.stringify({ repos: [{ name: "alerts-web", path: "../alerts-web" }] })}\n`, "utf-8");
-    writeFileSync(join(ws, "repos.local.json"), `${JSON.stringify({ repos: [{ name: "alerts-web", path: `../${basename(outside)}` }] })}\n`, "utf-8");
+    writeFileSync(join(ws, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [{ name: "alerts-web", path: `../${basename(outside)}` }] })}\n`, "utf-8");
     writeFileSync(join(outside, "README.md"), "# Replaced\n", "utf-8");
     const line = broughtFilesLine(withWayBack(ws, [{ repo: "alerts-web", path: "README.md", deleted: false, sha }]));
     expect(line).toContain(`To put it back, run \`git -C ../${basename(outside)} checkout HEAD -- README.md\`.`);

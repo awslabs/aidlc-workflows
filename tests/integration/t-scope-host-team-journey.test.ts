@@ -25,7 +25,7 @@
 // Unit and its way back, and the lead's re-hold of a Unit.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
@@ -132,7 +132,8 @@ function teamClone(home: Home, hosts: Record<string, string>, plan: Plan, opts: 
     folders.set(repo, relative(dir, join(own, repo)));
   }
   if (own !== null) {
-    writeFileSync(join(dir, "repos.local.json"), `${JSON.stringify({
+    mkdirSync(join(dir, "aidlc"), { recursive: true });
+    writeFileSync(join(dir, "aidlc", "repos.local.json"), `${JSON.stringify({
       repos: plan.repos.map(({ repo }) => ({ name: repo, path: join(own, repo).replace(/\\/g, "/") })),
     }, null, 2)}\n`);
   }

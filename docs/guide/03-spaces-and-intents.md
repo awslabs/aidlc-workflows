@@ -613,9 +613,9 @@ it, is still read, and the next refresh moves it into `aidlc/`
 - A repo name is the name of one folder, with the characters a discovered folder
   may have (above).
 
-**Your own paths: `repos.local.json`.** When your disk differs from the team's
-layout (your clones live in `C:/src`, say), put a `repos.local.json` beside
-`repos.json`. It has the same shape and is read only for `path`, `url` and
+**Your own paths: `aidlc/repos.local.json`.** When your disk differs from the team's
+layout (your clones live in `C:/src`, say), put a `repos.local.json` in `aidlc/`,
+beside `aidlc/repos.json`; AI-DLC reads it only there. It has the same shape and is read only for `path`, `url` and
 `branch` of repos `repos.json` lists; a name `repos.json` does not list is
 ignored, and `--doctor` and the sync tool say so in one line. It is never
 committed: AI-DLC's own block in `.gitignore` lists it.
@@ -632,7 +632,7 @@ Wherever a repo lives, AI-DLC treats it as part of the project: a build waits
 for its approved plan before writing there, and a Code Generation target in it
 is spelled `<repo>/<path>`. When a repo is not where the files say, AI-DLC says
 where it looked and the way forward: "billing is not at ../billing, where
-repos.json puts it. Clone it there, or give its path in repos.local.json."
+repos.json puts it. Clone it there, or give its path in aidlc/repos.local.json."
 
 **Writing it from what is here.** When work built by teams records repos, in a
 workspace with no `repos.json`, AI-DLC offers once, at a stage boundary (when
@@ -726,7 +726,7 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent creates and cursor switches. |
 | `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
 | `aidlc/.aidlc-request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
-| `repos.local.json` | Where *your* clones of the workspace's repos live, when your disk differs from the team's layout in `repos.json` (see [Declaring the repo set](#declaring-the-repo-set-optional-manifest)). It is yours alone. |
+| `aidlc/repos.local.json` | Where *your* clones of the workspace's repos live, when your disk differs from the team's layout in `repos.json` (see [Declaring the repo set](#declaring-the-repo-set-optional-manifest)). It is yours alone. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* finds documents that live outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. No command creates such a link today (`onboard` copies a file into `documents/`), so you will not normally see this file. |
 

@@ -309,7 +309,8 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
   test("a repos.local.json that cannot be read is a warning, not a passing row", () => {
     const ws = freshGitWorkspace();
     writeManifest(ws, MANIFEST);
-    writeFileSync(join(ws, "repos.local.json"), '{ "repos": [ { "name": "checkout-api", "path": "../mine" }, ] }\n', "utf-8");
+    mkdirSync(join(ws, "aidlc"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", "repos.local.json"), '{ "repos": [ { "name": "checkout-api", "path": "../mine" }, ] }\n', "utf-8");
     const row = workspaceManifestChecks(ws).find((result) => result.label.startsWith("Your repos.local.json:"));
     expect(row?.pass).toBe(false);
     expect(row?.severity).toBe("warn");
