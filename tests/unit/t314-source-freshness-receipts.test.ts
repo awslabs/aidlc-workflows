@@ -6777,7 +6777,8 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // add-repo --path: the repo the person named beside the workspace; the
-  // install writes repos.json and workspace-sync's two files at the root.
+  // install writes the repo list in aidlc/ and workspace-sync's two files at
+  // the root.
   test("a repo added at the folder the person named: it and the files written at the root are no Unit's change", () => {
     const outside = join(proj, "..", `${basename(proj)}-billing`);
     mkdirSync(join(outside, "lib"), { recursive: true });
@@ -6788,7 +6789,7 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     git(outside, ["add", "-A"]);
     git(outside, ["commit", "-qm", "seed"]);
     intent("add-repo", "billing", "--path", `../${basename(proj)}-billing`);
-    expect(existsSync(join(proj, "repos.json"))).toBe(true);
+    expect(existsSync(join(proj, "aidlc", "repos.json"))).toBe(true);
     reviewUnitsInAppA();
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("no Unit's review covers");
