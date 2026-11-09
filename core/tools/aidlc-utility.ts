@@ -2455,7 +2455,7 @@ To get started:
   // Teams across repos sharing one workspace by git: what the last pull here brought from the others.
   const acrossRepos = unitBuildOf(content) !== null || (isTeamUnitOwnership(content) && homeLocation(content) !== null);
   const arrived = acrossRepos ? arrivedAtLastPull(projectDir, selection.space) : null;
-  const arrivedLine = arrived === null ? "" : `From others:    ${arrived} (at your last pull)\n`;
+  const arrivedLine = arrived === null ? "" : `From others:    ${arrived} (at your last pull that brought changes)\n`;
   // Work an older AI-DLC recorded, brought up to this one in place: said here
   // on purpose, never in chat.
   const upgrade = stateUpgradeRecord(projectDir, selection.intent ?? undefined, selection.space);

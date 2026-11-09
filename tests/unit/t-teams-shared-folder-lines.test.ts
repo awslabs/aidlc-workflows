@@ -108,6 +108,22 @@ describe("Carry on in a shared workspace", () => {
       expect.objectContaining({ label: "Carry on refunds for the payments team", detail: "alice's build of it, from another computer; turned down in billing, back with payments." }),
     ]);
   });
+
+  test("a build the lead sent back from Build and Test says it was the lead's Build and Test", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    checkIn(alice, "payments: refunds pushed");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const sent = run(UNIT, ["send-back", "refunds", "--person-words", "the refund total is off by one"], home.dir);
+    expect(sent.status, sent.out).toBe(0);
+    const look = next(cloneOf(home.remote, "abe"));
+    expect(carryOns(look), JSON.stringify(look)).toEqual([
+      expect.objectContaining({ detail: "alice's build of it, from another computer; sent back from the lead's Build and Test, back with payments." }),
+    ]);
+    expect(JSON.stringify(look)).not.toContain("your Build and Test");
+  });
 });
 
 describe("the check-in line", () => {
@@ -132,7 +148,7 @@ describe("the check-in line", () => {
     expect(pushed.out).not.toContain("own folder");
   });
 
-  test("said at the build's end when the push was put off, and not on the look after a check-in", () => {
+  test("said when the push is put off, and not again by a later look at the finished build", () => {
     const { alice, record } = refundsTaken();
     const step = next(alice);
     expect(JSON.stringify(step)).not.toContain("git add aidlc");
@@ -142,10 +158,15 @@ describe("the check-in line", () => {
       .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
       .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
     expect(next(alice).ask_type).toBe("unit-push");
-    expect(run(UNIT, ["push", "--later"], alice).status).toBe(0);
-    const end = next(alice);
-    expect(end.kind, JSON.stringify(end)).toBe("done");
-    expect(String(end.narration)).toEndWith(LINE);
+    const later = run(UNIT, ["push", "--later"], alice);
+    expect(later.status, later.out).toBe(0);
+    expect(later.json?.notice).toBe(`Nothing is pushed. I'll push refunds when you want it to go to the lead. ${LINE}`);
+    // The end, and every look after it, carry nothing more.
+    for (let look = 0; look < 2; look++) {
+      const end = next(alice);
+      expect(end.kind, JSON.stringify(end)).toBe("done");
+      expect(JSON.stringify(end)).not.toContain("git add aidlc");
+    }
   });
 
   test("said at the lead's own Build and Test end, with the approval", () => {
@@ -184,7 +205,14 @@ describe("where things stand", () => {
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(arrivedAtLastPull(ana, "payments")).toBe("the web team's checkout-ui");
     const status = run(UTILITY, ["status"], ana, ENV);
-    expect(status.out).toContain("From others:    the web team's checkout-ui (at your last pull)");
+    expect(status.out).toContain("From others:    the web team's checkout-ui (at your last pull that brought changes)");
+    // Another pull, straight after, that brings the lead's change: only that one is said.
+    writeFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "notes.md"), "Lead's note.\n");
+    git(home.dir, ["pull", "-q", "--no-rebase", "--no-edit"]);
+    checkIn(home.dir, "the lead's note");
+    git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
+    expect(arrivedAtLastPull(ana, "payments")).toStartWith("the lead's ");
+    expect(arrivedAtLastPull(ana, "payments")).not.toContain("checkout-ui");
   });
 });
 

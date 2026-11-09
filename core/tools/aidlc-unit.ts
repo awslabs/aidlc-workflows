@@ -6990,7 +6990,8 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (bareFlags.has("later") || flags.later !== undefined) {
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
     finishBuildRecord(pd);
-    console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you want it to go to the lead.` }));
+    const later = [`Nothing is pushed. I'll push ${unit} when you want it to go to the lead.`, checkInLine(pd)].filter((line) => line !== null);
+    console.log(JSON.stringify({ pushed: false, notice: later.join(" ") }));
     return;
   }
   // A repo the Unit changed that the home's plan did not list is fine
@@ -7355,7 +7356,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     }, pd);
   });
   if (homeHasIt) finishBuildRecord(pd);
-  const checkIn = checkInLine(pd);
+  const checkIn = homeHasIt ? checkInLine(pd) : null;
   if (checkIn !== null) lines.push(checkIn);
   console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), notice: lines.join(" ") }));
 }

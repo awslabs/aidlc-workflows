@@ -7058,16 +7058,12 @@ function parkedAfterPark(pd: string, parkStdout: string, lead?: string): ParkedD
   return parked;
 }
 
-// A stopping point's narration with the check-in line (checkInLine), once in
-// the person's turn: a step emitted twice, or Build and Test's end before the
-// work's own end, says it once.
+// A stopping point's narration with the check-in line (checkInLine). Each
+// caller is an event that happens once (a park, an approval), never a step a
+// later look emits again.
 function withCheckIn(projectDir: string, narration: string, stateContent?: string): string {
   const line = checkInLine(projectDir, stateContent);
   if (line === null) return narration;
-  if (engineSessionId) {
-    if (personLineHeardThisTurn(projectDir, engineSessionId, line)) return narration;
-    if (!isReadOnlyEngineProbe()) markPersonLineHeardThisTurn(projectDir, engineSessionId, line);
-  }
   return narration ? `${narration} ${line}` : line;
 }
 
@@ -9106,8 +9102,10 @@ function buildLastWorked(
   } catch {
     // No audit: nobody named.
   }
-  const last = rows.at(-1);
+  // Who and where come from the same row, so a teammate who carried it on and
+  // has not decided anything yet is not named for the earlier hand's computer.
   const named = rows.findLast((row) => auditBlockField(row.block, "Git Name"));
+  const last = named ?? rows.at(-1);
   const pushedAt = rows.findLastIndex((row) => row.event === "UNIT_PUSHED");
   const startedSince = pushedAt >= 0 && rows.slice(pushedAt + 1).some((row) => row.event === "STAGE_STARTED");
   return {
@@ -9231,7 +9229,7 @@ function unitTakeLook(
           // own (a team's own workspace builds there).
           const worked = buildLastWorked(projectDir, built, claim?.payload.taken_by);
           const down = claim?.payload.turned_down;
-          const sentBack = down !== undefined && claim !== undefined ? turnedDownStatus(down, claim.owner) : null;
+          const sentBack = down !== undefined && claim !== undefined ? turnedDownStatus(down, claim.owner, "the lead's") : null;
           const own = built.space === DEFAULT_SPACE;
           // The team as the lead named it ("data team"), else its space.
           const builders = theTeam(claim !== undefined && teamSpaceOf(claim.owner) === built.space ? claim.owner : built.space);
@@ -15325,16 +15323,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
     // No stage left to run — the workflow is complete.
     const notPushed = build !== null && (getField(stateContent ?? "", UNIT_PUSH_FIELD)?.trim() !== "pushed" || redone);
-    const finished = "That is everything on the plan. Your work is finished and written up.";
     emit({
       kind: "done",
       reason: `Workflow complete - no in-scope stage remains after ${currentSlug} (scope: ${scope}).${NEW_WORK_HINT}`,
       // The genuine end of the work. The other `done` emissions in this file are
       // loop bookkeeping (a report landed, a read-only command already ran) and
-      // stay silent: the user did not ask about the round-trip. A Unit's end on
-      // teams across repos is a stopping point; a pushed build heard the
-      // check-in with its push.
-      narration: build !== null && !notPushed ? finished : withCheckIn(pd, finished, stateContent ?? undefined),
+      // stay silent: the user did not ask about the round-trip.
+      narration: "That is everything on the plan. Your work is finished and written up.",
       ...(notPushed ? { done_note: `When the person says push, run \`${aidlcToolInvocation("unit")} push\` and say its notice line.` } : {}),
     });
     return;
@@ -17924,9 +17919,9 @@ function teamHomeClaims(
 
 // A Unit back with its team: turned down in one of its repos, or sent back
 // from the lead's own Build and Test (which names no repo).
-function turnedDownStatus(down: { repo: string; from?: string }, team: string): string {
+function turnedDownStatus(down: { repo: string; from?: string }, team: string, whose = "your"): string {
   return down.from === "build-and-test"
-    ? `sent back from your Build and Test, back with ${team}`
+    ? `sent back from ${whose} Build and Test, back with ${team}`
     : `turned down in ${down.repo}, back with ${team}`;
 }
 

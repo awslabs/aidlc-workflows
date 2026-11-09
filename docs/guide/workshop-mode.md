@@ -664,8 +664,8 @@ work does: after every stage, or once at its end.
   with whose build it is and whether it was last worked on this computer or
   another. Another team's build is listed as being built, by whom and where,
   never offered. A pushed build is listed as waiting for its merge, until the
-  lead turns it down or sends it back from Build and Test; then it is offered to
-  its team again with those words. In a fresh clone, before your team is known,
+  lead turns it down or sends it back from the lead's Build and Test; then it is
+  offered to its team again with those words. In a fresh clone, before your team is known,
   each team's build is offered with its team named (**Carry on <unit> for the
   payments team**), and picking one makes that team your active space.
 - A lead's project you can read but not push to: a Unit held for your team is still
@@ -773,13 +773,14 @@ one, `aidlc.settings.json` at the workspace root. Tool folders (`.claude/`,
 runs `aidlc config` in their own clone for the tool they use.
 
 AI-DLC says so once at each stopping point of teams' work: when you stop for
-now, at your Unit's push, at the end of a build you have not pushed, and at the
+now, when your Unit is pushed, when you say **Not now** to its push, and at the
 lead's project when Build and Test is approved: "Your teammates get where this
 work stands when you check it in: `git add aidlc`, then commit and push." It
 never goes by what git shows changed, since AI-DLC's own record changes at every
 step. Asked where things stand (`/aidlc --status`), a clone also says what its
-last `git pull` brought from the other teams, for example "From others: the web
-team's checkout-ui (at your last pull)".
+last `git pull` that brought changes brought from the other teams, for example
+"From others: the web team's checkout-ui (at your last pull that brought
+changes)".
 
 ### Start early, and change a shared input
 

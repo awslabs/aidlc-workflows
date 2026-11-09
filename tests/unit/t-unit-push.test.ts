@@ -817,7 +817,10 @@ describe("the push", () => {
     expect(choices[1].command).toEndWith("aidlc-unit.ts push --later");
     const later = run(UNIT, ["push", "--later"], alice);
     expect(later.status, later.out).toBe(0);
-    expect(later.json?.notice).toBe("Nothing is pushed. I'll push refunds when you want it to go to the lead.");
+    expect(later.json?.notice).toBe(
+      "Nothing is pushed. I'll push refunds when you want it to go to the lead. " +
+        "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.",
+    );
     expect(tellsWhatToType(ask.question, ask.choices, later.json?.notice)).toBe(false);
     const end = next(alice);
     expect(end.kind, JSON.stringify(end)).toBe("done");

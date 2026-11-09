@@ -500,20 +500,24 @@ export function checkInLine(projectDir: string, stateContent?: string): string |
   return remotes.status === 0 && remotes.stdout.trim() !== "" ? CHECK_IN_LINE : null;
 }
 
-// What the person's last `git pull` here brought from the other spaces of a
-// workspace teams share: each record by its Unit, or the work's own name, with
-// whose it is. Read from this clone's own reflog, so it holds until the next
-// pull and nothing is written. Null with no pull here, nothing from others, or
-// no git.
+// What the person's last `git pull` here that brought changes brought from the
+// other spaces of a workspace teams share: each record by its Unit, or the
+// work's own name, with whose it is. Read from this clone's own reflog (a pull
+// that brought nothing writes no entry), so nothing is written. Null with no
+// such pull here, nothing from others, or no git.
 export function arrivedAtLastPull(projectDir: string, ownSpace: string): string | null {
   const reflog = spawnSync("git", ["-C", projectDir, "reflog", "-n", "200", "--format=%H%x00%gs"], { encoding: "utf-8", timeout: 10_000 });
   if (reflog.status !== 0) return null;
   const rows = reflog.stdout.split("\n").filter((row) => row.includes("\u0000")).map((row) => row.split("\u0000") as [string, string]);
-  // Newest first: the last pull's entries (a rebase pull writes several), then where it started.
+  // Newest first. A pull is one entry; a rebase pull writes its steps
+  // ("pull --rebase (finish)", "(pick)") back to its "(start)" entry.
   const first = rows.findIndex(([, subject]) => /^pull\b/.test(subject));
   if (first === -1) return null;
   let last = first;
-  while (last + 1 < rows.length && /^pull\b/.test(rows[last + 1][1])) last++;
+  if (/^pull\b[^:]*\((?!start\))[^)]*\):/.test(rows[first][1])) {
+    const start = rows.findIndex(([, subject], at) => at > first && /^pull\b[^:]*\(start\):/.test(subject));
+    if (start !== -1) last = start;
+  }
   if (last + 1 >= rows.length) return null;
   const diff = spawnSync("git", ["-C", projectDir, "diff", "--name-only", rows[last + 1][0], rows[first][0], "--", "aidlc/spaces"], { encoding: "utf-8", timeout: 10_000 });
   if (diff.status !== 0) return null;
