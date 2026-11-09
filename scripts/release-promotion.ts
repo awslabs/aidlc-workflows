@@ -386,6 +386,23 @@ export function publicationStatus(version: string, repository: string, run: Comm
   return published;
 }
 
+// What a person runs to upgrade. From 2.12 `aidlc update` is all: each
+// project catches up the next time it is opened. An earlier release, promoted
+// later, keeps the words it shipped with.
+function upgradeBlocks(version: string): string[] {
+  const [major, minor] = version.split(".").map(Number);
+  if (major > 2 || (major === 2 && minor >= 12)) {
+    return [
+      "```bash\naidlc update\n```",
+      "Each project catches up the next time you open it; open work carries on. `aidlc doctor` in a project shows whether it is on this release.",
+    ];
+  }
+  return [
+    "```bash\naidlc update\ncd /path/to/project\naidlc config --yes\naidlc doctor\n```",
+    "Open work carries on through the refresh. When a project contains multiple harnesses, run `aidlc config --harness <name> --yes` for each harness you want to refresh.",
+  ];
+}
+
 // The stable page, the only one the release publishes. The preview's test
 // warnings and its failure report stay on the preview's page, which the
 // Promoted line opens; the promotion record keeps the warning lines.
@@ -400,8 +417,7 @@ export function promotionNotes(p: Promotion): string {
     ...(entry.summary ? [entry.summary] : []),
     `**Compatibility:** ${entry.compatibility}.${entry.affected ? ` ${entry.affected}` : ""}`,
     "## Upgrade",
-    "```bash\naidlc update\ncd /path/to/project\naidlc config --yes\naidlc doctor\n```",
-    "Open work carries on through the refresh. When a project contains multiple harnesses, run `aidlc config --harness <name> --yes` for each harness you want to refresh.",
+    ...upgradeBlocks(p.version),
     ...entry.steps,
     // Copy installs use their own Bun; 1.4.4 includes the CVE-2026-111497 fix.
     `Manual-copy users must copy the complete \`runtime/<harness>/\` tree from [\`aidlc-copy-runtime-${p.version}.tar.gz\`](${download}/aidlc-copy-runtime-${p.version}.tar.gz). ` +

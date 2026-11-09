@@ -393,6 +393,13 @@ describe("the stable page", () => {
     expect(thanks).not.toContain("## New Contributors");
   });
 
+  test("from 2.12 the upgrade is aidlc update alone, each project catching up when opened; an earlier release keeps its words", () => {
+    const page = promotionNotes({ ...shipped, version: "2.12.0", contributors: [] });
+    expect(page).toContain("## Upgrade\n\n```bash\naidlc update\n```\n\nEach project catches up the next time you open it; open work carries on.");
+    expect(page).not.toContain("aidlc config --yes");
+    expect(promotionNotes({ ...shipped, version: "2.11.4", contributors: [] })).toContain("aidlc update\ncd /path/to/project\naidlc config --yes");
+  });
+
   test("the copy-channel line names a Bun version with the Brotli security fix", () => {
     expect(promotionNotes(shipped)).toContain("This installation path requires **Bun 1.4.4 or newer**");
     expect(readFileSync(join(REPO_ROOT, "docs/guide/18-install-and-lifecycle.md"), "utf8")).toMatch(/^## Copy Channel$/m);
