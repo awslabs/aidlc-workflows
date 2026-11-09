@@ -305,9 +305,9 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   status: { name: false, options: [], usage: "unit status" },
   take: {
     name: true,
-    options: ["home", "home-space", "team"],
+    options: ["home", "home-space", "team", "from"],
     switches: ["early", "lead-rules"],
-    usage: "unit take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] [--lead-rules]",
+    usage: "unit take <unit> --home <record> [--home-space <space>] [--from <lead's project address>] [--team <label>] [--early] [--lead-rules]",
   },
   "turned-down": {
     name: true,

@@ -12,6 +12,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -27,6 +28,7 @@ import {
   codeHost,
   ENV,
   git,
+  GIT_ENV,
   HOME_RECORD,
   makeHome,
   mergeOnHost,
@@ -103,6 +105,27 @@ describe("starting early", () => {
     expect(git(join(dana, "billing"), ["rev-parse", "HEAD"])).toBe(git(hosts.billing, ["rev-parse", "refunds"]));
     // The home's board shows it started early.
     expect(String(next(home.dir).narration)).toContain("- reporting, data: building early on refunds, taken by dana");
+  });
+
+  // An early start's branch starts at another team's pushed branch: tracking
+  // it, a plain git push before AI-DLC's own (which sets the Unit's upstream)
+  // was refused, or with push.default=upstream went onto that team's branch.
+  test("an early start's branch tracks nothing: a plain git push never lands on the dependency's branch", () => {
+    const { dana, hosts } = refundsPushed();
+    const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana);
+    expect(took.status, took.out).toBe(0);
+    const billing = join(dana, "billing");
+    expect(git(billing, ["branch", "--show-current"])).toBe("reporting");
+    const refundsTip = git(hosts.billing, ["rev-parse", "refunds"]);
+    writeFileSync(join(billing, "reporting.ts"), "export const reporting = 1;\n");
+    git(billing, ["add", "-A"]);
+    git(billing, ["commit", "-q", "-m", "reporting"]);
+    // Stock git, then push.default=upstream in this repo's own config.
+    spawnSync("git", ["push"], { cwd: billing, env: GIT_ENV });
+    git(billing, ["config", "push.default", "upstream"]);
+    spawnSync("git", ["push"], { cwd: billing, env: GIT_ENV });
+    expect(git(hosts.billing, ["rev-parse", "refunds"])).toBe(refundsTip);
+    expect(spawnSync("git", ["rev-parse", "--abbrev-ref", "@{u}"], { cwd: billing, env: GIT_ENV }).status).not.toBe(0);
   });
 
   // A live run (x2783-s4b, data team, its own uncommitted edit in billing): "Start reporting early for data" put

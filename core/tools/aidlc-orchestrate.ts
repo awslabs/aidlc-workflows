@@ -583,7 +583,8 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { chatTookStep, hostNamesThisChat, idSuffix, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { maskUserinfo } from "./aidlc-workspace-sync.ts";
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -631,6 +632,10 @@ import {
   newsNotTakenIn,
   refreshHomeClaims,
   refreshListedHome,
+  auditRowsAt,
+  leadOfBuild,
+  leadWorkAt,
+  leadWorkByAddress,
   sendLeadsApprovedChanges,
   GitWriteRefused,
   earlyBaseMerged,
@@ -741,6 +746,7 @@ import {
   unitBuildOf,
   unitDependencies,
   unitLikelyRepos,
+  unitLikelyReposFrom,
   unitsAssignedSinceTeams,
   assignmentNotHeld,
   notHeldWords,
@@ -755,6 +761,10 @@ import {
   UNIT_WORDS_NOTE,
   unitWordsArg,
   TEAM_RHYTHM_OFFER,
+  leadCopyAt,
+  leadRulesUnreadLine,
+  sameGitAddress,
+  textAt,
 } from "./aidlc-unit-teams.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import {
@@ -7201,6 +7211,7 @@ export interface ParsedFlags {
   propose?: string;
   continue?: boolean; // --continue: a routing question's "part of that work" answer
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
+  leadAddress?: string; // --lead-address <address>: the lead's project a team takes a Unit from, as the person said it
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   carryOn?: boolean; // the pick question's answer: select the record, then carry on in the same turn
   pickedUp?: string; // --resume picking up the only work here: the person's one line for it
@@ -7570,6 +7581,12 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       } else {
         if (PLAN_NAME_PATTERN.test(value)) flags.planName = value;
         else flags.parseError = `--plan-name takes lowercase letters, digits and hyphens; received "${value}".`;
+      }
+    } else if (a === "--lead-address") {
+      if (value === undefined) {
+        flags.parseError = "--lead-address requires the lead's project address.";
+      } else {
+        flags.leadAddress = value;
       }
     } else if (a === "--save-as") {
       // Echoed into the creation command, which saves under the same rule.
@@ -9062,6 +9079,34 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   };
 }
 
+// The lead's project by the address the person said (--lead-address): the
+// Units to take there, as the one take offer (unitTakeLook) says them, never
+// held back by other work of theirs here; in a clone of the lead's own
+// workspace, the offer as it is here. Null when there is nothing to offer and
+// the address was not read empty: the step goes on as a plain next.
+function leadAddressStep(projectDir: string, address: string): Directive | null {
+  let looked: ReturnType<typeof unitTakeLook>;
+  try {
+    looked = unitTakeLook(projectDir, true, address);
+  } catch (e) {
+    if (e instanceof GitWriteRefused) throw e;
+    return errorDirective(e instanceof Error ? e.message : String(e));
+  }
+  if (looked.choices.length === 0 && looked.sentences.length === 0) {
+    return looked.readAtAddress === 0
+      ? lineEndingTurn(`The lead's project at ${maskUserinfo(address)} has no work built by teams on its branch yet: the lead shares the plan first.`)
+      : null;
+  }
+  if (looked.choices.length === 0) return lineEndingTurn(`${looked.sentences.join(" ")} Nothing is ready to take yet.`);
+  return {
+    kind: "ask",
+    ask_type: "unit-take",
+    response_route: "command",
+    question: `${looked.sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the lead approved.`.trim(),
+    choices: looked.choices,
+  };
+}
+
 // Whether this checkout made the plan of a piece of work here: its plan's rows
 // are in this checkout's own audit shard (planMadeElsewhere). The lead's own
 // checkout, or a copy of it, is the one place the lead's work built by teams
@@ -9104,10 +9149,96 @@ function buildLastWorked(
   };
 }
 
+// The lead's work teams build that a look lists: on disk here, or read by the
+// lead's address from the lead's copy (`lead`), its claims and copy fetched
+// first (`refreshed`).
+type LookedHome = {
+  intent: IntentInfo;
+  space: string;
+  state: string;
+  dependencyBody: string;
+  lead: { address: string; oid: string } | null;
+  refreshed?: { fetched: boolean; unreached: string | null };
+};
+
+function homesOnDisk(projectDir: string): LookedHome[] {
+  const homes: LookedHome[] = [];
+  for (const { name: space } of listSpaces(projectDir)) {
+    for (const intent of listIntents(projectDir, space)) {
+      if (!intent.dirName || !intent.uuid) continue;
+      try {
+        const state = readStateFile(projectDir, intent.dirName, space);
+        if (!isTeamUnitOwnership(state) || homeLocation(state) === null) continue;
+        homes.push({ intent, space, state, dependencyBody: readFileSync(unitDependencyPath(projectDir, intent.dirName, space), "utf-8"), lead: null });
+      } catch {
+        continue;
+      }
+    }
+  }
+  return homes;
+}
+
+// The lead's work this workspace knows only by the lead's address: from the
+// builds here whose lead's record is not here (the address said once, at the
+// first take), and the address the person said now (`address`), unless the
+// lead's work there is on disk here, which is then the one looked at.
+function homesByAddress(projectDir: string, onDisk: LookedHome[], now: boolean, address?: string): { homes: LookedHome[]; readAtAddress: number | null } {
+  const leads = new Map<string, { address: string }>();
+  for (const { name: space } of listSpaces(projectDir)) {
+    for (const intent of listIntents(projectDir, space)) {
+      if (!intent.dirName) continue;
+      let build: ReturnType<typeof unitBuildOf>;
+      try {
+        build = unitBuildOf(readStateFile(projectDir, intent.dirName, space));
+      } catch {
+        continue;
+      }
+      if (build === null || leads.has(build.homeWork) || onDisk.some((home) => home.intent.uuid === build.homeWork)) continue;
+      let lead: ReturnType<typeof leadOfBuild>;
+      try {
+        lead = leadOfBuild(projectDir, build);
+      } catch {
+        continue;
+      }
+      if (lead !== null) leads.set(lead.uuid, { address: lead.location });
+    }
+  }
+  const homes: LookedHome[] = [];
+  const own = workspaceHomeLocation(projectDir);
+  const said = address !== undefined && !(own !== null && sameGitAddress(address, own)) &&
+    !onDisk.some((home) => sameGitAddress(homeLocation(home.state) ?? "", address));
+  let readAtAddress: number | null = null;
+  if (said) {
+    const works = leadWorkByAddress(projectDir, address).works;
+    readAtAddress = works.length;
+    for (const work of works) {
+      if (!onDisk.some((home) => home.intent.uuid === work.uuid)) leads.set(work.uuid, { address });
+    }
+  }
+  for (const [uuid, lead] of leads) {
+    const id8 = idSuffix(uuid);
+    let refreshed: LookedHome["refreshed"];
+    if (!isReadOnlyEngineProbe()) {
+      const looked = refreshHomeClaims(projectDir, { home: { target: lead.address, id8, leadCopy: true }, sessionId: engineSessionId, now });
+      refreshed = { fetched: looked.fetched, unreached: looked.unreached };
+    }
+    const oid = leadCopyAt(projectDir, id8);
+    const work = oid === null ? undefined : leadWorkAt(projectDir, oid).find((entry) => entry.uuid === uuid);
+    if (oid === null || work === undefined) continue;
+    homes.push({
+      intent: { uuid, slug: work.slug, status: "active", dirName: work.dirName, active: false },
+      space: work.space, state: work.state, dependencyBody: work.dependencies, lead: { address: lead.address, oid }, refreshed,
+    });
+  }
+  return { homes, readAtAddress };
+}
+
 function unitTakeLook(
   projectDir: string,
   now: boolean,
-): { sentences: string[]; choices: AskChoice[]; homeHere: IntentInfo[]; stale: boolean } {
+  // The lead's project by the address the person said now (--lead-address).
+  address?: string,
+): { sentences: string[]; choices: AskChoice[]; homeHere: IntentInfo[]; stale: boolean; readAtAddress: number | null } {
   const active = engineSelection(projectDir).space;
   const team = active === DEFAULT_SPACE ? null : active;
   const unitTool = aidlcToolInvocation("unit");
@@ -9116,20 +9247,13 @@ function unitTakeLook(
   const homeHere: IntentInfo[] = [];
   // A home whose claims this look did not fetch (fetched earlier in the chat).
   let stale = false;
-  for (const { name: space } of listSpaces(projectDir)) {
-    for (const intent of listIntents(projectDir, space)) {
+  const onDisk = homesOnDisk(projectDir);
+  const byAddressLook = homesByAddress(projectDir, onDisk, now, address);
+  for (const looked of [onDisk, byAddressLook.homes]) {
+    for (const { intent, space, state, dependencyBody, lead: byAddress, refreshed: lookedAlready } of looked) {
       if (!intent.dirName || !intent.uuid) continue;
-      let state: string;
-      let dependencyBody: string;
-      try {
-        state = readStateFile(projectDir, intent.dirName, space);
-        if (!isTeamUnitOwnership(state) || homeLocation(state) === null) continue;
-        dependencyBody = readFileSync(unitDependencyPath(projectDir, intent.dirName, space), "utf-8");
-      } catch {
-        continue;
-      }
       if (!isReadOnlyEngineProbe()) {
-        const refreshed = refreshListedHome(projectDir, intent.dirName, space, { sessionId: engineSessionId, now });
+        const refreshed = lookedAlready ?? refreshListedHome(projectDir, intent.dirName, space, { sessionId: engineSessionId, now });
         if (!refreshed.fetched && refreshed.unreached === null) stale = true;
         if (refreshed.unreached !== null) {
           sayWithStepOnce(projectDir, `The lead's project for ${intentDisplayLabel(intent)} could not be reached just now, so what is ready to take may be behind.`);
@@ -9143,12 +9267,14 @@ function unitTakeLook(
       } catch {
         continue;
       }
-      if (space === active && !isHomesCopiedWork(projectDir, state)) homeHere.push(intent);
-      const take = `${unitTool} take %s --home ${shellArg(intent.dirName)}` +
+      if (byAddress === null && space === active && !isHomesCopiedWork(projectDir, state)) homeHere.push(intent);
+      const take = `${unitTool} take %s${byAddress === null ? "" : ` --from ${shellArg(byAddress.address)}`} --home ${shellArg(intent.dirName)}` +
         (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
-      const likely = unitLikelyRepos(projectDir, intent.dirName, space);
+      const likely = byAddress === null ? unitLikelyRepos(projectDir, intent.dirName, space) : unitLikelyReposFrom(dependencyBody);
       // A Unit no team holds that the home started is the home's.
-      const rows = readAuditShardEvents(projectDir, intent.dirName, space);
+      const rows = byAddress === null
+        ? readAuditShardEvents(projectDir, intent.dirName, space)
+        : auditRowsAt(projectDir, `aidlc/spaces/${space}/intents/${intent.dirName}`, byAddress.oid);
       const startedAtHome = unitsStartedAtLeadsProject(rows);
       // Once the lead answered who builds which Unit, one no team holds that
       // waits for none (unitsKeptForTeams, unitsLeftOpen) is the lead's
@@ -9176,7 +9302,7 @@ function unitTakeLook(
       // them; one more row takes a Unit under the team's own rules only, naming
       // the Unit when one start is offered, else asking which.
       // Their agreed practices (memory/team.md) come with them, named as such.
-      const lead = leadRules(projectDir, space);
+      const lead = byAddress === null ? leadRules(projectDir, space) : leadRules(projectDir, space, (rel) => textAt(projectDir, byAddress.oid, rel));
       const names = [...lead.practices, ...lead.project];
       const brings = lead.practices.length === 0 ? "project rules" : lead.project.length === 0 ? "agreed practices" : "agreed practices and project rules";
       const ownRules: AskChoice[] = [];
@@ -9291,7 +9417,8 @@ function unitTakeLook(
           command: `${take.replace("%s", "'<the Unit>'")}${early ? " --early" : ""} --team ${team !== null ? shellArg(team) : "'<their team>'"}`,
         });
       }
-      const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (the lead's project is at ${homeLocation(state)})` : "";
+      const elsewhere = byAddress !== null ? ` (the lead's project is at ${maskUserinfo(byAddress.address)})`
+        : isHomesCopiedWork(projectDir, state) ? ` (the lead's project is at ${homeLocation(state)})` : "";
       const label = intentDisplayLabel(intent);
       if (ready.length > 0 || waiting.length > 0 || building.length > 0 || leads.length > 0 || others.length > 0) {
         sentences.push(
@@ -9310,7 +9437,7 @@ function unitTakeLook(
       }
     }
   }
-  return { sentences, choices, homeHere, stale };
+  return { sentences, choices, homeHere, stale, readAtAddress: byAddressLook.readAtAddress };
 }
 
 // A Unit's build its lead turned down or sent back, not redone since its
@@ -13518,6 +13645,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
   // What the home said about a Unit's build reaches its team once, on any step.
   for (const line of stateContent ? buildClaimNotes(pd, stateContent, engineSessionId) : []) sayWithStepOnce(pd, line);
+  // A lead's file the build follows that cannot be read now: the step goes on
+  // under the team's own rules, and says so once.
+  const leadUnread = stateContent !== null ? leadRulesUnreadLine(pd, stateContent) : null;
+  if (leadUnread !== null) sayWithStepOnce(pd, leadUnread);
+  // The lead's project by the address the person said: its Units to take.
+  const leadAddress = flags.leadAddress === undefined ? null : leadAddressStep(pd, flags.leadAddress);
+  if (leadAddress !== null) {
+    emit(leadAddress);
+    return;
+  }
   // A copy the team changed is theirs to send home, offered once per its text.
   const propose = stateContent !== null && !isReadOnlyEngineProbe() ? unitProposeAsk(pd, stateContent) : null;
   if (propose) {

@@ -20,6 +20,7 @@ import {
   getField,
   intentDisplayLabel,
   intentRepos,
+  intentsDir,
   isPerUnitStage,
   isTeamUnitOwnership,
   LEARNINGS_CORRECTION_CHOICES,
@@ -44,7 +45,7 @@ import {
   writeEngineFileNoFollow,
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
-import { applicableTeamUnitScopeStamp, listIntents } from "./aidlc-record-core.ts";
+import { applicableTeamUnitScopeStamp, idSuffix, listIntents } from "./aidlc-record-core.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
 
@@ -222,11 +223,17 @@ export const LEAD_RULES_FIELD = "Lead Project Rules";
 
 // The lead's rules a team's take can follow: the files, as LEAD_RULES_FIELD
 // records them, and the headings of each that hold one of the lead's own, not
-// only the template's notes, for the take question to name.
-export function leadRules(projectDir: string, homeSpace: string): { paths: string[]; practices: string[]; project: string[] } {
+// only the template's notes, for the take question to name. `read` reads a
+// path of the lead's workspace: this checkout's file, or the lead's commit
+// when the lead's project is reached by its address.
+export function leadRules(
+  projectDir: string,
+  homeSpace: string,
+  read: (rel: string) => string | null = (rel) => readTextOrNull(join(projectDir, ...rel.split("/"))),
+): { paths: string[]; practices: string[]; project: string[] } {
   const path = (file: string) => `aidlc/spaces/${homeSpace}/memory/${file}`;
-  const practices = memoryRuleNames(projectDir, path("team.md"));
-  const project = memoryRuleNames(projectDir, path("project.md"));
+  const practices = memoryRuleNames(read(path("team.md")));
+  const project = memoryRuleNames(read(path("project.md")));
   return {
     paths: [...(practices.length > 0 ? [path("team.md")] : []), ...(project.length > 0 ? [path("project.md")] : [])],
     practices,
@@ -234,15 +241,77 @@ export function leadRules(projectDir: string, homeSpace: string): { paths: strin
   };
 }
 
-// The headings of one of the lead's memory files that hold a rule of its own.
-// Empty when it has none, or it cannot be read here.
-function memoryRuleNames(projectDir: string, rel: string): string[] {
-  let text: string;
+function readTextOrNull(path: string): string | null {
   try {
-    text = readFileSync(join(projectDir, ...rel.split("/")), "utf-8");
+    return readFileSync(path, "utf-8");
   } catch {
-    return [];
+    return null;
   }
+}
+
+// A lead's project address git is given, as opposed to a remote's name.
+export function isGitAddress(target: string): boolean {
+  return /[:/\\]/.test(target);
+}
+
+// Where the lead's copy of their workspace is kept in a team's workspace that
+// reaches the lead's project by its address (aidlc-unit take).
+export function leadCopyRef(homeId8: string): string {
+  return `refs/aidlc/home/${homeId8}/integration`;
+}
+
+// The commit of the lead's copy here, or null when it is not here.
+export function leadCopyAt(projectDir: string, homeId8: string): string | null {
+  const read = spawnSync("git", ["rev-parse", "--verify", "--quiet", leadCopyRef(homeId8)], { cwd: projectDir, encoding: "utf-8" });
+  return read.status === 0 && read.stdout.trim() !== "" ? read.stdout.trim() : null;
+}
+
+// A path of the lead's workspace at a commit here, or null.
+export function textAt(projectDir: string, commit: string, rel: string): string | null {
+  const shown = spawnSync("git", ["show", `${commit}:${rel}`, "--"], { cwd: projectDir, encoding: "utf-8" });
+  return shown.status === 0 ? shown.stdout : null;
+}
+
+// The lead's files a team's build follows (LEAD_RULES_FIELD), each read where
+// it is: in this checkout when the lead's record is here, else in the lead's
+// copy AI-DLC fetched with the claims (leadCopyRef), at the same paths, so the
+// team's own default memory is never read as the lead's. `text` is null for a
+// file that cannot be read now; `fromCopy` marks one read from the copy.
+export function leadRuleFiles(projectDir: string, stateContent: string): Array<{ path: string; text: string | null; fromCopy: boolean }> {
+  const paths = (getField(stateContent, LEAD_RULES_FIELD) ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+  if (paths.length === 0) return [];
+  const build = unitBuildOf(stateContent);
+  if (build === null || leadRecordHere(projectDir, build.homeRecord) || !isGitAddress(build.homeLocation)) {
+    return paths.map((path) => ({ path, text: readTextOrNull(join(projectDir, ...path.split("/"))), fromCopy: false }));
+  }
+  const copy = leadCopyRef(idSuffix(build.homeWork));
+  return paths.map((path) => ({ path, text: textAt(projectDir, copy, path), fromCopy: true }));
+}
+
+// Whether the lead's record (`<space>/<dirName>`, a build's Home Record) is in
+// this workspace: a clone of the lead's, or the lead's own. A record name
+// without a space is taken as here, so nothing is read from elsewhere for it.
+export function leadRecordHere(projectDir: string, homeRecord: string): boolean {
+  const at = homeRecord.indexOf("/");
+  return at < 0 || existsSync(join(intentsDir(projectDir, homeRecord.slice(0, at)), homeRecord.slice(at + 1), "aidlc-state.md"));
+}
+
+// The line said once when a lead's file the build follows cannot be read: the
+// step goes on under the team's own rules. Null when every one was read.
+export function leadRulesUnreadLine(projectDir: string, stateContent: string): string | null {
+  const unread = leadRuleFiles(projectDir, stateContent).filter((file) => file.text === null).map((file) => file.path);
+  if (unread.length === 0) return null;
+  const kinds = [
+    ...(unread.some((path) => path.endsWith("/team.md")) ? ["agreed practices"] : []),
+    ...(unread.some((path) => path.endsWith("/project.md")) ? ["project rules"] : []),
+  ];
+  return `The lead's ${kinds.length > 0 ? kinds.join(" and ") : "rules"} could not be read just now, so this step follows your team's own rules.`;
+}
+
+// The headings of one of the lead's memory files that hold a rule of its own.
+// Empty when it has none, or it cannot be read.
+function memoryRuleNames(text: string | null): string[] {
+  if (text === null) return [];
   const names: string[] = [];
   let heading: string | null = null;
   for (const line of visibleMarkdownLines(text)) {
@@ -454,6 +523,16 @@ export function buildWaitsForPush(stateContent: string): boolean {
 // The build of a home's Unit in this workspace, in any space: what taking that
 // Unit again here carries on. A build given back (archived) is not carried on.
 export function findUnitBuild(projectDir: string, homeWork: string, unit: string): { space: string; dirName: string } | null {
+  return findBuild(projectDir, (build) => build.unit === unit && build.homeWork === homeWork);
+}
+
+// A build here of a Unit of the lead's record (`<space>/<dirName>`), found
+// with no read of the lead's project.
+export function findUnitBuildOfRecord(projectDir: string, homeRecord: string, unit: string): { space: string; dirName: string } | null {
+  return findBuild(projectDir, (build) => build.unit === unit && build.homeRecord === homeRecord);
+}
+
+function findBuild(projectDir: string, matches: (build: UnitBuild) => boolean): { space: string; dirName: string } | null {
   let spaces: string[];
   try {
     spaces = readdirSync(join(projectDir, "aidlc", "spaces"));
@@ -469,7 +548,7 @@ export function findUnitBuild(projectDir: string, homeWork: string, unit: string
         continue;
       }
       const build = unitBuildOf(state);
-      if (build?.unit === unit && build.homeWork === homeWork && getField(state, "Status")?.trim() !== "Archived") return { space, dirName };
+      if (build !== null && matches(build) && getField(state, "Status")?.trim() !== "Archived") return { space, dirName };
     }
   }
   return null;

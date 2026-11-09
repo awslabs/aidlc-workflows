@@ -581,9 +581,12 @@ its own. Each team needs to reach the lead's project's repository with its own l
 - **One workspace for everyone.** Each team member clones the lead's
   workspace. The Units are offered there, and each team's build lives in its
   own space (`aidlc/spaces/<team>/`) of the same repository.
-- **A workspace per team.** A team makes its own workspace repository from the
-  lead's. The lead's record comes along, read only, and is never offered to
-  carry on; its Units are reached at the lead's project's address.
+- **A workspace per team.** A team makes its own workspace repository, from the
+  lead's (the lead's record comes along, read only, and is never offered to
+  carry on) or with nothing of the lead's in it, where a team member says once
+  where the lead's project is
+  ([Take a Unit by the lead's address](#take-a-unit-by-the-leads-address)). Its
+  Units are reached at the lead's project's address.
 - **A personal copy.** One person clones their own copy; it works as one of
   the two above, by where its `origin` points.
 
@@ -679,6 +682,35 @@ work does: after every stage, or once at its end.
 Each build keeps its entry in its own record folder (`aidlc-intent.json`), not in
 the space's `intents.json`, so two people who take two Units in one space share
 no file and their pulls never conflict.
+
+### Take a Unit by the lead's address
+
+A team can keep a workspace repository of its own that holds nothing of the
+lead's. A team member says where the lead's project is, once, in their own
+words ("the lead's plan is in the shop workspace at
+git@example.com:shop/shop-ws.git, take our Unit"), and AI-DLC offers the Units
+their team can take there, as a clone of the lead's workspace offers them.
+AI-DLC reads the lead's branch with your own login into a git ref of its own:
+no folder of the lead's and no remote are added.
+
+- Taking one holds it at the lead's project for your team and starts its build
+  in your active space (the default space, unless you switched).
+- Nobody says the address again: each later step reads the lead's project from
+  the build, and once your Unit is pushed or done, `/aidlc` or "what's ours to
+  build?" offers your team's next Unit there. A teammate's clone of your
+  workspace carries the build on the same way.
+- A repo the Unit needs that your workspace does not list yet is offered from
+  the lead's repo list, with its address: "billing is not here yet; the lead's
+  list has it at <address>. Do you want me to clone it here?" On your yes it is
+  cloned and added to your workspace's own list.
+- Following the lead's rules too reads the lead's agreed practices and project
+  rules where they are, in the lead's project, before your team's own; nothing
+  is copied, and a change the lead pushes applies once AI-DLC next looks at the
+  lead's project (in a new chat, or at your build's next stage). When they
+  cannot be read (the lead's project cannot be reached on a first look), the
+  step goes on under your team's own rules and says so once.
+- In a clone of the lead's own workspace, saying the address changes nothing:
+  the Units are read from what is here.
 
 ### Push your Unit, and merge it your way
 
