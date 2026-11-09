@@ -4703,7 +4703,10 @@ export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => bo
     const parsed = splitSourcePathKey(pathKey);
     if (parsed === null) return false;
     if (parsed.path === SOURCE_FINGERPRINT_REGISTRY) return true;
-    if (parsed.repo === "" && parsed.path === REPOS_FILE) return rootList ??= rootReposManifestIsAidlcs(projectDir);
+    if (parsed.repo === "" && parsed.path === REPOS_FILE) {
+      rootList ??= rootReposManifestIsAidlcs(projectDir);
+      return rootList;
+    }
     const slash = parsed.path.indexOf("/");
     if (
       parsed.repo === "" && slash > 0 && parsed.path.slice(slash + 1) === SOURCE_FINGERPRINT_REGISTRY &&
