@@ -133,6 +133,15 @@ function patchVersion(offset: number): string {
   return `${major}.${minor}.${patch + offset}`;
 }
 const NEXT_VERSION = patchVersion(1);
+// A release before 2.12 reads the repo list only at the project root, and
+// going back to one says so.
+const readsListOnlyAtRoot = (version: string): boolean => {
+  const [major, minor] = version.split(".").map(Number);
+  return major < 2 || (major === 2 && minor < 12);
+};
+// The lists here are not tracked, so the way back is a plain move.
+const goingBackLine = (version: string): string =>
+  `AI-DLC ${version} reads repos.json only at the project root; to keep your repo list on it, run \`mv aidlc/repos.json repos.json\`.`;
 const LIVE_PIN_VERSION = patchVersion(2);
 const STALE_PIN_VERSION = patchVersion(3);
 const REMOVABLE_VERSION = patchVersion(4);
@@ -1397,6 +1406,9 @@ describe("t244 management lifecycle", () => {
     expect(run(LIFECYCLE, [
       "versions", "install", REMOVABLE_VERSION, "--from", removableRelease,
     ], project, env).status).toBe(0);
+    // A repo list in aidlc/, which a release before 2.12 does not read.
+    mkdirSync(join(pinnedProject, "aidlc"), { recursive: true });
+    writeFileSync(join(pinnedProject, "aidlc", "repos.json"), '{ "repos": [] }\n');
     const pinned = run(INIT, [
       "config",
       "--pin",
@@ -1405,6 +1417,7 @@ describe("t244 management lifecycle", () => {
       pinnedProject,
     ], pinnedProject, env);
     expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    expect(pinned.stdout.includes(goingBackLine(LIVE_PIN_VERSION))).toBe(readsListOnlyAtRoot(LIVE_PIN_VERSION));
     const pins = JSON.parse(
       readFileSync(join(machine, "pins.json"), "utf-8"),
     ) as Record<string, string>;
@@ -1429,7 +1442,7 @@ describe("t244 management lifecycle", () => {
     // The next step is the one that is true: a refresh runs beside open work,
     // so nobody waits for a workflow to end.
     expect(updated.stdout).toContain(
-      "Project files were not changed. Run 'aidlc config --yes' in each project to refresh them. Open work carries on.",
+      "Each project catches up the next time you open it.",
     );
     expect(updated.stdout).not.toContain("between workflows");
     expect(updated.stdout).toContain(`Pruned unprotected releases: ${REMOVABLE_VERSION}.`);
@@ -1470,11 +1483,15 @@ describe("t244 management lifecycle", () => {
     expect(JSON.parse(dryRunJson.stdout).message).toContain(
       `update plan: ${NEXT_VERSION} -> ${STALE_PIN_VERSION}`,
     );
+    mkdirSync(join(project, "aidlc"), { recursive: true });
+    writeFileSync(join(project, "aidlc", "repos.json"), '{ "repos": [] }\n');
     const usePrior = run(LIFECYCLE, ["use", AIDLC_VERSION], project, env);
     expect(usePrior.status, usePrior.stdout + usePrior.stderr).toBe(0);
     expect(usePrior.stdout).toContain(
       `Now using aidlc ${AIDLC_VERSION} (was ${NEXT_VERSION}; retained locally, no project changes).`,
     );
+    expect(usePrior.stdout.includes(goingBackLine(AIDLC_VERSION))).toBe(readsListOnlyAtRoot(AIDLC_VERSION));
+    unlinkSync(join(project, "aidlc", "repos.json"));
     const useNext = run(LIFECYCLE, ["use", NEXT_VERSION], project, env);
     expect(useNext.status, useNext.stdout + useNext.stderr).toBe(0);
     expect(useNext.stdout).toContain(

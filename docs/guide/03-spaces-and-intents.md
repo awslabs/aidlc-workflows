@@ -484,8 +484,7 @@ use a subfolder install only when a package is really its own project.
 ```
 my-project/           ← run `aidlc config` here
 ├── .claude/          the harness files
-├── aidlc/            records for work that spans the repos
-├── repos.json        optional: the repos to clone (see below)
+├── aidlc/            records for work that spans the repos, and repos.json, the optional list of repos to clone (see below)
 ├── .gitignore
 ├── checkout-api/     its own git repo
 └── checkout-web/     its own git repo
@@ -577,8 +576,11 @@ An intent that records no repos is the ordinary single-repo case. See
 
 Auto-discovery needs the sibling repos to already be cloned. On a fresh checkout
 of a shared workspace they are not, so a teammate would have to know which repos
-to clone and where. An **optional** `repos.json` manifest at the workspace root
-records that expected set so it can be reproduced with one command:
+to clone and where. An **optional** repo list, `aidlc/repos.json`, kept with the
+team's record, records that expected set so it can be reproduced with one
+command. A `repos.json` at the workspace root, where releases before 2.12 wrote
+it, is still read, and the next refresh moves it into `aidlc/`
+([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)):
 
 ```json
 {

@@ -177,6 +177,7 @@ import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { addPluginProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
+import { moveReposManifestIntoAidlc, REPOS_MOVED_LINE } from "./aidlc-workspace-manifest.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -14550,6 +14551,11 @@ export async function main(
       : null;
     if (openLine) changes.push(openLine);
     if (!recordOnly) {
+      // The repo list moves into aidlc/ only while this release's own files go
+      // in: an earlier release's tools (a pin, a --from) read it only at the root.
+      if (stamp.frameworkVersion === AIDLC_VERSION && moveReposManifestIntoAidlc(projectDir).tracked) {
+        changes.push(REPOS_MOVED_LINE);
+      }
       changes.push(...refreshDoneLines(projectDir, {
         added: existing.distribution || switchingFrom ? undefined : descriptor.harnessDir,
         switched: switchingFrom !== undefined,

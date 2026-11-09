@@ -31,6 +31,7 @@ import { workspaceSyncInvocation } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
   readWorkspaceRepos,
+  reposManifestPath,
   type WorkspaceManifest,
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
   WORKSPACE_GITIGNORE_GATE_END as GATE_END,
@@ -219,13 +220,13 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   }
 
   // W2/W3 - only when a repos.json manifest is present (the declared multi-repo signal).
-  const reposManifestPath = join(projectDir, "repos.json");
-  if (existsSync(reposManifestPath)) {
+  const manifestPath = reposManifestPath(projectDir);
+  if (existsSync(manifestPath)) {
     // Parse through the exact schema used by sync so doctor never reports a
     // manifest as synchronized when sync would reject it.
     let manifest: WorkspaceManifest | null = null;
     try {
-      manifest = parseWorkspaceManifest(readFileSync(reposManifestPath, "utf-8"));
+      manifest = parseWorkspaceManifest(readFileSync(manifestPath, "utf-8"));
     } catch (e) {
       results.push({
         pass: true,

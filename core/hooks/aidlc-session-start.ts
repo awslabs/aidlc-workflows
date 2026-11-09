@@ -30,7 +30,9 @@
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
 // metadata so the first intent created later in the turn can bind to it.
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
@@ -65,6 +67,7 @@ import {
   writeHookStatusFile,
   humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
+  addPendingPersonLines,
   isoTimestamp,
   intentUuidForSelection,
   readSessionBinding,
@@ -96,7 +99,22 @@ import {
 import { leadsPlanNotHere } from "../tools/aidlc-unit-holders.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
-import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import {
+  aidlcInvocation,
+  aidlcToolInvocation,
+  discoverProjectHarnesses,
+  entrySkillInvocation,
+  isCompiledExecutable,
+  runtimeHarnessName,
+  typedHarnessName,
+} from "../tools/aidlc-runtime-paths.ts";
+import { compareVersions } from "../tools/aidlc-channel.ts";
+import { AIDLC_VERSION } from "../tools/aidlc-version.ts";
+import {
+  REPOS_MOVED_LINE,
+  reposManifestMovedIntoAidlc,
+  trackedReposManifestAtRoot,
+} from "../tools/aidlc-workspace-manifest.ts";
 import { backOnInstructions, switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
 
@@ -130,6 +148,67 @@ function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string):
   } catch {
     // A malformed record stays for doctor to name; the Stop hook fails closed on it.
   }
+}
+
+// After `aidlc update`, a project's harness files are an earlier release's
+// while the hooks already run the new one (a native install's hooks call the
+// machine's aidlc; a pinned project runs its own release, and the copy channel
+// its own copy, so neither is ever behind). The first chat to open it runs
+// config's refresh for each such folder, as the person's own `aidlc config`
+// would with no terminal: it asks nothing and keeps every recorded answer;
+// without --yes it never takes an in-place switch, and the deferral leaves the
+// Kiro questions to the person. A refresh that fails says nothing (doctor's
+// version row shows the project behind) and is tried again at the next chat's
+// start. A newer stamp is never touched. Two passes, as config refreshes a
+// folder only after a sibling it shares files with. True when this moved a
+// repos.json git tracks into aidlc/.
+function catchUpProjectFiles(projectDir: string): boolean {
+  if (!isCompiledExecutable() || existsSync(join(projectDir, ".aidlc-version"))) return false;
+  const major = AIDLC_VERSION.split(".")[0];
+  const behind = () => {
+    try {
+      return discoverProjectHarnesses(projectDir).filter((harness) => {
+        const version = harness.frameworkVersion;
+        if (!version || version.split(".")[0] !== major) return false;
+        try {
+          return compareVersions(version, AIDLC_VERSION) < 0;
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      return [];
+    }
+  };
+  let pending = behind();
+  if (pending.length === 0) return false;
+  const trackedList = trackedReposManifestAtRoot(projectDir);
+  // The child resolves its own harness, as a typed config does: this hook's
+  // pins name the chat's harness folder, not the one being refreshed.
+  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_CONFIG_DEFER_KIRO_SESSION: "1" };
+  for (const key of ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_DIR_GUESSED", "AIDLC_HARNESS_NAME", "AIDLC_RUNTIME_PROJECT_DIR"]) {
+    delete env[key];
+  }
+  for (let pass = 0; pass < 2 && pending.length > 0; pass++) {
+    const tried = pending.length;
+    for (const harness of pending) {
+      spawnSync(
+        process.execPath,
+        ["config", "--quiet", "--harness", typedHarnessName(harness.distribution), "--project-dir", projectDir],
+        {
+          cwd: projectDir,
+          env,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 600_000,
+        },
+      );
+    }
+    pending = behind();
+    // A second pass only after the first brought a folder up: one config
+    // refused stays refused, so it runs once per chat start.
+    if (pending.length === tried) break;
+  }
+  return trackedList && reposManifestMovedIntoAidlc(projectDir);
 }
 
 export async function run(input: string): Promise<number> {
@@ -392,6 +471,17 @@ if (sessionId && !rebindCheckOnly) {
     }
   } catch {
     // Kept at a later start.
+  }
+  // After the status line, whose once-only line config's own call would take.
+  // A compaction's start is mid-turn, so the refresh waits for the next chat.
+  try {
+    if (source !== "compact" && catchUpProjectFiles(projectDir)) {
+      // opencode's adapter carries no session-start context: the next step does.
+      if (runtimeHarnessName(projectDir) === "opencode") addPendingPersonLines(projectDir, sessionId, [REPOS_MOVED_LINE]);
+      else asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${REPOS_MOVED_LINE}"`);
+    }
+  } catch {
+    // Tried again at the next chat's start.
   }
   trackedSteeringAsk = asks.filter(Boolean).join("\n");
 }

@@ -752,15 +752,16 @@ secrets in the committed `.mcp.json`.
 
 ## Updating
 
-`aidlc update` updates the machine runtime. It does not rewrite configured
-projects. Refresh each project; open work carries on:
+`aidlc update` updates the machine runtime, and each project catches up the
+next time you open it; open work carries on:
 
 ```bash
 aidlc update
-cd /path/to/your-project
-aidlc doctor
-aidlc config
 ```
+
+`aidlc doctor` in a project shows whether it is on the running release. A
+copied project (the copy channel) refreshes when you run config from the new
+release's files.
 
 Config preserves project-owned content, and a refresh while a workflow is open
 is done and says whether that work carries on. Projects using plugins should run

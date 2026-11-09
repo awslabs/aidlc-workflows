@@ -576,7 +576,7 @@ describe("the one offer to write repos.json", () => {
     git(proj, ["init", "-q", "-b", "main"]);
     const added = utility(proj, ["intent", "add-repo", "habits", "--path", "."]);
     expect(added.rc, added.out).toBe(0);
-    expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8"))).toEqual({ repos: [{ name: "habits", path: "." }] });
+    expect(JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8"))).toEqual({ repos: [{ name: "habits", path: "." }] });
     expect(added.out).toContain("repos.json is new: it lists habits as the workspace folder itself. Commit it to share it with your team.");
     const ask = next(proj);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("repos-manifest");
@@ -586,7 +586,7 @@ describe("the one offer to write repos.json", () => {
     );
     const written = sync(proj, ["--write-manifest"]);
     expect(written.status, written.out).toBe(0);
-    expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8")).repos).toEqual([
+    expect(JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")).repos).toEqual([
       { name: "habits", path: "." },
       { name: "tracker-cli", url: "", path: "tracker-cli" },
       { name: "tracker-core", url: "", path: "tracker-core" },
@@ -611,7 +611,7 @@ describe("the one offer to write repos.json", () => {
     const changed = boundaryProject(["tracker-core", "tracker-cli"], false);
     git(changed, ["init", "-q", "-b", "main"]);
     expect(utility(changed, ["intent", "add-repo", "habits", "--path", "."]).rc).toBe(0);
-    writeFileSync(join(changed, "repos.json"), `// ours\n${readFileSync(join(changed, "repos.json"), "utf-8")}`);
+    writeFileSync(join(changed, "aidlc", "repos.json"), `// ours\n${readFileSync(join(changed, "aidlc", "repos.json"), "utf-8")}`);
     const later = next(changed);
     expect(later.ask_type, JSON.stringify(later)).not.toBe("repos-manifest");
   });

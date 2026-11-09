@@ -51,6 +51,7 @@ import {
   isProjectSubmodule,
   parseWorkspaceManifest,
   readWorkspaceRepos,
+  reposManifestPath,
   repoNotThereLine,
   type WorkspaceManifest,
   type WorkspaceRepoEntry,
@@ -135,8 +136,8 @@ function git(dir: string, args: string[], input?: string): GitResult {
 function readManifest(path: string): ManifestSnapshot {
   if (!existsSync(path)) {
     throw new SyncFailure(
-      `no repos.json at ${path}. The manifest is optional; create one at the ` +
-        `workspace root with a "repos" array to enable clone/sync ` +
+      `no repos.json at ${path}. The manifest is optional; create one there ` +
+        `with a "repos" array to enable clone/sync ` +
         `(see the User Guide: "Declaring the repo set"), then re-run.`,
     );
   }
@@ -1432,7 +1433,7 @@ export function installWorkspaceRepo(
     commitPlan(
       root,
       parsed,
-      { path: join(root, "repos.json"), ...manifest },
+      { path: reposManifestPath(root), ...manifest },
       { toClone: [staged.repo], toKeep: [], toRemove: [], branchWarnings: [], notCloned: [] },
       staged.clones,
       before,
@@ -1456,7 +1457,7 @@ export function installWorkspaceManifest(root: string, manifest: { raw: string |
   commitPlan(
     root,
     parsed,
-    { path: join(root, "repos.json"), ...manifest },
+    { path: reposManifestPath(root), ...manifest },
     { toClone: [], toKeep: [], toRemove: [], branchWarnings: [], notCloned: [] },
     stagePlan(root, parsed, [], () => {}),
     before,
@@ -1469,7 +1470,7 @@ export function discardStagedWorkspaceRepo(staged: StagedWorkspaceRepo): void {
 }
 
 function reconcile(root: string, force: boolean): number {
-  const manifestPath = join(root, "repos.json");
+  const manifestPath = reposManifestPath(root);
   const { manifest, raw: manifestRaw } = readManifest(manifestPath);
   console.log(
     dim(
@@ -1512,7 +1513,8 @@ export function originUrl(dir: string): string | null {
 // left out), blank when it has none. The one add-repo made for the workspace
 // folder itself gains the repos found here that the offer named.
 function writeManifest(root: string): number {
-  const manifestPath = join(root, "repos.json");
+  const manifestPath = reposManifestPath(root);
+  const shown = relative(root, manifestPath).replaceAll("\\", "/");
   const origin = (dir: string): string => withoutCredentials(originUrl(dir) ?? "");
   if (pathEntryExists(manifestPath)) {
     const raw = reposManifestListsOnlyAddedWorkspace(root) ? readFileSync(manifestPath, "utf-8") : null;
@@ -1524,13 +1526,13 @@ function writeManifest(root: string): number {
       raw,
     );
     if (raw === null || next === null || found.length === 0) {
-      console.log("repos.json is already here; nothing was written.");
+      console.log(`${shown} is already here; nothing was written.`);
       return 0;
     }
     writeFileSync(manifestPath, next, "utf-8");
     const blank = found.filter((name) => origin(join(root, name)) === "");
     console.log(
-      `Added ${found.join(", ")} to repos.json: each one's folder and the address its origin points to. ` +
+      `Added ${found.join(", ")} to ${shown}: each one's folder and the address its origin points to. ` +
         "Commit it so a teammate's clone knows where they go." +
         (blank.length > 0 ? ` ${blank.join(", ")} has no origin, so its "url" is blank for now.` : ""),
     );
@@ -1549,7 +1551,7 @@ function writeManifest(root: string): number {
   writeFileSync(manifestPath, `${JSON.stringify({ repos }, null, 2)}\n`, "utf-8");
   const blank = repos.filter((repo) => repo.url === "").map((repo) => repo.name);
   console.log(
-    `Wrote repos.json with ${repos.map((repo) => repo.name).join(", ")}: each one's folder and the address its ` +
+    `Wrote ${shown} with ${repos.map((repo) => repo.name).join(", ")}: each one's folder and the address its ` +
       "origin points to. Commit it so a teammate's clone knows where they go." +
       (blank.length > 0 ? ` ${blank.join(", ")} has no origin, so its "url" is blank for now.` : ""),
   );

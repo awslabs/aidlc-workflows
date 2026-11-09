@@ -3332,8 +3332,9 @@ it, and reverting an edit restores the original fingerprint.
 ### `aidlc-workspace-sync` - clone and reconcile the declared repo set
 
 This is a **direct tool invocation**, not an `/aidlc workspace-sync` command. It
-reconciles a multi-repo workspace against the optional `repos.json` manifest at
-the workspace root (see
+reconciles a multi-repo workspace against the optional repo list,
+`aidlc/repos.json` (or a `repos.json` at the workspace root that a release before
+2.12 wrote; see
 [Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)):
 
 ```bash
@@ -3341,7 +3342,8 @@ aidlc system workspace-sync [--force]
 aidlc system workspace-sync --write-manifest
 ```
 
-`--write-manifest` writes `repos.json` from the repos found here (each child
+`--write-manifest` writes the repo list (in `aidlc/` when the workspace has that
+folder) from the repos found here (each child
 repo, or the workspace itself as `"path": "."` when it is the one code repo),
 with the address each one's `origin` points to, read and never changed; it
 writes nothing when `repos.json` already exists, except the one
