@@ -613,10 +613,11 @@ it, is still read, and the next refresh moves it into `aidlc/`
 - A repo name is the name of one folder, with the characters a discovered folder
   may have (above).
 
-**Your own paths: `aidlc/repos.local.json`.** When your disk differs from the team's
-layout (your clones live in `C:/src`, say), put a `repos.local.json` in `aidlc/`,
-beside `aidlc/repos.json`; AI-DLC reads it only there. It has the same shape and is read only for `path`, `url` and
-`branch` of repos `repos.json` lists; a name `repos.json` does not list is
+**Your own paths: `aidlc/repos.local.json`.** When your disk differs from the
+team's layout (your clones live in `C:/src`, say), put a `repos.local.json` in
+`aidlc/`, beside `aidlc/repos.json`; AI-DLC reads it only there. It has the
+same shape and is read only for `path`, `url` and `branch` of repos
+`repos.json` lists; a name `repos.json` does not list is
 ignored, and `--doctor` and the sync tool say so in one line. It is never
 committed: AI-DLC's own block in `.gitignore` lists it.
 

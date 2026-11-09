@@ -20,7 +20,7 @@ export const REPOS_MANIFEST_PLACES = ["aidlc/repos.json", "repos.json"] as const
 export type ReposManifestPlace = (typeof REPOS_MANIFEST_PLACES)[number];
 
 // One person's own paths, beside the list's first place and read only there:
-// no release before it shipped the file. Never committed: AI-DLC's marked
+// no release shipped the file at the root. Never committed: AI-DLC's marked
 // .gitignore block has an unanchored repos.local.json line, which matches here.
 export const REPOS_LOCAL_PLACE =
   `${REPOS_MANIFEST_PLACES[0].slice(0, REPOS_MANIFEST_PLACES[0].lastIndexOf("/") + 1)}${REPOS_LOCAL_FILE}`;
