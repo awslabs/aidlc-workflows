@@ -626,7 +626,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
   // owning verb verifies artifacts before committing — a CLI-forged receipt
   // would skip that verification. Owned by `aidlc-state.ts unit`; the
-  // UNIT_SKIPPED settle receipt is owned by the engine's skip transition.
+  // UNIT_SKIPPED settle receipt is owned by the engine's skip transition, and
+  // `aidlc-unit.ts claim` writes it for main's skip that came before the claim.
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
