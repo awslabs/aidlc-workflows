@@ -74,7 +74,8 @@ aidlc doctor
 
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
-On Windows, download `install.ps1` and run
+On Windows, download `install.ps1`, allow scripts in that PowerShell window
+with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`, and run
 `& $installer`. If Kiro was open while you installed, including when you ran
 the installer in Kiro's own terminal, quit Kiro fully and reopen it before
 your first `/aidlc`: Kiro keeps the PATH it started with, so its hooks, its
@@ -83,7 +84,8 @@ agent and its other terminals cannot find `aidlc` until it restarts, and
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
-`& $installer -From <release-directory> -Offline` on Windows.
+`& $installer -From <release-directory> -Offline` on Windows, after the same
+`Set-ExecutionPolicy` line.
 
 `aidlc config` projects the Kiro shell before the project is opened. The native
 `aidlc engine *` trust grant, and the exact read-only and turn-back-on commands
@@ -919,12 +921,14 @@ aidlc doctor
 
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
-On Windows, download `install.ps1` and run
+On Windows, download `install.ps1`, allow scripts in that PowerShell window
+with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`, and run
 `& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
-`& $installer -From <release-directory> -Offline` on Windows.
+`& $installer -From <release-directory> -Offline` on Windows, after the same
+`Set-ExecutionPolicy` line.
 
 `aidlc config` projects the Kiro shell before the first chat session. Then start
 Kiro from the project root:
