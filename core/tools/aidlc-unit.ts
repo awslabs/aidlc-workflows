@@ -5336,7 +5336,9 @@ function shareMain(args: string[], projectDir?: string): void {
       pd,
       landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams",
       undefined,
-      planOnly ? (path) => path === "aidlc" || path.startsWith("aidlc/") : undefined,
+      // The plan's share carries the repo list: in aidlc/, or still at the root
+      // (with its removal there once it moved).
+      planOnly ? (path) => path === "aidlc" || path.startsWith("aidlc/") || path === "repos.json" : undefined,
     ).committed;
   } catch (error) {
     clearTeamHandoverMarks(pd, ["share", "push"]);

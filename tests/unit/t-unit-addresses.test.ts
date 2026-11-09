@@ -79,7 +79,7 @@ describe("addresses", () => {
     rmSync(join(home.dir, "repos.json"));
     const written = run(join(AIDLC_SRC, "tools", "aidlc-workspace-sync.ts"), ["--write-manifest"], home.dir);
     expect(written.status, written.out).toBe(0);
-    const manifest = readFileSync(join(home.dir, "repos.json"), "utf-8");
+    const manifest = readFileSync(join(home.dir, "aidlc", "repos.json"), "utf-8");
     expect(manifest).toContain("https://example.test/org/app.git");
     expect(manifest).not.toContain(TOKEN);
   });

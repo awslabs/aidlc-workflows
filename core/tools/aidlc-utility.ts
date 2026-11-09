@@ -149,6 +149,7 @@ import {
   repoCloneable,
   parseWorkspaceManifest,
   readWorkspaceRepos,
+  reposManifestPath,
   repoNotThereLine,
   type WorkspaceManifest,
   workspaceManifestWith,
@@ -9812,7 +9813,7 @@ function handleIntentRepos(
         die(`Could not write repos.json for ${name}: ${maskUserinfo(errorMessage(err))}. Nothing was changed.`);
       }
     }
-    if (madeManifest !== null && existsSync(join(projectDir, "repos.json"))) noteReposManifestWritten(projectDir, madeManifest);
+    if (madeManifest !== null && existsSync(reposManifestPath(projectDir))) noteReposManifestWritten(projectDir, madeManifest);
     return withAuditLock(projectDir, () => {
       const list = readIntentRegistry(projectDir, space);
       const row = list.find((entry) => recordDirMatches(entry, dirName));
@@ -10033,7 +10034,7 @@ function plannedRepoPath(
   }
   const address = url ?? originUrl(dir) ?? undefined;
   const kept = address === undefined ? undefined : withoutCredentials(address);
-  const file = join(projectDir, "repos.json");
+  const file = reposManifestPath(projectDir);
   const raw = existsSync(file) ? readFileSync(file, "utf-8") : null;
   const next = workspaceManifestWith(raw, repos.manifest?.org, { name, path: shown, ...(kept === undefined ? {} : { url: kept }) });
   if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
@@ -10096,7 +10097,7 @@ function pathEntryExists(path: string): boolean {
 // The repo names repos.json lists, or none when it is absent or unreadable.
 function workspaceManifestNames(projectDir: string): string[] {
   try {
-    return parseWorkspaceManifest(readFileSync(join(projectDir, "repos.json"), "utf-8")).repos.map((repo) => repo.name);
+    return parseWorkspaceManifest(readFileSync(reposManifestPath(projectDir), "utf-8")).repos.map((repo) => repo.name);
   } catch {
     return [];
   }
@@ -10112,7 +10113,7 @@ function plannedRepoClone(
   name: string,
   url: string | undefined,
 ): { repo: WorkspaceRepoEntry; org: string | undefined; address: string; manifest: { raw: string | null; next: string | null }; note: string | null } {
-  const path = join(projectDir, "repos.json");
+  const path = reposManifestPath(projectDir);
   const raw = existsSync(path) ? readFileSync(path, "utf-8") : null;
   let manifest: WorkspaceManifest | null = null;
   if (raw !== null) {

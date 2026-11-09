@@ -138,6 +138,7 @@ import {
   runtimeHarnessDir,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
+import { reposListGoingBackLine } from "./aidlc-workspace-manifest.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // A release's harnesses as a person types them after --harness; the JSON
@@ -2999,8 +3000,11 @@ export async function configureProjectPin(
         );
       }
       commitProjectPin(projectDir, version);
+      const reposLine = reposListGoingBackLine(projectDir, version);
       return success(
-        `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.${finish}`,
+        `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.${finish}${
+          reposLine ? ` ${reposLine}` : ""
+        }`,
         { projectDir: responseProjectDir, version, pinned: true },
       );
     } finally {
@@ -3048,7 +3052,8 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
     });
   }
   const pluginCatalogue = activate(version, { replaceLauncher });
-  return success(`active AI-DLC version set to ${version}`, {
+  const reposLine = reposListGoingBackLine(projectDirFrom(argv), version);
+  return success(`active AI-DLC version set to ${version}${reposLine ? `. ${reposLine}` : ""}`, {
     version,
     ...(pluginCatalogue ? { pluginCatalogue } : {}),
   });
@@ -3237,13 +3242,14 @@ export function humanLifecycleNarration(
         `Updated aidlc from ${before ?? "not installed"} to ${target}.`,
         process.stdout,
       ),
-      "Project files were not changed. Run 'aidlc config --yes' in each project to refresh them. Open work carries on.",
+      "Each project catches up the next time you open it.",
     ].join("\n");
   }
   if (command === "use") {
     const data = result.data as { version?: string; pluginCatalogue?: PluginCatalogueRefresh } | undefined;
     const target = data?.version ?? argv[1];
     if (!target) return null;
+    const reposLine = before === target ? null : reposListGoingBackLine(projectDirFrom([...argv]), target);
     return `${successText(
       before === target
         ? `Already using aidlc ${target}.`
@@ -3251,7 +3257,7 @@ export function humanLifecycleNarration(
             before ?? "not installed"
           }; retained locally, no project changes).`,
       process.stdout,
-    )}${data?.pluginCatalogue?.warning ? `\n${data.pluginCatalogue.warning}` : ""}`;
+    )}${reposLine ? `\n${reposLine}` : ""}${data?.pluginCatalogue?.warning ? `\n${data.pluginCatalogue.warning}` : ""}`;
   }
   if (command === "uninstall") {
     const data = result.data as {

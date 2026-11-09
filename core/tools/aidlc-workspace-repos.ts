@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, lstatSync, readFileSync, realpathSync, existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { isoTimestamp, repoDir, repoIsWorkspace, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
-import { readWorkspaceRepos, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
+import { readWorkspaceRepos, reposManifestPath } from "./aidlc-workspace-manifest.ts";
 
 // The checkouts repos.json and repos.local.json place at a path of their own.
 function mappedRepoDirs(projectDir: string): string[] {
@@ -148,7 +148,7 @@ export function noteReposManifestWritten(projectDir: string, text: string): void
 export function reposManifestListsOnlyAddedWorkspace(projectDir: string): boolean {
   try {
     const mark = JSON.parse(readFileSync(join(sessionsDir(projectDir), REPOS_WRITTEN_FILE), "utf-8")) as { digest?: unknown };
-    if (mark.digest !== textDigest(readFileSync(join(projectDir, REPOS_FILE), "utf-8"))) return false;
+    if (mark.digest !== textDigest(readFileSync(reposManifestPath(projectDir), "utf-8"))) return false;
   } catch {
     return false;
   }

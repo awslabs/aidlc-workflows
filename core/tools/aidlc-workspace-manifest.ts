@@ -5,7 +5,7 @@
 // can read it without an import cycle.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, renameSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, resolve } from "node:path";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
 import { normalizeDriveLetter, repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
@@ -32,6 +32,83 @@ export function workspaceManifestAt(
     if (text !== null) return { path, text, manifest: parseWorkspaceManifest(text) };
   }
   return null;
+}
+
+function entryAt(path: string): ReturnType<typeof lstatSync> | undefined {
+  return lstatSync(path, { throwIfNoEntry: false });
+}
+
+// The workspace's repo list on disk, in REPOS_MANIFEST_PLACES order. With none
+// yet, a new list goes in aidlc/ when the workspace has that folder, and at the
+// root otherwise (no folder is made for it).
+export function reposManifestPath(root: string): string {
+  const inRecord = join(root, ...REPOS_MANIFEST_PLACES[0].split("/"));
+  if (entryAt(inRecord)) return inRecord;
+  const atRoot = join(root, REPOS_FILE);
+  if (entryAt(atRoot)) return atRoot;
+  return entryAt(join(root, "aidlc"))?.isDirectory() ? inRecord : atRoot;
+}
+
+// The release whose readers first look in aidlc/; one before it reads only the
+// root. The two lines below are the only words about the move.
+const REPOS_IN_AIDLC_SINCE = { major: 2, minor: 12 };
+export const REPOS_MOVED_LINE =
+  `AI-DLC moved repos.json into aidlc/. Commit it so your team gets it; teammates need AI-DLC ` +
+  `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer.`;
+
+// Said when the person sets a project to an earlier release (a pin, `aidlc
+// use`): that release would not see the list where this one moved it.
+export function reposListGoingBackLine(root: string, release: string): string | null {
+  const parts = /^(\d+)\.(\d+)\./.exec(release);
+  if (parts === null) return null;
+  const [major, minor] = [Number(parts[1]), Number(parts[2])];
+  const earlier = major < REPOS_IN_AIDLC_SINCE.major ||
+    (major === REPOS_IN_AIDLC_SINCE.major && minor < REPOS_IN_AIDLC_SINCE.minor);
+  if (!earlier || !entryAt(join(root, "aidlc", REPOS_FILE))?.isFile() || entryAt(join(root, REPOS_FILE))) return null;
+  return `AI-DLC ${release} reads repos.json only at the project root; to keep your repo list on it, run ` +
+    "`git mv aidlc/repos.json repos.json`.";
+}
+
+function gitTracks(root: string, path: string): boolean {
+  return spawnSync("git", ["-C", root, "ls-files", "--error-unmatch", "--", path], { stdio: "ignore", timeout: 10_000 })
+    .status === 0;
+}
+
+// The one move, for config's refresh: a root repos.json goes into aidlc/ with
+// its bytes kept. A file git tracks moves by `git mv`, so the rename is staged
+// and a teammate whose AI-DLC made the same move still pulls the lead's commit
+// cleanly (a plain rename leaves an untracked aidlc/repos.json that blocks it);
+// when git refuses, the list stays at the root, where it is still read. With a
+// list already in aidlc/, both stay as they are and aidlc/'s is read.
+export function moveReposManifestIntoAidlc(root: string): { moved: boolean; tracked: boolean } {
+  const from = join(root, REPOS_FILE);
+  const to = join(root, "aidlc", REPOS_FILE);
+  if (!entryAt(from)?.isFile() || !entryAt(join(root, "aidlc"))?.isDirectory() || entryAt(to)) {
+    return { moved: false, tracked: false };
+  }
+  if (gitTracks(root, REPOS_FILE)) {
+    const moved = spawnSync("git", ["-C", root, "mv", "--", REPOS_FILE, `aidlc/${REPOS_FILE}`], {
+      stdio: "ignore",
+      timeout: 10_000,
+    }).status === 0;
+    return { moved, tracked: moved };
+  }
+  try {
+    renameSync(from, to);
+    return { moved: true, tracked: false };
+  } catch {
+    return { moved: false, tracked: false };
+  }
+}
+
+// For a refresh run in another process: whether a root repos.json git tracks is
+// here now, and afterwards whether that move happened (REPOS_MOVED_LINE's case).
+export function trackedReposManifestAtRoot(root: string): boolean {
+  return entryAt(join(root, REPOS_FILE))?.isFile() === true && gitTracks(root, REPOS_FILE);
+}
+
+export function reposManifestMovedIntoAidlc(root: string): boolean {
+  return !entryAt(join(root, REPOS_FILE)) && entryAt(join(root, "aidlc", REPOS_FILE))?.isFile() === true;
 }
 
 export interface WorkspaceRepoEntry {
@@ -268,9 +345,9 @@ function fileStamp(path: string): string {
 const cache = new Map<string, { stamp: string; repos: WorkspaceRepos }>();
 
 export function readWorkspaceRepos(root: string): WorkspaceRepos {
-  const manifestPath = join(root, REPOS_FILE);
+  const manifestPath = reposManifestPath(root);
   const localPath = join(root, REPOS_LOCAL_FILE);
-  const stamp = `${fileStamp(manifestPath)}|${fileStamp(localPath)}`;
+  const stamp = `${manifestPath}|${fileStamp(manifestPath)}|${fileStamp(localPath)}`;
   const cached = cache.get(root);
   if (cached?.stamp === stamp) return cached.repos;
   const repos: WorkspaceRepos = { manifest: null, entries: new Map(), pathSource: new Map(), ignored: [] };

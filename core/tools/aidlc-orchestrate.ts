@@ -712,7 +712,7 @@ import {
   workspaceSyncInvocation,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
-import { isProjectSubmodule, localRepoOverrideLines, readWorkspaceRepos, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
+import { isProjectSubmodule, localRepoOverrideLines, readWorkspaceRepos, reposManifestPath } from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestListsOnlyAddedWorkspace, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
   builtFromAnotherMachine,
@@ -5574,8 +5574,9 @@ function reposManifestAsk(projectDir: string, stateContent: string, atBoundary: 
   if (process.env.AIDLC_UNATTENDED === "1") return null;
   // The repos.json add-repo made for the workspace folder itself lists none of
   // the repos found here, so the offer still stands for it; any other stands it back.
-  const addedWorkspace = existsSync(join(projectDir, REPOS_FILE)) && reposManifestListsOnlyAddedWorkspace(projectDir);
-  if ((existsSync(join(projectDir, REPOS_FILE)) && !addedWorkspace) || reposManifestOffered(projectDir)) return null;
+  const hasList = existsSync(reposManifestPath(projectDir));
+  const addedWorkspace = hasList && reposManifestListsOnlyAddedWorkspace(projectDir);
+  if ((hasList && !addedWorkspace) || reposManifestOffered(projectDir)) return null;
   const teams = homeLocation(stateContent) !== null || isTeamUnitOwnership(stateContent);
   if (!teams && intentRepos(projectDir).length < 2) return null;
   // Only repos besides the workspace folder: teammates clone the workspace

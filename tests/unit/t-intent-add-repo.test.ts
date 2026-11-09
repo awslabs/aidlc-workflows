@@ -437,6 +437,18 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(stagingLeft()).toEqual([]);
   });
 
+  test("a team's clone adds the repo to the shared list in aidlc/, never a one-repo file at the root", () => {
+    bareRepo("acme", "payments");
+    insteadOf("git@github.com:acme/", "acme");
+    const shared = '{\n  "org": "acme",\n  "repos": [\n    { "name": "app-a" }\n  ]\n}\n';
+    writeFileSync(join(proj, "aidlc", "repos.json"), shared);
+    const r = utility(["intent", "add-repo", "payments"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(existsSync(join(proj, "repos.json"))).toBe(false);
+    const manifest = JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")) as { repos: Array<{ name: string }> };
+    expect(manifest.repos.map((repo) => repo.name)).toEqual(["app-a", "payments"]);
+  });
+
   test("from the person's --url, with no repos.json: a local path creates none and the line says so", () => {
     const bare = bareRepo("local", "payments");
     const r = utility(["intent", "add-repo", "payments", "--url", bare, "--person-words", "add payments from my local copy"]);
@@ -462,12 +474,12 @@ describe("intent add-repo clones a repo that is not here yet", () => {
       "repos.json is new: it lists payments under the org acme; commit it to share the list with your team. " +
         "Its address there leaves out the credential.",
     );
-    const manifest = JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8"));
+    const manifest = JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8"));
     expect(manifest).toEqual({ org: "acme", repos: [{ name: "payments", url: "https://example.invalid/acme/payments.git" }] });
     expect(r.out).not.toContain("s3cret-tok");
     expect(audit()).not.toContain("s3cret-tok");
     expect(audit()).toContain("**Person Words**: add payments from https://***@example.invalid/acme/payments.git");
-    expect(readFileSync(join(proj, "repos.json"), "utf-8")).not.toContain("s3cret-tok");
+    expect(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")).not.toContain("s3cret-tok");
   });
 
   test("a failed clone records nothing, says git's reason and the command to run by hand, and leaves no staging folder", () => {
@@ -688,8 +700,9 @@ describe("work that records no repos", () => {
     return relative(proj, dir).replaceAll("\\", "/");
   }
 
+  // A new list goes in aidlc/, which every test project has.
   function manifest(): { repos: Array<{ name: string; path?: string }> } {
-    return JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8"));
+    return JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8"));
   }
 
   test("repos beside the workspace and no repos.json: the refusal names --path, and the folders the person named are recorded", () => {
