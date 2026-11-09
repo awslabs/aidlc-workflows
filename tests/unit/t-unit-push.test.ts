@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:merged, audit:UNIT_PUSHED, audit:UNIT_MERGED, function:checkTeamResults, function:renderUnitBoard, function:teamsAcrossReposLine, function:homeResultsPastUnitStages
+// covers: subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:merged, audit:UNIT_PUSHED, audit:UNIT_MERGED, function:checkTeamResults, function:renderUnitBoard, function:teamsAcrossReposLine, function:homeResultsPastUnitStages, function:pastUnitStages
 //
 // A Unit's build goes home (#2410, item 5). Teams build Units across repos when
 // the workspace is in git. At the build's end the person is offered the push;
@@ -16,6 +16,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rm
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { AIDLC_SRC, fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   bashLine,
@@ -580,6 +581,27 @@ describe("the push", () => {
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
+  });
+
+  test("a push when the lead's project holds no claim for the Unit: its code goes, and its result is offered again", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    git(home.remote, ["update-ref", "-d", `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      "The lead's project did not take refunds's result: its claim is not there now. Do you want me to send it again?",
+    );
+    expect(git(hosts.billing, ["rev-parse", "--verify", "refunds"])).toMatch(/^[0-9a-f]{40}/);
+    expect(existsSync(join(alice, "aidlc", "handoff")), "no result file is written").toBe(false);
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
+    const again = next(alice);
+    expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
+    expect(again.question).toBe("Refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
+    const later = run(UNIT, ["push", "--later"], alice);
+    expect(later.status, later.out).toBe(0);
+    expect(next(alice).ask_type ?? null).not.toBe("unit-push");
   });
 
   test("a push after a turn-down keeps the lead's word that a repo merged only where that repo's head did not change", () => {
@@ -1230,6 +1252,10 @@ describe("at the home", () => {
     expect(jumped.status, jumped.out).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
+    // The board and status say where it is, read only, before any step records it.
+    const row = "not recorded yet: it is recorded once the work is back on Functional Design";
+    expect(run(ORCH, ["team-board"], home.dir).out).toMatch(new RegExp(`^- refunds, payments: .*${row}$`, "m"));
+    expect(run(UTILITY, ["status"], home.dir).out).toMatch(new RegExp(`^- refunds, payments: .*${row}$`, "m"));
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-push-past-unit-stages" };
     const step = next(home.dir, chat);
     const said = ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("refunds (from payments) is back but not recorded yet"));
@@ -1246,6 +1272,15 @@ describe("at the home", () => {
     next(home.dir, chat);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("refunds");
+  });
+
+  test("the way back named is the Unit stage the work left from, and a home still on the Unit stages is not past them", () => {
+    const fromCodeGeneration = homeState()
+      .replace(/^- \[-\] functional-design/m, "- [x] functional-design")
+      .replace(/^- \[ \] (nfr-requirements|nfr-design|infrastructure-design) /gm, "- [x] $1 ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test");
+    expect(pastUnitStages(fromCodeGeneration)).toEqual({ at: "Build and Test", back: "Code Generation" });
+    expect(pastUnitStages(homeState())).toBeNull();
   });
 
   test("the board names the agent's commands for the lead's words: a repo turned it down, or merged it where the check cannot see", () => {
@@ -1273,9 +1308,9 @@ describe("at the home", () => {
     expect(merged[0]?.block).toContain('billing (by your word: "billing merged it by hand last night")');
   });
 
-  // A live run (by file): the member said the merge request merged and the
-  // agent ran the lead's merged at the team's build, which said the team had
-  // no result. By git, the lead's project checks the repos itself.
+  // A live run: the member said the merge request merged and the agent ran the
+  // lead's merged at the team's build, which said the team had no result. The
+  // lead's project checks the repos itself.
   test("the lead's merged, run at a team's build by git, says the lead's project checks it and writes nothing", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);

@@ -823,13 +823,6 @@ export interface UnitSignoffAskDirective extends AskDirectiveBase {
   signoff_command: string;
 }
 
-// A hand-off file the person pointed at: start its Unit, or not now.
-export interface UnitHandoffAskDirective extends AskDirectiveBase {
-  ask_type: "unit-handoff";
-  response_route: "command";
-  choices: AskChoice[];
-}
-
 // A team's Unit the home turned down, at the end of its build: back to Code
 // Generation, or not now.
 export interface UnitTurnedDownAskDirective extends AskDirectiveBase {
@@ -982,7 +975,6 @@ export type AskDirective =
   | UnitAssignmentAskDirective
   | UnitTakeAskDirective
   | UnitPushAskDirective
-  | UnitHandoffAskDirective
   | UnitTurnedDownAskDirective
   | UnitProposeAskDirective
   | UnitMoveOntoAskDirective
@@ -1817,7 +1809,7 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
 // Engine questions answered by running the picked choice's command.
-const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone"]);
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone"]);
 
 export interface AskChoice {
   label: string;

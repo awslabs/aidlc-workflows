@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
   type AuditShardEvent,
@@ -26,7 +26,6 @@ import {
   loadScopeMapping,
   loadStageGraphAll,
   markdownBlocks,
-  normalizeDriveLetter,
   parseBoltDag,
   readAtomicReplacedFileNoFollowOrThrow,
   readAuditShardEvents,
@@ -283,37 +282,34 @@ export function offersLearningsCorrectionChoices(has: (choice: string) => boolea
 
 // What the plan's share reaches, from the lead's answers since teams: Units held
 // for a team that takes them from the home, and Units open for any team that
-// the home has not started itself. A Unit handed off by file comes to its team
-// as that file, never from the home.
+// the home has not started itself.
 export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: number; open: number; units: string[] } {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   let teamsAt = -1;
   ordered.forEach((row, at) => {
     if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
   });
-  const byFile = new Map<string, boolean>();
+  const held = new Set<string>();
   const open = new Set<string>();
   for (const row of ordered.slice(teamsAt + 1)) {
     if (row.event !== "UNITS_ASSIGNED") continue;
     const opened = auditBlockField(row.block, "Open");
     if (opened !== null && opened !== "none") {
       for (const unit of opened.split(",").map((entry) => entry.trim()).filter(Boolean)) {
-        byFile.delete(unit);
+        held.delete(unit);
         open.add(unit);
       }
     }
     for (const unit of listField(row.block, "Here")) open.delete(unit);
-    const file = auditBlockField(row.block, "By File") !== null;
     for (const pair of (auditBlockField(row.block, "Assigned") ?? "").split(",").map((entry) => entry.trim())) {
       const at = pair.indexOf("=");
       if (at < 1) continue;
       open.delete(pair.slice(0, at));
-      byFile.set(pair.slice(0, at), file);
+      held.add(pair.slice(0, at));
     }
   }
   for (const row of ordered) if (row.event === "UNIT_STARTED") open.delete(auditBlockField(row.block, "Unit") ?? "");
-  const held = [...byFile].filter(([, file]) => !file).map(([unit]) => unit);
-  return { held: held.length, open: open.size, units: [...held, ...open] };
+  return { held: held.size, open: open.size, units: [...held, ...open] };
 }
 
 // The Units the lead named for teams while the home could not be reached, with
@@ -544,8 +540,6 @@ export interface RepoResult {
   heads: string[];
   paths: Record<string, string | null>;
   patch_id?: string;
-  // The team's own check, for a home that cannot fetch the repo itself.
-  reported?: { merged: boolean; commit?: string };
 }
 
 export interface UnitResult {
@@ -554,8 +548,6 @@ export interface UnitResult {
   // Record-relative paths of the Unit outputs the home's later stages read,
   // carried as files in the claim commit's tree under RESULT_FILES_ROOT.
   outputs: string[];
-  // Taken in from a file changed after the team wrote it.
-  edited?: true;
   // Shared inputs the team's own edit was kept for, made on the version before
   // the home's change (record-relative).
   kept_edits?: string[];
@@ -854,86 +846,9 @@ export function mergedStatus(verdicts: ReadonlyArray<{ repo: string; merged: boo
   return verdicts.length === 1 ? parts[0] : `${parts.join(", ")} (${merged} of ${verdicts.length} merged)`;
 }
 
-// --- Files for a team that cannot reach the home ------------------------------
-//
-// One readable Markdown text each: the hand-off a lead writes for a Unit, and
-// the progress and result files the team sends back. Bound by the home's work
-// id, the Unit, the attempt and fingerprints; never signed. Written with LF,
-// read with CRLF too; paths with forward slashes.
-
-export type HandFileKind = "handoff" | "progress" | "result";
-
-export interface HandFile {
-  kind: HandFileKind;
-  fields: Record<string, string>;
-  files: Map<string, string>;
-  result?: UnitResult;
-  // A file whose fingerprints no longer match what it says it holds.
-  edited: boolean;
-}
-
-export const HANDOFF_DIR = "aidlc/handoff";
-
-// A file the lead writes for a team directly in the hand-off folder of the
-// lead's own project (Home Location recorded, not a Unit's build). There the
-// folder is the lead's outbox to teams that work by file, and nothing builds
-// from it, so the plan-approval guard admits the write in every Plan Approval
-// state (with its own link checks) and the Kiro IDE adapter's list of what the
-// guard admits reads the same. A team's own build writes its progress and
-// result files there through its commands, and its plan wait holds as before.
-export function isLeadHandOffNote(projectDir: string, target: string, stateContent: string | null): boolean {
-  if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return false;
-  return normalizeDriveLetter(dirname(resolve(target))) === normalizeDriveLetter(resolve(projectDir, HANDOFF_DIR));
-}
-
 // A text's fingerprint, the same for its LF and CRLF spellings.
 export function textFingerprint(text: string): string {
   return `sha256:${createHash("sha256").update(committedTextBytes(Buffer.from(text, "utf-8"))).digest("hex")}`;
-}
-
-function filesFingerprint(files: ReadonlyMap<string, string>, result?: UnitResult): string {
-  return textFingerprint([
-    ...[...files].map(([path, text]) => `${path} ${textFingerprint(text)}`),
-    ...(result ? [JSON.stringify(result)] : []),
-  ].join("\n"));
-}
-
-// A fence longer than any run of tildes in the text it holds.
-function fenceFor(text: string): string {
-  const longest = Math.max(0, ...(text.match(/~+/g) ?? []).map((run) => run.length));
-  return "~".repeat(Math.max(4, longest + 1));
-}
-
-export function renderHandFile(
-  kind: HandFileKind,
-  title: string,
-  intro: string,
-  fields: Record<string, string>,
-  files: ReadonlyMap<string, string>,
-  result?: UnitResult,
-): string {
-  const lines = [`# ${title}`, "", intro, "", `<!-- aidlc-${kind} 1 -->`];
-  for (const [name, value] of Object.entries({ ...fields, Fingerprint: filesFingerprint(files, result) })) {
-    lines.push(`- **${name}**: ${value}`);
-  }
-  lines.push("");
-  if (files.size > 0) {
-    lines.push("## Files", "", "| File | Fingerprint |", "| --- | --- |");
-    for (const [path, text] of files) lines.push(`| ${path} | ${textFingerprint(text)} |`);
-    lines.push("");
-  }
-  if (result) {
-    const json = JSON.stringify(result, null, 2);
-    const fence = fenceFor(json);
-    lines.push("## Result", "", `${fence}json`, json, fence, "");
-  }
-  for (const [path, text] of files) {
-    const normalized = text.replace(/\r\n?/g, "\n");
-    const fence = fenceFor(normalized);
-    const ends = normalized.endsWith("\n");
-    lines.push(`## File: ${path}`, "", ends ? fence : `${fence} noeol`, ends ? normalized.slice(0, -1) : normalized, fence, "");
-  }
-  return lines.join("\n");
 }
 
 // A table's rows as cells, from markdownBlocks: the one reading of Markdown structure.
@@ -941,82 +856,6 @@ function tableRows(lines: readonly string[], blocks: ReturnType<typeof markdownB
   return lines.flatMap((line, at) => blocks[at]?.kind === "table" && blocks[at].containers.length === 0
     ? [line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim())]
     : []);
-}
-
-// Read a hand-off, progress or result file; null for any other text. Its
-// marker, field list, headings, fences and table are located by
-// markdownBlocks, so an editor that pads the table or rewrites the fences in
-// backticks changes nothing.
-export function parseHandFile(raw: string): HandFile | null {
-  const text = raw.replace(/\r\n?/g, "\n");
-  const lines = text.split("\n");
-  const blocks = markdownBlocks(text).lines;
-  if (blocks.length !== lines.length) return null;
-  const top = (at: number): boolean => blocks[at].containers.length === 0;
-  const markerAt = lines.findIndex((line, at) =>
-    blocks[at].kind === "htmlFlow" && top(at) && /^<!-- aidlc-(handoff|progress|result) 1 -->$/.test(line.trim()));
-  if (markerAt < 0) return null;
-  const kind = /aidlc-(\w+)/.exec(lines[markerAt])![1] as HandFileKind;
-  const fields: Record<string, string> = {};
-  let at = markerAt + 1;
-  for (; at < lines.length && blocks[at].kind !== "blank" && blocks[at].kind !== "heading"; at++) {
-    const field = /^\s*[-*] \*\*(.+?)\*\*: ?(.*)$/.exec(lines[at]);
-    if (field) fields[field[1]] = field[2].trim();
-  }
-  const listed = new Map(tableRows(lines, blocks).filter((cells) => /^sha256:[0-9a-f]+$/.test(cells[1] ?? "")).map((cells) => [cells[0], cells[1]]));
-  const files = new Map<string, string>();
-  let result: UnitResult | undefined;
-  // A fenced block from its opening line: its closing line and what it holds; null for one left open.
-  const fenced = (open: number): { close: number; body: string } | null => {
-    const block = blocks[open].block;
-    let close = open;
-    while (close + 1 < lines.length && blocks[close + 1].block === block && blocks[close + 1].kind === "codeFenced") close++;
-    const fence = /^\s*(~{3,}|`{3,})\s*(\S*)/.exec(lines[open]);
-    if (!fence || close === open || !lines[close].trim().startsWith(fence[1])) return null;
-    return { close, body: lines.slice(open + 1, close).join("\n") };
-  };
-  const fileHeading = (at: number): RegExpExecArray | null =>
-    blocks[at].kind === "heading" && top(at) ? /^## File: (.+)$/.exec(lines[at].trim()) : null;
-  for (; at < lines.length; at++) {
-    if (blocks[at].kind !== "heading" || !top(at)) continue;
-    if (lines[at].trim() === "## Result") {
-      // The Result section runs to the next File section, and its result is
-      // the first fenced block in it that reads as one: a note a person or
-      // their agent wrote above the block (a merge status, say) changes nothing.
-      let scan = at + 1;
-      for (; scan < lines.length && fileHeading(scan) === null; scan++) {
-        if (blocks[scan].kind !== "codeFenced" || !top(scan)) continue;
-        const found = fenced(scan);
-        if (found === null) break;
-        result ??= resultIn(found.body);
-        scan = found.close;
-      }
-      at = scan - 1;
-      continue;
-    }
-    const file = fileHeading(at);
-    if (!file) continue;
-    let open = at + 1;
-    while (open < lines.length && blocks[open].kind === "blank") open++;
-    if (blocks[open]?.kind !== "codeFenced") continue;
-    const found = fenced(open);
-    if (found === null) break;
-    files.set(file[1], /noeol/.test(lines[open]) ? found.body : `${found.body}\n`);
-    at = found.close;
-  }
-  const edited = fields.Fingerprint !== filesFingerprint(files, result) ||
-    [...files].some(([path, text]) => listed.get(path) !== textFingerprint(text));
-  return { kind, fields, files, ...(result ? { result } : {}), edited };
-}
-
-// A fenced block's text as a Unit's result: a JSON object with its repos.
-function resultIn(body: string): UnitResult | undefined {
-  try {
-    const parsed = JSON.parse(body) as UnitResult | null;
-    return parsed !== null && typeof parsed === "object" && Array.isArray(parsed.repos) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 // --- A shared input a team proposes to change -------------------------------------

@@ -84,7 +84,7 @@ const PLAN: readonly Plan[] = [
 const FIRST = PLAN.filter((p) => p.dependsOn === undefined);
 const plan = (unit: string): Plan => PLAN.find((p) => p.unit === unit)!;
 
-const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-assignment", "unit-amend", "unit-signoff", "unit-handoff"]);
+const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-assignment", "unit-amend", "unit-signoff"]);
 
 // The lead's project at the first Construction step, its plan skipping the
 // NFR and infrastructure stages, with the lead's tree and the Units held as
@@ -238,11 +238,10 @@ function expectResult(remote: string, id8: string, p: Plan, pushed: Record<strin
 const unitsMerged = (dir: string): string[] =>
   readAuditShardEvents(dir).filter((row) => row.event === "UNIT_MERGED").map((row) => /\*\*Unit\*\*: (\S+)/.exec(row.block)?.[1] ?? "").sort();
 
-// A Unit the lead holds for a team that nobody has taken, and not by file.
+// A Unit the lead holds for a team that nobody has taken.
 function heldNotTaken(claim: Record<string, unknown> | null, team: string): void {
   expect(claim).toMatchObject({ status: "claimed", owner: team });
   expect(claim?.taken_by, JSON.stringify(claim)).toBeUndefined();
-  expect(claim?.by_file, JSON.stringify(claim)).toBeUndefined();
 }
 
 describe("one piece of work, a team on every tool", () => {
@@ -445,7 +444,7 @@ describe("a teammate on Copilot CLI and the Units the lead held for teams", () =
 });
 
 describe("the lead holds a Unit for a team again", () => {
-  test("a re-hold after a release is a hold, assign makes a hand-off by file a hold again, and the approvals question is answered once", () => {
+  test("a re-hold after a release is a hold, and the approvals question is answered once", () => {
     const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web") };
     const { home, id8, assigned } = leadsProject(hosts, TWO_TEAMS, TWO_TEAMS.map((p) => `${p.unit}=${p.team}`));
     const lead = homeStandIn(home);
@@ -460,7 +459,7 @@ describe("the lead holds a Unit for a team again", () => {
     const board = lead.agent.next();
     expect(board.kind, JSON.stringify(board).slice(0, 400)).toBe("print");
     // x2783-s9 3: the lead freed refunds, then said to hold it for payments again;
-    // the board's note gave the agent only the hand-off by file, which it ran.
+    // the board's note names the assign that holds it.
     lead.person.say("free refunds for now");
     const freed = lead.agent.host.bash(`${unitTool} release refunds`);
     expect(freed.status, freed.stdout + freed.stderr).toBe(0);
@@ -472,14 +471,6 @@ describe("the lead holds a Unit for a team again", () => {
     heldNotTaken(claimPayload(home.remote, id8, "refunds"), "payments");
     // x2783-s9 4: the approvals question was answered at the first assign and is not asked again.
     expect((JSON.parse(held.stdout.trim().split("\n").at(-1) ?? "{}") as { offer?: unknown }).offer).toBeUndefined();
-    // x2783-s9 12: a hand-off by file the lead asked for, then "no file": assign makes it a hold again.
-    lead.person.say("hand checkout-ui to web by file");
-    const file = lead.agent.host.bash(`${unitTool} hand-off checkout-ui --team web --person-words 'hand checkout-ui to web by file'`);
-    expect(file.status, file.stdout + file.stderr).toBe(0);
-    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ by_file: true });
-    lead.person.say("no file, the web team works in this workspace");
-    const hold = lead.agent.host.bash(`${unitTool} assign checkout-ui=web --person-words 'no file, the web team works in this workspace'`);
-    expect(hold.status, hold.stdout + hold.stderr).toBe(0);
     heldNotTaken(claimPayload(home.remote, id8, "checkout-ui"), "web");
     expect(run(ORCH, ["team-board"], home.dir).out).toContain("- checkout-ui, web: held for web, not taken yet");
   });

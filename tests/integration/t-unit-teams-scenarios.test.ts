@@ -1,12 +1,14 @@
-// covers: subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:hand-off, subcommand:aidlc-unit:take-in, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:propose, subcommand:aidlc-unit:amend, function:checkTeamResults, function:switchSoloToTeams, function:buildClaimNotes
+// covers: subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:propose, subcommand:aidlc-unit:amend, function:checkTeamResults, function:switchSoloToTeams, function:buildClaimNotes
 //
-// The six scenarios of the build-out (#2410, section 3), at the engine level,
-// each team on another tool's tree: one shared workspace with the repos side
-// by side; one big code repo beside the workspace (a workspace inside it keeps
-// the team flow of one repo); a team keeping its own workspace repo, reaching
-// the home by its address; a team that cannot reach the home, by hand-off
-// file (CRLF, a folder with a space); solo work a second person joins; and what goes wrong (a turned-down
-// PR, a refused push, a Unit started early, a shared input changed mid-build).
+// The scenarios of the build-out (#2410, section 3), at the engine level, each
+// team on another tool's tree, numbered as the RFC numbers them; every team
+// works through git, so the RFC's fourth (a team that cannot reach the home,
+// by file) has none: one shared workspace with the repos side by side; one big
+// code repo beside the workspace (a workspace inside it keeps the team flow of
+// one repo); a team keeping its own workspace repo, reaching the home by its
+// address (one that can read but not push to it takes nothing); solo work a
+// second person joins; and what goes wrong (a turned-down PR, a refused push,
+// a Unit started early, a shared input changed mid-build).
 // Each team's stages are recorded built as the engine records them; the walk
 // through every stage on every tree is t-unit-teams-journeys.
 
@@ -14,8 +16,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8, REPO_ROOT, seedAidlcMemory, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import { fixtureIntentId8, REPO_ROOT, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
 import {
@@ -284,7 +285,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ done: true });
   });
 
-  test("read but not write: the result goes back as a file, said once", () => {
+  test("read but not write: nothing is taken, and the line names git's reason and the way on", () => {
     const home = makeHome();
     teamsChosen(home, ["refunds=payments", "checkout-ui=web"]);
     const hook = join(home.remote, "hooks", "pre-receive");
@@ -293,65 +294,12 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     const kiroIde = tree("kiro-ide");
     const web = teamWorkspace(home.remote, "wendy");
     const took = run(kiroIde.unit, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], web.dir);
-    expect(took.status, took.out).toBe(0);
-    expect(String(took.json?.notice)).toContain(
-      "You can read the lead's project but not write to it, so the result of checkout-ui goes back as a file when it is built.",
+    expect(took.status, took.out).not.toBe(0);
+    expect(String(took.json?.error)).toBe(
+      "checkout-ui is held for your team at the lead's project, which takes no push from here: read-only for partners. " +
+        "Ask the lead for push access to it, then take checkout-ui again.",
     );
-  });
-});
-
-describe("scenario 4: a team that cannot reach the home", () => {
-  test("the hand-off file goes out, the build starts from it, progress and the result come back as files, and the Unit is done", () => {
-    const OPEN = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
-      "  - name: reporting\n    repos: [ledger]\n    depends_on: []\n```\n";
-    const home = makeHome({ dependencies: OPEN, repos: { ledger: "" } });
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
-    const handed = run(UNIT, ["hand-off", "reporting", "--team", "data", "--person-words", "hand off reporting to the data team"], home.dir);
-    expect(handed.status, handed.out).toBe(0);
-    // The lead's yes to sharing the plan with the teams.
-    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
-    const file = "aidlc/handoff/fixture-reporting.md";
-    // The partner's own workspace on Copilot, with its own copy of ledger.
-    const partner = join(tempDir("partner"), "data workspace");
-    mkdirSync(partner, { recursive: true });
-    seedAidlcMemory(partner);
-    git(partner, ["init", "-q", "-b", "main"]);
-    const ledger = codeHost("ledger");
-    cloneCode(ledger, partner, "ledger", "dana");
-    const copilot = tree("copilot");
-    // Each file travels as a mail attachment saved with CRLF, into a folder with a space.
-    const deliver = (from: string, rel: string): string => {
-      const inbox = join(tempDir("inbox"), "from the other side");
-      mkdirSync(inbox, { recursive: true });
-      const path = join(inbox, rel.split("/").at(-1)!);
-      writeFileSync(path, readFileSync(join(from, ...rel.split("/")), "utf-8").replace(/\n/g, "\r\n"));
-      return path;
-    };
-    const ask = copilot.next(partner, ["--hand-file", deliver(home.dir, file)]);
-    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-handoff");
-    expect(run(copilot.unit, ["take", "--file", deliver(home.dir, file)], partner).status).toBe(0);
-    expect(run(copilot.unit, ["progress"], partner).status).toBe(0);
-    expect(run(UNIT, ["take-in", deliver(partner, "aidlc/handoff/fixture-reporting-progress.md")], home.dir).status).toBe(0);
-    expect(String(next(home.dir).narration)).toContain("- reporting, data: handed off by file, at Functional Design");
-    const record = buildRecord(partner, "data", "reporting");
-    built(record, "reporting", [{ folder: join(partner, "ledger"), path: "src/report.ts" }]);
-    expect(run(copilot.unit, ["push"], partner).status).toBe(0);
-    git(join(partner, "ledger"), ["switch", "-q", "main"]);
-    git(join(partner, "ledger"), ["merge", "-q", "--ff-only", "reporting"]);
-    git(join(partner, "ledger"), ["push", "-q", "origin", "main"]);
-    const again = run(copilot.unit, ["push"], partner);
-    expect(again.status, again.out).toBe(0);
-    // The lead gives the result file's path to /aidlc: that step takes it in.
-    const result = deliver(partner, "aidlc/handoff/fixture-reporting-result.md");
-    const step = next(home.dir, undefined, ["--hand-file", result]);
-    expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(String(step.message)).toContain(`aidlc-unit.ts take-in '${result}'`);
-    const taken = run(UNIT, ["take-in", result], home.dir);
-    expect(taken.json?.notice).toBe("Took in reporting's result from data.");
-    next(home.dir);
-    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("reported by data");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ done: true });
+    expect(existsSync(join(web.dir, "aidlc", "spaces", "web")), "no build record was made").toBe(false);
   });
 });
 

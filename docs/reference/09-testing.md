@@ -371,10 +371,9 @@ the person), and pushes it; its repos merge by squash, merge commit or rebase
 outside the workspace in its own `repos.local.json`. The home sees every merge
 with no fetch by the lead, records each Unit done, opens the Unit that waited
 and runs Build and Test. `tests/integration/t-unit-teams-scenarios.test.ts` runs
-the RFC's six scenarios at the engine level, each team on another tree (the
+the RFC's scenarios at the engine level, each team on another tree (the
 repos side by side, the monorepo beside and inside the workspace, a team's own
-workspace repo, the hand-off file round trip, solo then a second person, and
-what goes wrong), in the ordinary integration tier. CI runs the scope-host files as their
+workspace repo, solo then a second person, and what goes wrong), in the ordinary integration tier. CI runs the scope-host files as their
 own integration job (`scope-hosts`): Linux on pull requests and in the merge
 queue, and Linux, macOS and Windows in the nightly Full Suite (its `scope_runs`
 job) and in a `full_verification` Full Suite.

@@ -202,7 +202,7 @@ export function nextFlagTakesFollowing(flag: string, following: string | undefin
 export type UnitGrammar = {
   /** The verb takes the Unit's name, its one word that is not an option. */
   name: boolean;
-  /** The one word it takes that is not a Unit's name, as its usage shows it (`take-in <file>`). */
+  /** The one word it takes that is not a Unit's name, as its usage shows it (`lead-sign-off on|off`). */
   word?: string;
   /** It takes `<unit>=<team>` pairs as its words (`assign`). */
   pairs?: true;
@@ -245,11 +245,6 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
     options: ["decision", "user-input", "request-file"],
     usage: "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
   },
-  "hand-off": {
-    name: true,
-    options: ["team", "request-file", "person-words"],
-    usage: "unit hand-off <unit> --team <team> [--request-file <file> | --person-words <text>]",
-  },
   land: {
     name: true,
     options: ["step", "target", "strategy", "user-input"],
@@ -276,7 +271,6 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   },
   participate: { name: false, options: [], usage: "unit participate" },
   pin: { name: true, options: [], usage: "unit pin <unit>" },
-  progress: { name: false, options: [], usage: "unit progress" },
   propose: {
     name: false,
     options: ["input", "file", "request-file", "person-words"],
@@ -311,12 +305,10 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   status: { name: false, options: [], usage: "unit status" },
   take: {
     name: true,
-    options: ["home", "home-space", "team", "file"],
+    options: ["home", "home-space", "team"],
     switches: ["early", "lead-rules"],
-    usage: "unit take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] [--lead-rules] | " +
-      "take --file <hand-off file>",
+    usage: "unit take <unit> --home <record> [--home-space <space>] [--team <label>] [--early] [--lead-rules]",
   },
-  "take-in": { name: false, word: "<file>", options: [], usage: "unit take-in <file>" },
   "turned-down": {
     name: true,
     options: ["repo", "message", "request-file", "person-words"],

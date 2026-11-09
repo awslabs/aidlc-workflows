@@ -432,26 +432,13 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     expect(String(ask.question)).toStartWith("The Units are open for any team to take. Share the plan with them now?");
   });
 
-  test("every Unit held for a team handed off by file: no team takes it from the home, so nothing is asked", () => {
-    const home = makeHome();
-    chooseTeams(home.dir);
-    next(home.dir);
-    for (const [unit, team] of [["refunds", "payments"], ["checkout-ui", "web"]]) {
-      const handed = run(UNIT, ["hand-off", unit, "--team", team], home.dir);
-      expect(handed.status, handed.out).toBe(0);
-    }
-    expect(isShare(next(home.dir))).toBe(false);
-  });
-
-  test("an open Unit the home built itself is not open to the teams: with the rest handed off by file, nothing is asked", () => {
+  test("an open Unit the home built itself is not open to the teams: with every open Unit started here, nothing is asked", () => {
     const home = makeHome();
     chooseTeams(home.dir);
     next(home.dir);
     expect(run(UNIT, ["assign", "--open"], home.dir).status).toBe(0);
-    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
-    for (const [unit, team] of [["checkout-ui", "web"], ["reporting", "data"]]) {
-      const handed = run(UNIT, ["hand-off", unit, "--team", team], home.dir);
-      expect(handed.status, handed.out).toBe(0);
+    for (const unit of ["refunds", "checkout-ui", "reporting"]) {
+      appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: unit, "Run floor": "0" }, home.dir);
     }
     expect(isShare(next(home.dir))).toBe(false);
   });
@@ -633,11 +620,10 @@ describe("a Unit the lead's project started stays there", () => {
   });
 });
 
-// Live runs (x2783-s9, Claude Code at the lead's project): "Hold it for them
-// again" became a hand-off by file, since the board's note named no other way
-// to hold a Unit for a team, and the lead's assign could not undo it; "Leave it
-// for them" for a Unit the lead's project had started did the same; and each
-// assign asked the approval rhythm again after the lead had answered it.
+// Live runs (x2783-s9, Claude Code at the lead's project): the board's note
+// named no way to hold a Unit for a team again, nor to leave one the lead's
+// project had started for them; and each assign asked the approval rhythm
+// again after the lead had answered it.
 describe("the lead's re-hold stays a hold", () => {
   const pushAll = (dir: string) => {
     git(dir, ["add", "-A"]);
@@ -645,28 +631,7 @@ describe("the lead's re-hold stays a hold", () => {
     git(dir, ["push", "-q", "origin", "main"]);
   };
 
-  test("the lead's assign of a Unit handed off by file to the same team holds it here again, not by file", () => {
-    const home = makeHome();
-    chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments crew"], home.dir).status).toBe(0);
-    const handed = run(UNIT, ["hand-off", "refunds", "--team", "payments crew"], home.dir);
-    expect(handed.status, handed.out).toBe(0);
-    const id8 = fixtureIntentId8(home.dir);
-    const byFile = claimPayload(home.remote, id8, "refunds")!;
-    expect(byFile.by_file).toBe(true);
-    const again = run(UNIT, ["assign", "refunds=Payments Crew"], home.dir);
-    expect(again.status, again.out).toBe(0);
-    expect(String(again.json?.notice)).toContain(
-      "refunds is held for payments crew here again, not by file: they take it from this workspace.",
-    );
-    const held = claimPayload(home.remote, id8, "refunds")!;
-    expect(held).toMatchObject({ status: "claimed", owner: "payments crew", generation: byFile.generation });
-    expect(held.by_file).toBeUndefined();
-    const board = run(ORCH, ["team-board"], home.dir);
-    expect(board.out).toContain("- refunds, payments crew: held for payments crew, not taken yet");
-  });
-
-  test("the board's note names how to hold a Unit for a team and leave one open, beside the hand-off by file", () => {
+  test("the board's note names how to hold a Unit for a team and leave one open", () => {
     const home = makeHome();
     chooseTeams(home.dir);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
@@ -682,7 +647,7 @@ describe("the lead's re-hold stays a hold", () => {
         "--request-file aidlc/.aidlc-request-text/unit-assign.txt`",
     );
     expect(note).toContain("--started-here <unit>");
-    expect(note).toContain("When they ask to hand a Unit off by file");
+    expect(note).not.toContain("hand-off");
   });
 
   // Live (this fold's run, Claude Code): a later assign said "Built here: reporting" for the Unit the lead had

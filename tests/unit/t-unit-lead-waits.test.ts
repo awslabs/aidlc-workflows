@@ -2,7 +2,7 @@
 //
 // While the lead's project waits at Code Generation on Units the teams build,
 // nothing is built there, and the board is the step `next` gives. A live run
-// (Claude Code, Linux, every Unit handed off by file): after a send-back from
+// (Claude Code, Linux, a Unit sent back to its team): after a send-back from
 // the lead's Build and Test, every write the lead asked for in the project, and
 // a compound read, was refused by the plan-approval guard with "Run next", and
 // next printed the board: a loop with no way out. At that wait the agent's own
@@ -20,13 +20,14 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_SRC, createTestProject, seedAidlcMemory, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
   cloneCode,
+  cloneOf,
   codeHost,
   ENV,
-  git,
+  HOME_RECORD,
   hook,
   homeState,
   makeHome,
@@ -35,7 +36,6 @@ import {
   refundsTaken,
   run,
   STATE,
-  tempDir,
   UNIT,
 } from "../harness/team-build.ts";
 
@@ -45,7 +45,6 @@ afterEach(cleanupTeamBuild);
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const OPEN = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
   "  - name: reporting\n    repos: [ledger]\n    depends_on: []\n```\n";
-const FILE = "aidlc/handoff/fixture-reporting.md";
 const CHAT = "t-unit-lead-waits-chat";
 const FAILURE = "the refund route never calls the notices handler";
 const WAIT = "refunds waits on the payments team and reporting on the data team, so nothing is built here " +
@@ -53,15 +52,6 @@ const WAIT = "refunds waits on the payments team and reporting on the data team,
 
 // The lead's own chat: its commands carry the chat, as the host's hooks name it.
 const LEAD: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: CHAT };
-
-// The file as it reaches the other side: a mail attachment saved with CRLF.
-function deliver(fromDir: string, file: string): string {
-  const inbox = join(tempDir("inbox"), "from the lead");
-  mkdirSync(inbox, { recursive: true });
-  const path = join(inbox, file.split("/").at(-1)!);
-  writeFileSync(path, readFileSync(join(fromDir, ...file.split("/")), "utf-8").replace(/\n/g, "\r\n"));
-  return path;
-}
 
 // The person types in their chat: the prompt hook keeps the message and writes its turn.
 function leadSays(dir: string, prompt: string, chat = CHAT): string {
@@ -88,10 +78,10 @@ const reason = (out: string): string => {
   }
 };
 
-// refunds held for payments; reporting handed to data by file, built there and
-// taken in; then the lead's Build and Test fails on reporting, the lead sends it
-// back, and the lead's project goes back to Code Generation to wait for it, as
-// the step says. The board is the step there.
+// refunds held for payments, reporting for data; a data member's clone takes
+// reporting, builds it and pushes it; then the lead's Build and Test fails on
+// reporting, the lead sends it back, and the lead's project goes back to Code
+// Generation to wait for it, as the step says. The board is the step there.
 function leadWaits(policy?: "relaxed" | "off") {
   const home = makeHome({
     dependencies: OPEN,
@@ -99,14 +89,12 @@ function leadWaits(policy?: "relaxed" | "off") {
     ...(policy ? { state: homeState([`- **Guard Policy**: ${policy} (set by you)`]) } : {}),
   });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
-  expect(run(UNIT, ["hand-off", "reporting", "--team", "data", "--person-words", "hand reporting to the data team"], home.dir).status).toBe(0);
+  expect(run(UNIT, ["assign", "refunds=payments", "reporting=data"], home.dir).status).toBe(0);
   expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
-  const partner = createTestProject();
-  seedAidlcMemory(partner);
-  git(partner, ["init", "-q", "-b", "main"]);
+  const partner = cloneOf(home.remote, "dana");
   cloneCode(codeHost("ledger"), partner, "ledger", "dana");
-  expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner).status).toBe(0);
+  const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--team", "data"], partner);
+  expect(took.status, took.out).toBe(0);
   const intents = join(partner, "aidlc", "spaces", "data", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
   mkdirSync(join(partner, "ledger", "src"), { recursive: true });
@@ -118,8 +106,6 @@ function leadWaits(policy?: "relaxed" | "off") {
   })}\n`);
   const pushed = run(UNIT, ["push"], partner);
   expect(pushed.status, pushed.out).toBe(0);
-  const taken = run(UNIT, ["take-in", deliver(partner, "aidlc/handoff/fixture-reporting-result.md")], home.dir);
-  expect(taken.status, taken.out).toBe(0);
   // The lead's Build and Test failed on reporting.
   const statePath = seededStateFile(home.dir);
   writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
@@ -179,9 +165,9 @@ describe("while the lead's project waits on the teams at Code Generation", () =>
 
   test("asked before the agent tries: their note and the compound read on their question run, with no refusal", () => {
     const { home } = leadWaits();
-    leadSays(home.dir, "How does the data team get this? They can't reach our repo, they work from the files.");
+    leadSays(home.dir, "How does the data team get this? Write them a note with what Build and Test found.");
     const read = call(home.dir, "Bash", {
-      command: `date; grep -n -i "sent back\\|^## " ${FILE} | head -30`,
+      command: `date; grep -n -i "current stage\\|^## " aidlc/spaces/default/intents/${HOME_RECORD}/aidlc-state.md | head -30`,
     });
     expect(read.status, read.out).toBe(0);
     expect(write(home.dir, "aidlc/notes-for-data.md").status).toBe(0);

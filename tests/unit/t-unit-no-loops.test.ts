@@ -1,14 +1,12 @@
-// covers: subcommand:aidlc-unit:assign, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:hand-off, subcommand:aidlc-unit:progress, subcommand:aidlc-unit:take-in, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:propose, subcommand:aidlc-unit:amend, function:handFileStep, function:reopenTurnedDownBuild, subcommand:aidlc-unit:sign-off
+// covers: subcommand:aidlc-unit:assign, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:propose, subcommand:aidlc-unit:amend, function:reopenTurnedDownBuild, subcommand:aidlc-unit:sign-off
 //
 // No step the build-out adds hands the person the same thing twice. Each walk
 // runs a step's own command as the agent would (from the project's tool tree,
 // with the person's words filled in) and then asks for the next step, and the
 // next step is never the same step for the same thing. A command that is
 // refused names a way on, and following it leads somewhere else. Walks: the
-// lead assigns and the board offers a hand-off; a team takes, pushes, goes back
-// to main, is turned down, goes back to Code Generation and pushes again from
-// main; a team by file starts from the file,
-// sends progress (taken in by its path) and its result (by the command); the
+// lead assigns and shares the plan; a team takes, pushes, goes back to main, is
+// turned down, goes back to Code Generation and pushes again from main; the
 // home answers two proposals; no step met tells the person what to type
 // (tellsWhatToType), and every step is a kind each harness's skill acts on
 // in a fresh chat (kindsEverySkillHandles). Then each step that waits on an answer the person
@@ -32,7 +30,6 @@ import {
   fixtureIntentId8,
   REPO_ROOT,
   removeWorkspaceRecord,
-  seedAidlcMemory,
 } from "../harness/fixtures.ts";
 import {
   bashLine,
@@ -138,7 +135,7 @@ function movesOn(dir: string, env: NodeJS.ProcessEnv, step: Step, command: strin
 }
 
 describe("no step of the build-out comes back after its own command ran", () => {
-  test("the lead assigns, the board offers a hand-off, a team takes, pushes, is turned down and goes back to Code Generation", () => {
+  test("the lead assigns and shares the plan, a team takes, pushes, is turned down and goes back to Code Generation", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     withTools(home.dir);
@@ -151,12 +148,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     const share = movesOn(home.dir, ENV, assignment, assign);
     expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
     const shareChoice = (share.choices as Array<{ label: string; command?: string }>).find((choice) => choice.label === "Share them with the teams");
-    const board = movesOn(home.dir, ENV, share, shareChoice!.command!);
-    // The board, with checkout-ui held for web and not taken: its hand-off offer, run once, is not offered again.
-    const offer = (board.offers as Array<{ choices: Array<{ label: string; command?: string }> }>)
-      .find((entry) => entry.choices[0].label.includes("checkout-ui"))!;
-    const handed = movesOn(home.dir, ENV, board, offer.choices[0].command!);
-    expect(JSON.stringify(handed.offers ?? [])).not.toContain("Hand checkout-ui");
+    movesOn(home.dir, ENV, share, shareChoice!.command!);
     // A team member takes refunds from the offer; the offer is not put again.
     const alice = withTools(cloneOf(home.remote, "alice"));
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
@@ -211,52 +203,6 @@ describe("no step of the build-out comes back after its own command ran", () => 
     const sent = movesOn(alice, ENV, again, choice(again, "Push"));
     expect(JSON.stringify(sent)).not.toContain("back to Code Generation");
     expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
-  });
-
-  test("a team by file starts from the file once, and its progress and result are taken in once, by path and by command", () => {
-    const deps = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
-      "  - name: reporting\n    repos: [ledger]\n    depends_on: []\n```\n";
-    const home = makeHome({ dependencies: deps, repos: { ledger: "" } });
-    withTools(home.dir);
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["hand-off", "reporting", "--team", "data", "--person-words", "hand off reporting to data"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
-    const partner = withTools(createTestProject());
-    seedAidlcMemory(partner);
-    git(partner, ["init", "-q", "-b", "main"]);
-    cloneCode(codeHost("ledger"), partner, "ledger", "dana");
-    const inbox = tempDir("inbox");
-    const deliver = (from: string, rel: string): string => {
-      const path = join(inbox, rel.split("/").at(-1)!);
-      writeFileSync(path, readFileSync(join(from, ...rel.split("/")), "utf-8"));
-      return path;
-    };
-    // The hand-off file: pointed at, then started; pointed at again, the build carries on.
-    const file = deliver(home.dir, "aidlc/handoff/fixture-reporting.md");
-    const offer = next(partner, ENV, ["--hand-file", file]);
-    expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-handoff");
-    movesOn(partner, ENV, offer, choice(offer, "Start reporting"), ["--hand-file", file]);
-    // Progress, taken in by its path (the turn keeps the path for every step in it).
-    expect(run(UNIT, ["progress"], partner).status).toBe(0);
-    const progress = deliver(partner, "aidlc/handoff/fixture-reporting-progress.md");
-    const takeIn = next(home.dir, ENV, ["--hand-file", progress]);
-    expect(takeIn.kind, JSON.stringify(takeIn)).toBe("print");
-    const after = movesOn(home.dir, ENV, takeIn, printed(takeIn), ["--hand-file", progress]);
-    expect(String(after.narration)).toContain("handed off by file, at");
-    // The result, taken in by the command: the next step offers no take-in of it.
-    const intents = join(partner, "aidlc", "spaces", "data", "intents");
-    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
-    mkdirSync(join(partner, "ledger", "src"), { recursive: true });
-    writeFileSync(join(partner, "ledger", "src", "report.ts"), "export const report = 1;\n");
-    const stage = join(record, "construction", "reporting", "code-generation");
-    mkdirSync(stage, { recursive: true });
-    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({ stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/report.ts" }] })}\n`);
-    expect(run(UNIT, ["push"], partner).status).toBe(0);
-    const result = deliver(partner, "aidlc/handoff/fixture-reporting-result.md");
-    expect(run(UNIT, ["take-in", result], home.dir).status).toBe(0);
-    const later = next(home.dir, ENV, ["--hand-file", result]);
-    expect(String(later.message), JSON.stringify(later)).not.toContain("take-in");
   });
 
   test("the home answers a proposal once, approved or turned down, and is not asked it again", () => {
@@ -359,7 +305,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     movesOn(alice, ENV, ask, choice(ask, "Send it to the lead"));
   });
 
-  test("the push: a repo the plan did not list goes with it; a result the home did not take is offered again as that; a read-only take sends by git once it can", () => {
+  test("the push: a repo the plan did not list goes with it; a result the home did not take is offered again as that", () => {
     const { home, alice, record } = refundsTaken();
     withTools(alice);
     codeGenerated(alice, record);

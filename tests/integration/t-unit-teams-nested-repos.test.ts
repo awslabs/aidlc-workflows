@@ -41,7 +41,7 @@ setDefaultTimeout(20 * 60_000);
 afterAll(cleanupTeamBuild);
 
 const SYNC = join(AIDLC_SRC, "tools", "aidlc-workspace-sync.ts");
-const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-assignment", "unit-amend", "unit-signoff", "unit-handoff"]);
+const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-assignment", "unit-amend", "unit-signoff"]);
 const DEPENDENCIES = "# Unit dependencies\n\n```yaml\nunits:\n" +
   "  - name: refunds\n    kind: service\n    repos: [pkg-a, pkg-b]\n    depends_on: []\n" +
   "  - name: checkout-ui\n    kind: ui\n    repos: [pkg-b]\n    depends_on: []\n" +
