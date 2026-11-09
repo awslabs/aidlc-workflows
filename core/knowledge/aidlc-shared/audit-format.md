@@ -73,7 +73,7 @@ it would be without it. The rows that carry it:
   with `Source: you`.
 - `CHANGE_ACCEPTED` that carries the person's `Message Id`.
 
-## Event Registry (134 events, 27 categories)
+## Event Registry (135 events, 27 categories)
 
 ### Workflow Lifecycle (9 events)
 

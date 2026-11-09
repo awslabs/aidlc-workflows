@@ -28,7 +28,7 @@ const AGENT_COUNTS: ReadonlyArray<readonly [string, number]> = [
   ["aidlc-composer-agent", 1],
   ["aidlc-delivery-agent", 3],
   ["aidlc-design-agent", 5],
-  ["aidlc-developer-agent", 6],
+  ["aidlc-developer-agent", 7],
   ["aidlc-devsecops-agent", 4],
   ["aidlc-operations-agent", 4],
   ["aidlc-pipeline-deploy-agent", 3],
@@ -106,11 +106,11 @@ describe("t15 — knowledge-file inventory + non-emptiness (mechanism: none)", (
   });
 
   // Re-derive the arithmetic from the live tree so the suite cannot silently
-  // shrink the surface: pin the total .md count at 61 and the summed plan at 97.
-  test("TAP-plan parity: 14 + 14 + 8 + TOTAL == 97 with TOTAL == 61 [.sh L11-14]", () => {
+  // shrink the surface: pin the total .md count at 62 and the summed plan at 98.
+  test("TAP-plan parity: 14 + 14 + 8 + TOTAL == 98 with TOTAL == 62 [.sh L11-14]", () => {
     const total = findMd(KNOWLEDGE_DIR).length;
-    expect(total).toBe(61);
+    expect(total).toBe(62);
     const plan = 14 + 14 + 8 + total;
-    expect(plan).toBe(97);
+    expect(plan).toBe(98);
   });
 });
