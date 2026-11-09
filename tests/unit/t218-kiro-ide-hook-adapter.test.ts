@@ -7579,6 +7579,101 @@ describe("t218 terminal-command-guard stops an AI-DLC command whose reply goes t
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // A POSIX shell reads a backslash as an escape: `'\''` puts an apostrophe in
+  // a single-quoted value and `\"` a quote in a double-quoted one, so the > after
+  // it is still inside the value. posixCommandText says which comments the
+  // check cuts. PowerShell reads a backslash as a plain character, and
+  // so does Kiro's shell on Windows, so these run only where the shell tools are
+  // POSIX.
+  const POSIX_HOST = process.platform !== "win32";
+  const ESCAPED_QUOTE_VALUES = [
+    String.raw`aidlc engine orchestrate next 'the user'\''s <b> tag'`,
+    String.raw`aidlc engine orchestrate next "say \"a > b\" now"`,
+    String.raw`aidlc engine log decision --stage x --decision 'the user'\''s <b> tag'`,
+    String.raw`aidlc engine log decision --stage x --decision "say \"a > b\" now"`,
+  ];
+  const ESCAPED_GT = String.raw`aidlc engine orchestrate next a\>b`;
+  const COMMENTS = [
+    String.raw`aidlc engine orchestrate next # example value: \"a > b\"`,
+    "aidlc engine orchestrate next # a > b",
+    "aidlc engine orchestrate next # it's > fine",
+    // A command with a here-document gets no POSIX reading (posixShell): its
+    // body's # line is not cut, so that line's quote still hides the next one.
+    "cat <<'EOF'\n# user's example\naidlc engine orchestrate next > next.tmp\nEOF",
+  ];
+
+  test.skipIf(!POSIX_HOST)("a > after an escaped quote inside a value, or in a comment, passes on the POSIX shell tools", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const tool of ["execute_bash", "shell"]) {
+        for (const command of [...ESCAPED_QUOTE_VALUES, ESCAPED_GT, ...COMMENTS]) {
+          const r = guard(dir, tool, command);
+          expect(r.stderr, `${tool} ${JSON.stringify(command)}`).toBe("");
+          expect(r.code, `${tool} ${JSON.stringify(command)}`).toBe(0);
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(!POSIX_HOST)("a redirect after an escaped quote, an escaped backslash, a line ending in a backslash or a comment line, or after a # that starts no comment, is still stopped on the POSIX shell tools", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const tool of ["execute_bash", "shell"]) {
+        for (const command of [
+          String.raw`aidlc engine orchestrate next 'the user'\''s tag' > next.tmp`,
+          String.raw`aidlc engine orchestrate next "say \"hi\"" > next.tmp`,
+          String.raw`aidlc engine orchestrate next \"hi >next.tmp`,
+          String.raw`aidlc engine orchestrate next a\\>next.tmp`,
+          "cd /work/app && \\\naidlc engine orchestrate next > next.tmp",
+          "# see \\\naidlc engine orchestrate next > next.tmp",
+          "aidlc engine \\\n  orchestrate next > next.tmp",
+          "aidlc engine orchestrate next \\\"hello\\\nworld\\\" > next.tmp",
+          "# Escape \" as \\\"\naidlc engine orchestrate next > next.tmp",
+          "# it's\naidlc engine orchestrate next > next.tmp",
+          "aidlc engine orchestrate next a#b > next.tmp",
+          String.raw`aidlc engine orchestrate next \#b > next.tmp`,
+          "aidlc engine orchestrate next $(cat f)#x > next.tmp",
+          "x=`: #`; aidlc engine orchestrate next > next.tmp",
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion, not a template
+          "aidlc engine orchestrate next ${request:-Build #1} > next.tmp",
+          "(( 1 # )); aidlc engine orchestrate next > next.tmp",
+          'aidlc engine orchestrate next "$(printf %s "Fix issue #12")" > next.tmp',
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion, not a template
+          "aidlc engine orchestrate next ${x:-a) #} > next.tmp",
+          "aidlc engine orchestrate next --answer 'one\nx' `echo \\' #` \\' > next.tmp",
+          "x=a; : $[ #x ]; aidlc engine orchestrate next > next.tmp",
+          "aidlc engine orchestrate next $[ ##a ] > next.tmp",
+          String.raw`aidlc engine orchestrate next $'the user\'s developer\'s tag' > next.tmp`,
+          "printf %s ticket\\\n#12; aidlc engine orchestrate next > next.tmp",
+          `aidlc engine orchestrate next "$(printf %s '\\"a"b')" > next.tmp`,
+          '[ -d aidlc ] || exit 1\n# Escape " as \\"\naidlc engine orchestrate next > next.tmp',
+          'ls x <#"\\"\naidlc engine orchestrate next > next.tmp',
+        ]) {
+          const r = guard(dir, tool, command);
+          expect(r.code, `${tool} ${JSON.stringify(command)}`).toBe(2);
+          expect(r.stderr, `${tool} ${JSON.stringify(command)}`).toBe(REFUSAL);
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("on PowerShell a backslash is a plain character, so a > after a backslash and a double quote is a redirect", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const command of ESCAPED_QUOTE_VALUES.filter((value) => value.includes('\\"'))) {
+        const r = guard(dir, "execute_pwsh", command);
+        expect(r.code, JSON.stringify(command)).toBe(2);
+        expect(r.stderr, JSON.stringify(command)).toBe(REFUSAL);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // In a second run reported on #2167 (macOS, zsh) the agent piped 70 of 117
@@ -7713,6 +7808,55 @@ describe("t218 catch-up forgets a step reply the agent piped or captured away", 
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  // On a POSIX shell tool a backslash escapes the next character, so a | after
+  // `'\''` or `\"` inside a value is text, and a | after the value's end is a
+  // pipe.
+  const forgets = (tool: string, command: string, expected: string) => {
+    const dir = scratchProject(false);
+    try {
+      seedRecord(dir);
+      const label = `${tool} ${JSON.stringify(command)}`;
+      const noted = card(dir, tool, command);
+      expect(noted.code, `${label}: ${noted.stderr}`).toBe(0);
+      expect(noted.stderr, label).toBe("");
+      const after = card(dir, tool, "echo done");
+      expect(after.code, `${label}: ${after.stderr}`).toBe(0);
+      const record = readRecord(dir);
+      expect(record.last, label).toBe(expected);
+      expect(record.persona, label).toEqual(PERSONA);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test.skipIf(process.platform === "win32")("a pipe after a value that holds an escaped quote, on a line after a backslash or a comment, or after a # that starts no comment, is a pipe on the POSIX shell tools", () => {
+    for (const tool of ["execute_bash", "shell"]) {
+      forgets(tool, String.raw`aidlc engine orchestrate next 'the user'\''s text' | head -50`, "");
+      forgets(tool, String.raw`aidlc engine orchestrate next "say \"hi\"" | head -50`, "");
+      forgets(tool, "cd /work/app && \\\naidlc engine orchestrate next | head -50", "");
+      forgets(tool, "# note \\\naidlc engine orchestrate next | head -50", "");
+      forgets(tool, "aidlc engine orchestrate next \\\"hello\\\nworld\\\" | head -50", "");
+      forgets(tool, "# Escape \" as \\\"\naidlc engine orchestrate next | head -50", "");
+      forgets(tool, "x=`: #`; aidlc engine orchestrate next | head -50", "");
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion, not a template
+      forgets(tool, "aidlc engine orchestrate next ${request:-Build #1} | head -50", "");
+      forgets(tool, 'aidlc engine orchestrate next "$(printf %s "Fix issue #12")" | head -50', "");
+      forgets(tool, "aidlc engine orchestrate next $[ #x ] | head -50", "");
+      forgets(tool, String.raw`aidlc engine orchestrate next $'the user\'s developer\'s tag' | head -50`, "");
+      forgets(tool, "printf %s ticket\\\n#12; aidlc engine orchestrate next | head -50", "");
+      forgets(tool, `aidlc engine orchestrate next "$(printf %s '\\"a"b')" | head -50`, "");
+      forgets(tool, '[ -d aidlc ] || exit 1\n# Escape " as \\"\naidlc engine orchestrate next | head -50', "");
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("a | inside a value that holds an escaped quote, or in a comment, leaves the record alone on the POSIX shell tools", () => {
+    for (const tool of ["execute_bash", "shell"]) {
+      forgets(tool, String.raw`aidlc engine orchestrate next 'the user'\''s a | b'`, BUNDLE);
+      forgets(tool, String.raw`aidlc engine orchestrate next "say \"a | b\" now"`, BUNDLE);
+      forgets(tool, "aidlc engine orchestrate next # see a | b", BUNDLE);
     }
   });
 });
