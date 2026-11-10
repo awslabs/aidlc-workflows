@@ -7594,11 +7594,20 @@ describe("t218 terminal-command-guard stops an AI-DLC command whose reply goes t
     String.raw`aidlc engine log decision --stage x --decision "say \"a > b\" now"`,
   ];
   const ESCAPED_GT = String.raw`aidlc engine orchestrate next a\>b`;
+  // Brackets and braces inside quotes, and a backtick or $( inside single
+  // quotes, are text, so they leave the POSIX reading on; so do << and $'
+  // inside double quotes.
+  const QUOTED_PUNCTUATION = [
+    String.raw`aidlc engine orchestrate next 'the user'\''s (primary) <b> tag'`,
+    String.raw`aidlc engine orchestrate next 'the user'\''s {x} [y] \`z\` $(w) <b> tag'`,
+    String.raw`aidlc engine orchestrate next "say \"a > b\" (now) [x] {y}"`,
+    String.raw`aidlc engine orchestrate next "say \"a > b\" <<x $'y'"`,
+  ];
   const COMMENTS = [
     String.raw`aidlc engine orchestrate next # example value: \"a > b\"`,
     "aidlc engine orchestrate next # a > b",
     "aidlc engine orchestrate next # it's > fine",
-    // A command with a here-document gets no POSIX reading (posixShell): its
+    // A command with a here-document gets no POSIX reading (posixReading): its
     // body's # line is not cut, so that line's quote still hides the next one.
     "cat <<'EOF'\n# user's example\naidlc engine orchestrate next > next.tmp\nEOF",
   ];
@@ -7607,7 +7616,7 @@ describe("t218 terminal-command-guard stops an AI-DLC command whose reply goes t
     const dir = scratchProject(false);
     try {
       for (const tool of ["execute_bash", "shell"]) {
-        for (const command of [...ESCAPED_QUOTE_VALUES, ESCAPED_GT, ...COMMENTS]) {
+        for (const command of [...ESCAPED_QUOTE_VALUES, ESCAPED_GT, ...COMMENTS, ...QUOTED_PUNCTUATION]) {
           const r = guard(dir, tool, command);
           expect(r.stderr, `${tool} ${JSON.stringify(command)}`).toBe("");
           expect(r.code, `${tool} ${JSON.stringify(command)}`).toBe(0);
@@ -7624,6 +7633,10 @@ describe("t218 terminal-command-guard stops an AI-DLC command whose reply goes t
       for (const tool of ["execute_bash", "shell"]) {
         for (const command of [
           String.raw`aidlc engine orchestrate next 'the user'\''s tag' > next.tmp`,
+          String.raw`aidlc engine orchestrate next 'the user'\''s (primary) tag' > next.tmp`,
+          "# don't\naidlc engine orchestrate next 'a (primary) c' > next.tmp",
+          "aidlc engine orchestrate next # see (x)\naidlc engine orchestrate next 'it'\\''s' > next.tmp",
+          'typeset -A x; aidlc engine orchestrate next "$[ x[" #"] ]" > next.tmp',
           String.raw`aidlc engine orchestrate next "say \"hi\"" > next.tmp`,
           String.raw`aidlc engine orchestrate next \"hi >next.tmp`,
           String.raw`aidlc engine orchestrate next a\\>next.tmp`,
@@ -7835,6 +7848,8 @@ describe("t218 catch-up forgets a step reply the agent piped or captured away", 
   test.skipIf(process.platform === "win32")("a pipe after a value that holds an escaped quote, on a line after a backslash or a comment, or after a # that starts no comment, is a pipe on the POSIX shell tools", () => {
     for (const tool of ["execute_bash", "shell"]) {
       forgets(tool, String.raw`aidlc engine orchestrate next 'the user'\''s text' | head -50`, "");
+      forgets(tool, String.raw`aidlc engine orchestrate next 'the user'\''s (primary) text' | head -50`, "");
+      forgets(tool, "# don't\naidlc engine orchestrate next 'a (primary) c' | head -50", "");
       forgets(tool, String.raw`aidlc engine orchestrate next "say \"hi\"" | head -50`, "");
       forgets(tool, "cd /work/app && \\\naidlc engine orchestrate next | head -50", "");
       forgets(tool, "# note \\\naidlc engine orchestrate next | head -50", "");
@@ -7857,6 +7872,7 @@ describe("t218 catch-up forgets a step reply the agent piped or captured away", 
       forgets(tool, String.raw`aidlc engine orchestrate next 'the user'\''s a | b'`, BUNDLE);
       forgets(tool, String.raw`aidlc engine orchestrate next "say \"a | b\" now"`, BUNDLE);
       forgets(tool, "aidlc engine orchestrate next # see a | b", BUNDLE);
+      forgets(tool, String.raw`aidlc engine orchestrate next 'the user'\''s (a | b)'`, BUNDLE);
     }
   });
 });
