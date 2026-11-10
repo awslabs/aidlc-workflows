@@ -478,7 +478,7 @@ describe("Kiro CLI and opencode: the host sends the memory files with every requ
     const parsed = JSON.parse(readFileSync(config, "utf-8")) as { instructions: string[] };
     writeFileSync(config, JSON.stringify({
       ...parsed,
-      instructions: parsed.instructions.map((entry) => entry.replace("aidlc/.aidlc-engine/active-memory/", "aidlc/.aidlc-engine/active-memory/")),
+      instructions: parsed.instructions.map((entry) => entry.replace("aidlc/.aidlc-engine/active-memory/", ["aidlc", "active-memory/"].join("/"))),
     }));
     const sid = randomUUID();
     await sessionStart(proj, "opencode", sid, "startup");

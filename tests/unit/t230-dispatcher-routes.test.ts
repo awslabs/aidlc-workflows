@@ -1633,6 +1633,10 @@ describe("t230 version-aware startup", () => {
         ".aidlc-unit-scope.json": '{"version":1,"unit":"u1"}\n',
       };
       for (const [rel, bytes] of Object.entries(earlier)) writeFileSync(join(project, "aidlc", rel), bytes);
+      // What the fixture's shell put in the engine folder, which must not grow.
+      const engineFolder = join(project, "aidlc", ".aidlc-engine");
+      const listed = (): string[] => existsSync(engineFolder) ? readdirSync(engineFolder, { recursive: true }).map(String).sort() : [];
+      const before = listed();
       const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
       for (const [argv, input] of [
         [["engine", "hook", "validate-state"], JSON.stringify({ session_id: "s-one" })],
@@ -1641,7 +1645,7 @@ describe("t230 version-aware startup", () => {
       ] as const) {
         const result = viaDispatcher([...argv], project, env, input);
         expect(result.exitCode, `${argv.join(" ")}: ${result.stderr.toString()}`).toBe(0);
-        expect(existsSync(join(project, "aidlc", ".aidlc-engine")), argv.join(" ")).toBe(false);
+        expect(listed(), argv.join(" ")).toEqual(before);
         for (const [rel, bytes] of Object.entries(earlier)) {
           expect(readFileSync(join(project, "aidlc", rel), "utf-8"), `${argv.join(" ")}: ${rel}`).toBe(bytes);
         }
