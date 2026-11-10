@@ -1595,6 +1595,60 @@ describe("t230 version-aware startup", () => {
     },
   );
 
+  // A project pinned to another release runs that release, which reads its
+  // own files where it keeps them: the dispatcher hands every route over
+  // before anything of this release could move them into aidlc/.aidlc-engine/.
+  test.skipIf(process.platform === "win32")(
+    "a pinned project's hook, command and statusline move none of its engine files",
+    () => {
+      const project = makeProject();
+      const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-pinned-layout-"));
+      const version = "9.9.7";
+      const root = join(machine, "versions", version);
+      const executable = join(root, "aidlc");
+      mkdirSync(root, { recursive: true });
+      cpSync(join(REPO_ROOT, "dist-release", "claude"), join(root, "runtime", "claude"), { recursive: true });
+      const runtimeStampPath = join(root, "runtime", "claude", ".claude", "tools", "data", "aidlc-stamp.json");
+      const runtimeStamp = JSON.parse(readFileSync(runtimeStampPath, "utf-8")) as { frameworkVersion: string };
+      runtimeStamp.frameworkVersion = version;
+      writeFileSync(runtimeStampPath, `${JSON.stringify(runtimeStamp, null, 2)}\n`);
+      writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      writeFileSync(
+        join(root, "version.json"),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          version,
+          distributions: [{ name: "claude" }],
+          assets: [{
+            name: `aidlc-${targetTriple()}`,
+            sha256: createHash("sha256").update(readFileSync(executable)).digest("hex"),
+          }],
+        }, null, 2)}\n`,
+      );
+      writeFileSync(join(project, ".aidlc-version"), `${version}\n`);
+      registerPinFixture(project, machine, version, executable);
+      const earlier = {
+        ".aidlc-clone-id": "0a1b2c3d4e5f\nhost-one\n",
+        ".aidlc-sessions/s-one.binding.json": '{"space":"default"}\n',
+        ".aidlc-unit-scope.json": '{"version":1,"unit":"u1"}\n',
+      };
+      for (const [rel, bytes] of Object.entries(earlier)) writeFileSync(join(project, "aidlc", rel), bytes);
+      const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+      for (const [argv, input] of [
+        [["engine", "hook", "validate-state"], JSON.stringify({ session_id: "s-one" })],
+        [["engine", "status"], undefined],
+        [["engine", "statusline"], JSON.stringify({ session_id: "s-one", workspace: { current_dir: project } })],
+      ] as const) {
+        const result = viaDispatcher([...argv], project, env, input);
+        expect(result.exitCode, `${argv.join(" ")}: ${result.stderr.toString()}`).toBe(0);
+        expect(existsSync(join(project, "aidlc", ".aidlc-engine")), argv.join(" ")).toBe(false);
+        for (const [rel, bytes] of Object.entries(earlier)) {
+          expect(readFileSync(join(project, "aidlc", rel), "utf-8"), `${argv.join(" ")}: ${rel}`).toBe(bytes);
+        }
+      }
+    },
+  );
+
   // `kiro` reaches the same KAS adapter once the rows share that name: the
   // installed tree's layout, not the adapter name, keeps stdin unread.
   for (const harness of ["kiro-ide", "kiro"] as const) test(`Kiro IDE adapter routing never waits for its open stdin pipe (engine adapter ${harness})`, async () => {

@@ -263,6 +263,7 @@ import {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  UNIT_SCOPE_FILE,
 } from "./aidlc-record-core.ts";
 export {
   ACTIVE_INTENT_POINTER,
