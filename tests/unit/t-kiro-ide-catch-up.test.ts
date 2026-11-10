@@ -71,6 +71,7 @@ function project(): { dir: string; capture: string } {
     `${JSON.stringify([{ uuid: "00000000-0000-7000-8000-000000000001", slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }], null, 2)}\n`,
   );
   writeFileSync(seededStateFile(dir), readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"));
+  mkdirSync(join(dir, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${CLONE_ID}\n`);
   mkdirSync(seededAuditDir(dir), { recursive: true });
   writeFileSync(join(seededAuditDir(dir), shardName()), "# AI-DLC Audit Log\n");

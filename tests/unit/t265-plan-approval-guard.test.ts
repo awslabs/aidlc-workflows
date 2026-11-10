@@ -4814,6 +4814,7 @@ describe("t265b hook lifecycle", () => {
       // (audit/<host>-<clone>.md) - the hook gates its emit on that exact file
       // existing. Pin the clone-id (t221's idiom) so the seeded shard and the
       // hook's resolved shard agree.
+      mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
       writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
       const auditDir = join(proj, RECORD_REL, "audit");
       mkdirSync(auditDir, { recursive: true });

@@ -168,6 +168,7 @@ function scratchProject(withState: boolean): string {
     );
     // The resolved audit shard (pinned clone-id) keeps log-subagent writes
     // deterministic and seeds the "# AI-DLC Audit Log" header.
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine"), { recursive: true });
     writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
     const auditDir = seededAuditDir(dir);
     mkdirSync(auditDir, { recursive: true });

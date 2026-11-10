@@ -314,6 +314,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
       "utf-8",
     );
     mkdirSync(join(payWt, "aidlc"), { recursive: true });
+    mkdirSync(join(payWt, "aidlc", ".aidlc-engine"), { recursive: true });
     writeFileSync(join(payWt, "aidlc", ".aidlc-engine", "clone-id"), mainCloneId, "utf-8");
     auditAppend(payWt, "SENSOR_FIRED", [
       ["Sensor", "required-sections"],

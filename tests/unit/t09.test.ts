@@ -116,6 +116,7 @@ function proj(
     seedStateFile(p, join(FIXTURES_DIR, "state-mid-ideation.md"));
     writeFileSync(join(seededRecordDir(p), "aidlc-state.md"), "# malformed\n", "utf-8");
   }
+  mkdirSync(join(p, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(p, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   if (audit) {
     const auditDir = seededAuditDir(p);

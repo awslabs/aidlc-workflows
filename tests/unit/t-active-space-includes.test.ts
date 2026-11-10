@@ -229,12 +229,11 @@ describe("t-active-space-includes: refreshActiveMemory writes the space's memory
     const stub = join(root, ".claude", "rules", "aidlc.md");
     mkdirSync(join(root, ".claude", "rules"), { recursive: true });
     writeFileSync(stub, `@../../${EARLIER_COPY}/org.md\n`);
-    mkdirSync(join(root, ...EARLIER_COPY.split("/")), { recursive: true });
-    writeFileSync(join(root, ...EARLIER_COPY.split("/"), "mine.md"), "a file of mine\n");
     expect(portablePaths(refreshActiveMemory(root, "teamB"))).toEqual([EARLIER_COPY]);
     expect(readFileSync(join(root, ...EARLIER_COPY.split("/"), "org.md"), "utf-8")).toBe(copied("teamB", "org.md", "# org teamB\n"));
     expect(existsSync(join(root, ...COPY.split("/")))).toBe(false);
 
+    writeFileSync(join(root, ...EARLIER_COPY.split("/"), "mine.md"), "a file of mine\n");
     writeFileSync(stub, `@../../${COPY}/org.md\n`);
     expect(portablePaths(refreshActiveMemory(root, "teamB"))).toEqual([COPY]);
     expect(copyFile(root, "org.md")).toBe(copied("teamB", "org.md", "# org teamB\n"));
@@ -286,8 +285,8 @@ describe("t-active-space-includes: refreshActiveMemory writes the space's memory
   test("a copy folder that leads out of the project is not written through", () => {
     const root = setup();
     const outside = freshRoot();
-    mkdirSync(join(root, "aidlc"), { recursive: true });
-    symlinkSync(outside, join(root, "aidlc", "active-memory"), process.platform === "win32" ? "junction" : "dir");
+    mkdirSync(join(root, "aidlc", ".aidlc-engine"), { recursive: true });
+    symlinkSync(outside, join(root, ...COPY.split("/")), process.platform === "win32" ? "junction" : "dir");
     expect(refreshActiveMemory(root, "teamB")).toEqual([]);
     expect(readdirSync(outside)).toEqual([]);
   });

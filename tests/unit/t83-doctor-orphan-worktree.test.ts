@@ -150,6 +150,7 @@ function seedWtAuditShard(proj: string, slug: string, contents: string): void {
   const wtRoot = worktreePath(proj, fixtureIntentId8(proj), slug);
   mkdirSync(join(wtRoot, "aidlc"), { recursive: true });
   const token = "ffffffffffff";
+  mkdirSync(join(wtRoot, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(wtRoot, "aidlc", ".aidlc-engine", "clone-id"), `${token}\n`, "utf-8");
   const host =
     hostname()

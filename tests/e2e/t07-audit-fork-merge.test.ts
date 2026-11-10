@@ -94,6 +94,7 @@ function shardName(): string {
  *  shard name is deterministic and shared with the main checkout. */
 function seedCloneId(cloneRoot: string): void {
   mkdirSync(join(cloneRoot, "aidlc"), { recursive: true });
+  mkdirSync(join(cloneRoot, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(cloneRoot, "aidlc", ".aidlc-engine", "clone-id"), `${FIXED_CLONE_ID}\n`, "utf-8");
 }
 

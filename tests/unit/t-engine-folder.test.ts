@@ -19,6 +19,9 @@
 //   5. A link at aidlc/.aidlc-engine carries nothing out of the project.
 //   6. A read-only engine observer that is the first process on the earlier
 //      layout reads what the earlier release recorded.
+//   7. Switching to a release from before the folder says once what it will
+//      not see (a claimed Unit, an approved merge not landed), and nothing when
+//      nothing is open, the folder was never made, or the release reads it.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -41,6 +44,7 @@ import { REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 const LIB = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-lib.ts");
+const RECORD_CORE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-record-core.ts");
 const dirs: string[] = [];
 afterAll(() => {
   for (const dir of dirs) {
@@ -121,11 +125,15 @@ function earlierWorkspace(): string {
   return proj;
 }
 
-// One fresh engine process: `body` runs with `lib` (the shipped aidlc-lib) and
-// `proj`, and prints what the test reads.
+// One fresh engine process: `body` runs with `lib` (the shipped aidlc-lib),
+// `core` (aidlc-record-core) and `proj`, and prints what the test reads.
 function engine(proj: string, body: string, env: Record<string, string> = {}): string {
   const script = join(scratch("aidlc-engine-folder-probe-"), "probe.ts");
-  writeFileSync(script, `const lib = await import(${JSON.stringify(LIB)});\nconst proj = ${JSON.stringify(proj)};\n${body}\n`);
+  writeFileSync(
+    script,
+    `const lib = await import(${JSON.stringify(LIB)});\nconst core = await import(${JSON.stringify(RECORD_CORE)});\n` +
+      `const proj = ${JSON.stringify(proj)};\n${body}\n`,
+  );
   const run = spawnSync(process.execPath, [script], {
     cwd: proj,
     encoding: "utf-8",
@@ -198,7 +206,7 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
     writeFileSync(join(folder, ".gitignore"), "*\n");
     chmodSync(folder, 0o500);
     try {
-      const token = engine(proj, "console.log(lib.cloneIdentity(proj).token);");
+      const token = engine(proj, "console.log(core.cloneIdentity(proj).token);");
       expect(token).toBe("0a1b2c3d4e5f");
       expect(existsSync(join(folder, "clone-id"))).toBe(false);
       expect(readFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "utf-8")).toBe(EARLIER[".aidlc-clone-id"]);
@@ -227,5 +235,24 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
     );
     expect(read).toBe('{"ask":1}');
     expect(existsSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "plan-approval", "ask-0123456789abcdef01234567.json"))).toBe(true);
+  });
+
+  test("going back to a release from before the folder says what it will not see, once, and only then", () => {
+    const proj = scratch("aidlc-engine-folder-back-");
+    const line = (release: string): string => engine(proj, `console.log(lib.engineFolderGoingBackLine(proj, ${JSON.stringify(release)}, "aidlc use 2.12.0") ?? "none");`);
+    mkdirSync(join(proj, "aidlc"), { recursive: true });
+    expect(line("2.11.3")).toBe("none");
+    const units = join(proj, "aidlc", ".aidlc-engine", "units");
+    mkdirSync(join(units, "merges", "default", "1111"), { recursive: true });
+    expect(line("2.11.3")).toBe("none");
+    writeFileSync(join(units, "claimed.json"), '{"version":1,"unit":"u1"}\n');
+    expect(line("2.11.3")).toBe("AI-DLC 2.11.3 will not see the Unit u1 you claimed in this project. `aidlc use 2.12.0` brings it back.");
+    writeFileSync(join(units, "merges", "default", "1111", "u2.json"), '{"status":"approved","unit":"u2"}\n');
+    writeFileSync(join(units, "merges", "default", "1111", "u3.json"), '{"status":"complete","unit":"u3"}\n');
+    expect(line("2.11.3")).toBe(
+      "AI-DLC 2.11.3 will not see the Unit u1 you claimed and the merge of u2 you approved in this project. `aidlc use 2.12.0` brings it back.",
+    );
+    expect(line("2.12.0")).toBe("none");
+    expect(line("3.0.0")).toBe("none");
   });
 });

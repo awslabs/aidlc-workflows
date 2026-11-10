@@ -40,7 +40,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -64,6 +64,7 @@ const PINNED_CLONE_ID = "testcloneid33";
 /** createTestProject + pin the clone-id (so spawned tools share one audit shard). */
 function mkProj(): string {
   const p = createTestProject();
+  mkdirSync(join(p, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(p, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   return p;
 }

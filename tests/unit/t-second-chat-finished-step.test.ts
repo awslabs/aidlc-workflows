@@ -573,6 +573,7 @@ describe("t-second-chat-finished-step: a stage finished in another chat is shown
   test("a gate a teammate's clone opened is not called your other chat", () => {
     const { folder, first } = secondChatFinishedTheStage();
     // This checkout now writes a shard of its own: every row so far is another clone's.
+    mkdirSync(join(folder.dir, "aidlc", ".aidlc-engine"), { recursive: true });
     writeFileSync(join(folder.dir, "aidlc", ".aidlc-engine", "clone-id"), "teammate0001\nhost\n");
     first.said("B, the team");
     // The stage's own question meets what it meets today, never the other-chat redirect.

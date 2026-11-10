@@ -100,6 +100,7 @@ function makeProject(): string {
     `${JSON.stringify([{ uuid: "00000000-0000-7000-8000-000000000001", slug: "t195", status: "in-flight" }], null, 2)}\n`,
     "utf-8",
   );
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   mkdirSync(seededAuditDir(proj), { recursive: true });
   writeFileSync(pinnedShardPath(proj), "audit row 1\n", "utf-8");

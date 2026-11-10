@@ -117,6 +117,7 @@ function seedIntentShard(p: string): { auditDir: string; recordRoot: string } {
   // path-derived, so the fixture choice is incidental.
   seedStateFile(p, join(FIXTURES_DIR, "state-construction.md"));
   // Pin the clone-id BEFORE the hook runs (the hook reads it from disk).
+  mkdirSync(join(p, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(p, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   const auditDir = seededAuditDir(p);
   mkdirSync(auditDir, { recursive: true });

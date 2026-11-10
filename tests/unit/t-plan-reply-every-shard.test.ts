@@ -91,6 +91,7 @@ function checkout(): Checkout {
   const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8")
     .replace("## Runtime State\n", "## Runtime State\n- **Unit Ownership**: team\n");
   writeFileSync(seededStateFile(dir), state);
+  mkdirSync(join(dir, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${TOKEN}\n${HOST}\n`);
   const audit = join(seededRecordDir(dir), "audit");
   mkdirSync(audit, { recursive: true });

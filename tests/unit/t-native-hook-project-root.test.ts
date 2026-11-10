@@ -95,6 +95,7 @@ function fixture(distribution: "claude" | "kiro" | "kiro-ide" = "kiro-ide"): str
   writeFileSync(seededStateFile(project), readFileSync(
     join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8",
   ).replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"));
+  mkdirSync(join(project, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(project, "aidlc", ".aidlc-engine", "clone-id"), "nativehookroottest\n", "utf-8");
   const ledger = join(seededRecordDir(project), "audit", auditShardName(project));
   mkdirSync(dirname(ledger), { recursive: true });

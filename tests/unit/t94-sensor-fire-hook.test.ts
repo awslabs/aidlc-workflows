@@ -171,6 +171,7 @@ function makeProject(): string {
     STUB_DISPATCHER,
     "utf-8",
   );
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   return proj;
 }

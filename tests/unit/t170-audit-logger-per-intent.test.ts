@@ -89,6 +89,7 @@ function pinnedShardName(): string {
 function seedIntentWithShard(p: string, slug: string): { auditDir: string; recordRoot: string } {
   const created = createIntent(p, slug, "default", "feature");
   // Pin the clone-id BEFORE the hook runs (the hook reads it from disk).
+  mkdirSync(join(p, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(p, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   const auditDir = join(docsRoot(p), "audit");
   mkdirSync(auditDir, { recursive: true });

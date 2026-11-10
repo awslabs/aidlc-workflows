@@ -81,6 +81,7 @@ describe("a HUMAN_TURN a later HOST_TURN names is no turn", () => {
       }])}\n`);
       seedAidlcMemory(dir);
       writeFileSync(seededStateFile(dir), readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8"));
+      mkdirSync(join(dir, "aidlc", ".aidlc-engine"), { recursive: true });
       writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), "testclonetakenback\n");
       mkdirSync(seededAuditDir(dir), { recursive: true });
       const host = hostname().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "host";

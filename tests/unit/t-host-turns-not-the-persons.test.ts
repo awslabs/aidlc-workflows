@@ -179,6 +179,7 @@ function scratchProject(tree: Tree): { dir: string; home: string } {
   seedShell(dir);
   seedAidlcMemory(dir);
   writeFileSync(seededStateFile(dir), readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8"));
+  mkdirSync(join(dir, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   mkdirSync(seededAuditDir(dir), { recursive: true });
   writeFileSync(join(seededAuditDir(dir), pinnedShardName()), "# AI-DLC Audit Log\n");

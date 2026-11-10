@@ -629,6 +629,7 @@ function seedUnitScope(
 function seedAuditShard(proj: string): string {
   const auditDir = join(proj, "aidlc", "spaces", "default", "intents", "audit");
   mkdirSync(auditDir, { recursive: true });
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
   writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), "t221clone\n", "utf-8");
   const host =
     hostname()

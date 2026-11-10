@@ -139,6 +139,7 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
     // all five processes resolve + append to this single shard (the audit-logger's
     // "shard exists" gate passes for each). audit-sample.md carries exactly one
     // ARTIFACT_CREATED block (INITIAL_ENTRIES = 1).
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
     writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
     const auditDir = seededAuditDir(proj);
     mkdirSync(auditDir, { recursive: true });

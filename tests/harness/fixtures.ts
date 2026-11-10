@@ -412,6 +412,9 @@ export function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   mkdirSync(seededRecordDir(proj, space), { recursive: true });
   // Pin the per-clone audit-shard token so a spawned tool's shard is
   // deterministic (see FIXTURE_CLONE_ID / seededAuditShard).
+  // The engine folder as the engine makes it: its .gitignore first.
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", ".gitignore"), "*\n", "utf-8");
   writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
   // A fixture has no git, so its first gate would say the no-git line: this
   // project has already heard it (t-no-git-said-once removes the record).
