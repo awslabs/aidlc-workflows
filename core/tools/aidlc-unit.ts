@@ -7431,7 +7431,11 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (homeHasIt) finishBuildRecord(pd);
   const checkIn = homeHasIt ? checkInLine(pd) : null;
   if (checkIn !== null) lines.push(checkIn);
-  console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), notice: lines.join(" ") }));
+  // Reached the lead's project, so no line asks anything: the lines ride the
+  // step that follows, as the take's carry-on line does, so a next run at once
+  // says them with its question; with no chat known they are printed here.
+  const forNextStep = homeHasIt && saidWithNextStep(pd, lines.join(" "));
+  console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), ...(forNextStep ? {} : { notice: lines.join(" ") }) }));
 }
 
 // The build's record finishes once its push reached home or the person put it

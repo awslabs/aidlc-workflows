@@ -382,6 +382,64 @@ describe("the check-in line", () => {
   });
 });
 
+// Live runs (Claude Code on Windows Server, Codex, Kiro CLI): after the
+// person's own commit and push, the agent kept saying to commit and push
+// aidlc/; the next look now hands it the fact.
+describe("the checked-in fact", () => {
+  const CHECKED_IN = "aidlc/ is committed and pushed: your teammates see where this work stands.";
+  const STATUS_YES = "Checked in:     yes, aidlc/ is committed and pushed\n";
+  const chatOf = (session: string): NodeJS.ProcessEnv => ({ ...ENV, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) });
+  const statusOf = (dir: string): string => run(UTILITY, ["status"], dir, ENV).out;
+  const notices = (step: Record<string, unknown>): string[] => (step.change_notices ?? []) as string[];
+
+  test("after the person's own commit and push, the chat that heard the line hears once that it is checked in, and status says yes", () => {
+    const { alice } = refundsTaken();
+    const chat = chatOf("5b6c0d1e-1f2a-4c3b-8e4f-0a1b2c3d4e50");
+    next(alice, chat);
+    const parked = run(ORCH, ["park"], alice, chat);
+    expect(String(parked.json?.narration), parked.out).toEndWith(LINE);
+    expect(statusOf(alice)).not.toContain("Checked in:");
+    checkIn(alice, "refunds parked");
+    const look = next(alice, chat);
+    expect(notices(look), JSON.stringify(look)).toContain(CHECKED_IN);
+    expect(JSON.stringify(look)).not.toContain(LINE);
+    expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+    expect(statusOf(alice)).toContain(STATUS_YES);
+  });
+
+  test("a change not checked in, or a decision of theirs only in this clone's audit, says nothing at a look or in status", () => {
+    const { alice, record } = refundsTaken();
+    const chat = chatOf("4a5b9c0d-0e1f-4b2a-8d3e-9f0a1b2c3d40");
+    next(alice, chat);
+    expect(run(ORCH, ["park"], alice, chat).status).toBe(0);
+    checkIn(alice, "refunds parked");
+    // A change to the record the person has not checked in.
+    writeFileSync(join(record, "notes.md"), "Not checked in yet.\n");
+    expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+    expect(statusOf(alice)).not.toContain("Checked in:");
+    rmSync(join(record, "notes.md"));
+    // A decision row of theirs, in this clone's own audit file only.
+    const audit = join(record, "audit");
+    const shard = readdirSync(audit).find((name) => readFileSync(join(audit, name), "utf-8").includes("**Event**: UNIT_TAKEN_IN"))!;
+    writeFileSync(join(audit, shard), `${readFileSync(join(audit, shard), "utf-8")}\n## Gate Approved\n**Timestamp**: 2026-11-10T12:00:00Z\n**Event**: GATE_APPROVED\n**Stage**: functional-design\n**Git Name**: alice\n\n---\n`);
+    expect(statusOf(alice)).not.toContain("Checked in:");
+    expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+  });
+
+  test("a branch never pushed cannot be told: no line at a look, none in status, and the stopping point says today's words", () => {
+    const { alice } = refundsTaken();
+    git(alice, ["checkout", "-q", "-b", "local-only"]);
+    const chat = chatOf("3f4a8b9c-9d0e-4a1f-8c2d-8e9f0a1b2c30");
+    next(alice, chat);
+    const parked = run(ORCH, ["park"], alice, chat);
+    expect(String(parked.json?.narration), parked.out).toEndWith(LINE);
+    git(alice, ["add", "aidlc"]);
+    git(alice, ["commit", "-q", "-m", "refunds parked"]);
+    expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+    expect(statusOf(alice)).not.toContain("Checked in:");
+  });
+});
+
 describe("where things stand", () => {
   test("status says what the last pull brought from the other teams", () => {
     const home = homeWithTeams();

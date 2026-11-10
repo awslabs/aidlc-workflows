@@ -735,7 +735,10 @@ import { localRepoOverrideLines, readWorkspaceRepos, reposManifestPath } from ".
 import { noteReposManifestOffered, reposManifestListsOnlyAddedWorkspace, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
   builtFromAnotherMachine,
+  checkInHandedOut,
   checkInLine,
+  checkInState,
+  CHECKED_IN_LINE,
   lastCommittedByThisPerson,
   findUnitBuild,
   homeLocation,
@@ -1967,6 +1970,14 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   const unread = engineProjectDir ? unreadDocumentsOnce(engineProjectDir) : null;
   if (unread !== null) directive = withChangeNotices(directive, [...(directive.change_notices ?? []), unread.line]);
+  // The chat that heard the check-in line hears once, at its next look after
+  // the person's own commit and push, that it is done, so no old to-do stands.
+  if (engineProjectDir && engineSessionId && directive.kind !== "load-steering" && directive.kind !== "error" &&
+    !isReadOnlyEngineProbe() && checkInHandedOut(engineProjectDir, engineSessionId) &&
+    !personLineHeard(engineProjectDir, engineSessionId, CHECKED_IN_LINE) && checkInState(engineProjectDir) === "checked-in") {
+    directive = withChangeNotices(directive, [...(directive.change_notices ?? []), CHECKED_IN_LINE]);
+    markPersonLinesHeard(engineProjectDir, engineSessionId, [CHECKED_IN_LINE]);
+  }
   if (restartUnmarkedNotice) {
     directive = withChangeNotices(directive, [RESTART_UNMARKED_LINE, ...(directive.change_notices ?? [])]);
     restartUnmarkedNotice = false;

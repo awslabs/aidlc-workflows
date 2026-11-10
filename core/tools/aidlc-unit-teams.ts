@@ -25,6 +25,8 @@ import {
   isTeamUnitOwnership,
   LEARNINGS_CORRECTION_CHOICES,
   listIntentDirs,
+  markPersonLinesHeard,
+  personLineHeard,
   loadScopeMapping,
   loadStageGraphAll,
   markdownBlocks,
@@ -45,7 +47,8 @@ import {
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
 import { gitUserName } from "./aidlc-git-name.ts";
-import { applicableTeamUnitScopeStamp, idSuffix, listIntents } from "./aidlc-record-core.ts";
+import { applicableTeamUnitScopeStamp, idSuffix, knownAuditShardName, listIntents, resolveWorkflowSelection } from "./aidlc-record-core.ts";
+import { isReadOnlyEngineProbe } from "./aidlc-locks.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
 
@@ -543,23 +546,87 @@ function findBuild(projectDir: string, matches: (build: UnitBuild) => boolean): 
 // list) into every later look as a to-do.
 export const CHECK_IN_LINE = "Your teammates see where this work stands once aidlc/ is committed and pushed.";
 
+// What the chat that heard CHECK_IN_LINE hears once at its first look after the
+// person's own commit and push, and status's line then (checkInState).
+export const CHECKED_IN_LINE = "aidlc/ is committed and pushed: your teammates see where this work stands.";
+export const CHECKED_IN_STATUS = "Checked in:     yes, aidlc/ is committed and pushed";
+
 // Teams across repos share AI-DLC's record by git, and the person checks it in.
 // The callers say this at the stopping points (a stop, the push or the
-// person's Not now to it, the lead's Build and Test approval), never from what
-// git status shows: AI-DLC's own audit rows change aidlc/ at every step. Null for other work (main's team Units on the workspace's own
-// repo commit the record for the person) and where there is no remote to push.
+// person's Not now to it, the lead's Build and Test approval), unless aidlc/ is
+// checked in (checkInState). Null for other work (main's team Units on the
+// workspace's own repo commit the record for the person) and where there is no
+// remote to push.
 export function checkInLine(projectDir: string, stateContent?: string): string | null {
+  if (!checkInApplies(projectDir, stateContent) || checkInState(projectDir) === "checked-in") return null;
+  // The chat is noted as handed the line, whichever step carries it, so its
+  // first look after the check-in says it is done (checkInHandedOut).
+  const session = resolveWorkflowSelection(projectDir).sessionId;
+  if (session && !isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, session, [CHECK_IN_HANDED]);
+  return CHECK_IN_LINE;
+}
+
+// The person-lines record's note that this chat was handed CHECK_IN_LINE; never said.
+const CHECK_IN_HANDED = "(the check-in line was handed out)";
+
+export function checkInHandedOut(projectDir: string, sessionId: string): boolean {
+  return personLineHeard(projectDir, sessionId, CHECK_IN_HANDED);
+}
+
+export function checkInApplies(projectDir: string, stateContent?: string): boolean {
   let state = stateContent;
   if (state === undefined) {
     try {
       state = readStateFile(projectDir);
     } catch {
-      return null;
+      return false;
     }
   }
-  if (unitBuildOf(state) === null && !(isTeamUnitOwnership(state) && homeLocation(state) !== null)) return null;
+  if (unitBuildOf(state) === null && !(isTeamUnitOwnership(state) && homeLocation(state) !== null)) return false;
   const remotes = spawnSync("git", ["-C", projectDir, "remote"], { encoding: "utf-8", timeout: 10_000 });
-  return remotes.status === 0 && remotes.stdout.trim() !== "" ? CHECK_IN_LINE : null;
+  return remotes.status === 0 && remotes.stdout.trim() !== "";
+}
+
+// Whether aidlc/ is checked in, from local git only: nothing under it changed
+// but the rows this clone's own audit files gain at every look (a decision row
+// of the person's, which carries their Git Name, still counts), and no commit
+// touching it is ahead of the branch's upstream. Unknown when git cannot tell:
+// no upstream (never pushed), a detached HEAD, or git failing.
+export function checkInState(projectDir: string): "checked-in" | "not-checked-in" | "unknown" {
+  const run = (args: string[]) => spawnSync("git", ["-C", projectDir, ...args], { encoding: "utf-8", timeout: 10_000 });
+  const upstream = run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
+  const prefix = run(["rev-parse", "--show-prefix"]);
+  if (upstream.status !== 0 || upstream.stdout.trim() === "" || prefix.status !== 0) return "unknown";
+  const ahead = run(["log", "--format=%H", "@{upstream}..HEAD", "--", "aidlc"]);
+  const changed = run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "aidlc"]);
+  if (ahead.status !== 0 || changed.status !== 0) return "unknown";
+  if (ahead.stdout.trim() !== "") return "not-checked-in";
+  const shard = knownAuditShardName(projectDir);
+  const root = prefix.stdout.trim();
+  const own = (path: string): boolean => shard !== null && path.startsWith(`${root}aidlc/spaces/`) &&
+    /\/intents\/[^/]+\/audit\/[^/]+$/.test(path) && basename(path) === shard;
+  // -z entries: "XY path", a rename's or copy's source path after it.
+  const entries = changed.stdout.split("\0").filter(Boolean);
+  const paths: string[] = [];
+  for (let at = 0; at < entries.length; at++) {
+    paths.push(entries[at].slice(3));
+    if (/^[RC]/.test(entries[at])) at++;
+  }
+  if (paths.some((path) => !own(path))) return "not-checked-in";
+  // Each of this clone's audit files gained rows after what is committed, and
+  // none of them carries a Git Name; a rewrite of what is committed counts.
+  const onlyLookRows = paths.every((path) => {
+    const committed = run(["cat-file", "blob", `HEAD:${path}`]);
+    let now: string;
+    try {
+      now = readFileSync(join(projectDir, path.slice(root.length)), "utf-8").replaceAll("\r\n", "\n");
+    } catch {
+      return false;
+    }
+    const before = committed.status === 0 ? committed.stdout.replaceAll("\r\n", "\n") : "";
+    return now.startsWith(before) && !/^\*\*Git Name\*\*:/m.test(now.slice(before.length));
+  });
+  return onlyLookRows ? "checked-in" : "not-checked-in";
 }
 
 // What the person's last `git pull` here that brought changes brought from

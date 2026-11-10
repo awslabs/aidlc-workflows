@@ -189,6 +189,9 @@ import {
 } from "./aidlc-unit.ts";
 import {
   arrivedAtLastPull,
+  checkInApplies,
+  checkInState,
+  CHECKED_IN_STATUS,
   homeLocation,
   PROJECT_TYPE_SOURCE_FIELD,
   PROJECT_TYPE_SOURCE_HOME,
@@ -2512,6 +2515,8 @@ To get started:
   const { pulledBuildStanding } = await import("./aidlc-orchestrate.ts");
   const arrived = acrossRepos ? arrivedAtLastPull(projectDir, (built) => pulledBuildStanding(projectDir, built)) : null;
   const arrivedLine = arrived === null ? "" : `From others, at your last pull that brought changes:    ${arrived}\n`;
+  // Said only when it is so: a record not checked in, or one git cannot tell about, says nothing here.
+  const checkedInLine = checkInApplies(projectDir, content) && checkInState(projectDir) === "checked-in" ? `${CHECKED_IN_STATUS}\n` : "";
   // Work an older AI-DLC recorded, brought up to this one in place: said here
   // on purpose, never in chat.
   const upgrade = stateUpgradeRecord(projectDir, selection.intent ?? undefined, selection.space);
@@ -2533,7 +2538,7 @@ Completion:     ${completed}/${total} stages${takesBuildUnits ? " here" : ""} ($
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${arrivedLine}${upgradedLine}`;
+${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${arrivedLine}${checkedInLine}${upgradedLine}`;
   if (isTeamUnitOwnership(content)) {
     const selectorArgs = [
       ...(flags.intent ? ["--intent", flags.intent] : []),

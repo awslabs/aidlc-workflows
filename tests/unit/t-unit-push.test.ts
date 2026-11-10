@@ -99,6 +99,23 @@ describe("the push", () => {
     expect(rows).toHaveLength(1);
   });
 
+  // A live run (Claude Code, Windows Server): the agent ran next at once after
+  // the push and put the next question with none of the push's lines.
+  test("from a chat, the push's lines ride the step that follows, said once", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "push-chat" };
+    const pushed = run(UNIT, ["push"], alice, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(pushed.json?.notice, pushed.out).toBeUndefined();
+    const step = next(alice, chat);
+    const said = ((step.change_notices ?? []) as string[]).join(" ");
+    expect(said, JSON.stringify(step).slice(0, 800)).toContain("Pushed branch refunds in checkout-api and billing.");
+    expect(said).toContain(CHECK_IN_LINE);
+    expect(JSON.stringify(next(alice, chat))).not.toContain("Pushed branch refunds");
+  });
+
   test("a file that held their own uncommitted change when the Unit was taken: only the Unit's change goes, theirs stays theirs", () => {
     const { hosts, alice, record } = refundsTaken((dir) => {
       writeFileSync(join(dir, "checkout-api", "README.md"), "# checkout-api\n\nmy secret note\n");
