@@ -769,7 +769,7 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
       "When the composer returns empty changes.skip and changes.add and no settingsChanges, present no approval gate and run no recompose: relay its answer, then run",
     );
     expect(message).toMatch(
-      /When it returns only settingsChanges, present them on the gate \(Approve \/ Reject\): on approve, apply them yourself with `[^`]*config set <setting> <value> \[--<setting> <value> \.\.\.\] --message '<id>'`[^;]*; run no recompose\./,
+      /When it returns only settingsChanges, present them on the gate \(Approve \/ Reject\): on approve, apply them yourself with `[^`]*config set <setting> <value> \[--<setting> <value> \.\.\.\] --message '<id>' --verbatim`[^;]*; run no recompose\./,
     );
     // A mixed approval lands the stage delta and the settings in one recompose
     // write, so neither half is lost.

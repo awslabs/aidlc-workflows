@@ -179,7 +179,7 @@ describe("t-compose-approve-carries-on: every answer to the in-flight compose qu
   test("a settings-only Approve goes through the setter, which keeps the question, then next closes it and carries on", () => {
     const proj = work();
     const print = askCompose(proj);
-    expect(print).toMatch(/on approve, apply them yourself with `[^`]*config set <setting> <value> \[--<setting> <value> \.\.\.\] --message '<id>'`/);
+    expect(print).toMatch(/on approve, apply them yourself with `[^`]*config set <setting> <value> \[--<setting> <value> \.\.\.\] --message '<id>' --verbatim`/);
     expect(print).toMatch(/print its output verbatim, then run `[^`]*aidlc-orchestrate\.ts next` and follow what it returns; run no recompose/);
     const set = run(proj, "aidlc.ts", ["config", "set", "review", "none"]);
     expect(set.status, set.out).toBe(0);

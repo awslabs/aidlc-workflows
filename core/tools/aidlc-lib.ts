@@ -30722,7 +30722,8 @@ export function effectiveUnitGateRhythm(
 // or reject: it is the step on record for the selected work (or the work
 // named), on the state it was asked on. A `next` that names another step, or
 // the plan change their approval runs, closes it; a setting written meanwhile
-// keeps it, as it keeps every step. A failed read throws; each caller decides.
+// keeps it, as it keeps every step. A failed state read throws (each caller
+// decides); a step that cannot be read is no open question.
 export function composeGateOpen(projectDir: string, intent?: string, space?: string): boolean {
   const statePath = stateFilePath(projectDir, intent, space);
   if (!existsSync(statePath)) return false;
