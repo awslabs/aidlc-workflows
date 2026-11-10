@@ -262,7 +262,8 @@ describe("the request keeps the quote marks the person typed", () => {
       [`${SAVE} --plan-approval off`, SAVE],
       [`-- ${SAVE}`, SAVE],
       [`bugfix: ${SLUGIT}`, SLUGIT],
-      [`fix  the\t"Save"\nbutton`, `fix  the\t"Save" button`],
+      [`fix  the\t"Save"\nbutton`, `fix  the\t"Save"\nbutton`],
+      [`fix the\r\n\u00a0\u00a0"Save" button`, `fix the\n  "Save" button`],
       // Escapes are the person's characters too.
       [String.raw`say \"hi\" and one\ two`, String.raw`say \"hi\" and one\ two`],
       // One argument is that argument: the quotes around it only made it one.

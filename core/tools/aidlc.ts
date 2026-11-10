@@ -1256,7 +1256,7 @@ export type Action =
   | { type: "statusline"; path: string; projectDir?: string }
   | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string; projectDir?: string }
   | { type: "sensor-script-file"; id: string; args: string[]; projectDir?: string }
-  | { type: "version"; json: boolean }
+  | { type: "version"; json: boolean; projectDir?: string }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; scope: "human" | "engine" | "system" | "all" | "config" }
   | { type: "noun-help"; message: string }
@@ -1777,7 +1777,7 @@ export function renderCommandHelp(command: PublicCommand): string {
   }
   const descriptions: Record<Exclude<PublicCommand, "config">, string> = {
     doctor: "Check this machine and project and show a fix for every problem",
-    version: "Print binary and selected runtime versions",
+    version: "Print binary and selected runtime versions, and the release a pinned project runs on",
     update: "Install and switch to a newer aidlc release",
     use: "Switch this machine to an exact aidlc release",
     uninstall: "Remove aidlc from this machine",
@@ -2700,8 +2700,11 @@ function resolveActionFrom(
   // Read before anything of ours is put back on the line below.
   const routeArgs = action.type === "delegate" ? [...action.args] : undefined;
   const words = theirWordsOn(argv, route, routeArgs, !(clean[0]?.startsWith("-") ?? false));
-  if (action.type === "version" && globalFlags.includes("--json")) {
-    action.json = true;
+  if (action.type === "version") {
+    if (globalFlags.includes("--json")) action.json = true;
+    // version runs on this machine's release, but it reads the pin from the
+    // folder pin dispatch would read, so it names the release that runs there.
+    action.projectDir = dispatcherProjectDirFrom(argv, limit);
   }
   if (projectDir) {
     const absoluteProjectDir = isAbsolute(projectDir)
@@ -3217,7 +3220,29 @@ async function runGroupMembers(
     const allow = await claudeOwnCommandAllow(input);
     if (allow) process.stdout.write(allow);
   }
+  if (code === 0 && !printed && toolName === "AskUserQuestion") {
+    const box = await claudePlanQuestionBox(input);
+    if (box) process.stdout.write(box);
+  }
   return code;
+}
+
+// Claude Code's box for the code plan question shows each plan's lines under
+// the agent's question (planQuestionBoxInput in aidlc-plan-approval-ask.ts).
+// Any other box, and any failure, prints nothing, so the box opens as the agent
+// wrote it and is never refused.
+async function claudePlanQuestionBox(input: string): Promise<string> {
+  try {
+    const payload = JSON.parse(input) as { hook_event_name?: unknown; session_id?: unknown; tool_input?: unknown };
+    if (payload.hook_event_name !== "PreToolUse" || runtimeHarnessName() !== "claude") return "";
+    const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
+    const { planQuestionBoxInput } = await import("./aidlc-plan-approval-ask.ts");
+    const updatedInput = planQuestionBoxInput(resolveProjectDirFromHook(import.meta.url), payload.tool_input, payload.session_id);
+    if (updatedInput === null) return "";
+    return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } })}\n`;
+  } catch {
+    return "";
+  }
 }
 
 // Claude Code runs AI-DLC's own command without a prompt however a helper spells this project's
@@ -3457,6 +3482,9 @@ async function execute(action: Action): Promise<number> {
     return 0;
   }
   if (action.type === "version") {
+    // Loaded here, not at the top: every hook starts through this file.
+    const { pinnedVersionNote, projectPinnedVersion } = await import("./aidlc-channel.ts");
+    const pinned = action.projectDir ? projectPinnedVersion(action.projectDir) : null;
     text(
       1,
       action.json
@@ -3464,9 +3492,16 @@ async function execute(action: Action): Promise<number> {
             schemaVersion: 1,
             binaryVersion: AIDLC_VERSION,
             runtimeVersion: AIDLC_VERSION,
+            ...(pinned ? { pinnedVersion: pinned } : {}),
           })}\n`
         : `aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})\n`,
     );
+    // The stdout line stays exactly as it is: an update checks a release it
+    // activates by comparing that line, in whatever folder the update runs. The
+    // pin goes to stderr only at a terminal, where a person reads it: Windows
+    // PowerShell 5.1 stops a script that stops on errors at a stderr line it
+    // redirects, so a script, a pipe or a capture gets nothing new.
+    if (pinned && !action.json && process.stderr.isTTY) text(2, `aidlc: ${pinnedVersionNote(pinned, AIDLC_VERSION)}\n`);
     return 0;
   }
   if (action.type === "hook") {

@@ -31,6 +31,8 @@ import {
   changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
+  enterHookWorkflow,
+  hookStandsOutside,
   errorMessage,
   fenceSwitchSentence,
   getField,
@@ -96,6 +98,7 @@ import {
   keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
   planAsSentBack,
+  readPlanApprovalSettingWith,
   readTestingContract,
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
@@ -515,7 +518,8 @@ const TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX-]\]/;
 
 /**
  * The few lines the question shows for one plan. Step 2 asks for a
- * `## Summary` section with Builds / Touches / Tests lines; without one, the
+ * `## Summary` section with Builds / Touches / Tests lines, and an Adds line
+ * when the plan adds an element no requirement asks for; without one, the
  * engine counts plan steps instead of refusing.
  */
 export function planSummaryLines(plan: string, instructions: string): string[] {
@@ -763,9 +767,7 @@ function questionsFileContent(
     "",
     question,
     "",
-    ...view.summary.map((line) => `- ${line}`),
-    "",
-    `Full plan: ${view.plan_path}`,
+    ...planLines(view.summary, view.plan_path),
     `Test instructions: ${view.instructions_path}`,
     "",
     `[Approval Fingerprint]: ${fingerprint}`,
@@ -776,6 +778,179 @@ function questionsFileContent(
     `[Answer]:${answer ? ` ${answer}` : ""}`,
     "",
   ].join("\n");
+}
+
+// One plan as its question shows it: the summary lines, then its path.
+function planLines(summary: readonly string[], planPath: string): string[] {
+  return [...summary.map((line) => `- ${line}`), "", `Full plan: ${planPath}`];
+}
+
+// --- The question box (Claude Code) -------------------------------------------
+//
+// Claude Code's question box shows only what the agent put in it, and agents
+// left the plan's lines out. Its PreToolUse hook (the guard-tool-call row) puts
+// them under the agent's own question, from the engine's open question, and the
+// human-turn hook takes them off again, so every record reads the box as the
+// agent asked it.
+
+// Claude Code shows this many characters of a box's question and cuts the rest.
+const BOX_QUESTION_MAX_CHARS = 2000;
+
+interface BoxQuestion {
+  entry: Record<string, unknown>;
+  question: string;
+  picker: PlanApprovalPickerQuestion;
+}
+
+// The one question an AskUserQuestion input asks, single-choice, with readable labels.
+function singleBoxQuestion(toolInput: unknown): BoxQuestion | null {
+  if (toolInput === null || typeof toolInput !== "object") return null;
+  const questions = (toolInput as Record<string, unknown>).questions;
+  if (!Array.isArray(questions) || questions.length !== 1) return null;
+  const entry = questions[0];
+  if (entry === null || typeof entry !== "object") return null;
+  const { question, options, multiSelect } = entry as Record<string, unknown>;
+  if (typeof question !== "string" || multiSelect === true || !Array.isArray(options)) return null;
+  const labels = options.map((option) =>
+    option !== null && typeof option === "object" ? (option as Record<string, unknown>).label : null);
+  if (labels.length === 0 || !labels.every((label): label is string => typeof label === "string")) return null;
+  return { entry: entry as Record<string, unknown>, question, picker: { question, options: labels, severalPicks: false } };
+}
+
+// What goes under the question, in the order boxText tries them: one plan's
+// lines, else its path only. Several Units always get each Unit's name and
+// path, never the summaries: the box does not scroll, and a short window (an
+// editor's terminal panel) would show the last plan alone, as if it were the
+// only one. The line naming source that already changed is in each, said once.
+function boxAdditions(projectDir: string, record: PlanApprovalAskRecord): string[] {
+  const views = record.targets.map((target) => targetView(projectDir, target.unit));
+  const changed = changedBeforeApprovalLine(projectDir);
+  const several = views.length > 1;
+  return (several ? [false] : [true, false]).map((summaries) => [
+    ...views.flatMap((view, index) => [
+      ...(index > 0 ? [""] : []),
+      ...(several ? [view.unit ?? ""] : []),
+      ...(!summaries
+        ? [`Full plan: ${view.plan_path}`]
+        : planLines(changed === null ? view.summary : [...view.summary, changed], view.plan_path)),
+    ]),
+    ...(changed !== null && !summaries ? ["", changed] : []),
+  ].join("\n"));
+}
+
+// A line of the plan's own (a summary line, its path, the changed-source line).
+const PLAN_LINE_RE = /^(?:- |Full plan: |Already changed before you approved)/;
+
+// The question with the additions under it, less the plan's lines its text
+// already shows: Step 3 asks the agent to show them, and an agent may put them
+// in the question itself. Null when it shows them all, or nothing fits the box.
+function boxText(question: string, additions: readonly string[]): string | null {
+  for (const added of additions) {
+    const lines = added.split("\n")
+      .filter((line) => !PLAN_LINE_RE.test(line) || !question.includes(line.replace(/^(?:- |Full plan: )/, "")));
+    if (!lines.some((line) => PLAN_LINE_RE.test(line))) return null;
+    const text = `${question}\n\n${lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "")}`;
+    if (text.length <= BOX_QUESTION_MAX_CHARS) return text;
+  }
+  return null;
+}
+
+// `read` run on the work the hook payload's chat is on, picked by the payload's
+// session as the guards pick it (enterHookWorkflow); null where the hooks stand
+// outside that work (hookStandsOutside), so a box never shows, or reads back,
+// another work's plan.
+function forPayloadChat<T>(projectDir: string, session: unknown, read: () => T | null): T | null {
+  const workflow = enterHookWorkflow(projectDir, session);
+  try {
+    return hookStandsOutside(workflow) ? null : read();
+  } finally {
+    workflow.restore();
+  }
+}
+
+/**
+ * The AskUserQuestion input with each asked plan's lines under the question,
+ * when it asks the open, unanswered code plan question of this chat's work
+ * alone (a single-choice box offering its choices, the readers'
+ * pickerAsksThisQuestion); null for any other box and on any failure, so the
+ * box goes out as the agent wrote it.
+ */
+export function planQuestionBoxInput(
+  projectDir: string,
+  toolInput: unknown,
+  session: unknown,
+): Record<string, unknown> | null {
+  try {
+    const box = singleBoxQuestion(toolInput);
+    if (box === null) return null;
+    return forPayloadChat(projectDir, session, () => {
+      const open = currentPlanApprovalAsk(projectDir);
+      if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return null;
+      const text = boxText(box.question, boxAdditions(projectDir, open.record));
+      return text === null ? null : { ...(toolInput as Record<string, unknown>), questions: [{ ...box.entry, question: text }] };
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A PostToolUse payload of the box planQuestionBoxInput filled, with the
+ * question as the agent asked it, in the input, the result and the keys of its
+ * answers and notes; any other payload, and on any failure, as it was given.
+ * Read against the record even once answered, as another chat may have answered
+ * it while the box was open.
+ */
+export function planQuestionBoxAsAsked(projectDir: string, payload: string): string {
+  // ponytail: the lines are read again from disk, so when the plan's Summary or
+  // the source changes while the box is open the box's text stays on the record
+  // (the pick still records); and an agent question that already holds the lines
+  // after a blank line is recorded as the text before them, the shortest
+  // question that rebuilds the box. Keep what was shown if that ever matters.
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown> | null;
+    if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return payload;
+    const box = singleBoxQuestion(parsed.tool_input);
+    if (box === null) return payload;
+    const shown = box.question;
+    const asked = forPayloadChat(projectDir, parsed.session_id, () => {
+      const open = currentPlanApprovalAsk(projectDir, "all");
+      if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return null;
+      const additions = boxAdditions(projectDir, open.record);
+      // The agent's question ends where a blank line starts what the box added;
+      // every place one starts, as its own question may end in a line break.
+      return [...shown.matchAll(/(?=\n\n)/g)]
+        .map((match) => shown.slice(0, match.index))
+        .find((question) => boxText(question, additions) === shown) ?? null;
+    });
+    if (asked === null) return payload;
+    const swap = (entry: unknown): unknown =>
+      entry !== null && typeof entry === "object" && (entry as Record<string, unknown>).question === shown
+        ? { ...(entry as Record<string, unknown>), question: asked }
+        : entry;
+    const rekey = (map: unknown): unknown =>
+      map !== null && typeof map === "object" && !Array.isArray(map)
+        ? Object.fromEntries(Object.entries(map).map(([key, value]) => [key === shown ? asked : key, value]))
+        : map;
+    const result = (response: unknown): unknown => {
+      if (response === null || typeof response !== "object" || Array.isArray(response)) return response;
+      const own = response as Record<string, unknown>;
+      return {
+        ...own,
+        ...(Array.isArray(own.questions) ? { questions: own.questions.map(swap) } : {}),
+        ...("answers" in own ? { answers: rekey(own.answers) } : {}),
+        ...("annotations" in own ? { annotations: rekey(own.annotations) } : {}),
+      };
+    };
+    const input = parsed.tool_input as Record<string, unknown>;
+    return JSON.stringify({
+      ...parsed,
+      tool_input: { ...input, questions: [swap(box.entry)] },
+      ...("tool_response" in parsed ? { tool_response: result(parsed.tool_response) } : {}),
+    });
+  } catch {
+    return payload;
+  }
 }
 
 // The person's own answer on the `[Answer]:` line, as the file's instructions
@@ -976,6 +1151,18 @@ function targetState(
   // review it first. That request is for this plan only; later Units still build.
   if (planApprovalOff && !reviewRequested) return { unit, kind: "skip" };
   return { unit, kind: "ask", repaired: result?.choice === "repair" && result.edited === true };
+}
+
+/**
+ * True while the engine's Plan Approval question is open for this Unit: asked,
+ * and not yet answered for it. Read from the question's own record, so it
+ * holds with or without a chat session's directive marker.
+ */
+export function planApprovalQuestionOpenFor(projectDir: string, unit: string): boolean {
+  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+  if (record === null) return false;
+  if (!record.targets.some((target) => target.unit === unit)) return false;
+  return !(record.results ?? []).some((result) => result.unit === unit);
 }
 
 // In place: the engine keys a run-stage's rule route and a swarm's publication
@@ -1309,6 +1496,9 @@ function planApprovalSettingFor(projectDir: string): PlanApprovalSetting | null 
     return null;
   }
 }
+
+// The receipt reader judges a plan built without asking by this setting too.
+readPlanApprovalSettingWith((projectDir) => planApprovalSettingFor(projectDir)?.value === "off");
 
 /**
  * A Kiro IDE window that passes hooks no message text keeps its picker, so no

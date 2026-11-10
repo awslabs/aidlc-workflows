@@ -115,6 +115,7 @@ import {
   type ProtectedChoice,
   protectedChoiceDigests,
   stripRecommendedDecorator,
+  typedWordGap,
 } from "./aidlc-reply-reader.ts";
 export {
   formatReceivedReply,
@@ -249,6 +250,7 @@ import {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  COMPOSE_ASK_TYPE,
 } from "./aidlc-record-core.ts";
 export {
   ACTIVE_INTENT_POINTER,
@@ -352,6 +354,7 @@ export {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  COMPOSE_ASK_TYPE,
 } from "./aidlc-record-core.ts";
 import {
   isReviewRecordRelativePath,
@@ -2094,9 +2097,8 @@ export function commandArgSpans(raw: string): CommandArgSpan[] {
 // its hooks a quoted phrase with the quotes removed and the spaces kept, so
 // "Hello,  World!" arrives as two tokens. `words` is some of the line's tokens
 // in order, separated by whitespace. When one stretch of the line's tokens,
-// side by side, spells them, each separator takes the spaces and tabs typed
-// there; any other gap (a line break, a no-break or other Unicode space) stays
-// one plain space, as the split hands it on. Read by text alone a flag's value
+// side by side, spells them, each separator takes the gap typed there as
+// typedWordGap keeps it; any other gap stays the join's. Read by text alone a flag's value
 // can spell a word too (`--scope bugfix  bugfix bugfix is broken`), so words no
 // stretch spells, or two stretches spell with different spacing, keep the
 // join's spaces. A token lines up only whole, at a whitespace boundary, and
@@ -2136,7 +2138,7 @@ function spacedFrom(words: string, raw: string, tokens: CommandArgSpan[], first:
     while (at < words.length && /\s/.test(words[at])) at++;
     if (at === words.length) return spaced + words.slice(to);
     const typed = k + 1 < tokens.length ? raw.slice(tokens[k].end, tokens[k + 1].start) : "";
-    spaced += /^[ \t]+$/.test(typed) ? typed : words.slice(to, at);
+    spaced += typedWordGap(typed) ?? words.slice(to, at);
   }
   return null;
 }
@@ -29824,20 +29826,11 @@ export function reviewerDispatchPath(projectDir: string, intent?: string, space?
 // Freshness window for the reviewer dispatch record. The scope hook honours a
 // record only while its mtime is younger than this; an older record is an
 // orphan (a session that crashed between dispatch and verdict) and is ignored
-// plus best-effort cleaned up — the same staleness discipline as the compose
-// marker. 6h: the worst observed pre-fix review ran ~3h, so the window covers
-// the pathological case with margin while still bounding a crashed review.
+// plus best-effort cleaned up. 6h: the worst observed pre-fix review ran ~3h,
+// so the window covers the pathological case with margin while still bounding
+// a crashed review.
 export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 
-// `<projectDir>/aidlc/.aidlc-compose-pending`: the in-flight compose gate
-// marker the conductor writes before presenting the approve/edit/reject gate
-// and deletes on resolve. It lives at the WORKSPACE level (not a per-intent
-// record) so a single spelling is shared by the Stop-hook carve-out (which
-// honours it as a turn-stop signal) and the doctor probe (which flags an
-// orphaned one). Hoisted here so the path is spelled once.
-export function composeMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-compose-pending");
-}
 export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
 export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
 export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
@@ -30725,20 +30718,17 @@ export function effectiveUnitGateRhythm(
     readUnitGateRhythm(stateContent);
 }
 
-// Freshness window for the compose marker. The Stop hook honours the carve-out
-// only while the marker's mtime is younger than this; an older marker is an
-// orphan (a session that crashed between write and gate-resolve) and is ignored
-// plus best-effort cleaned up, so it cannot silently disable forwarding-loop
-// enforcement forever. 24h is generous enough to cover a long human pause at an
-// open gate while still catching a stranded marker.
-export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
-
-// Whether an in-flight compose proposal waits on the person's approve, edit or
-// reject: its marker is on disk and fresh. A stale orphan is no open question,
-// as the Stop hook reads it. A failed read throws; each caller decides.
-export function composeGateOpen(projectDir: string): boolean {
-  const marker = composeMarkerPath(projectDir);
-  return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
+// Whether the in-flight compose question waits on the person's approve, edit
+// or reject: it is the step on record for the selected work (or the work
+// named), on the state it was asked on. A `next` that names another step, or
+// the plan change their approval runs, closes it; a setting written meanwhile
+// keeps it, as it keeps every step. A failed state read throws (each caller
+// decides); a step that cannot be read is no open question.
+export function composeGateOpen(projectDir: string, intent?: string, space?: string): boolean {
+  const statePath = stateFilePath(projectDir, intent, space);
+  if (!existsSync(statePath)) return false;
+  const marker = readActiveDirectiveMarker(projectDir, readFileSync(statePath, "utf-8"), intent, space);
+  return marker?.kind === "ask" && marker.ask_type === COMPOSE_ASK_TYPE;
 }
 
 // `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
@@ -32618,7 +32608,7 @@ const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GU
 // reviewer's name. The words match the review request's own step.
 export function reviewRequestAction(lead: string, request: string | undefined): string {
   if (request === undefined) return `${lead}.`;
-  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a subagent and have it write ` +
+  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a new subagent and have it write ` +
     "the `reviewFile` that command returns: that file is the reviewer's, so never write it yourself and never " +
     `stand in for it (\`${harnessDir()}/aidlc-common/protocols/stage-protocol-reviewer.md\` step 1 says what to ` +
     "pass it). When its verdict is back, record it with the `recordVerdict` command the request returns.";
@@ -33529,7 +33519,7 @@ export interface GuardRecoveryAskData {
   detail?: string;
 }
 
-function guardRefusalPath(
+export function guardRefusalPath(
   projectDir: string,
   stage: string,
   unit?: string,
@@ -33543,7 +33533,7 @@ function guardRefusalPath(
 // The latest boundary after which a repetition is a new situation: a session
 // start or resume, a workflow start, a jump, this stage's gate rejection, or a
 // fresh Bolt attempt for this Unit.
-function guardRefusalResetToken(
+export function guardRefusalResetToken(
   projectDir: string,
   stage: string,
   unit?: string,
@@ -33591,7 +33581,7 @@ function gateEventCovers(event: AuditShardEvent, stage: string, unit?: string): 
 
 // The latest approval of this stage (or this Unit's step), so a question left
 // before it can tell that the step it was about was approved since.
-function guardRefusalApprovalToken(
+export function guardRefusalApprovalToken(
   events: AuditShardEvent[],
   stage: string,
   unit?: string,
@@ -33602,7 +33592,7 @@ function guardRefusalApprovalToken(
   return latest === undefined ? "" : `${latest.timestamp}\0${latest.shard}\0${latest.pos}`;
 }
 
-function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
+export function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
   try {
     const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
     if (!isPlainObject(value) || value.version !== 1) return null;
@@ -36335,7 +36325,7 @@ const UNIT_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
   "UNIT_SKIPPED",
 ]);
 
-function currentUnitLifecycleRows(
+export function currentUnitLifecycleRows(
   projectDir: string,
   audit: string,
   slug: string,
@@ -36480,7 +36470,7 @@ export function unitScopedLifecycleFloors(stateContent: string): boolean {
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
 }
 
-function unitMajorLifecycleMode(projectDir: string): boolean {
+export function unitMajorLifecycleMode(projectDir: string): boolean {
   try {
     const state = readStateFile(projectDir);
     return (
@@ -41679,11 +41669,18 @@ export function sayOnceNoteLine(
  * top-level additionalContext without a word; every other harness's adapter,
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
+ * `firstStepNote` goes only to an adapter that asked the human-turn hook for
+ * it, whose host takes no context line from that hook (opencode).
  */
-export function hookContextLine(event: "SessionStart" | "UserPromptSubmit" | "PostToolUse", context: string): string {
+export function hookContextLine(
+  event: "SessionStart" | "UserPromptSubmit" | "PostToolUse",
+  context: string,
+  firstStepNote?: string,
+): string {
   return `${JSON.stringify({
     additionalContext: context,
     hookSpecificOutput: { hookEventName: event, additionalContext: context },
+    ...(firstStepNote === undefined ? {} : { firstStepNote }),
   })}\n`;
 }
 

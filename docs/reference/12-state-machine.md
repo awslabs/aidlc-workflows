@@ -270,8 +270,10 @@ unit's `Run floor`, so the unit owes the stage nothing in this attempt
 kind-vacuous unit), the walk moves on, and every other unit still gets the
 stage. A unit that skipped every step that writes its code owes no
 Construction checkpoint at all: the walk goes on to the next unit, and no
-stage approval waits on it. Once a unit has finished work, a forward jump
-inside the per-unit steps moves only the unit in flight on the same way: `aidlc-jump.ts execute --units`
+stage approval waits on it. A forward jump inside the per-unit steps moves
+only the unit in flight on the same way, on the solo walk and on a team main
+that works every Unit itself, the first unit before any unit has finished work
+included: `aidlc-jump.ts execute --units`
 runs this transition for each step the walk would stop that unit at before the
 target, also for a step reopened behind its stage approval, whose checkbox and
 Current Stage stay as they are. When some units did the stage and others
@@ -1595,7 +1597,10 @@ is the skipped record when plan approval is off for the piece of work: a receipt
 marked skipped, `[Answer]: Plan approval off`, and a `PLAN_APPROVAL_SKIPPED`
 row, written when the build is handed over (by `next`, or by the `continue`
 that delivers its last rules part). Its authority is the setting (which only the person, the scope, or the
-machine switch sets), never an answer, and no reader takes it for one. The two engine
+machine switch sets), never an answer, and no reader takes it for one. It stands only
+while plan approval is off and the questions file is still its record, or once that
+plan's build has started (the receipt at `generation`); turned on before then, `next`
+asks about that plan. The two engine
 observers (the Stop probe and the route check) write nothing at all, and a typed barrier at the durable write
 primitives makes an observer that reaches one fail loudly rather than corrupt
 authority. A guard's only move is to refuse: it does not clear a receipt, a

@@ -2456,6 +2456,14 @@ async function evaluate(
     (!DISPATCH_TOOLS.has(toolName) && toolName.length > 0);
   if (!guardedDispatch && !mutationCapable) return 0;
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
+  // The receipt reader judges a plan built without asking by the plan-approval
+  // setting too, which the router module hands it as it loads
+  // (readPlanApprovalSettingWith); this hook loads it before it judges.
+  try {
+    await import("../tools/aidlc-plan-approval-ask.ts");
+  } catch (error) {
+    recordHookDrop(projectDir, HOOK_NAME, `plan-approval setting not read: ${errorMessage(error)}`);
+  }
 
   let state: string | null = null;
   let verdict: PlanApprovalVerdict;

@@ -248,8 +248,9 @@ export const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
 // enumeration a future author has to remember. It THROWS rather than no-ops
 // because a silent no-op hides exactly the bug the barrier exists to expose, and
 // both producers already fail safe on a non-zero engine exit: the Stop hook
-// allows the stop and records a drop, and the route check surfaces the error
-// from `unit start` instead of corrupting authority.
+// allows the stop and records a drop, and the route check (readEngineUnitDirective)
+// surfaces the error from `unit start`, or lets the start-receipt guard stand
+// aside, instead of corrupting authority.
 export class EngineModeViolationError extends Error {
   constructor(readonly primitive: string) {
     super(
@@ -277,9 +278,10 @@ export function engineDirFor(recordRoot: string): string {
 // above).
 export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
 
-// The env marker that identifies the route check `aidlc-state.ts unit start`
-// runs to learn which Unit the engine would route. Like the Stop-hook probe it
-// consults the engine and reads only the directive off stdout.
+// The env marker that identifies the route check (readEngineUnitDirective in
+// aidlc-log.ts) that `unit start` and the start-receipt guard run to learn which
+// Unit the engine would route. Like the Stop-hook probe it consults the engine
+// and reads only the directive off stdout.
 export const ROUTE_CHECK_ENV = "AIDLC_ROUTE_CHECK";
 
 // The env marker on the `next` a prompt hook runs ahead of the agent (Kiro
