@@ -104,7 +104,7 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
         expect(JSON.parse(skipped.stdout).kind, skipped.out).toBe("done");
         // The claimed checkout walks alpha only: the line says nothing of other Units.
         expect(JSON.parse(skipped.stdout).reason).toBe('Skipped "infrastructure-design" for unit "alpha". Run next to continue.');
-        generation = Number(JSON.parse(readFileSync(join(checkout, "aidlc", ".aidlc-unit-scope.json"), "utf-8")).generation);
+        generation = Number(JSON.parse(readFileSync(join(checkout, "aidlc", ".aidlc-engine", "units", "claimed.json"), "utf-8")).generation);
         expect(unitSkips(checkout)).toEqual([`alpha@${generation}`]);
         // The stage is the Unit's to skip, not the checkout's: no [S] on it.
         expect(readFileSync(seededStateFile(checkout), "utf-8")).not.toMatch(/^- \[S\] infrastructure-design/m);

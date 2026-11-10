@@ -706,7 +706,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     const first = activeIntent(proj);
     expect(first).not.toBeNull();
     expect(
-      existsSync(join(proj, "aidlc", ".aidlc-sessions", "handoff-session-1")),
+      existsSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "handoff-session-1")),
     ).toBe(true);
 
     const directive = next([
@@ -772,7 +772,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     expect(fireHook(SESSION_START, { source: "startup", session_id: "session-b" })).toBe(0);
     // Both hooks ran under this test process, so its pid-map entry names B, the
     // last to start. The creator is identified by its own PostToolUse instead.
-    rmSync(join(proj, "aidlc", ".aidlc-sessions", "pids"), { recursive: true, force: true });
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "pids"), { recursive: true, force: true });
 
     const created = util([
       "intent-create",
@@ -788,7 +788,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     const registry = readIntentRegistry(proj);
     expect(record).not.toBeNull();
     expect(registry.length).toBe(1);
-    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
     expect(readFileSync(join(sessions, "session-a"), "utf-8").trim()).toBe(
       registry[0].uuid,
     );
@@ -813,7 +813,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     expect(
       util(["intent-create", "--scope", "poc", "--arguments", "existing intent"]).status,
     ).toBe(0);
-    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
     mkdirSync(sessions, { recursive: true });
     writeFileSync(join(sessions, ".current-session"), "legacy-unstamped\n", "utf-8");
 
@@ -1661,7 +1661,7 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
     expect(records.length).toBe(1);
     expect(
       readFileSync(
-        join(proj, "aidlc", ".aidlc-sessions", "migration-session"),
+        join(proj, "aidlc", ".aidlc-engine", "sessions", "migration-session"),
         "utf-8",
       ).trim(),
     ).toBe(readIntentRegistry(proj)[0]?.uuid);
@@ -1693,7 +1693,7 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
     // The tool's process-ancestry walk names no session: a host whose tool
     // processes cannot name one, or a walk that ran out of time on a loaded
     // machine. Only the creating session's own PostToolUse can bind it.
-    rmSync(join(proj, "aidlc", ".aidlc-sessions", "pids"), { recursive: true, force: true });
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "pids"), { recursive: true, force: true });
 
     const r = util(["intent-create", "--scope", "feature"]);
     expect(r.status).toBe(0);
@@ -1702,7 +1702,7 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
 
     const [migrated] = readIntentRegistry(proj);
     expect(
-      readFileSync(join(proj, "aidlc", ".aidlc-sessions", "migration-session"), "utf-8").trim(),
+      readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "migration-session"), "utf-8").trim(),
     ).toBe(migrated?.uuid);
     expect(readSessionBinding(proj, "migration-session")).toMatchObject({
       space: "default",

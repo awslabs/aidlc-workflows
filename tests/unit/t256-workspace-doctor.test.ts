@@ -26,6 +26,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { ensureWorkspaceEngineFolder } from "../../core/tools/aidlc-runtime-paths.ts";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
 import {
   REPO_ROOT,
@@ -167,6 +168,16 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     g("commit", "-q", "-m", "earlier commit");
     request = workspaceManifestChecks(ws).find((r) => r.label.startsWith("Request folder:"));
     expect(request?.fix).toMatch(/^add the line `aidlc\/\.aidlc-request-text\/` to the project folder's \.gitignore, .*, then in the project folder, take the tracked ones out of git, keeping the files: `git rm --cached -r -f -- aidlc\/\.aidlc-request-text\/`/);
+  });
+
+  test("a request in the engine folder is kept out of git by the folder itself, so no row names it", () => {
+    const ws = freshGitWorkspace();
+    ensureWorkspaceEngineFolder(ws);
+    mkdirSync(join(ws, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", ".aidlc-engine", "request-text", "request.txt"), "my words\n", "utf-8");
+    const rows = workspaceManifestChecks(ws);
+    expect(rows.some((r) => r.label.startsWith("Request folder:"))).toBe(false);
+    expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
   });
 
   test("a project below its repository root, and a request named with a space and Korean, are never asked to be committed", () => {

@@ -980,14 +980,35 @@ describe("t265b hook lifecycle", () => {
   test("runtime integrity refuses session-record writes even when Plan Approval is disabled", () => {
     const proj = scratchProject();
     try {
-      const payload = WRITE(join(proj, "aidlc", ".aidlc-sessions", "presence-bypass-s"));
-      for (const disabled of ["0", "1"]) {
-        const result = runHook(proj, payload, {
-          AIDLC_DISABLE_PLAN_APPROVAL_GUARD: disabled,
-          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: disabled,
-        });
-        expect(result.code).toBe(2);
-        expect(result.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+      // The sessions folder, and the place an earlier release kept it.
+      for (const folder of [join("aidlc", ".aidlc-engine", "sessions"), join("aidlc", ".aidlc-sessions")]) {
+        const payload = WRITE(join(proj, folder, "presence-bypass-s"));
+        for (const disabled of ["0", "1"]) {
+          const result = runHook(proj, payload, {
+            AIDLC_DISABLE_PLAN_APPROVAL_GUARD: disabled,
+            AIDLC_SKIP_HUMAN_PRESENCE_GUARD: disabled,
+          });
+          expect(result.code, folder).toBe(2);
+          expect(result.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+        }
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // A chat that loaded an earlier release's text writes the person's request to
+  // the folder that release named; a chat on this release, to the engine
+  // folder. Both reach the engine while a plan waits; source still does not.
+  test("a request file passes while a plan waits, in the engine folder and in the earlier folder", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      expect(runHook(proj, WRITE(join(proj, "src", "x.ts"))).code).toBe(2);
+      for (const folder of [join("aidlc", ".aidlc-engine", "request-text"), join("aidlc", ".aidlc-request-text")]) {
+        const result = runHook(proj, WRITE(join(proj, folder, "request.txt")));
+        expect(result.code, `${folder}\n${result.stderr}`).toBe(0);
       }
     } finally {
       rmSync(proj, { recursive: true, force: true });
@@ -2838,7 +2859,7 @@ describe("t265b hook lifecycle", () => {
       seedState(proj);
       writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
       mkdirSync(join(proj, "other"), { recursive: true });
-      const file = "aidlc/.aidlc-request-text/pick-1.txt";
+      const file = "aidlc/.aidlc-engine/request-text/pick-1.txt";
       for (const [refused, named] of [
         [`cd other && bun .claude/tools/aidlc.ts engine orchestrate next --request-file ${file}`, `next --request-file ${file}`],
         [`cd other; bun .claude/tools/aidlc-orchestrate.ts next --resume --request-file ${file}`, `next --resume --request-file ${file}`],
@@ -3317,9 +3338,9 @@ describe("t265b hook lifecycle", () => {
       const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
       for (const probe of [
         `printf code > ${nullDevice}`,
-        "ls aidlc/.aidlc-sessions/ 2>/dev/null",
+        "ls aidlc/.aidlc-engine/sessions/ 2>/dev/null",
         'grep -rl "plan-approval" .claude/tools/ 2>/dev/null | head',
-        "cat aidlc/.aidlc-sessions/current-session 2>/dev/null; echo ---",
+        "cat aidlc/.aidlc-engine/sessions/current-session 2>/dev/null; echo ---",
       ]) {
         expect(runHook(proj, BASH(probe)).code, probe).toBe(0);
       }
@@ -4793,7 +4814,8 @@ describe("t265b hook lifecycle", () => {
       // (audit/<host>-<clone>.md) - the hook gates its emit on that exact file
       // existing. Pin the clone-id (t221's idiom) so the seeded shard and the
       // hook's resolved shard agree.
-      writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+      mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+      writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
       const auditDir = join(proj, RECORD_REL, "audit");
       mkdirSync(auditDir, { recursive: true });
       const host =

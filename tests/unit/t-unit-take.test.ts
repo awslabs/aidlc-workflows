@@ -137,7 +137,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect(labels(cloneOf(home.remote, "lead"))).toEqual(["Start refunds", "Start checkout-ui"]);
     // A copy of the lead's checkout keeps its clone id, so the plan's rows are its own.
     const copy = cloneOf(home.remote, "lead-copy");
-    cpSync(join(home.dir, "aidlc", ".aidlc-clone-id"), join(copy, "aidlc", ".aidlc-clone-id"));
+    cpSync(join(home.dir, "aidlc", ".aidlc-engine", "clone-id"), join(copy, "aidlc", ".aidlc-engine", "clone-id"));
     expect(labels(copy)).toContain("Carry on fixture here, as the lead");
   });
 
@@ -367,7 +367,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     const alice = cloneOf(home.remote, "alice");
     inSpace(alice, "payments");
     const before = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
-    const took = take(alice, "refunds", ["--request-file", "aidlc/.aidlc-request-text/missing.txt"]);
+    const took = take(alice, "refunds", ["--request-file", "aidlc/.aidlc-engine/request-text/missing.txt"]);
     expect(took.status).not.toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(before);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
@@ -1093,7 +1093,7 @@ describe("a team's own workspace, made from the home's", () => {
     expect(took.json?.notice).toBeUndefined();
     const line = "The lead's project takes no push from here (this host takes no push from here (pre-receive hook declined)), so the lead " +
       "and the other teams cannot see that you took refunds until it does; AI-DLC records it there when a push next goes through.";
-    const kept = JSON.parse(readFileSync(join(pay, "aidlc", ".aidlc-sessions", `${session}.person-lines`), "utf-8")) as {
+    const kept = JSON.parse(readFileSync(join(pay, "aidlc", ".aidlc-engine", "sessions", `${session}.person-lines`), "utf-8")) as {
       lines: Array<{ line: string; reply?: boolean }>;
     };
     expect(kept.lines.find((entry) => entry.line === line)?.reply, JSON.stringify(kept)).toBe(true);
@@ -1520,7 +1520,7 @@ function freshTeamWorkspace(label: string): { dir: string; host: string } {
   const dir = join(tempDir(`${label}-ws`), "workspace");
   mkdirSync(dir, { recursive: true });
   seedAidlcMemory(dir);
-  writeFileSync(join(dir, ".gitignore"), "aidlc/.aidlc-clone-id\naidlc/.aidlc-sessions/\naidlc/active-space\naidlc/spaces/*/intents/active-intent\n" +
+  writeFileSync(join(dir, ".gitignore"), "aidlc/.aidlc-engine/clone-id\naidlc/.aidlc-engine/sessions/\naidlc/active-space\naidlc/spaces/*/intents/active-intent\n" +
     "**/aidlc/spaces/*/intents/**/.aidlc-engine/\n/checkout-api/\n/billing/\n");
   git(dir, ["init", "-q", "-b", "main"]);
   git(dir, ["config", "user.name", label]);

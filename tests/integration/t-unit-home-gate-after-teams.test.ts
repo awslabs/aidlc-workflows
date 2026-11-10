@@ -114,7 +114,7 @@ describe("a Unit built at the lead's project stays the lead's to approve there",
     teamsChosen(home.dir);
     const claim = run(UNIT, ["claim", "orders-api", "--team", "shop"], home.dir);
     expect(claim.status, claim.out).not.toBe(0);
-    expect(existsSync(join(home.dir, "aidlc", ".aidlc-unit-scope.json"))).toBe(false);
+    expect(existsSync(join(home.dir, "aidlc", ".aidlc-engine", "units", "claimed.json"))).toBe(false);
     expect(stateOf(home.dir)).not.toContain("Claimed");
   });
 });

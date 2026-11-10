@@ -107,7 +107,7 @@ import {
   composerProposalPath,
   docsRoot,
   ENGINE_TEXT_DIRS,
-  REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
@@ -1291,14 +1291,16 @@ function isEngineTextTarget(projectDir: string, target: string): boolean {
   }
 }
 
-// The project folder where the agent writes a person's request for `next
-// --request-file` (REQUEST_TEXT_DIR): a plain file directly inside it, the only
-// place the engine reads it, reached through no link. Writing it changes
+// A project folder where the agent writes a person's request for `next
+// --request-file` (REQUEST_TEXT_DIRS: this release's, or the one a chat that
+// loaded an earlier release's text names): a plain file directly inside it, the
+// only place the engine reads it, reached through no link. Writing it changes
 // nothing and builds nothing; the engine reads the file and removes it.
 function isRequestTextTarget(projectDir: string, target: string): boolean {
   try {
-    const folder = join(projectDir, REQUEST_TEXT_DIR);
-    if (normalizeDriveLetter(dirname(resolve(target))) !== normalizeDriveLetter(resolve(folder))) return false;
+    const folder = REQUEST_TEXT_DIRS.map((dir) => join(projectDir, dir))
+      .find((candidate) => normalizeDriveLetter(dirname(resolve(target))) === normalizeDriveLetter(resolve(candidate)));
+    if (folder === undefined) return false;
     if (!isTrustedRecordTarget(projectDir, target, folder)) return false;
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);

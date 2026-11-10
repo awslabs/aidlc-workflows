@@ -170,7 +170,7 @@ function emittedArgv(command: string): string[] {
 }
 
 function questionFile(id: string): string {
-  return join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+  return join(proj, "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`);
 }
 
 // Words alone over active work first get the re-entry readings (a redo,
@@ -609,8 +609,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const ask = JSON.parse(approval.stdout.trim());
         expect(ask.ask_type, approval.out).toBe("new-work-routing");
         const approved = taskless
-          ? readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions"))
-            .map((file) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "questions", file), "utf-8")))
+          ? readdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "questions"))
+            .map((file) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "questions", file), "utf-8")))
             .find((question) => question.origin === "front" && question.composedFrom === composed)?.id
           : composed;
         expect(approved).toMatch(/^[0-9a-f]{8}$/);
@@ -1005,7 +1005,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     };
     // The reply a command hands on: the request file it names holds it.
     const handedOn = (command: string): string => {
-      const file = /(?:^| )--request-file (aidlc\/\.aidlc-request-text\/[^ ]+)$/.exec(command);
+      const file = /(?:^| )--request-file (aidlc\/\.aidlc-engine\/request-text\/[^ ]+)$/.exec(command);
       expect(file, command).not.toBeNull();
       return readFileSync(join(proj, ...file![1].split("/")), "utf-8");
     };
@@ -1071,7 +1071,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const withReply = (command: string, text: string) => `${command} -- ${quoteCommandArgument(text)}`;
       const reshapesOf = (ask: { reshape_commands: Array<{ command: string; selector: string }> }, text: string) =>
         ask.reshape_commands.map(({ command, selector }) => {
-          const named = `${command} --request-file aidlc/.aidlc-request-text/reshape-${selector}.txt`;
+          const named = `${command} --request-file aidlc/.aidlc-engine/request-text/reshape-${selector}.txt`;
           expect(handedOn(named)).toBe(text);
           return named;
         });
@@ -1092,7 +1092,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
           : undefined;
         return id === undefined ? first : emittedIn(session, `${ORCH_SH} next --request ${id} --propose ${planFor(text)}`);
       };
-      const questionCount = () => readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions")).length;
+      const questionCount = () => readdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "questions")).length;
       const seedOneIntentNoCursor = (): string => {
         expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
         const [record] = recordDirs(proj);
@@ -1720,7 +1720,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const dispatch = JSON.parse(next(["compose", "tighten the remaining plan"]).stdout.trim());
       expect(dispatch.kind).toBe("print");
       expect(dispatch.message).toContain("RUNNING workflow");
-      const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+      const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
       expect(existsSync(dir) ? readdirSync(dir) : []).toEqual([]);
     });
 
@@ -1879,7 +1879,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     test("a set retention removes expired copies on the next run, with no new question asked", () => {
       const old = JSON.parse(next(["fix the login bug"]).stdout.trim());
       const oldId: string = old.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-      const questions = join(proj, "aidlc", ".aidlc-sessions", "questions");
+      const questions = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
       // The proposal step's question and the plan question were asked together and age together.
       for (const file of readdirSync(questions)) ageQuestion(file.slice(0, 8), 3);
       const run = runEmittedCommand(`${ORCH_SH} next`, proj, { AIDLC_QUESTION_RETENTION_DAYS: "2" });
@@ -1916,13 +1916,13 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(tree(), `${label} writes nothing`).toEqual(before);
       }
       // Kiro's same-turn latch swallows a bare next after a terminal command.
-      writeFileSync(join(proj, "aidlc", ".aidlc-turn-counter"), "7\n");
-      writeFileSync(join(proj, "aidlc", ".aidlc-readonly-latch"), `${JSON.stringify({ turn: 7, flag: "status" })}\n`);
+      writeFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "kiro-turn-counter"), "7\n");
+      writeFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "kiro-readonly-latch"), `${JSON.stringify({ turn: 7, flag: "status" })}\n`);
       const beforeLatch = tree();
       const latched = JSON.parse(runEmittedCommand(`${ORCH_SH} next`, proj, retention).stdout.trim());
       expect(latched.kind).toBe("done");
       expect(tree(), "a latch-swallowed next writes nothing").toEqual(beforeLatch);
-      rmSync(join(proj, "aidlc", ".aidlc-readonly-latch"));
+      rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "kiro-readonly-latch"));
       expect(existsSync(questionFile(id))).toBe(true);
       runEmittedCommand(`${ORCH_SH} next`, proj, retention);
       expect(existsSync(questionFile(id)), "a run that engages the workflow removes it").toBe(false);
@@ -1946,7 +1946,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const oldHere = saveQuestion(proj, "old request here", "bugfix");
         const oldThere = saveQuestion(other, "old request there", "bugfix");
         const age = (dir: string, id: string): void => {
-          const file = join(dir, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+          const file = join(dir, "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`);
           const stored = JSON.parse(readFileSync(file, "utf-8"));
           stored.createdAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
           writeFileSync(file, `${JSON.stringify(stored)}\n`);
@@ -1963,7 +1963,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         }
         expect(existsSync(questionFile(oldHere.id)), "this project keeps one day").toBe(false);
         expect(
-          existsSync(join(other, "aidlc", ".aidlc-sessions", "questions", `${oldThere.id}.json`)),
+          existsSync(join(other, "aidlc", ".aidlc-engine", "sessions", "questions", `${oldThere.id}.json`)),
           "the other project sets nothing, so it keeps everything",
         ).toBe(true);
       } finally {
@@ -1976,8 +1976,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       mkdirSync(outside, { recursive: true });
       try {
         mkdirSync(join(proj, "aidlc"), { recursive: true });
-        rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
-        symlinkSync(outside, join(proj, "aidlc", ".aidlc-sessions"), "dir");
+        rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
+        symlinkSync(outside, join(proj, "aidlc", ".aidlc-engine", "sessions"), "dir");
         const r = next(["fix the login bug"]);
         expect(r.status, r.out).not.toBe(0);
         expect(r.out).toContain("is a symlink");

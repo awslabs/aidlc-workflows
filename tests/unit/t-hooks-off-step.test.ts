@@ -677,7 +677,7 @@ describe("before any workflow, next stops when the person's message left no hear
 describe("the request the first next stopped with carries on after the restart", () => {
   const REQUEST = "add a dark mode toggle to the settings page";
   const LINE = "Carrying on with your earlier request.";
-  const kept = (proj: string) => join(proj, "aidlc", ".aidlc-sessions", "kept-request.json");
+  const kept = (proj: string) => join(proj, "aidlc", ".aidlc-engine", "sessions", "kept-request.json");
   type Routed = Printed & { narration?: string };
 
   for (const h of HARNESSES) {
@@ -777,9 +777,9 @@ describe("the request the first next stopped with carries on after the restart",
     const proj = installed(OPENCODE);
     const outside = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-kept-request-outside-"));
     outsides.push(outside);
-    mkdirSync(join(proj, "aidlc"), { recursive: true });
-    rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
-    symlinkSync(outside, join(proj, "aidlc", ".aidlc-sessions"), DIR_LINK);
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
+    symlinkSync(outside, join(proj, "aidlc", ".aidlc-engine", "sessions"), DIR_LINK);
     expect(isStop(next(proj, OPENCODE, {}, ["--", REQUEST]))).toBe(true);
     expect(existsSync(join(outside, "kept-request.json"))).toBe(false);
   });
@@ -828,7 +828,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const stopped = next(proj, h, {}, JUMP);
     expect(isStop(stopped)).toBe(true);
     expect(stopped.message ?? "").not.toContain("--request");
-    expect(existsSync(join(proj, "aidlc", ".aidlc-sessions", "restarts"))).toBe(false);
+    expect(existsSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "restarts"))).toBe(false);
   });
 
   test("stopped words reach the new chat with the step that reads them", () => {
@@ -859,15 +859,15 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const big = installed(OPENCODE);
     intentCreate(big, OPENCODE);
     // Through a request file: one argument this long is past Windows' command-line limit.
-    mkdirSync(join(big, "aidlc", ".aidlc-request-text"), { recursive: true });
-    writeFileSync(join(big, "aidlc", ".aidlc-request-text", "request.txt"), huge);
-    const bigId = idIn(next(big, OPENCODE, {}, ["--request-file", "aidlc/.aidlc-request-text/request.txt"]));
+    mkdirSync(join(big, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(big, "aidlc", ".aidlc-engine", "request-text", "request.txt"), huge);
+    const bigId = idIn(next(big, OPENCODE, {}, ["--request-file", "aidlc/.aidlc-engine/request-text/request.txt"]));
     beat(big, "reviewer-scope");
     const cut = next(big, OPENCODE, {}, ["--request", bigId]);
     expect(cut.kind, JSON.stringify(cut).slice(0, 300)).toBe("print");
     expect(cut.message ?? "").toContain("(cut to fit this step: if this step has you pass their words on, tell the person in one line that their request was too long to carry on whole");
     expect(cut.message ?? "").not.toContain(JSON.stringify(huge));
-    expect(existsSync(join(big, "aidlc", ".aidlc-request-text", `kept-${bigId}.txt`))).toBe(false);
+    expect(existsSync(join(big, "aidlc", ".aidlc-engine", "request-text", `kept-${bigId}.txt`))).toBe(false);
   });
 
   test("it runs in the work it was stopped in, never in work selected since", () => {
@@ -915,11 +915,11 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     intentCreate(proj, OPENCODE);
     const id = idIn(next(proj, OPENCODE, {}, JUMP));
     beat(proj, "reviewer-scope");
-    mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
-    writeFileSync(join(proj, "aidlc", ".aidlc-request-text", "request.txt"), "and keep the old layout\n");
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", ".aidlc-engine", "request-text", "request.txt"), "and keep the old layout\n");
     const beside = [
       ["--", "and keep the old layout"], ["and", "keep", "the", "old", "layout"], ["--resume"], ["--json"],
-      ["--request-file", "aidlc/.aidlc-request-text/request.txt"],
+      ["--request-file", "aidlc/.aidlc-engine/request-text/request.txt"],
     ];
     for (const line of [...beside.map((words) => ["--request", id, ...words]), ["and", "keep", "the", "old", "layout", "--request", id]]) {
       const step = next(proj, OPENCODE, {}, line);
@@ -932,7 +932,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
       expect(step.message ?? "").toContain("send what they typed beside the id again in the new chat");
     }
     // Nothing was used or changed: the id alone still runs the kept command as it was kept.
-    const kept = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "restarts", `${id}.json`), "utf-8")) as { args: string[] };
+    const kept = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "restarts", `${id}.json`), "utf-8")) as { args: string[] };
     expect(kept.args).toEqual(JUMP);
     expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
@@ -952,7 +952,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const chat = { AIDLC_SESSION_OVERRIDE: SESSION };
     const id = idIn(next(proj, OPENCODE, chat, JUMP));
     expect(idIn(next(proj, OPENCODE, chat, JUMP))).toBe(id);
-    expect(readdirSync(join(proj, "aidlc", ".aidlc-sessions", "restarts")).filter((name) => name.endsWith(".json")))
+    expect(readdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "restarts")).filter((name) => name.endsWith(".json")))
       .toHaveLength(1);
     // Another chat's stop is its own request, with its own id.
     const other = idIn(next(proj, OPENCODE, { AIDLC_SESSION_OVERRIDE: "22222222-3333-4444-8555-666666666666" }, JUMP));
@@ -1060,7 +1060,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
       intentCreate(proj, OPENCODE);
       const id = idIn(next(proj, OPENCODE, {}, JUMP));
       beat(proj, "reviewer-scope");
-      const restarts = join(proj, "aidlc", ".aidlc-sessions", "restarts");
+      const restarts = join(proj, "aidlc", ".aidlc-engine", "sessions", "restarts");
       chmodSync(restarts, 0o500);
       try {
         const unmarked = next(proj, OPENCODE, {}, ["--request", id]) as Printed & { change_notices?: string[] };
@@ -1081,12 +1081,12 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     intentCreate(proj, OPENCODE);
     const id = idIn(next(proj, OPENCODE, {}, JUMP));
     beat(proj, "reviewer-scope");
-    symlinkSync(join(proj, "nowhere"), join(proj, "aidlc", ".aidlc-sessions", "restarts", `${id}.taken`));
+    symlinkSync(join(proj, "nowhere"), join(proj, "aidlc", ".aidlc-engine", "sessions", "restarts", `${id}.taken`));
     expect(ran(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
     // The entry alone before any workflow reads the same mark.
     const early = installed(OPENCODE);
     const earlyId = idIn(next(early, OPENCODE, {}, ["--", "add a dark mode toggle"]));
-    symlinkSync(join(early, "nowhere"), join(early, "aidlc", ".aidlc-sessions", "restarts", `${earlyId}.taken`));
+    symlinkSync(join(early, "nowhere"), join(early, "aidlc", ".aidlc-engine", "sessions", "restarts", `${earlyId}.taken`));
     beat(early, "record-human-turn");
     expect(JSON.stringify(next(early, OPENCODE))).not.toContain("add a dark mode toggle");
   });

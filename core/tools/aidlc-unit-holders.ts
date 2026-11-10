@@ -6,7 +6,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { activeSpace, workspaceRoot } from "./aidlc-locks.ts";
+import { activeSpace } from "./aidlc-locks.ts";
+import { workspaceEngineFile } from "./aidlc-runtime-paths.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import {
   activeIntentUuid,
@@ -22,7 +23,8 @@ import {
 } from "./aidlc-record-core.ts";
 import { completedUnits } from "./aidlc-unit-landing.ts";
 
-export const CLAIM_REGISTRY_CACHE_FILE = ".aidlc-claim-registry.json";
+// Under aidlc/.aidlc-engine/ (workspaceEngineFile).
+export const CLAIM_REGISTRY_CACHE_FILE = "units/claim-registry.json";
 
 export interface CachedUnitClaim {
   status: "claimed" | "released";
@@ -43,7 +45,7 @@ export interface UnitClaimRegistryCache {
 }
 
 export function claimRegistryCachePath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLAIM_REGISTRY_CACHE_FILE);
+  return workspaceEngineFile(projectDir, CLAIM_REGISTRY_CACHE_FILE);
 }
 
 export function readUnitClaimRegistryCache(

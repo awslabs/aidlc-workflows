@@ -14,7 +14,7 @@ import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync,
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
-import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+import { ensureWorkspaceEngineFolder, runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX, workspaceEngineFile, workspaceEnginePath } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
 import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
@@ -451,20 +451,21 @@ export function listIntents(
 // B's context (the central multi-space hazard, vision §3). The fix is a tiny
 // per-user, machine-local map: at session START stamp the working intent's UUID
 // keyed by session_id; on RESUME, compare the stamped UUID to the live cursor
-// and OFFER a rebind on mismatch. The map lives at `aidlc/.aidlc-sessions/`
-// (gitignored — see dot-gitignore `aidlc/.aidlc-sessions/`): it is per-user
+// and OFFER a rebind on mismatch. The map lives at `aidlc/.aidlc-engine/sessions/`
+// (kept out of git by the engine folder's own .gitignore): it is per-user
 // runtime state, never shared truth. The intent record itself is the durable,
 // harness-neutral artifact; the session merely enriches the cursor on resume.
-export const SESSIONS_DIR = ".aidlc-sessions";
+//
+// The per-chat runtime scratch dir. Exported because aidlc-usage.ts writes the
+// usage ledger and the persisted-transcript-path pointers here, and the
+// statusline/state consumers read the ledger back.
+export const SESSIONS_DIR = "sessions";
 
-// The gitignored runtime scratch dir `aidlc/.aidlc-sessions/`. Exported because
-// aidlc-usage.ts writes the usage ledger and the persisted-transcript-path
-// pointers here, and the statusline/state consumers read the ledger back.
 export function sessionsDir(projectDir: string): string {
-  return join(workspaceRoot(projectDir), SESSIONS_DIR);
+  return workspaceEnginePath(projectDir, SESSIONS_DIR);
 }
 
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. Session
+// The per-session record file: `aidlc/.aidlc-engine/sessions/<session-id>`. Session
 // ids must already match the canonical safe shape; normalization-changing
 // values are rejected so distinct raw identities cannot alias one record.
 function safeSessionId(sessionId: string): string {
@@ -495,7 +496,7 @@ export class SessionResolutionConflictError extends Error {
   }
 }
 
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
+// The per-session record file: `aidlc/.aidlc-engine/sessions/<session-id>`. The
 // session id is normalised to the slug shape so a host-supplied id can never
 // escape the sessions dir (path traversal / separators); an empty id yields "".
 export function sessionRecordPath(projectDir: string, sessionId: string): string {
@@ -1619,17 +1620,17 @@ export function auditFilePath(projectDir: string, intent?: string, space?: strin
   return join(resolved.dir, ...(local ? [ENGINE_DIR] : []), "audit", auditShardName(projectDir));
 }
 
-// The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
-// machine-local, GITIGNORED (see the `aidlc/.aidlc-*` rule) so it never travels
-// in a commit — that is what makes the token DISTINCT across clones (a fresh
+// The clone-id token file: `aidlc/.aidlc-engine/clone-id`. Workspace-level,
+// machine-local, kept out of git by the engine folder's .gitignore so it never
+// travels in a commit — that is what makes the token DISTINCT across clones (a fresh
 // checkout has no token file and mints its own). The shard name below embeds
 // this token, so every process IN one clone resolves the SAME shard while two
 // different clones get DIFFERENT shards (no git merge-conflict on concurrent
 // appends — the whole point of per-clone sharding).
-export const CLONE_ID_FILE = ".aidlc-clone-id";
+export const CLONE_ID_FILE = "clone-id";
 
 export function cloneIdPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLONE_ID_FILE);
+  return workspaceEngineFile(projectDir, CLONE_ID_FILE);
 }
 
 // The host segment of a NEWLY minted shard name: hostname() is a human-readable
@@ -1706,8 +1707,8 @@ function parseCloneIdFile(raw: string): { token: string | null; host: string | n
   };
 }
 
-// The stable per-CLONE identity (not per-process). Read from the gitignored
-// `aidlc/.aidlc-clone-id` file when present; minted (12 hex chars from a v4
+// The stable per-CLONE identity (not per-process). Read from the clone-id
+// file (cloneIdPath) when present; minted (12 hex chars from a v4
 // uuid, no Math.random) and persisted on first use otherwise. Stable WITHIN a
 // clone across processes (the fork subprocess and the merge subprocess both
 // read the same file, so the same shard), DISTINCT across clones (each clone
@@ -1751,7 +1752,7 @@ export function cloneIdentity(projectDir: string): CloneIdentity {
     host: (recorded.token && existingShardHost(projectDir, recorded.token)) || auditShardHostSegment(),
   };
   try {
-    mkdirSync(workspaceRoot(projectDir), { recursive: true });
+    ensureWorkspaceEngineFolder(projectDir);
     const content = cloneIdFileContent(identity.token, identity.host);
     if (recorded.token) writeFileAtomic(path, content);
     else writeFileSync(path, content, "utf-8");
@@ -2353,8 +2354,6 @@ export function maximalAttemptEvents<T extends AuditShardEvent>(
   return events.filter((event) => event.timestamp === latest);
 }
 
-export const UNIT_SCOPE_FILE = ".aidlc-unit-scope.json";
-
 export interface UnitScopeStamp {
   version: 1;
   space: string;
@@ -2372,8 +2371,11 @@ export interface UnitScopeStamp {
   audit_shard?: string;
 }
 
+// Under aidlc/.aidlc-engine/, as the other Unit files of this checkout.
+export const UNIT_SCOPE_FILE = "units/claimed.json";
+
 export function unitScopePath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_SCOPE_FILE);
+  return workspaceEngineFile(projectDir, UNIT_SCOPE_FILE);
 }
 
 export function readUnitScopeStamp(projectDir: string): UnitScopeStamp | null {

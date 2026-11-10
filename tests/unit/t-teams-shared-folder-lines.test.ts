@@ -343,7 +343,7 @@ describe("the check-in line", () => {
     const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir, chat);
     expect(approved.status, approved.out).toBe(0);
     expect(String(approved.json?.narration ?? "")).not.toContain(LINE);
-    const kept = JSON.parse(readFileSync(join(home.dir, "aidlc", ".aidlc-sessions", `${session}.person-lines`), "utf-8")) as {
+    const kept = JSON.parse(readFileSync(join(home.dir, "aidlc", ".aidlc-engine", "sessions", `${session}.person-lines`), "utf-8")) as {
       lines: Array<{ line: string; reply?: boolean }>;
     };
     expect(kept.lines.find((entry) => entry.line === LINE)?.reply, JSON.stringify(kept)).toBe(true);

@@ -247,6 +247,7 @@ import {
   isCompiledExecutable,
   quoteCommandArgument,
   runtimeHarnessName,
+  WORKSPACE_ENGINE_DIR,
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
@@ -2056,7 +2057,9 @@ function candidateEvidence(
       "--name-only",
       `${candidateBaseOid}..${claim.oid}`,
       "--",
-      `aidlc/${UNIT_MERGE_DIR}`,
+      `aidlc/${WORKSPACE_ENGINE_DIR}/${UNIT_MERGE_DIR}`,
+      // Where a candidate built by an earlier release would carry one.
+      "aidlc/.aidlc-unit-merges",
     ],
     "Cannot inspect candidate merge journals",
   )

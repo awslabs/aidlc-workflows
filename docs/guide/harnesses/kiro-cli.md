@@ -120,7 +120,7 @@ ignored local `dist/kiro/` output instead.
 
 The shipped `.gitignore` carries the workspace's commit/ignore split: the
 per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`)
-and machine-local runtime (`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor
+and machine-local runtime (`aidlc/.aidlc-engine/clone-id`, `runtime-graph.json`, sensor
 caches, `spaces/*/knowledge/.sources.local.json`) stay untracked, while the
 shared records — method memory, state, audit shards, artifacts — travel with
 git. The last line, the copy's own setup, adds those lines and AI-DLC's part of

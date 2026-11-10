@@ -317,14 +317,14 @@ settings, and machine-local derived state are ignored.
 | `aidlc-state.md` | `aidlc/active-space`, `intents/active-intent` (per-user cursors) |
 | `audit/*.md` (per-clone shards) | `.aidlc-engine/` (framework state) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
-| `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
-| Space-level `aidlc/spaces/<space>/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
+| `verification/` phase check results | `aidlc/.aidlc-engine/clone-id` (names this clone's shard; must stay machine-local) |
+| Space-level `aidlc/spaces/<space>/knowledge/` team knowledge files | `aidlc/.aidlc-engine/sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
 | Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-engine/hooks-health/`, `.aidlc-engine/sensors/` (heartbeats, advisory findings) |
 | Each reviewed stage's `reviews/` copies | `.claude/settings.local.json`, `aidlc.settings.local.json` (your own settings) |
 | `repos.json` (the workspace's repos and where they live) | `aidlc/repos.local.json` (where your own clones of them live) |
 | A Unit's build: `approved-inputs.md` (what it was approved with by the lead) and `aidlc-intent.json` (its registry entry, kept in its own folder) | |
-| | `aidlc/active-memory/` (the engine's copy of the active space's `memory/` that every harness include reads; written at session start and on a space switch, so a switch changes no tracked file; each copied file starts with a comment naming the file to edit, and an edit made in the copy is replaced at the next refresh) |
-| | `aidlc/.aidlc-request-text/` (a request the agent wrote to a file for the engine to read; removed once the command goes ahead, left there when it did not) |
+| | `aidlc/.aidlc-engine/active-memory/` (the engine's copy of the active space's `memory/` that every harness include reads; written at session start and on a space switch, so a switch changes no tracked file; each copied file starts with a comment naming the file to edit, and an edit made in the copy is replaced at the next refresh) |
+| | `aidlc/.aidlc-engine/request-text/` (a request the agent wrote to a file for the engine to read; removed once the command goes ahead, left there when it did not) |
 
 ---
 

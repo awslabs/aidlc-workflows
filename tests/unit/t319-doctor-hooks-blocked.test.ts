@@ -190,7 +190,7 @@ function asPulledByAnotherClone(project: string, writerShard: string, ownCloneId
   const shards = readdirSync(audit).filter((file) => file.endsWith(".md"));
   expect(shards).toHaveLength(1);
   renameSync(join(audit, shards[0]), join(audit, writerShard));
-  const cloneId = join(project, "aidlc", ".aidlc-clone-id");
+  const cloneId = join(project, "aidlc", ".aidlc-engine", "clone-id");
   if (ownCloneId === null) rmSync(cloneId, { force: true });
   else writeFileSync(cloneId, ownCloneId, "utf-8");
 }

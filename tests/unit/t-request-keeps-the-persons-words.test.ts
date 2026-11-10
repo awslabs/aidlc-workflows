@@ -54,7 +54,7 @@ function env(): Record<string, string | undefined> {
 
 // The words a printed step hands on: the request file its `command` names.
 function handedOn(proj: string, message: string | undefined, command: string): string {
-  const named = new RegExp(`${command} --request-file (aidlc/\\.aidlc-request-text/[^ \`]+)`).exec(String(message));
+  const named = new RegExp(`${command} --request-file (aidlc/\\.aidlc-engine/request-text/[^ \`]+)`).exec(String(message));
   expect(named, String(message)).not.toBeNull();
   return readFileSync(join(proj, ...named![1].split("/")), "utf-8");
 }

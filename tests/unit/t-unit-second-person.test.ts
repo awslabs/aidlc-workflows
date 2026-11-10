@@ -239,7 +239,7 @@ describe("a teammate opens solo work built from another machine", () => {
       "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.",
     );
     // The step itself carries their sign-off, for an agent that reads no board.
-    expect(String(step.change_notices_note)).toContain("lead-sign-off on --request-file aidlc/.aidlc-request-text/unit-lead-sign-off.txt");
+    expect(String(step.change_notices_note)).toContain("lead-sign-off on --request-file aidlc/.aidlc-engine/request-text/unit-lead-sign-off.txt");
     const state = stateOf(home.dir);
     expect(field(state, "Unit Ownership")).toBe("team");
     expect(field(state, "Home Location")).toBe(home.remote);
@@ -449,7 +449,7 @@ describe("the lead's sign-off", () => {
     const signOff = (board.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)
       .find((offer) => offer.question === "refunds came back from alice. Sign it off?");
     expect(signOff?.choices.map((choice) => choice.label)).toEqual(["Sign it off", "Not now"]);
-    expect(String(signOff?.choices[0].command)).toEndWith("aidlc-unit.ts sign-off refunds --request-file aidlc/.aidlc-request-text/unit-sign-off-refunds.txt");
+    expect(String(signOff?.choices[0].command)).toEndWith("aidlc-unit.ts sign-off refunds --request-file aidlc/.aidlc-engine/request-text/unit-sign-off-refunds.txt");
     for (const command of ["sign-off <unit>", "amend <unit> --input <file>", "lead-sign-off on", "release <unit>"]) {
       expect(String(board.board_note)).toContain(command);
     }

@@ -107,7 +107,7 @@ function humanTurns(proj: string) {
 
 /** The texts of this chat's message records, in the order written. */
 function messages(proj: string, session?: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf-8")) as { at: string; text: string; session: string | null })
@@ -198,8 +198,8 @@ describe("a fresh clone with no choice made on this machine stays as today", () 
     said(proj, "approve", FIRST);
     const approve = messages(proj, FIRST);
     expect(approve).toEqual(["approve"]);
-    const id = readdirSync(join(proj, "aidlc", ".aidlc-sessions", "messages")).filter((name) => name.endsWith(".json"))
-      .map((name) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "messages", name), "utf-8")) as { id: string; session: string | null })
+    const id = readdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages")).filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages", name), "utf-8")) as { id: string; session: string | null })
       .find((message) => message.session === FIRST)!.id;
     // The agent's shell carries no chat identity (opencode, Copilot): the engine proves the message by the one chat
     // that has spoken on this work since the last decision. Chat B is bound to no record, so it is not that chat.
@@ -223,8 +223,8 @@ describe("a fresh clone with no choice made on this machine stays as today", () 
     said(proj, "no, hold on");
     expect(humanTurns(proj)).toHaveLength(2);
     expect(readSessionBinding(proj, FIRST)).toMatchObject({ intent: null, source: "unjoined" });
-    const id = readdirSync(join(proj, "aidlc", ".aidlc-sessions", "messages")).filter((name) => name.endsWith(".json"))
-      .map((name) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "messages", name), "utf-8")) as { id: string; session: string | null })
+    const id = readdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages")).filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages", name), "utf-8")) as { id: string; session: string | null })
       .find((message) => message.session === FIRST)!.id;
     const logged = spawnSync(BUN, [LOG, "decision", "--stage", "requirements-analysis", "--decision", "Approve the draft", "--message", id, "--project-dir", proj], {
       cwd: proj,
@@ -247,8 +247,8 @@ describe("a fresh clone with no choice made on this machine stays as today", () 
     writeSessionBinding(proj, FIRST, "default", DEFAULT_RECORD_DIR, "switch");
     said(proj, "approve", FIRST);
     expect(humanTurns(proj)).toHaveLength(1);
-    const id = readdirSync(join(proj, "aidlc", ".aidlc-sessions", "messages")).filter((name) => name.endsWith(".json"))
-      .map((name) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "messages", name), "utf-8")) as { id: string; session: string | null })
+    const id = readdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages")).filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages", name), "utf-8")) as { id: string; session: string | null })
       .find((message) => message.session === FIRST)!.id;
     const logged = spawnSync(BUN, [LOG, "decision", "--stage", "requirements-analysis", "--decision", "Approve the draft", "--message", id, "--project-dir", proj], {
       cwd: proj,

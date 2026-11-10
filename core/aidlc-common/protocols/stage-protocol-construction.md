@@ -323,9 +323,9 @@ claim ref but does not integrate it. On unscoped main, `aidlc unit pin <unit>`
 (a review choice of that offer, or the person's own command), then
 in the same turn present the returned pinned OID + evidence summary as one merge
 gate, as its `merge_gate` says. Write the person's reply, as they typed it, to
-`aidlc/.aidlc-request-text/gate-<unit>.txt` with your file tool, not a shell, and
+`aidlc/.aidlc-engine/request-text/gate-<unit>.txt` with your file tool, not a shell, and
 record it with the command it names for their choice (`aidlc unit gate <unit>
---decision <approve|reject> --request-file aidlc/.aidlc-request-text/gate-<unit>.txt`).
+--decision <approve|reject> --request-file aidlc/.aidlc-engine/request-text/gate-<unit>.txt`).
 On approval, the gate's `land` names `aidlc unit land
 <unit> --target <branch>`, run in the same turn with no further question; it
 owns the transaction: pinned git content first with main-owned metadata retained,

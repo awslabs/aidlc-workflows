@@ -263,8 +263,8 @@ a digit or symbol in it (after a password's name, words joined by `-`, `.` or
 `_` count too). A reference such as `$DB_PASSWORD` stays, and so does a
 placeholder such as `your-api-key-here`. The rest of your words stay as you typed them, for
 example `**Person Reply**: Approve, the deploy key is [masked]`. Your whole
-message stays only in `aidlc/.aidlc-sessions/`, which AI-DLC's `.gitignore`
-block keeps out of commits. When your message held one, AI-DLC says so once in
+message stays only in `aidlc/.aidlc-engine/sessions/`, which that folder's own
+`.gitignore` keeps out of commits. When your message held one, AI-DLC says so once in
 the chat: the chat itself still received it, so change the key where it was
 issued if it is real. Masking goes by shape only, so a secret written another
 way (`my password is hunter2`) is kept as typed, and the doctor bundle masks

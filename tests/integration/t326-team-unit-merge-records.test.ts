@@ -112,7 +112,7 @@ function artifactWrite(checkout: string, unit: string, details: string): void {
 function ignoreAsShipped(checkout: string): void {
   appendFileSync(
     join(checkout, ".git", "info", "exclude"),
-    "aidlc/.aidlc-sessions/\n**/.aidlc-engine/*\n!**/.aidlc-engine/reviews/\n",
+    "aidlc/.aidlc-engine/sessions/\n**/.aidlc-engine/*\n!**/.aidlc-engine/reviews/\n",
   );
 }
 

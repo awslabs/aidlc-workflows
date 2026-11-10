@@ -33,6 +33,7 @@ import {
   personsWordsText,
   readRegularFileNoFollowOrThrow,
   removeRecordFileNoFollow,
+  sessionsDir,
   transactActiveDirective,
   withAuditLock,
   withdrawProtectedReplyWords,
@@ -40,7 +41,6 @@ import {
 } from "./aidlc-lib.ts";
 import { refuseEngineObserverWrite } from "./aidlc-locks.ts";
 import { forgetMessage, isMessageId, readMessage } from "./aidlc-message-store.ts";
-import { CLAUDE_TURNS_PENDING_DIR } from "./aidlc-claude-turn-pending.ts";
 import { auditShardBlocks } from "./aidlc-record-core.ts";
 
 /** A turn the hook kept as the person's by default (its message), with Claude Code's key for it. */
@@ -63,7 +63,7 @@ const PENDING_RETENTION_MS = 24 * 60 * 60 * 1000;
 const CHAT_FILE = /^[A-Za-z0-9._-]{1,128}$/;
 
 function pendingDir(projectDir: string): string {
-  return join(projectDir, CLAUDE_TURNS_PENDING_DIR);
+  return join(sessionsDir(projectDir), "claude-turns");
 }
 
 function pendingRel(projectDir: string, session: string): string {

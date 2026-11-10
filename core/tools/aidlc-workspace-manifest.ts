@@ -7,8 +7,10 @@
 import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, renameSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, resolve } from "node:path";
+import { compareVersions } from "./aidlc-channel.ts";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
 import { normalizeDriveLetter, repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 export const REPOS_FILE = "repos.json";
 export const REPOS_LOCAL_FILE = "repos.local.json";
@@ -61,6 +63,23 @@ export const REPOS_MOVED_LINE =
   `AI-DLC moved repos.json into aidlc/. Commit it so your team gets it; teammates need AI-DLC ` +
   `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer.`;
 
+/** A release from before this layout: it reads repos.json only at the root and
+ *  keeps AI-DLC's own files at the top of aidlc/, not in aidlc/.aidlc-engine/.
+ *  The one reading of that for both lines said on going back. The release
+ *  running now has the layout, and so does any newer one, whatever its number
+ *  says (a preview built from main is numbered below 2.12). */
+export function releaseBeforeLayout(release: string): boolean {
+  const parts = /^(\d+)\.(\d+)\./.exec(release);
+  if (parts === null) return false;
+  try {
+    if (compareVersions(release, AIDLC_VERSION) >= 0) return false;
+  } catch {
+    return false;
+  }
+  const [major, minor] = [Number(parts[1]), Number(parts[2])];
+  return major < REPOS_IN_AIDLC_SINCE.major || (major === REPOS_IN_AIDLC_SINCE.major && minor < REPOS_IN_AIDLC_SINCE.minor);
+}
+
 // A file AI-DLC shares with the person, where it writes only its own marked part.
 const SHARED_ROOT_FILES = new Set(["AGENTS.md", ".gitignore"]);
 
@@ -98,12 +117,7 @@ export function catchUpChangedLine(version: string, paths: readonly string[], mo
 // Said when the person sets a project to an earlier release (a pin, `aidlc
 // use`): that release would not see the list where this one moved it.
 export function reposListGoingBackLine(root: string, release: string): string | null {
-  const parts = /^(\d+)\.(\d+)\./.exec(release);
-  if (parts === null) return null;
-  const [major, minor] = [Number(parts[1]), Number(parts[2])];
-  const earlier = major < REPOS_IN_AIDLC_SINCE.major ||
-    (major === REPOS_IN_AIDLC_SINCE.major && minor < REPOS_IN_AIDLC_SINCE.minor);
-  if (!earlier || !entryAt(join(root, "aidlc", REPOS_FILE))?.isFile() || entryAt(join(root, REPOS_FILE))) return null;
+  if (!releaseBeforeLayout(release) || !entryAt(join(root, "aidlc", REPOS_FILE))?.isFile() || entryAt(join(root, REPOS_FILE))) return null;
   const move = gitTracks(root, `aidlc/${REPOS_FILE}`) ? "git mv" : "mv";
   return `AI-DLC ${release} reads repos.json only at the project root; to keep your repo list on it, run ` +
     `\`${move} aidlc/repos.json repos.json\`.`;

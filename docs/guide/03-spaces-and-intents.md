@@ -238,7 +238,7 @@ run.
 ### Concurrent sessions in one checkout
 
 Each live session keeps a machine-local binding at
-`aidlc/.aidlc-sessions/<session-id>.binding.json`. The binding records the
+`aidlc/.aidlc-engine/sessions/<session-id>.binding.json`. The binding records the
 session's space and intent, so another terminal or IDE window can move the shared
 cursors without silently moving this session's workflow.
 
@@ -330,7 +330,7 @@ environments with no binding therefore behave exactly as before.
 Session bindings isolate workflow selection across spaces, but the
 harness-native method include is still one checkout-wide surface: every
 include reads one git-ignored copy of the active space's memory files,
-`aidlc/active-memory/`, which SessionStart and the space switch verb
+`aidlc/.aidlc-engine/active-memory/`, which SessionStart and the space switch verb
 write for the selected space. So two simultaneous sessions in different spaces
 can overwrite which space's ambient rules the harness delivers next. This
 increment supports concurrent intents within one space; concurrent
@@ -417,7 +417,7 @@ When you switch spaces, two things follow the cursor automatically:
 1. **AI-DLC's own resolvers** — the next intent you start, and the practices and
    knowledge agents load, all come from the space you switched into.
 2. **The rules your harness loads into context**: switching writes the new
-   space's `memory/` files into `aidlc/active-memory/`, the git-ignored
+   space's `memory/` files into `aidlc/.aidlc-engine/active-memory/`, the git-ignored
    copy your harness's native rule include reads (Claude's `@`-import, Kiro CLI
    resources, Cursor rules, opencode's instructions, Copilot's `AGENTS.md`;
    Kiro IDE's steering file carries the text itself, and on Codex the engine
@@ -725,8 +725,8 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | Gitignored (per-user, machine-local) | Why |
 |---|---|
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent creates and cursor switches. |
-| `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
-| `aidlc/.aidlc-request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
+| `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-engine/sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
+| `aidlc/.aidlc-engine/request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
 | `aidlc/repos.local.json` | Where *your* clones of the workspace's repos live, when your disk differs from the team's layout in `repos.json` (see [Declaring the repo set](#declaring-the-repo-set-optional-manifest)). It is yours alone. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* finds documents that live outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. No command creates such a link today (`onboard` copies a file into `documents/`), so you will not normally see this file. |

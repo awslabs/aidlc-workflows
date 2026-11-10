@@ -330,7 +330,7 @@ describe("the guard judges only the build: records and engine commands pass, the
         { tool: "Task", agent: DEVELOPER, prompt: developerBrief(state.proj) },
         ...unseen,
         { tool: "Bash", command: "echo built > src/slugify.ts" },
-        { tool: "Write", path: join(state.proj, "aidlc", ".aidlc-sessions", "plan-approval", "receipt-x.json") },
+        { tool: "Write", path: join(state.proj, "aidlc", ".aidlc-engine", "sessions", "plan-approval", "receipt-x.json") },
         { tool: "Write", path: join(recordDir, ".aidlc-engine", "x.json") },
         { tool: "Write", path: join(recordDir, "audit", "x.md") },
         { tool: "Write", path: join(recordDir, "aidlc-state.md") },

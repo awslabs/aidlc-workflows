@@ -12,6 +12,7 @@
 // on. Every read fails open: it can only ever change a sentence.
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { sessionsDir } from "./aidlc-record-core.ts";
 import { type KiroDisabledHook, kiroDisabledHooks } from "./aidlc-utility.ts";
 
 /**
@@ -68,12 +69,12 @@ export function kiroHookOffLine(hook: KiroHookOff, now: Date = new Date()): stri
 
 // The said mark keeps, per hook, the file time the line was said for, so a hook
 // turned back on and off again is a new change that is said again. It lives
-// beside the sessions (aidlc-record-core.ts sessionsDir: `aidlc/.aidlc-sessions`); a
+// beside the sessions (aidlc-record-core.ts sessionsDir); a
 // torn or missing record only has the line said once more.
 const SAID_FILE = "kiro-hooks-off-said.json";
 
 function saidPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-sessions", SAID_FILE);
+  return join(sessionsDir(projectDir), SAID_FILE);
 }
 
 function readSaid(projectDir: string): Record<string, string> {

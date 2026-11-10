@@ -52,8 +52,23 @@ import {
   repoNameRefusal,
   normalizeDriveLetter,
   typedHarnessName,
+  WORKSPACE_ENGINE_DIR,
+  workspaceEngineFile,
+  workspaceEnginePath,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation, normalizeDriveLetter, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+export {
+  ensureWorkspaceEngineFolder,
+  entrySkillInvocation,
+  normalizeDriveLetter,
+  REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
+  repoNameProblem,
+  repoNameRefusal,
+  SPACE_NAME_REGEX,
+  WORKSPACE_ENGINE_DIR,
+  workspaceEngineFile,
+  workspaceEnginePath,
+} from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
@@ -7941,8 +7956,8 @@ export function clearSessionIntentSwitch(projectDir: string): void {
 // has no session_id, so it cannot re-stamp the live session's record on its own.
 // This marker is the bridge: the hook writes it on EVERY fire (so it always names
 // the live conversation), and the switch tool reads it to learn which session to
-// re-stamp. Lives beside the per-session records under `aidlc/.aidlc-sessions/`
-// (gitignored — dot-gitignore `aidlc/.aidlc-sessions/`): per-user runtime state.
+// re-stamp. Lives beside the per-session records under `aidlc/.aidlc-engine/sessions/`
+// (kept out of git by the engine folder's .gitignore): per-user runtime state.
 export const CURRENT_SESSION_FILE = ".current-session";
 
 function currentSessionPath(projectDir: string): string {
@@ -9116,7 +9131,7 @@ export function steeringTokenKeyPathFor(projectDir: string, statePath: string): 
       ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
       : join(storage, STEERING_TOKEN_KEY_FILE);
   }
-  return join(projectDir, "aidlc", ".aidlc-sessions", LEGACY_SESSION_STEERING_TOKEN_KEY_FILE);
+  return join(sessionsDir(projectDir), LEGACY_SESSION_STEERING_TOKEN_KEY_FILE);
 }
 
 /** The key encoded in a key file's text, or null when it is not a well-formed key. */
@@ -13045,10 +13060,6 @@ export const LEARNINGS_SELECTIONS_DIR = `${ENGINE_DIR}/learnings`;
  *  file. The plan-approval guard and every adapter that mirrors it read this. */
 export const ENGINE_TEXT_DIRS: readonly string[] = [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR];
 
-/** The project folder where a person's request for `next --request-file` is
- *  written, so the words reach the engine without passing through any shell.
- *  The engine reads only a plain file directly inside it. */
-export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
 
 /**
  * Read one answer text file the agent wrote, then remove it. The path is
@@ -21619,6 +21630,8 @@ function worktreeSourceExclusionContext(
     ".aidlc/worktree-meta.json",
     ".aidlc/base-source-listing.tsv",
     "aidlc/.aidlc-clone-id",
+    // The engine folder (the clone id, its .gitignore) is the workspace's, never the repo's source.
+    `aidlc/${WORKSPACE_ENGINE_DIR}/`,
   ];
   if ("intentRecord" in parsed) {
     if (
@@ -29857,11 +29870,12 @@ export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 export function composeMarkerPath(projectDir: string): string {
   return join(projectDir, "aidlc", ".aidlc-compose-pending");
 }
-export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
-export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
-export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
-export const UNIT_RELEASE_PENDING_FILE = ".aidlc-unit-releases";
-export const UNIT_MERGE_DIR = ".aidlc-unit-merges";
+// This checkout's Unit files, under aidlc/.aidlc-engine/ (workspaceEngineFile).
+export const UNIT_PARKED_FILE = "units/parked";
+export const CLAIM_GENERATIONS_FILE = "units/claim-generations.json";
+export const UNIT_PARTICIPANT_FILE = "units/participant";
+export const UNIT_RELEASE_PENDING_FILE = "units/releases";
+export const UNIT_MERGE_DIR = "units/merges";
 
 export interface UnitMergeEvidence {
   stages_expected: string[];
@@ -29938,15 +29952,15 @@ export interface UnitMergeTransaction {
 }
 
 export function unitParkedPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_PARKED_FILE);
+  return workspaceEngineFile(projectDir, UNIT_PARKED_FILE);
 }
 
 export function claimGenerationsPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLAIM_GENERATIONS_FILE);
+  return workspaceEngineFile(projectDir, CLAIM_GENERATIONS_FILE);
 }
 
 export function unitParticipantPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_PARTICIPANT_FILE);
+  return workspaceEngineFile(projectDir, UNIT_PARTICIPANT_FILE);
 }
 
 function identityScopedUnitPath(
@@ -29970,7 +29984,7 @@ function identityScopedUnitPath(
       throw new Error(`Invalid ${label} path segment "${value}".`);
     }
   }
-  return join(workspaceRoot(projectDir), root, resolvedSpace, resolvedIntent, `${unit}.json`);
+  return workspaceEnginePath(projectDir, ...root.split("/"), resolvedSpace, resolvedIntent, `${unit}.json`);
 }
 
 export function unitReleasePendingPath(
@@ -30132,12 +30146,7 @@ export function unitMergeTransactionsForIdentity(
   space: string,
   intentUuid: string,
 ): UnitMergeTransaction[] {
-  const dir = join(
-    workspaceRoot(projectDir),
-    UNIT_MERGE_DIR,
-    space,
-    intentUuid,
-  );
+  const dir = workspaceEnginePath(projectDir, ...UNIT_MERGE_DIR.split("/"), space, intentUuid);
   let files: string[];
   try {
     files = readdirSync(dir)
@@ -30762,13 +30771,13 @@ export function composeGateOpen(projectDir: string): boolean {
   return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
 }
 
-// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
+// `<projectDir>/aidlc/.aidlc-engine/sessions/subagent-inflight`: the workspace-level background
 // dispatch ledger. Entries are session-scoped and reference-counted so
 // overlapping workers cannot clear or authorize each other. The file remains
 // workspace-level because dispatch and completion hooks can run outside an
 // intent record, while each entry carries the session identity needed by Stop.
 export function subagentInflightMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-subagent-inflight");
+  return workspaceEngineFile(projectDir, "sessions/subagent-inflight");
 }
 
 // Freshness window for each background-subagent entry. The Stop hook honours
@@ -30910,7 +30919,7 @@ export function markSubagentInflight(
     const current = readSubagentInflightLedger(projectDir);
     if (current.malformed) {
       throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+        "background-subagent in-flight ledger is malformed; delete it in your own terminal (rm aidlc/.aidlc-engine/sessions/subagent-inflight)",
       );
     }
     const nowMs = Date.now();
@@ -30939,7 +30948,7 @@ export function completeSubagentInflight(
     if (!current.exists) return false;
     if (current.malformed) {
       throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+        "background-subagent in-flight ledger is malformed; delete it in your own terminal (rm aidlc/.aidlc-engine/sessions/subagent-inflight)",
       );
     }
     const entries = freshSubagentEntries(current.entries, Date.now());

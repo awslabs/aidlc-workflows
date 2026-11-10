@@ -132,7 +132,7 @@ describe("t148 dist/kiro file structure", () => {
     // The AIDLC method lives at the workspace root, aidlc/spaces/default/memory/:
     // one hand-editable source of truth, identical on every harness, read by Kiro
     // via the agent JSON `resources` globs of the engine's git-ignored copy of the
-    // active space (file://aidlc/active-memory/**/*.md). It sits beside .kiro/, so
+    // active space (file://aidlc/.aidlc-engine/active-memory/**/*.md). It sits beside .kiro/, so
     // resolve from KIRO, not K.
     const mem = (...parts: string[]) =>
       join(KIRO, "aidlc", "spaces", "default", "memory", ...parts);
@@ -352,7 +352,7 @@ describe("t148 dist/kiro file structure", () => {
       // writes only its grid proposal, never a scope or the scope grid.
       const deny = fm.slice(fm.indexOf("    - capability: fs_write\n      effect: deny"));
       expect(deny, file).toContain(`        - ".kiro/**"`);
-      expect(deny, file).toContain(`        - "aidlc/.aidlc-sessions/**"`);
+      expect(deny, file).toContain(`        - "aidlc/.aidlc-engine/sessions/**"`);
       expect(deny, file).toContain(`        - "aidlc/spaces/*/intents/*/.aidlc-engine/gate-words/**"`);
       expect(deny, file).not.toContain("exclude:");
       if (file === "aidlc-composer-agent.md") {
@@ -743,7 +743,7 @@ describe("t148 dist/kiro file structure", () => {
     expect(fm).not.toContain("toolsSettings");
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
     // The request file a request after `next` goes through on Windows (next --request-file).
-    expect(fm).toContain(`        - "aidlc/.aidlc-request-text/**"`);
+    expect(fm).toContain(`        - "aidlc/.aidlc-engine/request-text/**"`);
   });
 
   // Kiro's documented shell matching (kiro.dev/docs/permissions): a command

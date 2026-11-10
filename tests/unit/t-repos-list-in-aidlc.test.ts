@@ -33,6 +33,8 @@ import { aidlcOwnedSourceKey, sourceChangedOutsideAidlc, sourcePathKey } from ".
 import { workspaceManifestChecks } from "../../dist/claude/.claude/tools/aidlc-workspace-doctor.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+const NEWER_PREVIEW = ((parts) => `${parts[0]}.${parts[1]}.${parts[2] + 1}-preview.20261111.1`)(AIDLC_VERSION.split(".").map(Number));
 import { cleanupTeamBuild, git, makeHome, run, STATE, tempDir, UNIT } from "../harness/team-build.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 
@@ -253,19 +255,23 @@ describe("the one move into aidlc/", () => {
     const dir = workspace();
     writeFileSync(join(dir, "aidlc", "repos.json"), list("billing"));
     // A list git does not track goes back by a plain move.
-    expect(reposListGoingBackLine(dir, "2.11.3")).toBe(
-      "AI-DLC 2.11.3 reads repos.json only at the project root; to keep your repo list on it, run `mv aidlc/repos.json repos.json`.",
+    expect(reposListGoingBackLine(dir, "2.10.0")).toBe(
+      "AI-DLC 2.10.0 reads repos.json only at the project root; to keep your repo list on it, run `mv aidlc/repos.json repos.json`.",
     );
     git(dir, ["add", "aidlc/repos.json"]);
     git(dir, ["commit", "-q", "-m", "list"]);
-    expect(reposListGoingBackLine(dir, "2.11.3")).toBe(
-      "AI-DLC 2.11.3 reads repos.json only at the project root; to keep your repo list on it, run `git mv aidlc/repos.json repos.json`.",
+    expect(reposListGoingBackLine(dir, "2.10.0")).toBe(
+      "AI-DLC 2.10.0 reads repos.json only at the project root; to keep your repo list on it, run `git mv aidlc/repos.json repos.json`.",
     );
     expect(reposListGoingBackLine(dir, "2.12.0")).toBeNull();
+    // The release running now, and one newer than it, have this layout whatever
+    // their number says (a preview built from main is numbered below 2.12).
+    expect(reposListGoingBackLine(dir, AIDLC_VERSION)).toBeNull();
+    expect(reposListGoingBackLine(dir, NEWER_PREVIEW)).toBeNull();
     expect(reposListGoingBackLine(dir, "3.0.0")).toBeNull();
     writeFileSync(join(dir, "repos.json"), list("billing"));
-    expect(reposListGoingBackLine(dir, "2.11.3")).toBeNull();
-    expect(reposListGoingBackLine(workspace(), "2.11.3")).toBeNull();
+    expect(reposListGoingBackLine(dir, "2.10.0")).toBeNull();
+    expect(reposListGoingBackLine(workspace(), "2.10.0")).toBeNull();
   });
 });
 

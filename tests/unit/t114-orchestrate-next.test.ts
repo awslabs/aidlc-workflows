@@ -1520,7 +1520,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     { event: "STAGE_STARTED", stage: "feasibility" },
     { event: "DECISION_RECORDED", stage: "feasibility" },
   ];
-  const questionDir = () => join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const questionDir = () => join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   const storedQuestions = (): Array<{ id: string; text: string; stateSha256?: string }> =>
     existsSync(questionDir())
       ? readdirSync(questionDir()).map((name) => JSON.parse(readFileSync(join(questionDir(), name), "utf-8")))
@@ -1766,7 +1766,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       const ask = routingAsk();
       const d = directive([reply]);
       expect(d.message).toContain(ROUTING_STEP);
-      expect(routingStepCommand(d.message, "Reshape the active work")).toStartWith(`${ask.compose_command!} --request-file aidlc/.aidlc-request-text/reshape`);
+      expect(routingStepCommand(d.message, "Reshape the active work")).toStartWith(`${ask.compose_command!} --request-file aidlc/.aidlc-engine/request-text/reshape`);
     });
   }
 
@@ -1785,7 +1785,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     const d = directive([OTHER_ANSWER]);
     expect(d.message).toContain(ROUTING_STEP);
     const reshape = routingStepCommand(d.message, "Reshape the active work");
-    expect(reshape).toStartWith(`${ask.compose_command!} --request-file aidlc/.aidlc-request-text/reshape`);
+    expect(reshape).toStartWith(`${ask.compose_command!} --request-file aidlc/.aidlc-engine/request-text/reshape`);
     const dispatch = runWords(reshape);
     expect(dispatch.kind, JSON.stringify(dispatch).slice(0, 300)).toBe("print");
     expect(dispatch.message).toContain("RUNNING workflow");
@@ -1838,7 +1838,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(d.message).toContain(ROUTING_STEP);
     expect(d.message).not.toContain("which keeps every word of theirs");
     // Their words go to `next` in a file the step names, never on its line.
-    const file = / next --request-file (aidlc\/\.aidlc-request-text\/other[^ `]*\.txt)`/.exec(String(d.message))?.[1];
+    const file = / next --request-file (aidlc\/\.aidlc-engine\/request-text\/other[^ `]*\.txt)`/.exec(String(d.message))?.[1];
     expect(file, String(d.message)).toBeDefined();
     expect(readFileSync(join(proj, ...file!.split("/")), "utf-8")).toBe(OTHER_ANSWER);
     expect(d.message).toContain(`(their words: ${JSON.stringify(OTHER_ANSWER)})`);
@@ -1891,8 +1891,8 @@ describe("t114 Branch 9c: replies that are not new work", () => {
         const command = routingStepCommand(d.message, label);
         if (route === "compose_command") {
           // Their reply goes to the composer in a file the command names.
-          expect(command).toBe(`${ask[route]!} --request-file aidlc/.aidlc-request-text/reshape.txt`);
-          expect(readFileSync(join(proj, "aidlc", ".aidlc-request-text", "reshape.txt"), "utf-8")).toBe(reply);
+          expect(command).toBe(`${ask[route]!} --request-file aidlc/.aidlc-engine/request-text/reshape.txt`);
+          expect(readFileSync(join(proj, "aidlc", ".aidlc-engine", "request-text", "reshape.txt"), "utf-8")).toBe(reply);
         } else expect(command).toBe(ask[route]!);
         expect(runCommand(command).ask_type).not.toBe("new-work-routing");
       });
@@ -1943,7 +1943,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       expect(d.kind).toBe("print");
       expect(d.message).toContain(ROUTING_STEP);
       // Words about something else keep every word through `next --request-file <their words>`.
-      expect(d.message).toContain(" next --request-file aidlc/.aidlc-request-text/other");
+      expect(d.message).toContain(" next --request-file aidlc/.aidlc-engine/request-text/other");
     });
   }
 });
@@ -1992,7 +1992,7 @@ describe("t114 retired flags are consumed, not description text", () => {
   const pendingDescription = (project: string, out: string): string => {
     const id = out.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
     expect(id).toMatch(/^[0-9a-f]{8}$/);
-    const file = join(project, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+    const file = join(project, "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`);
     return JSON.parse(readFileSync(file, "utf-8")).text;
   };
 

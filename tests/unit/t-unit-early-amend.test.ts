@@ -573,7 +573,7 @@ describe("a change to a shared input", () => {
     );
     const choices = ask.choices as Array<{ label: string; command?: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Send it to the lead", "Keep it here only"]);
-    expect(String(choices[0].command)).toEndWith(`aidlc-unit.ts propose --input ${REQUIREMENTS} --request-file aidlc/.aidlc-request-text/unit-propose.txt`);
+    expect(String(choices[0].command)).toEndWith(`aidlc-unit.ts propose --input ${REQUIREMENTS} --request-file aidlc/.aidlc-engine/request-text/unit-propose.txt`);
     expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "send it"], alice).status).toBe(0);
     expect(next(alice).ask_type).not.toBe("unit-propose");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.proposals).toEqual([expect.objectContaining({ input: REQUIREMENTS })]);

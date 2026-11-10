@@ -74,7 +74,7 @@ import {
   stopHookDir,
 } from "./aidlc-lib.ts";
 import { SECRET_SHAPES } from "./aidlc-audit.ts";
-import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation, workspaceEngineFile } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // The bundle format version — bumped when the report/manifest/evidence SHAPE
@@ -1668,8 +1668,8 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
     }
   }
   const stopDir = stopHookDir(projectDir);
-  const turnCounterPath = join(projectDir, "aidlc", ".aidlc-turn-counter");
-  const latchPath = join(projectDir, "aidlc", ".aidlc-readonly-latch");
+  const turnCounterPath = workspaceEngineFile(projectDir, "sessions/kiro-turn-counter");
+  const latchPath = workspaceEngineFile(projectDir, "sessions/kiro-readonly-latch");
   return {
     planExists,
     planParseable,

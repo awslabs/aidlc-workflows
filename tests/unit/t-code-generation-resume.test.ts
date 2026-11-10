@@ -546,7 +546,7 @@ describe("a fresh start for the steps", () => {
       "Message Id": pick!,
     }, proj);
     reply(proj, "log every part");
-    rmSync(join(proj, "aidlc", ".aidlc-sessions", "messages", `${pick}.json`));
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages", `${pick}.json`));
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
   });
 

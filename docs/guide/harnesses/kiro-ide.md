@@ -176,7 +176,7 @@ ignored local `dist/kiro-ide/` output instead.
 
 The shipped `.gitignore` carries the workspace's commit/ignore split: the
 per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`)
-and machine-local runtime (`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor
+and machine-local runtime (`aidlc/.aidlc-engine/clone-id`, `runtime-graph.json`, sensor
 caches, `spaces/*/knowledge/.sources.local.json`) stay untracked, while the
 shared records — method memory, state, audit shards, artifacts — travel with
 git. The last line, the copy's own setup, adds those lines and AI-DLC's part of
@@ -681,7 +681,7 @@ is **Command Prompt**, Kiro hands AI-DLC a command's reply only when the
 command finishes within a second (Command Prompt has no shell integration, so
 Kiro reads the result one second after sending the command and shows exit code
 -1 for every run). Most AI-DLC steps take longer. So in Command Prompt every
-AI-DLC command prints one line first, `AI-DLC reply: aidlc/.aidlc-sessions/replies/<id>.txt`,
+AI-DLC command prints one line first, `AI-DLC reply: aidlc/.aidlc-engine/sessions/replies/<id>.txt`,
 and writes its reply to that file as well as to the terminal; when Kiro cuts
 the result off at that line or later in the reply, the agent goes on from the
 file instead of running the command again (the newest twenty replies are kept,

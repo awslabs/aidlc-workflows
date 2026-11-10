@@ -64,7 +64,7 @@ describe("t177 workspace-journey fixture (deterministic, no LLM)", () => {
         // The sibling aidlc/ memory shell landed (the default space's memory),
         // so the rule-layer resolver finds the method.
         expect(existsSync(join(journey.root, "aidlc", "spaces", "default", "memory"))).toBe(true);
-        expect(existsSync(join(journey.root, "aidlc", ".aidlc-clone-id"))).toBe(true);
+        expect(existsSync(join(journey.root, "aidlc", ".aidlc-engine", "clone-id"))).toBe(true);
 
         expect(journey.repoA).toBe(join(journey.root, "repo-a"));
         expect(journey.repoB).toBe(join(journey.root, "repo-b"));

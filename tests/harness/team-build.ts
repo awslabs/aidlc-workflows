@@ -160,8 +160,8 @@ export function makeHome(options: { state?: string; dependencies?: string; repos
   }
   writeFileSync(
     join(dir, ".gitignore"),
-    "aidlc/.aidlc-clone-id\naidlc/.aidlc-sessions/\naidlc/active-space\naidlc/spaces/*/intents/active-intent\n" +
-      "aidlc/.aidlc-unit-scope.json\naidlc/.aidlc-claim-generations.json\naidlc/.aidlc-claim-registry.json\n" +
+    "aidlc/.aidlc-engine/clone-id\naidlc/.aidlc-engine/sessions/\naidlc/active-space\naidlc/spaces/*/intents/active-intent\n" +
+      "aidlc/.aidlc-engine/units/claimed.json\naidlc/.aidlc-engine/units/claim-generations.json\naidlc/.aidlc-engine/units/claim-registry.json\n" +
       "**/aidlc/spaces/*/intents/**/.aidlc-engine/\n" + repos.map((name) => `/${name}/\n`).join(""),
   );
   git(dir, ["init", "-q", "-b", "main"]);

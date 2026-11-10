@@ -135,7 +135,7 @@ function installedProject(): string {
 /** The adapter's project-local subagent ledger. Spawn records are `.json`;
  *  main-conversation markers are `.marker`. */
 function ledgerDirFor(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-cursor-subagents");
+  return join(projectDir, "aidlc", ".aidlc-engine", "sessions", "cursor-subagents");
 }
 
 function ledgerFilesFor(projectDir: string, suffix = ".json"): string[] {
@@ -147,7 +147,7 @@ function ledgerFilesFor(projectDir: string, suffix = ".json"): string[] {
 }
 
 function witnessFilesFor(projectDir: string): string[] {
-  const dir = join(projectDir, "aidlc");
+  const dir = join(projectDir, "aidlc", ".aidlc-engine", "sessions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter(
@@ -279,7 +279,7 @@ function registerTaskParent(projectDir: string): void {
 
 /** A chat stamped by an earlier version: its stamp stays, its binding goes. */
 function unbind(projectDir: string): void {
-  const sessions = join(projectDir, "aidlc", ".aidlc-sessions");
+  const sessions = join(projectDir, "aidlc", ".aidlc-engine", "sessions");
   for (const name of readdirSync(sessions)) {
     if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
   }
@@ -907,7 +907,7 @@ describe("t276 cursor adapter payload conversion", () => {
     const b = createIntent(proj, "intent-b", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
-    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
     for (const name of readdirSync(sessions)) {
       if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
     }
@@ -1227,7 +1227,7 @@ describe("t276 cursor adapter payload conversion", () => {
       .toEqual({ owner: 1, other: 0 });
     // A drop is recorded beside the completion, not under the cursor's intent.
     expect(drive((proj) => {
-      writeFileSync(join(proj, "aidlc", ".aidlc-subagent-inflight"), "{malformed");
+      writeFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "subagent-inflight"), "{malformed");
       runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
     })).toEqual({ owner: 1, other: 0, ownerDrop: true, otherDrop: false });
     // sessionEnd retires the delegation witness when the Task ledger is gone.
@@ -1932,7 +1932,7 @@ if (import.meta.main) {
       `rm -f ${JSON.stringify(dispatch.slice(0, -1))}*`,
       `rm -f ${JSON.stringify(dispatch.slice(0, -1))}[n]`,
       `rm -rf ${JSON.stringify(`${dirname(record)}${sep}`)}*`,
-      `rm -rf ${JSON.stringify(`${join(proj, "aidlc")}${sep}.aidlc-cursor-sub`)}*`,
+      `rm -rf ${JSON.stringify(`${join(proj, "aidlc", ".aidlc-engine", "sessions")}${sep}.aidlc-cursor-sub`)}*`,
       `rm -rf ${JSON.stringify(`${join(proj, "aidlc")}${sep}.aidlc-`)}*`,
     ]) {
       const removal = runAdapter(
@@ -3760,9 +3760,9 @@ if (import.meta.main) {
     if (process.platform !== "win32") {
       for (const currentTargetCommand of [
         `shred -u ~+/${relative.slice(0, -1)}*`,
-        "find ~+/aidlc/.aidlc-cursor-subagent* -depth -delete",
+        "find ~+/aidlc/.aidlc-engine/sessions/.aidlc-cursor-subagent* -depth -delete",
         `shred -u ~-/${relative.slice(0, -1)}*`,
-        "find ~-/aidlc/.aidlc-cursor-subagent* -depth -delete",
+        "find ~-/aidlc/.aidlc-engine/sessions/.aidlc-cursor-subagent* -depth -delete",
       ]) {
         const currentTarget = runAdapter(
           proj,
@@ -3907,7 +3907,7 @@ if (import.meta.main) {
       process.platform === "win32"
         ? [
             `cd /d aidlc && del /q ${relativeDispatch.slice(0, -1)}*`,
-            "pushd aidlc && del /q .aidlc-cursor-subagent*",
+            "pushd aidlc\\.aidlc-engine\\sessions && del /q .aidlc-cursor-subagent*",
             `Set-Location aidlc; Remove-Item ${relativeDispatch.slice(0, -1)}*`,
             `cd /d no-such-dir || del /q ${projectRelativeDispatch.slice(0, -1)}*`,
             `cd /d aidlc || echo unchanged\ndel /q ${relativeDispatch.slice(0, -1)}*`,
@@ -3918,7 +3918,7 @@ if (import.meta.main) {
           ]
         : [
             `cd aidlc; shred -u ${relativeDispatch.slice(0, -1)}*`,
-            "pushd aidlc; find .aidlc-cursor-subagent* -depth -delete",
+            "pushd aidlc/.aidlc-engine/sessions; find .aidlc-cursor-subagent* -depth -delete",
             `cd no-such-dir || shred -u ${projectRelativeDispatch.slice(0, -1)}*`,
             `cd aidlc || true; shred -u ${relativeDispatch.slice(0, -1)}*`,
             `cd aidlc || cd scratch; shred -u ${relativeDispatch.slice(0, -1)}*`,
@@ -3929,7 +3929,7 @@ if (import.meta.main) {
             `case x in x) cd aidlc;; esac; shred -u ${relativeDispatch.slice(0, -1)}*`,
             `f(){ cd aidlc; }; f; shred -u ${relativeDispatch.slice(0, -1)}*`,
             `builtin cd aidlc; shred -u ${relativeDispatch.slice(0, -1)}*`,
-            "builtin -- pushd aidlc; find .aidlc-cursor-subagent* -depth -delete",
+            "builtin -- pushd aidlc/.aidlc-engine/sessions; find .aidlc-cursor-subagent* -depth -delete",
           ];
     for (const command of commands) {
       const removal = runAdapter(
@@ -4682,10 +4682,10 @@ if (import.meta.main) {
       for (const command of [
         "bun -e 'x'",
         `${mint}\nbun -e 'x'`,
-        `${mint} \\\n> aidlc/.aidlc-cursor-subagents/x.json`,
+        `${mint} \\\n> aidlc/.aidlc-engine/sessions/cursor-subagents/x.json`,
         "bun --preload ./x.ts .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
-        `${mint} > aidlc/.aidlc-cursor-subagents/x.json`,
-        `rm -rf aidlc/.aidlc-cursor-subagents && ${mint}`,
+        `${mint} > aidlc/.aidlc-engine/sessions/cursor-subagents/x.json`,
+        `rm -rf aidlc/.aidlc-engine/sessions/cursor-subagents && ${mint}`,
         `FORCE=1 ${mint}`,
         "bun scratch/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
         "bun .cursor/tools/aidlc.ts engine knowledge sync",

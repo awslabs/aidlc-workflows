@@ -3740,7 +3740,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       join(proj, ".gitignore"),
       [
         "aidlc/active-space",
-        "aidlc/.aidlc-clone-id",
+        "aidlc/.aidlc-engine/clone-id",
         "aidlc/spaces/*/intents/active-intent",
         "aidlc/spaces/*/intents/*/runtime-graph.json",
         "aidlc/spaces/*/intents/*/.aidlc-*",

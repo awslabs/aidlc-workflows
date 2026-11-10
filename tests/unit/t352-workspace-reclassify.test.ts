@@ -757,7 +757,7 @@ describe("t352 said in the message that started the work", () => {
     const proj = noWorkYet();
     const id = typed(proj, `/aidlc ${REQUEST}`);
     startWork(proj);
-    writeFileSync(join(proj, "aidlc", ".aidlc-sessions", ".current-session"), `${CHAT}\n`);
+    writeFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", ".current-session"), `${CHAT}\n`);
     recordedAsTheirs(proj, reclassify(proj, ["--message", id], null));
   });
 
@@ -1575,7 +1575,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(dispatch.kind).toBe("print");
     expect(heard(dispatch)).toContain(split);
     expect(heard(dispatch)).not.toContain("Staff vote on lunch");
-    const questions = join(proj, "aidlc", ".aidlc-sessions", "questions");
+    const questions = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
     const [request] = readdirSync(questions).map((name) => name.replace(/\.json$/, ""));
     const creation = nextIn(proj, ["--scope", "poc", "--request", request]);
     expect(creation.kind).toBe("print");

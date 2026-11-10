@@ -10,7 +10,7 @@
 //               active-memory/<file>, the engine's git-ignored copy of
 //               the active space's memory (explicit @-lines; Claude @-imports do
 //               NOT glob — verified against code.claude.com/docs memory.md).
-//   - Kiro    → agent JSON resources glob file://aidlc/active-memory/**/*.md
+//   - Kiro    → agent JSON resources glob file://aidlc/.aidlc-engine/active-memory/**/*.md
 //   - Codex   -> AGENTS.md auto-merge + the engine's rules delivery (the LIVE
 //               probe lives in the gated e2e tests/e2e/
 //               t-exec-codex-memory-include.serial.test.ts).
@@ -178,7 +178,7 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
       "phases/operation.md",
     ];
     for (const f of memFiles) {
-      expect(stub, `stub @-line for ${f}`).toContain(`@../../aidlc/active-memory/${f}`);
+      expect(stub, `stub @-line for ${f}`).toContain(`@../../aidlc/.aidlc-engine/active-memory/${f}`);
     }
     // And CLAUDE.md imports the stub (top of the reference chain).
     const claudeMd = readFileSync(
@@ -219,7 +219,7 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
         checkedAgents++;
         harnessChecked++;
         expect(json.resources, `${harness.name}/${f} resources → the engine's copy of the active space's memory`).toContain(
-          "file://aidlc/active-memory/**/*.md",
+          "file://aidlc/.aidlc-engine/active-memory/**/*.md",
         );
         // Only the always-on native onboarding may load from steering; method
         // globs must use relocated memory. Inspect resources, not write permissions.

@@ -96,7 +96,7 @@ function said(proj: string, prompt: string, chat = CHAT): string {
   const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
   const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
   expect(id).not.toBeNull();
-  const path = join(proj, "aidlc", ".aidlc-sessions", "messages", `${id}.json`);
+  const path = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages", `${id}.json`);
   const record = JSON.parse(readFileSync(path, "utf-8")) as { at: string };
   record.at = new Date(Date.parse(record.at) - 5000).toISOString().replace(/\.\d{3}Z$/, "Z");
   writeFileSync(path, `${JSON.stringify(record)}\n`);
@@ -188,7 +188,7 @@ describe.each(POLICIES)("Guard Policy %s: a stop the person asked for", (policy)
     const proj = project(policy);
     autonomous(proj);
     said(proj, "stop for today");
-    rmSync(join(proj, "aidlc", ".aidlc-sessions", "messages"), { recursive: true, force: true });
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages"), { recursive: true, force: true });
     const r = park(proj);
     expect(r.status, r.out).toBe(0);
     expect(getField(stateText(proj), "Parked By")).toBe("person");

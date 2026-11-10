@@ -721,6 +721,7 @@ import {
   runtimeHarnessName,
   workspaceSyncInvocation,
   typedHarnessName,
+  workspaceEngineFile,
 } from "./aidlc-runtime-paths.ts";
 import { isProjectSubmodule, localRepoOverrideLines, readWorkspaceRepos, reposManifestPath } from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestListsOnlyAddedWorkspace, reposManifestOffered } from "./aidlc-workspace-repos.ts";
@@ -4704,7 +4705,7 @@ function reuseSkipWaitsOnAnswer(projectDir: string, stage: string, stateContent:
 
 // A question that takes the person's own reply (the verification command, a
 // Construction policy question) is held for that reply under
-// aidlc/.aidlc-sessions/, which is not committed: in a teammate's fresh clone
+// aidlc/.aidlc-engine/sessions/, which is not committed: in a teammate's fresh clone
 // no chat holds it, so their answer would be refused and they would be asked
 // again. Any other question, or a store that cannot be read, needs no hold.
 function protectedQuestionHeldHere(projectDir: string, block: string): boolean {
@@ -4729,7 +4730,7 @@ function registerAgainStep(stage: string, block: string, decision: string, choic
     ? "--checkpoint verification-command --command-file verification-command.txt"
     : `--checkpoint construction-policy --field ${shellArg(auditBlockField(block, "Field") ?? "")} ` +
       `--value ${shellArg(auditBlockField(block, "Value") ?? "")}`;
-  return "Nothing in this checkout holds it for their reply (aidlc/.aidlc-sessions/ is not shared), so first register " +
+  return "Nothing in this checkout holds it for their reply (aidlc/.aidlc-engine/sessions/ is not shared), so first register " +
     "it again with " +
     `\`${aidlcToolInvocation("log")} decision --stage ${shellArg(stage)} ${flags} --decision ${shellArg(decision)} ` +
     `--options ${shellArg(choices.join(","))}\`. `;
@@ -12970,7 +12971,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // deterministically off-band but CANNOT block the turn, so the conductor relays
   // the output AND may still fire a bare `next` (sometimes several times the same
   // turn), rolling the active workflow forward. The seam stamps
-  // aidlc/.aidlc-readonly-latch with the CURRENT turn counter; here, BEFORE any
+  // aidlc/.aidlc-engine/sessions/kiro-readonly-latch with the CURRENT turn counter; here, BEFORE any
   // state inspection, a TRULY BARE advancing next (none of its own flags set)
   // checks the latch: when latch.turn === the current counter (the SAME turn) we
   // emit `done` instead of routing to a run-stage. Turn-scoped — a legitimate
@@ -12985,8 +12986,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       !flags.claim && !flags.release) {
     try {
       const pdLatch = resolveProjectDir(projectDir);
-      const latchPath = join(pdLatch, "aidlc", ".aidlc-readonly-latch");
-      const counterPath = join(pdLatch, "aidlc", ".aidlc-turn-counter");
+      const latchPath = workspaceEngineFile(pdLatch, "sessions/kiro-readonly-latch");
+      const counterPath = workspaceEngineFile(pdLatch, "sessions/kiro-turn-counter");
       let counter = -1;
       let latchTurn = -2;
       let label = "the read-only command";

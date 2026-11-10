@@ -105,7 +105,7 @@ export function expectSpaceInclude(root: string, space: string): void {
   expect(readFileSync(join(root, "aidlc", "active-space"), "utf-8").trim()).toBe(space);
   // The engine's copy every harness include reads holds this space's memory
   // files, each behind one line that names the file to edit.
-  expect(readFileSync(join(root, "aidlc", "active-memory", "org.md"), "utf-8"))
+  expect(readFileSync(join(root, "aidlc", ".aidlc-engine", "active-memory", "org.md"), "utf-8"))
     .toBe(`${copyHeader(space, "org.md")}${readFileSync(join(root, "aidlc", "spaces", space, "memory", "org.md"), "utf-8")}`);
 }
 

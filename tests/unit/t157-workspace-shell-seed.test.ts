@@ -63,7 +63,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { __resetGraphCache, loadRules } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
-import { REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -136,13 +135,13 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
     for (const harness of HARNESS_MATRIX) {
       if (harness.capabilities.memoryInclude === "claude-import") {
         const stub = readFileSync(join(harness.engineRoot, "rules", "aidlc.md"), "utf-8");
-        expect(stub).toContain("@../../aidlc/active-memory/org.md");
+        expect(stub).toContain("@../../aidlc/.aidlc-engine/active-memory/org.md");
       } else if (harness.capabilities.memoryInclude === "kiro-resources") {
         const agent = JSON.parse(
           readFileSync(join(harness.engineRoot, "agents", "aidlc.json"), "utf-8"),
         ) as { resources: string[] };
         expect(agent.resources, harness.name).toContain(
-          "file://aidlc/active-memory/**/*.md",
+          "file://aidlc/.aidlc-engine/active-memory/**/*.md",
         );
       } else if (harness.capabilities.memoryInclude === "kiro-steering") {
         const steering = readFileSync(
@@ -163,14 +162,14 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         // Copilot: the project-root AGENTS.md's @-import lines are the
         // native include (both Copilot surfaces expand @-imports).
         const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
-        expect(agentsMd, harness.name).toContain("@aidlc/active-memory/org.md");
+        expect(agentsMd, harness.name).toContain("@aidlc/.aidlc-engine/active-memory/org.md");
       } else if (harness.capabilities.memoryInclude === "cursor-rule") {
         // Cursor: the alwaysApply rule lists the method files as plain paths
         // (no @-import expansion on Cursor); the sessionStart hook injects the
         // live workflow context. AGENTS.md is the auto-read rules file.
         const rule = readFileSync(join(harness.engineRoot, "rules", "aidlc.mdc"), "utf-8");
         expect(rule).toContain("alwaysApply: true");
-        expect(rule).toContain("aidlc/active-memory/org.md");
+        expect(rule).toContain("aidlc/.aidlc-engine/active-memory/org.md");
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else {
         // opencode: the instructions glob in the project-root opencode.json is
@@ -179,7 +178,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
           readFileSync(join(harness.distRoot, "opencode.json"), "utf-8"),
         ) as { instructions: string[] };
         expect(config.instructions, harness.name).toContain(
-          "aidlc/active-memory/**/*.md",
+          "aidlc/.aidlc-engine/active-memory/**/*.md",
         );
         expect(existsSync(harness.onboardingDist)).toBe(true);
       }
@@ -318,18 +317,22 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
 
   // A request the agent wrote for the engine stays in its folder when the
   // command never went ahead; the person's words are never theirs to commit.
-  test("8b: the gitignore ignores a request left in the request folder", () => {
+  // The folder inside aidlc/.aidlc-engine/ is ignored by that folder's own
+  // .gitignore; the shared block keeps the earlier folder's line for a
+  // teammate still on an earlier release.
+  test("8b: the gitignore ignores a request left in the earlier request folder", () => {
+    const EARLIER_REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
     for (const h of HARNESSES) {
       const gi = readFileSync(gitignore(h), "utf-8");
       expect(gi.split("\n").map((l) => l.trim()), `${h}: ignores the request folder`).toContain(
-        `${REQUEST_TEXT_DIR}/`,
+        `${EARLIER_REQUEST_TEXT_DIR}/`,
       );
       const repo = mkdtempSync(join(tmpdir(), `aidlc-t157-request-${h}-`));
       tempDirs.push(repo);
       expect(spawnSync("git", ["init", "-q"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo }).status, `${h}: git init`).toBe(0);
       writeFileSync(join(repo, ".gitignore"), gi, "utf-8");
       expect(
-        spawnSync("git", ["check-ignore", "-q", `${REQUEST_TEXT_DIR}/request.txt`], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo }).status,
+        spawnSync("git", ["check-ignore", "-q", `${EARLIER_REQUEST_TEXT_DIR}/request.txt`], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo }).status,
         `${h}: a left request is functionally ignored`,
       ).toBe(0);
     }

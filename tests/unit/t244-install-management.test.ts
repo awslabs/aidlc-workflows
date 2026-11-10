@@ -134,10 +134,10 @@ function patchVersion(offset: number): string {
 }
 const NEXT_VERSION = patchVersion(1);
 // A release before 2.12 reads the repo list only at the project root, and
-// going back to one says so.
+// going back to one says so; never to the release running, or a newer one.
 const readsListOnlyAtRoot = (version: string): boolean => {
   const [major, minor] = version.split(".").map(Number);
-  return major < 2 || (major === 2 && minor < 12);
+  return (major < 2 || (major === 2 && minor < 12)) && Bun.semver.order(version, AIDLC_VERSION) < 0;
 };
 // The lists here are not tracked, so the way back is a plain move.
 const goingBackLine = (version: string): string =>
