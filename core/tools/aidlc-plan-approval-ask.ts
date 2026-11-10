@@ -814,22 +814,24 @@ function singleBoxQuestion(toolInput: unknown): BoxQuestion | null {
   return { entry: entry as Record<string, unknown>, question, picker: { question, options: labels, severalPicks: false } };
 }
 
-// What goes under the question: every plan's lines, or past the box's limit
-// each plan's path only; the line naming source that already changed is in
-// both, said once.
+// What goes under the question, in the order boxText tries them: one plan's
+// lines, else its path only. Several Units always get each Unit's name and
+// path, never the summaries: the box does not scroll, and a short window (an
+// editor's terminal panel) would show the last plan alone, as if it were the
+// only one. The line naming source that already changed is in each, said once.
 function boxAdditions(projectDir: string, record: PlanApprovalAskRecord): string[] {
   const views = record.targets.map((target) => targetView(projectDir, target.unit));
   const changed = changedBeforeApprovalLine(projectDir);
   const several = views.length > 1;
-  return [true, false].map((summaries) => [
+  return (several ? [false] : [true, false]).map((summaries) => [
     ...views.flatMap((view, index) => [
       ...(index > 0 ? [""] : []),
       ...(several ? [view.unit ?? ""] : []),
       ...(!summaries
         ? [`Full plan: ${view.plan_path}`]
-        : planLines(changed === null || several ? view.summary : [...view.summary, changed], view.plan_path)),
+        : planLines(changed === null ? view.summary : [...view.summary, changed], view.plan_path)),
     ]),
-    ...(changed !== null && (several || !summaries) ? ["", changed] : []),
+    ...(changed !== null && !summaries ? ["", changed] : []),
   ].join("\n"));
 }
 

@@ -14,6 +14,9 @@
 //     lines, an answered question, a payload or record that cannot be read;
 //   - past Claude Code's 2,000 characters of question text only the plan's
 //     path is added, and past that nothing;
+//   - a question about several Units always gets each Unit's name and path,
+//     and the changed-source line once, never the summaries, so a short window
+//     never shows several plans as one; nothing once one plan is answered;
 //   - the answer to the filled box records as on main: the pick, the person's
 //     own words, the question the agent asked and its id; Approve builds and
 //     is not asked again, Request Changes and "I'll edit the files" go as on
@@ -27,14 +30,33 @@ import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  cleanupWorktreeFixture,
   createOrchestrationTestProject,
   FIXTURES_DIR,
   runOrchestrateNext,
+  seedAidlcMemory,
+  seedBoltDagBatches,
   seededRecordDir,
   seededStateFile,
+  setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { planApprovalRuntimeFile } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  codeGenerationRecordDir,
+  renderTestingContract,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import {
+  planApprovalRuntimeFile,
+  stateDigest,
+  workspaceSourceListing,
+  writeActiveDirectiveMarker,
+  writeBaselineSourceSnapshot,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  publishPlanApprovalAsk,
+  routeCodeGenerationPlanApproval,
+} from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 
 setDefaultTimeout(120_000);
 
@@ -59,8 +81,10 @@ interface Box {
 }
 
 const created: string[] = [];
+const worktrees: string[] = [];
 afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
+  while (worktrees.length > 0) cleanupWorktreeFixture(worktrees.pop());
 });
 
 function project(): string {
@@ -419,5 +443,91 @@ describe("planQuestionBoxAsAsked", () => {
     }
     expect(planQuestionBoxAsAsked(join(proj, "no-such-folder"), boxPayload([planBox("Approve?")])))
       .toBe(boxPayload([planBox("Approve?")]));
+  });
+});
+
+// Two Units asked about in one question (the swarm set-up of
+// t-plan-approval-ask's groupedProject), with the person's source change since
+// the stage started when `changed` is set.
+const GROUP = ["alpha", "beta"];
+
+function groupedProject(changed: boolean): { pd: string; question: string; choices: string[]; paths: string[] } {
+  const pd = setupWorktreeFixture();
+  worktrees.push(pd);
+  seedAidlcMemory(pd);
+  writeFileSync(seededStateFile(pd), [
+    "# State", "## Project Information", "- **Project**: Grouped plan approval", "- **Scope**: feature",
+    "- **Project Type**: Greenfield", "- **State Version**: 8", "## Runtime State",
+    "- **Construction Checkpoints**: enabled", "- **Construction Iteration**: stage-major",
+    "- **Construction Execution**: swarm", "- **Construction Autonomy Mode**: gated", "- **Skeleton Stance**: off",
+    "- **Unit Ownership**: solo", "- **Guard Policy**: strict (set by you)", "## Stage Progress",
+    "### CONSTRUCTION PHASE", "- [-] code-generation \u2014 EXECUTE", "- [ ] build-and-test \u2014 EXECUTE",
+    "## Current Status", "- **Current Stage**: code-generation", "- **Lifecycle Phase**: CONSTRUCTION",
+    "- **Status**: Running", "",
+  ].join("\n"), "utf-8");
+  seedBoltDagBatches(pd, [GROUP]);
+  mkdirSync(join(pd, "src"), { recursive: true });
+  const baseline = writeBaselineSourceSnapshot(pd, "code-generation", workspaceSourceListing(pd)!);
+  appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
+  appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, pd);
+  if (changed) writeFileSync(join(pd, "src", "theirs.ts"), "export const theirs = 1;\n", "utf-8");
+  const contract = renderTestingContract(resolveTestingPosture(pd));
+  for (const unit of GROUP) {
+    const dir = codeGenerationRecordDir(pd, unit);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "code-generation-plan.md"),
+      `# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n- Touches: src/${unit}.ts\n- Tests: 2 unit tests\n\n` +
+        `## Steps\n- [ ] Implement ${unit}\n\n${contract}`, "utf-8");
+    writeFileSync(join(dir, "unit-test-instructions.md"), `# Tests\n\nRun ${unit} tests.\n`, "utf-8");
+  }
+  const state = () => stateDigest(readFileSync(seededStateFile(pd), "utf-8"));
+  writeActiveDirectiveMarker(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP, state_sha256: state() });
+  const routed = routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP }) as
+    unknown as { question: string; plan_approval: { choices: string[]; targets: Array<{ plan_path: string }> } };
+  writeActiveDirectiveMarker(pd, {
+    kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: GROUP, state_sha256: state(),
+  });
+  publishPlanApprovalAsk(pd, routed as unknown as Parameters<typeof publishPlanApprovalAsk>[1]);
+  return {
+    pd, question: routed.question, choices: routed.plan_approval.choices,
+    paths: routed.plan_approval.targets.map((target) => target.plan_path),
+  };
+}
+
+function groupBox(question: string, choices: string[]): Box {
+  return { question, header: "Code plans", multiSelect: false, options: choices.map((label) => ({ label, description: "" })) };
+}
+
+describe("a question about several Units", () => {
+  test("the box gets each Unit's name and path, never the summaries", () => {
+    const { pd, question, choices, paths } = groupedProject(false);
+    expect(question).toBe("Approve these 2 code plans?");
+    expect(filled(pd, [groupBox(question, choices)])?.[0].question).toBe([
+      question, "", "alpha", `Full plan: ${paths[0]}`, "", "beta", `Full plan: ${paths[1]}`,
+    ].join("\n"));
+  });
+
+  test("the source that already changed is said once, last", () => {
+    const { pd, question, choices, paths } = groupedProject(true);
+    const shown = filled(pd, [groupBox(question, choices)])?.[0].question ?? "";
+    expect(shown.startsWith([question, "", "alpha", `Full plan: ${paths[0]}`, "", "beta", `Full plan: ${paths[1]}`, "",
+      "Already changed before you approved: "].join("\n"))).toBe(true);
+    expect(shown.split("Already changed").length).toBe(2);
+    expect(shown).not.toContain("- Builds:");
+  });
+
+  test("the answer reads the box as the agent asked it, and once one plan is answered nothing is added", () => {
+    const { pd, question, choices } = groupedProject(false);
+    const shown = filled(pd, [groupBox(question, choices)])![0];
+    answered(pd, shown, "Request Changes");
+    const replied = rows(pd, "QUESTION_REPLIED");
+    expect(field(replied[0], "Question")).toBe(question);
+    expect(field(replied[0], "Reply")).toBe("Request Changes");
+    const approved = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Approve Plan", "--units", "alpha", "--project-dir", pd,
+    ], { cwd: pd, env: env(pd), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(approved.status, `${approved.stdout}${approved.stderr}`).toBe(0);
+    quiet(pd, boxPayload([groupBox(question, choices)]));
   });
 });

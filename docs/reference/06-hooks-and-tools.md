@@ -113,13 +113,17 @@ code plan?" with the choices alone. So the same row also runs for
 `AskUserQuestion`, which none of its members matches: when the box asks the
 open, unanswered code plan question alone, offering its choices, the group
 answers with `updatedInput` (no permission decision, no reason text) that puts
-each plan's summary lines and its `Full plan:` path under the agent's own
+the plan's summary lines and its `Full plan:` path under the agent's own
 question, the lines the engine hands over in `plan_approval.targets` and writes
-in the questions file; several Units get one block each, the line naming
-source that already changed is said once, and a line (or the plan's path) the
-agent's question already shows is not added again. Claude Code shows 2,000
-characters of a box's question, so past that each plan shows only its path
-(with that line), and past that nothing is added. The choices, their descriptions and the
+in the questions file, and the line naming source that already changed when the
+engine adds one. A question about several Units gets each Unit's name and its
+`Full plan:` path, with the changed-source line once, and no summaries: the box
+does not scroll, and a short window (an editor's terminal panel) would show the
+last plan alone as if it were the only one, so each Unit's summary, an Adds line
+among them, is read in the plan file the box names. A line (or the plan's path)
+the agent's question already shows is not added again. Claude Code shows 2,000
+characters of a box's question, so past that a plan shows only its path (with
+the changed-source line), and past that nothing is added. The choices, their descriptions and the
 engine's `question` stay as they were. The human-turn hook takes the lines off
 again when the answer comes back, so the pick, the person's own words and
 `QUESTION_REPLIED` read the box as the agent asked it. Any other box, another
