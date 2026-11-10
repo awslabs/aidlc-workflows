@@ -137,7 +137,13 @@ import {
   latestMessage, listMessages, MESSAGE_TEXT_MAX_CHARS, messageBeforeJoining, noReplySince, personTurnStands, readMessage,
   REQUEST_MAX_BYTES, requestMessageStep, standingPersonTurn, type StoredMessage, wholeMessageText,
 } from "./aidlc-message-store.ts";
-import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices, SUMMARY_CONFIRMATION_CHOICES } from "./aidlc-reply-reader.ts";
+import {
+  aidlcEntryWords,
+  APPROVAL_GATE_CHOICES,
+  protectedChoices,
+  SUMMARY_CONFIRMATION_CHOICES,
+  typedWordGap,
+} from "./aidlc-reply-reader.ts";
 import {
   type AskChoice,
   type AskDirective,
@@ -535,7 +541,6 @@ import {
   type WorkflowSelection,
   withdrawProtectedReplyWords,
   commandArgSpans,
-  typedWordGap,
   withTypedSpacing,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
@@ -3523,10 +3528,13 @@ function authoritativeRequest(raw: string): string {
   return authoritativeProjectDescription(raw).description;
 }
 
-// The start of the request as a question quotes it on one line: each line
-// break, with the spaces around it, reads as one space.
-function requestPreview(raw: string): string {
-  const text = authoritativeRequest(raw).replace(/[ \t]*[\r\n][ \t\r\n]*/g, " ");
+// The start of the request as a question or a step quotes it: across a CR or
+// LF line break, its lines trimmed and joined with one space.
+export function requestPreview(raw: string): string {
+  const request = authoritativeRequest(raw);
+  const text = /[\r\n]/.test(request)
+    ? request.split(/\r\n?|\n/).map((line) => line.trim()).filter((line) => line.length > 0).join(" ")
+    : request;
   return text.length > 240 ? `${text.slice(0, 240)}...` : text;
 }
 

@@ -24,7 +24,7 @@ import {
   saveMessage,
   wholeMessageText,
 } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
-import { CUT_MESSAGE_PERSON_LINE } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
+import { CUT_MESSAGE_PERSON_LINE, requestPreview } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 
 setDefaultTimeout(240_000);
 
@@ -53,7 +53,8 @@ function japaneseSpec(size: number): string {
 }
 
 const sha = (text: string): string => createHash("sha256").update(text, "utf-8").digest("hex");
-// Taken from the person's line, its line breaks read as the spaces between its words, as main has it for any line.
+// The words alone, whatever spacing runs between them: the tests that use it check every word arrives; "a taken line
+// keeps the person's line breaks" checks the spacing.
 const spaced = (text: string): string => text.replace(/\s+/g, " ").trim();
 const projects: string[] = [];
 afterEach(() => {
@@ -432,6 +433,7 @@ describe("a taken line keeps the person's line breaks", () => {
       const audit = readdirSync(join(record, "audit")).map((name) => readFileSync(join(record, "audit", name), "utf-8")).join("\n");
       const request = /^\*\*Request\*\*: (.*)$/m.exec(audit.slice(audit.indexOf("WORKFLOW_STARTED")));
       expect(request?.[1] ?? "", "the audit row's Request is one line").toStartWith("/aidlc # Tally");
+      expect(request?.[1] ?? "", "the audit row's Request is one line").toContain(END);
     });
   }
 
@@ -444,6 +446,15 @@ describe("a taken line keeps the person's line breaks", () => {
     const record = readdirSync(messagesDir(proj)).filter((name) => name.endsWith(".json"))
       .map((name) => JSON.parse(readFileSync(join(messagesDir(proj), name), "utf-8")) as { words: string | null })[0];
     expect(record.words).toBe(words);
+  });
+
+  test("the preview reads a long run of spaces in one pass", () => {
+    // A pasted table or terminal output can carry a long run of spaces; the plan question quotes the request at once.
+    const request = `## Tally\nbuild a ledger${" ".repeat(100_000)}for small teams`;
+    const started = performance.now();
+    const preview = requestPreview(request);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(preview).toBe(`## Tally build a ledger${" ".repeat(217)}...`);
   });
 
   test("a flag typed on a later line is still read as the flag", async () => {

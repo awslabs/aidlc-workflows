@@ -115,6 +115,7 @@ import {
   type ProtectedChoice,
   protectedChoiceDigests,
   stripRecommendedDecorator,
+  typedWordGap,
 } from "./aidlc-reply-reader.ts";
 export {
   formatReceivedReply,
@@ -2140,14 +2141,6 @@ function spacedFrom(words: string, raw: string, tokens: CommandArgSpan[], first:
     spaced += typedWordGap(typed) ?? words.slice(to, at);
   }
   return null;
-}
-
-// A gap typed between two of the person's words as their request keeps it: the
-// spaces, tabs and line breaks typed, a Windows or older Mac line ending as one
-// line break. Null for any other gap (a no-break or other Unicode space), which
-// stays one plain space, as the split hands it on.
-export function typedWordGap(gap: string): string | null {
-  return /^[ \t\r\n]+$/.test(gap) ? gap.replace(/\r\n?/g, "\n") : null;
 }
 
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(

@@ -716,8 +716,8 @@ describe("the request the first next stopped with carries on after the restart",
     expect(noWorkflow(next(proj, OPENCODE))).toBe(true);
   });
 
-  // JSON writes a control character other than a line break or a tab as six bytes (an ESC from a terminal paste as
-  // \u001b), so a request near the size that is dense with them must still read back.
+  // JSON writes most control characters as six bytes (an ESC from a terminal paste as \u001b), so a request near
+  // the size that is dense with them must still read back.
   test("a request near the request size dense with ESC characters is kept at the stop and carried on with whole", () => {
     const proj = installed(OPENCODE);
     const line = (i: number) => `\x1b[1m\x1b[4mSection ${i}.\x1b[0m\x1b[0m ${"\x1b".repeat(24)} the ledger keeps every task.`;
