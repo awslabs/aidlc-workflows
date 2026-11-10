@@ -1258,9 +1258,9 @@ describe("prepare with plan approval off", () => {
     const prepared = prepare(pd);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
     const worker = child(pd);
-    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
-      "- **Plan Approval**: off (set by you)", "- **Plan Approval**: on (set by you)",
-    ));
+    // The setter, as the agent runs it: the step in hand stays current.
+    succeeded(tool(pd, "aidlc.ts", ["engine", "config", "set", "plan-approval", "on", "--project-dir", pd]));
+    expect(readFileSync(statePath, "utf-8")).toContain("- **Plan Approval**: on (set by a command)");
     expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
     const after = tool(pd, "aidlc-orchestrate.ts", ["next", "--project-dir", pd]);
     succeeded(after);
