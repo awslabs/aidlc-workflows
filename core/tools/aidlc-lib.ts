@@ -32714,7 +32714,7 @@ const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GU
 // reviewer's name. The words match the review request's own step.
 export function reviewRequestAction(lead: string, request: string | undefined): string {
   if (request === undefined) return `${lead}.`;
-  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a subagent and have it write ` +
+  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a new subagent and have it write ` +
     "the `reviewFile` that command returns: that file is the reviewer's, so never write it yourself and never " +
     `stand in for it (\`${harnessDir()}/aidlc-common/protocols/stage-protocol-reviewer.md\` step 1 says what to ` +
     "pass it). When its verdict is back, record it with the `recordVerdict` command the request returns.";
@@ -33625,7 +33625,7 @@ export interface GuardRecoveryAskData {
   detail?: string;
 }
 
-function guardRefusalPath(
+export function guardRefusalPath(
   projectDir: string,
   stage: string,
   unit?: string,
@@ -33639,7 +33639,7 @@ function guardRefusalPath(
 // The latest boundary after which a repetition is a new situation: a session
 // start or resume, a workflow start, a jump, this stage's gate rejection, or a
 // fresh Bolt attempt for this Unit.
-function guardRefusalResetToken(
+export function guardRefusalResetToken(
   projectDir: string,
   stage: string,
   unit?: string,
@@ -33687,7 +33687,7 @@ function gateEventCovers(event: AuditShardEvent, stage: string, unit?: string): 
 
 // The latest approval of this stage (or this Unit's step), so a question left
 // before it can tell that the step it was about was approved since.
-function guardRefusalApprovalToken(
+export function guardRefusalApprovalToken(
   events: AuditShardEvent[],
   stage: string,
   unit?: string,
@@ -33698,7 +33698,7 @@ function guardRefusalApprovalToken(
   return latest === undefined ? "" : `${latest.timestamp}\0${latest.shard}\0${latest.pos}`;
 }
 
-function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
+export function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
   try {
     const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
     if (!isPlainObject(value) || value.version !== 1) return null;
@@ -36431,7 +36431,7 @@ const UNIT_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
   "UNIT_SKIPPED",
 ]);
 
-function currentUnitLifecycleRows(
+export function currentUnitLifecycleRows(
   projectDir: string,
   audit: string,
   slug: string,
@@ -36576,7 +36576,7 @@ export function unitScopedLifecycleFloors(stateContent: string): boolean {
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
 }
 
-function unitMajorLifecycleMode(projectDir: string): boolean {
+export function unitMajorLifecycleMode(projectDir: string): boolean {
   try {
     const state = readStateFile(projectDir);
     return (

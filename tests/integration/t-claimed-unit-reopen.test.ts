@@ -337,10 +337,20 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
     });
 
+    test(`${label}: an answer for another Unit is told this checkout's Unit, never to start the other`, () => {
+      const { checkout } = claimedPastFunctionalDesign(shape);
+      const answered = run(LOG, ["answer", "--stage", "nfr-requirements", "--unit", "beta", "--details", "A"], checkout);
+      expect(answered.status).not.toBe(0);
+      expect(answered.out).toContain("is scoped to Unit");
+      expect(answered.out).not.toContain("unit start");
+    });
+
     test(`${label}: a change they ask for in words to an approved stage is recorded in their words`, () => {
       const { checkout } = claimedPastFunctionalDesign(shape);
       const words = "I want to change Functional Design: names are trimmed.";
-      // The next step's question is on screen when they say it, as in the live run.
+      // The next step's question is on screen when they say it, as in the live run,
+      // asked once the Unit's step is started.
+      expect(run(STATE, ["unit", "start", "--stage", "nfr-requirements", "--unit", "alpha"], checkout).status).toBe(0);
       expect(run(LOG, ["decision", "--stage", "nfr-requirements", "--decision", "A choice", "--unit", "alpha"], checkout).status).toBe(0);
       says(checkout, words);
       const turn = readAuditShardEvents(checkout).filter((event) => event.event === "HUMAN_TURN").at(-1);

@@ -141,6 +141,15 @@ import {
   isReplyTurn,
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
+  isTeamUnitOwnership,
+  currentUnitLifecycleRows,
+  hookChildEnv,
+  ROUTE_CHECK_ENV,
+  guardRefusalApprovalToken,
+  guardRefusalPath,
+  guardRefusalResetToken,
+  readGuardRefusalRecord,
+  unitMajorLifecycleMode,
   isAutonomousSwarmStage,
   unitOpenCheckpoints,
   waveEligible,
@@ -321,7 +330,8 @@ import {
   REVIEW_TESTING_CONTRACT_FIELD,
   reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
@@ -1307,6 +1317,9 @@ function handleDecision(args: string[]): void {
     return;
   }
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  if (flags.unit) {
+    refuseWithoutUnitStart(pd, flags.stage, flags.unit, flags.single === "true", "record this question", error);
+  }
   const summaryEvidence =
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
@@ -2316,6 +2329,11 @@ function handleAnswer(args: string[]): void {
   // The engine's recovery question: the conductor records the remedy the
   // person picked, as it read their reply. "Request Changes: <what>" says the
   // same reply also said what should change.
+  if (flags.unit && flags.checkpoint !== "guard-recovery") {
+    refuseWithoutUnitStart(
+      resolveActiveProjectDir(projectDir), flags.stage, flags.unit, flags.single === "true", "record this answer", error,
+    );
+  }
   if (flags.checkpoint === "guard-recovery") {
     const pd = resolveActiveProjectDir(projectDir, flags.stage);
     let picked: { op: string; action: string; awaitingWords: boolean; stage: string; unit?: string };
@@ -2489,6 +2507,9 @@ function handleAnswer(args: string[]): void {
   const verificationCommand = verificationCheckpoint
     ? verificationCommandFromFlags(pd, flags) : null;
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  if (flags.unit) {
+    refuseWithoutUnitStart(pd, flags.stage, flags.unit, flags.single === "true", "record these answers", error);
+  }
   const summaryEvidence = summaryCheckpoint
     ? summaryQuestionEvidence(pd, flags, flags.details)
     : null;
@@ -2695,6 +2716,9 @@ function handleAnswer(args: string[]): void {
         stageNode !== undefined &&
         isPerUnitStage(stageNode) &&
         getField(content ?? "", "Construction Iteration")?.trim() === "unit-major";
+      if (flags.unit !== undefined) {
+        refuseWithoutUnitStart(pd, flags.stage, flags.unit, flags.single === "true", "record the summary choice", error);
+      }
       const auditRows = readAuditShardEvents(pd);
       const floors = summaryAttemptFloors(
         auditRows.filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event)),
@@ -3541,6 +3565,188 @@ function refuseReview(message: string, changeNotices: readonly string[] = []): n
   throw new ReviewRefusal(message, changeNotices);
 }
 
+// The engine's live route, read as `unit start` reads it: `next` run as a
+// read-only route check (ROUTE_CHECK_ENV), its rules parts followed. `unit
+// start` (aidlc-state.ts) and the start-receipt guard below both read it here.
+export interface EngineUnitDirective {
+  kind?: unknown;
+  stage?: unknown;
+  unit?: unknown;
+  wave?: unknown;
+  questions_only?: unknown;
+}
+
+// The engine routes the stage as a wave, or a Unit's questions before its wave:
+// no serial Unit receipt goes there.
+export function routesWave(routed: EngineUnitDirective, stage: string): boolean {
+  return routed.kind === "run-stage" && routed.stage === stage &&
+    (Boolean(routed.wave) || routed.questions_only === true);
+}
+
+// The engine routes this Unit's own step of the stage: the route a start is
+// recorded on.
+export function routesUnitStep(routed: EngineUnitDirective, stage: string, unit: string): boolean {
+  return routed.kind === "run-stage" && routed.stage === stage && routed.unit === unit;
+}
+
+// Whether `unit start` would pass its route checks for this Unit now, so the
+// start-receipt guard never names a start the engine then refuses.
+function unitStartRouted(pd: string, stage: string, unit: string): boolean {
+  let routed: EngineUnitDirective;
+  try {
+    routed = readEngineUnitDirective(
+      pd, stage, unit, "start", resolveWorkflowSelection(pd).sessionId ?? undefined,
+      (message) => { throw new Error(message); },
+    );
+  } catch {
+    return false;
+  }
+  return !routesWave(routed, stage) && routesUnitStep(routed, stage, unit);
+}
+
+export function readEngineUnitDirective(
+  pd: string,
+  stage: string,
+  unit: string,
+  action: string,
+  session: string | undefined,
+  refuse: (message: string) => never,
+): EngineUnitDirective {
+  const executable = compiledExecutable();
+  let subargs = ["next", "--project-dir", pd];
+  let directive: unknown = null;
+  for (let attempts = 0; attempts < 1_000; attempts++) {
+    const command = executable
+      ? [executable, "engine", "orchestrate", ...subargs]
+      : [
+          process.execPath,
+          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...subargs,
+        ];
+    const result = spawnSync(command[0], command.slice(1), {
+      cwd: pd,
+      encoding: "utf-8",
+        env: hookChildEnv(pd, session, {
+          AIDLC_PROJECT_DIR: pd,
+          [ROUTE_CHECK_ENV]: "1",
+        }),
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    if (result.status !== 0) {
+      refuse(
+        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine could not resolve ` +
+          `the current routed unit (${(result.stderr ?? "").trim() || "no diagnostic"}).`,
+      );
+    }
+    try {
+      directive = JSON.parse((result.stdout ?? "").trim());
+    } catch {
+      refuse(
+        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine returned an ` +
+          "unparseable directive.",
+      );
+    }
+    const transport =
+      directive !== null && typeof directive === "object"
+        ? directive as { kind?: unknown; receipt?: unknown }
+        : {};
+    if (transport.kind !== "load-steering") break;
+    if (
+      typeof transport.receipt !== "string" ||
+      transport.receipt.length === 0
+    ) {
+      refuse(
+        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's rules part ` +
+          "did not include its receipt.",
+      );
+    }
+    subargs = ["continue", transport.receipt, "--project-dir", pd];
+  }
+  return directive !== null && typeof directive === "object"
+    ? directive as EngineUnitDirective
+    : {};
+}
+
+// True when Unit `unit` has a lifecycle receipt (UNIT_STARTED, UNIT_COMPLETED
+// or UNIT_SKIPPED) for `slug` in the current stage attempt. A per-Unit stage's
+// confirmations and reviews hang off that receipt: without it the gate later
+// refuses the Unit with UNIT_COMPLETION_MISSING.
+export function unitLifecycleRecorded(
+  projectDir: string,
+  slug: string,
+  unit: string,
+): boolean {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return false;
+  const unitMajor = unitMajorLifecycleMode(projectDir);
+  return currentUnitLifecycleRows(projectDir, audit, slug, unitMajor).some(
+    (row) => row.unit === unit,
+  );
+}
+
+// True while a guard refusal about `stage` for `unit` still stands: the engine
+// has asked which way on, and the remedies it offers (a recovery review, a
+// fresh summary) are then the way, so the start-receipt guard stands aside for
+// them. Read from the refusal record, as the recovery ask itself is, so it
+// holds with or without a chat session's directive marker.
+export function guardRecoveryAskOpenFor(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string,
+): boolean {
+  const record = readGuardRefusalRecord(guardRefusalPath(projectDir, stage, unit));
+  if (record === null) return false;
+  const closed = parseCheckboxes(stateContent).some(
+    (entry) => entry.slug === stage && (entry.state === "completed" || entry.state === "skipped"),
+  );
+  if (closed) return false;
+  const events = readAuditShardEvents(projectDir);
+  return record.resetToken === guardRefusalResetToken(projectDir, stage, unit, events) &&
+    (record.pendingApproval ?? "") === guardRefusalApprovalToken(events, stage, unit);
+}
+
+// A per-Unit stage's records hang off the Unit's start receipt: a question, a
+// summary confirmation or a review recorded for a Unit never started leaves a
+// gate that can only refuse the Unit later (UNIT_COMPLETION_MISSING), so the
+// missing start is named at the first record instead. It guards team-owned
+// Units only: a scoped checkout's gate is the one that cannot recover from the
+// missing receipt, and the solo walk's own recovery reviews (a hand edit of an
+// approved Unit's document, a redo) are requested before any new start. The
+// guard also stands aside for a single-stage run, a stage-major walk, an
+// autonomous swarm Unit, while a guard refusal about the Unit still stands (its
+// remedies are then the way on), and where `unit start` would itself be refused
+// (the engine takes a step whose files are written as done and asks about it
+// instead), so the step it names always works.
+function refuseWithoutUnitStart(
+  pd: string,
+  stage: string,
+  unit: string,
+  single: boolean,
+  what: string,
+  refuse: (message: string) => never,
+): void {
+  if (single) return;
+  const node = loadStageGraphAll().find((entry) => entry.slug === stage);
+  if (!node || !isPerUnitStage(node)) return;
+  const state = existsSync(stateFilePath(pd)) ? readFileSync(stateFilePath(pd), "utf-8") : "";
+  if (!isTeamUnitOwnership(state)) return;
+  // Stage-major may route the stage as a wave, which has no start (`unit start`
+  // refuses there).
+  if (getField(state, "Construction Iteration")?.trim() !== "unit-major") return;
+  if (isAutonomousSwarmStage(pd, state, node)) return;
+  if (unitLifecycleRecorded(pd, stage, unit) || guardRecoveryAskOpenFor(pd, state, stage, unit)) return;
+  // The plan question comes before the start can be recorded (no run-stage is
+  // routed while it is open), so its answer is never what the guard refuses.
+  if (stage === "code-generation" && planApprovalAsk().planApprovalQuestionOpenFor(pd, unit)) return;
+  if (!unitStartRouted(pd, stage, unit)) return;
+  refuse(
+    `Cannot ${what} for "${stage}" Unit "${unit}": the Unit has not been started for this stage, ` +
+      "so nothing can be recorded against it. Run " +
+      `\`${aidlcToolInvocation("state")} unit start --stage ${stage} --unit ${unit}\` first, then ${what} again.`,
+  );
+}
+
 function refuseReviewGuard(
   projectDir: string,
   refusal: GuardRefusal,
@@ -4274,6 +4480,9 @@ function handleReview(args: string[]): void {
           mergedBoltUnits,
         } = context;
         workspaceStage = node.workspace_requires === true;
+        if (flags.unit !== undefined && !autonomousCandidate) {
+          refuseWithoutUnitStart(pd, flags.stage, flags.unit, flags.single === "true", "request a review", refuseReview);
+        }
         const { pendingStatus, teamGate } = admitReviewSummary(context, "review-request", requestChangeNotices);
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =

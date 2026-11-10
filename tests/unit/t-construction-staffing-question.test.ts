@@ -480,4 +480,20 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(text).not.toContain("Construction staffing");
     expect(text).not.toContain("Team check-in rhythm");
   });
+
+  // #3362: with Team Formation skipped (mvp, classic), Delivery Planning had
+  // team-allocation.md state that the AI developer builds every Bolt, and the
+  // person then approved a file that presented as settled the very thing the
+  // engine asks next. The stage plans the mob per Bolt; the engine's question
+  // is the one owner of who builds the Units.
+  test("Delivery Planning plans the mob per Bolt and leaves who builds the Units to the engine's question", () => {
+    const text = readFileSync(STAGE_FILE, "utf-8");
+    expect(text).not.toContain("states that all Bolts are executed by");
+    expect(text).not.toContain("default to aidlc-developer-agent for all Bolts");
+    const allocation = text.split("\n").find((line) => line.startsWith("- `team-allocation.md`"));
+    expect(allocation).toBeDefined();
+    const ownsBolt = text.split("\n").find((line) => line.includes("Which mob is planned to build this Bolt?"));
+    expect(ownsBolt).toBeDefined();
+    expect(ownsBolt).toContain("Who builds the Units is not this stage's question");
+  });
 });

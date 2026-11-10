@@ -305,6 +305,7 @@ import { buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocat
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
+import { type EngineUnitDirective, readEngineUnitDirective, routesUnitStep, routesWave } from "./aidlc-log.ts";
 import {
   stageLabel,
   stageValidationAuditFields,
@@ -2856,13 +2857,9 @@ function handleUnit(args: string[]): void {
     // The route check is read-only and shares this lock's ledger snapshot.
     const routed = action === "complete"
       ? {}
-      : readEngineUnitDirective(pd, slug, unit, action);
+      : readEngineUnitDirective(pd, slug, unit, action, stateSessionOverride, error);
     // A Unit's questions before the wave are the wave's own step.
-    if (
-      routed.kind === "run-stage" &&
-      routed.stage === slug &&
-      (routed.wave || routed.questions_only === true)
-    ) {
+    if (routesWave(routed, slug)) {
       if (!routed.wave) {
         throw new UnitWaveRouteRefusalError(
           `Refusing unit ${action} for "${unit}" of "${slug}": this step asks ` +
@@ -3134,85 +3131,12 @@ function validateStateLineValue(label: string, value: string | undefined): void 
   }
 }
 
-interface EngineUnitDirective {
-  kind?: unknown;
-  stage?: unknown;
-  unit?: unknown;
-  wave?: unknown;
-  questions_only?: unknown;
-}
-
-function readEngineUnitDirective(
-  pd: string,
-  stage: string,
-  unit: string,
-  action: string,
-): EngineUnitDirective {
-  const executable = compiledExecutable();
-  let subargs = ["next", "--project-dir", pd];
-  let directive: unknown = null;
-  for (let attempts = 0; attempts < 1_000; attempts++) {
-    const command = executable
-      ? [executable, "engine", "orchestrate", ...subargs]
-      : [
-          process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
-          ...subargs,
-        ];
-    const result = spawnSync(command[0], command.slice(1), {
-      cwd: pd,
-      encoding: "utf-8",
-        env: hookChildEnv(pd, stateSessionOverride, {
-          AIDLC_PROJECT_DIR: pd,
-          [ROUTE_CHECK_ENV]: "1",
-        }),
-      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-    });
-    if (result.status !== 0) {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine could not resolve ` +
-          `the current routed unit (${(result.stderr ?? "").trim() || "no diagnostic"}).`,
-      );
-    }
-    try {
-      directive = JSON.parse((result.stdout ?? "").trim());
-    } catch {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine returned an ` +
-          "unparseable directive.",
-      );
-    }
-    const transport =
-      directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; receipt?: unknown }
-        : {};
-    if (transport.kind !== "load-steering") break;
-    if (
-      typeof transport.receipt !== "string" ||
-      transport.receipt.length === 0
-    ) {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's rules part ` +
-          "did not include its receipt.",
-      );
-    }
-    subargs = ["continue", transport.receipt, "--project-dir", pd];
-  }
-  return directive !== null && typeof directive === "object"
-    ? directive as EngineUnitDirective
-    : {};
-}
-
 function requireEngineRoutedUnit(
   routed: EngineUnitDirective,
   stage: string,
   unit: string,
 ): void {
-  if (
-    routed.kind !== "run-stage" ||
-    routed.stage !== stage ||
-    routed.unit !== unit
-  ) {
+  if (!routesUnitStep(routed, stage, unit)) {
     const expected =
       routed.kind === "run-stage" &&
       typeof routed.stage === "string" &&
