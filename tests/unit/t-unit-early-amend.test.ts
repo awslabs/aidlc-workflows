@@ -334,6 +334,32 @@ describe("a change to a shared input", () => {
     expect(notices(next(alice))).toContain("The lead approved your change to the requirements.");
   });
 
+  // The header's 'on every Guard Policy': under strict, the stages that used
+  // the changed input read as current in the team's build, so it is asked
+  // nothing again.
+  test("under a strict Guard Policy the approved change reaches a team's build as a fact, and no finished stage is asked about again", () => {
+    const { home } = proposed();
+    const state = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
+    writeFileSync(state, readFileSync(state, "utf-8").replace(/^(## Runtime State)$/m, "$1\n- **Guard Policy**: strict (set by you)"));
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "strict"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bob = cloneOf(home.remote, "bob");
+    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    const intents = join(bob, "aidlc", "spaces", "web", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toMatch(/^- \*\*Guard Policy\*\*: strict/m);
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
+    expect(amended.status, amended.out).toBe(0);
+    git(bob, ["fetch", "-q", "origin"]);
+    const step = next(bob);
+    expect(notices(step)).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
+    expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
+    expect(JSON.stringify(step)).not.toContain("changed after");
+    expect(readFileSync(join(record, ...REQUIREMENTS.split("/")), "utf-8")).toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
+  });
+
   // Arden's call on a live run: a team's own edit of its copy was written over
   // by the lead's change. Their edit stays as they left it, the new version
   // goes beside it, said once, and the lead hears it was made on the older one.
