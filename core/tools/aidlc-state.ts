@@ -28,6 +28,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
+import { buildStartListing, unitSourceManifests } from "./aidlc-brought-files.ts";
 import {
   approvalDispositionField,
   rejectedFindingDispositionField,
@@ -262,6 +263,10 @@ import {
   worktreeStateFilePath,
   sameWorkspaceSource,
   recordedSourceListingUnderCurrentBoundary,
+  linkOfTargetListingKey,
+  sourceCheckoutListingRel,
+  sourceListingChangedKeys,
+  splitSourcePathKey,
   workspaceSourceState,
   withWorkspaceSourceStateCache,
   writeStateFile,
@@ -5333,6 +5338,114 @@ function noteVerdictNotFinished(
   }
 }
 
+// Of the changed source paths, sorted, the ones a Unit's manifest could claim
+// (`paths`): the stage's completion and `lookup source-changes` leave out the
+// same ones. `claimed` takes out the paths the caller's Unit claims already
+// cover. `ignored` holds the ones left out as ignored by git, which the lookup
+// reads for the checkouts it cannot see into.
+function unitClaimableSourceChanges(
+  pd: string,
+  stageSlug: string,
+  changed: Iterable<string>,
+  current: ReadonlyMap<string, string>,
+  claimed: (pathKey: string) => boolean = () => false,
+): { paths: string[]; ignored: Set<string> } {
+  // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
+  // install, the source registry) are no Unit's to claim, and neither is a
+  // path Git ignores that a source manifest refuses to claim (build output, a
+  // test run's record), nor one the registry's exclude list now leaves out of
+  // the walk (a cache excluded after the stage started: its baseline entries
+  // are nobody's change).
+  const aidlcOwned = aidlcOwnedSourceKey(pd);
+  // A file the agent changed before the person picked this work's plan, put
+  // back since (the undo the pick's line named), holds what it held before
+  // the agent's write: nobody's change.
+  const putBack = putBackBeforePick(pd);
+  let outsideClaims = [...changed].filter((pathKey) =>
+    !aidlcOwned(pathKey) && !claimed(pathKey) && !putBack(pathKey, current.get(pathKey))
+  );
+  // Nor is a file another open piece of work in this folder claims: a second
+  // chat building its own work here made it, so it is that work's change.
+  if (outsideClaims.length > 0) {
+    const otherWork = otherOpenWorkClaims(pd, stageSlug);
+    outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
+  }
+  const ignored = unclaimableIgnoredSourceKeys(pd, outsideClaims);
+  const unclaimable = new Set(ignored);
+  for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
+  const paths = outsideClaims
+    .filter((pathKey) => !unclaimable.has(pathKey))
+    .sort();
+  return { paths, ignored };
+}
+
+// `lookup source-changes [<unit>]`: the source paths that changed since a
+// Unit's Code Generation began, for the agent to check its account of the
+// build against when it writes the Unit's `source-manifest.json`, so it need
+// not run git for that (Kiro asks the person about a git command they have not
+// allowed). Read-only. It sees AI-DLC's source walk, not who wrote a change:
+// `listed_by` names the other Units whose manifest lists a path, and
+// `not_listed` the places it leaves out because it cannot list them as a
+// manifest claims them: a checkout recorded with `intent add-checkout` (one
+// recorded after the build began reads as all created), a folder a link leads
+// to outside the project, and a checkout of its own the project's git ignores.
+function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<string, unknown> {
+  const named = unit === null ? {} : { unit };
+  const unavailable = {
+    ...named,
+    available: false,
+    note: "AI-DLC cannot compare the files here with where this build began: take the paths from the build's own account.",
+  };
+  try {
+    const start = buildStartListing(pd, unit);
+    const current = workspaceSourceState(pd);
+    if (start === null || current === null) return unavailable;
+    const recorded = recordedSourceListingUnderCurrentBoundary(start.listing, current.listing);
+    const { paths, ignored } = unitClaimableSourceChanges(
+      pd,
+      "code-generation",
+      sourceListingChangedKeys(recorded, current.listing),
+      current.listing,
+    );
+    const listings = [recorded, current.listing];
+    const linkOf = (key: string): string | null =>
+      listings.map((listing) => linkOfTargetListingKey(listing, key)).find((link) => link !== null) ?? null;
+    const nestedCheckouts = listings.flatMap((listing) =>
+      [...listing].filter(([, entry]) => entry.startsWith("160000 ")).map(([key]) => key));
+    // Listing keys of the links and the git-ignored checkouts the list leaves out.
+    const leftOut = new Set<string>();
+    const keys = paths.filter((key) => {
+      const link = linkOf(key);
+      if (link === null) return true;
+      leftOut.add(link);
+      return false;
+    });
+    for (const key of ignored) {
+      const place = linkOf(key) ?? nestedCheckouts.find((checkout) => key === checkout || key.startsWith(`${checkout}/`));
+      if (place !== undefined) leftOut.add(place);
+    }
+    const notListed = [...new Set([
+      ...readRecordedSourceCheckouts(pd).map((entry) => sourceCheckoutListingRel(entry.label)),
+      ...renderSourcePathKeys(leftOut),
+    ])].sort();
+    const others = unitSourceManifests(pd).filter((entry) => entry.unit !== unit);
+    const changed = keys.flatMap((key) => {
+      const parsed = splitSourcePathKey(key);
+      if (parsed === null) return [];
+      const listedBy = others.filter(({ manifest }) => sourceClaimCovers(key, manifest)).map((entry) => entry.unit);
+      return [{
+        ...(parsed.repo === "" ? {} : { repo: parsed.repo }),
+        path: parsed.path,
+        change: !current.listing.has(key) ? "deleted" : recorded.has(key) ? "modified" : "created",
+        ...(listedBy.length === 0 ? {} : { listed_by: listedBy }),
+      }];
+    });
+    return { ...named, since: start.since, changed, ...(notListed.length === 0 ? {} : { not_listed: notListed }) };
+  } catch {
+    return unavailable;
+  }
+}
+
 function verifyReviewerPrecondition(
   pd: string,
   content: string,
@@ -5509,32 +5622,13 @@ function verifyReviewerPrecondition(
       if (!baseline.has(pathKey)) baselineChanged.add(pathKey);
     }
     const claimModels = [...receipts.freshUnitClaims.values()];
-    // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
-    // install, the source registry) are no Unit's to claim, and neither is a
-    // path Git ignores that a source manifest refuses to claim (build output, a
-    // test run's record), nor one the registry's exclude list now leaves out of
-    // the walk (a cache excluded after the stage started: its baseline entries
-    // are nobody's change).
-    const aidlcOwned = aidlcOwnedSourceKey(pd);
-    // A file the agent changed before the person picked this work's plan, put
-    // back since (the undo the pick's line named), holds what it held before
-    // the agent's write: nobody's change.
-    const putBack = putBackBeforePick(pd);
-    let outsideClaims = [...baselineChanged].filter((pathKey) =>
-      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)) &&
-      !putBack(pathKey, receipts.currentSourceListing?.get(pathKey))
-    );
-    // Nor is a file another open piece of work in this folder claims: a second
-    // chat building its own work here made it, so it is that work's change.
-    if (outsideClaims.length > 0) {
-      const otherWork = otherOpenWorkClaims(pd, stage.slug);
-      outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
-    }
-    const unclaimable = unclaimableIgnoredSourceKeys(pd, outsideClaims);
-    for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
-    baselineUnclaimed = outsideClaims
-      .filter((pathKey) => !unclaimable.has(pathKey))
-      .sort();
+    baselineUnclaimed = unitClaimableSourceChanges(
+      pd,
+      stage.slug,
+      baselineChanged,
+      receipts.currentSourceListing,
+      (pathKey) => claimModels.some((claims) => sourceClaimCovers(pathKey, claims)),
+    ).paths;
   }
   const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
   const applicableReconciliationUnits =
@@ -10290,9 +10384,25 @@ function handleLookup(args: string[]): void {
       }
       break;
     }
+    case "source-changes": {
+      if (subArgs.length > 1) error("Usage: lookup source-changes [<unit>]");
+      const unit = subArgs[0] ?? null;
+      const pd = resolveProjectDir(projectDir);
+      if (unit !== null) {
+        const unitNameError = validateUnitName(unit);
+        if (unitNameError) error(unitNameError);
+        // A name that is no Unit of this work would be answered from the stage's start.
+        const dag = resolveBoltDag(pd);
+        if (dag.state === "ok" && !dag.units.includes(unit)) {
+          error(`No Unit named ${unit} in this work. Its Units: ${dag.units.join(", ")}.`);
+        }
+      }
+      console.log(JSON.stringify(sourceChangesSinceBuildStart(pd, unit)));
+      break;
+    }
     default:
       error(
-        `Unknown lookup subcommand: ${sub}. Valid: phase-of, next-stage, agent-for, number-of, stages-in-scope, first-in-phase, validate-stage, validate-phase`
+        `Unknown lookup subcommand: ${sub}. Valid: phase-of, next-stage, agent-for, number-of, stages-in-scope, first-in-phase, validate-stage, validate-phase, source-changes`
       );
   }
 }

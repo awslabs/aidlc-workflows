@@ -975,6 +975,22 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
+  // The lead ran `git status --short` while writing a Unit's source-manifest.json,
+  // and Kiro asks about a git command the person has not allowed; AI-DLC's own
+  // lookup asks nothing.
+  test("the Kiro IDE conductor checks a Unit's changed files with AI-DLC, a command it runs without asking", () => {
+    for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
+      const dir = join(REPO_ROOT, tree, "kiro-ide", ".kiro");
+      const fm = frontmatter(join(dir, "agents", "aidlc-aidlc.md"));
+      const command = `${invoke} engine state lookup source-changes u1-tagging`;
+      expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("allow");
+      const skill = readFileSync(join(dir, "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill, `${tree} SKILL`).toContain(
+        `To check that account, run \`${invoke} engine state lookup source-changes <directive.unit>\` rather than \`git status\` or \`git diff\``,
+      );
+    }
+  });
+
   test("no Kiro IDE persona runs a shell form or a machine-changing command without the person", () => {
     // The persona's shell deny (above) refuses what only the conductor runs;
     // its asks cover the shell forms on any command it is allowed.
