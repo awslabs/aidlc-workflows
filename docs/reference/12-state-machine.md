@@ -952,12 +952,12 @@ column.
 
 All nine intent settings share `config-change`: `depth`, `test-strategy`,
 `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`,
-`plan-approval`, `collaborators`, in that order. Three per-fence keys, `guard.review-freeze`,
-`guard.state-transition`, and `guard.reviewer-scope`, use the same setter and
+`plan-approval`, `collaborators`, in that order. Four per-fence keys, `guard.review-freeze`,
+`guard.state-transition`, `guard.reviewer-scope`, and `guard.continued-agent`, use the same setter and
 take `on` or `off`; `guard.plan-approval` is an alias of `plan-approval` (one
 switch, no `Guards Off` entry). The matching slash flags and every
 `config set <key> <value>` route can combine settings in one transaction.
-`config get` and `config list` expose all thirteen keys; Guard Policy, fence, and
+`config get` and `config list` expose all fourteen keys; Guard Policy, fence, and
 ceremony values include effective sources, and the retired key `change-control`
 resolves to `guard-policy`. `config-change` accepts only those setting flags plus
 `--intent`, `--space`, and `--project-dir`, requires at least one setting, and

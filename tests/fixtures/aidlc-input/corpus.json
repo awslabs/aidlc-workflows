@@ -16253,7 +16253,7 @@
     "state": "fresh",
     "meaning": "the person means: use this setting for the next piece of work I start: the review freeze check off",
     "source": "docs/guide/12-cli-commands.md:73 (+11 more sources)",
-    "documented": "\"Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`)\" (quick-reference row, source escapes the pipe)",
+    "documented": "\"Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope, continued-agent; `guard.plan-approval` is another name for `plan-approval`)\" (quick-reference row, source escapes the pipe)",
     "expected": {
       "engine": {
         "kinds": [
@@ -16282,7 +16282,7 @@
     "state": "work-open",
     "meaning": "the person means: turn the review freeze check off for the open work",
     "source": "docs/guide/12-cli-commands.md:73 (+11 more sources)",
-    "documented": "\"Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`)\" (quick-reference row, source escapes the pipe)",
+    "documented": "\"Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope, continued-agent; `guard.plan-approval` is another name for `plan-approval`)\" (quick-reference row, source escapes the pipe)",
     "expected": {
       "engine": {
         "kinds": [
@@ -16305,7 +16305,7 @@
     "state": "work-open",
     "meaning": "the person means: list the open work's settings",
     "source": "docs/guide/12-cli-commands.md:74 (+2 more sources)",
-    "documented": "\"List all thirteen active workflow settings (`--json` for structured output)\"",
+    "documented": "\"List all fourteen active workflow settings (`--json` for structured output)\"",
     "expected": {
       "engine": {
         "kinds": [

@@ -184,7 +184,7 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("a setting typed in chat and config-change expose all thirteen settings through get and both list formats", () => {
+  test("a setting typed in chat and config-change expose all fourteen settings through get and both list formats", () => {
     const project = stateProject();
     // The hook records their line and applies nothing; the agent runs the setter
     // the engine names, and the settings are theirs.
@@ -206,7 +206,7 @@ describe("t231 config get/list/set handlers", () => {
     expect(changed.stdout).toContain("The state transition check is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
     // The eight settings the human names, collaborators reading its scope
-    // default, plus the four per-run fence keys, in the order config list
+    // default, plus the five per-run fence keys, in the order config list
     // prints them. relaxed lowers two fences by itself;
     // the switch lowered a third; the rest read their default.
     // `guard.plan-approval` is another name for `plan-approval` and reads the same.
@@ -224,6 +224,7 @@ describe("t231 config get/list/set handlers", () => {
       "guard.review-freeze": "off (guard policy relaxed (set by you))",
       "guard.state-transition": "off (set by you)",
       "guard.reviewer-scope": "on (default)",
+      "guard.continued-agent": "on (default)",
     };
     for (const [key, value] of Object.entries(expected)) {
       const read = utility(["config-get", key], project, FENCE_ENV_CLEAR);

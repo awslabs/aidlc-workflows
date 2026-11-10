@@ -20,22 +20,38 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import {
   hookStandsOutside,
   enterHookWorkflow,
-  agentsDir,
+  auditBlockField,
   authorityFor,
+  decideFence,
+  errorMessage,
+  fenceSwitchSentence,
   getField,
-  isAidlcAgentFile,
+  guardStandAsideSpeaks,
+  guardStoodAsideLine,
   markSubagentInflight,
+  readAuditShardEvents,
   readIssuedDirectiveMarker,
   recordGuardBlockedRow,
+  recordGuardStoodAside,
+  recordHookDrop,
   resolveWorkflowSelection,
   stateFilePath,
   stateFilePathForSelection,
   validSessionId,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import {
+  AGENT_STAGE_FIELD,
+  AGENT_UNIT_FIELD,
+  type AgentWork,
+  isAidlcAgent,
+  workName,
+  workOnRecord,
+} from "../tools/aidlc-agent-work.ts";
 import {
   type GraphStage,
   loadGraph,
@@ -64,22 +80,11 @@ export type DispatchRuleResult = {
 };
 
 const DISPATCH_TOOLS = new Set(["task", "agent", "spawn_agent", "subagent"]);
-const EXEMPT_AGENTS = new Set(["aidlc-composer-agent"]);
 // Keep hook stdout comfortably below the smallest observed subprocess capture
 // ceiling. Oversized bundles fail before writing so callers receive complete
 // repair guidance instead of a truncated, invalid JSON response.
 const DISPATCH_HOOK_OUTPUT_MAX_BYTES = 512 * 1024;
 const PRELOAD_FALLBACK_ENV = "AIDLC_DISPATCH_RULES_PRELOAD_FALLBACK";
-
-function isAidlcAgent(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[a-z0-9][a-z0-9-]*-agent$/.test(value) &&
-    existsSync(join(agentsDir(), `${value}.md`)) &&
-    isAidlcAgentFile(join(agentsDir(), `${value}.md`)) &&
-    !EXEMPT_AGENTS.has(value)
-  );
-}
 
 function currentStage(projectDir: string): string | null {
   const path = stateFilePath(projectDir);
@@ -437,8 +442,105 @@ function deliverAtStart(parsed: HookInput, projectDir: string): number {
   return 0;
 }
 
+// The tool that sends a message to an agent that already started (Claude Code).
+// It is not a dispatch: the agent resumes with everything it did before, and
+// the rules for the work now reach an agent only when it first starts.
+const CONTINUE_TOOLS = new Set(["sendmessage"]);
+
+export type ContinuedAgent = {
+  agentType: string;
+  earlier: AgentWork;
+  now: AgentWork;
+};
+
+/**
+ * The AI-DLC agent this message would continue on other work: its last
+ * SUBAGENT_COMPLETED row names a stage or Unit other than the one the engine
+ * last issued. Null for any other call: a message to an agent that is still
+ * running or has no row, an agent that is not AI-DLC's, a row written without
+ * a stage (an earlier release, or no step issued then), the same work (a
+ * follow-up on the task it finished stays allowed), or evidence that cannot be
+ * read.
+ */
+export function continuedOnOtherWork(
+  toolName: string,
+  input: Record<string, unknown>,
+  projectDir: string,
+  sessionId: unknown,
+): ContinuedAgent | null {
+  if (!CONTINUE_TOOLS.has(toolName.toLowerCase())) return null;
+  const target = typeof input.to === "string" ? input.to.trim() : "";
+  if (!target) return null;
+  try {
+    const row = readAuditShardEvents(projectDir).findLast((event) =>
+      event.event === "SUBAGENT_COMPLETED" && auditBlockField(event.block, "Agent ID") === target);
+    if (!row) return null;
+    const agentType = auditBlockField(row.block, "Agent Type")?.trim() ?? "";
+    if (!isAidlcAgent(agentType)) return null;
+    const stage = auditBlockField(row.block, AGENT_STAGE_FIELD)?.trim();
+    if (!stage) return null;
+    const earlier: AgentWork = { stage, unit: auditBlockField(row.block, AGENT_UNIT_FIELD)?.trim() || null };
+    const now = workOnRecord(projectDir, sessionId);
+    if (!now || (now.stage === earlier.stage && now.unit === earlier.unit)) return null;
+    return { agentType, earlier, now };
+  } catch {
+    return null;
+  }
+}
+
+// The check is one of the person's own switches (`guard.continued-agent`): off
+// for this piece of work, the message goes through and the audit trail keeps a
+// row, like every other check that stands aside.
+function continuedAgentStandsAside(parsed: HookInput, projectDir: string, continued: ContinuedAgent): boolean {
+  let gate: ReturnType<typeof decideFence>;
+  try {
+    const session = typeof parsed.session_id === "string" ? parsed.session_id : undefined;
+    gate = decideFence(projectDir, "continued-agent", {
+      hookInput: {
+        session_id: session,
+        tool_name: parsed.tool_name,
+        ...(typeof parsed.agent_type === "string" ? { agent_type: parsed.agent_type } : {}),
+      },
+    });
+  } catch (e) {
+    recordHookDrop(projectDir, "deliver-stage-rules", errorMessage(e));
+    return false;
+  }
+  if (gate.decision !== "stand-aside") return false;
+  const detail = `${continued.agentType}: ${workName(continued.earlier)} to ${workName(continued.now)}`;
+  if (guardStandAsideSpeaks(gate)) {
+    writeGuardStoodAside(guardStoodAsideLine("continued-agent", gate.source, detail));
+  }
+  recordGuardStoodAside(projectDir, {
+    fence: "continued-agent",
+    authority: gate.authority,
+    stage: continued.now.stage,
+    tool: parsed.tool_name ?? "SendMessage",
+    details: detail,
+  });
+  return true;
+}
+
+function refuseContinuedAgent(parsed: HookInput, projectDir: string, continued: ContinuedAgent): number {
+  process.stderr.write(
+    `[aidlc] Not sent: this ${continued.agentType} finished its work on ${workName(continued.earlier)}, and the ` +
+      `work is now ${workName(continued.now)}. A subagent continued with a message keeps everything it did ` +
+      "before, and the rules for the new work reach an agent only when it first starts. Dispatch a new " +
+      `${continued.agentType} instead, with everything it needs in its prompt. ` +
+      `${fenceSwitchSentence(projectDir, "continued-agent")}\n`,
+  );
+  recordStageRulesBlocked(parsed, projectDir, "continued-agent");
+  return 2;
+}
+
 function deliver(parsed: HookInput, projectDir: string): number {
   if (parsed.hook_event_name === "SubagentStart") return deliverAtStart(parsed, projectDir);
+  if (CONTINUE_TOOLS.has((parsed.tool_name ?? "").toLowerCase())) {
+    if (parsed.hook_event_name === "PostToolUse") return 0;
+    const continued = continuedOnOtherWork(parsed.tool_name ?? "", parsed.tool_input ?? {}, projectDir, parsed.session_id);
+    if (!continued || continuedAgentStandsAside(parsed, projectDir, continued)) return 0;
+    return refuseContinuedAgent(parsed, projectDir, continued);
+  }
   // The rules were delivered before the dispatch; afterwards the hook only
   // records a background launch its input did not announce.
   if (parsed.hook_event_name === "PostToolUse") {

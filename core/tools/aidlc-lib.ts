@@ -3539,7 +3539,7 @@ export function messageFill(projectDir: string, settings: readonly string[] = []
 // (aidlc-guard-switch.ts) and a decision's own command (settingsBesideDecision)
 // read this one list.
 const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
-  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
+  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope", "guard.continued-agent"];
 export const CONFIG_KEYS = [
   "depth",
   "test-strategy",
@@ -12688,6 +12688,7 @@ const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[
   "guard.review-freeze": { on: ["on"], off: ["off"] },
   "guard.state-transition": { on: ["on"], off: ["off"] },
   "guard.reviewer-scope": { on: ["on"], off: ["off"] },
+  "guard.continued-agent": { on: ["on"], off: ["off"] },
   "guard-policy": { on: ["strict"], off: ["relaxed", "off"] },
 };
 
@@ -40902,6 +40903,7 @@ export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
   "review-freeze": "Review freeze (edits after a review receipt)",
   "state-transition": "State transition (direct lifecycle commands)",
   "reviewer-scope": "Reviewer read scope (a dispatched reviewer outside its unit)",
+  "continued-agent": "Continued agent (a finished AI-DLC agent sent on to other work)",
   "human-presence": "Human presence (a real human turn behind approvals and answers)",
 };
 
@@ -40940,7 +40942,7 @@ export const ENGINE_OWNED_STATE_TRANSITIONS: ReadonlySet<string> = new Set([
 
 /** The fences the policy word lowers by itself. */
 export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[] {
-  if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope"];
+  if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope", "continued-agent"];
   if (policy === "relaxed") return ["plan-approval", "review-freeze"];
   return [];
 }

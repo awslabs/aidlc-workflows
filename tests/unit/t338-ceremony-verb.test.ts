@@ -488,6 +488,7 @@ describe("t338 atomic per-intent settings", () => {
       // `guard.plan-approval` is the same switch, so it reads the same setting.
       "guard.plan-approval": "on (from scope classic)", "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)", "guard.reviewer-scope": "on (default)",
+      "guard.continued-agent": "on (default)",
     });
     expect(settingRows(proj)).toHaveLength(7);
   });
