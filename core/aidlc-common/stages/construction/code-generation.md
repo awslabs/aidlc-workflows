@@ -427,6 +427,10 @@ plan's steps yourself.
 
 Delegate to Task tool with subagent_type="aidlc-developer-agent".
 
+Each Unit's build starts a new developer subagent. Never continue the developer
+of an earlier Unit by sending it a message: it still holds that earlier build in
+its context. The delegation prompt below carries everything it needs.
+
 The aidlc-developer-agent persona and its knowledge are loaded automatically by the named agent. Do NOT manually inject the persona in the prompt.
 
 Include in the delegation prompt:
