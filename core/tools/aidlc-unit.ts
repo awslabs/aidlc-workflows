@@ -4964,7 +4964,7 @@ function giveBack(pd: string, build: UnitBuild): void {
   }
   let said: string;
   if (current?.status === "claimed" && current.payload.taken_by !== undefined && current.generation === build.attempt &&
-    current.payload.result === undefined) {
+    current.payload.result === undefined && takeStanding(pd, build).state === "recorded") {
     const before = current.payload.predecessor_oid ? readPayload(pd, current.payload.predecessor_oid, { localOnly: true }) : null;
     const held = before !== null && before.status === "claimed" && before.taken_by === undefined &&
       teamSpaceOf(before.owner) === teamSpaceOf(current.owner) ? before : null;
@@ -6630,48 +6630,32 @@ function takeUnit(args: string[], projectDir?: string): void {
   }
   const team = current?.status === "claimed" ? current.owner : flags.team ?? activeTeam ?? me;
   if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
-  const generation = current?.status === "claimed"
-    ? current.generation
-    : current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1;
-  const payload: UnitClaimPayload = {
-    ...(current?.status === "claimed" ? current.payload : {
-      version: 1,
-      status: "claimed",
-      owner: team,
-      space: home.space,
-      intent_uuid: home.uuid,
-      intent_id8: home.id8,
-      unit,
-      nonce: randomUUID(),
-      claim_ref: ref,
-      gate_rhythm: readUnitGateRhythm(plan.state),
-    }),
-    generation,
-    base_oid: integration.oid,
-    integration_ref: integration.ref,
-    predecessor_oid: current?.oid ?? null,
-    taken_by: me,
-    ...(earlyOn ? { early_on: earlyOn } : {}),
-  } as UnitClaimPayload;
+  const generation = takeGeneration(current);
+  const payload = takenClaimPayload(current, {
+    team, home, unit, ref, generation, me, baseOid: integration.oid, integrationRef: integration.ref,
+    gateRhythm: readUnitGateRhythm(plan.state), earlyOn,
+  });
   const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
   const pushed = updateClaimRef(pd, home.target, ref, commit, current?.oid ?? null);
+  // The lead's project took no push from here: the take goes on as the person
+  // asked, and its claim is recorded there when a push next goes through
+  // (recordTakeHere). An early start's claim alone holds where it started, so
+  // that one waits for the lead's project to take pushes.
+  let notRecorded: string | null = null;
   if (!pushed.ok) {
     const winner = currentClaim(pd, home.target, ref);
     if (winner?.status === "claimed" && winner.nonce !== current?.nonce) fail(`${unit} was just taken by ${theTeam(winner.owner)}.`);
     if (winner?.status === "claimed" && winner.payload.taken_by !== undefined) fail(`${unit} was just taken by ${winner.payload.taken_by}.`);
-    // A take is recorded only on its claim at the lead's project: one git
-    // refused is said in git's words with the one way on, and nothing is taken.
     // Git gave no reason when the claim moved under the take.
     if (pushed.refused === undefined) fail(`${unit} was not taken: its claim at the lead's project moved meanwhile. Try again.`);
     const why = pushed.refused.replace(/\.+$/, "");
-    if (current?.status === "claimed") {
-      fail(`${unit} is held for your team at the lead's project, which takes no push from here: ${why}. ` +
-        `Ask the lead for push access to it, then take ${unit} again.`);
+    if (earlyOn) {
+      fail(`${unit} is ${current?.status === "claimed" ? "held for your team" : "open"} at the lead's project, which takes no push from here: ` +
+        `${why}. Ask the lead for push access to it, then take ${unit} again.`);
     }
-    fail(`${unit} is open at the lead's project, which takes no push from here: ${why}. ` +
-      `Ask the lead for push access to it, then take ${unit} again.`);
+    notRecorded = why;
   }
-  invalidateLiveClaimPayloadCache(pd, unit);
+  if (notRecorded === null) invalidateLiveClaimPayloadCache(pd, unit);
   const withLeadRules = bareFlags.has("lead-rules") || flags["lead-rules"] !== undefined;
   // The lead's rules the build reads too, in the take's own words, as its choice named them.
   // In a team's own workspace the lead's files are read from the lead's commit, never this workspace's own.
@@ -6726,7 +6710,9 @@ function takeUnit(args: string[], projectDir?: string): void {
     notThere.lines +
     (planChanging !== null
       ? ` The lead is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
-      : "");
+      : "") +
+    (notRecorded === null ? "" : ` The lead's project takes no push from here (${notRecorded}), so the lead and the other teams ` +
+      `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`);
   // The take's own line waits for the build's next step, which also puts the
   // offer to clone its repos not checked out here (buildCloneOffer).
   const said = saidWithNextStep(pd, taken);
@@ -6738,6 +6724,168 @@ function takeUnit(args: string[], projectDir?: string): void {
     record: build.dirName,
     ...(said ? {} : { notice: taken }),
   }));
+}
+
+// The generation a take writes: a held or released claim's own, else the next.
+function takeGeneration(current: UnitClaimView | null): number {
+  return current?.status === "claimed" || current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1;
+}
+
+// The claim a take writes: the lead's hold kept as the lead made it, or a new
+// claim for the team, taken by this person, at this generation.
+function takenClaimPayload(
+  current: UnitClaimView | null,
+  take: {
+    team: string; home: HomeWork; unit: string; ref: string; generation: number; me: string; baseOid: string;
+    integrationRef: string; gateRhythm: ReturnType<typeof readUnitGateRhythm>; earlyOn?: UnitClaimPayload["early_on"];
+  },
+): UnitClaimPayload {
+  return {
+    ...(current?.status === "claimed" ? current.payload : {
+      version: 1,
+      status: "claimed",
+      owner: take.team,
+      space: take.home.space,
+      intent_uuid: take.home.uuid,
+      intent_id8: take.home.id8,
+      unit: take.unit,
+      nonce: randomUUID(),
+      claim_ref: take.ref,
+      gate_rhythm: take.gateRhythm,
+    }),
+    generation: take.generation,
+    base_oid: take.baseOid,
+    integration_ref: take.integrationRef,
+    predecessor_oid: current?.oid ?? null,
+    taken_by: take.me,
+    ...(take.earlyOn ? { early_on: take.earlyOn } : {}),
+  } as UnitClaimPayload;
+}
+
+// Whether a build's take is on its claim at the lead's project, as git last
+// fetched the claim. Only the checkout that made the take can tell (its
+// UNIT_TAKEN_IN row is in this checkout's own audit shard); a build taken in
+// another reads as recorded, as every take did before. "pending": never
+// recorded and still the person's to record; "aside": someone else's take, a
+// hold for another team, or the Unit done, is there now, and this build's take
+// is never written over it.
+type TakeStanding =
+  | { state: "recorded" }
+  | { state: "pending"; current: UnitClaimView | null; team: string; baseOid: string; dirName: string; space: string }
+  | { state: "aside"; line: string };
+
+function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
+  const here = findUnitBuild(projectDir, build.homeWork, build.unit);
+  if (here === null) return { state: "recorded" };
+  const row = readAuditShardEvents(projectDir, here.dirName, here.space).findLast((entry) => entry.event === "UNIT_TAKEN_IN");
+  const own = knownAuditShardName(projectDir);
+  if (row === undefined || own === null || basename(row.shard) !== own) return { state: "recorded" };
+  const homeSpace = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
+  let current: UnitClaimView | null;
+  try {
+    current = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
+      .get(build.unit) ?? null;
+  } catch {
+    return { state: "recorded" };
+  }
+  const me = git(projectDir, ["config", "user.name"]).stdout.trim() || "a teammate";
+  const myEmail = git(projectDir, ["config", "user.email"]).stdout.trim();
+  // The build's attempt as its record has it now (a take recorded later at a
+  // new attempt writes it there), never as the caller read it before.
+  let attempt = build.attempt;
+  try {
+    attempt = unitBuildOf(readStateFile(projectDir, here.dirName, here.space))?.attempt ?? attempt;
+  } catch {
+    // The caller's stands.
+  }
+  // The claim's own history, back from what git fetched: this take there once
+  // is recorded, whatever the lead did with the Unit since. It is this person's
+  // by their git name then, or by the email of the commit that made the take
+  // (only that one: a later commit of theirs on someone else's take is not it).
+  let oid = current?.oid ?? null;
+  for (let steps = 0; oid !== null && steps < 200; steps++) {
+    const payload = readPayload(projectDir, oid, { localOnly: true });
+    if (payload === null) break;
+    const before = payload.predecessor_oid === null ? null : readPayload(projectDir, payload.predecessor_oid, { localOnly: true });
+    const madeTheTake = payload.taken_by !== undefined && before?.taken_by !== payload.taken_by;
+    if (payload.taken_by !== undefined && payload.generation === attempt && (payload.taken_by === me || (madeTheTake && myEmail !== "" &&
+      localGit(projectDir, ["log", "-1", "--format=%ce", oid]).stdout.trim() === myEmail))) return { state: "recorded" };
+    oid = payload.predecessor_oid;
+  }
+  const team = auditBlockField(row.block, "Team") ?? "";
+  const unit = build.unit;
+  if (current?.status === "claimed" && current.payload.taken_by !== undefined) {
+    const by = current.payload.taken_by;
+    const at = git(projectDir, ["log", "-1", "--format=%cs", current.oid]).stdout.trim();
+    return {
+      state: "aside",
+      line: `${unit} was taken at the lead's project by ${by} for ${theTeam(current.owner)}${at ? ` on ${at}` : ""}, before your take ` +
+        `could be recorded there, so the lead and the other teams see theirs, not yours. Your build is still here: agree with ${by} ` +
+        "who carries it on, or give yours back.",
+    };
+  }
+  const now = current?.payload.done === true ? "done there"
+    : current?.status === "claimed" && teamSpaceOf(current.owner) !== teamSpaceOf(team) ? `held for ${theTeam(current.owner)}` : null;
+  if (now !== null) {
+    return {
+      state: "aside",
+      line: `${unit}'s claim at the lead's project changed before your take could be recorded there: it is ${now} now, so the lead ` +
+        "and the other teams do not see your take. Your build is still here: agree with the lead who carries it on, or give yours back.",
+    };
+  }
+  return { state: "pending", current, team, baseOid: auditBlockField(row.block, "Home Commit") ?? "", dirName: here.dirName, space: here.space };
+}
+
+// A take this checkout made that the lead's project did not record then, put
+// on its claim now with the same compare-and-swap, under quiet git. At a look
+// nobody typed (`typed` false) it is not tried where commits are signed, which
+// may ask for a passphrase. The claim's attempt is the build's from then on.
+// Ok, or git's refusal (none for a race lost), and nothing is said either way.
+function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, standing: Extract<TakeStanding, { state: "pending" }>, typed: boolean): { ok: boolean; refused?: string } {
+  if (!typed && git(projectDir, ["config", "--type=bool", "commit.gpgsign"]).stdout.trim() === "true") return { ok: false };
+  try {
+    return quietly(() => {
+      const ref = claimRef(home.id8, build.unit);
+      const { current } = standing;
+      const generation = takeGeneration(current);
+      const record = `${home.recordPrefix}/aidlc-state.md`;
+      const remote = home.target !== null && !isGitAddress(home.target) ? home.target : null;
+      const integrationRef = home.target !== null && isGitAddress(home.target) ? leadCopyRef(home.id8)
+        : remote !== null ? `refs/remotes/${remote}/${affirmedIntegrationBranch(projectDir, home.space)?.branch ?? integrationBranch(projectDir, remote)}`
+        : `refs/heads/${affirmedIntegrationBranch(projectDir, home.space)?.branch ?? integrationBranch(projectDir, null)}`;
+      const payload = takenClaimPayload(current, {
+        team: standing.team, home, unit: build.unit, ref, generation,
+        me: git(projectDir, ["config", "user.name"]).stdout.trim() || "a teammate",
+        baseOid: standing.baseOid, integrationRef, gateRhythm: readUnitGateRhythm(textAt(projectDir, standing.baseOid, record) ?? ""),
+      });
+      const pushed = updateClaimRef(projectDir, home.target, ref, createClaimCommit(projectDir, current?.oid ?? standing.baseOid, payload), current?.oid ?? null);
+      if (!pushed.ok) return pushed;
+      invalidateLiveClaimPayloadCache(projectDir, build.unit);
+      if (generation !== build.attempt) {
+        withAuditLock(projectDir, () => {
+          writeStateFile(projectDir, setOrInsertField(readStateFile(projectDir, standing.dirName, standing.space), "## Runtime State",
+            "Home Attempt", String(generation)), standing.dirName, standing.space);
+        });
+      }
+      return { ok: true };
+    });
+  } catch {
+    return { ok: false };
+  }
+}
+
+// What a build's claim says is not this build's to act on now: someone else's
+// take, a hold for another team or the Unit done, before this checkout's take
+// was recorded. The step says it once (buildClaimNotes), and no look, push or
+// give back acts on that claim as this build's.
+export function takeAside(projectDir: string, stateContent: string): boolean {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return false;
+  try {
+    return takeStanding(projectDir, build).state === "aside";
+  } catch {
+    return false;
+  }
 }
 
 // A line of the take's for the person: it waits for the next step the agent
@@ -7125,6 +7273,19 @@ function pushUnit(args: string[], projectDir?: string): void {
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, unit);
   if (home.target !== null) ensureFetchedClaim(pd, home, ref);
+  // A take the lead's project did not record then is recorded first, so the
+  // result goes onto this build's own claim, never onto anyone else's: read
+  // against the claims as the lead's project has them now.
+  let standing = takeStanding(pd, build);
+  if (standing.state === "pending") {
+    refreshHomeClaims(pd, { home, now: true });
+    standing = takeStanding(pd, build);
+  }
+  const recorded = standing.state === "pending" ? recordTakeHere(pd, build, home, standing, true) : null;
+  if (recorded?.ok) {
+    if (home.target !== null) ensureFetchedClaim(pd, home, ref);
+    standing = takeStanding(pd, build);
+  }
   const claim = currentClaim(pd, home.target, ref);
   const label = getField(state, "Home Label")?.trim() || build.homeRecord;
   // What this Unit sent before keeps each repo's base and heads across pushes:
@@ -7369,7 +7530,13 @@ function pushUnit(args: string[], projectDir?: string): void {
     ...(kept.length > 0 ? { kept_edits: kept } : {}),
   };
   let homeHasIt = true;
-  if (claim === null) {
+  if (standing.state === "aside") {
+    lines.push(standing.line);
+    homeHasIt = false;
+  } else if (standing.state === "pending") {
+    lines.push(`The lead's project did not take ${unit}'s result: ${recorded?.refused ?? "its claim moved meanwhile"}. Do you want me to send it again?`);
+    homeHasIt = false;
+  } else if (claim === null) {
     // The lead's project answered and holds no claim for this Unit now: the
     // code is pushed, and the result waits to be sent again.
     lines.push(`The lead's project did not take ${unit}'s result: its claim is not there now. Do you want me to send it again?`);
@@ -7801,7 +7968,12 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     if (refreshed?.unreached) lines.push("The lead's project could not be reached just now, so news from it may be behind.");
     if (refreshed?.refused) lines.push(newsNotTakenIn("the lead's project"));
     if (home !== null && newStage) noteBuildStageLooked(projectDir, sessionId, atStage);
+    // A take the lead's project did not record then, tried again when the claims were just fetched.
+    const standing = home !== null && refreshed?.fetched ? takeStanding(projectDir, build) : null;
+    if (home !== null && standing?.state === "pending") recordTakeHere(projectDir, build, home, standing, false);
   }
+  const aside = takeStanding(projectDir, build);
+  if (aside.state === "aside") return [...lines, aside.line];
   let claims: Map<string, UnitClaimView>;
   try {
     claims = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false);
@@ -7902,7 +8074,7 @@ export function otherBuildsTurnedDown(
         const mine = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
           .get(build.unit);
         const down = mine?.payload.turned_down;
-        if (!down || mine?.payload.done) continue;
+        if (!down || mine?.payload.done || takeStanding(projectDir, build).state !== "recorded") continue;
         const said = turnedDownLine(build.unit, down);
         found.push({
           line: `${said} ${BUILD_WAITING_CLAUSE}`,
@@ -7946,7 +8118,9 @@ export function earlyBaseMerged(
     return [];
   }
   const branch = unitBranchOf(stateContent, build.unit);
-  return (claims.get(build.unit)?.payload.early_on ?? []).flatMap((dep) => {
+  const earlyOn = claims.get(build.unit)?.payload.early_on ?? [];
+  if (earlyOn.length === 0 || takeStanding(projectDir, build).state !== "recorded") return [];
+  return earlyOn.flatMap((dep) => {
     const theirs = claims.get(dep.unit)?.payload;
     if (!theirs?.done || skip(dep.unit)) return [];
     const moves = (from: typeof dep.repos, look: boolean) => from.flatMap(({ repo, head }) => {
@@ -8145,6 +8319,18 @@ function proposeChange(args: string[], projectDir?: string): void {
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, build.unit);
   if (home.target !== null) ensureFetchedClaim(pd, home, ref);
+  // Never onto a claim this build's take is not on; one the lead's project did
+  // not record then is recorded first.
+  let standing = takeStanding(pd, build);
+  if (standing.state === "pending") {
+    refreshHomeClaims(pd, { home, now: true });
+    standing = takeStanding(pd, build);
+    if (standing.state === "pending" && recordTakeHere(pd, build, home, standing, true).ok) standing = takeStanding(pd, build);
+  }
+  if (standing.state === "aside") {
+    console.log(JSON.stringify({ proposed: false, notice: standing.line }));
+    return;
+  }
   const live = currentClaim(pd, home.target, ref);
   if (live?.status !== "claimed") fail(`${build.unit} is not held at the lead's project, so there is no claim to send the change on.`);
   const proposal: Proposal = {

@@ -636,6 +636,7 @@ import {
   leadOfBuild,
   leadWorkAt,
   leadWorkByAddress,
+  takeAside,
   sendLeadsApprovedChanges,
   GitWriteRefused,
   earlyBaseMerged,
@@ -9497,7 +9498,8 @@ function unitCloneAsk(projectDir: string, stateContent: string): AskDirective | 
 
 function unitProposeAsk(projectDir: string, stateContent: string): AskDirective | null {
   const build = unitBuildOf(stateContent);
-  if (build === null) return null;
+  // A claim this build's take is not on takes no change from it (said once by buildClaimNotes).
+  if (build === null || takeAside(projectDir, stateContent)) return null;
   for (const changed of changedInputs(projectDir, stateContent)) {
     const askName = `unit-propose-${changed.path.replace(/[^A-Za-z0-9.-]+/g, "_")}-${changed.fingerprint.slice("sha256:".length, 19)}.json`;
     if (engineAskMark(projectDir, askName) !== null) continue;
@@ -9573,6 +9575,10 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   }
   if (!unitPushToOffer(projectDir, stateContent)) return null;
   const unitTool = aidlcToolInvocation("unit");
+  // Someone else's take, a hold for another team or the Unit done is on the
+  // claim before this take was recorded: said once (buildClaimNotes), never
+  // offered again as a result to send.
+  if (push === "unsent" && takeAside(projectDir, stateContent)) return null;
   if (push === "unsent") {
     return {
       kind: "ask",
