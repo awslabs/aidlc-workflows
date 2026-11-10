@@ -1838,7 +1838,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(d.message).toContain(ROUTING_STEP);
     expect(d.message).not.toContain("which keeps every word of theirs");
     // Their words go to `next` in a file the step names, never on its line.
-    const file = / next --request-file (aidlc\/\.aidlc-request-text\/other[^ `]*\.txt)`/.exec(String(d.message))?.[1];
+    const file = / next --request-file (aidlc\/\.aidlc-engine\/request-text\/other[^ `]*\.txt)`/.exec(String(d.message))?.[1];
     expect(file, String(d.message)).toBeDefined();
     expect(readFileSync(join(proj, ...file!.split("/")), "utf-8")).toBe(OTHER_ANSWER);
     expect(d.message).toContain(`(their words: ${JSON.stringify(OTHER_ANSWER)})`);

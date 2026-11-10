@@ -142,12 +142,12 @@ function ledgerFilesFor(projectDir: string, suffix = ".json"): string[] {
   const dir = ledgerDirFor(projectDir);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter((name) => name.endsWith(suffix))
+    .filter((name) => name.endsWith(suffix) && !name.startsWith(".aidlc-cursor-subagent-"))
     .map((name) => join(dir, name));
 }
 
 function witnessFilesFor(projectDir: string): string[] {
-  const dir = join(projectDir, "aidlc");
+  const dir = ledgerDirFor(projectDir);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter(

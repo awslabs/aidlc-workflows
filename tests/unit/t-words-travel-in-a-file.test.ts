@@ -39,7 +39,7 @@ describe("the person's words in a printed next step travel in a file", () => {
     const typed = ["intent", "nowhere", ...WORDS];
     const d = next(proj, typed);
     expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
-    const step = /`([^`]* next --request-file (aidlc\/\.aidlc-request-text\/[^ `]+))` instead/.exec(String(d.message));
+    const step = /`([^`]* next --request-file (aidlc\/\.aidlc-engine\/request-text\/[^ `]+))` instead/.exec(String(d.message));
     expect(step, String(d.message)).not.toBeNull();
     // The command holds no word of theirs; the file holds them all, as typed.
     for (const word of WORDS) expect(step![1]).not.toContain(word);
@@ -63,7 +63,7 @@ describe("the person's words in a printed next step travel in a file", () => {
     ]) {
       const d = next(proj, typed);
       expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
-      const step = /`[^`]* unit gate alpha --decision reject --request-file (aidlc\/\.aidlc-request-text\/[^ `]+)`/.exec(String(d.message));
+      const step = /`[^`]* unit gate alpha --decision reject --request-file (aidlc\/\.aidlc-engine\/request-text\/[^ `]+)`/.exec(String(d.message));
       expect(step, String(d.message)).not.toBeNull();
       for (const word of WORDS) expect(String(d.message)).not.toContain(word);
       expect(readFileSync(join(proj, ...step![1].split("/")), "utf-8")).toBe(reason);

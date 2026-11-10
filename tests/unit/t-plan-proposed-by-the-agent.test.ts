@@ -727,7 +727,7 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name kee
       expect(String(d.message)).toContain("--scope classic --request-file aidlc/.aidlc-engine/request-text/line-after-plan");
       expect(String(d.message)).toContain('(the task: "car rental website")');
       expect(questionTexts(proj)).toEqual([]);
-      const theirs = next(CLAUDE_TOOLS, proj, commandAfter(d.message, /--request-file aidlc\/\.aidlc-request-text\/line(?!-after)/));
+      const theirs = next(CLAUDE_TOOLS, proj, commandAfter(d.message, /--request-file aidlc\/\.aidlc-engine\/request-text\/line(?!-after)/));
       expect(theirs.kind, JSON.stringify(theirs).slice(0, 300)).toBe("print");
       expect(String(theirs.message)).toContain(PROPOSAL);
       expect(String(theirs.message)).toContain('"classic car rental website"');

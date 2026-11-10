@@ -85,7 +85,7 @@ async function probe(preload: boolean): Promise<string[]> {
       resources: string[];
     };
     const memoryResources = shipped.resources.filter((entry) =>
-      /^file:\/\/aidlc\/active-memory\/\*\*\/\*\.md$/.test(entry));
+      /^file:\/\/aidlc\/\.aidlc-engine\/active-memory\/\*\*\/\*\.md$/.test(entry));
     expect(memoryResources).toHaveLength(1);
     const worker = {
       name: WORKER, prompt: WORKER_PROMPT,

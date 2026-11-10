@@ -329,7 +329,7 @@ describe("a flag the engine takes with a value it does not", () => {
 // The file a step's command names for their words, read as the command reads it.
 function requestFileText(proj: string, message: string, name: string): string {
   // `<name>-<chat id>.txt`: a file per chat.
-  const file = new RegExp(`--request-file (aidlc/\\.aidlc-request-text/${name}-[0-9a-f]{8}-[^ \`]+\\.txt)`).exec(message)?.[1];
+  const file = new RegExp(`--request-file (aidlc/\\.aidlc-engine/request-text/${name}-[0-9a-f]{8}-[^ \`]+\\.txt)`).exec(message)?.[1];
   expect(file, message).toBeDefined();
   return readFileSync(join(proj, ...file!.split("/")), "utf-8");
 }

@@ -777,7 +777,7 @@ describe("the request the first next stopped with carries on after the restart",
     const proj = installed(OPENCODE);
     const outside = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-kept-request-outside-"));
     outsides.push(outside);
-    mkdirSync(join(proj, "aidlc"), { recursive: true });
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
     rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
     symlinkSync(outside, join(proj, "aidlc", ".aidlc-engine", "sessions"), DIR_LINK);
     expect(isStop(next(proj, OPENCODE, {}, ["--", REQUEST]))).toBe(true);

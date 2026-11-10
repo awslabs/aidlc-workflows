@@ -1005,7 +1005,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     };
     // The reply a command hands on: the request file it names holds it.
     const handedOn = (command: string): string => {
-      const file = /(?:^| )--request-file (aidlc\/\.aidlc-request-text\/[^ ]+)$/.exec(command);
+      const file = /(?:^| )--request-file (aidlc\/\.aidlc-engine\/request-text\/[^ ]+)$/.exec(command);
       expect(file, command).not.toBeNull();
       return readFileSync(join(proj, ...file![1].split("/")), "utf-8");
     };

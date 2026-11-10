@@ -42,7 +42,7 @@ const PIECE = "fixture-8000000000000001";
 const READING = "the person's words may ask to redo";
 // The step after the switch, as the pick step names it.
 const THEN = /then run `[^`]* next( --resume(?: --request-file \S+)?| --request-file \S+| -- [^`]+)?` and follow what it returns/;
-const REQUEST_FILE = /^--request-file (aidlc\/\.aidlc-request-text\/[^/\s]+)$/;
+const REQUEST_FILE = /^--request-file (aidlc\/\.aidlc-engine\/request-text\/[^/\s]+)$/;
 
 /** A teammate's clone of a bug fix at Requirements Analysis: the record is there, the git-ignored selection is not. */
 async function clone(state: "work-open" | "parked" | "gate-open" = "work-open"): Promise<string> {

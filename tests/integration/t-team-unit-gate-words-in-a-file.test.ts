@@ -66,7 +66,7 @@ describe("a Unit merge decision in the person's words, from a request file", () 
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
     const gate = JSON.parse(pin.stdout).merge_gate as Record<string, string>;
-    const named = / unit gate alpha --decision reject --request-file (aidlc\/\.aidlc-request-text\/gate-alpha\.txt)$/.exec(gate.reject);
+    const named = / unit gate alpha --decision reject --request-file (aidlc\/\.aidlc-engine\/request-text\/gate-alpha\.txt)$/.exec(gate.reject);
     expect(named, gate.reject).not.toBeNull();
     expect(gate.approve).toEndWith(` unit gate alpha --decision approve --request-file ${named![1]}`);
     expect(gate.ask).toContain(named![1]);
