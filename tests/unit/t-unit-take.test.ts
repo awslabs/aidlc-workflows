@@ -114,7 +114,7 @@ describe("a team member's clone of the home's workspace", () => {
         "checkout-ui (open; likely checkout-web). Waiting: reporting (on refunds). Taking a Unit starts it as your " +
         "team's own piece of work here, from what the lead approved.",
     );
-    const choices = ask.choices as Array<{ label: string; command: string }>;
+    const choices = ask.choices as Array<{ label: string; command: string; detail?: string }>;
     expect(choices.map((choice) => choice.label)).toEqual([
       "Start refunds",
       "Start checkout-ui",
