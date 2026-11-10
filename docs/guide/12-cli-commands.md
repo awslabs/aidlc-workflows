@@ -803,8 +803,13 @@ Run from unscoped main:
 Pinning fetches the claim ref, records its exact OID/generation and a fresh pin
 transaction ID, and reads
 artifacts, Unit receipts, team gates, reviewer verdicts, Plan Approval, state,
-and audit-shard transport directly from that commit. It does not merge or create
-a worktree. The claim-bound team shard may carry only that Unit's attempt
+and audit-shard transport directly from that commit. It does not merge into main
+or create a worktree; it tries the merge with `git merge-tree`, and a candidate
+that conflicts with main is refused before the merge question, with the files
+and the step for the Unit's owner (merge main in the claimed checkout, resolve,
+publish again). When main here has commits the remote's integration branch does
+not have yet (a landing not pushed), the step says to push main first, since
+the owner's merge reads the remote. The claim-bound team shard may carry only that Unit's attempt
 receipts; main-authority rows, another Unit's record/receipt paths, extra shards,
 and other workflow-record paths are refused. Pin also compares the candidate
 base's entry for the Unit (its kind and dependencies) and the active per-Unit
