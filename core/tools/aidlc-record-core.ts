@@ -385,7 +385,8 @@ export function keepRecordKeptEntries(
 function writeRowIfChanged(path: string, entry: IntentRegistryEntry): void {
   const text = `${JSON.stringify(entry, null, 2)}\n`;
   try {
-    if (readFileSync(path, "utf-8") === text) return;
+    // A row Git checked out with CRLF (Git for Windows) is the same row.
+    if (readFileSync(path, "utf-8").replaceAll("\r\n", "\n") === text) return;
   } catch {
     // A new row.
   }
