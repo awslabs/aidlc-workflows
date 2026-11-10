@@ -145,6 +145,19 @@ describe("#1454 a brief above the 28 KiB directive limit still tailors a plan, b
     expect(questionCopy(proj, id).text).toBe(brief);
   });
 
+  test("a request that fits one step still rides in it, word for word", () => {
+    const proj = projectWithWork();
+    const brief = briefOf(5_000);
+    const ask = planQuestion(proj, brief);
+    const dispatch = next(proj, argsOf(String(ask.compose_command)));
+    expect(dispatch.kind, String(dispatch.message)).toBe("print");
+    const message = String(dispatch.message);
+    expect(message).toContain(`propose the workflow plan for: "${brief}"`);
+    expect(message).toContain("MUST equal the original task text above verbatim");
+    expect(message).not.toContain("the request kept in this project at");
+    expect(message).not.toContain(copyPath(proj, requestIdOf(message)));
+  });
+
   // Windows caps one command line at 32,767 characters, so this test cannot
   // hand the 60,000-character request to the tool as one argument there. The
   // 30,000-character cases around it run on Windows.
@@ -197,14 +210,14 @@ describe("#1454 the new-work-routing ask carries the same preview its question s
 
 // Listed from the folder, so a composer.md a new harness adds is read too.
 describe("every harness's composer.md agrees with the dispatch", () => {
-  test("none still asks for the request verbatim in creationDescription", () => {
+  test("each says what creationDescription is when the dispatch names the stored copy", () => {
     const harnesses = join(import.meta.dir, "..", "..", "harness");
     const files = readdirSync(harnesses)
       .map((name) => join(harnesses, name, "skills", "aidlc", "composer.md"))
       .filter((path) => existsSync(path));
     expect(files.length).toBeGreaterThan(0);
     for (const path of files) {
-      expect(readFileSync(path, "utf-8"), path).not.toContain("must still equal the original request verbatim");
+      expect(readFileSync(path, "utf-8"), path).toContain("names the request's stored copy instead of carrying it");
     }
   });
 });

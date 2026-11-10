@@ -8268,6 +8268,7 @@ function unitPlanChangeAsk(flags: ParsedFlags, pd: string, scope: string, stateC
 function composeDispatchDirective(
   flags: ParsedFlags,
   inFlight: boolean,
+  nameCopy = false,
 ): PrintDirective {
   const hd = harnessDir();
   const parts: string[] = [];
@@ -8305,7 +8306,7 @@ function composeDispatchDirective(
     );
   } else {
     const request = authoritativeRequest(flags.intent ?? "");
-    const copy = request !== "" && flags.request !== undefined && engineProjectDir !== undefined
+    const copy = nameCopy && request !== "" && flags.request !== undefined && engineProjectDir !== undefined
       ? questionCopyPath(engineProjectDir, flags.request)
       : null;
     parts.push(
@@ -12673,9 +12674,20 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // The plan's creation for this request records the composer's scores, and
     // tells the type the composer planned for from the one the scan found now.
     if (!inFlight && flags.request) openComposerScores(pd, flags.request, detectedProjectType(pd));
-    const dispatch = composeDispatchDirective(flags, inFlight);
-    if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
-    emit(dispatch);
+    // The request rides in the step whenever the step fits what the host shows
+    // of one command result. Only a front step that would not fit names the
+    // engine's stored copy for the composer to read instead: a host's file
+    // tool can turn a long read away or cut it (opencode's read cuts any line
+    // over 2,000 characters), and nothing tells the engine when it does, so
+    // that read is kept for the requests that have no other way through.
+    const dispatchThat = (namesCopy: boolean): PrintDirective => {
+      const directive = composeDispatchDirective(flags, inFlight, namesCopy);
+      if (splitSaid) directive.narration = `${directive.narration ?? ""}${splitSaid}`.trim();
+      return directive;
+    };
+    const carried = dispatchThat(false);
+    const fits = Buffer.byteLength(JSON.stringify(carried), "utf-8") <= directiveMaxBytes();
+    emit(inFlight || fits ? carried : dispatchThat(true));
     return;
   }
 

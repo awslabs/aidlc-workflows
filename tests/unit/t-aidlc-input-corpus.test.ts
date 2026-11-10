@@ -20,9 +20,6 @@
 // green on main and tightens by itself as each one lands. The corpus is generated; see
 // tests/harness/aidlc-input-corpus.ts for the shared mechanics and the item schema.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { questionCopyPath } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { cleanupTestProject } from "../harness/fixtures.ts";
 import {
@@ -58,21 +55,10 @@ const HOST_HOOKS = HARNESSES.filter((h) => h !== "claude");
 
 interface Observed {
   hooks: Partial<Record<Harness, { exit: Exec; record: StoredRecord | null }>>;
-  steps: Partial<Record<ArgvVariant, { argv: string[]; status: number; directive: Directive | null; out: string; kept: string }>>;
+  steps: Partial<Record<ArgvVariant, { argv: string[]; status: number; directive: Directive | null; out: string }>>;
   error?: string;
 }
 const observed = new Map<string, Observed>();
-
-// A step that names the request by the engine's stored copy carries none of its words, so that a request of any
-// length fits one step. The copy's text then stands for the words the step names; it is read here, while the
-// project is still there.
-function keptRequest(proj: string, directive: Directive | null): string {
-  const message = String(directive?.message ?? "");
-  const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
-  const copy = id === undefined ? null : questionCopyPath(proj, id);
-  if (copy === null || !message.includes(copy)) return "";
-  return String((JSON.parse(readFileSync(join(proj, copy), "utf-8")) as { text?: string }).text ?? "");
-}
 const projects: string[] = [];
 
 async function observe(item: CorpusItem, hostHooks: boolean): Promise<Observed> {
@@ -90,7 +76,7 @@ async function observe(item: CorpusItem, hostHooks: boolean): Promise<Observed> 
     }
     for (const [variant, argv] of argvVariants(item)) {
       const step = await next(proj, argv, opts);
-      result.steps[variant] = { argv, ...step, kept: keptRequest(proj, step.directive) };
+      result.steps[variant] = { argv, ...step };
     }
     if (hostHooks && hookRuns(item)) {
       for (const harness of HOST_HOOKS) {
@@ -179,7 +165,7 @@ for (const category of categories) {
           const d = step.directive!;
           const text = [d.message, d.question, d.narration, ...Object.values(d).filter((v) => typeof v === "string")].join("\n");
           expect(engine.kinds, `${label}: kind ${d.kind} ${d.ask_type ?? ""}: ${d.message ?? d.question ?? ""}`).toContain(d.kind ?? "");
-          for (const named of engine.names ?? []) expect(`${text}\n${step.kept}`, `${label}: names ${JSON.stringify(named)}`).toContain(named);
+          for (const named of engine.names ?? []) expect(text, `${label}: names ${JSON.stringify(named)}`).toContain(named);
           for (const forbidden of engine.never ?? []) expect(text, `${label}: never ${JSON.stringify(forbidden)}`).not.toContain(forbidden);
           if (engine.no_ask) expect(d.kind, `${label}: a question reached the person: ${d.question ?? d.message}`).not.toBe("ask");
         }
