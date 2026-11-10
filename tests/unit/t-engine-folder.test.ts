@@ -44,7 +44,10 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
+import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+
+const NEWER_PREVIEW = ((parts) => `${parts[0]}.${parts[1]}.${parts[2] + 1}-preview.20261111.1`)(AIDLC_VERSION.split(".").map(Number));
 
 const LIB = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-lib.ts");
 const RECORD_CORE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-record-core.ts");
@@ -246,24 +249,28 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
     const proj = scratch("aidlc-engine-folder-back-");
     const line = (release: string): string => engine(proj, `console.log(await lifecycle.engineFolderGoingBackLine(proj, ${JSON.stringify(release)}, "aidlc use 2.12.0") ?? "none");`);
     mkdirSync(join(proj, "aidlc"), { recursive: true });
-    expect(line("2.11.3")).toBe("none");
+    expect(line("2.10.0")).toBe("none");
     const units = join(proj, "aidlc", ".aidlc-engine", "units");
     mkdirSync(join(units, "merges", "default", "1111"), { recursive: true });
-    expect(line("2.11.3")).toBe("none");
+    expect(line("2.10.0")).toBe("none");
     writeFileSync(join(units, "claimed.json"), '{"version":1,"unit":"u1"}\n');
-    expect(line("2.11.3")).toBe("AI-DLC 2.11.3 will not see the Unit u1 you claimed in this project. `aidlc use 2.12.0` brings it back.");
+    expect(line("2.10.0")).toBe("AI-DLC 2.10.0 will not see the Unit u1 you claimed in this project. `aidlc use 2.12.0` brings it back.");
     writeFileSync(join(units, "merges", "default", "1111", "u2.json"), '{"status":"approved","unit":"u2"}\n');
     writeFileSync(join(units, "merges", "default", "1111", "u3.json"), '{"status":"complete","unit":"u3"}\n');
-    expect(line("2.11.3")).toBe(
-      "AI-DLC 2.11.3 will not see the Unit u1 you claimed and the merge of u2 you approved in this project. `aidlc use 2.12.0` brings it back.",
+    expect(line("2.10.0")).toBe(
+      "AI-DLC 2.10.0 will not see the Unit u1 you claimed and the merge of u2 you approved in this project. `aidlc use 2.12.0` brings it back.",
     );
     expect(line("2.12.0")).toBe("none");
     expect(line("3.0.0")).toBe("none");
+    // The release running now, and one newer than it, have the folder whatever
+    // their number says (a preview built from main is numbered below 2.12).
+    expect(line(AIDLC_VERSION)).toBe("none");
+    expect(line(NEWER_PREVIEW)).toBe("none");
     // `aidlc use` does not reach a project whose own pin names another release.
     writeFileSync(join(proj, ".aidlc-version"), "2.12.0\n");
-    expect(line("2.11.3")).toBe("none");
-    writeFileSync(join(proj, ".aidlc-version"), "2.11.3\n");
-    expect(line("2.11.3")).not.toBe("none");
+    expect(line("2.10.0")).toBe("none");
+    writeFileSync(join(proj, ".aidlc-version"), "2.10.0\n");
+    expect(line("2.10.0")).not.toBe("none");
   });
 
   test("a fresh workspace gets the folder with its sessions and units folders, so a first claim has somewhere to write", () => {
@@ -291,7 +298,7 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
   test("the going-back line reads what is there and moves nothing", () => {
     const proj = earlierWorkspace();
     mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
-    expect(engine(proj, 'console.log(await lifecycle.engineFolderGoingBackLine(proj, "2.11.3", "aidlc use 2.12.0") ?? "none");')).toBe("none");
+    expect(engine(proj, 'console.log(await lifecycle.engineFolderGoingBackLine(proj, "2.10.0", "aidlc use 2.12.0") ?? "none");')).toBe("none");
     for (const old of Object.keys(EARLIER)) {
       expect(readFileSync(join(proj, "aidlc", old), "utf-8"), old).toBe(EARLIER[old]);
     }

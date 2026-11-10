@@ -7,8 +7,10 @@
 import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, renameSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, resolve } from "node:path";
+import { compareVersions } from "./aidlc-channel.ts";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
 import { normalizeDriveLetter, repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 export const REPOS_FILE = "repos.json";
 export const REPOS_LOCAL_FILE = "repos.local.json";
@@ -63,10 +65,17 @@ export const REPOS_MOVED_LINE =
 
 /** A release from before this layout: it reads repos.json only at the root and
  *  keeps AI-DLC's own files at the top of aidlc/, not in aidlc/.aidlc-engine/.
- *  The one reading of that for both lines said on going back. */
+ *  The one reading of that for both lines said on going back. The release
+ *  running now has the layout, and so does any newer one, whatever its number
+ *  says (a preview built from main is numbered below 2.12). */
 export function releaseBeforeLayout(release: string): boolean {
   const parts = /^(\d+)\.(\d+)\./.exec(release);
   if (parts === null) return false;
+  try {
+    if (compareVersions(release, AIDLC_VERSION) >= 0) return false;
+  } catch {
+    return false;
+  }
   const [major, minor] = [Number(parts[1]), Number(parts[2])];
   return major < REPOS_IN_AIDLC_SINCE.major || (major === REPOS_IN_AIDLC_SINCE.major && minor < REPOS_IN_AIDLC_SINCE.minor);
 }
