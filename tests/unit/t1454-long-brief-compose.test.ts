@@ -145,7 +145,10 @@ describe("#1454 a brief above the 28 KiB directive limit still tailors a plan, b
     expect(questionCopy(proj, id).text).toBe(brief);
   });
 
-  test("the step keeps one size however long the brief is", () => {
+  // Windows caps one command line at 32,767 characters, so this test cannot
+  // hand the 60,000-character request to the tool as one argument there. The
+  // 30,000-character cases around it run on Windows.
+  test.skipIf(process.platform === "win32")("the step keeps one size however long the brief is", () => {
     const sizes = [30_000, 60_000].map((chars) => {
       const proj = projectWithWork();
       const ask = planQuestion(proj, briefOf(chars));
