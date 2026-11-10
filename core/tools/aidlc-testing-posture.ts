@@ -9,6 +9,7 @@
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { gitSubmoduleNames } from "./aidlc-git.ts";
+import { resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -3126,7 +3127,30 @@ function planApprovalReceiptFor(
   authority: CodeGenerationAuthority,
   key: PlanApprovalReceiptKey,
 ): PlanApprovalRuntimeReceipt | null {
-  return readPlanApprovalReceipt(projectDir, key) ?? committedPlanApproval(projectDir, authority, key);
+  const receipt = readPlanApprovalReceipt(projectDir, key);
+  if (skipNoLongerStands(projectDir, authority, receipt)) return null;
+  return receipt ?? committedPlanApproval(projectDir, authority, key);
+}
+
+// A plan that plan approval off built without asking, its build not started
+// yet, stands only while plan approval is still off and its questions file is
+// still the record the skip wrote. Turned on, nobody approved it, so `next`
+// asks; once that question is out, the plan is the question's, and plan
+// approval turned off again records the skip afresh. A setting that cannot be
+// read keeps the plan stop, as the router does.
+function skipNoLongerStands(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+  receipt: PlanApprovalRuntimeReceipt | null,
+): boolean {
+  if (receipt?.skipped === undefined || receipt.status === "generation") return false;
+  try {
+    if (resolvePlanApprovalSetting(projectDir, runStateContent(projectDir)).value !== "off") return true;
+    const path = join(authority.stageDir, "code-generation-questions.md");
+    return !existsSync(path) || planApprovalPromptSha256(readFileSync(path, "utf-8")) !== receipt.promptSha256;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -3276,9 +3300,11 @@ function codeGenerationApprovalArtifacts(
   // approval whose receipt went missing or whose attempt moved on still reads
   // as approved and is checked as one. The label on the file's `[Answer]:`
   // line, the person's own words included, decides nothing.
-  const approvedAnswer = recordedFingerprint !== null && (readPlanApprovalReceipt(projectDir, {
+  const receipt = recordedFingerprint === null ? null : readPlanApprovalReceipt(projectDir, {
     targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: recordedFingerprint,
-  })?.choice === "Approve Plan" || planApprovedOnRecord(projectDir, authority.targetId, recordedFingerprint));
+  });
+  const approvedAnswer = recordedFingerprint !== null && !skipNoLongerStands(projectDir, authority, receipt) &&
+    (receipt?.choice === "Approve Plan" || planApprovedOnRecord(projectDir, authority.targetId, recordedFingerprint));
   const embedded = planExists ? parseTestingContract(plan) : null;
   const current = planExists ? resolveTestingPosture(contractProjectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;

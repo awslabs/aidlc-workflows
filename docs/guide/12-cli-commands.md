@@ -1988,7 +1988,7 @@ it, for the active intent:
 
 | Flag / config key | State and status row | What `off` skips |
 |-------------------|----------------------|------------------|
-| `--plan-approval` / `plan-approval` (also `guard.plan-approval`) | Plan Approval | The Plan Approval question. Once a plan is written the person hears one line naming it and the build starts; a `PLAN_APPROVAL_SKIPPED` row records the fingerprint that was built |
+| `--plan-approval` / `plan-approval` (also `guard.plan-approval`) | Plan Approval | The Plan Approval question. Once a plan is written the person hears one line naming it and the build starts; a `PLAN_APPROVAL_SKIPPED` row records the fingerprint handed over to be built |
 
 Express and poc ship with it off, and every other shipped scope with it on.
 Precedence matches the other ceremonies, with one addition: a memory
