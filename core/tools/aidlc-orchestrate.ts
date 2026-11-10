@@ -587,6 +587,7 @@ import {
   waveEligible,
   optionsList,
   turnsPersonCheckOff,
+  enterHookWorkflow,
 } from "./aidlc-lib.ts";
 import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { readRequestFileResult, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
@@ -7284,6 +7285,48 @@ export function nextArgsNameOnlyAPlan(args: string[]): string | null {
   return Object.keys(parsed).length === 1 && typeof parsed.positionalScope === "string"
     ? parsed.positionalScope
     : null;
+}
+
+// The note the human-turn hook hands the agent for a typed `/aidlc` line it
+// has just kept whole beyond the record's cut (the record `messageId`, its
+// whole text beside it): `next` reads that line from AI-DLC's own copy
+// (takePersonsOwnLine), so the agent runs `next` with nothing after it and
+// does not type tens of thousands of characters again, often past what one
+// command line can carry. The sentence is the one Kiro's adapters say for
+// every such line (their firstStepLine). "" for any other line: words that
+// are not words alone (nextArgsAreOnlyWords), or that hold a flag-shaped
+// token `next` does not take, which a bare `next` hands back for the agent to
+// send again behind `--`; a record with no whole copy; no chat, whose `next`
+// finds no record; and while the chat's work has its record, where the agent
+// reads the line first (a reply, a plan change routed through compose, a
+// new-work offer).
+export function firstStepNote(pd: string, session: string, prompt: string, messageId: string): string {
+  const words = aidlcEntryWords(prompt.trim());
+  if (words === null || words === "" || session === "") return "";
+  const message = readMessage(pd, messageId);
+  if (message === null || wholeMessageText(pd, message) === null) return "";
+  const args = splitKiroCommandArgs(words);
+  if (!nextArgsAreOnlyWords(args) || parseNextFlags(args).untakenFlag !== undefined) return "";
+  if (workflowRecordSelected(pd, session)) return "";
+  const run = `Run \`${aidlcInvocation()} engine orchestrate next\` now and do only what it prints.`;
+  return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
+}
+
+// Whether the workflow this chat selects already has its record (the state
+// file the engine's bare `next` would read), judged the way the gate floor
+// judges it (enterHookWorkflow). Unreadable state counts as selected: the
+// step is then withheld rather than said where it may be wrong.
+function workflowRecordSelected(pd: string, sessionId: string): boolean {
+  try {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      return existsSync(stateFilePath(pd));
+    } finally {
+      workflow.restore();
+    }
+  } catch {
+    return true;
+  }
 }
 
 // Appended to the `done` reason emitted when the ACTIVE intent has no in-scope

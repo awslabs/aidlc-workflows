@@ -581,10 +581,12 @@ async function run(input: string): Promise<number> {
   const forThePerson: Array<() => void> = [];
   // Besides the notes, respond hands back the help line and the event the host
   // fired: a host takes a hook's context only under its own event (a box
-  // answer's line named UserPromptSubmit is dropped on Claude Code).
-  const handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" } = {
-    help: null, event: "UserPromptSubmit",
-  };
+  // answer's line named UserPromptSubmit is dropped on Claude Code). And, for an
+  // adapter that asked for it (wants_first_step_note), the first-step note in
+  // its own key: its host takes no context line from this hook (opencode).
+  const handover: {
+    help: string | null; event: "UserPromptSubmit" | "PostToolUse"; firstStepNote: string | null;
+  } = { help: null, event: "UserPromptSubmit", firstStepNote: null };
   try {
     return await respond(input, notes, forThePerson, handover);
   } finally {
@@ -598,7 +600,9 @@ async function run(input: string): Promise<number> {
     if (handover.help !== null && [...notes, handover.help].join("\n").length <= PROMPT_CONTEXT_MAX_CHARS) {
       notes.push(handover.help);
     }
-    if (notes.length > 0) process.stdout.write(hookContextLine(handover.event, notes.join("\n")));
+    if (notes.length > 0 || handover.firstStepNote !== null) {
+      process.stdout.write(hookContextLine(handover.event, notes.join("\n"), handover.firstStepNote ?? undefined));
+    }
   }
 }
 
@@ -606,7 +610,7 @@ async function respond(
   received: string,
   notes: string[],
   forThePerson: Array<() => void>,
-  handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" },
+  handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse"; firstStepNote: string | null },
 ): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -645,6 +649,9 @@ try {
   // An adapter whose host may show the person this hook's context line says
   // so; the message-id line is then left to the steps of `next`.
   let contextMayReachPerson = false;
+  // An adapter whose host takes no context line from this hook asks for the
+  // first-step note in its own key (opencode); no other output changes.
+  let wantsFirstStepNote = false;
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -666,9 +673,11 @@ try {
       transcript_path?: unknown;
       relays_terminal_output?: unknown;
       context_may_reach_person?: unknown;
+      wants_first_step_note?: unknown;
     };
     relaysTerminalOutput = parsed.relays_terminal_output === true;
     contextMayReachPerson = parsed.context_may_reach_person === true;
+    wantsFirstStepNote = parsed.wants_first_step_note === true;
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
     // A host that wraps the person's turn in its own context (Kiro Crew) hands
@@ -845,6 +854,22 @@ try {
       return null;
     }
   };
+  // A typed `/aidlc` line kept whole beyond the record's cut: the agent hears
+  // that AI-DLC has it, so it runs `next` with nothing after it instead of
+  // typing it all again (firstStepNote). A Kiro adapter says its own first
+  // step (relays_terminal_output), so it gets no line of this unless it asks.
+  const sayFirstStep = async (messageId: string | null): Promise<void> => {
+    if (!messageId || !sessionId || !promptSubmitted || !typedPrompt) return;
+    try {
+      const { firstStepNote } = await import("../tools/aidlc-orchestrate.ts");
+      const note = firstStepNote(projectDir, sessionId, typedPrompt, messageId);
+      if (note === "") return;
+      if (!relaysTerminalOutput) notes.push(note);
+      if (wantsFirstStepNote) handover.firstStepNote = note;
+    } catch {
+      // Without the note the agent passes the words, as it always has.
+    }
+  };
   // A Claude Code prompt still to be settled from its own row
   // (aidlc-claude-turn-origin.ts) keeps Claude Code's key beside its message
   // wherever the message is kept: before any work exists the message is the
@@ -892,6 +917,7 @@ try {
     if (turnOrigin.kind !== "host") {
       const kept = keepMessage();
       keepClaudeKey(kept, false);
+      await sayFirstStep(kept);
       const tookPart = workflow.participation === "participant" && selectedRecordIsFinished(projectDir, workflow.selection);
       sayMessageId(kept, typedParse?.command === true, tookPart);
       // The person wrote after work they took part in finished: a line kept for
@@ -962,6 +988,7 @@ try {
   const messageId = keepMessage();
   if (!inRecord) keepClaudeKey(messageId, false);
   sayIfKeyShaped();
+  await sayFirstStep(messageId);
   if (inRecord) {
     // With a record it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,
