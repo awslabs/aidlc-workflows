@@ -337,6 +337,14 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
     });
 
+    test(`${label}: an answer for another Unit is told this checkout's Unit, never to start the other`, () => {
+      const { checkout } = claimedPastFunctionalDesign(shape);
+      const answered = run(LOG, ["answer", "--stage", "nfr-requirements", "--unit", "beta", "--details", "A"], checkout);
+      expect(answered.status).not.toBe(0);
+      expect(answered.out).toContain("is scoped to Unit");
+      expect(answered.out).not.toContain("unit start");
+    });
+
     test(`${label}: a change they ask for in words to an approved stage is recorded in their words`, () => {
       const { checkout } = claimedPastFunctionalDesign(shape);
       const words = "I want to change Functional Design: names are trimmed.";
