@@ -974,15 +974,17 @@ This stage has a **two-part structure**: planning followed by generation.
    execution ordering and traceability.
 
    Data-model elements are named, never implied: a step that creates or
-   changes an object, entity, table, field or column (a Salesforce custom
-   object or field, say) names each one with the requirement, acceptance
-   criterion, business rule or design element that asks for it. An element
-   nothing upstream asks for goes under the plan's `## Assumptions` with why
-   the work needs it, and the Summary's `Adds:` line names it, so the person
-   decides it at Plan Approval rather than finding it after deployment. The
-   developer agent creates only what the approved plan names; one the build
-   turns out to need goes into the plan's Assumptions first, which the
-   after-approval rules then treat as any other plan change.
+   changes an object, entity, table, field or column names each one with the
+   requirement, acceptance criterion, business rule or design element that
+   asks for it. An element nothing upstream asks for also gets one plain line
+   (not a checkbox) under the plan's `## Assumptions`, naming the step that
+   adds it and why the work needs it, and the Summary's `Adds:` line counts
+   and names it, so the person decides it at Plan Approval rather than
+   finding it after deployment. A plan that adds no such element has neither.
+   The developer agent builds no such element the approved plan does not
+   name; one the build turns out to need goes into the plan first, as a step
+   of its own, which the after-approval rules then treat as any other plan
+   change.
 
    Resolve one code-generation record directory from the directive:
    `<record>/construction/<directive.unit>/code-generation/` when
@@ -1011,10 +1013,9 @@ This stage has a **two-part structure**: planning followed by generation.
    Unit or one of its paths gets its own Unit-scoped check.
 
 
-   The plan opens with a short `## Summary` (Builds, Touches, Tests and Adds
-   lines) that the engine shows the person when it asks for approval; `Adds`
-   names the data-model elements no requirement asks for, or says `nothing
-   beyond the requirements`.
+   The plan opens with a short `## Summary` (Builds, Touches and Tests lines,
+   and an Adds line when the plan adds an element no requirement asks for)
+   that the engine shows the person when it asks for approval.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
    conductor runs `next`. A ready plan (non-empty plan and instructions, a
@@ -1260,7 +1261,7 @@ This stage has a **two-part structure**: planning followed by generation.
 
 | Artifact                  | Description                                                         |
 |---------------------------|---------------------------------------------------------------------|
-| code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing  |
+| code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing, and an Assumptions section when it adds a data-model element no requirement asks for |
 | code-generation-questions.md | Persisted Plan Approval question and explicit human answer       |
 | unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
