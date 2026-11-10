@@ -120,6 +120,12 @@ and `.gitignore`; it never replaces your own lines.
 - **`AI_AGENT=hermes-agent`** marks every command Hermes's agent runs; in a
   project with several harnesses installed, that is how the native engine
   picks this tree's steps.
+- **Plugins compose by hand.** The plugin projection (`.hermes-plugin`) ships
+  the neutral compose wiring and the plugin's contribution tree, but Hermes has
+  no plugin store that runs AI-DLC's compose hook, so an enabled plugin's stages
+  are composed by running `bun .hermes/tools/aidlc-plugin.ts sync` once after
+  install (the projection's `hooks/hooks.json` is a template, not a registration
+  Hermes reads).
 - **No MCP servers ship.** Add your own with `hermes mcp add` when a stage
   needs one. AI-DLC itself needs none.
 - A workflow's `aidlc/` workspace tree is harness-neutral: a project can move

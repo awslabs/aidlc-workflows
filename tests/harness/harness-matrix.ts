@@ -189,7 +189,9 @@ const HARNESS_CAPABILITIES = {
       kind: "store",
       manifestDir: ".hermes-plugin",
       marketplaceDir: ".hermes-plugin",
-      wiringFile: null,
+      // The projection carries the neutral compose wiring, as opencode's does;
+      // Hermes runs no project hook, so the wiring is a manual step (guide).
+      wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "hermes-md",
     kiroAgentJson: false,
