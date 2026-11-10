@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hooksHealthReadDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { questionCopyPath } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 import {
   cleanupTestProject,
   runOrchestrateNext,
@@ -92,10 +93,16 @@ function planQuestion(proj: string, brief: string, plan = "bugfix"): Directive {
   return ask;
 }
 
+// The stored copy's path as the engine prints it, so these checks follow the
+// sessions folder wherever the engine keeps it.
+function copyPath(proj: string, id: string): string {
+  const copy = questionCopyPath(proj, id);
+  expect(copy, `question ${id} has no stored copy`).not.toBeNull();
+  return copy as string;
+}
+
 function questionCopy(proj: string, id: string): { text: string } {
-  const path = join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
-  expect(existsSync(path), `the stored copy ${path} must exist`).toBe(true);
-  return JSON.parse(readFileSync(path, "utf-8")) as { text: string };
+  return JSON.parse(readFileSync(join(proj, copyPath(proj, id)), "utf-8")) as { text: string };
 }
 
 function runCreation(proj: string, printed: Directive): { status: number; out: string } {
@@ -132,7 +139,7 @@ describe("#1454 a brief above the 28 KiB directive limit still tailors a plan, b
     expect(dispatch.bytes as number).toBeLessThan(DIRECTIVE_LIMIT_BYTES);
     const message = String(dispatch.message);
     const id = requestIdOf(message);
-    expect(message).toContain(`aidlc/.aidlc-sessions/questions/${id}.json`);
+    expect(message).toContain(copyPath(proj, id));
     expect(message).toContain("propose the workflow plan for the request kept in this project at");
     expect(message).not.toContain(MARKER.slice(0, 120));
     expect(questionCopy(proj, id).text).toBe(brief);
@@ -182,5 +189,19 @@ describe("#1454 the new-work-routing ask carries the same preview its question s
     expect(brief.startsWith(description.slice(0, -3))).toBe(true);
     expect(questionCopy(proj, String(ask.question_id)).text).toBe(brief);
     expect(String(ask.new_intent_command)).toContain(`--request ${String(ask.question_id)}`);
+  });
+});
+
+// Listed from the folder, so a composer.md a new harness adds is read too.
+describe("every harness's composer.md agrees with the dispatch", () => {
+  test("none still asks for the request verbatim in creationDescription", () => {
+    const harnesses = join(import.meta.dir, "..", "..", "harness");
+    const files = readdirSync(harnesses)
+      .map((name) => join(harnesses, name, "skills", "aidlc", "composer.md"))
+      .filter((path) => existsSync(path));
+    expect(files.length).toBeGreaterThan(0);
+    for (const path of files) {
+      expect(readFileSync(path, "utf-8"), path).not.toContain("must still equal the original request verbatim");
+    }
   });
 });
