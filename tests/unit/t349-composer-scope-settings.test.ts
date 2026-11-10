@@ -766,10 +766,10 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
     );
     expect(message).toContain("full reviews is --review adversarial and changes no stages");
     expect(message).toContain(
-      "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop.",
+      "When the composer returns empty changes.skip and changes.add and no settingsChanges, present no approval gate and run no recompose: relay its answer, then run",
     );
-    expect(message).toContain(
-      "When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose.",
+    expect(message).toMatch(
+      /When it returns only settingsChanges, present them on the gate \(Approve \/ Reject\): on approve, apply them yourself with `[^`]*config set <setting> <value> \[--<setting> <value> \.\.\.\] --message '<id>'`[^;]*; run no recompose\./,
     );
     // A mixed approval lands the stage delta and the settings in one recompose
     // write, so neither half is lost.

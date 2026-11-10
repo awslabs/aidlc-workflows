@@ -249,6 +249,7 @@ import {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  COMPOSE_ASK_TYPE,
 } from "./aidlc-record-core.ts";
 export {
   ACTIVE_INTENT_POINTER,
@@ -352,6 +353,7 @@ export {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  COMPOSE_ASK_TYPE,
 } from "./aidlc-record-core.ts";
 import {
   isReviewRecordRelativePath,
@@ -29824,20 +29826,11 @@ export function reviewerDispatchPath(projectDir: string, intent?: string, space?
 // Freshness window for the reviewer dispatch record. The scope hook honours a
 // record only while its mtime is younger than this; an older record is an
 // orphan (a session that crashed between dispatch and verdict) and is ignored
-// plus best-effort cleaned up — the same staleness discipline as the compose
-// marker. 6h: the worst observed pre-fix review ran ~3h, so the window covers
-// the pathological case with margin while still bounding a crashed review.
+// plus best-effort cleaned up. 6h: the worst observed pre-fix review ran ~3h,
+// so the window covers the pathological case with margin while still bounding
+// a crashed review.
 export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 
-// `<projectDir>/aidlc/.aidlc-compose-pending`: the in-flight compose gate
-// marker the conductor writes before presenting the approve/edit/reject gate
-// and deletes on resolve. It lives at the WORKSPACE level (not a per-intent
-// record) so a single spelling is shared by the Stop-hook carve-out (which
-// honours it as a turn-stop signal) and the doctor probe (which flags an
-// orphaned one). Hoisted here so the path is spelled once.
-export function composeMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-compose-pending");
-}
 export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
 export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
 export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
@@ -30725,20 +30718,16 @@ export function effectiveUnitGateRhythm(
     readUnitGateRhythm(stateContent);
 }
 
-// Freshness window for the compose marker. The Stop hook honours the carve-out
-// only while the marker's mtime is younger than this; an older marker is an
-// orphan (a session that crashed between write and gate-resolve) and is ignored
-// plus best-effort cleaned up, so it cannot silently disable forwarding-loop
-// enforcement forever. 24h is generous enough to cover a long human pause at an
-// open gate while still catching a stranded marker.
-export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
-
-// Whether an in-flight compose proposal waits on the person's approve, edit or
-// reject: its marker is on disk and fresh. A stale orphan is no open question,
-// as the Stop hook reads it. A failed read throws; each caller decides.
-export function composeGateOpen(projectDir: string): boolean {
-  const marker = composeMarkerPath(projectDir);
-  return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
+// Whether the in-flight compose question waits on the person's approve, edit
+// or reject: it is the step on record for the selected work (or the work
+// named), on the state it was asked on. A `next` that names another step, or
+// the plan change their approval runs, closes it; a setting written meanwhile
+// keeps it, as it keeps every step. A failed read throws; each caller decides.
+export function composeGateOpen(projectDir: string, intent?: string, space?: string): boolean {
+  const statePath = stateFilePath(projectDir, intent, space);
+  if (!existsSync(statePath)) return false;
+  const marker = readActiveDirectiveMarker(projectDir, readFileSync(statePath, "utf-8"), intent, space);
+  return marker?.kind === "ask" && marker.ask_type === COMPOSE_ASK_TYPE;
 }
 
 // `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background

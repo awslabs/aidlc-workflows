@@ -742,7 +742,8 @@ describe("t148 dist/kiro file structure", () => {
       expect(subagentRule).toContain(`        - "${agent.replace(/\.md$/, "")}"`);
     }
     expect(fm).not.toContain("toolsSettings");
-    expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
+    // The engine keeps the in-flight compose question itself: no file to allow.
+    expect(fm).not.toContain(".aidlc-compose-pending");
     // The request file words that would ask go to `next` through (next --request-file).
     expect(fm).toContain(`        - "aidlc/.aidlc-request-text/**"`);
   });

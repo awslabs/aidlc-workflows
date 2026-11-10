@@ -240,8 +240,6 @@ import {
   parseGuardPolicyStateLine,
   resolveGuardPolicy,
   composeGateOpen,
-  composeMarkerPath,
-  COMPOSE_MARKER_TTL_MS,
   defaultScope,
   defaultScopeResolution,
   DEFAULT_SPACE,
@@ -5882,35 +5880,26 @@ export async function collectDoctorReport(
     }
   }
 
-  // Orphaned compose-marker probe: a read-only tripwire. The conductor writes
-  // the compose marker before an in-flight compose gate and deletes it on
-  // resolve; the Stop hook treats a FRESH marker as a carve-out (the turn may
-  // end at the gate). A crash between write and resolve can leave the marker on
-  // disk, so doctor reports a present marker with its age and the remediation
-  // (delete it if no compose gate is actually pending). Pass/fail follows the
-  // shared freshness window: a FRESH marker is the normal state while a compose
-  // gate is legitimately open (written before the gate, deleted on resolve), so
-  // it renders as an advisory pass (running doctor in a second terminal during
-  // a live gate must not exit 1 on a healthy workspace). Only a STALE marker
-  // (older than the TTL, i.e. an orphan the Stop hook has begun ignoring) is a
-  // fault. Silent when absent (no marker means nothing to report). Read-only:
-  // doctor never deletes it (the Stop hook is the janitor for a stale one).
+  // The in-flight compose question (composeGateOpen) is healthy waiting: an
+  // advisory pass. The file an earlier version had the agent write for it is
+  // read by nothing now; doctor names it while it is there and never deletes it.
   try {
-    const composeMarker = composeMarkerPath(projectDir);
-    if (existsSync(composeMarker)) {
-      const ageMs = Date.now() - statSync(composeMarker).mtimeMs;
-      const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
-      const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
-      const stale = ageMs > COMPOSE_MARKER_TTL_MS;
-      const staleLabel = stale ? ", stale" : ", fresh";
+    if (composeGateOpen(projectDir)) {
       results.push({
-        pass: !stale,
-        label: `Compose marker present (aidlc/.aidlc-compose-pending, ${ageLabel}${staleLabel})`,
-        fix: "if no in-flight compose gate is actually pending, delete it ('rm aidlc/.aidlc-compose-pending') or resolve the pending gate. A stale marker no longer disables the Stop hook, but it should not linger.",
+        pass: true,
+        label: "A proposed plan change is waiting for the person's answer (approve, edit or reject)",
+        fix: "answer the proposed plan change in the chat that shows it",
       });
     }
   } catch {
-    // Compose-marker probe failure is non-fatal for the doctor report.
+    // Compose-question probe failure is non-fatal for the doctor report.
+  }
+  if (existsSync(join(projectDir, "aidlc", ".aidlc-compose-pending"))) {
+    results.push({
+      pass: true,
+      label: "Left over from an earlier AI-DLC version and no longer read: aidlc/.aidlc-compose-pending (safe to delete)",
+      fix: "delete aidlc/.aidlc-compose-pending",
+    });
   }
 
   // A long-open approval gate is healthy waiting, not a hung workflow. Surface
@@ -13187,15 +13176,15 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
-    // The person's approval at the in-flight compose question: its step runs
-    // this before deleting the question's marker and names nothing after it,
-    // so the work goes on from here, as after their approval at a stage's gate.
-    // The engine's other plan-change steps say what comes after themselves.
+    // The person's approval at the in-flight compose question, read before
+    // this write closes it: its step names nothing after this, so the work
+    // goes on from here, as after their approval at a stage's gate. The
+    // engine's other plan-change steps say what comes after themselves.
     let approvedAtCompose = false;
     try {
-      approvedAtCompose = composeGateOpen(projectDir);
+      approvedAtCompose = composeGateOpen(projectDir, flags.intent, flags.space);
     } catch {
-      // An unreadable marker names no step and nobody; the plan change still lands.
+      // An unreadable step names no step and nobody; the plan change still lands.
     }
 
     // Audit first, as config-change does, in one batch: a failed append leaves
@@ -13232,7 +13221,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         (droppedUnitWork === null ? "" : `${droppedUnitWork}\n`) +
         settingsUpdate.lines.map((line) => `${line}\n`).join("") +
         (approvedAtCompose
-          ? "Then delete `aidlc/.aidlc-compose-pending`, apply any setting the same approval also named, and run " +
+          ? "Then apply any setting the same approval also named, and run " +
             `\`${aidlcToolInvocation("orchestrate")} next\`; follow what it returns, so the work carries on.\n`
           : ""),
     );

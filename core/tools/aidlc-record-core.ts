@@ -1398,6 +1398,13 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
   return join(resolved.dir, "aidlc-state.md");
 }
 
+// The in-flight compose question's ask type on the active-directive marker
+// below. The agent shows the question from the composer's proposal, so the
+// engine hands out a print, and the print is published as the question's step,
+// as every question the engine asks is (prepareEmission; read by
+// composeGateOpen).
+export const COMPOSE_ASK_TYPE = "compose";
+
 // The engine's final validated run-stage is the active execution cursor. Most
 // stages match aidlc-state.md's Current Stage, but unit-major Construction can
 // interleave later stages while the durable cursor stays on the first block
