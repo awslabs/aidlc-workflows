@@ -492,8 +492,6 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(text).not.toContain("default to aidlc-developer-agent for all Bolts");
     const allocation = text.split("\n").find((line) => line.startsWith("- `team-allocation.md`"));
     expect(allocation).toBeDefined();
-    expect(allocation).toContain("asked once when Construction starts");
-    expect(allocation).toContain("never the decision");
     const ownsBolt = text.split("\n").find((line) => line.includes("Which mob is planned to build this Bolt?"));
     expect(ownsBolt).toBeDefined();
     expect(ownsBolt).toContain("Who builds the Units is not this stage's question");

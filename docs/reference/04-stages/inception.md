@@ -1356,11 +1356,7 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
   unit-of-work-dependency artifact.
 - Team allocation draws from the Team Formation artifacts (Stage 1.5) if
   they exist; when 1.5 is SKIP (mvp, classic, workshop), every Bolt is planned
-  for aidlc-developer-agent (AI). The allocation is a plan, not the decision:
-  who builds the Units (this session, or several teams each owning one) is
-  asked once as Inception ends and recorded in the state as `Unit Ownership`
-  (see [Orchestrator](../03-orchestrator.md)), whatever the scope, so
-  `team-allocation.md` says so and never presents the assignment as settled.
+  for aidlc-developer-agent (AI). The allocation is a plan, not the decision.
 
 ---
 
