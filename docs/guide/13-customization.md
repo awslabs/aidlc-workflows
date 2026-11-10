@@ -142,8 +142,8 @@ You can override scope at any time during a workflow:
 
 The nine intent settings are `depth`, `test-strategy`, `review`,
 `guard-policy`, `sensors`, `learnings`, `summary-confirmation`,
-`plan-approval`, and `collaborators`, in that order. Three more keys, `guard.review-freeze`,
-`guard.state-transition`, and `guard.reviewer-scope`, switch one guard off or
+`plan-approval`, and `collaborators`, in that order. Four more keys, `guard.review-freeze`,
+`guard.state-transition`, `guard.reviewer-scope`, and `guard.continued-agent`, switch one guard off or
 back on for a single piece of work, and `guard.plan-approval` is another name
 for `plan-approval`. The CLI routes share one atomic setter,
 `config-change`. A typed `/aidlc` line with settings is recorded whole by the
@@ -158,8 +158,8 @@ Mix the settings in one command rather than chaining separate updates:
 ```
 
 The native equivalent is `aidlc engine config set <key> <value>` followed by
-the remaining `--key value` flags. `config get <key>` accepts all thirteen keys,
-and `config list` (optionally `--json`) returns all thirteen, including effective
+the remaining `--key value` flags. `config get <key>` accepts all fourteen keys,
+and `config list` (optionally `--json`) returns all fourteen, including effective
 values and sources for Guard Policy, the switchable fences, and the ceremonies
 (`guard.plan-approval` is another name for `plan-approval` and reads the same):
 

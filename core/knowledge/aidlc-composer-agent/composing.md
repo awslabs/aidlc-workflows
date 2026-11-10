@@ -81,7 +81,7 @@ agents. `strict` lowers
 no fences and reopens that approval; `relaxed`
 records the change once, tells the human in one line, continues, and stands the
 plan-approval and review-freeze checks aside; `off` does that and stands the
-state-transition and reviewer-scope checks aside as well. No value removes a
+state-transition, reviewer-scope and continued-agent checks aside as well. No value removes a
 gate and none of them touches human presence. The conductor still asks every
 approval question; the value also decides which fences stop undirected work,
 and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.

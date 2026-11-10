@@ -75,8 +75,8 @@ diagnostic and lifecycle routes.
 | `/aidlc --statusline <on\|off>` | Show AI-DLC's progress in the status line, or give yours back (Claude Code: for you only; Codex: for everyone in the project) |
 | `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `collaborators`, `guard.<fence>`) |
 | `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; the agent runs it for a setting typed as a flag or asked for in plain words |
-| `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
-| `/aidlc config list` | List all thirteen active workflow settings (`--json` for structured output) |
+| `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope, continued-agent; `guard.plan-approval` is another name for `plan-approval`) |
+| `/aidlc config list` | List all fourteen active workflow settings (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
@@ -1337,7 +1337,7 @@ request at the next ordinal.
 
 ### Workflow configuration — one atomic setter
 
-All twelve intent settings (thirteen keys, because `guard.plan-approval` is another name for `plan-approval`) share one CLI setter, `config-change`.
+All thirteen intent settings (fourteen keys, because `guard.plan-approval` is another name for `plan-approval`) share one CLI setter, `config-change`.
 Flags from different settings can be combined in one atomic CLI command; do not
 split companion settings into successive setters.
 For a typed lowering command, the agent runs this setter with the switch and
@@ -1360,6 +1360,7 @@ through `aidlc config flags`.
 | `guard.review-freeze` / `--guard.review-freeze` | `on`, `off` | Guards Off / Guards On |
 | `guard.state-transition` / `--guard.state-transition` | `on`, `off` | Guards Off / Guards On |
 | `guard.reviewer-scope` / `--guard.reviewer-scope` | `on`, `off` | Guards Off / Guards On |
+| `guard.continued-agent` / `--guard.continued-agent` | `on`, `off` | Guards Off / Guards On |
 
 The retired key `change-control` and the retired flag `--change-control` still
 resolve to `guard-policy` for one release and print one deprecation line. On the
@@ -1406,7 +1407,7 @@ aidlc engine config set guard-policy relaxed --sensors off --intent login-fix --
 bun .claude/tools/aidlc-utility.ts config-change --depth minimal --review none --guard-policy relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
 ```
 
-`config-change` accepts only the thirteen setting flags (and the retired `--change-control` spelling), `--message`,
+`config-change` accepts only the fourteen setting flags (and the retired `--change-control` spelling), `--message`,
 `--person-words` or `--person-words-file` (still taken, but they prove nothing and are kept as the agent's own text),
 and the `--intent`, `--space`, and `--project-dir` selectors. At least one setting is required.
 Selectors pin the state file, memory policy, and audit shard to the same target;
@@ -1441,7 +1442,7 @@ Updated` changes only when stored state changes. Repeating an already stored
 choice is a no-op, but changing a scope-sourced value to an explicit override
 records that provenance even if the value is the same.
 
-`config get` accepts every key in the table, and `config list` returns all thirteen
+`config get` accepts every key in the table, and `config list` returns all fourteen
 in that order. Guard Policy, fence, and ceremony reads include effective values
 and sources, just like status:
 
@@ -1491,7 +1492,7 @@ until you undo it or set `relaxed` (see
 [Guard Policy](13-customization.md#guard-policy)). On the fences, `strict` leaves all five up,
 `relaxed` lowers `plan-approval` (plan re-approval: an edited plan is not asked
 about again) and `review-freeze`, and `off` lowers those two
-plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
+plus `state-transition`, `reviewer-scope` and `continued-agent`. `human-presence` is never lowered
 by the policy word.
 
 Setting `guard-policy relaxed` or `guard-policy off` from chat is the person's
@@ -1659,8 +1660,8 @@ accepted when they agree; in `orchestrate next` the last of the two wins.
 #### `/aidlc config set guard.<fence> <on|off>` - one fence, one piece of work
 
 Turn a single fence off for the work in front of you without touching the policy
-word, and turn it back on even when that word lowers it. The three per-work
-switches are `review-freeze`, `state-transition`, and `reviewer-scope`.
+word, and turn it back on even when that word lowers it. The four per-work
+switches are `review-freeze`, `state-transition`, `reviewer-scope`, and `continued-agent`.
 `guard.plan-approval` is another name for the `plan-approval` setting (see
 [Plan approval](#aidlc-plan-approval-plan-approval)), so it writes no `Guards Off` entry. Human presence
 is the key holder and has no per-work switch.

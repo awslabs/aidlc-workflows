@@ -130,7 +130,7 @@ three values names the file and the allowed values; the per-intent command
 repairs an invalid state line.
 
 A scope word is a product statement about how much ceremony this kind of work
-deserves. It is not the only control: a human can lower one of the four switchable
+deserves. It is not the only control: a human can lower one of the five switchable
 fences for one piece of work with `/aidlc config set guard.<fence> off`, which
 writes the `Guards Off` state line and one `GUARD_DISABLED` audit row. Setting
 `on` can raise a policy-lowered fence, writing `Guards On` and `GUARD_RESTORED`.
@@ -138,7 +138,7 @@ Setting the Guard Policy word clears the line that goes against it: `off` clears
 Human presence is the key holder and has no per-work switch; only
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers it. Environment kill switches remain
 the machine-wide override. Declare `off` in a scope only when every piece of work
-on it should run with those four fences lowered, as every shipped scope except
+on it should run with those five fences lowered, as every shipped scope except
 `enterprise` does. To spare people a fence they meet only occasionally, use the per-work switch
 instead; the next piece of work starts from its own scope default.
 

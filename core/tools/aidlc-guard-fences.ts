@@ -11,6 +11,7 @@ export const GUARD_FENCES = [
   "review-freeze",
   "state-transition",
   "reviewer-scope",
+  "continued-agent",
   "human-presence",
 ] as const;
 export type GuardFence = (typeof GUARD_FENCES)[number];
@@ -20,6 +21,7 @@ export const SWITCHABLE_GUARD_FENCES = [
   "review-freeze",
   "state-transition",
   "reviewer-scope",
+  "continued-agent",
 ] as const;
 export type SwitchableGuardFence = (typeof SWITCHABLE_GUARD_FENCES)[number];
 
@@ -45,6 +47,7 @@ export const CHECK_GLOSS: Record<SwitchableGuardFence, string> = {
   "review-freeze": "a document stays as it was reviewed until you ask for changes",
   "state-transition": "only AI-DLC's own steps move the work from stage to stage",
   "reviewer-scope": "reviewers read only the work they review",
+  "continued-agent": "a finished AI-DLC agent is not sent on to other work, so each stage and Unit gets a fresh one",
 };
 export const GUARD_POLICY_GLOSS: Record<"strict" | "relaxed" | "off", string> = {
   strict: "AI-DLC asks you again when something you approved changes",

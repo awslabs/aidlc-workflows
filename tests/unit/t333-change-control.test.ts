@@ -26,7 +26,7 @@
 // the intent's own valid state line when present; a missing line stays strict
 // for compatibility, then any memory layer that declares strict wins. The
 // policy word lowers a fixed set of fences; a per-run switch lowers or raises
-// one of four fences for one piece of work. These tests pin resolver precedence,
+// one of five fences for one piece of work. These tests pin resolver precedence,
 // scope defaults the maintainer decided, the memory grammar and its validation
 // error, the source labels the human sees, the verb and flag surfaces, the
 // GUARD_POLICY_SET / GUARD_DISABLED / GUARD_RESTORED rows, and the retired
@@ -1970,7 +1970,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
   });
 });
 
-describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can lower or raise four fences", () => {
+describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can lower or raise five fences", () => {
   /** A resolution for a value with a fixed source, as resolveFences reads it. */
   function policy(value: "strict" | "relaxed" | "off", source = "you"): GuardPolicyResolution {
     return {
@@ -1985,12 +1985,13 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     };
   }
 
-  test("strict lowers nothing; relaxed lowers two; off lowers four; human presence is never among them", () => {
+  test("strict lowers nothing; relaxed lowers two; off lowers five; human presence is never among them", () => {
     expect(GUARD_FENCES).toEqual([
       "plan-approval",
       "review-freeze",
       "state-transition",
       "reviewer-scope",
+      "continued-agent",
       "human-presence",
     ]);
     expect(fencesLoweredByPolicy("strict")).toEqual([]);
@@ -2000,6 +2001,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       "review-freeze",
       "state-transition",
       "reviewer-scope",
+      "continued-agent",
     ]);
     withEnvAndFreshCaches(FENCE_ENV_CLEAR, () => {
       const strict = resolveFences(policy("strict"), "");
@@ -2013,6 +2015,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       expect(relaxed["review-freeze"].value).toBe("off");
       expect(relaxed["state-transition"]).toEqual({ fence: "state-transition", value: "on", source: "default" });
       expect(relaxed["reviewer-scope"].value).toBe("on");
+      expect(relaxed["continued-agent"].value).toBe("on");
       expect(relaxed["human-presence"].value).toBe("on");
       const off = resolveFences(policy("off"), "");
       expect(off["state-transition"]).toEqual({
@@ -2021,6 +2024,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
         source: "guard policy off (set by you)",
       });
       expect(off["reviewer-scope"].value).toBe("off");
+      expect(off["continued-agent"].value).toBe("off");
       expect(off["human-presence"]).toEqual({ fence: "human-presence", value: "on", source: "default" });
       expect(formatFence(relaxed["plan-approval"])).toBe("off (guard policy relaxed (from scope express))");
       expect(formatFence(strict["plan-approval"])).toBe("on (default)");
@@ -2116,6 +2120,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)",
       "guard.reviewer-scope": "on (default)",
+      "guard.continued-agent": "on (default)",
     });
     expect(JSON.parse(listed.stdout)).not.toHaveProperty("guard.human-presence");
   });
@@ -2858,7 +2863,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(0);
   });
 
-  test("config list names the thirteen switchable settings in order", () => {
+  test("config list names the fourteen switchable settings in order", () => {
     const { proj } = project("classic");
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
     expect(listed.status, listed.stderr).toBe(0);
@@ -2876,6 +2881,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       "guard.review-freeze",
       "guard.state-transition",
       "guard.reviewer-scope",
+      "guard.continued-agent",
     ]);
   });
 
@@ -3233,7 +3239,7 @@ describe("t333 (10) retired policy confirmation", () => {
     expect(readFileSync(state, "utf-8")).toBe(retired);
   });
 
-  test("next announces all four fences for retired off without changing state bytes", () => {
+  test("next announces all five fences for retired off without changing state bytes", () => {
     const { proj, state } = project("classic");
     const retired = readFileSync(state, "utf-8").replace(
       /^- \*\*Guard Policy\*\*:.*$/m,

@@ -36,6 +36,7 @@ import {
   swarmUnitOpenReviews,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { AGENT_STAGE_FIELD, AGENT_UNIT_FIELD, isAidlcAgent, workOnRecord } from "../tools/aidlc-agent-work.ts";
 
 // The selection's record takes a helper's rows while its workflow runs, or with
 // no work while a stage run on its own is open in the space's own record.
@@ -190,7 +191,18 @@ export async function run(input: string): Promise<number> {
     "Agent Type": agentType,
   };
   if (dispatchAgent !== null) fields["Dispatch Agent"] = dispatchAgent;
-  if (agentId) fields["Agent ID"] = agentId;
+  if (agentId) {
+    fields["Agent ID"] = agentId;
+    // The stage and Unit an AI-DLC agent finished on, as the engine issued them,
+    // so a later message that would continue it on other work is recognised
+    // (deliver-stage-rules). Evidence only: no issued step, or one that cannot
+    // be read, leaves both out.
+    const worked = isAidlcAgent(agentType) ? workOnRecord(projectDir, rawSessionId) : null;
+    if (worked) {
+      fields[AGENT_STAGE_FIELD] = worked.stage;
+      if (worked.unit) fields[AGENT_UNIT_FIELD] = worked.unit;
+    }
+  }
   if (agentMessage) fields.Message = agentMessage;
   // What a reviewer left in the review file of every request still open for
   // it, at the moment it finished: a side-by-side Unit's too, recorded in the

@@ -72,7 +72,7 @@ after its review, an output saved without the current summary confirmation):
 tell the human in one line, and continue. Workspace source that moved after a
 plan was approved is recorded and continued under every value. And which authority fences hold:
 `strict` lowers none, `relaxed` lowers `plan-approval` and `review-freeze`, and
-`off` lowers those two plus `state-transition` and `reviewer-scope`.
+`off` lowers those two plus `state-transition`, `reviewer-scope` and `continued-agent`.
 `human-presence` is never lowered by the word. By default each intent takes its
 scope's value. To lower it from chat, a person asks in their own words and the
 conductor runs the setter, or types the switch (`/aidlc --guard-policy relaxed`
