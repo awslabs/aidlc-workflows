@@ -1,4 +1,4 @@
-// covers: function:checkInLine, function:arrivedAtLastPull, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push
+// covers: function:checkInLine, function:arrivedAtLastPull, function:mergedAtTeamLook, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push
 //
 // The lines a person meets in a workspace teams share by git (#2410). Carry on
 // is offered only for the person's own team's build: another team's is said,
@@ -10,19 +10,24 @@
 // other teams.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { arrivedAtLastPull, checkInLine } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { mergedAtTeamLook, type UnitClaimPayload } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
   cloneOf,
   codeGenerated,
+  claimPayload,
   ENV,
   finishBuild,
   git,
   HOME_RECORD,
   makeHome,
+  mergeOnHost,
   next,
   ORCH,
   refundsTaken,
@@ -107,6 +112,105 @@ describe("Carry on in a shared workspace", () => {
     expect(carryOns(again), JSON.stringify(again)).toEqual([
       expect.objectContaining({ label: "Carry on refunds for the payments team", detail: "alice's build of it, from another computer; turned down in billing, back with payments." }),
     ]);
+  });
+
+  // A live run (Windows Server): a team's look said the Unit was waiting for its
+  // merge after it had merged, until the lead's next look. The team's look runs
+  // the lead's own merge rule, read only (mergedAtTeamLook), for its own pushed
+  // build; the row that says it comes with its own change.
+  test("the lead's merge rule, read at a team's checkout: merged once every repo has it, with nothing written to the claim", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const payload = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as unknown as UnitClaimPayload;
+    expect(mergedAtTeamLook(alice, payload)).toBe(false);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    expect(mergedAtTeamLook(alice, payload)).toBe(false);
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    expect(mergedAtTeamLook(alice, payload)).toBe(true);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toBeUndefined();
+  });
+
+  test("a code repo offline, refusing, asking for a sign-in or never answering reads as not merged, asks nothing and keeps the lead's time limit", async () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const payload = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as unknown as UnitClaimPayload;
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-merge-row-"));
+    const log = join(dir, "requests.log");
+    const marker = join(dir, "asked.txt");
+    const askpass = join(dir, "askpass.sh");
+    writeFileSync(askpass, `#!/bin/sh\necho asked >> '${marker.replaceAll("\\", "/")}'\necho secret\n`, { mode: 0o755 });
+    // A server that logs each request: one asks for a sign-in, one never answers.
+    const server = join(dir, "server.ts");
+    writeFileSync(server, [
+      "import { appendFileSync } from 'node:fs';",
+      "const [mode, log] = process.argv.slice(2);",
+      "const s = Bun.serve({ port: 0, fetch(req) { appendFileSync(log, mode + ' ' + new URL(req.url).pathname + '\\n');",
+      "  return mode === 'auth' ? new Response('', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm=\"x\"' } }) : new Promise(() => {}); } });",
+      "console.log(s.port);",
+    ].join("\n"));
+    const start = async (mode: string) => {
+      const child = Bun.spawn([process.execPath, server, mode, log], { stdout: "pipe", stderr: "ignore" });
+      const { value } = await child.stdout.getReader().read();
+      return { child, port: Number(new TextDecoder().decode(value).trim()) };
+    };
+    const auth = await start("auth");
+    const silent = await start("silent");
+    const before = { askpass: process.env.GIT_ASKPASS, prompt: process.env.GIT_TERMINAL_PROMPT };
+    // The person's own sign-in program, which a quiet fetch must never run.
+    process.env.GIT_ASKPASS = askpass;
+    process.env.GIT_TERMINAL_PROMPT = "1";
+    try {
+      for (const url of ["http://127.0.0.1:9/billing.git", `http://127.0.0.1:${auth.port}/billing.git`, `http://127.0.0.1:${silent.port}/billing.git`]) {
+        git(join(alice, "billing"), ["remote", "set-url", "origin", url]);
+        const started = Date.now();
+        expect(mergedAtTeamLook(alice, payload), url).toBe(false);
+        expect((Date.now() - started) / 1000, url).toBeLessThan(30);
+      }
+      expect(readFileSync(log, "utf-8")).toContain("auth ");
+      expect(readFileSync(log, "utf-8")).toContain("silent ");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (before.askpass === undefined) delete process.env.GIT_ASKPASS;
+      else process.env.GIT_ASKPASS = before.askpass;
+      if (before.prompt === undefined) delete process.env.GIT_TERMINAL_PROMPT;
+      else process.env.GIT_TERMINAL_PROMPT = before.prompt;
+      auth.child.kill();
+      silent.child.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("no merge check runs for a build that is not pushed and waiting", async () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-merge-row-"));
+    const log = join(dir, "requests.log");
+    writeFileSync(log, "");
+    const server = join(dir, "server.ts");
+    writeFileSync(server, [
+      "import { appendFileSync } from 'node:fs';",
+      "const log = process.argv[2];",
+      "const s = Bun.serve({ port: 0, fetch(req) { appendFileSync(log, new URL(req.url).pathname + '\\n'); return new Response('', { status: 404 }); } });",
+      "console.log(s.port);",
+    ].join("\n"));
+    const child = Bun.spawn([process.execPath, server, log], { stdout: "pipe", stderr: "ignore" });
+    const { value } = await child.stdout.getReader().read();
+    const port = Number(new TextDecoder().decode(value).trim());
+    try {
+      for (const repo of ["checkout-api", "billing"]) git(join(alice, repo), ["remote", "set-url", "origin", `http://127.0.0.1:${port}/${repo}.git`]);
+      writeFileSync(join(alice, "aidlc", "spaces", "payments", "intents", "active-intent"), "");
+      next(alice);
+      expect(readFileSync(log, "utf-8")).toBe("");
+    } finally {
+      child.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a build the lead sent back from Build and Test says it was the lead's Build and Test", () => {

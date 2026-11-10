@@ -7682,20 +7682,7 @@ function checkTeamResultsQuietly(
     }
     const result = live?.payload.result;
     if (live?.status !== "claimed" || !result) continue;
-    const verdicts = result.repos.map((repo) => {
-      const said = live.payload.said_merged?.find((entry) => entry.repo === repo.repo);
-      if (said) return { repo: repo.repo, merged: true, how: `by your word: "${said.words}"` };
-      const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
-      if (!isGitRepoDir(dir)) return { repo: repo.repo, merged: false };
-      const repoRemote = repositoryRemote(dir);
-      const integration = repoRemote === null ? "HEAD" : repoIntegration(dir, repoRemote);
-      // Only the branch the Unit merges into.
-      if (repoRemote !== null && !quietFetch(dir, ["-q", repoRemote, integration.slice(repoRemote.length + 1)]).ok) {
-        unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
-      }
-      const verdict = unitMergeVerdict(dir, integration, repo);
-      return verdict.merged ? { repo: repo.repo, merged: true, commit: verdict.commit, how: verdict.how } : { repo: repo.repo, merged: false };
-    });
+    const verdicts = resultVerdicts(pd, live.payload, unreached);
     const done = verdicts.length > 0 && verdicts.every((verdict) => verdict.merged) &&
       (!leadSignOffOn(readStateFile(pd)) || live.payload.signoff !== undefined);
     // The one thing written back is a merge the home has seen: a look at the
@@ -7716,6 +7703,45 @@ function checkTeamResultsQuietly(
     found.set(unit, { team: live.owner, verdicts, done });
   }
   return found;
+}
+
+// The lead's merge rule for a Unit's result, read only: a repo the lead counted
+// merged by word, else its integration branch fetched quietly (no sign-in, the
+// lead's own time limits) and the result's heads looked for there. A repo whose
+// fetch failed goes on `unreached`, its verdict the last fetch's.
+function resultVerdicts(pd: string, payload: UnitClaimPayload, unreached?: string[]): NonNullable<UnitClaimPayload["verdicts"]> {
+  return (payload.result?.repos ?? []).map((repo) => {
+    const said = payload.said_merged?.find((entry) => entry.repo === repo.repo);
+    if (said) return { repo: repo.repo, merged: true, how: `by your word: "${said.words}"` };
+    const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
+    if (!isGitRepoDir(dir)) return { repo: repo.repo, merged: false };
+    const repoRemote = repositoryRemote(dir);
+    const integration = repoRemote === null ? "HEAD" : repoIntegration(dir, repoRemote);
+    // Only the branch the Unit merges into.
+    if (repoRemote !== null && !quietFetch(dir, ["-q", repoRemote, integration.slice(repoRemote.length + 1)]).ok) {
+      unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
+    }
+    const verdict = unitMergeVerdict(dir, integration, repo);
+    return verdict.merged ? { repo: repo.repo, merged: true, commit: verdict.commit, how: verdict.how } : { repo: repo.repo, merged: false };
+  });
+}
+
+// A team's own look at a build of this checkout that is pushed and waiting:
+// the lead's merge rule run here, read only (nothing is written to the claim;
+// the lead's project records the merge at its next look). True only when every
+// repo of the result has it and each was reached now; a repo not here, offline
+// or refusing reads as not merged yet, and nothing is said.
+export function mergedAtTeamLook(projectDir: string, payload: UnitClaimPayload): boolean {
+  const pd = resolveProjectDir(projectDir);
+  try {
+    return quietly(() => {
+      const unreached: string[] = [];
+      const verdicts = resultVerdicts(pd, payload, unreached);
+      return unreached.length === 0 && verdicts.length > 0 && verdicts.every((verdict) => verdict.merged);
+    });
+  } catch {
+    return false;
+  }
 }
 
 // The work here is past the Unit stages: its stage comes after every Unit stage
