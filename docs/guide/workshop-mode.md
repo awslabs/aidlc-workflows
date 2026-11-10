@@ -804,8 +804,8 @@ runs `aidlc config` in their own clone for the tool they use.
 
 AI-DLC says so once at each stopping point of teams' work: when you stop for
 now, when your Unit is pushed, when you say **Not now** to its push, and at the
-lead's project when Build and Test is approved: "Your teammates get where this
-work stands when you check it in: `git add aidlc`, then commit and push." It
+lead's project when Build and Test is approved: "Your teammates see where this
+work stands once aidlc/ is committed and pushed." It
 never goes by what git shows changed, since AI-DLC's own record changes at every
 step. Asked where things stand (`/aidlc --status`), a clone also says what its
 last `git pull` that brought changes brought from the other teams, for example

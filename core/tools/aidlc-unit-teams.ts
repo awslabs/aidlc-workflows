@@ -554,7 +554,9 @@ function findBuild(projectDir: string, matches: (build: UnitBuild) => boolean): 
   return null;
 }
 
-export const CHECK_IN_LINE = "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.";
+// A fact, not a task: the agent carried the earlier words (with their command
+// list) into every later look as a to-do.
+export const CHECK_IN_LINE = "Your teammates see where this work stands once aidlc/ is committed and pushed.";
 
 // Teams across repos share AI-DLC's record by git, and the person checks it in.
 // The callers say this at the stopping points (a stop, the push or the

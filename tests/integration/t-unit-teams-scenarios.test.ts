@@ -136,7 +136,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
       "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in checkout-api and billing. Switch back to main any time. " +
-        "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.",
+        "Your teammates see where this work stands once aidlc/ is committed and pushed.",
     );
 
     expect(boardAt(home)).toBe([
@@ -208,7 +208,7 @@ describe("scenario 2: one big code repo", () => {
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
       "Pushed branch refunds in platform. Open a PR in it your usual way. You're on refunds now in platform. Switch back to main any time. " +
-        "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.",
+        "Your teammates see where this work stands once aidlc/ is committed and pushed.",
     );
     expect(git(platform, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n").sort())
       .toEqual(["README.md", "services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);

@@ -35,7 +35,7 @@ import {
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
 
-const LINE = "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.";
+const LINE = "Your teammates see where this work stands once aidlc/ is committed and pushed.";
 type Choice = { label: string; detail?: string };
 
 // The lead's work with its Units held for two teams, shared.
