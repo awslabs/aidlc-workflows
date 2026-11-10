@@ -824,6 +824,8 @@ try {
         ? said.slice(0, MESSAGE_TEXT_MAX_CHARS)
         : said;
       const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== said || picker?.cut === true;
+      // A typed prompt the record cuts is also kept whole beside it, so `next`
+      // takes the person's line as they typed it (wholeMessageText).
       return saveMessage(projectDir, {
         session: sessionId || null,
         at: isoTimestamp(),
@@ -833,7 +835,7 @@ try {
         picker: picker === null ? null : picker.entries,
         ...parsed,
         words,
-      }).id;
+      }, cut && promptSubmitted ? full : undefined).id;
     } catch {
       // The record is a convenience here; the turn and its row stand without it.
       return null;

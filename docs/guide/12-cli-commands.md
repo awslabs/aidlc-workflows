@@ -220,7 +220,7 @@ Kiro (Kiro IDE and Kiro CLI on its v3 engine) the agent sends a request this way
 on every shell when it holds `$`, a backtick, `>`, `<`, `&`, `@(`, `@{` or a line
 break, since Kiro asks you to approve an AI-DLC command holding one of them. The
 engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
-through no link, up to 64 KiB, uses its words exactly as written, and removes
+through no link, up to 128 KiB, uses its words exactly as written, and removes
 the file once the command goes ahead.
 
 ---
