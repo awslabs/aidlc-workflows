@@ -3102,7 +3102,14 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   // completion the way a solo run does, with no output fingerprint.
   function buildReviewed(p: string, unit: string, edit?: () => void, asRun = false) {
     let codeReviewed: ReturnType<typeof reviewThroughLog> | null = null;
+    // A team Unit's records hang off its start: each teammate's own.
+    const team = readFileSync(seededStateFile(p), "utf-8").includes("- **Unit Ownership**: team");
     for (const slug of stages) {
+      if (team) {
+        appendAuditEntry("UNIT_STARTED", {
+          Stage: slug, Unit: unit, "Run floor": latestMainWorkflowStageRunFloorForProject(p, slug, true, unit),
+        }, p);
+      }
       cover(p, unit, [slug], false);
       if (slug === "code-generation") edit?.();
       const reviewed = reviewThroughLog(p, [

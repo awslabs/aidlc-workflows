@@ -125,8 +125,10 @@ const runOpts = () => ({
   encoding: "utf-8" as const,
 });
 
-// Each Unit's design written and reviewed READY, with no `unit start` or
-// `unit complete` for it: the work is on disk, the receipts are not.
+// Each Unit's design written with no `unit start` or `unit complete` for it:
+// the work is on disk, the receipts are not. A review for a Unit never started
+// is refused until the engine's recovery ask is open (t-unit-start-receipt), so
+// the reviews are recorded once `next` has asked.
 function seedTeamProject(): string {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -137,24 +139,33 @@ function seedTeamProject(): string {
     const dir = join(seededRecordDir(proj), "construction", unit, SLUG);
     mkdirSync(dir, { recursive: true });
     for (const name of PRODUCES) writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
-    const args = [
-      LOG, "review", "--stage", SLUG, "--reviewer", REVIEWER, "--unit", unit,
-      "--iteration", "1", "--project-dir", proj,
-    ];
-    const request = spawnSync(BUN, args, runOpts());
-    expect(request.status, `${request.stdout}${request.stderr}`).toBe(0);
-    appendFileSync(
-      join(dir, artifactFilename("functional-spec")),
-      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
-    );
-    const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], runOpts());
-    expect(verdict.status, `${verdict.stdout}${verdict.stderr}`).toBe(0);
   }
   return proj;
 }
 
+function reviewUnitReady(proj: string, unit: string): void {
+  const dir = join(seededRecordDir(proj), "construction", unit, SLUG);
+  const args = [
+    LOG, "review", "--stage", SLUG, "--reviewer", REVIEWER, "--unit", unit,
+    "--iteration", "1", "--project-dir", proj,
+  ];
+  const request = spawnSync(BUN, args, { ...runOpts(), env: engineEnv() });
+  expect(request.status, `${request.stdout}${request.stderr}`).toBe(0);
+  appendFileSync(
+    join(dir, artifactFilename("functional-spec")),
+    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], { ...runOpts(), env: engineEnv() });
+  expect(verdict.status, `${verdict.stdout}${verdict.stderr}`).toBe(0);
+}
+
 function engineEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
+  // The stage's summary confirmation is not under test here, so its check is off.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
   return env;
 }
@@ -162,6 +173,19 @@ function engineEnv(): NodeJS.ProcessEnv {
 describe("a Unit done without its receipts is offered recording them", () => {
   test("1: team-owned Units: next asks, and the person's pick records the completion", () => {
     const proj = seedTeamProject();
+    // The first `next` asks about the missing receipt; with the ask open, the
+    // Unit's review is recorded, and the next `next` offers the completion.
+    const first = runOrchestrateNext(ORCH, proj, [], { env: engineEnv() });
+    expect(first.stderr).not.toContain("malformed directive");
+    expect(first.status, first.stderr).toBe(0);
+    expect(first.directive).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      stage: SLUG,
+      unit: "alpha",
+      reason_codes: ["UNIT_COMPLETION_MISSING"],
+    });
+    reviewUnitReady(proj, "alpha");
     const r = runOrchestrateNext(ORCH, proj, [], { env: engineEnv() });
     expect(r.stderr).not.toContain("malformed directive");
     expect(r.status, r.stderr).toBe(0);

@@ -21,6 +21,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import {
+  auditBlock,
   UNIT,
   cleanupTempDirs,
   clone,
@@ -140,6 +141,17 @@ function localRow(checkout: string, details: string): void {
 // The stage asks a question and logs the person's answer, each after a typed
 // turn, as a stage does.
 function answerStorageQuestion(checkout: string, sessionId: string): void {
+  // A team Unit's records hang off its start, recorded as the walk's first step.
+  // It goes in the claimed checkout's local record, where the engine writes it.
+  const stamp = readUnitScopeStamp(checkout)!;
+  const record = localRecord(checkout, stamp.audit_shard!);
+  mkdirSync(dirname(record), { recursive: true });
+  if (!existsSync(record)) writeFileSync(record, "# AI-DLC Audit Log\n");
+  const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  appendFileSync(
+    record,
+    `${auditBlock("UNIT_STARTED", "alpha", stamp.generation, "functional-design").replace(/\*\*Timestamp\*\*: \S+/, `**Timestamp**: ${now}`)}`,
+  );
   typedTurn(checkout, sessionId);
   const asked = runMergeTool(LOG, [
     "decision", "--stage", "functional-design", "--unit", "alpha",
