@@ -385,7 +385,7 @@ describe("where things stand", () => {
     const ana = cloneOf(home.remote, "ana");
     expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], ana).status).toBe(0);
     checkIn(ana, "payments: refunds started");
-    expect(arrivedAtLastPull(ana, "payments")).toBeNull();
+    expect(arrivedAtLastPull(ana)).toBeNull();
     const bea = cloneOf(home.remote, "bea");
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
