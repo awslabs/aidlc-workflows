@@ -31,6 +31,7 @@ import {
   changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
+  enterHookWorkflow,
   errorMessage,
   fenceSwitchSentence,
   getField,
@@ -852,20 +853,39 @@ function boxText(question: string, additions: readonly string[]): string | null 
   return null;
 }
 
+// `read` run on the work the hook payload's chat is on, picked by the payload's
+// session as the guards pick it (enterHookWorkflow); null for a chat that has
+// not joined that work, so a box never shows, or reads back, another work's plan.
+function forPayloadChat<T>(projectDir: string, session: unknown, read: () => T | null): T | null {
+  const workflow = enterHookWorkflow(projectDir, session);
+  try {
+    return workflow.participation === "participant" ? read() : null;
+  } finally {
+    workflow.restore();
+  }
+}
+
 /**
  * The AskUserQuestion input with each asked plan's lines under the question,
- * when it asks the open, unanswered code plan question alone (a single-choice
- * box offering its choices, the readers' pickerAsksThisQuestion); null for any
- * other box and on any failure, so the box goes out as the agent wrote it.
+ * when it asks the open, unanswered code plan question of this chat's work
+ * alone (a single-choice box offering its choices, the readers'
+ * pickerAsksThisQuestion); null for any other box and on any failure, so the
+ * box goes out as the agent wrote it.
  */
-export function planQuestionBoxInput(projectDir: string, toolInput: unknown): Record<string, unknown> | null {
+export function planQuestionBoxInput(
+  projectDir: string,
+  toolInput: unknown,
+  session: unknown,
+): Record<string, unknown> | null {
   try {
     const box = singleBoxQuestion(toolInput);
     if (box === null) return null;
-    const open = currentPlanApprovalAsk(projectDir);
-    if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return null;
-    const text = boxText(box.question, boxAdditions(projectDir, open.record));
-    return text === null ? null : { ...(toolInput as Record<string, unknown>), questions: [{ ...box.entry, question: text }] };
+    return forPayloadChat(projectDir, session, () => {
+      const open = currentPlanApprovalAsk(projectDir);
+      if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return null;
+      const text = boxText(box.question, boxAdditions(projectDir, open.record));
+      return text === null ? null : { ...(toolInput as Record<string, unknown>), questions: [{ ...box.entry, question: text }] };
+    });
   } catch {
     return null;
   }
@@ -889,16 +909,18 @@ export function planQuestionBoxAsAsked(projectDir: string, payload: string): str
     if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return payload;
     const box = singleBoxQuestion(parsed.tool_input);
     if (box === null) return payload;
-    const open = currentPlanApprovalAsk(projectDir, "all");
-    if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return payload;
     const shown = box.question;
-    const additions = boxAdditions(projectDir, open.record);
-    // The agent's question ends where a blank line starts what the box added;
-    // every place one starts, as its own question may end in a line break.
-    const asked = [...shown.matchAll(/(?=\n\n)/g)]
-      .map((match) => shown.slice(0, match.index))
-      .find((question) => boxText(question, additions) === shown);
-    if (asked === undefined) return payload;
+    const asked = forPayloadChat(projectDir, parsed.session_id, () => {
+      const open = currentPlanApprovalAsk(projectDir, "all");
+      if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return null;
+      const additions = boxAdditions(projectDir, open.record);
+      // The agent's question ends where a blank line starts what the box added;
+      // every place one starts, as its own question may end in a line break.
+      return [...shown.matchAll(/(?=\n\n)/g)]
+        .map((match) => shown.slice(0, match.index))
+        .find((question) => boxText(question, additions) === shown) ?? null;
+    });
+    if (asked === null) return payload;
     const swap = (entry: unknown): unknown =>
       entry !== null && typeof entry === "object" && (entry as Record<string, unknown>).question === shown
         ? { ...(entry as Record<string, unknown>), question: asked }

@@ -3146,11 +3146,11 @@ async function runGroupMembers(
 // wrote it and is never refused.
 async function claudePlanQuestionBox(input: string): Promise<string> {
   try {
-    const payload = JSON.parse(input) as { hook_event_name?: unknown; tool_input?: unknown };
+    const payload = JSON.parse(input) as { hook_event_name?: unknown; session_id?: unknown; tool_input?: unknown };
     if (payload.hook_event_name !== "PreToolUse" || runtimeHarnessName() !== "claude") return "";
     const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
     const { planQuestionBoxInput } = await import("./aidlc-plan-approval-ask.ts");
-    const updatedInput = planQuestionBoxInput(resolveProjectDirFromHook(import.meta.url), payload.tool_input);
+    const updatedInput = planQuestionBoxInput(resolveProjectDirFromHook(import.meta.url), payload.tool_input, payload.session_id);
     if (updatedInput === null) return "";
     return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } })}\n`;
   } catch {

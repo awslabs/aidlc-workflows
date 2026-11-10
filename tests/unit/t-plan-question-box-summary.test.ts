@@ -17,6 +17,9 @@
 //   - a question about several Units always gets each Unit's name and path,
 //     and the changed-source line once, never the summaries, so a short window
 //     never shows several plans as one; nothing once one plan is answered;
+//   - two pieces of work open in two chats, each at its plan question: each
+//     chat's box shows its own work's plan or nothing, never the other's, with
+//     or without Claude Code's own chat variables;
 //   - the answer to the filled box records as on main: the pick, the person's
 //     own words, the question the agent asked and its id; Approve builds and
 //     is not asked again, Request Changes and "I'll edit the files" go as on
@@ -32,7 +35,10 @@ import {
   cleanupTestProject,
   cleanupWorktreeFixture,
   createOrchestrationTestProject,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   FIXTURES_DIR,
+  intentsDirOf,
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDagBatches,
@@ -47,10 +53,12 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   planApprovalRuntimeFile,
+  setActiveIntentCursor,
   stateDigest,
   workspaceSourceListing,
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
+  writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -136,8 +144,15 @@ function asked(proj: string): string {
   return ask.question ?? "";
 }
 
+// Claude Code's own chat variables are left out unless a case sets them, so the
+// runner's own chat never stands in for the box's.
+const HOST_CHAT_VARS = ["CLAUDECODE", "CLAUDE_PID", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
+  "AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE"];
+
 function env(proj: string, extra: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
-  return { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", ...extra };
+  const own = { ...process.env };
+  for (const name of HOST_CHAT_VARS) delete own[name];
+  return { ...own, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", ...extra };
 }
 
 function planBox(question: string, extra: Partial<Box> = {}): Box {
@@ -163,9 +178,9 @@ function beforeBox(proj: string, input: string, extra: Record<string, string | u
   return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-function boxPayload(questions: unknown[]): string {
+function boxPayload(questions: unknown[], session = SESSION): string {
   return JSON.stringify({
-    hook_event_name: "PreToolUse", session_id: SESSION, cwd: "", tool_name: "AskUserQuestion",
+    hook_event_name: "PreToolUse", session_id: session, cwd: "", tool_name: "AskUserQuestion",
     tool_input: { questions },
   });
 }
@@ -549,5 +564,83 @@ describe("a question about several Units", () => {
     ], { cwd: pd, env: env(pd), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(approved.status, `${approved.stdout}${approved.stderr}`).toBe(0);
     quiet(pd, boxPayload([groupBox(question, choices)]));
+  });
+});
+
+// Two pieces of work in one project, each bound to its own chat, each at its
+// code plan question (the second record beside the fixture's, as
+// t-every-chat-enters-by-one-door sets it up); the shared cursor names the first.
+const WORKS = [
+  { record: DEFAULT_RECORD_DIR, chat: "01995000-7a11-7000-8000-00000000000a", builds: "ALPHA slugify for titles" },
+  { record: "second-work-00000002", chat: "01995000-7a11-7000-8000-00000000000b", builds: "BETA csv export" },
+];
+
+function twoWorks(): string {
+  const proj = project();
+  const intents = intentsDirOf(proj, DEFAULT_SPACE);
+  mkdirSync(join(intents, WORKS[1].record), { recursive: true });
+  writeFileSync(join(intents, WORKS[1].record, "aidlc-state.md"), readFileSync(seededStateFile(proj), "utf-8"));
+  const registry = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8")) as Array<Record<string, unknown>>;
+  registry.push({ uuid: "00000000-0000-7000-8000-000000000002", slug: "second-work", dirName: WORKS[1].record, status: "in-flight" });
+  writeFileSync(join(intents, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
+  setActiveIntentCursor(proj, WORKS[0].record);
+  for (const work of WORKS) {
+    writeSessionBinding(proj, work.chat, DEFAULT_SPACE, work.record, "switch");
+    const dir = join(intents, work.record, "construction", "code-generation");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "code-generation-plan.md"),
+      `# Code Generation Plan\n\n## Summary\n\n- Builds: ${work.builds}\n- Touches: src/slugify.ts\n- Tests: 3 unit tests\n\n` +
+        `## Steps\n\n- [ ] Step 1\n\n${renderTestingContract(resolveTestingPosture(proj))}`, "utf-8");
+    writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun the tests.\n", "utf-8");
+    const result = runOrchestrateNext(ORCHESTRATE, proj, [], { env: env(proj, { AIDLC_SESSION_OVERRIDE: work.chat }) });
+    expect(result.status, result.out).toBe(0);
+    const ask = result.directive as unknown as Directive & { plan_approval?: { targets?: Array<{ summary: string[] }> } };
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("plan-approval");
+    expect(ask.plan_approval?.targets?.[0].summary[0]).toBe(`Builds: ${work.builds}`);
+  }
+  return proj;
+}
+
+function boxIn(proj: string, chat: string, hostVariables: boolean): string | null {
+  const host = hostVariables ? { CLAUDE_PID: String(process.pid), CLAUDE_CODE_SESSION_ID: chat } : {};
+  const result = beforeBox(proj, boxPayload([planBox("Approve the code plan?")], chat), host);
+  expect(result.code, result.stderr).toBe(0);
+  return result.stdout.trim() === ""
+    ? null
+    : (JSON.parse(result.stdout) as { hookSpecificOutput: { updatedInput: { questions: Box[] } } })
+      .hookSpecificOutput.updatedInput.questions[0].question;
+}
+
+describe("two pieces of work open in two chats", () => {
+  test("each chat's box shows its own work's plan, never the other's, with or without Claude Code's chat variables", () => {
+    const proj = twoWorks();
+    for (const hostVariables of [false, true]) {
+      const [alpha, beta] = WORKS.map((work) => boxIn(proj, work.chat, hostVariables));
+      expect(alpha, `host variables ${hostVariables}`).toContain("ALPHA");
+      expect(alpha).not.toContain("BETA");
+      expect(beta, `host variables ${hostVariables}`).toContain("BETA");
+      expect(beta).not.toContain("ALPHA");
+    }
+  });
+
+  test("the answer in the second chat records against its own question", () => {
+    const proj = twoWorks();
+    const shown = boxIn(proj, WORKS[1].chat, false);
+    expect(shown).toContain("BETA");
+    const questions = [planBox(shown ?? "")];
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", session_id: WORKS[1].chat, tool_name: "AskUserQuestion",
+        tool_input: { questions }, tool_response: { questions, answers: { [shown ?? ""]: "Approve Plan" } },
+      }),
+      env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const audit = readdirSync(join(intentsDirOf(proj, DEFAULT_SPACE), WORKS[1].record, "audit"))
+      .map((name) => readFileSync(join(intentsDirOf(proj, DEFAULT_SPACE), WORKS[1].record, "audit", name), "utf-8")).join("\n");
+    const replied = audit.split(/\n(?=## )/).filter((block) => block.includes("**Event**: QUESTION_REPLIED\n"));
+    expect(field(replied[0] ?? "", "Question")).toBe("Approve the code plan?");
+    expect(audit).toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
 });
