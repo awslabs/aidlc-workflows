@@ -6432,9 +6432,10 @@ function settingEndsTurn(pd: string, scope: string, stateContent: string): boole
   if (parseCheckboxes(stateContent).find((c) => c.slug === slug)?.state !== "in-progress") return true;
   if (planApprovalAskIsOpen(pd)) return true;
   try {
-    // A plan proposal waiting for the person's approve, edit or reject: the
-    // Stop hook lets the turn end there too, so a setting typed under it must
-    // not hand the agent back to the work and walk past their pick.
+    // A plan proposal waiting for the person's approve, edit or reject: a scope
+    // switch or a team-kept setting under it ends the turn, so the agent never
+    // walks past their pick (a plain setting there names both endings for the
+    // agent to read, routeNext's composeWaits).
     if (composeGateOpen(pd)) return true;
     if (openPendingDecision(pd, slug) !== null) return true;
     const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, slug) : null;
@@ -13024,12 +13025,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // Which question their message answered is the agent's to read: approving
       // the settings it proposed answers it, and the `next` after the setter
       // names the work's step again, which closes it; a setting typed beside it
-      // leaves it waiting. The setter names their message either way.
+      // leaves it waiting. Where the setting needs their words, the setter names
+      // their message either way.
       let composeWaits = false;
       try {
         composeWaits = !planChanges && stillParked === null && composeGateOpen(pd);
       } catch {
-        // An unreadable step leaves the setting's own rule to decide.
+        // A state that cannot be read leaves the setting's own rule to decide.
       }
       if (composeWaits) {
         emit(printDirective(
