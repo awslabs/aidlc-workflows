@@ -763,6 +763,7 @@ import {
   SIGN_OFF_CLAUSE,
   UNIT_WORDS_NOTE,
   unitWordsArg,
+  unitsTakenBackHere,
   TEAM_RHYTHM_OFFER,
   leadCopyAt,
   leadRulesUnreadLine,
@@ -17354,6 +17355,21 @@ function unitProgressOwners(stateContent: string): Map<string, string> {
   return owners;
 }
 
+// A Unit the lead took back to build here after a team merged it keeps the
+// team's approved stages before the one reopened for it (every stage until
+// one is): how many of the block's stages that is, null for any other Unit.
+// The reopened stage and the ones after are the lead's own, built here with
+// their own receipts, never the old merge or the files it brought.
+function stagesKeptOnTakeBack(auditRows: readonly AuditShardEvent[], block: readonly GraphStage[]): (unit: string) => number | null {
+  const takenBack = unitsTakenBackHere(auditRows);
+  return (unit) => {
+    const reopened = takenBack.get(unit);
+    if (reopened === undefined) return null;
+    const at = reopened === null ? -1 : block.findIndex((stage) => stage.slug === reopened);
+    return at === -1 ? block.length : at;
+  };
+}
+
 function teamUnitProgressModel(
   projectDir: string,
   stateContent: string,
@@ -17459,9 +17475,11 @@ function teamUnitProgressModel(
       .map((row) => auditBlockField(row.block, "Unit") ?? "")
       .filter((unit) => mergedUnits.has(unit)),
   );
+  const keptUpTo = stagesKeptOnTakeBack(auditRows, block);
 
   for (const unit of units) {
     const unitKind = kinds?.get(unit) ?? null;
+    const kept = keptUpTo(unit) ?? 0;
     const cells: string[] = [];
     let anyProgress = false;
     let allSettled = true;
@@ -17469,7 +17487,7 @@ function teamUnitProgressModel(
     let anyRevising = false;
     let allStageGatesApproved = true;
 
-    for (const stage of block) {
+    for (const [index, stage] of block.entries()) {
       const ledger = ledgers.get(stage.slug) ?? unitLedgerFor(projectDir, stage.slug);
       // A step the Unit skipped owes nothing, as one its kind writes nothing for.
       const applies = teamUnitStageApplies(stage, unitKind) && !ledger.skipped.has(unit);
@@ -17491,7 +17509,7 @@ function teamUnitProgressModel(
         auditRows,
       );
       let state: CheckboxState;
-      if (!applies || builtElsewhere.has(unit)) state = "completed";
+      if (!applies || builtElsewhere.has(unit) || index < kept) state = "completed";
       else if (rhythmOf(unit) === "per-stage" && gate === "approved") state = "completed";
       else if (rhythmOf(unit) === "per-stage" && gate === "revising") state = "revising";
       else if (settled && rhythmOf(unit) === "per-stage") state = "awaiting-approval";
@@ -17505,11 +17523,11 @@ function teamUnitProgressModel(
       if (!settled) allSettled = false;
       if (state === "awaiting-approval") anyAwaiting = true;
       if (state === "revising") anyRevising = true;
-      if (applies && gate !== "approved") allStageGatesApproved = false;
+      if (applies && gate !== "approved" && index >= kept) allStageGatesApproved = false;
     }
 
     let gateState: CheckboxState = "pending";
-    if (builtElsewhere.has(unit)) gateState = "completed";
+    if (builtElsewhere.has(unit) || kept === block.length) gateState = "completed";
     else if (rhythmOf(unit) === "per-stage") {
       if (allStageGatesApproved) gateState = "completed";
       else if (anyRevising) gateState = "revising";
@@ -18500,15 +18518,19 @@ function teamUnitMajorWalkStep(
   // A Unit built here before teams, its checkpoint still open, is asked once for
   // the whole Unit, as its checkpoint was.
   const builtAlone = finalStage ? unitsBuiltHereGateOpen(projectDir, stateContent, finalStage.slug, auditRows) : new Set<string>();
+  const keptUpTo = stagesKeptOnTakeBack(auditRows, block);
   // The Unit's first stop, or null when it is done.
   const stopFor = (unit: string): TeamUnitWalkStep | null => {
     const unitKind = kinds?.get(unit) ?? null;
     const unitRhythm: UnitGateRhythm = builtAlone.has(unit) ? "unit-end" : rhythm;
-    for (const stage of block) {
-      if (!teamUnitStageApplies(stage, unitKind)) continue;
+    const kept = keptUpTo(unit);
+    if (kept === block.length) return null;
+    for (const [index, stage] of block.entries()) {
+      if (index < (kept ?? 0) || !teamUnitStageApplies(stage, unitKind)) continue;
       const ledger = ledgers.get(stage.slug) ?? unitLedgerFor(projectDir, stage.slug);
       if (ledger.skipped.has(unit)) continue;
-      if (!unitSettled(projectDir, stage, unit, recordPrefix, codekbCtx, unitKind, ledger)) {
+      if (!unitSettled(projectDir, stage, unit, recordPrefix, codekbCtx, unitKind, ledger) ||
+        (kept !== null && !ledger.receipts.has(unit))) {
         return { kind: "work", stage, unit, ledger };
       }
       const confirmation = checkSummaryConfirmationEvidence(projectDir, stage, { stateContent, unit });
@@ -19428,9 +19450,11 @@ function unitMajorReopen(
   const blockSlugs = walk.block.map((stage) => stage.slug);
   const targetIndex = blockSlugs.indexOf(targetSlug);
   if (targetIndex === -1) return null;
-  // A Unit a team built as work of its own goes back to that team with the
-  // failure (send-back), never reopened at the lead's project; past the Unit
-  // stages, the lead's project goes back to them to wait for it.
+  // A Unit a team built as work of its own goes back to whoever built it with
+  // the failure (send-back), and past the Unit stages the lead's project goes
+  // back to them to wait for it; or, when the person asks to fix it here, it
+  // is taken back and built here (release, then assign --here), and the next
+  // `next --stage` reopens it.
   const sentBack = flags.jumpUnit;
   if (sentBack !== undefined && homeLocation(stateContent) !== null && !readApplicableTeamUnitScopeStamp(projectDir, stateContent)) {
     let claim: UnitClaimView | undefined;
@@ -19444,12 +19468,17 @@ function unitMajorReopen(
         ? ""
         : `, then \`${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${blockSlugs.slice(targetIndex).join(",")} ` +
           `--units ${sentBack} --scope ${scopeArg(scope)}\` to wait for it here`;
+      const who = builderOf(claim);
       return {
         kind: "print",
-        message: `${sentBack} was built by ${builderOf(claim)} as work of their own, so it goes back to them with this failure and ` +
-          `is never reopened here. Write the failure, in the words you showed the person, to the request file its command names with your ` +
-          `file tool, never a shell, then run \`${aidlcToolInvocation("unit")} send-back ${shellArg(sentBack)} ` +
-          `${unitWordsArg("send-back", sentBack)}\`${back}; tell the person its notice line and re-run \`next\`.`,
+        message: `${sentBack} was built by ${who} as work of their own. Do what the person asked. To send it back to ${who}, ` +
+          "write the failure, in the words you showed the person, to the request file its command names with your file tool, never " +
+          `a shell, then run \`${aidlcToolInvocation("unit")} send-back ${shellArg(sentBack)} ${unitWordsArg("send-back", sentBack)}\`${back}; ` +
+          "tell the person its notice line and re-run `next`. To fix it here, write their words to the request file " +
+          `\`assign\` names the same way, then run \`${aidlcToolInvocation("unit")} release ${shellArg(sentBack)}\` and ` +
+          `\`${aidlcToolInvocation("unit")} assign --here ${shellArg(sentBack)} ${unitWordsArg("assign")}\` (release each other ` +
+          "Unit they asked to fix here too, and name it beside this one), tell the person its notice line, and re-run " +
+          `\`next --stage ${targetSlug} --unit ${shellArg(sentBack)}\`.`,
       };
     }
   }
@@ -19543,7 +19572,12 @@ function unitMajorReopen(
           `${stageName} yet, so there is nothing to reopen." Run nothing else.`,
       );
     }
-    reopened = [named];
+    // Every Unit taken back here beside it, not reopened yet, goes in the same
+    // reopen: the person's one ask stands behind one jump.
+    const takenBack = unitsTakenBackHere(readAuditShardEvents(projectDir));
+    reopened = takenBack.get(named) === null
+      ? [named, ...units.filter((unit) => unit !== named && takenBack.get(unit) === null && reached(unit))]
+      : [named];
   } else if (flags.everyUnit) {
     // Every unit includes one that is on the target step now: it starts it again.
     reopened = units.filter((unit) => reached(unit) || open.get(unit)?.stage === targetSlug);

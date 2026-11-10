@@ -5549,6 +5549,9 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
     }
     here.push(unit);
   }
+  // Who merged a Unit taken back here, read before this row sets that merge aside.
+  const rows = here.length > 0 ? readAuditShardEvents(pd) : [];
+  const mergedBy = new Map(here.map((unit) => [unit, auditBlockField(unitMergesStanding(rows, unit).at(-1)?.block ?? "", "Built By")]));
   if (here.length > 0) {
     appendAuditEntry("UNITS_ASSIGNED", {
       Here: here.join(", "),
@@ -5560,7 +5563,9 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
     notice: [
       ...here.map((unit) => notSeen.includes(unit)
         ? `${unit} is built here now. The teams cannot see that yet (${unseen}), so a teammate could still take it meanwhile.`
-        : `${unit} is built here now, no longer open for the teams.`),
+        : mergedBy.get(unit)
+          ? `${unit} is built here now, on top of what ${mergedBy.get(unit)} merged.`
+          : `${unit} is built here now, no longer open for the teams.`),
       ...lines,
     ].join(" "),
   }));

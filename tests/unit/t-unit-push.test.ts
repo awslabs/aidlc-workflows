@@ -1659,6 +1659,62 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     expect(merges()).toBe(2);
   });
 
+  // A live run (the lead's Build and Test on Claude Code, two Units teams had
+  // built and merged): the Build Failure question offered no fix here, the
+  // person typed "Fix it here", the step offered only the send-back, so the way
+  // was asked again; the second Unit's reopen was refused, and the next step
+  // completed Code Generation from the old merge, so the fix was written in
+  // Build and Test with no plan, review or Plan Approval.
+  test("a team's merged Unit the lead's Build and Test names: the step names both ways, and the Build Failure keeps Retry with fix", () => {
+    const { home } = twoMergedAtBuildAndTest();
+    const message = String(next(home.dir, undefined, ["--stage", "code-generation", "--unit", "refunds"]).message);
+    expect(message).toContain("send-back refunds --request-file");
+    expect(message).toContain("aidlc-unit.ts release refunds");
+    expect(message).toContain("aidlc-unit.ts assign --here refunds --request-file aidlc/.aidlc-engine/request-text/unit-assign.txt");
+    expect(message).toContain("next --stage code-generation --unit refunds");
+    expect(message).not.toContain("never reopened here");
+    const prose = readFileSync(join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol-loopback.md"), "utf-8");
+    expect(prose).toContain('someone else built and merged keeps "Retry with fix"');
+    expect(prose).toContain("**Send it back to <who built it> with this failure**");
+  });
+
+  test("taken back to fix here: one reopen for both Units that the guard lets through, and Code Generation runs again, never completed from the merge", () => {
+    const { home } = twoMergedAtBuildAndTest();
+    cpSync(AIDLC_SRC, join(home.dir, ".claude"), { recursive: true });
+    const session = "t-unit-push-fix-here";
+    const chat = personsChat(session);
+    const words = "Fix it here, in refunds and checkout-ui, then run Build and Test again.";
+    expect(hook(home.dir, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: words }).status).toBe(0);
+    for (const unit of ["refunds", "checkout-ui"]) expect(run(UNIT, ["release", unit], home.dir, chat).status).toBe(0);
+    const here = run(UNIT, ["assign", "--here", "refunds,checkout-ui", "--person-words", words], home.dir, chat);
+    expect(here.json?.notice).toBe(
+      "refunds is built here now, on top of what alice merged. checkout-ui is built here now, on top of what alice merged.",
+    );
+    const print = next(home.dir, chat, ["--stage", "code-generation", "--unit", "refunds"]);
+    const jump = /`(bun \S+aidlc-jump\.ts reopen [^`]+)`/.exec(String(print.message))?.[1];
+    expect(jump, String(print.message)).toContain("--units refunds,checkout-ui ");
+    const guard = hook(home.dir, chat, { hook_event_name: "PreToolUse", session_id: session, tool_name: "Bash", tool_input: { command: jump! } });
+    expect(guard.status, guard.out).toBe(0);
+    const ran = spawnSync("bash", ["-c", bashLine(jump!)], { cwd: home.dir, encoding: "utf-8", env: chat });
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    const completions = (): number =>
+      readAuditShardEvents(home.dir).filter((row) => row.event === "STAGE_COMPLETED" && row.block.includes("**Stage**: code-generation")).length;
+    const before = completions();
+    // The reopen holds across every next look: Code Generation, its plan first.
+    for (let look = 0; look < 2; look++) {
+      const step = next(home.dir, chat);
+      expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
+      expect(step.stage).toBe("code-generation");
+      expect(String(step.narration)).toContain("Writing the code plan for Code Generation for ");
+    }
+    expect(completions()).toBe(before);
+    // The stages before it keep the work that merged.
+    const state = readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md"), "utf-8");
+    for (const unit of ["refunds", "checkout-ui"]) {
+      expect(state).toMatch(new RegExp(`^\\| ${unit} \\| [^|]* \\| \\[x\\] \\| \\[x\\] \\| \\[x\\] \\| \\[x\\] \\| \\[R\\] \\|`, "m"));
+    }
+  });
+
   // A live run on Codex: payments said "yes, go back to it and fix it" in the
   // chat of its finished refunds report; the take moved the chat onto
   // u1-refunds, and the redo's own printed jump was refused by AI-DLC's hook
@@ -1731,6 +1787,49 @@ units:
 \`\`\`
 `;
 const SENT_BACK_WORDS = "it's their refund-flow test that pulls billing into checkout-api's coverage";
+
+// Code Generation's own outputs in a Unit's build, which its push brings to the
+// lead's record.
+function codeGenerationOutputs(record: string, unit: string): void {
+  const stage = join(record, "construction", unit, "code-generation");
+  mkdirSync(stage, { recursive: true });
+  for (const file of ["code-generation-plan.md", "code-summary.md", "unit-test-instructions.md"]) {
+    writeFileSync(join(stage, file), `# ${file}\n\n${unit}.\n`);
+  }
+  writeFileSync(join(stage, "traceability.json"), `${JSON.stringify({ stage: "code-generation", unit, entries: [] })}\n`);
+}
+
+// Payments' clone builds refunds and then checkout-ui; each is pushed and
+// merged, and the lead's project is at its Build and Test.
+function twoMergedAtBuildAndTest() {
+  const { home, hosts, alice, record } = refundsTaken(undefined, TWO_BUILDS_PLAN);
+  codeGenerated(alice, record);
+  codeGenerationOutputs(record, "refunds");
+  finishBuild(record);
+  appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
+  expect(run(UNIT, ["push"], alice).status).toBe(0);
+  mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+  mergeOnHost(hosts.billing, "refunds", "squash");
+  git(home.dir, ["fetch", "-q", "origin"]);
+  next(home.dir);
+  expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], alice).status).toBe(0);
+  const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+  const ui = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+  writeFileSync(join(alice, "checkout-api", "src", "ui.ts"), "export const ui = 1;\n");
+  codeGenerationOutputs(ui, "checkout-ui");
+  writeFileSync(join(ui, "construction", "checkout-ui", "code-generation", "source-manifest.json"), `${JSON.stringify({
+    stage: "code-generation", unit: "checkout-ui", version: 1, writes: [{ repo: "checkout-api", path: "src/ui.ts" }],
+  }, null, 2)}\n`);
+  finishBuild(ui);
+  appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(ui), "payments");
+  appendAuditEntry("WORKFLOW_COMPLETED", {}, alice, basename(ui), "payments");
+  expect(run(UNIT, ["push"], alice).status).toBe(0);
+  mergeOnHost(hosts["checkout-api"], "checkout-ui", "squash");
+  git(home.dir, ["fetch", "-q", "origin"]);
+  const step = next(home.dir);
+  expect(step.stage, JSON.stringify(step).slice(0, 400)).toBe("build-and-test");
+  return { home, hosts, alice };
+}
 
 // One chat of payments' clone builds refunds (pushed, merged, done at the
 // lead's project), then checkout-ui (pushed, merged, finished); then the

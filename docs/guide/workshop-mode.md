@@ -790,10 +790,13 @@ the team can change it and push it again, which it recommends, and runs the way
 back when they say yes. Once the redo's Code Generation is approved, the end of
 the build offers the push again. What already merged stays merged. A team whose
 chat is on another of its builds hears it there too, once, with how to go back
-to that build. When the lead's Build and Test finds a Unit a team built
-wanting, its retry sends the Unit back to the team in the failure's own words
-(`aidlc unit send-back <unit>`): it is never rebuilt at the lead's project, the
-board shows it back with the team, and its next merge is recorded again.
+to that build. When the lead's Build and Test finds a Unit someone else built
+wanting, the lead picks: send it back to whoever built it in the failure's own
+words (`aidlc unit send-back <unit>`), and the board shows it back with them and
+records its next merge again; or fix it here, and AI-DLC takes it back (`aidlc
+unit release <unit>`, then `aidlc unit assign --here <unit>`) and reopens Code
+Generation for it at the lead's project, with its plan, review and approval,
+keeping the stages before it as they merged.
 
 ### Check in your team's record
 
