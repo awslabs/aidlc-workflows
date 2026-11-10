@@ -88,6 +88,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   planApprovalReviewRequested,
+  planQuestionBoxInput,
   planSummaryLines,
   publishPlanApprovalAsk,
   routeCodeGenerationPlanApproval,
@@ -2564,6 +2565,27 @@ describe("one question for several ready Units", () => {
     replyAndRecord(pd, "approve all", "Approve all");
     for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // Claude Code's box for the question shows each Unit's lines and path, in
+  // order, and nothing once a plan of it is answered.
+  test("the question box shows each Unit's summary and path in order; once one is answered, nothing is added", () => {
+    const { pd, ask } = groupedProject();
+    const box = {
+      questions: [{
+        question: ask.question, header: "Code plans", multiSelect: false,
+        options: (ask.plan_approval.choices ?? []).map((label) => ({ label, description: "" })),
+      }],
+    };
+    const targets = ask.plan_approval.targets ?? [];
+    const expected = [ask.question, ...targets.flatMap((target) => [
+      "", target.unit ?? "", ...target.summary.map((line) => `- ${line}`), "", `Full plan: ${target.plan_path}`,
+    ])].join("\n");
+    const shown = planQuestionBoxInput(pd, box) as { questions: Array<{ question: string }> } | null;
+    expect(shown?.questions[0].question).toBe(expected);
+    reply(pd, "alpha is fine; I am still reading beta");
+    expect(answer(pd, "Approve Plan", ["--units", "alpha"]).code).toBe(0);
+    expect(planQuestionBoxInput(pd, box)).toBeNull();
   });
 
   // A reply while the person edits several Units' plans can be about some of

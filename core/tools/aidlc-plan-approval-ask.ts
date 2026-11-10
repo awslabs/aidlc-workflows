@@ -764,9 +764,7 @@ function questionsFileContent(
     "",
     question,
     "",
-    ...view.summary.map((line) => `- ${line}`),
-    "",
-    `Full plan: ${view.plan_path}`,
+    ...planLines(view.summary, view.plan_path),
     `Test instructions: ${view.instructions_path}`,
     "",
     `[Approval Fingerprint]: ${fingerprint}`,
@@ -777,6 +775,144 @@ function questionsFileContent(
     `[Answer]:${answer ? ` ${answer}` : ""}`,
     "",
   ].join("\n");
+}
+
+// One plan as its question shows it: the summary lines, then its path.
+function planLines(summary: readonly string[], planPath: string): string[] {
+  return [...summary.map((line) => `- ${line}`), "", `Full plan: ${planPath}`];
+}
+
+// --- The question box (Claude Code) -------------------------------------------
+//
+// Claude Code's question box shows only what the agent put in it, and agents
+// left the plan's lines out. Its PreToolUse hook (the guard-tool-call row) puts
+// them under the agent's own question, from the engine's open question, and the
+// human-turn hook takes them off again, so every record reads the box as the
+// agent asked it.
+
+// Claude Code shows this many characters of a box's question and cuts the rest.
+const BOX_QUESTION_MAX_CHARS = 2000;
+
+interface BoxQuestion {
+  entry: Record<string, unknown>;
+  question: string;
+  picker: PlanApprovalPickerQuestion;
+}
+
+// The one question an AskUserQuestion input asks, single-choice, with readable labels.
+function singleBoxQuestion(toolInput: unknown): BoxQuestion | null {
+  if (toolInput === null || typeof toolInput !== "object") return null;
+  const questions = (toolInput as Record<string, unknown>).questions;
+  if (!Array.isArray(questions) || questions.length !== 1) return null;
+  const entry = questions[0];
+  if (entry === null || typeof entry !== "object") return null;
+  const { question, options, multiSelect } = entry as Record<string, unknown>;
+  if (typeof question !== "string" || multiSelect === true || !Array.isArray(options)) return null;
+  const labels = options.map((option) =>
+    option !== null && typeof option === "object" ? (option as Record<string, unknown>).label : null);
+  if (labels.length === 0 || !labels.every((label): label is string => typeof label === "string")) return null;
+  return { entry: entry as Record<string, unknown>, question, picker: { question, options: labels, severalPicks: false } };
+}
+
+// What goes under the question: every plan's lines, or past the box's limit
+// each plan's path only; the line naming source that already changed is in
+// both, said once.
+function boxAdditions(projectDir: string, record: PlanApprovalAskRecord): string[] {
+  const views = record.targets.map((target) => targetView(projectDir, target.unit));
+  const changed = changedBeforeApprovalLine(projectDir);
+  const several = views.length > 1;
+  return [true, false].map((summaries) => [
+    ...views.flatMap((view, index) => [
+      ...(index > 0 ? [""] : []),
+      ...(several ? [view.unit ?? ""] : []),
+      ...(!summaries
+        ? [`Full plan: ${view.plan_path}`]
+        : planLines(changed === null || several ? view.summary : [...view.summary, changed], view.plan_path)),
+    ]),
+    ...(changed !== null && (several || !summaries) ? ["", changed] : []),
+  ].join("\n"));
+}
+
+function boxText(question: string, additions: readonly string[]): string | null {
+  if (question.includes(additions[0])) return null;
+  for (const added of additions) {
+    const text = `${question}\n\n${added}`;
+    if (text.length <= BOX_QUESTION_MAX_CHARS) return text;
+  }
+  return null;
+}
+
+/**
+ * The AskUserQuestion input with each asked plan's lines under the question,
+ * when it asks the open, unanswered code plan question alone (a single-choice
+ * box offering its choices, the readers' pickerAsksThisQuestion); null for any
+ * other box and on any failure, so the box goes out as the agent wrote it.
+ */
+export function planQuestionBoxInput(projectDir: string, toolInput: unknown): Record<string, unknown> | null {
+  try {
+    const box = singleBoxQuestion(toolInput);
+    if (box === null) return null;
+    const open = currentPlanApprovalAsk(projectDir);
+    if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return null;
+    const text = boxText(box.question, boxAdditions(projectDir, open.record));
+    return text === null ? null : { ...(toolInput as Record<string, unknown>), questions: [{ ...box.entry, question: text }] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A PostToolUse payload of the box planQuestionBoxInput filled, with the
+ * question as the agent asked it, in the input, the result and the keys of its
+ * answers and notes; any other payload, and on any failure, as it was given.
+ * Read against the record even once answered, as another chat may have answered
+ * it while the box was open.
+ */
+export function planQuestionBoxAsAsked(projectDir: string, payload: string): string {
+  // ponytail: the lines are read again from disk, so when the plan's Summary or
+  // the source changes while the box is open the box's text stays on the record
+  // (the pick still records); keep what was shown if that ever matters.
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown> | null;
+    if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return payload;
+    const box = singleBoxQuestion(parsed.tool_input);
+    if (box === null) return payload;
+    const open = currentPlanApprovalAsk(projectDir, "all");
+    if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return payload;
+    const shown = box.question;
+    const additions = boxAdditions(projectDir, open.record);
+    const asked = additions
+      .filter((added) => shown.endsWith(`\n\n${added}`))
+      .map((added) => shown.slice(0, shown.length - added.length - 2))
+      .find((question) => boxText(question, additions) === shown);
+    if (asked === undefined) return payload;
+    const swap = (entry: unknown): unknown =>
+      entry !== null && typeof entry === "object" && (entry as Record<string, unknown>).question === shown
+        ? { ...(entry as Record<string, unknown>), question: asked }
+        : entry;
+    const rekey = (map: unknown): unknown =>
+      map !== null && typeof map === "object" && !Array.isArray(map)
+        ? Object.fromEntries(Object.entries(map).map(([key, value]) => [key === shown ? asked : key, value]))
+        : map;
+    const result = (response: unknown): unknown => {
+      if (response === null || typeof response !== "object" || Array.isArray(response)) return response;
+      const own = response as Record<string, unknown>;
+      return {
+        ...own,
+        ...(Array.isArray(own.questions) ? { questions: own.questions.map(swap) } : {}),
+        ...("answers" in own ? { answers: rekey(own.answers) } : {}),
+        ...("annotations" in own ? { annotations: rekey(own.annotations) } : {}),
+      };
+    };
+    const input = parsed.tool_input as Record<string, unknown>;
+    return JSON.stringify({
+      ...parsed,
+      tool_input: { ...input, questions: [swap(box.entry)] },
+      ...("tool_response" in parsed ? { tool_response: result(parsed.tool_response) } : {}),
+    });
+  } catch {
+    return payload;
+  }
 }
 
 // The person's own answer on the `[Answer]:` line, as the file's instructions
