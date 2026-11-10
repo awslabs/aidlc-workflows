@@ -4,14 +4,15 @@
 // line past the record's cut whole beside its record (#3741), and a bare `next` reads it from there. So the prompt
 // hook tells the agent, in the words Kiro's first-step note already uses, that AI-DLC has the message and to run
 // `next` with nothing after it: the person's words go from their paste to the work without the model typing tens of
-// thousands of characters again, and nothing past a command line's limit is ever a command line. One owner
-// (firstStepNote) for the words and for when they are said; each tool's hook only delivers them: Claude Code and
-// Codex in the hook's context line, opencode through one key on the hook's output that only it asks for. Kiro's
-// adapters say the same sentence their own way (firstStepLine) and get nothing new; Copilot and Cursor drop a prompt
-// hook's output, so nothing reaches theirs.
-// A short message, a line with a flag or a verb, a paste holding a flag-shaped token `next` does not take, work
-// already open, a message with no whole copy, and a payload with no chat get no note, and every other output stays as
-// it was. No long text is an argument past what a Windows command line holds: it reaches the hook as a stdin file.
+// thousands of characters again, and nothing past a command line's limit is ever a command line. In core one place
+// (firstStepNote) owns the words and when they are said, and each tool's hook only delivers them: Claude Code and
+// Codex in the hook's context line, opencode through one key on the hook's output that only it asks for. Kiro IDE's
+// adapter (Kiro IDE and Kiro CLI's V3 engine) says the same sentence its own way (firstStepLine), held to these words
+// by a test here, and the Kiro adapters' turns get nothing new; Copilot and Cursor drop a prompt hook's output, so
+// nothing reaches theirs. A short message, a line with a flag or a verb, a paste holding a flag-shaped token `next`
+// does not take, work already open, a message with no whole copy, a payload with no chat, a host's turn and a turn
+// whose record is withheld (an unattended run; a swarm worker's worktree withholds it the same way) get no note and no
+// key. No long text is an argument past what a Windows command line holds: it reaches the hook as a stdin file.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
@@ -286,6 +287,22 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
     await bareNextTakesIt(proj, words);
   });
 
+  test("which chat, named the way Claude Code names it to the agent's shell: its own chat takes the line", async () => {
+    // No override: the engine finds the chat from CLAUDE_CODE_SESSION_ID beside a live CLAUDE_PID (hostNamedChat).
+    const asClaude = (session: string) => ({
+      env: { AIDLC_SESSION_OVERRIDE: undefined, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) } as unknown as Record<string, string>,
+    });
+    const proj = await project("fresh");
+    const words = spec(30_000);
+    await say(proj, `/aidlc ${words}`, "claude");
+    const other = await next(proj, [], asClaude(SECOND_SESSION));
+    expect(String(other.directive?.message ?? ""), "another chat's next never takes this chat's line").not.toContain(LAST);
+    expect(newest(proj)).toBeUndefined();
+    const own = await next(proj, [], asClaude(SESSION));
+    expect(String(own.directive?.message ?? ""), own.out.slice(0, 400)).toContain("propose");
+    expect(sha(spaced(newest(proj)?.text ?? ""))).toBe(sha(spaced(words)));
+  });
+
   test("no loop: the note's next gives the plan proposal, whose own command asks the plan question", async () => {
     const proj = await project("fresh");
     const words = spec(30_000);
@@ -299,7 +316,7 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
   });
 });
 
-describe("no note, and every other output as it was", () => {
+describe("no note and no key", () => {
   const cases: Array<[string, Parameters<typeof projectAt>[0], string, Harness]> = [
     ["a short /aidlc line", "fresh", "/aidlc fix the sales report end date", "claude"],
     ["a long plain message with no /aidlc", "fresh", spec(30_000), "claude"],
@@ -323,6 +340,13 @@ describe("no note, and every other output as it was", () => {
   test("a payload with no chat: no note (the bare next would find no line)", async () => {
     const proj = await project("fresh");
     const said = await coreHook(proj, `/aidlc ${spec(30_000)}`, {}, "");
+    expect(notes(said.stdout)).toBe(0);
+    expect(said.stdout).not.toContain(KEY);
+  });
+
+  test("a host's own turn: no note", async () => {
+    const proj = await project("fresh");
+    const said = await coreHook(proj, `/aidlc ${spec(30_000)}`, { origin: { kind: "host", reason: "a scheduled wake-up", source: "record" } });
     expect(notes(said.stdout)).toBe(0);
     expect(said.stdout).not.toContain(KEY);
   });

@@ -858,8 +858,10 @@ try {
   // that AI-DLC has it, so it runs `next` with nothing after it instead of
   // typing it all again (firstStepNote). A Kiro adapter says its own first
   // step (relays_terminal_output), so it gets no line of this unless it asks.
+  // A prompt no longer than the record keeps has no whole copy to read, so it
+  // loads no engine module here.
   const sayFirstStep = async (messageId: string | null): Promise<void> => {
-    if (!messageId || !sessionId || !promptSubmitted || !typedPrompt) return;
+    if (!messageId || !sessionId || !promptSubmitted || typedPrompt.length <= MESSAGE_TEXT_MAX_CHARS) return;
     try {
       const { firstStepNote } = await import("../tools/aidlc-orchestrate.ts");
       const note = firstStepNote(projectDir, sessionId, typedPrompt, messageId);

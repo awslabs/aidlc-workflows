@@ -7292,8 +7292,9 @@ export function nextArgsNameOnlyAPlan(args: string[]): string | null {
 // whole text beside it): `next` reads that line from AI-DLC's own copy
 // (takePersonsOwnLine), so the agent runs `next` with nothing after it and
 // does not type tens of thousands of characters again, often past what one
-// command line can carry. The sentence is the one Kiro's adapters say for
-// every such line (their firstStepLine). "" for any other line: words that
+// command line can carry. The sentence is the one Kiro IDE's adapter (Kiro
+// IDE and Kiro CLI on its V3 engine) says for every such line, firstStepLine,
+// which a test holds to these words. "" for any other line: words that
 // are not words alone (nextArgsAreOnlyWords), or that hold a flag-shaped
 // token `next` does not take, which a bare `next` hands back for the agent to
 // send again behind `--`; a record with no whole copy; no chat, whose `next`
