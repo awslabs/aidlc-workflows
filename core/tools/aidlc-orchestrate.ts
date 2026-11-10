@@ -135,7 +135,7 @@ import {
 } from "./aidlc-question-store.ts";
 import {
   latestMessage, listMessages, MESSAGE_TEXT_MAX_CHARS, messageBeforeJoining, noReplySince, personTurnStands, readMessage,
-  requestMessageStep, standingPersonTurn, type StoredMessage, wholeMessageText,
+  REQUEST_MAX_BYTES, requestMessageStep, standingPersonTurn, type StoredMessage, wholeMessageText,
 } from "./aidlc-message-store.ts";
 import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices, SUMMARY_CONFIRMATION_CHOICES } from "./aidlc-reply-reader.ts";
 import {
@@ -1258,7 +1258,13 @@ function hooksOffStop(
 // settings, never a command of another kind.
 const KEPT_REQUEST_FILE = "kept-request.json";
 const KEPT_REQUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const KEPT_REQUEST_MAX_BYTES = 64 * 1024;
+// A request up to REQUEST_MAX_BYTES, the message store's one number for how
+// much a request can carry, read back whole: its arguments are kept as JSON,
+// which writes a byte of theirs as at most six (a control character such as
+// an ESC as \u001b; a gap between arguments as three), and the record's own
+// fields (the time, a space name, which as a folder name is at most 255
+// bytes, and the restart id) fit in the 4 KiB beside it.
+const KEPT_REQUEST_MAX_BYTES = 6 * REQUEST_MAX_BYTES + 4 * 1024;
 const KEPT_REQUEST_LINE = "Carrying on with your earlier request.";
 const KEPT_REQUEST_FLAGS = new Set([
   "intent", "scope", "positionalScope", "depth", "testStrategy", "projectType", "review",
