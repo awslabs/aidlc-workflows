@@ -374,6 +374,14 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(proj, ".claude", "tools", "aidlc-review-records.ts"),
     );
     copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-unit-dag.ts"),
+      join(proj, ".claude", "tools", "aidlc-unit-dag.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-git.ts"),
+      join(proj, ".claude", "tools", "aidlc-git.ts"),
+    );
+    copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-record-core.ts"),
       join(proj, ".claude", "tools", "aidlc-record-core.ts"),
     );
@@ -388,6 +396,10 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-unit-landing.ts"),
       join(proj, ".claude", "tools", "aidlc-unit-landing.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-unit-holders.ts"),
+      join(proj, ".claude", "tools", "aidlc-unit-holders.ts"),
     );
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-kiro-chat-record.ts"),

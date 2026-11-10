@@ -351,6 +351,8 @@ import {
   postApplyOutstandingActions,
   shellOnlyRuntimes,
   preserveKiroMcpRegion,
+  harnessCliLeads,
+  launchedFromEditorTerminal,
   probeHarnessCli,
   probeRuntime,
   providerFiles,
@@ -5414,11 +5416,13 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "productName",
   "configNextStep",
   "hookActivation",
+  "newChatStep",
   "directiveMaxBytes",
   "harnessDir",
   "rulesSubdir",
   "statusLine",
   "agentFinishRecorded",
+  "hostShell",
 ]);
 
 const CLAUDE_SHIPPED_KEYS = [
@@ -8565,24 +8569,19 @@ function detectFirstRun(
   };
 }
 
-// A harness whose editor has no CLI to probe names that editor
-// (descriptor.editorTerminalApp), and the editor's integrated terminal is the
-// signal that setup is for it: TERM_PROGRAM is exactly the editor's name, or
-// the git askpass helper VS Code-based editors set (VSCODE_GIT_ASKPASS_NODE)
-// is the editor's executable. A miss only loses the default choice.
-export function launchedFromEditorTerminal(
-  app: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const name = app.toLowerCase();
-  if ((env.TERM_PROGRAM ?? "").toLowerCase() === name) return true;
-  const helper = (env.VSCODE_GIT_ASKPASS_NODE ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
-  return helper === name || helper === `${name}.exe`;
-}
-
 function launchedFromCandidateEditor(candidate: InstalledSourceCandidate): boolean {
   const app = candidate.descriptor.editorTerminalApp;
   return app !== undefined && launchedFromEditorTerminal(app);
+}
+
+// The descriptor's CLI-first lines where harnessCliLeads says they lead, for
+// the completion line and the first run's ending alike.
+function leadingCliGuidance(
+  descriptor: InstalledSourceCandidate["descriptor"],
+  distribution: string,
+): NonNullable<InstalledSourceCandidate["descriptor"]["cliFirst"]> | undefined {
+  const cliFirst = descriptor.cliFirst;
+  return cliFirst && harnessCliLeads(distribution, cliFirst.env) ? cliFirst : undefined;
 }
 
 function detectedCandidateChoices(
@@ -9228,8 +9227,9 @@ function renderFirstRunEnding(
     writeMenuRow("  Note: ", deep.note);
     process.stdout.write("\n");
   }
-  const steps = choices.candidate.descriptor.firstRunSteps ??
-    firstRunNextCommands(choices.candidate.stamp.distribution);
+  const steps = leadingCliGuidance(choices.candidate.descriptor, choices.candidate.stamp.distribution)?.firstRunSteps ??
+    choices.candidate.descriptor.firstRunSteps ??
+      firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
   writeMenuLines("    ", steps);
 }
@@ -13227,7 +13227,7 @@ export async function main(
     return;
   }
   if (argv.includes("--channel")) {
-    emitResult(configureChannel(argv), options);
+    emitResult(await configureChannel(argv), options);
     return;
   }
   if (argv.includes("--statusline")) {
@@ -13368,44 +13368,61 @@ export async function main(
       : undefined;
     const dryRun = argv.includes("--dry-run");
     // `--harness kiro` named Kiro CLI (V2) before it named Kiro, so on a Kiro
-    // CLI (V2) project it may be an older script's refresh. At a terminal the
-    // person is asked first, unless a --plan-token already carries their
-    // approval of this switch's plan. With no question to ask (no terminal,
-    // or --quiet or --json), the switch needs --yes (or a dry run's token);
-    // otherwise it stops, saying what the name means and both commands. With
-    // --yes or on a dry run, the note says what
-    // the name means and how to stay, before any check can refuse the run, in
-    // words true whatever happens next; under --json in the result (its notes
-    // on success, emitResult on any refusal).
-    if (switchOccupant?.distribution === "kiro" && !section && typedHarnesses.includes(typedHarnessName("kiro-ide"))) {
-      const stay = configCommand(`--harness ${invokedHarnessName("kiro")}${projectTarget(projectDir)}`);
+    // CLI (V2) project it may be an older script's refresh. A copied tool from
+    // before these names hands its refresh over in ids, where `kiro` is still
+    // Kiro CLI (V2), so on a Kiro project it may be a person following this
+    // release's guides. Either way, at a terminal the person is asked first,
+    // unless a --plan-token already carries their approval of this switch's
+    // plan. With no question to ask (no terminal, or --quiet or --json), the
+    // switch needs --yes (or a dry run's token); otherwise it stops, saying
+    // what the name means and both commands. With --yes or on a dry run, the
+    // note says what the name means and how to stay, before any check can
+    // refuse the run, in words true whatever happens next; under --json in
+    // the result (its notes on success, emitResult on any refusal).
+    const handedBy = handingTool();
+    const olderHandOff = switchOccupant?.distribution === "kiro-ide" && requestedHarness === "kiro" &&
+      handedBy !== undefined && !toolReadsTypedNames(handedBy);
+    const typedSwitch = switchOccupant?.distribution === "kiro" && typedHarnesses.includes(typedHarnessName("kiro-ide"));
+    if (switchOccupant && !section && (typedSwitch || olderHandOff)) {
+      const dir = switchOccupant.harnessDir;
+      const [staying, switching] = olderHandOff ? ["Kiro", "Kiro CLI (V2)"] : ["Kiro CLI (V2)", "Kiro"];
+      const meaning = olderHandOff
+        ? "`--harness kiro` now means Kiro, but the tool you ran is from an older release and reads it as Kiro CLI (V2)"
+        : `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3)`;
+      // The older tool stays on Kiro by its own run with Kiro named its way,
+      // from the same files; a plan token there is for the switch's plan.
+      const keepKiro = olderHandOff
+        ? configRerunWith(harnessArgsWith(input, (id) => (id === "kiro" ? "kiro-ide" : id)), projectDir, [], ["--plan-token"])
+        : undefined;
+      const stay = keepKiro ??
+        configCommand(`--harness ${invokedHarnessName(olderHandOff ? "kiro-ide" : "kiro")}${projectTarget(projectDir)}`);
+      // The older tool's way to stay leaves out a mirror the run named, and asks for it.
+      const stayMirror = keepKiro ? sameMirror(input) : "";
       const unapproved = !options.yes && !dryRun && !argv.includes("--plan-token");
       const asking = configInputIsTty() && options.mode === "human" && unapproved;
       if (asking) {
         const answer = configPrompt(
-          `This project is set up for Kiro CLI (V2). \`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3). ` +
-            `Switch ${switchOccupant.harnessDir} to Kiro in place? [y/N]:`,
+          `This project is set up for ${staying}. ${meaning}. Switch ${dir} to ${switching} in place? [y/N]:`,
         );
         if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
-          emitResult(usage(`nothing changed; ${switchOccupant.harnessDir} stays on Kiro CLI (V2)`, stay), options);
+          emitResult(usage(`nothing changed; ${dir} stays on ${staying}${keepKiro ? `. To keep ${staying}${stayMirror}:` : ""}`, stay), options);
           return;
         }
       } else {
-        const note = `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3), so on a Kiro CLI (V2) ` +
-          `project like this one it means switching ${switchOccupant.harnessDir} to Kiro in place; to keep Kiro CLI (V2), run \`${stay}\` instead.`;
+        const note = `${meaning}, so on a ${staying} project like this one it means switching ${dir} to ${switching} in place; ` +
+          `to keep ${staying}, run \`${stay}\`${stayMirror} instead.`;
         if (options.mode === "json") {
           refusalNote = note;
           sourceNotes.push(note);
         }
         // With no one at a terminal to answer, the run may be an agent
-        // following a line an older Kiro CLI (V2) tree printed, so the switch
-        // waits for --yes (a dry run and a --plan-token go on).
+        // following a line printed in the other meaning, so the switch waits
+        // for --yes (a dry run and a --plan-token go on).
         if (unapproved) {
           const again = configRerunWith(input, projectDir, ["--yes"]);
-          const stopped = `nothing changed; ${switchOccupant.harnessDir} stays on Kiro CLI (V2). ` +
-            `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3); ` +
-            `to switch ${switchOccupant.harnessDir} to Kiro in place, run ${again ? `\`${again}\`${sameMirror(input)}` : "it again with --yes"}. ` +
-            "To keep Kiro CLI (V2):";
+          const stopped = `nothing changed; ${dir} stays on ${staying}. ${meaning}; ` +
+            `to switch ${dir} to ${switching} in place, run ${again ? `\`${again}\`${sameMirror(input)}` : "it again with --yes"}. ` +
+            `To keep ${staying}${stayMirror}:`;
           // --quiet prints only a refusal's command, so the rest comes first.
           if (options.mode === "quiet") writeSwitchNote(stopped, options);
           emitResult(usage(stopped, stay), options);
@@ -14097,14 +14114,21 @@ export async function main(
     // A hook file the plan removes (the installed row shipped it) is not one
     // Kiro will run, so it is neither named nor expected after the commit.
     // So is the registration a dropped plugin's own build wrote beside it.
-    const accounted: Record<string, string> = {
+    // That one is recognised by its bytes, and the checks under the lock and
+    // after the commit recognise it again.
+    const planned: Record<string, string> = {
       ...files,
       ...Object.fromEntries(
         operations.filter((operation) => operation.kind === "remove").map((operation) => [operation.path, "remove"]),
       ),
-      ...Object.fromEntries(
-        (hookGate ? droppedPluginRegistrations(projectDir, descriptor.harnessDir) : []).map((path) => [path, "plugin"]),
-      ),
+    };
+    const recogniseRegistrations = () =>
+      [...new Set(droppedPluginRegistrations(projectDir, descriptor.harnessDir))]
+        .filter((path) => !Object.hasOwn(planned, path));
+    const recognised = hookGate ? recogniseRegistrations() : [];
+    const accounted: Record<string, string> = {
+      ...planned,
+      ...Object.fromEntries(recognised.map((path) => [path, "plugin"])),
     };
     const hookScan = hookGate
       ? scanUnownedHooks(projectDir, hooksDir, accounted)
@@ -14368,23 +14392,50 @@ export async function main(
     }
     // Under the transaction lock the hook set is read again before staging,
     // and once more after the files are committed, where a mismatch rolls the
-    // switch back: a file added, removed, renamed, or changed between the
-    // approval and the commit stops the switch.
+    // switch back: a hook file AI-DLC does not own added, removed, renamed, or
+    // changed between the approval and the commit stops the switch, and so
+    // does a recognised registration still there but no longer recognised.
+    // One that is gone leaves Kiro less to run, so it does not.
     // Test seam: a writer that adds a hook file after approval, before the
-    // transaction lock ("1") or while the switch commits ("committed"). The
-    // file is an empty object, which registers nothing.
+    // transaction lock ("1") or while the switch commits ("committed"), adds
+    // a description to a recognised registration at the same points
+    // ("registration", "registration-committed"), or removes one before the
+    // lock ("registration-removed"). The added file is an empty object, which
+    // registers nothing.
     const interference = hookGate ? process.env.AIDLC_TEST_SWITCH_HOOK_INTERFERENCE : undefined;
-    const interfere = () =>
-      writeFileSync(join(projectDir, hooksDir, "aidlc-test-interference.json"), "{}\n");
-    if (interference === "1") interfere();
+    const interfere = () => {
+      if (interference === "1" || interference === "committed") {
+        writeFileSync(join(projectDir, hooksDir, "aidlc-test-interference.json"), "{}\n");
+        return;
+      }
+      if (recognised.length === 0) throw new Error("AIDLC_TEST_SWITCH_HOOK_INTERFERENCE: no recognised registration");
+      const path = join(projectDir, recognised[0]);
+      if (interference === "registration-removed") {
+        rmSync(path);
+        return;
+      }
+      const registration = JSON.parse(readFileSync(path, "utf-8"));
+      writeFileSync(path, `${JSON.stringify({ ...registration, description: "edited while the switch runs" }, null, 2)}\n`);
+    };
+    if (interference === "1" || interference === "registration" || interference === "registration-removed") interfere();
     const checkHooks = (committed: boolean) => {
-      if (committed && interference === "committed") interfere();
-      const now = scanUnownedHooks(projectDir, hooksDir, accounted);
+      if (committed && (interference === "committed" || interference === "registration-committed")) interfere();
+      // A recognised registration stays out of the scan only while it is still
+      // recognised: one still there but no longer recognised is compared like a
+      // hook file AI-DLC does not own, and one that is gone is in neither set. The
+      // registrations are read again only while the directory is reviewable.
+      const still = recognised.length > 0 && !hooksDirProblem(projectDir, hooksDir)
+        ? new Set(recogniseRegistrations())
+        : new Set<string>();
+      const now = scanUnownedHooks(projectDir, hooksDir, {
+        ...planned,
+        ...Object.fromEntries(recognised.filter((path) => still.has(path)).map((path) => [path, "plugin"])),
+      });
       if (now.redirected || now.unreadable || canonical(now.entries) !== canonical(unownedHooks)) {
         throw new SwitchRefusal(
           committed
-            ? `${hooksDir}: hook files AI-DLC does not own changed while this switch was applied, so it was rolled back; review them and run the switch again`
-            : `${hooksDir}: hook files AI-DLC does not own changed after this switch was planned; review them and run the switch again`,
+            ? `${hooksDir}: hook files no longer match this switch's plan, so it was rolled back; review them and run the switch again`
+            : `${hooksDir}: hook files no longer match this switch's plan; review them and run the switch again`,
           { kind: "text", text: "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token" },
         );
       }
@@ -14644,7 +14695,7 @@ export async function main(
       }; next: ${
         cursorOutsideGit
           ? "run `git init` in this project, then open it in Cursor and trust it (fully restart Cursor if it is already open), then run `/aidlc --doctor`"
-          : descriptor.configNextStep
+          : leadingCliGuidance(descriptor, stamp.distribution)?.configNextStep ?? descriptor.configNextStep
       }`;
     const setupMapWillRender =
       !internal.setupWalkChild &&

@@ -18,6 +18,118 @@ export function kiroChatRecordPaths(sessionId: string | undefined, file = "messa
   }
 }
 
+/**
+ * How full this chat got in its first turn on the work (the highest figure Kiro
+ * recorded in that turn), and the model Kiro names for the chat: a new chat that
+ * picks the work up on the same model starts about that full. The first turn is
+ * the first one with a figure at or after `since` (this chat's first turn on the
+ * work); a turn Kiro summarized part way counts at its figure before the summary.
+ * The figure is a share of the window of the model that ran the turn, so it
+ * counts only when the record names that model and the model now, the same: a
+ * chat switched with /model since would start a new chat on another window.
+ * Kiro CLI's default engine saves each turn's figures and model in
+ * ~/.kiro/sessions/cli/<session id>.json. Kiro CLI v3 and Kiro IDE put the
+ * figures in `contextUsage` rows that carry the turn's `executionId`; the model
+ * that ran it is in Kiro's own `context_snapshot_` note before the turn ("The
+ * current model is <model>.", written at a chat's first prompt and after each
+ * summary), and the model now in the session.json beside, with the model that
+ * note last named. `auto` names no model: Kiro picks it. Kiro keeps no record
+ * of the other models a person can pick. Read only; null when nothing is known.
+ */
+export function kiroFirstTurnFill(
+  sessionId: string | undefined,
+  since: number | null,
+): { percent: number; model: string | null } | null {
+  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId) || since === null) return null;
+  try {
+    const chat = JSON.parse(readFileSync(join(homedir(), ".kiro", "sessions", "cli", `${sessionId}.json`), "utf-8"));
+    const state = recordField(chat, "session_state");
+    const turns = recordField(recordField(state, "conversation_metadata"), "user_turn_metadatas");
+    if (Array.isArray(turns)) {
+      for (const turn of turns) {
+        if (!(Date.parse(String(recordField(turn, "end_timestamp"))) >= since)) continue;
+        const figures = [recordField(turn, "context_usage_percentage"), recordField(turn, "final_context_usage_percentage")]
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+        if (figures.length === 0) return null;
+        const now = recordField(recordField(recordField(state, "rts_model_state"), "model_info"), "model_id") ??
+          recordField(recordField(recordField(state, "conversation_metadata"), "last_context_usage"), "model_id");
+        if (typeof now !== "string" || !now || recordField(turn, "model") !== now) return null;
+        return { percent: Math.max(...figures), model: modelName(now) };
+      }
+    }
+  } catch {
+    // Not a chat of Kiro CLI's default engine, or not readable now.
+  }
+  for (const path of kiroChatRecordPaths(sessionId)) {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf-8");
+    } catch {
+      continue;
+    }
+    let turn: string | null = null;
+    let percent: number | null = null;
+    let noted: string | null = null;
+    let ranOn: string | null = null;
+    for (const line of text.split("\n")) {
+      let row: unknown;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const payload = recordField(row, "payload");
+      if (turn === null && recordField(payload, "type") === "agent_note") {
+        const id = recordField(row, "id");
+        const content = recordField(payload, "content");
+        if (typeof id === "string" && id.startsWith("context_snapshot_") && typeof content === "string") {
+          noted = /^The current model is (.+)\.$/m.exec(content.replaceAll("\r", ""))?.[1] ?? null;
+        }
+        continue;
+      }
+      if (recordField(payload, "type") !== "session_metadata" || recordField(payload, "key") !== "contextUsage") continue;
+      const figure = recordField(recordField(payload, "value"), "usagePercentage");
+      const execution = recordField(payload, "executionId");
+      if (typeof figure !== "number" || !Number.isFinite(figure) || typeof execution !== "string") continue;
+      if (turn === null) {
+        if (!(Date.parse(String(recordField(row, "timestamp"))) >= since)) continue;
+        turn = execution;
+        ranOn = noted;
+      } else if (execution !== turn) {
+        break;
+      }
+      percent = Math.max(percent ?? figure, figure);
+    }
+    if (percent === null) continue;
+    let session: unknown;
+    try {
+      session = JSON.parse(readFileSync(join(dirname(path), "session.json"), "utf-8"));
+    } catch {
+      return null;
+    }
+    const now = recordField(session, "modelId");
+    const told = recordField(session, "contextSnapshotModelDisplay");
+    if (
+      ranOn === null || typeof now !== "string" || recordField(told, "modelId") !== now ||
+      recordField(told, "display") !== ranOn
+    ) return null;
+    return { percent, model: modelName(now) };
+  }
+  return null;
+}
+
+function recordField(value: unknown, key: string): unknown {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+// A model id as Kiro shows it in /model, said in the person's line only when it
+// is one plainly; `auto` is Kiro picking, so it names none.
+function modelName(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(value) && value.toLowerCase() !== "auto"
+    ? value
+    : null;
+}
+
 // Kiro IDE's agent menu names for the session.json `agentMode` of its built-in
 // agents that ask the person to approve each command (Kiro IDE 1.4.51).
 const DEFAULT_AGENTS: Readonly<Record<string, string>> = { vibe: "Default", "default-v2": "Default v2" };

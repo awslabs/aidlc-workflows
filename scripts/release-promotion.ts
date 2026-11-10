@@ -412,7 +412,10 @@ export function promotionNotes(p: Promotion): string {
     "### macOS and Linux",
     `\`\`\`bash\ncurl -fsSL ${download}/install.sh | sh -s -- --version ${p.version}\n\`\`\``,
     "### Windows PowerShell",
-    `\`\`\`powershell\nirm ${download}/install.ps1 -OutFile install.ps1\n./install.ps1 -Version ${p.version}\n\`\`\``,
+    `\`\`\`powershell\nirm ${download}/install.ps1 -OutFile install.ps1\nSet-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force\n./install.ps1 -Version ${p.version}\n\`\`\``,
+    "On a PC where a Group Policy sets the PowerShell execution policy, the `Set-ExecutionPolicy` line can print an error " +
+      "saying the setting is overridden. The installer still runs unless that policy is `AllSigned` or `Restricted`; " +
+      "then it is refused, and your administrator can say how to install AI-DLC on that PC.",
     "## Highlights",
     ...highlightBlocks(entry.highlights),
     ...contributorSections(p.contributors, p.repository),

@@ -17416,7 +17416,7 @@
     "input": "build a to-do app",
     "state": "fresh",
     "meaning": "the person means: new work to build a to-do app",
-    "source": "docs/guide/harnesses/kiro-ide.md:279",
+    "source": "docs/guide/harnesses/kiro.md:328",
     "documented": "Example of typing the whole request then pressing Enter in a Kiro IDE chat.",
     "expected": {
       "engine": {

@@ -119,7 +119,8 @@ const healthDir = hooksHealthDir(projectDir, intent, space);
 writeHookStatusFile(healthDir, "session-end.last", isoTimestamp());
 
 try {
-  appendAuditEntry("SESSION_ENDED", { Reason: reason }, projectDir, intent, space);
+  // The chat that ended, so a side-by-side batch it started is no longer held for it.
+  appendAuditEntry("SESSION_ENDED", { Reason: reason, ...(sessionId ? { Session: sessionId } : {}) }, projectDir, intent, space);
 } catch (e) {
   recordHookDrop(projectDir, "session-end", errorMessage(e), intent, space);
   return 0;

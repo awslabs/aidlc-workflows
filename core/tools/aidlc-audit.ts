@@ -212,9 +212,11 @@ const VALID_EVENT_TYPES = new Set([
   "STAGE_RULES_BLOCKED",
   // A system package install nobody asked for (hook-emitted): held until the
   // person says so (BLOCKED), and run with their turn standing behind it
-  // (ALLOWED, naming their message).
+  // (ALLOWED, naming their message). REQUESTED: the agent named the message
+  // that asked for the packages (`log install`).
   "SYSTEM_INSTALL_BLOCKED",
   "SYSTEM_INSTALL_ALLOWED",
+  "SYSTEM_INSTALL_REQUESTED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -330,6 +332,10 @@ const VALID_EVENT_TYPES = new Set([
   // are built in parallel: `aidlc-swarm.ts allow-change` records them with the
   // message they asked in, and the guard and the landings read it.
   "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  // The person asked a second chat to build a side-by-side batch another chat
+  // started: `aidlc-swarm.ts take-over` records it with the message they asked
+  // in, and `next` hands the batch to that chat from then on.
+  "SWARM_TAKEN_OVER",
   // Commit provenance -- emitted only by `aidlc-attest.ts anchor`: a workspace
   // commit observed to land reviewed unit claims. Enrichment ONLY: attest
   // resolve derives attribution purely from committed receipts + evidence and
@@ -415,6 +421,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_RULES_BLOCKED: "Stage Rules Blocked",
   SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
   SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
+  SYSTEM_INSTALL_REQUESTED: "System Install Requested",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
@@ -473,6 +480,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SWARM_UNIT_CONVERGED: "Swarm Unit Converged",
   SWARM_SOURCE_MERGED: "Swarm Source Merged",
   MAIN_CHECKOUT_CHANGE_ALLOWED: "Main Checkout Change Allowed",
+  SWARM_TAKEN_OVER: "Swarm Taken Over",
   SWARM_UNIT_FAILED: "Swarm Unit Failed",
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
@@ -606,6 +614,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_SOURCE_MERGED",
   // The person's request a strict landing keeps; a forged one would keep a change nobody asked for.
   "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  // The person's request that moves a batch to the chat they asked in.
+  "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -663,9 +673,10 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // A stand-aside row is a guard's own account of what it let through; a forged
   // one would make an unauthorized action look covered.
   "GUARD_STOOD_ASIDE",
-  // The person's go-ahead for a system install; a forged one would make an
-  // install nobody asked for look like theirs.
+  // The person's go-ahead for a system install, and the message named as asking
+  // for one; a forged one would make an install nobody asked for look like theirs.
   "SYSTEM_INSTALL_ALLOWED",
+  "SYSTEM_INSTALL_REQUESTED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);
@@ -706,6 +717,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   // The source-work check's own record opens the main checkout's gate.
   "SOURCE_WORK_NOT_FOUND",
   "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",

@@ -1110,6 +1110,73 @@ describe("t243 project initialization", () => {
     expect(existsSync(plugin)).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a Kiro switch recognises a dropped plugin's registration again while it runs, and lets it be removed", () => {
+    const projection = join(temp("aidlc-t243-plugin-change-"), "kiro-ide");
+    const built = run(join(REPO_ROOT, "scripts", "package.ts"), ["plugin", "build", "test-pro", "kiro-ide", projection], REPO_ROOT);
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    const dropped = () => {
+      const project = temp("aidlc-t243-kiro-switch-plugin-change-");
+      mkdirSync(join(project, ".git"));
+      const initialized = run(INIT, [
+        "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro-v2", "--mcp", "none",
+      ], project);
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+      cpSync(join(projection, ".kiro"), join(project, ".kiro"), { recursive: true });
+      const hooks = join(project, ".kiro", "hooks");
+      return {
+        project,
+        hooks,
+        registration: join(hooks, "aidlc-test-pro-compose.json"),
+        switchArgs: [
+          "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro", "--mcp", "none", "--yes",
+        ],
+        stampOf: () =>
+          JSON.parse(readFileSync(join(project, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution,
+      };
+    };
+
+    const { project, hooks, registration, switchArgs, stampOf } = dropped();
+    const written = readFileSync(registration, "utf-8");
+    for (const [when, line] of [
+      ["registration", ".kiro/hooks: hook files no longer match this switch's plan; review them and run the switch again"],
+      ["registration-committed", ".kiro/hooks: hook files no longer match this switch's plan, so it was rolled back"],
+    ]) {
+      const changed = run(INIT, switchArgs, project, { AIDLC_TEST_SWITCH_HOOK_INTERFERENCE: when });
+      expect(changed.status, when + changed.stdout + changed.stderr).toBe(4);
+      expect(changed.stdout + changed.stderr, when).toContain(line);
+      expect(changed.stdout + changed.stderr, when).toContain(
+        "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token",
+      );
+      expect(stampOf(), when).toBe("kiro");
+      expect(readFileSync(registration, "utf-8"), when).toContain("edited while the switch runs");
+      expect(existsSync(join(hooks, "aidlc-continue-workflow.json")), when).toBe(false);
+      expect(readdirSync(project).filter((name) => name.startsWith(".aidlc-txn-")), when).toEqual([]);
+      writeFileSync(registration, written);
+    }
+
+    // A registration gone after the dry run leaves Kiro less to run, so the plan still applies.
+    writeFileSync(
+      join(hooks, "team-check.json"),
+      '{"name":"team-check","version":"1","when":{"type":"promptSubmit"},"then":{"type":"runCommand","command":"echo reviewed"}}\n',
+    );
+    const dryRun = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(dryRun.status, dryRun.stdout + dryRun.stderr).toBe(0);
+    const token = /--plan-token (sha256:[0-9a-f]+)/.exec(dryRun.stdout)?.[1] ?? "";
+    expect(token).not.toBe("");
+    rmSync(registration);
+    const applied = run(INIT, [...switchArgs, "--plan-token", token], project);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    expect(stampOf()).toBe("kiro-ide");
+    expect(existsSync(registration)).toBe(false);
+
+    // So does one removed while the switch runs.
+    const other = dropped();
+    const removed = run(INIT, other.switchArgs, other.project, { AIDLC_TEST_SWITCH_HOOK_INTERFERENCE: "registration-removed" });
+    expect(removed.status, removed.stdout + removed.stderr).toBe(0);
+    expect(other.stampOf()).toBe("kiro-ide");
+    expect(existsSync(other.registration)).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   for (const earlier of EARLIER_KIRO_IDE_DROPS) {
     test(`a Kiro switch and a refresh keep a plugin dropped from ${earlier.build} and never name its registration as a hook AI-DLC does not own`, () => {
       const project = temp("aidlc-t243-kiro-switch-earlier-plugin-");
@@ -1197,6 +1264,44 @@ describe("t243 project initialization", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Windows runners may lack the permissions this fixture needs.
+  test.skipIf(process.platform === "win32")("a Kiro switch recognises a dropped plugin's registration only when it is a plain file", () => {
+    const project = temp("aidlc-t243-kiro-switch-plugin-entry-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro-v2", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const projection = join(temp("aidlc-t243-plugin-entry-"), "kiro-ide");
+    const built = run(join(REPO_ROOT, "scripts", "package.ts"), ["plugin", "build", "test-pro", "kiro-ide", projection], REPO_ROOT);
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    cpSync(join(projection, ".kiro"), join(project, ".kiro"), { recursive: true });
+    const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+    const written = readFileSync(registration, "utf-8");
+    const switchArgs = [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro", "--mcp", "none", "--dry-run",
+    ];
+
+    const outside = join(temp("aidlc-t243-plugin-entry-target-"), "aidlc-test-pro-compose.json");
+    writeFileSync(outside, written);
+    rmSync(registration);
+    symlinkSync(outside, registration);
+    const linked = run(INIT, switchArgs, project);
+    expect(linked.status, linked.stdout + linked.stderr).toBe(4);
+    expect(linked.stdout).toContain(
+      "Kiro would run hooks through entries that are not regular files in .kiro/hooks (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")",
+    );
+    expect(lstatSync(registration).isSymbolicLink()).toBe(true);
+    expect(readFileSync(outside, "utf-8")).toBe(written);
+
+    rmSync(registration);
+    writeFileSync(registration, written);
+    const owned = run(INIT, switchArgs, project);
+    expect(owned.status, owned.stdout + owned.stderr).toBe(0);
+    expect(owned.stdout).toContain("(switches .kiro in place from kiro-v2 to kiro)");
+    expect(owned.stdout).not.toContain("AI-DLC does not own");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a Kiro switch that would let Kiro run unowned hook files applies only the approved set", () => {
     const project = temp("aidlc-t243-kiro-switch-hooks-");
     mkdirSync(join(project, ".git"));
@@ -1268,7 +1373,7 @@ describe("t243 project initialization", () => {
       AIDLC_TEST_SWITCH_HOOK_INTERFERENCE: "1",
     });
     expect(raced.stdout + raced.stderr).toContain(
-      ".kiro/hooks: hook files AI-DLC does not own changed after this switch was planned",
+      ".kiro/hooks: hook files no longer match this switch's plan; review them and run the switch again",
     );
     expect(raced.stdout + raced.stderr).toContain(
       "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token",
@@ -1284,7 +1389,7 @@ describe("t243 project initialization", () => {
     });
     expect(committing.status, committing.stdout + committing.stderr).toBe(4);
     expect(committing.stdout + committing.stderr).toContain(
-      ".kiro/hooks: hook files AI-DLC does not own changed while this switch was applied, so it was rolled back",
+      ".kiro/hooks: hook files no longer match this switch's plan, so it was rolled back",
     );
     expect(committing.stdout + committing.stderr).toContain(
       "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token",

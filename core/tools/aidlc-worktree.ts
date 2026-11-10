@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  addPendingPersonLines,
   auditBlockField,
   BOLT_INTENT_ID8_REGEX,
   type BoltIdentity,
@@ -93,7 +94,8 @@ import {
   asksForHelp,
   printUsageAndExit,
 } from "./aidlc-lib.js";
-import { afterApprovedSkeleton } from "./aidlc-construction-checkpoints.ts";
+import { afterApprovedSkeleton, autonomyGrantedOnRecord } from "./aidlc-construction-checkpoints.ts";
+import { quoted } from "./aidlc-brought-files.ts";
 import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
 import { swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
@@ -1986,6 +1988,36 @@ const PERSON_DECIDES_CHANGES =
   "Those are the person's own changes, so they decide: keep them (with their go-ahead, set Guard Policy relaxed " +
   "for this piece of work) or undo them themselves; then run the merge again.";
 
+// A landing finished after it stopped staged (a clash, a refused commit) does
+// not compare the checkout again, so the change of the person's it kept is the
+// row its first run wrote from the fingerprint this link opens at, since this
+// Unit last converged.
+function keptByStagedLanding(
+  pd: string,
+  record: BoundConvergedSourceRecord,
+  recorded: string,
+  intent?: string,
+  space?: string,
+): { kept?: string } {
+  const rows = readAuditShardEvents(pd, intent, space);
+  const converged = sortWorktreeAuditRows(rows.filter((row) =>
+    row.event === "SWARM_UNIT_CONVERGED" &&
+    auditBlockField(row.block, "Unit name") === record.unit &&
+    auditBlockField(row.block, "Stage") === record.stage &&
+    auditBlockField(row.block, "Run floor") === record.floor)).at(-1);
+  if (converged === undefined) return {};
+  const row = sortWorktreeAuditRows(rows.filter((candidate) =>
+    candidate.event === "CHANGE_ACCEPTED" &&
+    auditBlockField(candidate.block, "Checkpoint") === "swarm-batch" &&
+    auditBlockField(candidate.block, "Stage") === record.stage &&
+    auditBlockField(candidate.block, "Unit") === record.unit &&
+    auditBlockField(candidate.block, "Recorded") === recorded &&
+    !auditBlockField(candidate.block, "Message Id") &&
+    rowAfter(candidate, converged))).at(-1);
+  const kept = row === undefined ? null : auditBlockField(row.block, "Details");
+  return kept ? { kept } : {};
+}
+
 function assertAggregateSourceBeforeMerge(
   pd: string,
   slug: string,
@@ -1998,6 +2030,8 @@ function assertAggregateSourceBeforeMerge(
 ): {
   state: WorkspaceSourceState;
   openingFingerprint: string;
+  // The person's own change this landing keeps, said once it has landed.
+  kept?: string;
 } | null {
   if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceState(pd, intent, space);
@@ -2005,17 +2039,18 @@ function assertAggregateSourceBeforeMerge(
   // the build are kept: the merge starts from the checkout as it is, and the
   // change is recorded once so the merge chain stays readable. Under strict so
   // are the files the person asked to change (swarm allow-change), recorded
-  // with the message they asked in; that step already told them.
+  // with the message they asked in; that step already told them. The line is
+  // not said here: the merge can still stop, and a run that stopped already
+  // wrote the row the run that lands finds.
   const keepChange = (recorded: string, changed: string[] | null, asked: string[] | null = null) => {
     const notice = changed && changed.length > 0
       ? `You changed ${renderChangedPaths(changed)} during the build${asked ? ", as you asked" : ""}; kept them and merged unit ${record.unit}.`
       : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
-    const said = recordAcceptedChanges(pd, [{
+    recordAcceptedChanges(pd, [{
       checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
       recorded, current: current!.fingerprint, notice, ...(asked ? { messageIds: asked } : {}),
     }], { intent, space });
-    if (asked === null) for (const line of said) process.stderr.write(`note: ${line}\n`);
-    return { state: current!, openingFingerprint: current!.fingerprint };
+    return { state: current!, openingFingerprint: current!.fingerprint, ...(asked === null ? { kept: notice } : {}) };
   };
   // Under strict, the step for the person's own changes: theirs to keep, with
   // the message they asked in, or to undo.
@@ -2049,7 +2084,12 @@ function assertAggregateSourceBeforeMerge(
         `refusing to merge: unit "${record.unit}" already has current-attempt source-merge authority`,
       );
     }
-    if (resuming) return { state: current, openingFingerprint: chain.fingerprint };
+    if (resuming) {
+      return {
+        state: current, openingFingerprint: chain.fingerprint,
+        ...keptByStagedLanding(pd, record, chain.fingerprint, intent, space),
+      };
+    }
     const changed = sameWorkspaceSource(chain.fingerprint, current.fingerprint)
       ? []
       : swarmSourceChangedSince(pd, record.stage, chain.listing, current, intent, space);
@@ -2081,7 +2121,12 @@ function assertAggregateSourceBeforeMerge(
       `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`,
     );
   }
-  if (resuming) return { state: current, openingFingerprint: opening.fingerprint };
+  if (resuming) {
+    return {
+      state: current, openingFingerprint: opening.fingerprint,
+      ...keptByStagedLanding(pd, record, opening.fingerprint, intent, space),
+    };
+  }
   // The walking skeleton the person approved at its own checkpoint is where the
   // swarm starts, never a change of theirs. The link this landing records still
   // opens at the stage baseline: the chain's first link, as earlier releases
@@ -2306,6 +2351,22 @@ function combinedLine(unit: string, combined: readonly string[], target: string)
     : `Landed Unit ${unit} with ${countFiles(combined)} settled by hand against what was already on ${target}: ${renderLandedPaths(combined)}.`;
 }
 
+// How the person sees what was settled by hand and undoes the landing, run from
+// the project: `git -C <repo>` for a Unit in another repository, the files by
+// their path there. A merge commit reverts against the branch it landed on.
+// The files are left out when one cannot be quoted for every shell or the line
+// names fewer than all of them; the commit alone still shows them. A repository
+// whose name no quoting passes whole gets no commands at all.
+function landingWayBack(sha: string, files: readonly string[], repo: string | null, mergeCommit: boolean): string | null {
+  const short = sha.slice(0, 12);
+  const where = repo ? quoted(repo) : "";
+  if (where === null) return null;
+  const git = where ? `git -C ${where} ` : "git ";
+  const named = files.map((file) => quoted(file));
+  const paths = named.length <= LANDED_PATHS_NAMED && named.every((file) => file !== null) ? ` -- ${named.join(" ")}` : "";
+  return `\`${git}show ${short}${paths}\` shows how, and \`${git}revert ${mergeCommit ? "-m 1 " : ""}${short}\` undoes the landing.`;
+}
+
 function assertLandedOnTop(
   slug: string,
   repoCwd: string,
@@ -2403,8 +2464,10 @@ function countFiles(paths: readonly string[]): string {
   return `${paths.length} ${paths.length === 1 ? "file" : "files"}`;
 }
 
+const LANDED_PATHS_NAMED = 20;
+
 function renderLandedPaths(paths: readonly string[]): string {
-  const shown = paths.slice(0, 20);
+  const shown = paths.slice(0, LANDED_PATHS_NAMED);
   const more = paths.length - shown.length;
   return more > 0 ? `${shown.join(", ")} +${more} more` : shown.join(", ");
 }
@@ -3092,6 +3155,7 @@ function handleMerge(args: string[]): void {
         `${cleanupTag} cannot bind the post-merge main-checkout source aggregate; worktree and retained source commit preserved`,
       );
     }
+    if (aggregateBefore.kept) landingNotices.push(aggregateBefore.kept);
     const landed = landedDifferences(
       repoCwd,
       wtPath,
@@ -3111,7 +3175,21 @@ function handleMerge(args: string[]): void {
     // Named the way landedDifferences names every landed path: with its repository.
     const settled = combined.map((path) => (repoTarget.repo ? `${repoTarget.repo}/${path}` : path));
     if (settled.length > 0) {
-      landingNotices.push(combinedLine(sourceRecord.unit, settled, flags.target));
+      // Under Continue automatically the agent approves the batch itself and
+      // goes on, so the line, with the commit and the way back, waits for the
+      // reply the person reads; a gated run's merge says it as before.
+      let granted = false;
+      try {
+        granted = autonomyGrantedOnRecord(pd, readStateFile(pd, flags.intent, flags.space), flags.intent, flags.space);
+      } catch {
+        // The landing is done: an unreadable record only says the line as before.
+      }
+      const line = combinedLine(sourceRecord.unit, settled, flags.target);
+      const wayBack = granted ? landingWayBack(commitSha, combined, repoTarget.repo, strategy === "merge") : null;
+      const said = wayBack ? `${line} ${wayBack}` : line;
+      const kept = granted && selection.sessionId !== null &&
+        addPendingPersonLines(pd, selection.sessionId, [said], { forReply: true });
+      if (!kept) landingNotices.push(said);
     }
     const landedChanges = [...new Set([...landed.changed, ...settled])].sort();
     for (const [driver, paths] of landed.drivers) {

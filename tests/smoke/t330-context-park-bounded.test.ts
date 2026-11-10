@@ -85,6 +85,8 @@ describe("t330 (smoke) parking for context needs a measured figure, not a feelin
           expect(/only when the harness has actually surfaced a usage figure/i.test(t)).toBe(false);
           expect(/never park for context on your own/i.test(t)).toBe(true);
           expect(/offers the person once to pause and carry on in a new chat/i.test(t)).toBe(true);
+          // And where a new chat would start about as full, it says that instead (#3642).
+          expect(/says once that a new chat on the same model will not help much/i.test(t)).toBe(true);
         });
       } else {
         test("binds context-parking to a surfaced numeric threshold", () => {

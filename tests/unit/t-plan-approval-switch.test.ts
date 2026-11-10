@@ -717,6 +717,47 @@ describe("asked before the piece of work exists", () => {
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
   });
 
+  // Their words kept in case they describe work, answered from status: no
+  // plan was put to them, so the switch said next is for the work they start.
+  const statusAsked = (proj: string): void => {
+    said(proj, "where do things stand?");
+    const step = runOrchestrateNext(ORCHESTRATE, proj, ["where do things stand?"], { env: { ...process.env, ...CLEAR } });
+    expect(String((step.directive as { message?: unknown } | null)?.message), step.out).toContain("--propose <plan> --request");
+  };
+
+  test("a status line answered from status, then the switch said alone, then the work: plan approval is off for it", () => {
+    const proj = emptyProject();
+    statusAsked(proj);
+    expect(setterOff(proj, skipAsked(said(proj, SKIP))).status).toBe(0);
+    const asked = requestOf(proj, "build the export");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  test("the switch said alone, then a status line answered from status, then the work: plan approval is off for it", () => {
+    const proj = emptyProject();
+    expect(setterOff(proj, skipAsked(said(proj, SKIP))).status).toBe(0);
+    statusAsked(proj);
+    const asked = requestOf(proj, "build the export");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  test("a status line answered from status, then Guard Policy said alone, then the work: the policy holds for it", () => {
+    const proj = emptyProject();
+    statusAsked(proj);
+    const set = setterOff(proj, ["--guard-policy", "relaxed", "--message", said(proj, "use the relaxed guard policy for this work")]);
+    expect(set.status, set.stderr).toBe(0);
+    const asked = requestOf(proj, "build the export");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(getField(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8"), "Guard Policy")).toBe("relaxed (set by you)");
+  });
+
   /** A report-only or task-less composition's dispatch, and the request id its approval names. */
   const composeOf = (proj: string, args: string[]): string => {
     const printed = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...CLEAR } });

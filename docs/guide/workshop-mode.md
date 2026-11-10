@@ -162,7 +162,12 @@ When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back
 gate; claims open once its Unit Progress row on the pushed main is complete.
 With `skeleton: off`, or `Skeleton Stance: off` recorded in the work's state,
-dependency-ready Units open immediately.
+dependency-ready Units open immediately. When the team's practices answer
+whether to build a thin end-to-end slice first, that answer is read at the
+first step after several teams are chosen, before a Unit is handed out and
+before the plan is shared. While your answer is recorded but the plan the teams
+have still holds every Unit behind the first, the board says so once, with the
+share that fixes it.
 
 Teams take Units from the plan on the shared remote. Once claims are open (at
 once with the skeleton off, once the walking skeleton is approved with it on)
@@ -171,9 +176,11 @@ once whether to share the plan with the teams, before each Unit this session
 would build:
 
 - **Share them with the teams** runs `aidlc unit share`: it commits what git
-  shows changed here (the question names how many files, and any new file
-  outside `aidlc/` by name, so nothing is pushed unseen; ignored files and
-  AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` stay out)
+  shows changed here (the question names how many files and, by name, up to
+  ten new files outside `aidlc/`, past ten those nearest the project's top, with
+  how many more; `git status` shows the rest before you share; ignored files
+  and AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` stay
+  out)
   and pushes the integration branch with a plain push, never forced. This
   checkout then shows the board instead of building Units. A push the remote
   refuses (it has commits this clone lacks, or the branch is protected) keeps
@@ -247,10 +254,14 @@ Gate rhythm controls the team review points:
 
 When the Unit is complete and approved, `/aidlc` asks once whether to commit it
 and publish it for review on main. **Commit and publish** runs
-`aidlc unit publish payments --commit`, which commits what git shows changed
-here (the question names any new file outside `aidlc/`) and then publishes;
-**Not now** leaves it, and the step then says it is not published yet, so
-asking for it later publishes it. Publication requires a clean tracked checkout;
+`aidlc unit publish payments --commit`, which commits the Unit's own work (every
+tracked change, the record under `aidlc/` and the new files its source manifest
+lists; the question names how many files and up to ten new ones, as the share
+question does) and then publishes. Other new files, such as AI-DLC's own install
+or an unignored `node_modules`, stay on disk uncommitted, and the publish says
+once how many it left out; say which you want in and it publishes again with
+them (`--include <path>`). **Not now** leaves it, and the step then says it is
+not published yet, so asking for it later publishes it. Publication requires a clean tracked checkout;
 AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json`, which it
 writes when a session starts in a fresh clone, does not count. By hand:
 

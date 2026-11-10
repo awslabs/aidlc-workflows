@@ -50,6 +50,11 @@ const manifest: HarnessManifest = {
       "person to answer again. Show the person this line and end your turn: " +
       '"Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on."',
   },
+  // opencode marks the commands its agent runs with OPENCODE=1, the mark
+  // hostRunsThisChat (aidlc-rules-held.ts) reads for an opencode chat.
+  hostShell: { env: ["OPENCODE"] },
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "start a new session, then type <entry>" },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
@@ -133,6 +138,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-issue-report", dst: "skills/aidlc-issue-report" },
     { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 

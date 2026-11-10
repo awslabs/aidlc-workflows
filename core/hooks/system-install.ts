@@ -7,11 +7,14 @@
 // hook that calls it off, turns it off.
 //
 // The install is let through when the person's turn stands with no decision
-// after it (their own request, or their go-ahead after the hold), and the row
-// it leaves names their message; or when a plan the person approved names it.
-// Otherwise the one step is to tell the person the command. Which program and
-// verb, and whether a turn stands, are read here; what the package is for and
-// what the person's reply meant are the agent's to say and read.
+// after it (their own request, or their go-ahead after the hold), or when the
+// agent named the message of theirs that asked for these packages (`log
+// install`, in the message that approved a stage, say), and the row it leaves
+// names that message; or when a plan the person approved names it. Otherwise
+// the one step is to name that message, or to tell the person the command.
+// Which program and verb, and whether a turn stands, are read here; what the
+// package is for and what the person's words meant are the agent's to say and
+// read.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
@@ -25,8 +28,9 @@ import {
   recordHookDrop,
   releaseAuditLock,
 } from "../tools/aidlc-lib.ts";
-import { readMessage, standingPersonTurn } from "../tools/aidlc-message-store.ts";
+import { proveMessage, readMessage, requestMessageStep, standingPersonTurn } from "../tools/aidlc-message-store.ts";
 import { askedQuestionFields, questionShows } from "../tools/aidlc-questions.ts";
+import { aidlcDispatcherInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
 import {
   approvalFingerprint,
   codeGenerationRecordDir,
@@ -156,6 +160,27 @@ export function namedByOnePlan(plans: readonly ReadonlySet<string>[], install: S
     install.family.some((name) => words.has(name)) && install.packages.every((name) => words.has(name.toLowerCase())));
 }
 
+// The packages the agent named the person's message for (`log install
+// <package>... --message <id>`): the newest SYSTEM_INSTALL_REQUESTED row that
+// names every package this line installs, while its message still stands as a
+// request's does (proveMessage), so the next decision of theirs ends it, as for
+// any request. Names and ids only; a row that cannot be read names nothing.
+function requestedInstall(projectDir: string, installs: readonly SystemInstall[]): { block: string } | null {
+  try {
+    const wanted = installs.flatMap((install) => install.packages.map((name) => name.toLowerCase()));
+    return readAuditShardEvents(projectDir).findLast((row) => {
+      if (row.event !== "SYSTEM_INSTALL_REQUESTED") return false;
+      const id = auditBlockField(row.block, "Message Id");
+      const named: unknown = JSON.parse(auditBlockField(row.block, "Packages") ?? "[]");
+      if (id === null || !Array.isArray(named)) return false;
+      const packages = new Set(named.map((name) => String(name).toLowerCase()));
+      return wanted.every((name) => packages.has(name)) && "message" in proveMessage(projectDir, id, "request", { request: true });
+    }) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // The go-ahead's row: the command, and the message whose turn stood behind it
 // with the person's words. It says that turn stood, never that they approved.
 function recordAllowed(
@@ -217,8 +242,9 @@ function recordInstallQuestion(
 
 /**
  * The refusal for a shell line that installs a system package nobody asked
- * for, or null when it runs: it installs none, the person's turn stands (the
- * row it leaves names their message), or an approved plan names every install.
+ * for, or null when it runs: it installs none, the person's turn stands or the
+ * agent named their message for its packages (the row it leaves names that
+ * message), or an approved plan names every install.
  * `shown` is the command as the refusal quotes it, on one line.
  */
 export function unaskedSystemInstall(
@@ -230,7 +256,7 @@ export function unaskedSystemInstall(
   const installs = systemInstalls(command);
   if (installs.length === 0) return null;
   const fields = { Stage: context.stage, ...(context.session ? { Session: context.session } : {}) };
-  const turn = standingPersonTurn(projectDir, "plain", { requests: true });
+  const turn = standingPersonTurn(projectDir, "plain", { requests: true }) ?? requestedInstall(projectDir, installs);
   if (turn !== null) {
     recordAllowed(projectDir, context.hook, command, turn, fields);
     return null;
@@ -247,7 +273,16 @@ export function unaskedSystemInstall(
     stage: context.stage,
   });
   if (held) recordInstallQuestion(projectDir, context.hook, command, fields, context.session);
+  // The step names the person's messages that can stand behind it, when any can:
+  // which one asked for the install is the agent's reading.
+  const packages = [...new Set(installs.flatMap((install) => install.packages))].map((name) => quoteCommandArgument(name));
+  const step = requestMessageStep(
+    projectDir,
+    "Tell the person the command and what it is for. It runs once the person says so, or they can run it themselves.",
+    "any",
+    `\`${aidlcDispatcherInvocation(`log install ${packages.join(" ")}`)}\``,
+    "run the install again",
+  );
   return `AI-DLC stopped this command: \`${shown}\` installs a system package on this machine, outside the project, ` +
-    "and no plan the person approved names it. Tell the person the command and what it is for. It runs once the " +
-    "person says so, or they can run it themselves.";
+    `and no plan the person approved names it. ${step}`;
 }

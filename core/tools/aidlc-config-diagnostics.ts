@@ -38,7 +38,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, dirname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   holdsRecordedWrite,
@@ -67,6 +67,7 @@ import {
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  inHostShell,
   kiroTreeLayout,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
@@ -86,6 +87,7 @@ import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
 import {
   HARNESS_PRODUCT_NAMES,
+  isModelHarness,
   sessionSetsAgentModels,
   type ModelHarness,
 } from "./aidlc-model-policy.ts";
@@ -1056,6 +1058,53 @@ export function probeHarnessCli(
     ...(version ? { version } : {}),
     ...(spec.minimumVersion ? { minimumVersion: spec.minimumVersion } : {}),
   };
+}
+
+// A harness whose editor has no CLI to probe names that editor
+// (descriptor.editorTerminalApp), and the editor's integrated terminal is the
+// signal that setup is for it: TERM_PROGRAM is exactly the editor's name, or
+// the git askpass helper VS Code-based editors set (VSCODE_GIT_ASKPASS_NODE)
+// is the editor's executable. A miss only loses the default choice.
+export function launchedFromEditorTerminal(
+  app: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const name = app.toLowerCase();
+  if ((env.TERM_PROGRAM ?? "").toLowerCase() === name) return true;
+  const helper = (env.VSCODE_GIT_ASKPASS_NODE ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return helper === name || helper === `${name}.exe`;
+}
+
+// probeHarnessCli's answer read from absolute PATH entries only: a relative
+// entry resolves in whatever folder the command runs in, so it is never run.
+function supportedHarnessCliOnPath(harness: string, env: NodeJS.ProcessEnv): boolean {
+  if (!isModelHarness(harness)) return false;
+  const platform = hostPlatform();
+  const absolute = pathEntries(env.PATH ?? "", platform).filter((directory) => isAbsolute(directory));
+  return probeHarnessCli(harness, {
+    env,
+    platform,
+    interactivePath: absolute.join(platform === "win32" ? ";" : delimiter),
+  }).status === "found";
+}
+
+// A tree an editor and a CLI both run (Kiro IDE and Kiro CLI) words its
+// what-next lines for the editor and keeps a copy for the CLI. The copy leads
+// where a supported CLI (its version floor included) is on an absolute PATH
+// entry and the command runs outside the editor: in no shell `hostEnv` names,
+// and not in the terminal of the editor `hostEnv`'s TERM_PROGRAM entry names
+// (launchedFromEditorTerminal, which reads the git askpass helper too).
+// Someone with both, in a plain terminal, is told the CLI first and the editor
+// after. The environment is read first, so inside the editor the CLI is never
+// run.
+export function harnessCliLeads(
+  harness: string,
+  hostEnv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const editors = hostEnv.flatMap((entry) => entry.startsWith("TERM_PROGRAM=") ? [entry.slice("TERM_PROGRAM=".length)] : []);
+  if (inHostShell(hostEnv, env) || editors.some((app) => launchedFromEditorTerminal(app, env))) return false;
+  return supportedHarnessCliOnPath(harness, env);
 }
 
 export function probeRuntime(

@@ -13,19 +13,27 @@
 // under Guard Policy off or relaxed it says no change of theirs and records
 // none, and under strict it goes on. A change the person makes after the skeleton's checkpoint
 // is still said and recorded (off) and still stops the landing for them (strict).
+//
+// Under Continue automatically the agent approves the batch and Code Generation's
+// gate itself and goes on, so the gate's change line waits for the reply the
+// person reads; when the person approves each checkpoint the gate says it.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { verifyConstructionCheckpoint } from "../../dist/claude/.claude/tools/aidlc-construction-checkpoints.ts";
 import {
   approvedConstructionUnits, artifactFilename, auditBlockField, boltSlugForUnit, findStageBySlug,
-  latestMainWorkflowStageRunFloorForProject, readAuditShardEvents, reviewArtifactFingerprint, setField,
+  addPendingPersonLines, latestMainWorkflowStageRunFloorForProject, pendingPersonLines, readAuditShardEvents,
+  reviewArtifactFingerprint, setField,
   unitMajorConstructionStageSlugs,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seedBoltDagBatches, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { ISOLATED_GIT_ENV } from "../harness/swarm-checkpoint.ts";
 import {
   approvePlan, CHECK, cleanupCheckpointFixtures, fixture, fixtureWithSource, git, humanChoice, nextDirective, publish,
   reviewRevisedSource, runCheckpointTool, STAGE, swarm, writeUnitSource,
@@ -196,6 +204,103 @@ describe("the swarm's first landing after the approved walking skeleton", () => 
     const approved = report(pd, "approved", ["--user-input", "Approve"]);
     expect(approved.kind, approved.message).not.toBe("error");
     expect(changesAccepted(pd)).toEqual([]);
+  });
+
+  test("under Continue automatically, the gate the agent approves itself keeps its change lines for the reply, and they ride the steps after it", async () => {
+    const line = "Files in the main checkout changed after the last unit was merged. Kept them.";
+    const earlier = "Landed Unit later with src/later.ts settled by hand against what was already on main.";
+    const chat = "skeleton-reply";
+    const inChat = (pd: string, file: string, args: string[]) => {
+      const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "tools", file), ...args, "--project-dir", pd], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe",
+        env: {
+          ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd,
+          AIDLC_SESSION_OVERRIDE: chat, AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+        },
+      });
+      expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
+      return JSON.parse(r.stdout.toString().trim().split(/\r?\n/).at(-1)!) as Record<string, unknown>;
+    };
+    let gatedSaid: string[] = [];
+    for (const granted of [false, true]) {
+      const pd = await skeletonApproved([["alpha"], ["later"]]);
+      if (granted) {
+        const statePath = seededStateFile(pd);
+        writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Construction Autonomy Mode", "autonomous"));
+        appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
+      }
+      ok(swarmLandsLater(pd));
+      if (granted) {
+        expect(inChat(pd, "aidlc-bolt.ts", ["swarm-checkpoint", "--action", "approve", "--batch", "2", "--units", "later"]).approved)
+          .toBe(true);
+      } else {
+        approveLaterBatch(pd);
+      }
+      // A file in the main checkout changes after the last landing, as the agent's own fix did in the run.
+      writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 4;\n");
+      // A line an earlier step kept for the reply rides the gate too.
+      if (!granted) expect(addPendingPersonLines(pd, chat, [earlier], { forReply: true })).toBe(true);
+      const gate = inChat(pd, "aidlc-orchestrate.ts", ["report", "--stage", STAGE, "--result", "awaiting-approval"]);
+      expect(gate.kind, JSON.stringify(gate)).toBe("print");
+      const said = Array.isArray(gate.change_notices) ? gate.change_notices : [];
+      const waiting = pendingPersonLines(pd, chat).lines;
+      if (granted) {
+        // The gate's own lines, the run's two among them, are kept for the reply: they ride this step and the
+        // steps after it, so the one the agent stops on carries them.
+        expect(waiting).toContain(line);
+        expect(waiting).toContain("The project source could not be checked against the Code Generation review on this machine; carrying on.");
+        expect(waiting.filter((kept) => !gatedSaid.includes(kept))).toEqual([]);
+        expect(said.filter((kept) => kept === line)).toHaveLength(1);
+        // The agent's own approval goes on to Build and Test: its step carries them again.
+        const approved = inChat(pd, "aidlc-orchestrate.ts", ["report", "--stage", STAGE, "--result", "approved"]);
+        expect(approved.kind, JSON.stringify(approved)).toBe("done");
+        expect(approved.change_notices ?? []).toContain(line);
+        expect(pendingPersonLines(pd, chat).lines).toContain(line);
+      } else {
+        // Said with the gate as before, nothing of the gate's kept; the earlier reply line rides it too.
+        expect(said).toContain(line);
+        expect(said.filter((kept) => kept === earlier)).toHaveLength(1);
+        expect(waiting).toEqual([earlier]);
+        gatedSaid = said.map(String).filter((kept) => kept !== earlier);
+      }
+    }
+  });
+
+  // Kiro's chat is nearly full, so the gate the agent approves itself also offers to pause in a new chat: a
+  // question the agent stops on, so it is the reply, and a line kept for the reply rides it.
+  test("under Continue automatically, a gate that offers to pause in a new chat says the line kept for the reply", async () => {
+    const chat = "5c1e4a0b-7d2f-4c3e-9a8b-1f2e3d4c5b6a";
+    const kept = "Landed Unit later with src/later.ts settled by hand against what was already on main.";
+    const homeDir = mkdtempSync(join(tmpdir(), "t-swarm-skeleton-kiro-home-"));
+    mkdirSync(join(homeDir, ".kiro", "sessions", "cli"), { recursive: true });
+    writeFileSync(join(homeDir, ".kiro", "sessions", "cli", `${chat}.json`), `${JSON.stringify({
+      session_id: chat, session_state: { conversation_metadata: { last_context_usage: { percentage: 84 } } },
+    })}\n`);
+    const pd = await skeletonApproved([["alpha"], ["later"]]);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Construction Autonomy Mode", "autonomous"));
+    appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
+    ok(swarmLandsLater(pd));
+    const env = {
+      ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd, HOME: homeDir, USERPROFILE: homeDir,
+      AIDLC_HARNESS_NAME: "kiro", AIDLC_SESSION_OVERRIDE: chat, AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+    };
+    const run = (file: string, args: string[]) => {
+      const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "tools", file), ...args, "--project-dir", pd], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe", env,
+      });
+      expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
+      return JSON.parse(r.stdout.toString().trim().split(/\r?\n/).at(-1)!) as Record<string, unknown>;
+    };
+    expect(run("aidlc-bolt.ts", ["swarm-checkpoint", "--action", "approve", "--batch", "2", "--units", "later"]).approved).toBe(true);
+    expect(addPendingPersonLines(pd, chat, [kept], { forReply: true })).toBe(true);
+    const gate = run("aidlc-orchestrate.ts", ["report", "--stage", STAGE, "--result", "awaiting-approval"]);
+    expect(gate.kind, JSON.stringify(gate)).toBe("print");
+    expect(String(gate.narration ?? "")).toContain("Do you want to pause here and carry on in a new chat?");
+    const said = Array.isArray(gate.change_notices) ? gate.change_notices : [];
+    expect(said.filter((line) => line === kept)).toHaveLength(1);
+    // Still kept, beside the gate's own kept line: it goes once the person writes after a step carried it.
+    expect(pendingPersonLines(pd, chat).lines).toContain(kept);
   });
 
   test("under Guard Policy off, their own change after the skeleton's checkpoint is still said and recorded", async () => {

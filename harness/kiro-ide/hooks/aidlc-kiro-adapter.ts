@@ -134,6 +134,9 @@ import {
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
+  type KiroCliSteer,
+  kiroCliSteersRecorded,
+  noteKiroCliSteerRecorded,
   recordHookDrop,
   recordPreWorkflowHeartbeat,
   resolveProjectFlag,
@@ -164,6 +167,7 @@ import {
   ORCHESTRATOR_LAUNCHER_OPTIONS,
   readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
+  tailText,
 } from "../tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -178,10 +182,10 @@ import {
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { aidlcEntryWords } from "../tools/aidlc-reply-reader.ts";
-import { kiroDefaultAgentName } from "../tools/aidlc-kiro-chat-record.ts";
+import { kiroChatRecordPaths, kiroDefaultAgentName } from "../tools/aidlc-kiro-chat-record.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { forgetRulesDelivered, kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
@@ -1494,6 +1498,70 @@ function payloadToolName(input: string): string | null {
   }
 }
 
+// What the person typed while the agent worked ("Type to steer"). Kiro CLI v3
+// runs no prompt hook for it (measured on 3.0.0) and writes it to the chat's
+// record as it is typed: a `steer-<id>` row with `source: "steer"`, the words as
+// its content and no mark of Kiro's own. Once Kiro hands it to the agent, a
+// `steering-injection` row names its id in `steeringConsumedIds` and holds
+// Kiro's envelope around the words; only a message handed on counts, so a call
+// the agent chose before it read the message is not let through on it. A
+// workflow's notices share `source: "steer"` under ids and a `notification` mark
+// of their own, and the `steering_boundary_` row at the turn's end is empty.
+// `handedOnOnly: false` takes a message not yet handed on too (a prompt hook
+// that got it before Kiro handed it on). Only this turn's messages count (after its latest `turn_start` row); the read
+// widens until that row is in view, up to 64 MB of the record, and parses only
+// the lines that can be one of these rows. None when it cannot be read.
+const KIRO_STEER_ID = /^steer-[A-Za-z0-9-]{1,64}$/;
+const KIRO_STEER_READ_MAX_BYTES = 64 << 20;
+function steersTypedThisTurn(sessionId: string, handedOnOnly = true): KiroCliSteer[] {
+  const [path] = kiroChatRecordPaths(sessionId);
+  if (path === undefined) return [];
+  const field = (value: unknown, key: string): unknown =>
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+  for (let bytes = 1 << 20; ; bytes *= 4) {
+    const lines = tailText(path, bytes)?.split("\n");
+    if (lines === undefined) return [];
+    const steers: KiroCliSteer[] = [];
+    const handedOn = new Set<string>();
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes("turn_start") && !lines[i].includes("steer")) continue;
+      let row: unknown;
+      try {
+        row = JSON.parse(lines[i]);
+      } catch {
+        continue;
+      }
+      const payload = field(row, "payload");
+      if (field(payload, "type") === "turn_start") return steers.reverse();
+      if (field(payload, "type") !== "user") continue;
+      const marks = field(field(payload, "_meta"), "kiro");
+      const consumed = field(marks, "steeringConsumedIds");
+      if (field(marks, "syntheticUserMessageReason") === "steering-injection" && Array.isArray(consumed)) {
+        for (const id of consumed) if (typeof id === "string") handedOn.add(id);
+        continue;
+      }
+      const id = field(row, "id");
+      const words = field(payload, "content");
+      if (
+        typeof id !== "string" || !KIRO_STEER_ID.test(id) || (handedOnOnly && !handedOn.has(id)) ||
+        field(payload, "source") !== "steer" || typeof words !== "string" || !words.trim() ||
+        ["notification", "syntheticUserMessageReason", "steeringClearedIds"].some((mark) => field(marks, mark) !== undefined)
+      ) {
+        continue;
+      }
+      if (!steers.some((steer) => steer.id === id)) steers.push({ id, words });
+    }
+    // The record may have grown since the last pass; its size now says whether it was read whole.
+    let size: number;
+    try {
+      size = statSync(path).size;
+    } catch {
+      return [];
+    }
+    if (bytes >= size || bytes >= KIRO_STEER_READ_MAX_BYTES) return [];
+  }
+}
+
 // One registration, several targets (KIRO_HOOK_GROUPS). A member runs for the
 // tools its own registration selected. Every member runs, in order, even after
 // one refuses, as Kiro ran every hook; the call is refused when any member
@@ -2476,6 +2544,40 @@ async function catchUpPendingCalls(card: "call" | "message" | "turn-end"): Promi
   }
 }
 
+// Each message typed while the agent worked this turn (steersTypedThisTurn) goes
+// through the core human-turn hook as the person's, once by Kiro's id: no prompt
+// hook ran for it. What that hook prints stays here, out of this card's output.
+// Like a typed prompt, it moves the chat's turn on, so a terminal command's hold
+// on the turn does not refuse what the person asked for after it.
+function recordMessagesTypedWhileWorking(): void {
+  const session = ide.sessionId?.trim() ?? "";
+  if (!session) return;
+  let moved = false;
+  try {
+    const recorded = kiroCliSteersRecorded(projectDir, session);
+    for (const steer of steersTypedThisTurn(session)) {
+      if (recorded.includes(steer.id)) continue;
+      const turn = runCore("aidlc-record-human-turn.ts", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: session,
+        prompt: steer.words,
+        origin: { kind: "person", source: "record" },
+        relays_terminal_output: true,
+        context_may_reach_person: true,
+      });
+      if (turn.code !== 0) {
+        recordHookDrop(projectDir, "kiro-adapter", `typed while working: the human-turn hook exited ${turn.code} - turn not recorded`);
+        break;
+      }
+      noteKiroCliSteerRecorded(projectDir, session, steer.id);
+      moved = true;
+    }
+  } catch (error) {
+    recordHookDrop(projectDir, "kiro-adapter", `typed while working: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (moved) bumpTurn(session);
+}
+
 if (target === CATCH_UP) {
   let event = "";
   try {
@@ -2484,6 +2586,10 @@ if (target === CATCH_UP) {
     // An unreadable payload is a tool call's card: the guard's checks judge it.
   }
   await catchUpPendingCalls(event === "UserPromptSubmit" ? "message" : "call");
+  // Before a call that changes something, and before the guards behind it read
+  // whether the person replied, each message they typed while the agent worked
+  // is recorded as their turn, in their words.
+  if (event !== "UserPromptSubmit") recordMessagesTypedWhileWorking();
   return 0;
 }
 
@@ -3877,7 +3983,12 @@ function runCore(
 }
 
 // The turn's end is judged on what its last write or command did.
-if (target === "continue-workflow") await catchUpPendingCalls("turn-end");
+if (target === "continue-workflow") {
+  await catchUpPendingCalls("turn-end");
+  // A message typed after the agent's last call that changed something, before
+  // the Stop hook below judges the turn.
+  recordMessagesTypedWhileWorking();
+}
 const fwd = buildForward();
 if (fwd === null) {
   hookDebug(projectDir, "kiro-adapter", "forward: null (no-op)", { target });
@@ -3982,6 +4093,22 @@ const sessionStartResult = promptSessionStart
   : null;
 if (sessionStartResult?.code === 0) markSessionStarted(promptSessionStart);
 const result = runCore(fwd.hook, fwd.input);
+// A message typed while the agent worked that did reach this prompt hook is the
+// chat's turn now: its row is noted, so the call after it records it no second time.
+if (target === "record-human-turn" && result.code === 0 && (fwd.input.origin as { kind?: unknown }).kind !== "host") {
+  const session = ide.sessionId?.trim() ?? "";
+  const words = (ide.userPrompt ?? "").trim();
+  try {
+    const recorded = session ? kiroCliSteersRecorded(projectDir, session) : [];
+    const steer = session && words
+      ? steersTypedThisTurn(session, false).findLast((typed) => typed.words.trim() === words && !recorded.includes(typed.id))
+      : undefined;
+    if (steer !== undefined) noteKiroCliSteerRecorded(projectDir, session, steer.id);
+  } catch (error) {
+    // The call after it then records it again.
+    recordHookDrop(projectDir, "kiro-adapter", `typed while working: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 if (target === "session-start" && result.code === 0) {
   markSessionStarted(String(fwd.input.session_id ?? ""));
 }

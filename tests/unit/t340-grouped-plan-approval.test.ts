@@ -372,8 +372,10 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
   test.each(["missing all", "missing beta", "foreign Unit", "foreign project"] as const)(
     "swarm PreToolUse refuses missing approvals and foreign Unit or project targets in both command forms: %s",
     (condition) => {
-      // Independent approvals leave alpha valid when beta's receipt is absent,
-      // so prepare/finalize must inspect every named member.
+      // Independent approvals leave alpha valid when beta's approval is gone,
+      // so prepare/finalize must inspect every named member. Beta's goes as a
+      // withdrawn approval leaves it: its receipt cleared and a later answer on
+      // record (a committed approval alone stands in for a missing receipt).
       const pd = fixture({ grouped: condition !== "missing beta" });
       if (condition === "missing all" || condition === "missing beta") {
         const targets = condition === "missing all" ? UNITS : ["beta"];
@@ -385,6 +387,10 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
         });
         for (const key of keys) clearPlanApprovalReceipt(pd, key);
         if (condition === "missing beta") {
+          appendAuditEntry("QUESTION_ANSWERED", {
+            Stage: STAGE, Checkpoint: "plan-approval", Details: "Request Changes", "Plan Target": keys[0].targetId,
+            "Approval Fingerprint": keys[0].fingerprint,
+          }, pd);
           expect(evaluateCodeGenerationApproval(pd, { unit: "alpha" }).ok).toBe(true);
         }
         expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
