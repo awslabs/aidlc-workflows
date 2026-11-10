@@ -1631,7 +1631,7 @@ git add .aidlc-version
 
 `aidlc config --pin <version>` installs and validates the version if needed,
 writes `.aidlc-version`, records the absolute binary target under the
-gitignored `aidlc/.aidlc-engine/sessions/` runtime directory, and registers the real
+gitignored `aidlc/.aidlc-sessions/` runtime directory, and registers the real
 project path in machine-local `pins.json`.
 Registry reads canonicalize filesystem aliases (including macOS `/var` and
 `/private/var`) and JSON output reports the canonical project path. Equivalent

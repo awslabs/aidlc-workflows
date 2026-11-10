@@ -140,7 +140,7 @@ import {
   typedHarnessName,
   WORKSPACE_ENGINE_DIR,
 } from "./aidlc-runtime-paths.ts";
-import { reposListGoingBackLine } from "./aidlc-workspace-manifest.ts";
+import { releaseBeforeLayout, reposListGoingBackLine } from "./aidlc-workspace-manifest.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // A release's harnesses as a person types them after --harness; the JSON
@@ -3060,8 +3060,9 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
   const engineLine = before && before !== version
     ? await engineFolderGoingBackLine(projectDirFrom(argv), version, `aidlc use ${before}`)
     : null;
+  const said = [reposLine, engineLine].filter((line) => line).join(" ");
   return success(
-    `active AI-DLC version set to ${version}${reposLine ? `. ${reposLine}` : ""}${engineLine ? ` ${engineLine}` : ""}`,
+    `active AI-DLC version set to ${version}${said ? `. ${said}` : ""}`,
     {
       version,
       ...(pluginCatalogue ? { pluginCatalogue } : {}),
@@ -3069,9 +3070,6 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
     },
   );
 }
-
-// The release that keeps this checkout's engine files in aidlc/.aidlc-engine/.
-const ENGINE_FOLDER_SINCE = { major: 2, minor: 12 };
 
 function engineFolderJson(projectDir: string, ...parts: string[]): Record<string, unknown> | null {
   try {
@@ -3094,17 +3092,21 @@ function engineFolderNames(projectDir: string, ...parts: string[]): string[] {
  * Said once when the person switches this project to a release from before the
  * engine folder (`aidlc use`, `aidlc config --pin`): what that release will not
  * see here, since it reads these files where it kept them and nothing is moved
- * back. Null when nothing is open, or the folder was never made (then nothing
- * moved). The switch itself moves nothing. `back` is the command that brings it
+ * back. Null when nothing is open, the folder was never made (then nothing
+ * moved), or the project's own pin names another release (the switch does not
+ * reach it). The switch itself moves nothing. `back` is the command that brings it
  * back.
  */
 export async function engineFolderGoingBackLine(projectDir: string, release: string, back: string): Promise<string | null> {
-  const parts = /^(\d+)\.(\d+)\./.exec(release);
-  if (parts === null) return null;
-  const [major, minor] = [Number(parts[1]), Number(parts[2])];
-  if (major > ENGINE_FOLDER_SINCE.major || (major === ENGINE_FOLDER_SINCE.major && minor >= ENGINE_FOLDER_SINCE.minor)) {
-    return null;
+  if (!releaseBeforeLayout(release)) return null;
+  // A project whose own pin names another release keeps running that one.
+  let pinned = "";
+  try {
+    pinned = readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim();
+  } catch {
+    // No pin: the active release runs here.
   }
+  if (pinned !== "" && pinned !== release) return null;
   if (!existsSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR))) return null;
   // The switch hands the project to that release as it is now.
   leaveEarlierEngineFiles(projectDir);

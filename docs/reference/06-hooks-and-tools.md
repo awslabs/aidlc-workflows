@@ -1593,7 +1593,7 @@ Codex consumes `hookSpecificOutput.updatedInput`; the opencode adapter applies t
 
 Before fence decisions, an unconditional runtime-integrity check refuses
 recognized direct and indirect tool-call routes to AIDLC hooks and runtime
-records, including paths containing `.aidlc-sessions`,
+records, including paths containing `.aidlc-sessions`, `.aidlc-engine/sessions`,
 `.aidlc-plan-approval`, or `.aidlc-engine/gate-words` (the words the
 human-turn hook keeps for a stage gate's Request Changes), session or bypass
 environment assignments, inline and wrapper scripts, aliases, shell functions,

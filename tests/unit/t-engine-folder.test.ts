@@ -23,7 +23,8 @@
 //      layout reads what the earlier release recorded.
 //   7. Switching to a release from before the folder says once what it will
 //      not see (a claimed Unit, an approved merge not landed), and nothing when
-//      nothing is open, the folder was never made, or the release reads it.
+//      nothing is open, the folder was never made, the release reads it, or the
+//      project's own pin names another release.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -258,6 +259,11 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
     );
     expect(line("2.12.0")).toBe("none");
     expect(line("3.0.0")).toBe("none");
+    // `aidlc use` does not reach a project whose own pin names another release.
+    writeFileSync(join(proj, ".aidlc-version"), "2.12.0\n");
+    expect(line("2.11.3")).toBe("none");
+    writeFileSync(join(proj, ".aidlc-version"), "2.11.3\n");
+    expect(line("2.11.3")).not.toBe("none");
   });
 
   test("a fresh workspace gets the folder with its sessions and units folders, so a first claim has somewhere to write", () => {

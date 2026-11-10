@@ -1027,15 +1027,16 @@ ambient method delivery can still race.
 
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
 The split (`harness/claude/dot-gitignore`): the two cursors
-(`active-space`, `active-intent`), per-clone runtime (`.aidlc-clone-id`,
-`.aidlc-sessions/`), the engine's copy of the active space's method
-(`active-memory/`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
+(`active-space`, `active-intent`), per-clone runtime in `aidlc/.aidlc-engine/`
+(its `clone-id`, `sessions/` and `units/`, and the engine's copy of the active
+space's method in `active-memory/`, kept out of git by the folder's own
+`.gitignore`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
 record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
 `codekb/**`), the `intents.json` registry, each record's `aidlc-state.md`, the
 `audit/` shards, and artifacts are **committed**. Audit is committed as per-clone
 shards (`audit/<host>-<clone>.md`) precisely so git never has to merge concurrent
 appends — there is intentionally no `merge=union` attribute.
-Both name parts come from `.aidlc-clone-id` (the token, and the host recorded
+Both name parts come from `aidlc/.aidlc-engine/clone-id` (the token, and the host recorded
 when it was minted), so a clone keeps one shard when the machine's name changes
 or the folder is copied to another machine. Shard files that start with the same
 first row are copies of one file (a sync tool's conflict copy, a hand copy);
