@@ -1871,6 +1871,33 @@ export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardE
   return plan.length > 0 && plan.every((row) => basename(row.shard) !== ownShard);
 }
 
+// A change git status lists under aidlc/ that is only this clone's own audit
+// file gaining rows after what is committed, none a decision of the person's
+// (a row with their Git Name), CRLF read as LF: the rows each look and each
+// doctor run write, which nobody needs committed. One rule, read by doctor's
+// records row and by the checked-in fact. `change.path` is git's, from the
+// repository root; `prefix` is the project folder's place under it.
+export function onlyOwnLookRows(projectDir: string, prefix: string, change: { status: string; path: string }): boolean {
+  if ((change.status !== " M" && change.status !== "??") || !change.path.startsWith(prefix)) return false;
+  const rel = change.path.slice(prefix.length);
+  const own = knownAuditShardName(projectDir);
+  if (own === null || basename(rel) !== own || !/^aidlc\/spaces\/[^/]+\/intents\/[^/]+\/audit\/[^/]+$/.test(rel)) return false;
+  try {
+    const file = join(projectDir, ...rel.split("/"));
+    if (!lstatSync(file).isFile()) return false;
+    let committed = "";
+    if (change.status === " M") {
+      const blob = spawnSync("git", ["-C", projectDir, "cat-file", "blob", `HEAD:${change.path}`], { encoding: "utf-8", timeout: 10_000 });
+      if (blob.status !== 0) return false;
+      committed = blob.stdout.replaceAll("\r\n", "\n");
+    }
+    const now = readFileSync(file, "utf-8").replaceAll("\r\n", "\n");
+    return now.startsWith(committed) && !/^\*\*Git Name\*\*:/m.test(now.slice(committed.length));
+  } catch {
+    return false;
+  }
+}
+
 // This clone's shard name when it is already known, without minting a token or
 // upgrading the clone-id file: readers use it to prefer their own shard, or to
 // tell their own rows from other clones', and must not write. Null means this

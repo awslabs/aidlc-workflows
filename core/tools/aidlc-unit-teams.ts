@@ -47,7 +47,7 @@ import {
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
 import { gitUserName } from "./aidlc-git-name.ts";
-import { applicableTeamUnitScopeStamp, idSuffix, knownAuditShardName, listIntents, resolveWorkflowSelection } from "./aidlc-record-core.ts";
+import { applicableTeamUnitScopeStamp, idSuffix, listIntents, onlyOwnLookRows, resolveWorkflowSelection } from "./aidlc-record-core.ts";
 import { isReadOnlyEngineProbe } from "./aidlc-locks.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
@@ -588,10 +588,10 @@ export function checkInApplies(projectDir: string, stateContent?: string): boole
 }
 
 // Whether aidlc/ is checked in, from local git only: nothing under it changed
-// but the rows this clone's own audit files gain at every look (a decision row
-// of the person's, which carries their Git Name, still counts), and no commit
-// touching it is ahead of the branch's upstream. Unknown when git cannot tell:
-// no upstream (never pushed), a detached HEAD, or git failing.
+// but the rows each look adds to this clone's own audit file (onlyOwnLookRows,
+// doctor's rule too; a decision of the person's there still counts), and no
+// commit touching it is ahead of the branch's upstream. Unknown when git cannot
+// tell: no upstream (never pushed), a detached HEAD, or git failing.
 export function checkInState(projectDir: string): "checked-in" | "not-checked-in" | "unknown" {
   const run = (args: string[]) => spawnSync("git", ["-C", projectDir, ...args], { encoding: "utf-8", timeout: 10_000 });
   const upstream = run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
@@ -601,32 +601,16 @@ export function checkInState(projectDir: string): "checked-in" | "not-checked-in
   const changed = run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "aidlc"]);
   if (ahead.status !== 0 || changed.status !== 0) return "unknown";
   if (ahead.stdout.trim() !== "") return "not-checked-in";
-  const shard = knownAuditShardName(projectDir);
   const root = prefix.stdout.trim();
-  const own = (path: string): boolean => shard !== null && path.startsWith(`${root}aidlc/spaces/`) &&
-    /\/intents\/[^/]+\/audit\/[^/]+$/.test(path) && basename(path) === shard;
   // -z entries: "XY path", a rename's or copy's source path after it.
   const entries = changed.stdout.split("\0").filter(Boolean);
-  const paths: string[] = [];
+  const changes: Array<{ status: string; path: string }> = [];
   for (let at = 0; at < entries.length; at++) {
-    paths.push(entries[at].slice(3));
+    changes.push({ status: entries[at].slice(0, 2), path: entries[at].slice(3) });
     if (/^[RC]/.test(entries[at])) at++;
   }
-  if (paths.some((path) => !own(path))) return "not-checked-in";
-  // Each of this clone's audit files gained rows after what is committed, and
-  // none of them carries a Git Name; a rewrite of what is committed counts.
-  const onlyLookRows = paths.every((path) => {
-    const committed = run(["cat-file", "blob", `HEAD:${path}`]);
-    let now: string;
-    try {
-      now = readFileSync(join(projectDir, path.slice(root.length)), "utf-8").replaceAll("\r\n", "\n");
-    } catch {
-      return false;
-    }
-    const before = committed.status === 0 ? committed.stdout.replaceAll("\r\n", "\n") : "";
-    return now.startsWith(before) && !/^\*\*Git Name\*\*:/m.test(now.slice(before.length));
-  });
-  return onlyLookRows ? "checked-in" : "not-checked-in";
+  // The rows each look adds to this clone's own audit file do not count.
+  return changes.every((change) => onlyOwnLookRows(projectDir, root, change)) ? "checked-in" : "not-checked-in";
 }
 
 // What the person's last `git pull` here that brought changes brought from

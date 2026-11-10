@@ -571,8 +571,11 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     return row as { pass: boolean; severity?: string; label: string };
   }
 
-  const OWN_ENTRIES_ONLY = "Workspace records: no uncommitted changes under aidlc/ other than doctor's own entries in the audit log";
+  const OWN_ENTRIES_ONLY = "Workspace records: no uncommitted changes under aidlc/ other than the entries each look adds to this clone's audit log";
   const STAGE_ROW = "\n## Stage Started\n**Timestamp**: 2026-10-20T01:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n\n---\n";
+  // A decision of the person's: its row carries their Git Name.
+  const DECISION_ROW = "\n## Gate Approved\n**Timestamp**: 2026-10-20T02:00:00Z\n**Event**: GATE_APPROVED\n**Stage**: requirements-analysis\n" +
+    "**User Input**: Approve\n**Git Name**: sam\n\n---\n";
 
   test("a clean project run through doctor twice is not told to commit doctor's own entries", () => {
     const { ws, g } = committedProject();
@@ -591,10 +594,25 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     let row = workspaceManifestChecks(ws)[0];
     expect(row).toMatchObject({ pass: false, severity: "warn" });
     expect(row.label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
-    appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
+    appendFileSync(seededAuditShard(ws), DECISION_ROW, "utf-8");
     row = workspaceManifestChecks(ws)[0];
     expect(row.label).toContain("Workspace records: 2 uncommitted change(s) under aidlc/");
     expect(row.label).toContain("`git add aidlc/ && git commit && git push`");
+  });
+
+  // A live run (Claude Code): right after the lead's push, doctor asked for a
+  // commit of the rows the look before it wrote.
+  test("the rows a look adds to this clone's audit log are not counted; a decision of the person's there, or a rewritten log, is", () => {
+    const { ws, g } = committedProject();
+    const shard = seededAuditShard(ws);
+    appendFileSync(shard, STAGE_ROW, "utf-8");
+    expect(workspaceManifestChecks(ws)[0]).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
+    appendFileSync(shard, DECISION_ROW, "utf-8");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
+    // What is committed, rewritten rather than added to.
+    g("checkout", "--", shard.slice(ws.length + 1).replaceAll("\\", "/"));
+    writeFileSync(shard, readFileSync(shard, "utf-8").replace("# AI-DLC Audit Log", "# AI-DLC Audit Log, edited"), "utf-8");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
   });
 
   test("a clone whose audit log doctor started, beside a teammate's, is not told to commit it", () => {
@@ -606,7 +624,7 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     expect(g("status", "--porcelain").stdout).toContain(`?? ${seededAuditShard(ws).slice(ws.length + 1).replaceAll("\\", "/")}`);
     expect(readFileSync(seededAuditShard(ws), "utf-8")).toStartWith("# AI-DLC Audit Log\n");
     expect(workspaceManifestChecks(ws)[0], own).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
-    appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
+    appendFileSync(seededAuditShard(ws), DECISION_ROW, "utf-8");
     expect(workspaceManifestChecks(ws)[0].label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
   });
 
