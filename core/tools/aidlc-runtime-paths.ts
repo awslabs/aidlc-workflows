@@ -1260,6 +1260,15 @@ export function leaveEarlierEngineFiles(projectDir: string): void {
   SETTLED_ENGINE_FOLDERS.add(resolve(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR)));
 }
 
+/** The project folder where a person's request for `next --request-file` is
+ *  written, so the words reach the engine without passing through any shell.
+ *  The engine reads only a plain file directly inside it. */
+export const REQUEST_TEXT_DIR = `aidlc/${WORKSPACE_ENGINE_DIR}/request-text`;
+/** Every folder a request file is read from: this release's, and the one an
+ *  earlier release named, which a chat that loaded that release's text still
+ *  writes to. Request files are never moved. */
+export const REQUEST_TEXT_DIRS: readonly string[] = [REQUEST_TEXT_DIR, "aidlc/.aidlc-request-text"];
+
 /** A path under `aidlc/.aidlc-engine/`, the folder made first where aidlc/ exists. */
 export function workspaceEnginePath(projectDir: string, ...parts: string[]): string {
   if (existsSync(join(projectDir, "aidlc"))) ensureWorkspaceEngineFolder(projectDir);

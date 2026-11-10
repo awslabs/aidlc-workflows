@@ -53,7 +53,6 @@ import {
   normalizeDriveLetter,
   typedHarnessName,
   WORKSPACE_ENGINE_DIR,
-  leaveEarlierEngineFiles,
   workspaceEngineFile,
   workspaceEnginePath,
 } from "./aidlc-runtime-paths.ts";
@@ -61,6 +60,8 @@ export {
   ensureWorkspaceEngineFolder,
   entrySkillInvocation,
   normalizeDriveLetter,
+  REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
   repoNameProblem,
   repoNameRefusal,
   SPACE_NAME_REGEX,
@@ -264,7 +265,6 @@ import {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
-  UNIT_SCOPE_FILE,
 } from "./aidlc-record-core.ts";
 export {
   ACTIVE_INTENT_POINTER,
@@ -13060,14 +13060,6 @@ export const LEARNINGS_SELECTIONS_DIR = `${ENGINE_DIR}/learnings`;
  *  file. The plan-approval guard and every adapter that mirrors it read this. */
 export const ENGINE_TEXT_DIRS: readonly string[] = [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR];
 
-/** The project folder where a person's request for `next --request-file` is
- *  written, so the words reach the engine without passing through any shell.
- *  The engine reads only a plain file directly inside it. */
-export const REQUEST_TEXT_DIR = "aidlc/.aidlc-engine/request-text";
-/** Every folder a request file is read from: this release's, and the one an
- *  earlier release named, which a chat that loaded that release's text still
- *  writes to. Request files are never moved (aidlc-runtime-paths.ts). */
-export const REQUEST_TEXT_DIRS: readonly string[] = [REQUEST_TEXT_DIR, "aidlc/.aidlc-request-text"];
 
 /**
  * Read one answer text file the agent wrote, then remove it. The path is
@@ -30147,88 +30139,6 @@ export function writeUnitMergeTransaction(
   );
   mkdirSync(dirname(path), { recursive: true });
   writeFileAtomic(path, `${JSON.stringify(transaction, null, 2)}\n`);
-}
-
-// The release that keeps this checkout's engine files in aidlc/.aidlc-engine/.
-const ENGINE_FOLDER_SINCE = { major: 2, minor: 12 };
-
-function engineFolderJson(projectDir: string, ...parts: string[]): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(readFileSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts), "utf-8"));
-    return isPlainObject(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function engineFolderNames(projectDir: string, ...parts: string[]): string[] {
-  try {
-    return readdirSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts)).sort();
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Said once when the person switches this project to a release from before the
- * engine folder (`aidlc use`, `aidlc config --pin`): what that release will not
- * see here, since it reads these files where it kept them and nothing is moved
- * back. Null when nothing is open, or the folder was never made (then nothing
- * moved). Read by path only, so the switch itself moves nothing. `back` is the
- * command that brings it back.
- */
-export function engineFolderGoingBackLine(projectDir: string, release: string, back: string): string | null {
-  const parts = /^(\d+)\.(\d+)\./.exec(release);
-  if (parts === null) return null;
-  const [major, minor] = [Number(parts[1]), Number(parts[2])];
-  if (major > ENGINE_FOLDER_SINCE.major || (major === ENGINE_FOLDER_SINCE.major && minor >= ENGINE_FOLDER_SINCE.minor)) {
-    return null;
-  }
-  if (!existsSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR))) return null;
-  // The switch hands the project to that release as it is now.
-  leaveEarlierEngineFiles(projectDir);
-  const unseen: string[] = [];
-  const claimed = engineFolderJson(projectDir, ...UNIT_SCOPE_FILE.split("/"))?.unit;
-  if (typeof claimed === "string" && claimed !== "") unseen.push(`the Unit ${claimed} you claimed`);
-  // Approved at its gate and not landed yet: the older release asks again.
-  const merges = UNIT_MERGE_DIR.split("/");
-  for (const space of engineFolderNames(projectDir, ...merges)) {
-    for (const intent of engineFolderNames(projectDir, ...merges, space)) {
-      for (const file of engineFolderNames(projectDir, ...merges, space, intent)) {
-        const journal = engineFolderJson(projectDir, ...merges, space, intent, file);
-        if (["approved", "git-landed", "state-folded"].includes(String(journal?.status)) && typeof journal?.unit === "string") {
-          unseen.push(`the merge of ${journal.unit} you approved`);
-        }
-      }
-    }
-  }
-  try {
-    const statePath = stateFilePath(projectDir);
-    const state = readFileSync(statePath, "utf-8");
-    // A Code Generation plan approved and not built yet: the older release
-    // reads it as unapproved and asks for the approval again.
-    const intent = activeIntentUuid(projectDir);
-    if (getField(state, "Current Stage") === "code-generation" && intent) {
-      const targets = new Set<string>();
-      for (const name of engineFolderNames(projectDir, "sessions", "plan-approval")) {
-        if (!/^receipt-[0-9a-f]{64}\.json$/.test(name)) continue;
-        const receipt = engineFolderJson(projectDir, "sessions", "plan-approval", name);
-        // "approved": not started yet (a started build's receipt says "generation").
-        if (receipt?.intentId === intent && receipt.status === "approved" && typeof receipt.targetId === "string") {
-          targets.add(receipt.targetId);
-        }
-      }
-      for (const target of [...targets].sort()) {
-        unseen.push(target.startsWith("unit:") ? `the plan you approved for ${target.slice(5)}` : "the plan you approved");
-      }
-    }
-    if (readActiveDirectiveMarker(projectDir, state)?.kind === "ask") unseen.push("the question waiting for your answer");
-  } catch {
-    // No work selected: no plan and no question.
-  }
-  if (unseen.length === 0) return null;
-  const list = unseen.length === 1 ? unseen[0] : `${unseen.slice(0, -1).join(", ")} and ${unseen[unseen.length - 1]}`;
-  return `AI-DLC ${release} will not see ${list} in this project. \`${back}\` brings it back.`;
 }
 
 export function unitMergeTransactionsForIdentity(

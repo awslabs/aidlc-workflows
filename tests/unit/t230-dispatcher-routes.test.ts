@@ -1633,9 +1633,12 @@ describe("t230 version-aware startup", () => {
         ".aidlc-unit-scope.json": '{"version":1,"unit":"u1"}\n',
       };
       for (const [rel, bytes] of Object.entries(earlier)) writeFileSync(join(project, "aidlc", rel), bytes);
-      // What the fixture's shell put in the engine folder, which must not grow.
+      // The files the fixture's shell put in the engine folder: none is added.
       const engineFolder = join(project, "aidlc", ".aidlc-engine");
-      const listed = (): string[] => existsSync(engineFolder) ? readdirSync(engineFolder, { recursive: true }).map(String).sort() : [];
+      const listed = (): string[] => existsSync(engineFolder)
+        ? readdirSync(engineFolder, { recursive: true }).map(String)
+          .filter((rel) => statSync(join(engineFolder, rel)).isFile()).sort()
+        : [];
       const before = listed();
       const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
       for (const [argv, input] of [

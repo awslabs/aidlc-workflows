@@ -45,6 +45,7 @@ import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harne
 
 const LIB = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-lib.ts");
 const RECORD_CORE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-record-core.ts");
+const LIFECYCLE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-lifecycle.ts");
 const dirs: string[] = [];
 afterAll(() => {
   for (const dir of dirs) {
@@ -126,12 +127,13 @@ function earlierWorkspace(): string {
 }
 
 // One fresh engine process: `body` runs with `lib` (the shipped aidlc-lib),
-// `core` (aidlc-record-core) and `proj`, and prints what the test reads.
+// `core` (aidlc-record-core), `lifecycle` and `proj`, and prints what the test reads.
 function engine(proj: string, body: string, env: Record<string, string> = {}): string {
   const script = join(scratch("aidlc-engine-folder-probe-"), "probe.ts");
   writeFileSync(
     script,
     `const lib = await import(${JSON.stringify(LIB)});\nconst core = await import(${JSON.stringify(RECORD_CORE)});\n` +
+      `const lifecycle = await import(${JSON.stringify(LIFECYCLE)});\n` +
       `const proj = ${JSON.stringify(proj)};\n${body}\n`,
   );
   const run = spawnSync(process.execPath, [script], {
@@ -239,7 +241,7 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
 
   test("going back to a release from before the folder says what it will not see, once, and only then", () => {
     const proj = scratch("aidlc-engine-folder-back-");
-    const line = (release: string): string => engine(proj, `console.log(lib.engineFolderGoingBackLine(proj, ${JSON.stringify(release)}, "aidlc use 2.12.0") ?? "none");`);
+    const line = (release: string): string => engine(proj, `console.log(await lifecycle.engineFolderGoingBackLine(proj, ${JSON.stringify(release)}, "aidlc use 2.12.0") ?? "none");`);
     mkdirSync(join(proj, "aidlc"), { recursive: true });
     expect(line("2.11.3")).toBe("none");
     const units = join(proj, "aidlc", ".aidlc-engine", "units");
@@ -280,7 +282,7 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
   test("the going-back line reads what is there and moves nothing", () => {
     const proj = earlierWorkspace();
     mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
-    expect(engine(proj, 'console.log(lib.engineFolderGoingBackLine(proj, "2.11.3", "aidlc use 2.12.0") ?? "none");')).toBe("none");
+    expect(engine(proj, 'console.log(await lifecycle.engineFolderGoingBackLine(proj, "2.11.3", "aidlc use 2.12.0") ?? "none");')).toBe("none");
     for (const old of Object.keys(EARLIER)) {
       expect(readFileSync(join(proj, "aidlc", old), "utf-8"), old).toBe(EARLIER[old]);
     }

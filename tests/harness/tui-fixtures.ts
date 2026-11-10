@@ -379,7 +379,7 @@ export function nextKiroNumberedProseAnswer(
 function seedTuiWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   const intentsDir = intentsDirOf(proj, space);
   mkdirSync(seededRecordDir(proj, space), { recursive: true });
-  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+  for (const sub of ["sessions", "units"]) mkdirSync(join(proj, "aidlc", ".aidlc-engine", sub), { recursive: true });
   writeFileSync(join(proj, "aidlc", ".aidlc-engine", ".gitignore"), "*\n", "utf-8");
   writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
   writeFileSync(join(proj, "aidlc", "active-space"), `${space}\n`, "utf-8");

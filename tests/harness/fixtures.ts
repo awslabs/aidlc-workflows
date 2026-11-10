@@ -413,7 +413,7 @@ export function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   // Pin the per-clone audit-shard token so a spawned tool's shard is
   // deterministic (see FIXTURE_CLONE_ID / seededAuditShard).
   // The engine folder as the engine makes it: its .gitignore first.
-  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+  for (const sub of ["sessions", "units"]) mkdirSync(join(proj, "aidlc", ".aidlc-engine", sub), { recursive: true });
   writeFileSync(join(proj, "aidlc", ".aidlc-engine", ".gitignore"), "*\n", "utf-8");
   writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
   // A fixture has no git, so its first gate would say the no-git line: this
@@ -912,6 +912,8 @@ export function setupWorkspaceJourney(harness: JourneyHarness = "claude"): Works
   // Pin the per-clone audit-shard token (gitignored on a real project) so any
   // shard a spawned tool writes is deterministic — same posture as the per-intent
   // fixtures (FIXTURE_CLONE_ID / seededAuditShard).
+  for (const sub of ["sessions", "units"]) mkdirSync(join(root, "aidlc", ".aidlc-engine", sub), { recursive: true });
+  writeFileSync(join(root, "aidlc", ".aidlc-engine", ".gitignore"), "*\n", "utf-8");
   writeFileSync(join(root, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
 
   // 2. Two git-init'd sibling repos as immediate children of the root, each with a

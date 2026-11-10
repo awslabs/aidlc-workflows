@@ -135,8 +135,10 @@ import {
   compiledExecutable,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  leaveEarlierEngineFiles,
   runtimeHarnessDir,
   typedHarnessName,
+  WORKSPACE_ENGINE_DIR,
 } from "./aidlc-runtime-paths.ts";
 import { reposListGoingBackLine } from "./aidlc-workspace-manifest.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
@@ -3001,7 +3003,7 @@ export async function configureProjectPin(
       }
       commitProjectPin(projectDir, version);
       const reposLine = reposListGoingBackLine(projectDir, version);
-      const engineLine = await engineFolderGoingBack(projectDir, version, "aidlc config --unpin");
+      const engineLine = await engineFolderGoingBackLine(projectDir, version, "aidlc config --unpin");
       return success(
         `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.${finish}${
           reposLine ? ` ${reposLine}` : ""
@@ -3056,7 +3058,7 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
   const pluginCatalogue = activate(version, { replaceLauncher });
   const reposLine = reposListGoingBackLine(projectDirFrom(argv), version);
   const engineLine = before && before !== version
-    ? await engineFolderGoingBack(projectDirFrom(argv), version, `aidlc use ${before}`)
+    ? await engineFolderGoingBackLine(projectDirFrom(argv), version, `aidlc use ${before}`)
     : null;
   return success(
     `active AI-DLC version set to ${version}${reposLine ? `. ${reposLine}` : ""}${engineLine ? ` ${engineLine}` : ""}`,
@@ -3068,16 +3070,90 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
   );
 }
 
-// What a release from before the engine folder will not see in this project
-// (engineFolderGoingBackLine, aidlc-lib.ts), loaded only where the folder is.
-async function engineFolderGoingBack(projectDir: string, release: string, back: string): Promise<string | null> {
-  if (!existsSync(join(projectDir, "aidlc", ".aidlc-engine"))) return null;
+// The release that keeps this checkout's engine files in aidlc/.aidlc-engine/.
+const ENGINE_FOLDER_SINCE = { major: 2, minor: 12 };
+
+function engineFolderJson(projectDir: string, ...parts: string[]): Record<string, unknown> | null {
   try {
-    const { engineFolderGoingBackLine } = await import("./aidlc-lib.ts");
-    return engineFolderGoingBackLine(projectDir, release, back);
+    const value: unknown = JSON.parse(readFileSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts), "utf-8"));
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
   } catch {
     return null;
   }
+}
+
+function engineFolderNames(projectDir: string, ...parts: string[]): string[] {
+  try {
+    return readdirSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts)).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Said once when the person switches this project to a release from before the
+ * engine folder (`aidlc use`, `aidlc config --pin`): what that release will not
+ * see here, since it reads these files where it kept them and nothing is moved
+ * back. Null when nothing is open, or the folder was never made (then nothing
+ * moved). The switch itself moves nothing. `back` is the command that brings it
+ * back.
+ */
+export async function engineFolderGoingBackLine(projectDir: string, release: string, back: string): Promise<string | null> {
+  const parts = /^(\d+)\.(\d+)\./.exec(release);
+  if (parts === null) return null;
+  const [major, minor] = [Number(parts[1]), Number(parts[2])];
+  if (major > ENGINE_FOLDER_SINCE.major || (major === ENGINE_FOLDER_SINCE.major && minor >= ENGINE_FOLDER_SINCE.minor)) {
+    return null;
+  }
+  if (!existsSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR))) return null;
+  // The switch hands the project to that release as it is now.
+  leaveEarlierEngineFiles(projectDir);
+  const unseen: string[] = [];
+  try {
+    const lib = await import("./aidlc-lib.ts");
+    const claimed = engineFolderJson(projectDir, ...lib.UNIT_SCOPE_FILE.split("/"))?.unit;
+    if (typeof claimed === "string" && claimed !== "") unseen.push(`the Unit ${claimed} you claimed`);
+    // Approved at its gate and not landed yet: the older release asks again.
+    const merges = lib.UNIT_MERGE_DIR.split("/");
+    for (const space of engineFolderNames(projectDir, ...merges)) {
+      for (const intent of engineFolderNames(projectDir, ...merges, space)) {
+        for (const file of engineFolderNames(projectDir, ...merges, space, intent)) {
+          const journal = engineFolderJson(projectDir, ...merges, space, intent, file);
+          if (["approved", "git-landed", "state-folded"].includes(String(journal?.status)) && typeof journal?.unit === "string") {
+            unseen.push(`the merge of ${journal.unit} you approved`);
+          }
+        }
+      }
+    }
+    try {
+      const state = readFileSync(lib.stateFilePath(projectDir), "utf-8");
+      // A Code Generation plan approved and not built yet: the older release
+      // reads it as unapproved and asks for the approval again.
+      const intent = lib.activeIntentUuid(projectDir);
+      if (lib.getField(state, "Current Stage") === "code-generation" && intent) {
+        const targets = new Set<string>();
+        for (const name of engineFolderNames(projectDir, "sessions", "plan-approval")) {
+          if (!/^receipt-[0-9a-f]{64}\.json$/.test(name)) continue;
+          const receipt = engineFolderJson(projectDir, "sessions", "plan-approval", name);
+          // "approved": not started yet (a started build's receipt says "generation").
+          if (receipt?.intentId === intent && receipt.status === "approved" && typeof receipt.targetId === "string") {
+            targets.add(receipt.targetId);
+          }
+        }
+        for (const target of [...targets].sort()) {
+          unseen.push(target.startsWith("unit:") ? `the plan you approved for ${target.slice(5)}` : "the plan you approved");
+        }
+      }
+      if (lib.readActiveDirectiveMarker(projectDir, state)?.kind === "ask") unseen.push("the question waiting for your answer");
+    } catch {
+      // No work selected: no plan and no question.
+    }
+  } catch {
+    return null;
+  }
+  if (unseen.length === 0) return null;
+  const list = unseen.length === 1 ? unseen[0] : `${unseen.slice(0, -1).join(", ")} and ${unseen[unseen.length - 1]}`;
+  return `AI-DLC ${release} will not see ${list} in this project. \`${back}\` brings it back.`;
 }
 
 function installProfileCommand(argv: string[]): CommandResult {
