@@ -82,8 +82,11 @@ describe("a Code Generation plan names the data-model elements it adds (#3455)",
     expect(GENERATION).toContain("a key, index or created or updated time that a requested element needs is part of that element");
     expect(GENERATION).toContain("goes into the plan first, as a step of its own");
     expect(GENERATION).toContain("Step 3's after-approval rules decide what the person sees");
-    expect(AGENT).toContain("an element nothing upstream asks for goes into the plan's Assumptions before the code");
-    expect(GUIDE).toContain("For each entity (one nothing upstream asks for is a plan Assumption first");
+    // The agent and its guide keep Step 4's exemption: an element the approved
+    // plan already names is built as approved, so a plan approved before this
+    // rule is never edited for it.
+    expect(AGENT).toContain("an element nothing upstream asks for and the approved plan does not name goes into the plan before the code");
+    expect(GUIDE).toContain("For each entity the requirements ask for or the approved plan names (any other goes into the plan first");
   });
 
   test("the stage adds no question of its own: the person decides at Plan Approval", () => {

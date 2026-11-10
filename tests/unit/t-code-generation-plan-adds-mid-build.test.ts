@@ -16,8 +16,9 @@
 //     own with its Assumptions line and the Adds line: under strict the plan
 //     question is asked once, naming the added step, and once approved the
 //     build goes on without asking again; under off the build goes on with a
-//     change notice naming the added step, and nothing asks or refuses. Each
-//     case runs `next` more than once after the change, so a loop shows.
+//     change notice naming the added step, and nothing asks, and the code
+//     write after it is not refused. Each case runs `next` more than once
+//     after the change, so a loop shows, and writes code through the guard.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -169,6 +170,17 @@ function startBuild(proj: string): void {
   expect(dispatch.status, String(dispatch.stderr)).toBe(0);
 }
 
+/** The developer writing code: the plan-approval guard's exit (2 refuses). */
+function writeCode(proj: string): number | null {
+  return run(proj, [GUARD], JSON.stringify({
+    hook_event_name: "PreToolUse",
+    session_id: SESSION,
+    cwd: proj,
+    tool_name: "Write",
+    tool_input: { file_path: join(proj, "subscribers.py"), content: "SUBSCRIBERS = []\nWELCOMED = set()\n" },
+  })).status;
+}
+
 /** A plan that adds nothing, approved, and its build started. */
 function building(proj: string): void {
   mkdirSync(recordDir(proj), { recursive: true });
@@ -227,6 +239,8 @@ describe("the plan names the data-model elements it adds, as the engine reads it
     expect(ask.ask_type).toBe("plan-approval");
     expect(ask.plan_approval?.note).toContain(`Your approved plan changed after the build started: ${addedStep}.`);
     expect(ask.plan_approval?.targets?.[0]?.summary).toContain(ADDS);
+    // While the question waits, the build's next write waits for the person.
+    expect(writeCode(proj)).toBe(2);
     approve(proj);
     for (let again = 0; again < 2; again++) {
       const build = next(proj);
@@ -234,6 +248,7 @@ describe("the plan names the data-model elements it adds, as the engine reads it
       expect(build.plan_approval).toEqual({ status: "approved" });
       expect(build.change_notices ?? []).toEqual([]);
     }
+    expect(writeCode(proj)).toBe(0);
   });
 
   test("off: an element found mid-build is one change notice, and nothing asks or refuses", () => {
@@ -247,6 +262,7 @@ describe("the plan names the data-model elements it adds, as the engine reads it
       expect(build.change_notices?.filter((line) => line.startsWith("Your approved plan changed"))).toEqual([
         expect.stringContaining(`Your approved plan changed after the build started: ${addedStep}.`),
       ]);
+      expect(writeCode(proj)).toBe(0);
     }
   });
 });
