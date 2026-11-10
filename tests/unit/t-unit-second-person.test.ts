@@ -95,6 +95,23 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(shown.status, shown.stdout + shown.stderr).toBe(0);
   });
 
+  // The 2026-11-07 review: Follow along's status named the walk's first Unit
+  // stage while the other machine was further on in another Unit.
+  test("following along, status names the Unit and stage the other machine is on, as the question does", () => {
+    const home = soloAtA(true, true);
+    appendAuditEntry("UNIT_STARTED", { Stage: "nfr-requirements", Unit: "reporting", "Run floor": "0" }, home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "reporting further on"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bob = cloneOf(home.remote, "bob");
+    expect(String(next(bob).question)).toStartWith("fixture is being built from another machine, on reporting (NFR Requirements). ");
+    const shown = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "status", "--space", "default", "--intent", HOME_RECORD], {
+      cwd: bob, env: { ...ENV, CLAUDE_PROJECT_DIR: bob, AIDLC_PROJECT_DIR: bob }, encoding: "utf-8",
+    });
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(shown.stdout).toContain("Current Step:   nfr-requirements for unit reporting\n");
+  });
+
   test("a stage the other machine finished since is not named: the Unit alone is", () => {
     const home = makeHome({ repos: {} });
     const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
