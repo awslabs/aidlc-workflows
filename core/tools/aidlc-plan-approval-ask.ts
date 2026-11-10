@@ -833,10 +833,18 @@ function boxAdditions(projectDir: string, record: PlanApprovalAskRecord): string
   ].join("\n"));
 }
 
+// A line of the plan's own (a summary line, its path, the changed-source line).
+const PLAN_LINE_RE = /^(?:- |Full plan: |Already changed before you approved)/;
+
+// The question with the additions under it, less the plan's lines its text
+// already shows: Step 3 asks the agent to show them, and an agent may put them
+// in the question itself. Null when it shows them all, or nothing fits the box.
 function boxText(question: string, additions: readonly string[]): string | null {
-  if (question.includes(additions[0])) return null;
   for (const added of additions) {
-    const text = `${question}\n\n${added}`;
+    const lines = added.split("\n")
+      .filter((line) => !PLAN_LINE_RE.test(line) || !question.includes(line.replace(/^(?:- |Full plan: )/, "")));
+    if (!lines.some((line) => PLAN_LINE_RE.test(line))) return null;
+    const text = `${question}\n\n${lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "")}`;
     if (text.length <= BOX_QUESTION_MAX_CHARS) return text;
   }
   return null;
@@ -881,9 +889,9 @@ export function planQuestionBoxAsAsked(projectDir: string, payload: string): str
     if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return payload;
     const shown = box.question;
     const additions = boxAdditions(projectDir, open.record);
-    const asked = additions
-      .filter((added) => shown.endsWith(`\n\n${added}`))
-      .map((added) => shown.slice(0, shown.length - added.length - 2))
+    // The agent's question ends where a blank line starts what the box added.
+    const asked = [...shown.matchAll(/\n\n/g)]
+      .map((match) => shown.slice(0, match.index))
       .find((question) => boxText(question, additions) === shown);
     if (asked === undefined) return payload;
     const swap = (entry: unknown): unknown =>

@@ -266,6 +266,23 @@ describe("the code plan question's box shows the plan's lines", () => {
     quiet(proj, boxPayload([planBox(question)]));
   });
 
+  // Step 3 asks the agent to show the lines, and an agent may put them in its
+  // question itself: the box then gets only what it does not show yet.
+  test("lines the agent's question already shows are not added again", () => {
+    const proj = project();
+    const question = asked(proj);
+    const own = [question, ...LINES].join("\n");
+    expect(filled(proj, [planBox(own)])?.[0].question).toBe(`${own}\n\nFull plan: ${planPath(proj)}`);
+    const bare = `${question}\n\n${LINES.slice(0, 2).map((line) => line.slice(2)).join("\n")}`;
+    expect(filled(proj, [planBox(bare)])?.[0].question)
+      .toBe(`${bare}\n\n${LINES[2]}\n\nFull plan: ${planPath(proj)}`);
+    quiet(proj, boxPayload([planBox(`${own}\nFull plan: ${planPath(proj)}`)]));
+    // The path shown anywhere in the question, as an agent wrote it after an update.
+    const withPath = `${question} (${planPath(proj)})`;
+    expect(filled(proj, [planBox(withPath)])?.[0].question).toBe([withPath, "", ...LINES].join("\n"));
+    quiet(proj, boxPayload([planBox([withPath, ...LINES].join("\n"))]));
+  });
+
   test("past 2,000 characters only the plan's path is added, and past that nothing", () => {
     const proj = project();
     asked(proj);
@@ -345,6 +362,16 @@ describe("the answer to the filled box records as on main", () => {
       expect(recorded.code, recorded.out).toBe(0);
       expect(auditText(proj)).toContain(words);
       expect(next(proj).plan_approval?.status).toBe("revise");
+    });
+    expect(filledRecord).toEqual(plainRecord);
+  });
+
+  test("a box whose question already shows the lines records as on main", () => {
+    const { filledRecord, plainRecord } = twins((proj, box) => {
+      const question = [asked(proj), ...LINES].join("\n");
+      const shown = box(question);
+      answered(proj, shown, "Approve Plan");
+      expect(rows(proj, "PLAN_APPROVAL_RECORDED").length).toBe(1);
     });
     expect(filledRecord).toEqual(plainRecord);
   });
