@@ -217,6 +217,8 @@ describe("after the share nothing is built at the lead's project until the lead 
     expect(note).not.toContain("assign --open");
     expect(note).not.toContain("--started-here");
     expect(note).not.toContain("hand-off");
+    // Nothing on the board puts a hold for a team in the agent's words.
+    expect(JSON.stringify(board)).not.toMatch(/\bhold|\breserve/i);
   });
 });
 

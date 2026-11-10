@@ -268,7 +268,7 @@ describe("the lead's project builds nothing it was not asked to", () => {
   // A live run: every look said the lead's project was on Functional Design
   // for the first Unit, while it built nothing.
   test("a look at where things stand names no stage as now while the lead's project waits on the Units", () => {
-    const { home } = refundsTaken();
+    const { home, alice } = refundsTaken();
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(next(home.dir).kind).toBe("print");
     const status = run(UTILITY, ["status"], home.dir).out;
@@ -279,6 +279,10 @@ describe("the lead's project builds nothing it was not asked to", () => {
     expect(status).not.toContain("Next Stage:");
     expect(status).not.toMatch(/CONSTRUCTION .*Unit \d+ of \d+/);
     expect(status).toContain("- refunds, payments: building, taken by alice");
+    // The Units' own stages run in each taker's build, never in this record: out of the count here.
+    expect(status).toMatch(/^Completion: {5}\d+\/\d+ stages here \(\d+%\); each Unit's own stages are on the board below$/m);
+    // A taker's own build counts its stages as always.
+    expect(run(UTILITY, ["status"], alice).out).toMatch(/^Completion: {5}\d+\/\d+ stages \(\d+%\)$/m);
     // Once the lead asks for a Unit here, its stage is said again.
     expect(run(UNIT, ["assign", "--here", "checkout-ui"], home.dir).status).toBe(0);
     expect(next(home.dir).unit).toBe("checkout-ui");
