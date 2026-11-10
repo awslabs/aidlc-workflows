@@ -753,15 +753,17 @@ let errorProjectDirArg: string | undefined;
 let errorSelection: { intent?: string; space?: string } = {};
 
 // The add's own chat, when it runs in one: a staging folder its clone left
-// outside the workspace is kept for that chat's next AI-DLC step, which says it
-// once (as the add's repos.json note is), since the agent may not pass the
-// command's own output on; with no chat it is printed after the add's line.
+// outside the workspace is kept for the reply (forReply), so every AI-DLC step
+// the agent speaks from in that turn carries it, a decision log included, and
+// the reply the turn ends on says it once, with no age limit; the agent may not
+// pass the command's own output on. With no chat it is printed after the add's
+// line.
 let stagingLeftChat: string | null = null;
 
 function stagingLeftToSay(projectDir: string): string[] {
   const left = takeStagingLeftLines();
   if (left.length === 0 || stagingLeftChat === null) return left;
-  return addPendingPersonLines(projectDir, stagingLeftChat, left) ? [] : left;
+  return addPendingPersonLines(projectDir, stagingLeftChat, left, { forReply: true }) ? [] : left;
 }
 
 // "Nothing was changed" is never said while a folder this run made is left.

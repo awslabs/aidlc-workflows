@@ -629,7 +629,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
 
   // In a chat the agent may not pass a command's own output on, so the line
   // rides the chat's next step, which the agent says, and is said once there.
-  test("from a chat: a staging folder an earlier add left is kept for the chat's next step, not only printed", () => {
+  test("from a chat: a staging folder an earlier add left is kept for the reply the turn ends on, not only printed", () => {
     const bare = bareRepo("local", "notify");
     const away = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t-add-away-")));
     try {
@@ -648,6 +648,8 @@ describe("intent add-repo clones a repo that is not here yet", () => {
       expect(r.out).not.toContain(said);
       const kept = readFileSync(join(proj, "aidlc", ".aidlc-sessions", `${SESSION}.person-lines`), "utf-8");
       expect(kept).toContain(JSON.stringify(said).slice(1, -1));
+      // Kept for the reply: the turn's decision log carries it too, and it is never dropped by age.
+      expect((JSON.parse(kept) as { lines: Array<{ line: string; reply?: boolean }> }).lines.find((entry) => entry.line === said)?.reply).toBe(true);
       expect(existsSync(left)).toBe(true);
     } finally {
       rmSync(away, { recursive: true, force: true });
