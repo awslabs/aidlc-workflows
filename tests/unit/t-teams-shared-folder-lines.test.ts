@@ -285,6 +285,29 @@ describe("the check-in line", () => {
     expect(String(approved.json?.narration), approved.out).toEndWith(LINE);
   });
 
+  // A live run (the lead's pull and Build and Test): the approval went straight
+  // on to CI Pipeline and the line, in the approval's own narration, never
+  // reached the person. In a chat it is kept for the reply the turn ends on.
+  test("from a chat, the lead's Build and Test end keeps the line for the reply, and the next step carries it", () => {
+    const home = homeWithTeams();
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \[ \] build-and-test /m, "- [?] build-and-test ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
+    const session = "7d8e2f3a-3b4c-4e5d-9a6b-2c3d4e5f6a70";
+    const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) };
+    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir, chat);
+    expect(approved.status, approved.out).toBe(0);
+    expect(String(approved.json?.narration ?? "")).not.toContain(LINE);
+    const kept = JSON.parse(readFileSync(join(home.dir, "aidlc", ".aidlc-sessions", `${session}.person-lines`), "utf-8")) as {
+      lines: Array<{ line: string; reply?: boolean }>;
+    };
+    expect(kept.lines.find((entry) => entry.line === LINE)?.reply, JSON.stringify(kept)).toBe(true);
+    const step = next(home.dir, chat);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(LINE);
+  });
+
   test("only for teams across repos with a remote: main's team Units on the workspace's own repo never hear it", () => {
     const { alice } = refundsTaken();
     expect(checkInLine(alice)).toBe(LINE);

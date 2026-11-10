@@ -24556,9 +24556,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
   const approvedLines = [unbuilt, progress].filter(Boolean).join("\n");
   // The lead's own Build and Test end on teams across repos is a stopping point.
-  const narration = approvedState !== null && approvedTogether.includes("build-and-test") && unitBuildOf(approvedState) === null
-    ? withCheckIn(pd, approvedLines, approvedState)
-    : approvedLines;
+  // The next stage's steps go on from the approval, so in a chat the line is
+  // kept for the reply the turn ends on (said once); with none it rides here.
+  const checkIn = approvedState !== null && approvedTogether.includes("build-and-test") && unitBuildOf(approvedState) === null
+    ? checkInLine(pd, approvedState)
+    : null;
+  const unkept = checkIn === null ? [] : keptForReply(pd, [checkIn]);
+  const narration = [approvedLines, ...unkept].filter(Boolean).join(" ");
   const continues = workflowContinues(pd);
   // The agent's own approval goes on to the next stage, so its lines wait for the reply.
   const approvalNotices = flags.result === "approved" && continues.workflow_continues === true &&
