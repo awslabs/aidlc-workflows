@@ -328,6 +328,30 @@ describe("the walking skeleton is built at the lead's project first, and every o
     expect(board.stdout).not.toContain("- checkout-ui, open");
     expect(stance(home.dir)).toBe("on");
   });
+
+  // The skeleton's approvals at the lead's project come before the board, and
+  // once one is asked after every stage the rhythm no longer changes.
+  test("on, the approval rhythm is offered with the skeleton's first step, before its first approval", () => {
+    const home = makeHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    chooseTeams(home.dir);
+    share(home.dir);
+    const step = next(home.dir);
+    expect(step, JSON.stringify(step).slice(0, 400)).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 600)).toContain(RHYTHM_OFFER);
+  });
+});
+
+describe("the approval rhythm is offered only while it can still change", () => {
+  test("once a Unit's approval was asked after every stage, the board does not offer it", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    share(home.dir);
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: "functional-design", Unit: "refunds", "Gate Scope": "per-stage" }, home.dir);
+    const board = next(home.dir);
+    expect(board.kind, JSON.stringify(board)).toBe("print");
+    expect(JSON.stringify(board.offers ?? [])).not.toContain("Each team will approve its Unit");
+    expect(run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir).status).not.toBe(0);
+  });
 });
 
 describe("a skip at the lead's project is of a Unit built there", () => {

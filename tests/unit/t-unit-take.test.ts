@@ -256,9 +256,9 @@ describe("a team member's clone of the home's workspace", () => {
     expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start checkout-ui");
     const again = next(alice, chat, ["something else entirely"]);
     expect(again.ask_type ?? null, JSON.stringify(again).slice(0, 300)).not.toBe("unit-take");
-    // A new chat's bare /aidlc there gets the same offer first, never "everything is done".
+    // A new chat's bare /aidlc there gets the build's own push first, never "everything is done".
     const bare = next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat-2" });
-    expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("unit-take");
+    expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("unit-push");
   });
 
   // Live run on Copilot CLI: the chat that took the first Unit was told its
@@ -1304,12 +1304,14 @@ describe("the way back from a take, and the lead's release", () => {
     const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
     expect(field(state, "Status")).toBe("Archived");
     expect(field(state, "Unit Build")).toBe("refunds");
-    // The person stays in the space they took it from, and their words there get the Units again.
+    // The person stays in the space they took it from, and their words there are read against the Units again.
     expect(readFileSync(join(sam, "aidlc", "active-space"), "utf-8").trim()).toBe("payments");
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "sam-chat" };
     const words = next(sam, chat, ["what else is there to take?"]);
-    expect(words.ask_type, JSON.stringify(words).slice(0, 400)).toBe("unit-take");
-    const labels = (words.choices as Array<{ label: string }>).map((choice) => choice.label);
+    expect(String(words.message), JSON.stringify(words).slice(0, 400)).toContain("Start refunds: `");
+    const offer = next(sam, chat);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 400)).toBe("unit-take");
+    const labels = (offer.choices as Array<{ label: string }>).map((choice) => choice.label);
     expect(labels).toContain("Start refunds");
     expect(labels).not.toContain("Carry on refunds");
     // Anyone takes it now, from where they are.
@@ -1318,13 +1320,44 @@ describe("the way back from a take, and the lead's release", () => {
     expect(claimPayload(home.remote, id8(home), "refunds")).toMatchObject({ status: "claimed", owner: "web", taken_by: "dora" });
   });
 
-  test("a teammate's first words in their own space, before any take there, get the Units offer", () => {
+  // Their words may be new work of their own: read against the Units offer
+  // and kept, so nobody says them twice.
+  test("a teammate's first words in their own space, before any take there, are read against the Units offer and kept", () => {
     const home = homeWithTeams();
     const pat = cloneOf(home.remote, "pat");
     inSpace(pat, "pay");
-    const words = next(pat, { ...ENV, AIDLC_SESSION_OVERRIDE: "pat-chat" }, ["what is ready to take?"]);
-    expect(words.ask_type, JSON.stringify(words).slice(0, 400)).toBe("unit-take");
-    expect((words.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start refunds");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "pat-chat" };
+    const words = next(pat, chat, ["add a dark mode to the admin site"]);
+    expect(words.kind, JSON.stringify(words).slice(0, 400)).toBe("print");
+    const message = String(words.message);
+    expect(message).toContain("Start refunds: `");
+    const id = /next --request (\S+)`/.exec(message)?.[1];
+    expect(id, message).toBeString();
+    expect(JSON.stringify(next(pat, chat, ["--request", id!]))).toContain("add a dark mode to the admin site");
+    const offer = next(pat, chat);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 400)).toBe("unit-take");
+    expect((offer.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start refunds");
+  });
+
+  // The lead frees a Unit while its taker builds it: the build is still the
+  // taker's own here, never "being built" by someone else.
+  test("a build whose claim the lead freed is the taker's own to carry on, named by its own last hand", () => {
+    const home = homeWithTeams();
+    const bea = cloneOf(home.remote, "bea");
+    expect(takeFrom("pay", bea, "refunds").status).toBe(0);
+    const record = buildDir(bea, "pay", "refunds");
+    appendAuditEntry("GATE_APPROVED", { Stage: "functional-design", "Git Name": "bea" }, bea, basename(record), "pay");
+    expect(run(UNIT, ["release", "refunds"], home.dir).status).toBe(0);
+    git(bea, ["fetch", "-q", "origin"]);
+    // Her list of the Units, from the lead's work in the clone's default space.
+    expect(run(UTILITY, ["space", "default"], bea).status).toBe(0);
+    const offer = next(bea, { ...ENV, AIDLC_SESSION_OVERRIDE: "bea-chat" });
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 500)).toBe("unit-take");
+    expect((offer.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Carry on refunds");
+    expect(JSON.stringify(offer)).not.toContain("being built by");
+    const carried = take(bea, "refunds");
+    expect(carried.status, carried.out).toBe(0);
+    expect(String(carried.json?.notice ?? "")).not.toContain("released");
   });
 
   test("the lead's release reopens a teammate's Unit, and the lead's own build here, started or not", () => {
@@ -1350,6 +1383,56 @@ describe("the way back from a take, and the lead's release", () => {
     expect(String(board.narration ?? ""), JSON.stringify(board).slice(0, 500)).toContain("- checkout-ui, open: waiting for a team to take it");
     const took = takeFrom("web", cloneOf(home.remote, "wes"), "checkout-ui");
     expect(took.status, took.out).toBe(0);
+  });
+});
+
+// A take builds in the space the person works in, never one named after a
+// team or a repo: team names change and people move between teams. A space
+// the person asks for by name is theirs.
+describe("a take builds where the person works, or in the space they ask for", () => {
+  // A live run: a teammate introduced herself with her team's name, and her
+  // build landed in a space named after the Unit's repo.
+  test("a teammate who names herself and her team builds in the space she is in, and no space is made", () => {
+    const home = homeWithTeams();
+    const bea = cloneOf(home.remote, "bea");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "bea-chat" };
+    const offer = next(bea, chat, ["Hi, I'm Bea from the web team. The checkout field is ours, let's take it."]);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 400)).toBe("unit-take");
+    const start = (offer.choices as Array<{ label: string; command?: string }>).find((choice) => choice.label === "Start checkout-ui");
+    expect(start?.command, JSON.stringify(offer.choices)).not.toContain("--space");
+    expect(start?.command).not.toContain("--team");
+    expect(String(offer.question_note)).toContain("naming themselves or their team is not that");
+    const took = take(bea, "checkout-ui");
+    expect(took.status, took.out).toBe(0);
+    expect(took.json?.space).toBe("default");
+    expect(readdirSync(join(bea, "aidlc", "spaces")).filter((name) => !name.startsWith("."))).toEqual(["default"]);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "default", taken_by: "bea" });
+  });
+
+  test("a take that asks for a space by name builds there, the space made as space create makes it", () => {
+    const home = homeWithTeams();
+    const pat = cloneOf(home.remote, "pat");
+    const took = take(pat, "refunds", ["--space", "web"]);
+    expect(took.status, took.out).toBe(0);
+    expect(took.json?.space).toBe("web");
+    expect(String(took.json?.notice ?? "")).toContain("Its build is its own piece of work here, in the web space,");
+    expect(existsSync(join(pat, "aidlc", "spaces", "web", "memory", "org.md"))).toBe(true);
+    expect(readFileSync(join(pat, "aidlc", "active-space"), "utf-8").trim()).toBe("web");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "web", taken_by: "pat" });
+    // A space already here is used as it is.
+    const second = take(pat, "checkout-ui", ["--space", "web"]);
+    expect(second.status, second.out).toBe(0);
+    expect(second.json?.space).toBe("web");
+  });
+
+  test("a space name space create refuses is refused in its words, and nothing is taken", () => {
+    const home = homeWithTeams();
+    const pat = cloneOf(home.remote, "pat");
+    const took = take(pat, "refunds", ["--space", "switch"]);
+    expect(took.status).not.toBe(0);
+    expect(took.out).toContain('"switch" is a reserved name and cannot be a space name.');
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
+    expect(existsSync(join(pat, "aidlc", "spaces", "switch"))).toBe(false);
   });
 });
 

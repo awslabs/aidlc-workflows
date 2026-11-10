@@ -1,12 +1,12 @@
 // covers: subcommand:aidlc-orchestrate:team-board, function:unitBoardRows, function:teamHomeBoardText, function:unitProgressStanding, function:unitTakeLook, function:checkTeamResults, function:claimsOpenAtPlanChange
 //
 // The board at the lead's project says only what the record says (#2410, the
-// board). A Unit no team holds reads where it stands in the Unit Progress the
-// step derived: done once it is through its gate, waiting for the lead's
-// approval while its gate is open (a Unit built before teams were chosen
-// too), and waiting only on a Unit that is not done; a Unit named for a team
-// that could not be held for them yet is theirs, never the lead's project's.
-// A teammate's take offer never names a Unit done on its claim as being built.
+// board). A Unit the lead's project builds reads where it stands in the Unit
+// Progress the step derived: done once it is through its gate, waiting for the
+// lead's approval while its gate is open (a Unit built before teams were
+// chosen too), and waiting only on a Unit that is not done; a Unit nobody took
+// reads open. A teammate's take offer never names a Unit done on its claim as
+// being built.
 // A look at the board (`team-board`) records nothing: a merge it sees that the
 // record does not have yet says so, and the next step records it. Going back
 // to change the Unit plan names the Units still with teams as they stand.
@@ -51,9 +51,9 @@ function teamBoard(dir: string): string {
   return looked.out;
 }
 
-// The lead's project with its two code repos; with teams chosen, checkout-ui
-// is held for web, and refunds and reporting (which waits on refunds) are left
-// to the lead's project.
+// The lead's project with its two code repos; with teams chosen, the lead
+// builds refunds and reporting (which waits on refunds) here, and checkout-ui
+// is open for any team to take.
 function leadKeepsTwo(teamsFirst = true) {
   const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
   const home = makeHome({ repos: hosts });
@@ -64,8 +64,8 @@ function leadKeepsTwo(teamsFirst = true) {
 function teamsChosen(dir: string): void {
   const teams = run(STATE, ["set-unit-ownership", "team"], dir);
   expect(teams.status, teams.out).toBe(0);
-  const assigned = run(UNIT, ["assign", "checkout-ui=web"], dir);
-  expect(assigned.status, assigned.out).toBe(0);
+  const here = run(UNIT, ["assign", "--here", "refunds,reporting"], dir);
+  expect(here.status, here.out).toBe(0);
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", "teams chosen"]);
   git(dir, ["push", "-q", "origin", "main"]);
@@ -96,7 +96,7 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
     expect(String(end.narration)).toBe([
       "Units of fixture:",
       "- refunds, here: done",
-      "- checkout-ui, web: held for web, not taken yet",
+      "- checkout-ui, open: waiting for a team to take it",
       "- reporting, here: done",
     ].join("\n"));
     expect(teamBoard(home.dir)).toContain("- reporting, here: done");
@@ -117,35 +117,17 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
     // The solo walk's first Unit, built through its last stage, its checkpoint not yet asked.
     const ask = leadsChat(home.dir, { until: (d) => d.construction_checkpoint !== undefined });
     const built = String((ask.construction_checkpoint as { unit?: string }).unit);
-    const other = built === "refunds" ? "checkout-ui" : "refunds";
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    const assigned = run(UNIT, ["assign", `${other}=payments`], home.dir);
-    expect(assigned.status, assigned.out).toBe(0);
     const board = teamBoard(home.dir);
     // Asked once for the whole Unit, as its checkpoint was, though teams approve stage by stage here.
     expect(board).toContain(`- ${built}, here: built, waiting for your approval`);
     expect(board).not.toContain(`- ${built}, here: done`);
   });
-
-  test("a Unit named for a team while it could not be held for them reads as theirs, never as the lead's project's", () => {
-    const { home } = leadKeepsTwo(false);
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(next(home.dir).ask_type).toBe("unit-assignment");
-    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
-    const kept = run(UNIT, ["assign", "refunds=payments", "--person-words", "payments takes refunds"], home.dir);
-    expect(kept.status, kept.out).toBe(0);
-    expect(next(home.dir).kind).toBe("print");
-    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
-    next(home.dir);
-    const board = teamBoard(home.dir);
-    expect(board).toContain("- refunds, payments: kept for payments, not held yet");
-    expect(board).not.toContain("- refunds, here:");
-  });
 });
 
 describe("a teammate's take offer", () => {
   test("a fresh clone never names a Unit done on its claim as being built, and what waited on it is ready", () => {
-    // reporting left open, so it is a team's to take once refunds is done.
+    // Nobody took reporting, so it is open for a team to take once refunds is done.
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -159,7 +141,7 @@ describe("a teammate's take offer", () => {
     const offer = next(bob);
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
     expect(String(offer.question)).not.toContain("Being built: refunds");
-    expect(String(offer.question)).toContain("Ready to take: checkout-ui (for web; likely checkout-web), reporting (open; likely billing).");
+    expect(String(offer.question)).toContain("Ready to take: checkout-ui (open; likely checkout-web), reporting (open; likely billing).");
   });
 });
 
@@ -189,6 +171,7 @@ describe("a look at the board records nothing, and says so", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "--here", "checkout-ui"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -211,16 +194,17 @@ describe("a look at the board records nothing, and says so", () => {
   });
 });
 
-describe("going back to change the Unit plan while teams hold Units", () => {
-  test("names each Unit as it stands with its team, never main's claim, land and publish words", () => {
+describe("going back to change the Unit plan while teams build Units", () => {
+  test("names each Unit taken as it stands with whoever took it, never an open one, main's claim, land and publish words", () => {
     const { home } = refundsTaken();
     git(home.dir, ["fetch", "-q", "origin"]);
     const step = next(home.dir, undefined, ["--stage", "units-generation"]);
     const notices = (step.change_notices ?? []) as string[];
     expect(notices, JSON.stringify(step)).toContain(
-      "Still with teams: refunds (being built by alice for payments), checkout-ui (held for web, not taken yet). " +
-        "A Unit a team has started keeps the plan it took. A Unit not taken yet is taken on the plan as it stands then.",
+      "Still with teams: refunds (being built by alice in payments). A Unit a team has started keeps the plan it took.",
     );
+    // checkout-ui and reporting, which nobody took, are not with a team.
+    expect(notices.find((notice) => notice.startsWith("Still with teams:"))).not.toMatch(/checkout-ui|reporting/);
     expect(JSON.stringify(step)).not.toContain("Still claimed");
     expect(JSON.stringify(step)).not.toContain("publishes again");
   });
@@ -240,8 +224,7 @@ describe("going back to change the Unit plan while teams hold Units", () => {
     expect(took.status, took.out).toBe(0);
     const step = next(home.dir, chat, ["--stage", "units-generation"]);
     const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));
-    expect(line, JSON.stringify(step)).toContain("refunds (being built by alice for payments)");
-    expect(line).not.toContain("refunds (held for payments");
+    expect(line, JSON.stringify(step)).toContain("refunds (being built by alice in payments)");
   });
 
   test("a Unit whose team pushed it reads pushed and not merged yet, never as being built", () => {
@@ -251,7 +234,7 @@ describe("going back to change the Unit plan while teams hold Units", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     const step = next(home.dir, undefined, ["--stage", "units-generation"]);
     const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));
-    expect(line, JSON.stringify(step)).toContain("refunds (pushed by alice for payments, not merged yet)");
+    expect(line, JSON.stringify(step)).toContain("refunds (pushed by alice in payments, not merged yet)");
     expect(line).not.toContain("being built");
   });
 });

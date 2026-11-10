@@ -29,19 +29,19 @@ import {
   GIT_ENV,
   git,
   homeState,
+  inSpace,
   makeHome,
   mergeOnHost,
   next,
   run,
   STATE,
-  UNIT,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(20 * 60_000);
 afterAll(cleanupTeamBuild);
 
 const SYNC = join(AIDLC_SRC, "tools", "aidlc-workspace-sync.ts");
-const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-assignment", "unit-amend", "unit-signoff"]);
+const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-amend", "unit-signoff"]);
 const DEPENDENCIES = "# Unit dependencies\n\n```yaml\nunits:\n" +
   "  - name: refunds\n    kind: service\n    repos: [pkg-a, pkg-b]\n    depends_on: []\n" +
   "  - name: checkout-ui\n    kind: ui\n    repos: [pkg-b]\n    depends_on: []\n" +
@@ -88,14 +88,13 @@ describe("the packages inside the workspace's own repo, as gitlinks", () => {
     expect(git(home.dir, ["ls-files", "-s", "src"]).split("\n").map((line) => `${line.split(" ")[0]} ${line.split("\t")[1]}`))
       .toEqual(["160000 src/pkg-a", "160000 src/pkg-b"]);
     expect(existsSync(join(home.dir, ".gitmodules"))).toBe(false);
+    // Teams chosen: every Unit is open for anyone to take.
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    const assigned = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir);
-    expect(assigned.status, assigned.out).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
 
-    // A payments developer's clone: the package folders come empty, and the sync fills each from its address.
+    // A teammate's clone: the package folders come empty, and the sync fills each from its address.
     const alice = cloneOf(home.remote, "alice");
     expect(readdirSync(join(alice, "src", "pkg-a"))).toEqual([]);
     const synced = spawnSync(process.execPath, [SYNC, "--project-dir", alice], { cwd: alice, encoding: "utf-8", env: GIT_ENV });
@@ -109,6 +108,8 @@ describe("the packages inside the workspace's own repo, as gitlinks", () => {
     expect(git(alice, ["status", "--porcelain", "--", "src"])).toBe("");
 
     cpSync(join(REPO_ROOT, "dist", "claude"), alice, { recursive: true, force: false, errorOnExist: false });
+    // She works in the payments space, so the build she takes goes there.
+    inSpace(alice, "payments");
     const host = hostFor("claude", alice, GIT_ENV);
     const person = new PersonScript(host);
     const agent = new AgentStandIn(host, person, {
@@ -120,7 +121,7 @@ describe("the packages inside the workspace's own repo, as gitlinks", () => {
     person.say("/aidlc");
     const offer = agent.next();
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
-    const took = pick(agent, person, offer, "Start refunds for payments");
+    const took = pick(agent, person, offer, "Start refunds");
     expect(took).toMatchObject({ taken: true, unit: "refunds", team: "payments", space: "payments" });
     const end = agent.drive(agent.next());
     expect(end.ask_type, JSON.stringify(end)).toBe("unit-push");

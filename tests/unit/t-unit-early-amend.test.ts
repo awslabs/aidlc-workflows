@@ -490,12 +490,20 @@ describe("a change to a shared input", () => {
 
   // A take the lead's chat had not seen when it approved, or one made after the
   // approval from the plan as last pushed: the lead's next step sends the
-  // approved change onto that claim too, as it did onto a Unit held for a team.
+  // approved change onto that claim too. The approval is read from the
+  // renewed receipt of the lead's Requirements Analysis, which a run has.
+  function receiptHere(dir: string) {
+    const basis = JSON.stringify({ schema: 3, graphContract: "g", projectType: null, inputs: [], outputs: [{ artifact: "requirements", producer: "requirements-analysis", required: true, instanceCount: 1, presentCount: 1, structureHash: "a", contentHash: "a" }] });
+    appendAuditEntry("STAGE_COMPLETED", { Stage: "requirements-analysis", "Validation Basis": basis }, dir);
+  }
+
   test("a Unit taken while the lead's answer is open hears the approved change at the lead's next step", () => {
     const { home } = proposed();
+    receiptHere(home.dir);
     expect(next(home.dir).ask_type).toBe("unit-amend");
     const bob = cloneOf(home.remote, "bob");
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     next(home.dir);
     git(bob, ["fetch", "-q", "origin"]);
@@ -504,7 +512,9 @@ describe("a change to a shared input", () => {
 
   test("a Unit taken after the approval, from the plan as last pushed, hears the approved change at the lead's next step", () => {
     const { home } = proposed();
+    receiptHere(home.dir);
     expect(next(home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     const bob = cloneOf(home.remote, "bob");
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
