@@ -458,7 +458,7 @@ describe("taking a Unit starts its build in the team's space", () => {
 
   // A live run (S1): payments built the refund amount test-after against the
   // lead's agreed "test first", which the take never carried.
-  test("the lead's agreed practices are offered at the take too, named, and taken they reach the build before the team's own", () => {
+  test("the lead's practices are offered at the take too, named, and taken they reach the build before the team's own", () => {
     const home = makeHome();
     const practices = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
     const seeded = readFileSync(practices, "utf-8");
@@ -477,11 +477,14 @@ describe("taking a Unit starts its build in the team's space", () => {
       "Start checkout-ui",
       "Start one under your team's own rules only",
     ]);
-    expect((choices[0] as { detail?: string }).detail).toContain("The lead's agreed practices (Testing Posture) apply to its build too");
+    expect((choices[0] as { detail?: string }).detail).toContain("The lead's practices (Testing Posture) apply to its build too");
+    expect(String(ask.question)).toContain("Each start follows the lead's practices too, with your team's own on top, as I'd recommend;");
+    expect((choices[2] as { detail?: string }).detail).toStartWith("Without the lead's practices.");
+    expect(JSON.stringify(ask)).not.toContain("agreed");
     const took = takeFrom("payments", alice, "refunds", ["--lead-rules"]);
     expect(took.status, took.out).toBe(0);
     // The take's own line names what the person chose to follow.
-    expect(String(took.json?.notice)).toContain("under your team's rules and the lead's agreed practices, from what the lead approved.");
+    expect(String(took.json?.notice)).toContain("under your team's rules and the lead's practices, from what the lead approved.");
     const record = buildDir(alice, "payments", "refunds");
     expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/team.md");
     const step = next(alice);
@@ -525,7 +528,7 @@ describe("taking a Unit starts its build in the team's space", () => {
   // A live run on Codex: the take carried the lead's agreed "tests are written
   // first" into the build's rules, but its testing contract still read the
   // organisation's default, so the agent asked the team whether to copy it.
-  test("taken with the lead's agreed practices, the build's testing contract follows the lead's Testing Posture where the team's own says none", () => {
+  test("taken with the lead's practices, the build's testing contract follows the lead's Testing Posture where the team's own says none", () => {
     const home = makeHome();
     const practices = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
     const seeded = readFileSync(practices, "utf-8");
@@ -557,7 +560,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     const step = next(alice, chat);
     expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
     expect(step.rules_in_context as string[]).not.toContain("aidlc/spaces/default/memory/team.md");
-    expect(first.out).toContain("The lead's agreed practices could not be read just now, so this step follows your team's own rules.");
+    expect(first.out).toContain("The lead's practices could not be read just now, so this step follows your team's own rules.");
     expect(run(ORCH, ["next"], alice, chat).out).not.toContain("could not be read just now");
   });
 
@@ -1430,7 +1433,7 @@ describe("a take builds where the person works, or in the space they ask for", (
     const pat = cloneOf(home.remote, "pat");
     const took = take(pat, "refunds", ["--space", "switch"]);
     expect(took.status).not.toBe(0);
-    expect(took.out).toContain('"switch" is a reserved name and cannot be a space name.');
+    expect(String(took.json?.error ?? took.out)).toContain('"switch" is a reserved name and cannot be a space name.');
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
     expect(existsSync(join(pat, "aidlc", "spaces", "switch"))).toBe(false);
   });
@@ -1554,9 +1557,9 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     commitAll(pay.dir, "our rules");
     const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--lead-rules"], pay.dir);
     expect(took.status, took.out).toBe(0);
-    expect(String(took.json?.notice)).toContain("under your team's rules and the lead's agreed practices, from what the lead approved.");
+    expect(String(took.json?.notice)).toContain("under your team's rules and the lead's practices, from what the lead approved.");
     const record = buildDir(pay.dir, "default", "refunds");
-    // The lead holds agreed practices and no project rules; the team's own project.md is never named as the lead's.
+    // The lead holds practices and no project rules; the team's own project.md is never named as the lead's.
     expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/team.md");
     const first = nextSaying(pay.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-chat-1" });
     expect(first.step.kind, JSON.stringify(first.step).slice(0, 400)).toBe("run-stage");
@@ -1576,7 +1579,7 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     expect(later.said).not.toContain("Test first for the refund amount.");
   });
 
-  test("taken with the lead's agreed practices from the lead's address, the testing contract follows the lead's Testing Posture", () => {
+  test("taken with the lead's practices from the lead's address, the testing contract follows the lead's Testing Posture", () => {
     const home = leadWithRules((dir) => {
       const practices = join(dir, "aidlc", "spaces", "default", "memory", "team.md");
       writeFileSync(practices, readFileSync(practices, "utf-8").replace("## Testing Posture\n", "## Testing Posture\nTDD: the refund amount's tests are written first and must fail.\n"));
@@ -1599,7 +1602,7 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     const first = nextSaying(pay.dir, chat);
     expect(first.step.kind, JSON.stringify(first.step).slice(0, 600)).toBe("run-stage");
     expect(first.step.rules_in_context as string[]).not.toContain("the lead's aidlc/spaces/default/memory/team.md");
-    expect(first.said).toContain(`The lead's agreed practices ${UNREAD}`);
+    expect(first.said).toContain(`The lead's practices ${UNREAD}`);
     const again = nextSaying(pay.dir, chat);
     expect(again.said).not.toContain(UNREAD);
   });

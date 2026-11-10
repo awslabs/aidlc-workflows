@@ -40,6 +40,7 @@ import {
   STATE,
   UNIT,
   takeIn,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -236,5 +237,61 @@ describe("going back to change the Unit plan while teams build Units", () => {
     const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));
     expect(line, JSON.stringify(step)).toContain("refunds (pushed by alice in payments, not merged yet)");
     expect(line).not.toContain("being built");
+  });
+});
+
+// A live run (the lead of work teams build, every Unit left open): recording
+// a team's merge was tied to carrying on, which would have carried on the
+// Units the lead left open. Nothing is built at the lead's project until the
+// lead says so.
+describe("the lead's project builds nothing it was not asked to", () => {
+  function refundsMerged() {
+    const taken = refundsTaken();
+    codeGenerated(taken.alice, taken.record);
+    expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
+    mergeOnHost(taken.hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(taken.hosts.billing, "refunds", "squash");
+    git(taken.home.dir, ["fetch", "-q", "origin"]);
+    return taken;
+  }
+  const merged = (dir: string) => readAuditShardEvents(dir).filter((row) => row.event === "UNIT_MERGED").length;
+
+  test("with every other Unit open, the lead's next records a team's merge and is the board, with nothing started", () => {
+    const { home } = refundsMerged();
+    const step = next(home.dir);
+    expect(step.kind, JSON.stringify(step).slice(0, 400)).toBe("print");
+    expect(String(step.narration)).toContain("- refunds, payments: done");
+    expect(merged(home.dir)).toBe(1);
+    expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_STARTED")).toBe(false);
+  });
+
+  // A live run: every look said the lead's project was on Functional Design
+  // for the first Unit, while it built nothing.
+  test("a look at where things stand names no stage as now while the lead's project waits on the Units", () => {
+    const { home } = refundsTaken();
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(next(home.dir).kind).toBe("print");
+    const status = run(UTILITY, ["status"], home.dir).out;
+    expect(status).toContain("Current Stage:  none here: the Units left are taken or open to take (below)\n");
+    expect(status).toContain("Status:         Waiting on the Units below\n");
+    expect(status).not.toContain("Active Agent:");
+    expect(status).not.toContain("Current Step:");
+    expect(status).not.toContain("Next Stage:");
+    expect(status).not.toMatch(/CONSTRUCTION .*Unit \d+ of \d+/);
+    expect(status).toContain("- refunds, payments: building, taken by alice");
+    // Once the lead asks for a Unit here, its stage is said again.
+    expect(run(UNIT, ["assign", "--here", "checkout-ui"], home.dir).status).toBe(0);
+    expect(next(home.dir).unit).toBe("checkout-ui");
+    expect(run(UTILITY, ["status"], home.dir).out).toContain("Current Stage:  Functional Design");
+  });
+
+  test("the lead's plain words to record a team's merge reach the step that records it, and nothing is started", () => {
+    const { home } = refundsMerged();
+    const words = next(home.dir, ENV, ["The refunds Unit is merged. I want that recorded now, nothing else."]);
+    expect(String(words.message), JSON.stringify(words).slice(0, 400)).toMatch(/run `[^`]*orchestrate\.ts next` with nothing after it/);
+    const step = next(home.dir);
+    expect(step.kind, JSON.stringify(step).slice(0, 400)).toBe("print");
+    expect(merged(home.dir)).toBe(1);
+    expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_STARTED")).toBe(false);
   });
 });
