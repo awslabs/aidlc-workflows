@@ -141,6 +141,8 @@ describe("#1454 a brief above the 28 KiB directive limit still tailors a plan, b
     const id = requestIdOf(message);
     expect(message).toContain(copyPath(proj, id));
     expect(message).toContain("propose the workflow plan for the request kept in this project at");
+    // The step says how long the request is, so a read that returns less of the file shows as cut.
+    expect(message).toContain(`${brief.length} characters long`);
     expect(message).not.toContain(MARKER.slice(0, 120));
     expect(questionCopy(proj, id).text).toBe(brief);
   });
