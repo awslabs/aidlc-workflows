@@ -150,6 +150,23 @@ function showTypedCommand(parts: ChatPart[], args: string): string {
   return typed;
 }
 
+// The human-turn hook's first-step note for a long /aidlc line AI-DLC kept
+// whole (its firstStepNote key, printed only because this adapter asked), at
+// the end of the command's own template: the part showTypedCommand marked for
+// the model, so the person's view of their message is unchanged and the agent
+// runs `next` with nothing after it instead of writing the words to a file.
+function addFirstStepNote(parts: ChatPart[], hookStdout: string): void {
+  let note: unknown;
+  try {
+    note = (JSON.parse(hookStdout) as { firstStepNote?: unknown }).firstStepNote;
+  } catch {
+    return;
+  }
+  const template = parts.findLast((part) => part.type === "text" && part.synthetic === true);
+  if (typeof note !== "string" || note === "" || template === undefined) return;
+  template.text = `${template.text ?? ""}\n\n${note}`;
+}
+
 export type PluginInput = {
   client: {
     session: {
@@ -749,15 +766,18 @@ async function createV1Adapter({
         // Retry on later human turns until an active workflow is available.
         if (sessionStartHandled(result.stdout)) started.add(input.sessionID);
       }
-      await runCore(
+      const recorded = await runCore(
         "aidlc-record-human-turn.ts",
         {
           hook_event_name: "UserPromptSubmit",
           session_id: input.sessionID,
           prompt: typed ?? said ?? "",
+          // The one line of this hook's that reaches opencode's agent, and only for a typed /aidlc.
+          ...(typed !== null ? { wants_first_step_note: true } : {}),
         },
         directory,
       );
+      if (typed !== null) addFirstStepNote(output.parts, recorded.stdout);
     },
 
     "command.execute.before": async (

@@ -41826,11 +41826,18 @@ export function sayOnceNoteLine(
  * top-level additionalContext without a word; every other harness's adapter,
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
+ * `firstStepNote` goes only to an adapter that asked the human-turn hook for
+ * it, whose host takes no context line from that hook (opencode).
  */
-export function hookContextLine(event: "SessionStart" | "UserPromptSubmit" | "PostToolUse", context: string): string {
+export function hookContextLine(
+  event: "SessionStart" | "UserPromptSubmit" | "PostToolUse",
+  context: string,
+  firstStepNote?: string,
+): string {
   return `${JSON.stringify({
     additionalContext: context,
     hookSpecificOutput: { hookEventName: event, additionalContext: context },
+    ...(firstStepNote === undefined ? {} : { firstStepNote }),
   })}\n`;
 }
 
