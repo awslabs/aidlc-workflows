@@ -7,6 +7,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HARNESS_ROOT = join(REPO_ROOT, "harness");
 
 type ReviewerScopeRegistration =
+  | "antigravity-hooks"
   | "claude-settings"
   | "codex-hooks"
   | "copilot-hooks"
@@ -32,6 +33,7 @@ type HarnessCapabilities = {
     wiringFile: string | null;
   };
   memoryInclude:
+    | "antigravity-rule"
     | "claude-import"
     | "codex-engine"
     | "copilot-agents-md"
@@ -48,6 +50,27 @@ type HarnessCapabilities = {
 // explicit makes harness-specific test selection reviewable and prevents a new
 // manifest from inheriting an accidental default.
 const HARNESS_CAPABILITIES = {
+  antigravity: {
+    harnessDir: ".agent",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+      harnessDist: ".agent/rules/aidlc-onboarding.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".agent/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".agent-plugin",
+      marketplaceDir: ".agent-plugin",
+      wiringFile: "hooks/hooks.json",
+    },
+    memoryInclude: "antigravity-rule",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "antigravity-hooks",
+  },
   claude: {
     harnessDir: ".claude",
     onboarding: {
@@ -293,7 +316,11 @@ function validateManifest(
         (file) => file.dst === "steering/aidlc-active-memory.md",
       ) ||
     (capabilities.memoryInclude === "claude-import") !==
-      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
+      (manifest.harnessDir === ".claude" &&
+        manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md")) ||
+    (capabilities.memoryInclude === "antigravity-rule") !==
+      (manifest.harnessDir === ".agent" &&
+        manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md")) ||
     (capabilities.memoryInclude === "codex-engine") !==
       (manifest.orchestratorSkillPath === ".agents/skills/aidlc/SKILL.md") ||
     (capabilities.memoryInclude === "opencode-instructions") !==

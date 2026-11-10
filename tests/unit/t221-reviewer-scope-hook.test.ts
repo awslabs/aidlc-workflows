@@ -1224,6 +1224,39 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
+  test("Antigravity hooks.json wires the adapter's guards target on PreToolUse", () => {
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "antigravity-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      const wiring = JSON.parse(
+        readFileSync(join(harness.engineRoot, "hooks.json"), "utf-8"),
+      ) as {
+        hooks: Record<
+          string,
+          Array<{ command?: string; hooks?: Array<{ command: string }> }>
+        >;
+      };
+      const pre = wiring.hooks.PreToolUse ?? [];
+      expect(
+        pre.some((entry) =>
+          (entry.hooks ?? []).some(
+            (h) =>
+              h.command ===
+              `bun hooks/aidlc-antigravity-adapter.ts guards`,
+          ),
+        ),
+      ).toBe(true);
+      const adapter = readFileSync(
+        join(harness.engineRoot, "hooks", "aidlc-antigravity-adapter.ts"),
+        "utf-8",
+      );
+      expect(adapter).toContain("aidlc-reviewer-scope.ts");
+      expect(adapter).toContain("aidlc-state-transition-guard.ts");
+    }
+  });
+
   test("reviewer protocol module carries the dispatch-record write, and leaves the delete to the engine", () => {
     // The dispatch record is per Unit, so it is in the per-Unit review module.
     const body = readFileSync(

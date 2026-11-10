@@ -24,6 +24,7 @@ const BLOCK_HEADING = "## Harness construction bindings";
 
 // The subsection heading each shipped tree names its own tool by.
 const TOOL_HEADING: Record<string, string> = {
+  antigravity: "Antigravity",
   claude: "Claude Code",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",

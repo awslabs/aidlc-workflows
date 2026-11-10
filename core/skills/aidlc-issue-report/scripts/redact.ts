@@ -63,7 +63,7 @@ export function onlyLabels(v: string): boolean {
 // Too short or too generic to replace without wrecking the text.
 const GENERIC = new Set([
   "user", "users", "admin", "administrator", "root", "home", "dev", "test", "main", "work", "src", "app",
-  "aidlc", "kiro", "claude", "codex", "copilot", "cursor", "default", "project", "workspace", "ubuntu", "ec2-user",
+  "aidlc", "kiro", "claude", "codex", "copilot", "cursor", "antigravity", "default", "project", "workspace", "ubuntu", "ec2-user",
 ]);
 
 // A one-word value that is also an ordinary word would replace the word everywhere ("the agent <user>
@@ -308,7 +308,7 @@ function outsideLabels(text: string, fn: (part: string) => string): string {
 // side) or a name the person hid, unless that word starts another path (`mv ~/a /home/alice/b`); a `<user>` inside
 // is read through, so what follows it is not left behind; a quoted path is read to its closing quote.
 export const TOOL_DIRS: string[][] = [
-  [".claude"], [".kiro"], [".codex"], [".copilot"], [".cursor"], [".agents"], [".aidlc"], [".config"], [".vscode"],
+  [".claude"], [".kiro"], [".codex"], [".copilot"], [".cursor"], [".agent"], [".agents"], [".aidlc"], [".config"], [".vscode"],
   [".local", "share", "aidlc"], ["AppData", "Local", "aidlc"], ["Library", "Application Support", "Kiro"],
   ["Library", "Application Support", "Code"], ["Library", "Application Support", "Cursor"],
 ];

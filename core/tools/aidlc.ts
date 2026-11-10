@@ -1281,9 +1281,10 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "antigravity" | "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
+  antigravity: ".agent",
   codex: ".codex",
   copilot: ".aidlc",
   cursor: ".cursor",
@@ -1296,6 +1297,7 @@ function isAdapterHarness(value: string): value is AdapterHarness {
 }
 
 function adapterFile(harness: AdapterHarness): string {
+  if (harness === "antigravity") return "aidlc-antigravity-adapter.ts";
   if (harness === "codex") return "aidlc-codex-adapter.ts";
   if (harness === "copilot") return "aidlc-copilot-adapter.ts";
   if (harness === "cursor") return "aidlc-cursor-adapter.ts";
@@ -1352,6 +1354,7 @@ export function resolveHookPath(
         ".kiro",
         ".codex",
         ".cursor",
+        ".agent",
       ].filter((value, index, values): value is string =>
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );

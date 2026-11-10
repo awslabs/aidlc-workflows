@@ -137,7 +137,7 @@ export function endFactOk(field: "exitCode" | "timeoutMs", v: unknown): boolean 
 // that field whatever AI-DLC's word list holds (lib-gate.ts).
 export const DOCTOR_SEVERITIES: ReadonlySet<string> = new Set(["error", "warning", "warn", "info", "other"]);
 // AI-DLC's harness rows.
-export const HARNESS_ROWS = new Set(["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]);
+export const HARNESS_ROWS = new Set(["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot", "antigravity"]);
 
 // A kernel release as Linux, WSL and macOS write it (`6.8.0-45-generic`, `5.15.167.4-microsoft-standard-WSL2`,
 // `6.1.112-122.189.amzn2023.x86_64`, `25.6.0`): a major of one or two digits, then the distributions' own words; any

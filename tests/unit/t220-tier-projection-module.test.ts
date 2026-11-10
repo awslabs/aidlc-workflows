@@ -52,6 +52,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const EXPECTED: Record<
   Tier,
   {
+    antigravity: { model: string | null };
     claude: { model: string; effort: "medium" | null };
     codex: { model: string | null; effort: "medium" | null };
     cursor: { model: string | null };
@@ -60,6 +61,7 @@ const EXPECTED: Record<
   }
 > = {
   judgment: {
+    antigravity: { model: null },
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
     cursor: { model: null },
@@ -71,6 +73,7 @@ const EXPECTED: Record<
     // a medium review pass at ~half the xhigh wall-clock with no finding-quality
     // loss (an xhigh session pin was silently doubling every review's cost via
     // inherit).
+    antigravity: { model: null },
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: null, effort: "medium" },
     // Cursor never pins a model either: model availability is Cursor-plan-
@@ -83,6 +86,7 @@ const EXPECTED: Record<
     opencode: { model: null, variant: "medium" },
   },
   templated: {
+    antigravity: { model: null },
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
     cursor: { model: null },

@@ -9,7 +9,7 @@ import { kiroHome } from "./lib-transcripts.ts";
 import { TOOL_KEYS, type ToolKey } from "./lib-tools.ts";
 
 // The engine dirs AI-DLC's harness rows install into (AI-DLC's harness table in aidlc-lib.ts).
-export const ENGINE_DIRS = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
+export const ENGINE_DIRS = [".claude", ".kiro", ".codex", ".cursor", ".agent", ".aidlc"] as const;
 
 // A tool the person named (set-version.ts), with the version they read or null, written into safe.json's environment.
 // A version already found or given is not dropped by a later "I don't know". When no chat log showed which tool the
@@ -86,7 +86,7 @@ function channelOf(project: string, dir: string): Tree["channel"] {
     if (!existsSync(path)) continue;
     const text = readFileSync(path, "utf8");
     if (/\baidlc(\.cmd|\.exe)?["']?\s+engine\b/.test(text)) return "native";
-    if (/tools[\\/]+aidlc\.ts/.test(text)) return "copy";
+    if (/(?:tools[\\/]+aidlc\.ts|hooks[\\/]+aidlc-[a-z-]+-adapter\.ts)/.test(text)) return "copy";
   }
   return "unknown";
 }
