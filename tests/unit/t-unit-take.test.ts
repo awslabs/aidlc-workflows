@@ -45,6 +45,7 @@ import {
   next,
   ORCH,
   refundsTaken,
+  DEPENDENCIES,
   run,
   STATE,
   tempDir,
@@ -329,6 +330,35 @@ describe("a team member's clone of the home's workspace", () => {
     expect((offered.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
     const again = next(alice, chat);
     expect(again.ask_type ?? null, JSON.stringify(again).slice(0, 300)).not.toBe("unit-take");
+  });
+
+  // The way to the next Unit that is not the lead's plan in her status: her
+  // finished build's own next step, in any chat.
+  test("a teammate's finished build, in a later chat, puts the Units to take at its next step", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ana = cloneOf(home.remote, "ana");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, ana, name, "ana");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-chat" };
+    const took = run(UNIT, ["take", "refunds", "--home", HOME], ana, chat);
+    expect(took.status, took.out).toBe(0);
+    const record = buildDir(ana, "default", "refunds");
+    codeGenerated(ana, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], ana, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const later = next(ana, { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-next-day" });
+    expect(later.ask_type, JSON.stringify(later).slice(0, 600)).toBe("unit-take");
+    expect((later.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
   });
 
   test("while the home builds the walking skeleton, hears that every Unit waits on it, and nothing of the home's work runs", () => {
@@ -991,6 +1021,38 @@ describe("builds in one workspace", () => {
     const asked = run(UNIT, ["take", "refunds", "--home", HOME], bob);
     expect(asked.json?.notice, asked.out).toBe("Carrying on refunds, alice's build in the data space.");
     expect(`${JSON.stringify(offer)}${resumed.out}${JSON.stringify(theirs)}${asked.out}`).not.toMatch(/the \w+ team|for the data|team's build/);
+  });
+
+  // A live run on Codex (a teammate's status): 'Also open' named the lead's
+  // plan and a teammate's build a pull brought, each offered to switch to.
+  test("a teammate's status lists her own builds, never another person's a pull brought or the lead's plan; the lead's lists no teammate's build", () => {
+    const home = makeHome({ dependencies: DEPENDENCIES.replace("depends_on: [refunds]", "depends_on: []") });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alsoOpen = (dir: string): string | null => {
+      const status = run(UTILITY, ["status"], dir);
+      expect(status.status, status.out).toBe(0);
+      return /^Also open: +(.*)$/m.exec(status.out)?.[1] ?? null;
+    };
+    // Her own build of reporting, made on her other computer under her git name.
+    const laptop = cloneOf(home.remote, "ana-laptop");
+    git(laptop, ["config", "user.name", "ana"]);
+    expect(take(laptop, "reporting").status).toBe(0);
+    commitAll(laptop, "reporting build");
+    git(laptop, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    expect(take(bea, "checkout-ui").status).toBe(0);
+    commitAll(bea, "checkout-ui build");
+    git(bea, ["push", "-q", "origin", "main"]);
+    const ana = cloneOf(home.remote, "ana");
+    expect(take(ana, "refunds").status).toBe(0);
+    expect(alsoOpen(ana)).toBe(`${basename(buildDir(ana, "default", "reporting"))} (ask to switch to it)`);
+    // The lead's own checkout after a pull, which brings the claims too: the teammates' builds are theirs.
+    git(home.dir, ["fetch", "-q", "origin"]);
+    git(home.dir, ["merge", "-q", "--no-edit", "origin/main"]);
+    expect(alsoOpen(home.dir)).toBeNull();
   });
 
   test("the build's Code Generation is told its code goes in the Unit's repos, beside the files of theirs it leaves alone", () => {

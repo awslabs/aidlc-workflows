@@ -2490,12 +2490,16 @@ To get started:
   // Other work still running in this space, so the person sees it and how to
   // reach it: the same list config and doctor use, so archived and finished
   // work stays out. A record named outside the record-name shape is not listed.
+  // Another person's build a pull brought, and the lead's plan in a teammate's
+  // clone, are not this person's to switch to (workOfAnother).
   let others: string[] = [];
   try {
+    const { workOfAnother } = await import("./aidlc-orchestrate.ts");
     others = selection.intent === null
       ? []
       : runningWorkflows(projectDir)
         .filter((run) => run.space === selection.space && run.dirName !== selection.intent && isSafeIntentRecordName(run.dirName))
+        .filter((run) => !workOfAnother(projectDir, run))
         .map((run) => run.dirName);
   } catch {
     // Other work that cannot be read is left out; this work's status still shows.

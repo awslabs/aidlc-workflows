@@ -6617,7 +6617,7 @@ export function takenFromSoloWork(projectDir: string, claims: ReadonlyMap<string
 }
 
 // A build's claim at the lead's project as this workspace last fetched it.
-function buildClaimHere(projectDir: string, built: { space: string; dirName: string }): UnitClaimView | null {
+export function buildClaimHere(projectDir: string, built: { space: string; dirName: string }): UnitClaimView | null {
   try {
     const build = unitBuildOf(readStateFile(projectDir, built.dirName, built.space));
     if (build === null) return null;

@@ -634,6 +634,7 @@ import {
   pushRemotesToPick,
   changedInputs,
   claimIsMine,
+  buildClaimHere,
   leadsOwnClaims,
   takenFromSoloWork,
   type ToldMerge,
@@ -9106,6 +9107,33 @@ function buildLastWorked(
   };
 }
 
+// Whose a build is, the one rule the take question's 'your build' and status
+// read: its claim while taken (claimIsMine), else the newest Git Name on its
+// own rows (buildLastWorked); null when neither is on the record.
+export function buildIsMine(
+  projectDir: string,
+  built: { space: string; dirName: string },
+  claim: UnitClaimView | null | undefined,
+  lastBy?: string | null,
+): boolean | null {
+  if (claim?.status === "claimed") return claimIsMine(projectDir, claim);
+  const by = lastBy !== undefined ? lastBy : buildLastWorked(projectDir, built, undefined).by;
+  return by === null ? null : by === gitUserName(projectDir);
+}
+
+// Other work here that is not this person's to switch to: another person's
+// build a pull brought (buildIsMine), or, in a teammate's clone, the lead's
+// plan (planMadeElsewhere on its own rows). Solo work is never read this way.
+export function workOfAnother(projectDir: string, run: { space: string; dirName: string }): boolean {
+  try {
+    const state = readStateFile(projectDir, run.dirName, run.space);
+    if (unitBuildOf(state) !== null) return buildIsMine(projectDir, run, buildClaimHere(projectDir, run)) === false;
+    return isTeamUnitOwnership(state) && planMadeElsewhere(projectDir, readAuditShardEvents(projectDir, run.dirName, run.space));
+  } catch {
+    return false;
+  }
+}
+
 // The lead's work teams build that a look lists: on disk here, or read by the
 // lead's address from the lead's copy (`lead`), its claims and copy fetched
 // first (`refreshed`).
@@ -9287,7 +9315,7 @@ function unitTakeLook(
           const where = spaceWords(built.space, true);
           const down = live?.payload.turned_down;
           const sentBack = down !== undefined ? turnedDownStatus(down, `${who}${where}`, "the lead's") : null;
-          const mine = live !== undefined ? claimIsMine(projectDir, live) : worked.by !== null && worked.by === gitUserName(projectDir);
+          const mine = buildIsMine(projectDir, built, live, worked.by) === true;
           if (worked.awaitingMerge && sentBack === null) {
             // Merged in every repo by the lead's own rule, read here and never written (mergedAtTeamLook).
             const merged = live !== undefined && mergedAtTeamLook(projectDir, live.payload);
