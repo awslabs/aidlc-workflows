@@ -75,7 +75,7 @@ import {
   VALID_DEPTHS,
   VALID_TEST_STRATEGIES,
 } from "./aidlc-guard-switch.ts";
-import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
+import { compareVersions, projectPinnedVersion, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { main as pluginTestMain } from "./aidlc-plugin-test.ts";
@@ -3926,13 +3926,8 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
     };
   }
   const native = aidlcInvocation() === "aidlc";
-  let pinned: string | undefined;
-  try {
-    const pin = readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim();
-    if (VERSION_ID.test(pin)) pinned = pin;
-  } catch {
-    // No pin; a malformed one has its own row.
-  }
+  // A malformed pin has its own row.
+  const pinned = projectPinnedVersion(projectDir);
   const newest = trees.filter((tree) => tree.frameworkVersion)
     .sort((left, right) => compareVersions(right.frameworkVersion ?? "", left.frameworkVersion ?? ""))[0];
   const release = pinned ?? (native ? AIDLC_VERSION : newest.frameworkVersion ?? AIDLC_VERSION);
@@ -4375,14 +4370,7 @@ export async function collectDoctorReport(
   // every engine command (hooks, sensors, orchestration) to the pinned one, so
   // the project stamp is judged against that engine. A malformed pin is
   // reported below and leaves this check on the running release.
-  const pinnedEngine = (() => {
-    try {
-      const value = readFileSync(pinPath, "utf-8").trim();
-      return VERSION_ID.test(value) ? value : null;
-    } catch {
-      return null;
-    }
-  })();
+  const pinnedEngine = projectPinnedVersion(projectDir);
   if (existsSync(projectStamp)) {
     try {
       const stamp = JSON.parse(readFileSync(projectStamp, "utf-8")) as {
