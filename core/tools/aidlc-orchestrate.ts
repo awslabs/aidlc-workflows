@@ -8301,7 +8301,7 @@ function composeDispatchDirective(
         aidlcDispatcherInvocation("recompose") +
         ` [--skip <changes.skip>] [--add <changes.add>] [approved setting flags --message '${MESSAGE_SLOT}']\`` +
         " (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add; " +
-        `with setting flags, ${MESSAGE_SLOT} is the id of the person's message that approved them). On Reject, at any of these gates, apply nothing, then ${nothingChanged}. ` +
+        `with setting flags, ${MESSAGE_SLOT} is the id of the person's message that approved them). On Reject, at any of these gates, apply nothing and tell the person in one line that the plan stays as it is, then ${nothingChanged}. ` +
         "Never write scope registry files for an in-flight proposal.",
     );
   } else {
