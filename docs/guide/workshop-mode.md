@@ -756,7 +756,7 @@ remote cannot be reached, one line says the board may be behind):
 Units of checkout-revamp:
 - refunds, payments space: built by bea, checkout-api merged, billing not merged yet (1 of 2 merged)
 - checkout-ui, web space: building, taken by sam
-- reporting, here: waits on refunds
+- reporting, open: waiting for a team to take it
 ```
 
 Each take's row names the space its build is in (a take in a default space has
@@ -811,16 +811,16 @@ runs `aidlc config` in their own clone for the tool they use.
 AI-DLC says so once at each stopping point of teams' work: when you stop for
 now, when your Unit is pushed, when you say **Not now** to its push, and at the
 lead's project when Build and Test is approved: "Your teammates see where this
-work stands once aidlc/ is committed and pushed." It is not said when aidlc/ is
-already checked in. After your own commit and push, the next look in that chat
-says once "aidlc/ is committed and pushed: your teammates see where this work
-stands.", and status shows `Checked in:     yes, aidlc/ is committed and pushed`.
-AI-DLC reads that from your local git only: nothing under aidlc/ changed except
-the lines each look adds to this clone's own audit file (a decision of yours
-there still counts as a change), and no commit touching aidlc/ is ahead of your
-branch's upstream. A branch never pushed says nothing either way. A push's own
-lines go with the step that follows it, so they are said before the next
-question. Asked where things stand (`/aidlc --status`), a clone also says what its
+work stands once aidlc/ is committed and pushed." It is said at those events,
+never because git status shows aidlc/ changed, since a look's own audit rows
+always change it. Your local git is read only to hand over the positive fact:
+after your own commit and push, the next look in that chat says once "aidlc/ is
+committed and pushed: your teammates see where this work stands.", status shows
+`Checked in:     yes, aidlc/ is committed and pushed`, and the reminder is left
+unsaid while it is checked in; the rows each look adds to this clone's own audit
+file are left out of that reading (a decision of yours there still counts), and
+a branch never pushed says nothing either way. A push's own lines go with the
+step that follows it, so they are said before the next question. Asked where things stand (`/aidlc --status`), a clone also says what its
 last `git pull` that brought changes brought from other people, by who made each
 change (their git name), and where each Unit's build stands in the words the
 Units offer uses (building, pushed, waiting for its merge, merged, turned down
