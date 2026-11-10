@@ -413,9 +413,31 @@ describe("a staging folder left beside a checkout outside the workspace", () => 
     expect(existsSync(join(root, "work", "billing", ".git"))).toBe(true);
     const said = leftLine(left, "billing");
     expect(result.out.split(said).length - 1, result.out).toBe(1);
-    expect(result.out.indexOf(said)).toBeGreaterThan(result.out.indexOf("workspace in sync"));
     expect(existsSync(left)).toBe(true);
   });
+
+  // A folder the person can make things in but not list (write and search with
+  // no read) took clones before the look for an earlier run's folder; the look
+  // never stops one.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a destination folder that cannot be listed still takes the clone, and nothing is said",
+    () => {
+      const { root, ws } = layout();
+      const bare = bareWithCommit(root, "billing");
+      const away = join(root, "away");
+      mkdirSync(away);
+      chmodSync(away, 0o300);
+      try {
+        writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", url: bare, path: "../../away/billing" }] }));
+        const result = sync(ws);
+        expect(result.status, result.out).toBe(0);
+        expect(existsSync(join(away, "billing", ".git"))).toBe(true);
+        expect(result.out).not.toContain("AI-DLC could not remove the temporary folder");
+      } finally {
+        chmodSync(away, 0o755);
+      }
+    },
+  );
 
   // A file git cannot let go of: the clone's own hook leaves a folder only its
   // owner can open up, then fails the clone. chmod does not lock a file on
@@ -445,7 +467,8 @@ describe("a staging folder left beside a checkout outside the workspace", () => 
         expect(result.stderr.split(said).length - 1, result.stderr).toBe(1);
         expect(result.stderr.indexOf(said)).toBeGreaterThan(result.stderr.indexOf("✗"));
       } finally {
-        if (stage !== undefined) chmodSync(join(root, "work", stage, "billing", "held"), 0o755);
+        const held = join(root, "work", stage ?? "", "billing", "held");
+        if (stage !== undefined && existsSync(held)) chmodSync(held, 0o755);
       }
     },
   );

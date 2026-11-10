@@ -1104,10 +1104,17 @@ export function removeOutsideStages(
 }
 
 // The one read for a folder an earlier run left beside this checkout (a run
-// stopped mid-clone runs no code to say it): the parent folder's own names.
+// stopped mid-clone runs no code to say it): the parent folder's own names. A
+// folder the person cannot list says nothing and still takes the clone.
 function noteEarlierStages(parent: string, repo: string): void {
   const prefix = `${OUTSIDE_STAGE_PREFIX}${repo}-`;
-  for (const name of readdirSync(parent)) {
+  let names: string[];
+  try {
+    names = readdirSync(parent);
+  } catch {
+    return;
+  }
+  for (const name of names) {
     if (name.startsWith(prefix) && name.length === prefix.length + OUTSIDE_STAGE_SUFFIX_LENGTH) {
       stagingLeft.add(stagingLeftLine(join(parent, name), repo));
     }
@@ -1372,8 +1379,9 @@ function commitPlan(
     }
     throw err;
   } finally {
+    // A staging folder outside holds only this run's clone, never recovery data.
+    removeOutsideStages(outsideStages);
     if (cleanupTransaction) {
-      removeOutsideStages(outsideStages);
       try {
         rmSync(transactionDir, { recursive: true, force: true });
       } catch (err) {

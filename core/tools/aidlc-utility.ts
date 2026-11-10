@@ -751,6 +751,11 @@ let errorArgs: string[] = [];
 let errorProjectDirArg: string | undefined;
 let errorSelection: { intent?: string; space?: string } = {};
 
+function stagingLeftAfter(msg: string): string | { message: string; auditMessage: string } {
+  const left = takeStagingLeftLines();
+  return left.length === 0 ? msg : { message: [msg, ...left].join("\n"), auditMessage: msg };
+}
+
 function die(msg: string): never {
   // main(argv) seeds this context before dispatch so ERROR_LOGGED lands in the
   // same workflow the argv-selected command was targeting. Fall back to default
@@ -763,8 +768,9 @@ function die(msg: string): never {
     "aidlc-utility",
     command,
     // A staging folder an add's clone left outside the workspace is said after
-    // the refusal, on its own line (none unless a clone was staged).
-    [msg, ...takeStagingLeftLines()].join("\n"),
+    // the refusal, on its own line (none unless a clone was staged), and kept
+    // off the audit row, which holds the refusal alone.
+    stagingLeftAfter(msg),
     errorSelection.intent,
     errorSelection.space,
   );
@@ -9797,7 +9803,18 @@ function handleIntentRepos(
   const madeManifest = mapping !== null && mapping.raw === null ? mapping.next
     : clone !== null && clone.manifest.raw === null ? clone.manifest.next
     : null;
-  const outcome = withAuditLock(projectDir, () => {
+  // A clone staged before the lock is discarded when the lock cannot be taken
+  // (workspace-sync holds it for its whole reconcile), so its staging folder
+  // is not left behind unsaid; a refusal inside ends the run as before.
+  const discardOnThrow = <T>(run: () => T): T => {
+    try {
+      return run();
+    } catch (err) {
+      if (staged !== null) discardStagedWorkspaceRepo(staged);
+      throw err;
+    }
+  };
+  const outcome = discardOnThrow(() => withAuditLock(projectDir, () => {
     if (staged !== null && isGitRepoDir(target)) {
       // Cloned here meanwhile (another chat, workspace-sync): it is on disk.
       discardStagedWorkspaceRepo(staged);
@@ -9909,7 +9926,7 @@ function handleIntentRepos(
         none: next.length === 0,
       };
     }, dirName, space);
-  });
+  }));
   // What the person hears: what happened and the way back, in their words. The
   // line about a repos.json the add made (a file the team commits) rides the
   // next step the agent speaks from, as its change notice; with no chat to keep
