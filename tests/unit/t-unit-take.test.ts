@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readAuditShardEvents, readIntentRegistry, shellArg } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { resolvedRuleBundle } from "../../dist/claude/.claude/tools/aidlc-steering.ts";
@@ -1739,7 +1739,8 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     // on and no step named a way to; the step now names the command, never as a choice.
     const carryOn = /When their words ask to carry on a build the question lists as being built, run its command: refunds: `([^`]+)`/
       .exec(String(offer.question_note ?? offer.board_note ?? ""))?.[1];
-    expect(carryOn, JSON.stringify(offer).slice(0, 1600)).toBe(`bun .claude/tools/aidlc-unit.ts take refunds --from ${home.remote} --home ${HOME}`);
+    // Quoted as every take command in the question is (a Windows path is).
+    expect(carryOn, JSON.stringify(offer).slice(0, 1600)).toBe(`bun .claude/tools/aidlc-unit.ts take refunds --from ${shellArg(home.remote)} --home ${HOME}`);
     // Asked for in their words, it is carried on, said once whose it is.
     const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay2, chat);
     expect(took.status, took.out).toBe(0);
